@@ -5,12 +5,35 @@ Supports any GGUF model (Qwen, Mistral, LLaMA, etc.)
 Efficient inference with GPU acceleration.
 """
 
+import os
 from pathlib import Path
 from typing import Any, Optional
+
+# Ensure CUDA libraries are findable (Ollama installs them here)
+_cuda_paths = ["/usr/local/lib/ollama/cuda_v12", "/usr/local/lib/ollama/cuda_v13"]
+for _path in _cuda_paths:
+    if os.path.exists(_path):
+        os.environ["LD_LIBRARY_PATH"] = f"{_path}:{os.environ.get('LD_LIBRARY_PATH', '')}"
+        break
 
 from ..base import BaseModelService, InferenceTimer
 from ..protocols import Message, ModelInfo
 from ..registry import register_llm
+
+
+def _get_free_vram_mb() -> int:
+    """Get free VRAM in MB. Returns 0 if CUDA not available."""
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            return int(result.stdout.strip().split('\n')[0])
+    except Exception:
+        pass
+    return 0
 
 
 @register_llm("llama-cpp")
@@ -73,22 +96,58 @@ class LlamaCppLLM(BaseModelService):
 
         self.logger.info("Loading LLM: %s", self._model_path)
 
+        # Check available VRAM and adjust GPU layers if needed
+        n_gpu_layers = self._n_gpu_layers
+        free_vram = _get_free_vram_mb()
+        model_size_mb = self._model_path.stat().st_size / (1024 * 1024)
+
+        self.logger.info("Free VRAM: %d MB, Model size: %.0f MB", free_vram, model_size_mb)
+
+        # If requesting all layers (-1) but not enough VRAM, estimate safe layers
+        if n_gpu_layers == -1 and free_vram > 0:
+            # Rough estimate: each layer ~300MB for a 7B model, scale by model size
+            estimated_per_layer = model_size_mb / 40  # Assume ~40 layers typical
+            safe_layers = int((free_vram * 0.8) / estimated_per_layer)  # Use 80% of free
+            if safe_layers < 40:
+                n_gpu_layers = max(0, min(safe_layers, 35))  # Cap at 35 layers
+                self.logger.warning(
+                    "Limited VRAM detected. Using %d GPU layers instead of all",
+                    n_gpu_layers
+                )
+
         try:
             from llama_cpp import Llama
 
             self._llm = Llama(
                 model_path=str(self._model_path),
                 n_ctx=self._n_ctx,
-                n_gpu_layers=self._n_gpu_layers,
+                n_gpu_layers=n_gpu_layers,
                 verbose=False,
             )
-            self.logger.info("LLM loaded successfully (ctx=%d)", self._n_ctx)
+            self.logger.info(
+                "LLM loaded successfully (ctx=%d, gpu_layers=%d)",
+                self._n_ctx, n_gpu_layers
+            )
 
         except ImportError:
             raise ImportError(
                 "llama-cpp-python not installed. Install with: "
-                "pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu121"
+                "pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124"
             )
+        except ValueError as e:
+            if "out of memory" in str(e).lower() or "Failed to load" in str(e):
+                # Retry with fewer GPU layers
+                self.logger.warning("GPU memory error, retrying with CPU fallback")
+                from llama_cpp import Llama
+                self._llm = Llama(
+                    model_path=str(self._model_path),
+                    n_ctx=self._n_ctx,
+                    n_gpu_layers=0,  # CPU only
+                    verbose=False,
+                )
+                self.logger.info("LLM loaded on CPU (ctx=%d)", self._n_ctx)
+            else:
+                raise
 
     def unload(self) -> None:
         """Unload the model from memory."""

@@ -498,6 +498,9 @@ Respond in 1 short sentence confirming what you did:"""
         Useful for testing or text-based interfaces.
         """
         start_time = datetime.now()
+
+        # Reset context for each new text query
+        self._state_machine.reset()
         ctx = self._state_machine.context
         ctx.transcript = text
 

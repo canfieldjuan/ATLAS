@@ -15,24 +15,29 @@ logger = logging.getLogger("atlas.capabilities.intent_parser")
 
 INTENT_EXTRACTION_PROMPT = """You are an intent parser for a smart home system called Atlas. Extract the user's intent from their query.
 
-Respond ONLY with a JSON object in this exact format (no other text):
+Respond ONLY with a JSON object (no other text):
 {{
-  "action": "the action verb (turn_on, turn_off, set_brightness, toggle, read, etc.)",
-  "target_type": "device type (light, switch, sensor, camera, thermostat) or null",
-  "target_name": "location or device name mentioned (living room, bedroom, kitchen) or null",
+  "action": "turn_on|turn_off|toggle|set_brightness|read|none",
+  "target_type": "light|switch|sensor|camera|thermostat|null",
+  "target_name": "location name or null",
   "parameters": {{}},
-  "confidence": 0.0
+  "confidence": 0.0-1.0
 }}
+
+IMPORTANT: If the query is NOT a device command (questions, greetings, help requests), return:
+{{"action":"none","target_type":null,"target_name":null,"parameters":{{}},"confidence":0.0}}
 
 Examples:
 - "turn on the living room lights" -> {{"action":"turn_on","target_type":"light","target_name":"living room","parameters":{{}},"confidence":0.95}}
 - "set bedroom lights to 50%" -> {{"action":"set_brightness","target_type":"light","target_name":"bedroom","parameters":{{"brightness":127}},"confidence":0.9}}
-- "what's the temperature" -> {{"action":"read","target_type":"sensor","target_name":null,"parameters":{{}},"confidence":0.85}}
+- "dim kitchen to 30%" -> {{"action":"set_brightness","target_type":"light","target_name":"kitchen","parameters":{{"brightness":76}},"confidence":0.9}}
 - "turn off all lights" -> {{"action":"turn_off","target_type":"light","target_name":null,"parameters":{{}},"confidence":0.95}}
+- "what can you do?" -> {{"action":"none","target_type":null,"target_name":null,"parameters":{{}},"confidence":0.0}}
+- "hello" -> {{"action":"none","target_type":null,"target_name":null,"parameters":{{}},"confidence":0.0}}
 
 User query: {query}
 
-JSON response:"""
+JSON:"""
 
 
 class IntentParser:
@@ -114,8 +119,21 @@ class IntentParser:
             logger.warning("Could not extract intent JSON from: %s", response_text[:200])
             return None
 
+        action = intent_data.get("action", "")
+
+        # Filter out non-action intents
+        if action == "none" or not action:
+            logger.debug("No action intent for query: %s", query)
+            return None
+
+        # Only allow valid device actions
+        valid_actions = {"turn_on", "turn_off", "toggle", "set_brightness", "read", "set_color", "set_temperature"}
+        if action not in valid_actions:
+            logger.debug("Non-device action '%s' for query: %s", action, query)
+            return None
+
         return Intent(
-            action=intent_data.get("action", ""),
+            action=action,
             target_type=intent_data.get("target_type"),
             target_name=intent_data.get("target_name"),
             parameters=intent_data.get("parameters", {}),
