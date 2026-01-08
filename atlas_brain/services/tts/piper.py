@@ -26,8 +26,8 @@ class PiperTTS(BaseModelService):
 
     CAPABILITIES = ["tts"]
 
-    # Default voice model
-    DEFAULT_VOICE = "en_US-amy-medium"
+    # Default voice model (high quality)
+    DEFAULT_VOICE = "en_US-libritts-high"
 
     def __init__(
         self,
