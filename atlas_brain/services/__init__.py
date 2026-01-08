@@ -14,6 +14,9 @@ from .protocols import (
     LLMService,
     Message,
     ModelInfo,
+    SpeakerIDService,
+    SpeakerInfo,
+    SpeakerMatch,
     STTService,
     TTSService,
     VLMService,
@@ -23,9 +26,11 @@ from .registry import (
     llm_registry,
     register_audio_events,
     register_llm,
+    register_speaker_id,
     register_stt,
     register_tts,
     register_vlm,
+    speaker_id_registry,
     stt_registry,
     tts_registry,
     vlm_registry,
@@ -35,6 +40,7 @@ from .registry import (
 from . import vlm  # noqa: F401
 from . import stt  # noqa: F401
 from . import audio_events  # noqa: F401
+from . import speaker_id  # noqa: F401
 
 # LLM and TTS implementations loaded on-demand
 # from . import llm  # noqa: F401
@@ -47,7 +53,10 @@ __all__ = [
     "LLMService",
     "TTSService",
     "AudioEventService",
+    "SpeakerIDService",
     "AudioEvent",
+    "SpeakerInfo",
+    "SpeakerMatch",
     "ModelInfo",
     "InferenceMetrics",
     "Message",
@@ -57,10 +66,12 @@ __all__ = [
     "llm_registry",
     "tts_registry",
     "audio_events_registry",
+    "speaker_id_registry",
     # Decorators
     "register_vlm",
     "register_stt",
     "register_llm",
     "register_tts",
     "register_audio_events",
+    "register_speaker_id",
 ]

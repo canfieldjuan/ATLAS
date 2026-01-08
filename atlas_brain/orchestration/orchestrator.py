@@ -57,8 +57,13 @@ class OrchestratorResult:
     error: Optional[str] = None
     latency_ms: float = 0.0
 
+    # Speaker identification
+    speaker_id: Optional[str] = None
+    speaker_confidence: float = 0.0
+
     # Detailed timing
     transcription_ms: float = 0.0
+    speaker_id_ms: float = 0.0
     processing_ms: float = 0.0
     action_ms: float = 0.0
     tts_ms: float = 0.0
@@ -84,6 +89,7 @@ class Orchestrator:
         self._vlm = None
         self._llm = None
         self._tts = None
+        self._speaker_id = None
         self._intent_parser = None
         self._action_dispatcher = None
 
@@ -125,6 +131,13 @@ class Orchestrator:
             from ..services import vlm_registry
             self._vlm = vlm_registry.get_active()
         return self._vlm
+
+    def _get_speaker_id(self):
+        """Lazy load speaker ID service."""
+        if self._speaker_id is None:
+            from ..services import speaker_id_registry
+            self._speaker_id = speaker_id_registry.get_active()
+        return self._speaker_id
 
     def _get_intent_parser(self):
         """Lazy load intent parser."""
@@ -265,6 +278,28 @@ class Orchestrator:
         """Process a complete utterance through STT → Intent → Action → TTS."""
         ctx = self._state_machine.context
         result = OrchestratorResult(success=True)
+
+        # Speaker identification (run in parallel with transcription conceptually)
+        speaker_id_service = self._get_speaker_id()
+        if speaker_id_service is not None:
+            try:
+                sid_start = datetime.now()
+                match = speaker_id_service.identify(ctx.audio_bytes)
+                ctx.speaker_id = match.name
+                ctx.speaker_confidence = match.confidence
+                result.speaker_id = match.name
+                result.speaker_confidence = match.confidence
+                result.speaker_id_ms = (datetime.now() - sid_start).total_seconds() * 1000
+
+                if match.is_known:
+                    logger.info(
+                        "Speaker identified: %s (%.2f, %.0fms)",
+                        match.name, match.confidence, result.speaker_id_ms
+                    )
+                else:
+                    logger.debug("Unknown speaker (best match: %.2f)", match.confidence)
+            except Exception as e:
+                logger.warning("Speaker identification failed: %s", e)
 
         # Transcription
         trans_start = datetime.now()

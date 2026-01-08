@@ -235,3 +235,110 @@ class AudioEventService(Protocol):
         Filters for events like doorbell, alarm, glass breaking, etc.
         """
         ...
+
+
+@dataclass
+class SpeakerInfo:
+    """Information about an enrolled speaker."""
+
+    name: str  # Speaker's name/identifier
+    embedding: Any  # Voice embedding (numpy array)
+    enrolled_at: float = 0.0  # Unix timestamp
+    sample_count: int = 1  # Number of samples used to create embedding
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "enrolled_at": self.enrolled_at,
+            "sample_count": self.sample_count,
+        }
+
+
+@dataclass
+class SpeakerMatch:
+    """Result of speaker identification."""
+
+    name: str  # Matched speaker name, or "unknown"
+    confidence: float  # Similarity score 0.0 - 1.0
+    is_known: bool  # Whether this is an enrolled speaker
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "confidence": self.confidence,
+            "is_known": self.is_known,
+        }
+
+
+@runtime_checkable
+class SpeakerIDService(Protocol):
+    """Protocol for Speaker Identification services (Resemblyzer, etc.)."""
+
+    @property
+    def model_info(self) -> ModelInfo:
+        """Return metadata about the current model."""
+        ...
+
+    def load(self) -> None:
+        """Load the model into memory."""
+        ...
+
+    def unload(self) -> None:
+        """Unload the model from memory to free resources."""
+        ...
+
+    def get_embedding(self, audio_bytes: bytes) -> Any:
+        """
+        Extract speaker embedding from audio.
+
+        Args:
+            audio_bytes: Raw audio (16-bit, 16kHz mono PCM or WAV)
+
+        Returns:
+            Speaker embedding vector (numpy array)
+        """
+        ...
+
+    def enroll(
+        self,
+        name: str,
+        audio_bytes: bytes,
+        merge_existing: bool = True,
+    ) -> SpeakerInfo:
+        """
+        Enroll a speaker with a voice sample.
+
+        Args:
+            name: Speaker's name/identifier
+            audio_bytes: Voice sample audio
+            merge_existing: If True, merge with existing enrollment
+
+        Returns:
+            SpeakerInfo for the enrolled speaker
+        """
+        ...
+
+    def identify(
+        self,
+        audio_bytes: bytes,
+        threshold: float = 0.75,
+    ) -> SpeakerMatch:
+        """
+        Identify the speaker in an audio sample.
+
+        Args:
+            audio_bytes: Voice sample to identify
+            threshold: Minimum similarity to consider a match
+
+        Returns:
+            SpeakerMatch with the best matching speaker
+        """
+        ...
+
+    def list_enrolled(self) -> list[SpeakerInfo]:
+        """List all enrolled speakers."""
+        ...
+
+    def remove_speaker(self, name: str) -> bool:
+        """Remove an enrolled speaker."""
+        ...
