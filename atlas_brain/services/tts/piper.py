@@ -150,10 +150,13 @@ class PiperTTS(BaseModelService):
         """Synthesize using Piper CLI."""
         import asyncio
 
+        # Try to find model path
+        model_path = self._find_model_path(voice)
+
         # Build command
         cmd = [
             "piper",
-            "--model", voice,
+            "--model", model_path,
             "--output_file", "-",  # Output to stdout
         ]
 
@@ -175,6 +178,31 @@ class PiperTTS(BaseModelService):
 
         return stdout
 
+    def _find_model_path(self, voice: str) -> str:
+        """Find the path to a voice model."""
+        # Check if voice is already a path
+        if Path(voice).exists():
+            return voice
+
+        # Check in cache path
+        model_file = self.cache_path / f"{voice}.onnx"
+        if model_file.exists():
+            return str(model_file)
+
+        # Check common locations
+        common_paths = [
+            Path.home() / ".local/share/piper/voices" / f"{voice}.onnx",
+            Path("/usr/share/piper/voices") / f"{voice}.onnx",
+            Path("models/piper") / f"{voice}.onnx",
+        ]
+
+        for path in common_paths:
+            if path.exists():
+                return str(path)
+
+        # Return voice name for piper to resolve
+        return voice
+
     async def _synthesize_python(
         self,
         text: str,
@@ -184,18 +212,18 @@ class PiperTTS(BaseModelService):
         """Synthesize using Piper Python library."""
         import asyncio
 
+        # Find model path first
+        model_path = self._find_model_path(voice)
+
         def _synthesize():
             try:
                 from piper import PiperVoice
 
                 # Load voice
-                voice_path = self.cache_path / f"{voice}.onnx"
-                if not voice_path.exists():
-                    # Try downloading
-                    self.logger.info("Voice model not found, attempting download...")
-                    raise FileNotFoundError(f"Voice model not found: {voice_path}")
+                if not Path(model_path).exists():
+                    raise FileNotFoundError(f"Voice model not found: {model_path}")
 
-                piper_voice = PiperVoice.load(str(voice_path))
+                piper_voice = PiperVoice.load(model_path)
 
                 # Synthesize
                 audio_data = []

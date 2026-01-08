@@ -139,6 +139,13 @@ class Orchestrator:
             self._speaker_id = speaker_id_registry.get_active()
         return self._speaker_id
 
+    def _get_tts(self):
+        """Lazy load TTS service."""
+        if self._tts is None:
+            from ..services import tts_registry
+            self._tts = tts_registry.get_active()
+        return self._tts
+
     def _get_intent_parser(self):
         """Lazy load intent parser."""
         if self._intent_parser is None:
@@ -362,11 +369,20 @@ class Orchestrator:
         ctx.response_text = result.response_text
 
         # TTS (if available)
-        # TODO: Implement when TTS service is added
-        # tts_start = datetime.now()
-        # if self._tts:
-        #     result.response_audio = await self._tts.synthesize(result.response_text)
-        # result.tts_ms = (datetime.now() - tts_start).total_seconds() * 1000
+        tts = self._get_tts()
+        if tts is not None and result.response_text:
+            try:
+                tts_start = datetime.now()
+                result.response_audio = await tts.synthesize(result.response_text)
+                ctx.response_audio = result.response_audio
+                result.tts_ms = (datetime.now() - tts_start).total_seconds() * 1000
+                logger.info(
+                    "TTS: %d bytes in %.0fms",
+                    len(result.response_audio),
+                    result.tts_ms,
+                )
+            except Exception as e:
+                logger.warning("TTS synthesis failed: %s", e)
 
         self._state_machine.transition(PipelineEvent.RESPONSE_READY)
 
