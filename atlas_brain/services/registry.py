@@ -9,11 +9,11 @@ import logging
 from threading import Lock
 from typing import Any, Callable, Generic, Optional, Type, TypeVar
 
-from .protocols import LLMService, ModelInfo, STTService, TTSService, VLMService
+from .protocols import AudioEventService, LLMService, ModelInfo, STTService, TTSService, VLMService
 
 logger = logging.getLogger("atlas.registry")
 
-T = TypeVar("T", VLMService, STTService, LLMService, TTSService)
+T = TypeVar("T", VLMService, STTService, LLMService, TTSService, AudioEventService)
 
 
 class ServiceRegistry(Generic[T]):
@@ -165,5 +165,17 @@ def register_tts(name: str) -> Callable[[Type[TTSService]], Type[TTSService]]:
     """Decorator to register a TTS implementation."""
     def decorator(cls: Type[TTSService]) -> Type[TTSService]:
         tts_registry.register(name, cls)
+        return cls
+    return decorator
+
+
+# Global registry for audio event detection services
+audio_events_registry: ServiceRegistry[AudioEventService] = ServiceRegistry("AudioEvents")
+
+
+def register_audio_events(name: str) -> Callable[[Type[AudioEventService]], Type[AudioEventService]]:
+    """Decorator to register an audio event detection implementation."""
+    def decorator(cls: Type[AudioEventService]) -> Type[AudioEventService]:
+        audio_events_registry.register(name, cls)
         return cls
     return decorator

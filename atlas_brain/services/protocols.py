@@ -168,3 +168,70 @@ class TTSService(Protocol):
     ) -> bytes:
         """Convert text to speech audio (WAV format)."""
         ...
+
+
+@dataclass
+class AudioEvent:
+    """A detected audio event."""
+
+    label: str  # e.g., "Doorbell", "Dog", "Glass breaking"
+    confidence: float  # 0.0 - 1.0
+    class_id: int  # YAMNet class ID
+    timestamp_ms: float = 0.0  # When in the audio chunk this occurred
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "label": self.label,
+            "confidence": self.confidence,
+            "class_id": self.class_id,
+            "timestamp_ms": self.timestamp_ms,
+        }
+
+
+@runtime_checkable
+class AudioEventService(Protocol):
+    """Protocol for Audio Event Detection services (YAMNet, etc.)."""
+
+    @property
+    def model_info(self) -> ModelInfo:
+        """Return metadata about the current model."""
+        ...
+
+    def load(self) -> None:
+        """Load the model into memory."""
+        ...
+
+    def unload(self) -> None:
+        """Unload the model from memory to free resources."""
+        ...
+
+    def classify(
+        self,
+        audio_bytes: bytes,
+        top_k: int = 5,
+        min_confidence: float = 0.1,
+    ) -> list[AudioEvent]:
+        """
+        Classify audio and return detected events.
+
+        Args:
+            audio_bytes: Raw audio (16-bit, 16kHz mono PCM or WAV)
+            top_k: Return top K predictions
+            min_confidence: Minimum confidence threshold
+
+        Returns:
+            List of AudioEvent detections
+        """
+        ...
+
+    def get_interesting_events(
+        self,
+        audio_bytes: bytes,
+        event_filter: Optional[list[str]] = None,
+    ) -> list[AudioEvent]:
+        """
+        Get only interesting/actionable events from audio.
+
+        Filters for events like doorbell, alarm, glass breaking, etc.
+        """
+        ...
