@@ -42,8 +42,7 @@ from . import stt  # noqa: F401
 from . import audio_events  # noqa: F401
 from . import speaker_id  # noqa: F401
 
-# LLM loaded on-demand
-# from . import llm  # noqa: F401
+from . import llm  # noqa: F401
 from . import tts  # noqa: F401
 
 __all__ = [

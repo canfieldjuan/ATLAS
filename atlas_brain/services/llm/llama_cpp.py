@@ -43,6 +43,11 @@ class LlamaCppLLM(BaseModelService):
         self._llm = None
 
     @property
+    def is_loaded(self) -> bool:
+        """Check if the model is loaded."""
+        return self._llm is not None
+
+    @property
     def model_info(self) -> ModelInfo:
         return ModelInfo(
             name=self.name,
