@@ -1,7 +1,8 @@
 """
 Intent parser for natural language to action conversion.
 
-Uses the LLM (preferred) or VLM to extract structured intents from user queries.
+Uses the VLM for fast structured intent extraction (~500ms).
+LLM is reserved for reasoning/conversation, not classification tasks.
 """
 
 import json
@@ -44,22 +45,15 @@ class IntentParser:
     """
     Parses natural language queries into structured intents.
 
-    Prefers LLM (Xortron) for better understanding, falls back to VLM.
+    Uses VLM (Moondream) for fast structured extraction (~500ms).
+    Intent parsing is a classification task - doesn't need heavy reasoning.
     """
 
     def __init__(self):
-        self._llm = None
         self._vlm = None
 
-    def _get_llm(self):
-        """Lazy import LLM."""
-        if self._llm is None:
-            from ..services import llm_registry
-            self._llm = llm_registry.get_active()
-        return self._llm
-
     def _get_vlm(self):
-        """Lazy import VLM as fallback."""
+        """Lazy import VLM for intent extraction."""
         if self._vlm is None:
             from ..services import vlm_registry
             self._vlm = vlm_registry.get_active()
@@ -69,47 +63,89 @@ class IntentParser:
         """
         Parse a natural language query into an Intent.
 
-        Uses LLM (preferred) or VLM to extract structured intent information.
+        Uses VLM for fast structured intent extraction.
 
         Args:
             query: Natural language query from the user
 
         Returns:
-            Intent object if parsing succeeds, None otherwise
+            Intent object if a device action is detected, None otherwise
         """
+        vlm = self._get_vlm()
+        if vlm is None:
+            logger.warning("VLM not available for intent parsing")
+            return None
+
         prompt = INTENT_EXTRACTION_PROMPT.format(query=query)
 
-        # Try LLM first (better reasoning)
-        llm = self._get_llm()
-        if llm is not None:
-            try:
-                result = llm.generate(
-                    prompt=prompt,
-                    max_tokens=150,
-                    temperature=0.1,  # Low temp for structured output
-                )
-                response_text = result.get("response", "")
-                intent = self._parse_response(response_text, query)
-                if intent:
-                    logger.info("LLM parsed intent: action=%s, target=%s", intent.action, intent.target_name)
-                    return intent
-            except Exception as e:
-                logger.warning("LLM intent parsing failed: %s", e)
+        try:
+            result = vlm.process_text(prompt)
+            response_text = result.get("response", "")
+            logger.info("VLM response for '%s': %s", query[:30], response_text[:200])
+            intent = self._parse_response(response_text, query)
+            if intent:
+                logger.info("Parsed intent: action=%s, target=%s", intent.action, intent.target_name)
+                return intent
+        except Exception as e:
+            logger.warning("Intent parsing failed: %s", e)
 
-        # Fallback to VLM
-        vlm = self._get_vlm()
-        if vlm is not None:
-            try:
-                result = vlm.process_text(prompt)
-                response_text = result.get("response", "")
-                intent = self._parse_response(response_text, query)
-                if intent:
-                    logger.info("VLM parsed intent: action=%s, target=%s", intent.action, intent.target_name)
-                    return intent
-            except Exception as e:
-                logger.warning("VLM intent parsing failed: %s", e)
+        return None
 
-        logger.warning("No model available for intent parsing")
+    def _normalize_action(self, raw_action: str) -> str:
+        """Normalize VLM action output to valid action types."""
+        action = raw_action.lower().strip()
+
+        # Direct match
+        valid_actions = {"turn_on", "turn_off", "toggle", "set_brightness", "read", "set_color", "set_temperature"}
+        if action in valid_actions:
+            return action
+
+        # Pattern matching for common variations
+        if any(x in action for x in ["turn on", "switch on", "power on"]):
+            return "turn_on"
+        if any(x in action for x in ["turn off", "switch off", "power off"]):
+            return "turn_off"
+        # "dim" always means brightness control
+        if "dim" in action:
+            return "set_brightness"
+        # Percentage patterns for brightness
+        if any(x in action for x in ["%", "percent", "brightness"]):
+            return "set_brightness"
+        if "toggle" in action:
+            return "toggle"
+        if "read" in action or "temperature" in action or "status" in action:
+            return "read"
+
+        return action  # Return as-is if no match
+
+    def _extract_brightness_from_query(self, query: str) -> int | None:
+        """
+        Extract brightness value from natural language query.
+
+        Handles patterns like:
+        - "set to 50%", "to 50 percent", "50%"
+        - "dim to 30", "brightness 80"
+
+        Returns brightness as 0-255 value, or None if not found.
+        """
+        query_lower = query.lower()
+
+        # Match percentage patterns: "50%", "50 percent", "50 %"
+        match = re.search(r'(\d+)\s*(?:%|percent)', query_lower)
+        if match:
+            percent = int(match.group(1))
+            # Clamp to 0-100 and convert to 0-255
+            percent = max(0, min(100, percent))
+            return int(percent * 255 / 100)
+
+        # Match "to X" or "at X" patterns (assume percentage if no unit)
+        match = re.search(r'(?:to|at)\s+(\d+)(?!\s*(?:degrees|celsius|fahrenheit|f|c))', query_lower)
+        if match:
+            value = int(match.group(1))
+            if value <= 100:
+                # Likely a percentage
+                return int(value * 255 / 100)
+
         return None
 
     def _parse_response(self, response_text: str, query: str) -> Optional[Intent]:
@@ -119,24 +155,35 @@ class IntentParser:
             logger.warning("Could not extract intent JSON from: %s", response_text[:200])
             return None
 
-        action = intent_data.get("action", "")
+        raw_action = intent_data.get("action", "")
+        action = self._normalize_action(raw_action)
 
         # Filter out non-action intents
         if action == "none" or not action:
-            logger.debug("No action intent for query: %s", query)
+            logger.info("No action intent (action=%s) for query: %s", action, query)
             return None
 
         # Only allow valid device actions
         valid_actions = {"turn_on", "turn_off", "toggle", "set_brightness", "read", "set_color", "set_temperature"}
         if action not in valid_actions:
-            logger.debug("Non-device action '%s' for query: %s", action, query)
+            logger.info("Non-device action '%s' (raw: %s) for query: %s", action, raw_action[:30], query)
             return None
+
+        # Get parameters from VLM response
+        parameters = intent_data.get("parameters", {})
+
+        # Extract brightness from query if VLM didn't provide it
+        if action == "set_brightness" and "brightness" not in parameters:
+            brightness = self._extract_brightness_from_query(query)
+            if brightness is not None:
+                parameters["brightness"] = brightness
+                logger.info("Extracted brightness=%d from query", brightness)
 
         return Intent(
             action=action,
             target_type=intent_data.get("target_type"),
             target_name=intent_data.get("target_name"),
-            parameters=intent_data.get("parameters", {}),
+            parameters=parameters,
             confidence=float(intent_data.get("confidence", 0.0)),
             raw_query=query,
         )

@@ -58,12 +58,28 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Failed to register test devices: %s", e)
 
+    # Initialize Home Assistant backend if enabled
+    try:
+        from .capabilities.homeassistant import init_homeassistant
+        ha_devices = await init_homeassistant()
+        if ha_devices:
+            logger.info("Registered Home Assistant devices: %s", ha_devices)
+    except Exception as e:
+        logger.error("Failed to initialize Home Assistant: %s", e)
+
     logger.info("Atlas Brain startup complete")
 
     yield  # Application runs here
 
     # --- Shutdown ---
     logger.info("Atlas Brain shutting down...")
+
+    # Disconnect Home Assistant backend
+    try:
+        from .capabilities.homeassistant import shutdown_homeassistant
+        await shutdown_homeassistant()
+    except Exception as e:
+        logger.error("Error shutting down Home Assistant: %s", e)
 
     # Unload models to free resources
     vlm_registry.deactivate()

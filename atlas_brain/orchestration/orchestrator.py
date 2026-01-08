@@ -453,43 +453,17 @@ Respond in 1-2 sentences:"""
         return f"I heard: {ctx.transcript}"
 
     def _generate_action_response(self, ctx: PipelineContext, successes: list) -> str:
-        """Generate a response describing completed actions."""
-        llm = self._get_llm()
+        """
+        Generate a response describing completed actions.
 
-        # Simple response if no LLM - use the action result message
-        if llm is None:
-            messages = []
-            for r in successes:
-                msg = r.message if hasattr(r, "message") else r.get("message", "Done")
-                messages.append(msg)
-            return " ".join(messages) if messages else "Done."
-
-        # Build action summary from action result messages
-        action_summary = ""
+        Uses the action result messages directly - no LLM needed for simple confirmations.
+        This keeps response time fast (~500ms total instead of ~9s with LLM).
+        """
+        messages = []
         for r in successes:
-            msg = r.message if hasattr(r, "message") else r.get("message", "completed action")
-            action_summary += msg + ". "
-
-        prompt = f"""You are Atlas, a home automation assistant. Confirm the action briefly.
-
-Action completed: {action_summary}
-User request: "{ctx.transcript}"
-
-Respond in 1 short sentence confirming what you did:"""
-
-        try:
-            result = llm.generate(
-                prompt=prompt,
-                max_tokens=50,
-                temperature=0.5,
-            )
-            response = result.get("response", "").strip()
-            if response:
-                return response
-        except Exception as e:
-            logger.warning("LLM action response failed: %s", e)
-
-        return "Done."
+            msg = r.message if hasattr(r, "message") else r.get("message", "Done")
+            messages.append(msg)
+        return " ".join(messages) if messages else "Done."
 
     async def process_text(self, text: str) -> OrchestratorResult:
         """
