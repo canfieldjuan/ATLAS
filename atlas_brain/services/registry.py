@@ -9,11 +9,11 @@ import logging
 from threading import Lock
 from typing import Any, Callable, Generic, Optional, Type, TypeVar
 
-from .protocols import ModelInfo, STTService, VLMService
+from .protocols import LLMService, ModelInfo, STTService, TTSService, VLMService
 
 logger = logging.getLogger("atlas.registry")
 
-T = TypeVar("T", VLMService, STTService)
+T = TypeVar("T", VLMService, STTService, LLMService, TTSService)
 
 
 class ServiceRegistry(Generic[T]):
@@ -144,5 +144,26 @@ def register_stt(name: str) -> Callable[[Type[STTService]], Type[STTService]]:
     """Decorator to register an STT implementation."""
     def decorator(cls: Type[STTService]) -> Type[STTService]:
         stt_registry.register(name, cls)
+        return cls
+    return decorator
+
+
+# Global registries for LLM and TTS services
+llm_registry: ServiceRegistry[LLMService] = ServiceRegistry("LLM")
+tts_registry: ServiceRegistry[TTSService] = ServiceRegistry("TTS")
+
+
+def register_llm(name: str) -> Callable[[Type[LLMService]], Type[LLMService]]:
+    """Decorator to register an LLM implementation."""
+    def decorator(cls: Type[LLMService]) -> Type[LLMService]:
+        llm_registry.register(name, cls)
+        return cls
+    return decorator
+
+
+def register_tts(name: str) -> Callable[[Type[TTSService]], Type[TTSService]]:
+    """Decorator to register a TTS implementation."""
+    def decorator(cls: Type[TTSService]) -> Type[TTSService]:
+        tts_registry.register(name, cls)
         return cls
     return decorator

@@ -55,6 +55,48 @@ class HomeAssistantConfig(BaseSettings):
     )
 
 
+class LLMConfig(BaseSettings):
+    """LLM (reasoning model) configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_LLM_")
+
+    default_model: str = Field(default="llama-cpp", description="Default LLM backend")
+    model_path: Optional[str] = Field(default=None, description="Path to GGUF model file")
+    n_ctx: int = Field(default=4096, description="Context window size")
+    n_gpu_layers: int = Field(default=-1, description="GPU layers (-1 = all)")
+
+
+class TTSConfig(BaseSettings):
+    """TTS configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_TTS_")
+
+    default_model: str = Field(default="piper", description="Default TTS backend")
+    voice: str = Field(default="en_US-amy-medium", description="Voice model")
+
+
+class OrchestrationConfig(BaseSettings):
+    """Voice pipeline orchestration configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_ORCH_")
+
+    # Wake word
+    wake_word_enabled: bool = Field(default=False, description="Enable wake word detection")
+    require_wake_word: bool = Field(default=False, description="Require wake word before processing")
+    wake_words: list[str] = Field(default=["hey_jarvis"], description="Wake words to detect")
+
+    # VAD
+    vad_aggressiveness: int = Field(default=2, description="VAD aggressiveness (0-3)")
+    silence_duration_ms: int = Field(default=1500, description="Silence to end utterance")
+
+    # Behavior
+    auto_execute: bool = Field(default=True, description="Auto-execute device actions")
+
+    # Timeouts
+    recording_timeout_ms: int = Field(default=30000, description="Max recording duration")
+    processing_timeout_ms: int = Field(default=10000, description="Max processing time")
+
+
 class Settings(BaseSettings):
     """Application-wide settings."""
 
@@ -78,6 +120,9 @@ class Settings(BaseSettings):
     # Nested configs
     vlm: VLMConfig = Field(default_factory=VLMConfig)
     stt: STTConfig = Field(default_factory=STTConfig)
+    llm: LLMConfig = Field(default_factory=LLMConfig)
+    tts: TTSConfig = Field(default_factory=TTSConfig)
+    orchestration: OrchestrationConfig = Field(default_factory=OrchestrationConfig)
     mqtt: MQTTConfig = Field(default_factory=MQTTConfig)
     homeassistant: HomeAssistantConfig = Field(default_factory=HomeAssistantConfig)
 

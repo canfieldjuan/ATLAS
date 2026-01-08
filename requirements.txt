@@ -3,11 +3,23 @@ uvicorn[standard]
 python-dotenv
 python-multipart
 pydantic-settings
+
+# ML / AI
 torch
 transformers
 accelerate
 bitsandbytes
 Pillow
 faster-whisper
+
+# IoT backends
 aiomqtt
 httpx
+
+# Orchestration / Voice pipeline
+webrtcvad
+openwakeword
+piper-tts
+
+# Optional: For GGUF model support
+# llama-cpp-python
