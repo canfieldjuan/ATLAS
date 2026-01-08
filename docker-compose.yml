@@ -1,0 +1,19 @@
+services:
+  brain:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./atlas_brain:/app/atlas_brain
+      - ./logs:/app/logs
+      - ./models:/app/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    container_name: atlas_brain
+    # The command is already specified in the Dockerfile's CMD,
+    # but you could override it here if needed.

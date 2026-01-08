@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+python-multipart
+pydantic-settings
+torch
+transformers
+accelerate
+bitsandbytes
+Pillow
+faster-whisper
+aiomqtt
+httpx
