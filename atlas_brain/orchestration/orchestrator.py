@@ -146,6 +146,13 @@ class Orchestrator:
             self._tts = tts_registry.get_active()
         return self._tts
 
+    def _get_llm(self):
+        """Lazy load LLM service for reasoning."""
+        if self._llm is None:
+            from ..services import llm_registry
+            self._llm = llm_registry.get_active()
+        return self._llm
+
     def _get_intent_parser(self):
         """Lazy load intent parser."""
         if self._intent_parser is None:
@@ -399,14 +406,83 @@ class Orchestrator:
         if not ctx.action_results:
             if ctx.intent:
                 return f"I understood '{ctx.intent.action}' but couldn't execute it."
-            return f"I heard: {ctx.transcript}"
+            # No intent - use LLM for conversational response
+            return self._generate_llm_response(ctx)
 
-        # Summarize action results
+        # Summarize action results with LLM
         successes = [r for r in ctx.action_results if r.get("success")]
         if successes:
-            return "Done."
+            return self._generate_action_response(ctx, successes)
         else:
             return "I couldn't complete that action."
+
+    def _generate_llm_response(self, ctx: PipelineContext) -> str:
+        """Generate a conversational response using the LLM."""
+        llm = self._get_llm()
+        if llm is None:
+            return f"I heard: {ctx.transcript}"
+
+        # Build context for the LLM
+        speaker = f"Speaker: {ctx.speaker_id}" if ctx.speaker_id != "unknown" else ""
+
+        prompt = f"""You are Atlas, a helpful home automation assistant. Respond briefly and naturally to the user.
+
+{speaker}
+User said: "{ctx.transcript}"
+
+Respond in 1-2 sentences:"""
+
+        try:
+            result = llm.generate(
+                prompt=prompt,
+                max_tokens=100,
+                temperature=0.7,
+            )
+            response = result.get("response", "").strip()
+            if response:
+                return response
+        except Exception as e:
+            logger.warning("LLM response generation failed: %s", e)
+
+        return f"I heard: {ctx.transcript}"
+
+    def _generate_action_response(self, ctx: PipelineContext, successes: list) -> str:
+        """Generate a response describing completed actions."""
+        llm = self._get_llm()
+
+        # Simple response if no LLM
+        if llm is None:
+            return "Done."
+
+        # Build action summary
+        actions = []
+        for r in successes:
+            action = r.get("action", "action")
+            target = r.get("target", "device")
+            actions.append(f"{action} {target}")
+
+        action_summary = ", ".join(actions) if actions else "completed the action"
+
+        prompt = f"""You are Atlas, a home automation assistant. Confirm the action briefly.
+
+Action completed: {action_summary}
+User request: "{ctx.transcript}"
+
+Respond in 1 short sentence confirming what you did:"""
+
+        try:
+            result = llm.generate(
+                prompt=prompt,
+                max_tokens=50,
+                temperature=0.5,
+            )
+            response = result.get("response", "").strip()
+            if response:
+                return response
+        except Exception as e:
+            logger.warning("LLM action response failed: %s", e)
+
+        return "Done."
 
     async def process_text(self, text: str) -> OrchestratorResult:
         """
