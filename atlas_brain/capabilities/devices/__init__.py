@@ -5,6 +5,7 @@ Import implementations here to make them available.
 """
 
 from .lights import HomeAssistantLight, MQTTLight
+from .mock import MockLight, MockSwitch, register_test_devices
 from .switches import HomeAssistantSwitch, MQTTSwitch
 
 __all__ = [
@@ -12,4 +13,7 @@ __all__ = [
     "HomeAssistantLight",
     "MQTTSwitch",
     "HomeAssistantSwitch",
+    "MockLight",
+    "MockSwitch",
+    "register_test_devices",
 ]

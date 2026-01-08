@@ -410,7 +410,13 @@ class Orchestrator:
             return self._generate_llm_response(ctx)
 
         # Summarize action results with LLM
-        successes = [r for r in ctx.action_results if r.get("success")]
+        # ActionResult can be object or dict depending on context
+        def is_success(r):
+            if hasattr(r, "success"):
+                return r.success
+            return r.get("success", False) if isinstance(r, dict) else False
+
+        successes = [r for r in ctx.action_results if is_success(r)]
         if successes:
             return self._generate_action_response(ctx, successes)
         else:
@@ -450,18 +456,19 @@ Respond in 1-2 sentences:"""
         """Generate a response describing completed actions."""
         llm = self._get_llm()
 
-        # Simple response if no LLM
+        # Simple response if no LLM - use the action result message
         if llm is None:
-            return "Done."
+            messages = []
+            for r in successes:
+                msg = r.message if hasattr(r, "message") else r.get("message", "Done")
+                messages.append(msg)
+            return " ".join(messages) if messages else "Done."
 
-        # Build action summary
-        actions = []
+        # Build action summary from action result messages
+        action_summary = ""
         for r in successes:
-            action = r.get("action", "action")
-            target = r.get("target", "device")
-            actions.append(f"{action} {target}")
-
-        action_summary = ", ".join(actions) if actions else "completed the action"
+            msg = r.message if hasattr(r, "message") else r.get("message", "completed action")
+            action_summary += msg + ". "
 
         prompt = f"""You are Atlas, a home automation assistant. Confirm the action briefly.
 
@@ -516,6 +523,7 @@ Respond in 1 short sentence confirming what you did:"""
             if dispatcher:
                 try:
                     action_result = await dispatcher.dispatch_intent(ctx.intent)
+                    ctx.action_results = [action_result]
                     result.action_results = [action_result]
                 except Exception as e:
                     logger.warning("Action execution failed: %s", e)

@@ -50,6 +50,14 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to load default STT: %s", e)
 
+    # Register test devices for development
+    try:
+        from .capabilities.devices import register_test_devices
+        device_ids = register_test_devices()
+        logger.info("Registered test devices: %s", device_ids)
+    except Exception as e:
+        logger.error("Failed to register test devices: %s", e)
+
     logger.info("Atlas Brain startup complete")
 
     yield  # Application runs here
