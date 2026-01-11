@@ -441,6 +441,7 @@ class Orchestrator:
             tier = router.select_tier(ctx.transcript, ctx)
             swapped = router.ensure_model_loaded(tier)
             if swapped:
+                self._llm = None  # Clear cached LLM reference
                 logger.info(
                     "Model routed: %s (complexity=%.2f)",
                     tier.name,

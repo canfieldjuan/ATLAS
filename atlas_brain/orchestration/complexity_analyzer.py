@@ -80,8 +80,8 @@ class ComplexityAnalyzer:
     ]
 
     # Thresholds for tier selection
-    SIMPLE_THRESHOLD = 0.3
-    COMPLEX_THRESHOLD = 0.7
+    SIMPLE_THRESHOLD = 0.20
+    COMPLEX_THRESHOLD = 0.45
 
     def __init__(self):
         # Pre-compile patterns for efficiency
@@ -140,12 +140,11 @@ class ComplexityAnalyzer:
 
         # Calculate weighted total
         total_score = (
-            length_score * 0.15 +
-            (-simple_score) * 0.25 +  # Simple patterns reduce complexity
-            medium_score * 0.20 +
-            complex_score * 0.25 +
-            structure_score * 0.10 +
-            context_score * 0.05
+            length_score * 0.10 +
+            (-simple_score) * 0.20 +  # Simple patterns reduce complexity
+            medium_score * 0.25 +
+            complex_score * 0.40 +  # Complex keywords have high impact
+            structure_score * 0.05
         )
 
         # Clamp to 0.0 - 1.0
@@ -190,12 +189,12 @@ class ComplexityAnalyzer:
     def _score_medium_patterns(self, query: str) -> float:
         """Score medium complexity patterns."""
         matches = sum(1 for p in self._medium_patterns if p.search(query))
-        return min(1.0, matches * 0.3)
+        return min(1.0, matches * 0.5)
 
     def _score_complex_patterns(self, query: str) -> float:
         """Score complex patterns."""
         matches = sum(1 for p in self._complex_patterns if p.search(query))
-        return min(1.0, matches * 0.4)
+        return min(1.0, matches * 0.7)
 
     def _score_structure(self, query: str) -> float:
         """Score query structure complexity."""
