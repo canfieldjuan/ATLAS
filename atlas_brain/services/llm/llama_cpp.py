@@ -246,12 +246,23 @@ class LlamaCppLLM(BaseModelService):
         self.logger.info("Chat with %d messages", len(messages))
 
         with InferenceTimer() as timer:
-            result = self._llm.create_chat_completion(
-                messages=llm_messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                stop=stop,
-            )
+            try:
+                result = self._llm.create_chat_completion(
+                    messages=llm_messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    stop=stop,
+                )
+            except Exception as e:
+                if "undefined" in str(e) or "jinja" in str(e).lower():
+                    self.logger.warning(
+                        "Chat template error, using fallback format: %s", e
+                    )
+                    result = self._chat_fallback(
+                        llm_messages, max_tokens, temperature, stop
+                    )
+                else:
+                    raise
 
         response_text = result["choices"][0]["message"]["content"].strip()
         metrics = self.gather_metrics(timer.duration)
@@ -267,6 +278,43 @@ class LlamaCppLLM(BaseModelService):
             "message": {"role": "assistant", "content": response_text},
             "usage": result["usage"],
             "metrics": metrics.to_dict(),
+        }
+
+    def _chat_fallback(
+        self,
+        messages: list[dict],
+        max_tokens: int,
+        temperature: float,
+        stop: Optional[list[str]],
+    ) -> dict[str, Any]:
+        """Fallback chat using manual prompt formatting."""
+        prompt_parts = []
+        for msg in messages:
+            role = msg["role"]
+            content = msg["content"]
+            if role == "system":
+                prompt_parts.append(f"<|system|>\n{content}</s>")
+            elif role == "user":
+                prompt_parts.append(f"<|user|>\n{content}</s>")
+            elif role == "assistant":
+                prompt_parts.append(f"<|assistant|>\n{content}</s>")
+
+        prompt_parts.append("<|assistant|>\n")
+        full_prompt = "\n".join(prompt_parts)
+
+        result = self._llm(
+            full_prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            stop=stop or ["</s>", "<|user|>", "<|system|>"],
+            echo=False,
+        )
+
+        response_text = result["choices"][0]["text"].strip()
+
+        return {
+            "choices": [{"message": {"content": response_text}}],
+            "usage": result["usage"],
         }
 
 
