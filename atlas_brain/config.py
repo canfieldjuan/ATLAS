@@ -117,11 +117,11 @@ class ModelRoutingConfig(BaseSettings):
     enabled: bool = Field(default=False, description="Enable intelligent routing")
 
     simple_model_name: str = Field(
-        default="ministral-3b",
+        default="llama-1b",
         description="Model name for simple queries"
     )
     simple_model_path: str = Field(
-        default="models/Ministral-3B-Instruct-GGUF/Ministral-3B-Instruct-Q4_K_M.gguf",
+        default="models/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct-Q4_K_M.gguf",
         description="Path to simple tier model"
     )
     simple_threshold: float = Field(default=0.3, description="Max complexity for simple tier")
