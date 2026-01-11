@@ -97,6 +97,57 @@ class OrchestrationConfig(BaseSettings):
     processing_timeout_ms: int = Field(default=10000, description="Max processing time")
 
 
+class ModelTierConfig(BaseSettings):
+    """Configuration for a single model tier."""
+
+    model_config = SettingsConfigDict(extra="ignore")
+
+    name: str = Field(default="", description="Model identifier")
+    model_path: str = Field(default="", description="Path to GGUF model file")
+    complexity_threshold: float = Field(default=0.5, description="Complexity score threshold")
+    max_tokens: int = Field(default=512, description="Max tokens for generation")
+    temperature: float = Field(default=0.7, description="Sampling temperature")
+
+
+class ModelRoutingConfig(BaseSettings):
+    """Intelligent model routing configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_ROUTING_")
+
+    enabled: bool = Field(default=False, description="Enable intelligent routing")
+
+    simple_model_name: str = Field(
+        default="ministral-3b",
+        description="Model name for simple queries"
+    )
+    simple_model_path: str = Field(
+        default="models/Ministral-3B-Instruct-GGUF/Ministral-3B-Instruct-Q4_K_M.gguf",
+        description="Path to simple tier model"
+    )
+    simple_threshold: float = Field(default=0.3, description="Max complexity for simple tier")
+
+    medium_model_name: str = Field(
+        default="hermes-8b",
+        description="Model name for medium queries"
+    )
+    medium_model_path: str = Field(
+        default="models/Hermes-3-Llama-3.1-8B-GGUF/Hermes-3-Llama-3.1-8B-Q4_K_M.gguf",
+        description="Path to medium tier model"
+    )
+    medium_threshold: float = Field(default=0.7, description="Max complexity for medium tier")
+
+    complex_model_name: str = Field(
+        default="blacksheep-24b",
+        description="Model name for complex queries"
+    )
+    complex_model_path: str = Field(
+        default="models/BlackSheep-24B-GGUF/BlackSheep-24B-Q4_K_M.gguf",
+        description="Path to complex tier model"
+    )
+
+    cache_duration_seconds: int = Field(default=300, description="Keep model loaded for N seconds")
+
+
 class Settings(BaseSettings):
     """Application-wide settings."""
 
@@ -127,6 +178,7 @@ class Settings(BaseSettings):
     orchestration: OrchestrationConfig = Field(default_factory=OrchestrationConfig)
     mqtt: MQTTConfig = Field(default_factory=MQTTConfig)
     homeassistant: HomeAssistantConfig = Field(default_factory=HomeAssistantConfig)
+    routing: ModelRoutingConfig = Field(default_factory=ModelRoutingConfig)
 
 
 # Singleton settings instance

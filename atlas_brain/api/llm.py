@@ -6,13 +6,21 @@ Provides REST API for:
 - Text generation and chat
 """
 
+import logging
 from pathlib import Path
 from typing import Optional
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..services import llm_registry
+from ..storage import db_settings
+from ..storage.database import get_db_pool
+from ..storage.repositories.session import get_session_repo
+from ..storage.repositories.conversation import get_conversation_repo
+
+logger = logging.getLogger("atlas.api.llm")
 
 router = APIRouter(prefix="/llm", tags=["llm"])
 
@@ -41,6 +49,9 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     max_tokens: int = 512
     temperature: float = 0.7
+    session_id: Optional[str] = None
+    user_id: Optional[str] = None
+    terminal_id: Optional[str] = None
 
 
 @router.get("/available")
@@ -113,7 +124,12 @@ async def generate_text(request: GenerateRequest):
 
 @router.post("/chat")
 async def chat(request: ChatRequest):
-    """Chat with the LLM."""
+    """
+    Chat with the LLM.
+
+    Optionally provide session_id to load conversation history
+    and persist new turns for multi-location continuity.
+    """
     service = llm_registry.get_active()
     if service is None:
         raise HTTPException(
@@ -125,11 +141,61 @@ async def chat(request: ChatRequest):
         from ..services.protocols import Message
 
         messages = [Message(role=m.role, content=m.content) for m in request.messages]
+        session_uuid = None
+
+        # Load conversation history if session_id provided and DB enabled
+        if request.session_id and db_settings.enabled:
+            pool = get_db_pool()
+            if pool.is_initialized:
+                try:
+                    session_uuid = UUID(request.session_id)
+                    conv_repo = get_conversation_repo()
+                    history = await conv_repo.get_history(session_uuid, limit=20)
+
+                    if history:
+                        history_messages = [
+                            Message(role=t.role, content=t.content)
+                            for t in history
+                        ]
+                        messages = history_messages + messages
+                        logger.debug(
+                            "Loaded %d turns from session %s",
+                            len(history),
+                            request.session_id
+                        )
+                except Exception as e:
+                    logger.warning("Failed to load history: %s", e)
+
         result = service.chat(
             messages=messages,
             max_tokens=request.max_tokens,
             temperature=request.temperature,
         )
+
+        # Persist new turns if session_id provided and DB enabled
+        if session_uuid and db_settings.enabled:
+            pool = get_db_pool()
+            if pool.is_initialized:
+                try:
+                    conv_repo = get_conversation_repo()
+                    user_content = request.messages[-1].content if request.messages else ""
+
+                    await conv_repo.add_turn(
+                        session_id=session_uuid,
+                        role="user",
+                        content=user_content,
+                    )
+
+                    response_content = result.get("response", "")
+                    await conv_repo.add_turn(
+                        session_id=session_uuid,
+                        role="assistant",
+                        content=response_content,
+                    )
+                    logger.debug("Persisted turns to session %s", request.session_id)
+                except Exception as e:
+                    logger.warning("Failed to persist turns: %s", e)
+
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chat failed: {e}")
@@ -149,4 +215,33 @@ async def get_status():
     return {
         "active": True,
         "model_info": service.model_info.to_dict(),
+    }
+
+
+@router.get("/routing/status")
+async def get_routing_status():
+    """Get intelligent routing status and statistics."""
+    from ..config import settings
+    from ..orchestration.model_router import get_model_router
+
+    router_instance = get_model_router()
+    stats = router_instance.get_stats()
+
+    return {
+        "enabled": settings.routing.enabled,
+        "current_model": llm_registry.get_active_name(),
+        "tiers": {
+            "simple": {
+                "name": settings.routing.simple_model_name,
+                "threshold": settings.routing.simple_threshold,
+            },
+            "medium": {
+                "name": settings.routing.medium_model_name,
+                "threshold": settings.routing.medium_threshold,
+            },
+            "complex": {
+                "name": settings.routing.complex_model_name,
+            },
+        },
+        "statistics": stats,
     }

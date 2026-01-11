@@ -92,6 +92,7 @@ class Orchestrator:
         self._speaker_id = None
         self._intent_parser = None
         self._action_dispatcher = None
+        self._model_router = None
 
         # Event callbacks
         self._on_state_change: Optional[Callable] = None
@@ -166,6 +167,13 @@ class Orchestrator:
             from ..capabilities.actions import action_dispatcher
             self._action_dispatcher = action_dispatcher
         return self._action_dispatcher
+
+    def _get_model_router(self):
+        """Lazy load model router."""
+        if self._model_router is None:
+            from .model_router import get_model_router
+            self._model_router = get_model_router()
+        return self._model_router
 
     def set_callbacks(
         self,
@@ -424,11 +432,24 @@ class Orchestrator:
 
     def _generate_llm_response(self, ctx: PipelineContext) -> str:
         """Generate a conversational response using the LLM."""
+        from ..config import settings
+        from ..services.protocols import Message
+
+        # Intelligent model routing when enabled
+        if settings.routing.enabled:
+            router = self._get_model_router()
+            tier = router.select_tier(ctx.transcript, ctx)
+            swapped = router.ensure_model_loaded(tier)
+            if swapped:
+                logger.info(
+                    "Model routed: %s (complexity=%.2f)",
+                    tier.name,
+                    tier.score,
+                )
+
         llm = self._get_llm()
         if llm is None:
             return f"I heard: {ctx.transcript}"
-
-        from ..services.protocols import Message
 
         system_msg = "You are Atlas, a helpful home automation assistant. Respond briefly and naturally in 1-2 sentences."
         if ctx.speaker_id != "unknown":
