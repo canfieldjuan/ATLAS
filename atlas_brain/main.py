@@ -6,12 +6,15 @@ The main FastAPI application entry point.
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 
 from .api import router as api_router
 from .config import settings
-from .services import vlm_registry, stt_registry
+from .services import vlm_registry, stt_registry, llm_registry, tts_registry
+from .storage import db_settings
+from .storage.database import init_database, close_database
 
 # Configure logging
 logging.basicConfig(
@@ -31,6 +34,16 @@ async def lifespan(app: FastAPI):
     # --- Startup ---
     logger.info("Atlas Brain starting up...")
 
+    # Initialize database connection pool
+    if db_settings.enabled:
+        try:
+            await init_database()
+            logger.info("Database connection pool initialized")
+        except Exception as e:
+            logger.error("Failed to initialize database: %s", e)
+            # Continue without database - service can still function
+            # but conversation persistence will be unavailable
+
     # Load default VLM if configured
     if settings.load_vlm_on_startup:
         try:
@@ -49,6 +62,30 @@ async def lifespan(app: FastAPI):
             )
         except Exception as e:
             logger.error("Failed to load default STT: %s", e)
+
+    # Load default TTS if configured
+    if settings.load_tts_on_startup:
+        try:
+            logger.info("Loading default TTS: %s (voice=%s)", settings.tts.default_model, settings.tts.voice)
+            tts_registry.activate(settings.tts.default_model, voice=settings.tts.voice)
+        except Exception as e:
+            logger.error("Failed to load default TTS: %s", e)
+
+    # Load default LLM if configured
+    if settings.load_llm_on_startup:
+        try:
+            logger.info("Loading default LLM: %s", settings.llm.default_model)
+            kwargs = {}
+            if settings.llm.model_path:
+                kwargs["model_path"] = Path(settings.llm.model_path)
+            if settings.llm.n_ctx:
+                kwargs["n_ctx"] = settings.llm.n_ctx
+            if settings.llm.n_gpu_layers is not None:
+                kwargs["n_gpu_layers"] = settings.llm.n_gpu_layers
+            llm_registry.activate(settings.llm.default_model, **kwargs)
+            logger.info("LLM loaded successfully")
+        except Exception as e:
+            logger.error("Failed to load default LLM: %s", e)
 
     # Register test devices for development
     try:
@@ -81,9 +118,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Error shutting down Home Assistant: %s", e)
 
+    # Close database connection pool
+    if db_settings.enabled:
+        try:
+            await close_database()
+            logger.info("Database connection pool closed")
+        except Exception as e:
+            logger.error("Error closing database: %s", e)
+
     # Unload models to free resources
     vlm_registry.deactivate()
     stt_registry.deactivate()
+    tts_registry.deactivate()
+    llm_registry.deactivate()
 
     logger.info("Atlas Brain shutdown complete")
 

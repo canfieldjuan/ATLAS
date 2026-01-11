@@ -4,6 +4,8 @@ Pipeline state machine for orchestration.
 Defines the states and transitions for the audio processing pipeline.
 """
 
+import asyncio
+import inspect
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
@@ -203,6 +205,12 @@ class PipelineStateMachine:
         """Notify listeners of state change."""
         for listener in self._listeners:
             try:
-                listener(event, old_state, new_state, self._context)
+                result = listener(event, old_state, new_state, self._context)
+                if inspect.iscoroutine(result):
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(result)
+                    except RuntimeError:
+                        pass
             except Exception:
-                pass  # Don't let listener errors break the state machine
+                pass

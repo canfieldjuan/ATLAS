@@ -94,12 +94,17 @@ class FasterWhisperSTT(BaseModelService):
 
         def _transcribe() -> tuple[str, list[dict], Any]:
             suffix = Path(filename).suffix or ".wav"
-            with tempfile.NamedTemporaryFile(suffix=suffix) as tmp:
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 tmp.write(audio_bytes)
                 tmp.flush()
                 segments, info = self._model.transcribe(tmp.name)
                 text_segments = self._serialize_segments(segments)
                 transcript = " ".join(seg["text"] for seg in text_segments).strip()
+                self.logger.info("Whisper result: lang=%s, prob=%.2f, segments=%d, text='%s'",
+                    getattr(info, "language", "?"),
+                    getattr(info, "language_probability", 0),
+                    len(text_segments),
+                    transcript[:100] if transcript else "(empty)")
                 return transcript, text_segments, info
 
         with InferenceTimer() as timer:

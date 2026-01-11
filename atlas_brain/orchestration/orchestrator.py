@@ -325,7 +325,7 @@ class Orchestrator:
 
         try:
             transcription = await stt.transcribe(ctx.audio_bytes)
-            ctx.transcript = transcription.get("text", "")
+            ctx.transcript = transcription.get("transcript", "")
             ctx.transcript_confidence = transcription.get("confidence", 0.0)
             result.transcript = ctx.transcript
             result.transcription_ms = (datetime.now() - trans_start).total_seconds() * 1000
@@ -428,19 +428,20 @@ class Orchestrator:
         if llm is None:
             return f"I heard: {ctx.transcript}"
 
-        # Build context for the LLM
-        speaker = f"Speaker: {ctx.speaker_id}" if ctx.speaker_id != "unknown" else ""
+        from ..services.protocols import Message
 
-        prompt = f"""You are Atlas, a helpful home automation assistant. Respond briefly and naturally to the user.
+        system_msg = "You are Atlas, a helpful home automation assistant. Respond briefly and naturally in 1-2 sentences."
+        if ctx.speaker_id != "unknown":
+            system_msg += f" The speaker is {ctx.speaker_id}."
 
-{speaker}
-User said: "{ctx.transcript}"
-
-Respond in 1-2 sentences:"""
+        messages = [
+            Message(role="system", content=system_msg),
+            Message(role="user", content=ctx.transcript),
+        ]
 
         try:
-            result = llm.generate(
-                prompt=prompt,
+            result = llm.chat(
+                messages=messages,
                 max_tokens=100,
                 temperature=0.7,
             )

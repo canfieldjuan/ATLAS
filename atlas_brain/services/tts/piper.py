@@ -212,27 +212,22 @@ class PiperTTS(BaseModelService):
         """Synthesize using Piper Python library."""
         import asyncio
 
-        # Find model path first
         model_path = self._find_model_path(voice)
 
         def _synthesize():
             try:
                 from piper import PiperVoice
 
-                # Load voice
                 if not Path(model_path).exists():
                     raise FileNotFoundError(f"Voice model not found: {model_path}")
 
                 piper_voice = PiperVoice.load(model_path)
 
-                # Synthesize
-                audio_data = []
-                for audio_bytes in piper_voice.synthesize_stream_raw(text):
-                    audio_data.append(audio_bytes)
+                wav_buffer = io.BytesIO()
+                with wave.open(wav_buffer, "wb") as wav_file:
+                    piper_voice.synthesize_wav(text, wav_file)
 
-                # Combine and convert to WAV
-                raw_audio = b"".join(audio_data)
-                return self._raw_to_wav(raw_audio, piper_voice.config.sample_rate)
+                return wav_buffer.getvalue()
 
             except ImportError:
                 raise RuntimeError(

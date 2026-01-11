@@ -60,12 +60,18 @@ async def orchestrated_audio_stream(websocket: WebSocket):
 
     # Track state for status updates
     last_state: Optional[PipelineState] = None
+    is_connected = True
 
     async def send_status(state: str, **kwargs):
         """Send a status update to the client."""
-        message = {"state": state, **kwargs}
-        await websocket.send_json(message)
-        logger.debug("Status: %s", state)
+        if not is_connected:
+            return
+        try:
+            message = {"state": state, **kwargs}
+            await websocket.send_json(message)
+            logger.debug("Status: %s", state)
+        except Exception:
+            pass
 
     async def on_state_change(event, old_state, new_state, ctx):
         """Callback for pipeline state changes."""
@@ -167,6 +173,16 @@ async def orchestrated_audio_stream(websocket: WebSocket):
                                 # Return current context
                                 await send_status("context", **context.build_context_dict())
 
+                            elif command == "stop_recording":
+                                # Force process collected audio
+                                audio_bytes = orchestrator._audio_buffer.get_utterance()
+                                if audio_bytes:
+                                    orchestrator._state_machine.context.audio_bytes = audio_bytes
+                                    await orchestrator._process_utterance()
+                                    # on_response callback is called by _process_utterance
+                                else:
+                                    await send_status("idle", message="No speech detected")
+
                         except json.JSONDecodeError:
                             logger.warning("Invalid JSON command: %s", message["text"])
 
@@ -182,13 +198,12 @@ async def orchestrated_audio_stream(websocket: WebSocket):
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
+        is_connected = False
     except Exception as e:
         logger.exception("Orchestration error")
-        try:
-            await send_status("error", message=str(e))
-        except Exception:
-            pass
+        await send_status("error", message=str(e))
     finally:
+        is_connected = False
         orchestrator.reset()
 
 

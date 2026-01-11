@@ -72,7 +72,7 @@ class TTSConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ATLAS_TTS_")
 
     default_model: str = Field(default="piper", description="Default TTS backend")
-    voice: str = Field(default="en_US-amy-medium", description="Voice model")
+    voice: str = Field(default="en_US-ryan-medium", description="Voice model")
 
 
 class OrchestrationConfig(BaseSettings):
@@ -116,6 +116,8 @@ class Settings(BaseSettings):
     # Startup behavior
     load_vlm_on_startup: bool = Field(default=True, description="Load VLM on startup")
     load_stt_on_startup: bool = Field(default=False, description="Load STT on startup (lazy load if False)")
+    load_tts_on_startup: bool = Field(default=False, description="Load TTS on startup (lazy load if False)")
+    load_llm_on_startup: bool = Field(default=True, description="Load LLM on startup")
 
     # Nested configs
     vlm: VLMConfig = Field(default_factory=VLMConfig)
