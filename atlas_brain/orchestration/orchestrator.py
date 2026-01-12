@@ -483,6 +483,12 @@ class Orchestrator:
             if self._on_transcript:
                 await self._on_transcript(ctx.transcript)
 
+            # Skip processing if transcription is empty (no speech detected)
+            if not ctx.transcript or not ctx.transcript.strip():
+                logger.info("Empty transcription, skipping response generation")
+                result.success = True
+                return result
+
         except Exception as e:
             logger.error("Transcription failed: %s", e)
             return OrchestratorResult(success=False, error=f"Transcription failed: {e}")
@@ -523,17 +529,27 @@ class Orchestrator:
         response_start = datetime.now()
         result.response_text = self._generate_response_text(ctx, result)
         ctx.response_text = result.response_text
+        logger.info("Response generated: intent=%s, action_results=%d, text='%s'",
+                   ctx.intent.action if ctx.intent else None,
+                   len(ctx.action_results),
+                   result.response_text[:100] if result.response_text else None)
 
         # TTS (if available)
         tts = self._get_tts()
+        logger.info("TTS check: tts=%s, response_text='%s'",
+                   tts is not None, result.response_text[:50] if result.response_text else None)
         if tts is not None and result.response_text:
             try:
                 tts_start = datetime.now()
                 result.response_audio = await tts.synthesize(result.response_text)
                 ctx.response_audio = result.response_audio
                 result.tts_ms = (datetime.now() - tts_start).total_seconds() * 1000
+                logger.info("TTS synthesized: %d bytes in %.0fms",
+                           len(result.response_audio) if result.response_audio else 0, result.tts_ms)
             except Exception as e:
                 logger.warning("TTS synthesis failed: %s", e)
+        else:
+            logger.warning("TTS skipped: tts=%s, has_text=%s", tts is not None, bool(result.response_text))
 
         self._state_machine.transition(PipelineEvent.RESPONSE_READY)
 

@@ -30,3 +30,6 @@ piper-tts
 
 # Optional: For GGUF model support
 # llama-cpp-python
+
+# Optional: Flash Attention 2 for faster inference (Ampere+ GPUs)
+# Install separately: pip install flash-attn --no-build-isolation

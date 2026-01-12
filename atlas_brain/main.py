@@ -4,9 +4,11 @@ Atlas Brain - Central Intelligence Server
 The main FastAPI application entry point.
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 
 from fastapi import FastAPI
 
@@ -15,6 +17,9 @@ from .config import settings
 from .services import vlm_registry, stt_registry, llm_registry, tts_registry, vos_registry
 from .storage import db_settings
 from .storage.database import init_database, close_database
+
+# Global voice client task
+_voice_client_task: Optional[asyncio.Task] = None
 
 # Configure logging
 logging.basicConfig(
@@ -74,15 +79,33 @@ async def lifespan(app: FastAPI):
     # Load default LLM if configured
     if settings.load_llm_on_startup:
         try:
-            logger.info("Loading default LLM: %s", settings.llm.default_model)
-            kwargs = {}
-            if settings.llm.model_path:
-                kwargs["model_path"] = Path(settings.llm.model_path)
-            if settings.llm.n_ctx:
-                kwargs["n_ctx"] = settings.llm.n_ctx
-            if settings.llm.n_gpu_layers is not None:
-                kwargs["n_gpu_layers"] = settings.llm.n_gpu_layers
-            llm_registry.activate(settings.llm.default_model, **kwargs)
+            backend = settings.llm.default_model
+            logger.info("Loading default LLM backend: %s", backend)
+
+            if backend == "transformers-flash":
+                # Transformers with Flash Attention
+                kwargs = {
+                    "model_id": settings.llm.hf_model_id,
+                    "torch_dtype": settings.llm.torch_dtype,
+                    "use_flash_attention": settings.llm.use_flash_attention,
+                }
+                if settings.llm.max_memory_gb:
+                    kwargs["max_memory_gb"] = settings.llm.max_memory_gb
+                logger.info("HF Model: %s, dtype: %s, flash_attn: %s",
+                           settings.llm.hf_model_id,
+                           settings.llm.torch_dtype,
+                           settings.llm.use_flash_attention)
+            else:
+                # llama-cpp (GGUF models)
+                kwargs = {}
+                if settings.llm.model_path:
+                    kwargs["model_path"] = Path(settings.llm.model_path)
+                if settings.llm.n_ctx:
+                    kwargs["n_ctx"] = settings.llm.n_ctx
+                if settings.llm.n_gpu_layers is not None:
+                    kwargs["n_gpu_layers"] = settings.llm.n_gpu_layers
+
+            llm_registry.activate(backend, **kwargs)
             logger.info("LLM loaded successfully")
         except Exception as e:
             logger.error("Failed to load default LLM: %s", e)
@@ -174,12 +197,52 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to initialize discovery service: %s", e)
 
+    # Start voice client if enabled
+    global _voice_client_task
+    if settings.voice.enabled:
+        try:
+            from atlas_voice.runner import VoiceRunner, RunnerConfig
+
+            voice_config = RunnerConfig(
+                atlas_url="ws://localhost:8000/api/v1/ws/orchestrated",
+                input_device=settings.voice.input_device,
+                output_device=settings.voice.output_device,
+                sample_rate=settings.voice.sample_rate,
+                require_wake_word=settings.voice.require_wake_word,
+            )
+            runner = VoiceRunner(voice_config)
+
+            async def run_voice_client():
+                try:
+                    await runner.run()
+                except asyncio.CancelledError:
+                    logger.info("Voice client task cancelled")
+                except Exception as e:
+                    logger.error("Voice client error: %s", e)
+
+            _voice_client_task = asyncio.create_task(run_voice_client())
+            logger.info("Voice client started (wake_word=%s)", settings.voice.require_wake_word)
+        except ImportError as e:
+            logger.warning("Voice client not available (atlas_voice not installed): %s", e)
+        except Exception as e:
+            logger.error("Failed to start voice client: %s", e)
+
     logger.info("Atlas Brain startup complete")
 
     yield  # Application runs here
 
     # --- Shutdown ---
     logger.info("Atlas Brain shutting down...")
+
+    # Stop voice client
+    if _voice_client_task and not _voice_client_task.done():
+        logger.info("Stopping voice client...")
+        _voice_client_task.cancel()
+        try:
+            await _voice_client_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Voice client stopped")
 
     # Shutdown discovery service
     if settings.discovery.enabled:

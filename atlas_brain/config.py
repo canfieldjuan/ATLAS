@@ -86,10 +86,31 @@ class LLMConfig(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="ATLAS_LLM_")
 
+    # Backend selection: "llama-cpp" or "transformers-flash"
     default_model: str = Field(default="llama-cpp", description="Default LLM backend")
+
+    # llama-cpp settings (GGUF models)
     model_path: Optional[str] = Field(default=None, description="Path to GGUF model file")
     n_ctx: int = Field(default=4096, description="Context window size")
     n_gpu_layers: int = Field(default=-1, description="GPU layers (-1 = all)")
+
+    # transformers-flash settings (HuggingFace models)
+    hf_model_id: str = Field(
+        default="meta-llama/Llama-3.1-8B-Instruct",
+        description="HuggingFace model ID for transformers backend"
+    )
+    torch_dtype: str = Field(
+        default="bfloat16",
+        description="Torch dtype: bfloat16, float16, or auto"
+    )
+    use_flash_attention: bool = Field(
+        default=True,
+        description="Use Flash Attention 2 if available"
+    )
+    max_memory_gb: Optional[float] = Field(
+        default=None,
+        description="Max GPU memory in GB (None = no limit)"
+    )
 
 
 class TTSConfig(BaseSettings):
@@ -272,6 +293,18 @@ class MemoryConfig(BaseSettings):
     )
 
 
+class VoiceClientConfig(BaseSettings):
+    """Voice client configuration - unified audio capture and playback."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_VOICE_")
+
+    enabled: bool = Field(default=True, description="Enable voice client on startup")
+    require_wake_word: bool = Field(default=True, description="Require wake word")
+    input_device: int | None = Field(default=None, description="Audio input device index")
+    output_device: int | None = Field(default=None, description="Audio output device index")
+    sample_rate: int = Field(default=16000, description="Audio sample rate")
+
+
 class Settings(BaseSettings):
     """Application-wide settings."""
 
@@ -318,6 +351,7 @@ class Settings(BaseSettings):
     routing: ModelRoutingConfig = Field(default_factory=ModelRoutingConfig)
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    voice: VoiceClientConfig = Field(default_factory=VoiceClientConfig)
 
 
 # Singleton settings instance
