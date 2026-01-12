@@ -1,181 +1,185 @@
 import clsx from 'clsx';
 import { useAtlasStore } from '../../state/store';
-import { useMemo } from 'react';
-
-interface Particle {
-  id: number;
-  x: number;
-  y: number;
-  size: number;
-  duration: number;
-  delay: number;
-}
-
-const generateParticles = (): Particle[] => {
-  const particles: Particle[] = [];
-  for (let i = 0; i < 20; i++) {
-    particles.push({
-      id: i,
-      x: Math.random() * 100,
-      y: Math.random() * 100,
-      size: Math.random() * 4 + 2,
-      duration: Math.random() * 3 + 2,
-      delay: Math.random() * 2,
-    });
-  }
-  return particles;
-};
-
 export const Avatar: React.FC = () => {
-  const { status } = useAtlasStore();
-  const particles = useMemo(() => generateParticles(), []);
-
-  const getOrbColors = () => {
-    switch (status) {
-      case 'listening':
-        return {
-          primary: 'from-blue-400 via-cyan-500 to-blue-600',
-          glow: 'shadow-[0_0_80px_30px_rgba(59,130,246,0.6)]',
-          particle: 'bg-blue-400',
-          ring: 'border-blue-400/50',
-        };
-      case 'processing':
-        return {
-          primary: 'from-amber-400 via-yellow-500 to-orange-500',
-          glow: 'shadow-[0_0_80px_30px_rgba(245,158,11,0.6)]',
-          particle: 'bg-yellow-400',
-          ring: 'border-yellow-400/50',
-        };
-      case 'speaking':
-        return {
-          primary: 'from-purple-400 via-violet-500 to-purple-600',
-          glow: 'shadow-[0_0_100px_40px_rgba(168,85,247,0.7)]',
-          particle: 'bg-purple-400',
-          ring: 'border-purple-400/50',
-        };
-      case 'error':
-        return {
-          primary: 'from-red-400 via-rose-500 to-red-600',
-          glow: 'shadow-[0_0_80px_30px_rgba(239,68,68,0.6)]',
-          particle: 'bg-red-400',
-          ring: 'border-red-400/50',
-        };
-      default:
-        return {
-          primary: 'from-slate-300 via-slate-400 to-slate-500',
-          glow: 'shadow-[0_0_40px_15px_rgba(148,163,184,0.3)]',
-          particle: 'bg-slate-400',
-          ring: 'border-slate-400/30',
-        };
-    }
-  };
-
-  const colors = getOrbColors();
+  const { status, audioAnalysis } = useAtlasStore();
   const isActive = status !== 'idle';
 
   return (
-    <div className="relative flex items-center justify-center w-72 h-72">
-      {/* Particle field */}
-      <div className="absolute inset-0 overflow-hidden rounded-full">
-        {particles.map((particle) => (
-          <div
-            key={particle.id}
-            className={clsx(
-              "absolute rounded-full opacity-60 blur-[1px]",
-              colors.particle,
-              isActive ? 'animate-float' : 'opacity-20'
-            )}
-            style={{
-              left: `${particle.x}%`,
-              top: `${particle.y}%`,
-              width: `${particle.size}px`,
-              height: `${particle.size}px`,
-              animationDuration: `${particle.duration}s`,
-              animationDelay: `${particle.delay}s`,
-            }}
-          />
-        ))}
-      </div>
+    <div className="relative flex items-center justify-center w-96 h-96">
+      
+      {/* Background Ambience Layer - deep network */}
+      <svg className="absolute w-full h-full opacity-60" viewBox="0 0 400 400">
+        <defs>
+          <radialGradient id="deep-glow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="#22d3ee" stopOpacity="0.2" />
+            <stop offset="100%" stopColor="#000000" stopOpacity="0" />
+          </radialGradient>
+          <filter id="blur-node">
+            <feGaussianBlur stdDeviation="3" />
+          </filter>
+        </defs>
+        
+        {/* Deep background glow */}
+        <circle cx="200" cy="200" r="180" fill="url(#deep-glow)" />
+        
+        {/* Background faint web */}
+        {[...Array(40)].map((_, i) => {
+           // Random stable seed based on index
+           const seed = i * 1337;
+           const angle1 = (i / 40) * Math.PI * 2;
+           const angle2 = ((i + 15) / 40) * Math.PI * 2;
+           const r = 180;
+           const x1 = 200 + Math.cos(angle1) * r;
+           const y1 = 200 + Math.sin(angle1) * r;
+           const x2 = 200 + Math.cos(angle2) * r;
+           const y2 = 200 + Math.sin(angle2) * r;
+           const controlR = 50 + (seed % 100); 
+           const cx = 200 + Math.cos(angle1 + 1) * controlR;
+           const cy = 200 + Math.sin(angle1 + 1) * controlR;
 
-      {/* Outer rotating ring */}
-      <div
+           return (
+             <path 
+               key={`bg-web-${i}`}
+               d={`M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`}
+               stroke="#0e7490" 
+               strokeWidth="0.5"
+               fill="none"
+               opacity="0.2"
+             />
+           );
+        })}
+      </svg>
+
+      {/* Primary Neural Web - High Detail */}
+      <svg 
         className={clsx(
-          "absolute w-64 h-64 rounded-full border-2 transition-all duration-700",
-          colors.ring,
-          isActive ? 'animate-spin-slow opacity-60' : 'opacity-20'
-        )}
-        style={{ animationDuration: '8s' }}
-      />
-
-      {/* Second rotating ring (opposite direction) */}
-      <div
-        className={clsx(
-          "absolute w-56 h-56 rounded-full border transition-all duration-700",
-          colors.ring,
-          isActive ? 'animate-reverse-spin opacity-40' : 'opacity-10'
-        )}
-        style={{ animationDuration: '12s' }}
-      />
-
-      {/* Orbital dots */}
-      {isActive && (
-        <div className="absolute w-60 h-60 animate-spin-slow" style={{ animationDuration: '6s' }}>
-          <div className={clsx("absolute top-0 left-1/2 -translate-x-1/2 w-3 h-3 rounded-full", colors.particle, "shadow-lg")} />
-          <div className={clsx("absolute bottom-0 left-1/2 -translate-x-1/2 w-2 h-2 rounded-full", colors.particle, "opacity-60")} />
-        </div>
-      )}
-
-      {/* Main 3D Orb */}
-      <div
-        className={clsx(
-          "relative w-40 h-40 rounded-full transition-all duration-500",
-          colors.glow,
-          status === 'listening' && 'scale-110',
-          status === 'speaking' && 'scale-105 animate-pulse-slow',
-          status === 'processing' && 'animate-pulse'
-        )}
+          "absolute w-full h-full transition-all duration-500",
+          isActive && "scale-105"
+        )} 
+        viewBox="0 0 400 400"
+        style={{
+           transform: audioAnalysis.isActive ? `scale(${1 + audioAnalysis.volume * 0.002})` : undefined
+        }}
       >
-        {/* Orb gradient background */}
-        <div
-          className={clsx(
-            "absolute inset-0 rounded-full bg-gradient-to-br transition-all duration-500",
-            colors.primary
-          )}
-        />
+        <defs>
+          <linearGradient id="neural-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#ffffff" />
+            <stop offset="100%" stopColor="#22d3ee" />
+          </linearGradient>
+          <filter id="glow-intense">
+            <feGaussianBlur stdDeviation="2.5" result="coloredBlur"/>
+            <feMerge>
+              <feMergeNode in="coloredBlur"/>
+              <feMergeNode in="SourceGraphic"/>
+            </feMerge>
+          </filter>
+          <mask id="fade-mask">
+            <radialGradient id="fade-grad">
+              <stop offset="60%" stopColor="white" />
+              <stop offset="100%" stopColor="black" />
+            </radialGradient>
+            <circle cx="200" cy="200" r="200" fill="url(#fade-grad)" />
+          </mask>
+        </defs>
 
-        {/* 3D highlight (top-left shine) */}
-        <div className="absolute inset-0 rounded-full bg-gradient-to-br from-white/40 via-transparent to-transparent" />
+        <g mask="url(#fade-mask)">
+          {/* Main Organic Fibers */}
+          {[...Array(60)].map((_, i) => {
+            const seed = i * 9382;
+            const angleStart = (i / 60) * Math.PI * 2;
+            // Connect to point roughly across but varied
+            const angleEnd = angleStart + Math.PI + (Math.sin(seed) * 1.5);
+            
+            const rStart = 160 + (Math.sin(seed * 0.1) * 20);
+            const rEnd = 160 + (Math.cos(seed * 0.1) * 20);
 
-        {/* Inner depth shadow */}
-        <div className="absolute inset-4 rounded-full bg-gradient-to-br from-transparent via-black/10 to-black/30" />
+            const x1 = 200 + Math.cos(angleStart) * rStart;
+            const y1 = 200 + Math.sin(angleStart) * rStart;
+            
+            const x2 = 200 + Math.cos(angleEnd) * rEnd;
+            const y2 = 200 + Math.sin(angleEnd) * rEnd;
 
-        {/* Core glow */}
-        <div className="absolute inset-8 rounded-full bg-white/20 blur-md" />
+            // Control points for organic curve
+            const cp1x = 200 + Math.cos(angleStart + 0.5) * 80;
+            const cp1y = 200 + Math.sin(angleStart + 0.5) * 80;
+            const cp2x = 200 + Math.cos(angleEnd - 0.5) * 80;
+            const cp2y = 200 + Math.sin(angleEnd - 0.5) * 80;
 
-        {/* Center bright spot */}
-        <div className="absolute top-6 left-6 w-8 h-8 rounded-full bg-white/50 blur-sm" />
-
-        {/* Status indicator ring */}
-        {status === 'listening' && (
-          <div className="absolute inset-0 rounded-full border-4 border-white/30 animate-ping" />
-        )}
-      </div>
-
-      {/* Ambient glow rings */}
-      <div
-        className={clsx(
-          "absolute w-48 h-48 rounded-full transition-all duration-700 blur-xl",
-          isActive ? 'opacity-30' : 'opacity-10',
-          `bg-gradient-to-r ${colors.primary}`
-        )}
-      />
-
-      {/* Pulse rings for speaking */}
-      {status === 'speaking' && (
-        <>
-          <div className="absolute w-52 h-52 rounded-full border border-purple-400/40 animate-ping" style={{ animationDuration: '1.5s' }} />
-          <div className="absolute w-60 h-60 rounded-full border border-purple-300/20 animate-ping" style={{ animationDuration: '2s' }} />
-        </>
+            return (
+              <path
+                key={`fiber-${i}`}
+                d={`M ${x1} ${y1} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${x2} ${y2}`}
+                stroke="url(#neural-gradient)"
+                strokeWidth={isActive ? Math.max(0.5, (Math.sin(i) + 1.5) * 0.8) : 0.5}
+                fill="none"
+                opacity={isActive ? 0.6 : 0.3}
+                className="transition-all duration-1000"
+              />
+            );
+          })}
+          
+          {/* Active Signal Pulses */}
+          {isActive && [...Array(12)].map((_, i) => (
+             <circle key={`pulse-${i}`} r="2" fill="#fff" filter="url(#glow-intense)">
+               <animateMotion 
+                 dur={`${2 + i % 3}s`} 
+                 repeatCount="indefinite"
+                 path={`M 200 200 Q ${200 + Math.cos(i) * 100} ${200 + Math.sin(i) * 100} ${200 + Math.cos(i) * 180} ${200 + Math.sin(i) * 180}`}
+               />
+               <animate attributeName="opacity" values="0;1;0" dur={`${2 + i % 3}s`} repeatCount="indefinite" />
+             </circle>
+          ))}
+        </g>
+        
+        {/* Central Neural Cluster */}
+        <g filter="url(#glow-intense)">
+            {/* Core Nodes */}
+            {[...Array(15)].map((_, i) => {
+                const angle = (i / 15) * Math.PI * 2;
+                const r = 25 + (i % 3) * 10;
+                const x = 200 + Math.cos(angle) * r;
+                const y = 200 + Math.sin(angle) * r;
+                const size = 3 + (i % 4);
+                
+                return (
+                    <circle 
+                        key={`node-${i}`} 
+                        cx={x} cy={y} r={size} 
+                        fill="#fff" 
+                        opacity={isActive ? 0.9 : 0.6}
+                    />
+                );
+            })}
+            
+            {/* Inner connections */}
+            {[...Array(20)].map((_, i) => {
+                const angle = (i / 20) * Math.PI * 2;
+                const x = 200 + Math.cos(angle) * 35;
+                const y = 200 + Math.sin(angle) * 35;
+                return (
+                    <line 
+                        key={`core-line-${i}`}
+                        x1="200" y1="200" x2={x} y2={y}
+                        stroke="#22d3ee"
+                        strokeWidth="1"
+                        opacity="0.6"
+                    />
+                );
+            })}
+            
+            {/* Central Nucleus */}
+            <circle cx="200" cy="200" r="12" fill="#fff" />
+            <circle cx="200" cy="200" r="20" fill="none" stroke="#22d3ee" strokeWidth="2" opacity="0.8">
+               <animateTransform attributeName="transform" type="scale" values="1;1.2;1" dur="2s" repeatCount="indefinite" />
+            </circle>
+        </g>
+      </svg>
+      
+      {/* Dynamic Text Overlay */}
+      {status !== 'idle' && (
+          <div className="absolute top-[85%] font-mono text-cyan-400 text-xs tracking-[0.3em] opacity-80">
+            {status.toUpperCase()}
+          </div>
       )}
     </div>
   );

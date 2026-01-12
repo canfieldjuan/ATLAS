@@ -6,15 +6,18 @@ export const useAtlasStore = create<AtlasStore>((set) => ({
   transcript: '',
   response: '',
   isConnected: false,
+  audioAnalysis: { volume: 0, frequency: 0, isActive: false, waveform: [] },
   
   setStatus: (status) => set({ status }),
   setTranscript: (transcript) => set({ transcript }),
   setResponse: (response) => set({ response }),
   setConnected: (isConnected) => set({ isConnected }),
+  setAudioAnalysis: (audioAnalysis) => set({ audioAnalysis }),
   
   reset: () => set({ 
     status: 'idle', 
     transcript: '', 
-    response: '' 
+    response: '',
+    audioAnalysis: { volume: 0, frequency: 0, isActive: false, waveform: [] }
   })
 }));
