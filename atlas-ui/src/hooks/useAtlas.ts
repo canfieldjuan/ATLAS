@@ -15,8 +15,14 @@ export const useAtlas = (url: string = 'ws://localhost:8000/api/v1/ws/orchestrat
   const baseReconnectDelay = 1000;
 
   const connect = useCallback(() => {
-    if (ws.current?.readyState === WebSocket.OPEN) {
+    // Don't create new connection if one exists and is open or connecting
+    if (ws.current && (ws.current.readyState === WebSocket.OPEN || ws.current.readyState === WebSocket.CONNECTING)) {
       return;
+    }
+
+    // Close any existing connection in closing state
+    if (ws.current) {
+      ws.current.close();
     }
 
     ws.current = new WebSocket(url);

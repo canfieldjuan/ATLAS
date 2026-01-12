@@ -47,13 +47,16 @@ class ConnectionManager:
     async def broadcast(self, message: dict):
         """Send a message to all connected clients."""
         if not self.active_connections:
+            logger.debug("No active connections for broadcast")
             return
+        state = message.get("state", "unknown")
         disconnected = []
         async with self._lock:
             for connection in self.active_connections:
                 try:
                     await connection.send_json(message)
-                except Exception:
+                except Exception as e:
+                    logger.warning("Broadcast failed for client: %s", e)
                     disconnected.append(connection)
             for conn in disconnected:
                 self.active_connections.discard(conn)
@@ -167,14 +170,13 @@ async def orchestrated_audio_stream(websocket: WebSocket):
     is_connected = True
 
     async def send_status(state: str, **kwargs):
-        """Send a status update to ALL connected clients."""
+        """Send a status update to this client only (no broadcast)."""
         if not is_connected:
             return
         try:
             message = {"state": state, **kwargs}
-            # Broadcast to all connected clients
-            await connection_manager.broadcast(message)
-            logger.debug("Broadcast status: %s", state)
+            # Send only to this specific WebSocket connection
+            await websocket.send_json(message)
         except Exception:
             pass
 
@@ -193,10 +195,14 @@ async def orchestrated_audio_stream(websocket: WebSocket):
 
     async def on_response(result):
         """Callback when response is ready."""
+        logger.info("on_response callback: text=%s, has_audio=%s",
+                    result.response_text[:50] if result.response_text else None,
+                    result.response_audio is not None)
         response_data = {
             "text": result.response_text,
             "success": result.success,
             "latency_ms": result.latency_ms,
+            "follow_up_mode": orchestrator.in_follow_up_mode,
         }
         if result.response_audio:
             response_data["audio_base64"] = base64.b64encode(result.response_audio).decode()
@@ -211,6 +217,7 @@ async def orchestrated_audio_stream(websocket: WebSocket):
             response_data["actions"] = result.action_results
 
         await send_status("response", **response_data)
+        logger.info("Sent response status with %d bytes audio", len(response_data.get("audio_base64", "")))
 
         # Add to conversation context
         if result.response_text:
@@ -227,6 +234,7 @@ async def orchestrated_audio_stream(websocket: WebSocket):
     await send_status(
         "listening",
         wake_word_enabled=orchestrator.config.require_wake_word,
+        follow_up_mode=orchestrator.in_follow_up_mode,
         context=context.build_context_dict(),
     )
 
@@ -341,6 +349,7 @@ async def orchestrated_audio_stream(websocket: WebSocket):
                 await send_status(
                     "listening",
                     wake_word_enabled=orchestrator.config.require_wake_word,
+                    follow_up_mode=orchestrator.in_follow_up_mode,
                 )
 
             except WebSocketDisconnect:

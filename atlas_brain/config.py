@@ -193,6 +193,10 @@ class OrchestrationConfig(BaseSettings):
     # Behavior
     auto_execute: bool = Field(default=True, description="Auto-execute device actions")
 
+    # Follow-up mode: stay "hot" after response for quick follow-up commands
+    follow_up_enabled: bool = Field(default=True, description="Enable follow-up mode (no wake word after response)")
+    follow_up_duration_ms: int = Field(default=20000, description="Follow-up window duration (ms)")
+
     # Timeouts
     recording_timeout_ms: int = Field(default=30000, description="Max recording duration")
     processing_timeout_ms: int = Field(default=10000, description="Max processing time")

@@ -128,7 +128,7 @@ class IntentParser:
             rf"(?:\s+the)?"
             rf"(?:\s+({location_pattern}))?"
             rf"(?:\s+({device_words}))?"
-            rf"\s*$",
+            rf"[.!?]*\s*$",
             re.IGNORECASE
         )
 
@@ -141,18 +141,19 @@ class IntentParser:
             rf"(?:\s+({device_words}))?"
             rf"(?:\s+(?:in|at|for)(?:\s+the)?)?"
             rf"(?:\s+({location_pattern}))?"
-            rf"\s*$",
+            rf"[.!?]*\s*$",
             re.IGNORECASE
         )
 
         # Pattern for TV-specific commands
         # Examples: "turn off the tv", "turn on roku", "kill the tv", "shut off television"
+        # Note: [.!?]* allows trailing punctuation from speech-to-text
         self._tv_pattern = re.compile(
             rf"^(?:please\s+)?(?:can\s+you\s+)?"
             rf"({turn_on_verbs}|{turn_off_verbs})"
             rf"(?:\s+the)?"
             rf"\s*(tv|television|roku|firestick|chromecast|apple\s*tv|shield)"
-            rf"\s*$",
+            rf"[.!?]*\s*$",
             re.IGNORECASE
         )
 
@@ -164,7 +165,7 @@ class IntentParser:
             rf"(?:\s+the)?"
             rf"\s*(tv|television|roku|firestick|chromecast|apple\s*tv|shield)"
             rf"\s+to\s+sleep"
-            rf"\s*$",
+            rf"[.!?]*\s*$",
             re.IGNORECASE
         )
 
@@ -173,7 +174,7 @@ class IntentParser:
             rf"wake\s*(?:up)?"
             rf"(?:\s+the)?"
             rf"\s*(tv|television|roku|firestick|chromecast|apple\s*tv|shield)"
-            rf"\s*$",
+            rf"[.!?]*\s*$",
             re.IGNORECASE
         )
 
@@ -295,12 +296,23 @@ class IntentParser:
             re.IGNORECASE
         )
 
+        # Wake word patterns to strip from transcriptions
+        self._wake_word_pattern = re.compile(
+            r"^(?:hey\s+)?(?:jarvis|atlas|computer|assistant)[,.]?\s*",
+            re.IGNORECASE
+        )
+
+    def _strip_wake_word(self, query: str) -> str:
+        """Strip wake word prefix from query if present."""
+        stripped = self._wake_word_pattern.sub("", query).strip()
+        if stripped != query:
+            logger.debug("Stripped wake word: '%s' -> '%s'", query[:30], stripped[:30])
+        return stripped
+
     def _get_llm(self):
-        """Lazy import LLM as fallback for intent extraction."""
-        if self._llm is None:
-            from ..services import llm_registry
-            self._llm = llm_registry.get_active()
-        return self._llm
+        """Get LLM for intent extraction. Always fetches fresh to avoid stale refs."""
+        from ..services import llm_registry
+        return llm_registry.get_active()
 
     async def parse(self, query: str) -> Optional[Intent]:
         """
@@ -315,6 +327,11 @@ class IntentParser:
             Intent object if a device action is detected, None otherwise
         """
         query = query.strip()
+        if not query:
+            return None
+
+        # Strip wake word prefixes that may be in the transcription
+        query = self._strip_wake_word(query)
         if not query:
             return None
 

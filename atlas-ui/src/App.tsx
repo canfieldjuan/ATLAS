@@ -2,27 +2,23 @@ import { useEffect, useState, useRef } from 'react';
 import { Avatar } from './components/Avatar/Avatar';
 import { useAtlas } from './hooks/useAtlas';
 import { useAtlasStore } from './state/store';
-import { useAudioRecorder } from './hooks/useAudioRecorder';
 import clsx from 'clsx';
-import { 
-  Mic, MicOff, Radio, Cpu, Activity, Terminal, Wifi,
-  Settings, Shield, Volume2, Search, BarChart3
+import {
+  Cpu, Activity, Terminal, Wifi
 } from 'lucide-react';
 
-// Generate static random heights outside component to avoid impure function calls
-const IDLE_BAR_HEIGHTS = Array.from({ length: 24 }, () => 20 + Math.random() * 30);
+// Static random heights for status indicator animation
 const IDLE_WAVE_HEIGHTS = Array.from({ length: 16 }, () => 12 + Math.random() * 20);
 
 function App() {
-  const { sendAudioData, stopRecording: sendStopCommand } = useAtlas();
+  // UI is observe-only - voice client (atlas_voice) handles audio capture
+  useAtlas();  // Connect to WebSocket for status updates only
   const { transcript, response, status, isConnected, audioAnalysis } = useAtlasStore();
-  const [alwaysOn, setAlwaysOn] = useState(true);
   const [showLeftPanel, setShowLeftPanel] = useState(false);
   const [showRightPanel, setShowRightPanel] = useState(false);
   const [logs, setLogs] = useState([
     "System initialized.",
     "Neural link established.",
-    "Audio subsystem ready.",
     "Awaiting voice commands."
   ]);
   const [cpuLoad, setCpuLoad] = useState(42);
@@ -30,22 +26,6 @@ function App() {
   const [networkSpeed, setNetworkSpeed] = useState(420);
   const [cpuTemp, setCpuTemp] = useState(42.1);
   const logEndRef = useRef<HTMLDivElement>(null);
-
-  const { isRecording, startRecording, stopRecording, error } = useAudioRecorder(
-    (audioData) => {
-      sendAudioData(audioData);
-    }
-  );
-
-  // Auto-start recording when always-on mode is enabled and connected
-  useEffect(() => {
-    if (alwaysOn && isConnected && !isRecording) {
-      startRecording();
-    }
-    if (!alwaysOn && isRecording) {
-      stopRecording();
-    }
-  }, [alwaysOn, isConnected, isRecording, startRecording, stopRecording]);
 
   // Simulated system stats and logs
   useEffect(() => {
@@ -77,23 +57,6 @@ function App() {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
 
-  const handleMicClick = () => {
-    if (alwaysOn) {
-      // Toggle always-on mode off
-      setAlwaysOn(false);
-      stopRecording();
-      sendStopCommand();
-    } else if (isRecording) {
-      stopRecording();
-      sendStopCommand();
-    } else {
-      startRecording();
-    }
-  };
-
-  const toggleAlwaysOn = () => {
-    setAlwaysOn(!alwaysOn);
-  };
 
   return (
     <div className="min-h-screen w-full bg-[#020617] text-cyan-400 font-mono overflow-hidden flex flex-col p-4 select-none relative">
@@ -284,18 +247,18 @@ function App() {
             )}
           </div>
 
-          {/* Voice Input Indicator */}
+          {/* Status Indicator */}
           <div className="mt-8 flex flex-col items-center gap-4">
             <div className="flex gap-1 h-8 items-center">
               {[...Array(16)].map((_, i) => (
-                <div 
-                  key={i} 
+                <div
+                  key={i}
                   className={clsx(
                     "w-1 bg-cyan-400 rounded-full transition-all duration-300",
-                    isRecording ? "opacity-100 animate-bounce" : "opacity-20 h-1"
+                    status === 'listening' ? "opacity-100 animate-bounce" : "opacity-20"
                   )}
-                  style={{ 
-                    height: isRecording ? `${IDLE_WAVE_HEIGHTS[i]}px` : '4px',
+                  style={{
+                    height: status === 'listening' ? `${IDLE_WAVE_HEIGHTS[i]}px` : '4px',
                     animationDelay: `${i * 0.05}s`
                   }}
                 />
@@ -340,12 +303,6 @@ function App() {
             </div>
           </div>
 
-          {error && (
-            <div className="relative bg-black/20 p-3 rounded-sm backdrop-blur-md border border-red-900/30 overflow-hidden">
-              <div className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full" />
-              <div className="text-[10px] text-red-400 relative z-10 font-bold font-mono">{error}</div>
-            </div>
-          )}
         </section>
         )}
       </main>

@@ -39,6 +39,10 @@ class OrchestratorConfig:
     auto_execute: bool = True  # Auto-execute actions or return for confirmation
     require_wake_word: bool = False  # If False, any speech triggers pipeline
 
+    # Follow-up mode: After a response, stay "hot" for follow-up commands
+    follow_up_enabled: bool = True
+    follow_up_duration_ms: int = 20000  # 20 seconds of hot mic after response
+
     # Timeouts
     wake_word_timeout_ms: int = 30000  # Max time waiting for wake word
     recording_timeout_ms: int = 30000  # Max recording duration
@@ -70,6 +74,8 @@ class OrchestratorConfig:
             vad_config=vad_config,
             auto_execute=orch.auto_execute,
             require_wake_word=orch.require_wake_word,
+            follow_up_enabled=getattr(orch, "follow_up_enabled", True),
+            follow_up_duration_ms=getattr(orch, "follow_up_duration_ms", 20000),
             recording_timeout_ms=orch.recording_timeout_ms,
             processing_timeout_ms=orch.processing_timeout_ms,
         )
@@ -155,14 +161,19 @@ class Orchestrator:
         self._on_transcript: Optional[Callable] = None
         self._on_response: Optional[Callable] = None
 
+        # Follow-up mode tracking
+        self._last_response_time: Optional[datetime] = None
+
         # Initialize wake word if enabled
         if self.config.wake_word_enabled:
             self._wake_word = WakeWordManager(self.config.wake_word_config)
 
         logger.info(
-            "Orchestrator initialized (wake_word=%s, require_wake=%s)",
+            "Orchestrator initialized (wake_word=%s, require_wake=%s, follow_up=%s/%dms)",
             self.config.wake_word_enabled,
             self.config.require_wake_word,
+            self.config.follow_up_enabled,
+            self.config.follow_up_duration_ms,
         )
 
     @property
@@ -174,6 +185,16 @@ class Orchestrator:
     def context(self) -> PipelineContext:
         """Current pipeline context."""
         return self._state_machine.context
+
+    @property
+    def in_follow_up_mode(self) -> bool:
+        """Check if we're in follow-up mode (no wake word required)."""
+        if not self.config.follow_up_enabled:
+            return False
+        if self._last_response_time is None:
+            return False
+        elapsed = (datetime.now() - self._last_response_time).total_seconds() * 1000
+        return elapsed < self.config.follow_up_duration_ms
 
     def _get_stt(self):
         """Lazy load STT service."""
@@ -372,11 +393,21 @@ class Orchestrator:
 
         Returns OrchestratorResult when pipeline completes, None otherwise.
         """
+        # Debug: log that we're receiving audio
+        if not hasattr(self, "_audio_chunk_count"):
+            self._audio_chunk_count = 0
+        self._audio_chunk_count += 1
+        if self._audio_chunk_count % 100 == 1:  # Log every 100 chunks (~3 seconds)
+            logger.info("AUDIO: chunk #%d (%d bytes)", self._audio_chunk_count, len(audio_chunk))
+
         state = self._state_machine.state
+
+        # Check if we need wake word (skip if in follow-up mode)
+        need_wake_word = self.config.require_wake_word and not self.in_follow_up_mode
 
         # Check for wake word if required
         if state in (PipelineState.IDLE, PipelineState.LISTENING):
-            if self.config.require_wake_word and self._wake_word:
+            if need_wake_word and self._wake_word:
                 detected, confidence, wake_word = self._wake_word.detect(audio_chunk)
                 if detected:
                     logger.info("Wake word detected: %s (%.2f)", wake_word, confidence)
@@ -388,6 +419,9 @@ class Orchestrator:
                     self._audio_buffer.reset()
                     # Refresh state after transition
                     state = self._state_machine.state
+            elif self.in_follow_up_mode:
+                # In follow-up mode, treat as if wake word was detected
+                state = PipelineState.WAKE_DETECTED
 
         # Process audio through VAD
         if state in (
@@ -398,7 +432,10 @@ class Orchestrator:
             event = self._audio_buffer.add_audio(audio_chunk)
 
             if event == "speech_start":
-                if not self.config.require_wake_word or state == PipelineState.WAKE_DETECTED:
+                # Allow speech to start if: no wake word required, wake word detected, or in follow-up mode
+                if not need_wake_word or state == PipelineState.WAKE_DETECTED or self.in_follow_up_mode:
+                    if self.in_follow_up_mode:
+                        logger.info("Follow-up speech detected (no wake word needed)")
                     self._state_machine.context.recording_started_at = datetime.now()
                     self._state_machine.transition(PipelineEvent.SPEECH_START)
                     logger.debug("Speech started")
@@ -555,6 +592,11 @@ class Orchestrator:
 
         if self._on_response:
             await self._on_response(result)
+
+        # Enter follow-up mode for subsequent commands without wake word
+        if self.config.follow_up_enabled and result.success:
+            self._last_response_time = datetime.now()
+            logger.info("Entering follow-up mode for %dms", self.config.follow_up_duration_ms)
 
         # Store conversation in memory
         storage_start = datetime.now()
