@@ -280,6 +280,89 @@ class LlamaCppLLM(BaseModelService):
             "metrics": metrics.to_dict(),
         }
 
+    async def chat_stream(
+        self,
+        messages: list[Message],
+        max_tokens: int = 512,
+        temperature: float = 0.7,
+        stop: Optional[list[str]] = None,
+    ):
+        """
+        Stream chat response token by token.
+
+        Yields tokens as they're generated for low-latency responses.
+
+        Args:
+            messages: List of Message objects (role, content)
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+            stop: Stop sequences
+
+        Yields:
+            String tokens as they're generated
+        """
+        import asyncio
+
+        if not self.is_loaded:
+            raise RuntimeError("Model not loaded. Call load() first.")
+
+        llm_messages = [{"role": m.role, "content": m.content} for m in messages]
+
+        self.logger.info("Streaming chat with %d messages", len(messages))
+
+        def _stream_sync():
+            """Synchronous generator for streaming."""
+            try:
+                stream = self._llm.create_chat_completion(
+                    messages=llm_messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    stop=stop,
+                    stream=True,
+                )
+                for chunk in stream:
+                    delta = chunk["choices"][0].get("delta", {})
+                    content = delta.get("content", "")
+                    if content:
+                        yield content
+            except Exception as e:
+                if "undefined" in str(e) or "jinja" in str(e).lower():
+                    # Fallback to non-streaming on template error
+                    self.logger.warning("Chat template error, falling back: %s", e)
+                    result = self._chat_fallback(
+                        llm_messages, max_tokens, temperature, stop
+                    )
+                    yield result["choices"][0]["message"]["content"]
+                else:
+                    raise
+
+        # Run streaming in executor to avoid blocking
+        loop = asyncio.get_event_loop()
+        queue = asyncio.Queue()
+        done = asyncio.Event()
+
+        def producer():
+            try:
+                for token in _stream_sync():
+                    loop.call_soon_threadsafe(queue.put_nowait, token)
+            finally:
+                loop.call_soon_threadsafe(done.set)
+
+        # Start producer in thread
+        import concurrent.futures
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        executor.submit(producer)
+
+        # Yield tokens from queue
+        while not done.is_set() or not queue.empty():
+            try:
+                token = await asyncio.wait_for(queue.get(), timeout=0.1)
+                yield token
+            except asyncio.TimeoutError:
+                continue
+
+        executor.shutdown(wait=False)
+
     def _chat_fallback(
         self,
         messages: list[dict],
