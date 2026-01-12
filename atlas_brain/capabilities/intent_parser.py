@@ -116,11 +116,15 @@ class IntentParser:
         sorted_locations = sorted(self.LOCATIONS, key=len, reverse=True)
         location_pattern = "|".join(re.escape(loc) for loc in sorted_locations)
 
+        # Common action verb patterns
+        turn_on_verbs = r"turn\s*on|switch\s*on|power\s*on|light\s*up|enable|activate"
+        turn_off_verbs = r"turn\s*off|switch\s*off|power\s*off|shut\s*off|kill|disable|deactivate"
+
         # Pattern: turn on/off [the] [location] [device]
-        # Examples: "turn on the living room lights", "turn off kitchen light"
+        # Examples: "turn on the living room lights", "shut off kitchen light", "kill the lights"
         self._turn_pattern = re.compile(
-            rf"^(?:please\s+)?(?:can\s+you\s+)?"
-            rf"(turn\s*on|turn\s*off|switch\s*on|switch\s*off|power\s*on|power\s*off)"
+            rf"^(?:please\s+)?(?:can\s+you\s+)?(?:go\s+)?"
+            rf"({turn_on_verbs}|{turn_off_verbs})"
             rf"(?:\s+the)?"
             rf"(?:\s+({location_pattern}))?"
             rf"(?:\s+({device_words}))?"
@@ -132,7 +136,7 @@ class IntentParser:
         # Examples: "turn on the lights in the kitchen"
         self._turn_reverse_pattern = re.compile(
             rf"^(?:please\s+)?(?:can\s+you\s+)?"
-            rf"(turn\s*on|turn\s*off|switch\s*on|switch\s*off)"
+            rf"({turn_on_verbs}|{turn_off_verbs})"
             rf"(?:\s+the)?"
             rf"(?:\s+({device_words}))?"
             rf"(?:\s+(?:in|at|for)(?:\s+the)?)?"
@@ -142,12 +146,33 @@ class IntentParser:
         )
 
         # Pattern for TV-specific commands
-        # Examples: "turn off the tv", "turn on roku"
+        # Examples: "turn off the tv", "turn on roku", "kill the tv", "shut off television"
         self._tv_pattern = re.compile(
             rf"^(?:please\s+)?(?:can\s+you\s+)?"
-            rf"(turn\s*on|turn\s*off|switch\s*on|switch\s*off|power\s*on|power\s*off)"
+            rf"({turn_on_verbs}|{turn_off_verbs})"
             rf"(?:\s+the)?"
-            rf"\s*(tv|television|roku|firestick|chromecast)"
+            rf"\s*(tv|television|roku|firestick|chromecast|apple\s*tv|shield)"
+            rf"\s*$",
+            re.IGNORECASE
+        )
+
+        # Pattern: put TV to sleep / wake up TV
+        # Examples: "put the tv to sleep", "wake up the roku"
+        self._tv_sleep_pattern = re.compile(
+            rf"^(?:please\s+)?(?:can\s+you\s+)?"
+            rf"(put|send)"
+            rf"(?:\s+the)?"
+            rf"\s*(tv|television|roku|firestick|chromecast|apple\s*tv|shield)"
+            rf"\s+to\s+sleep"
+            rf"\s*$",
+            re.IGNORECASE
+        )
+
+        self._tv_wake_pattern = re.compile(
+            rf"^(?:please\s+)?(?:can\s+you\s+)?"
+            rf"wake\s*(?:up)?"
+            rf"(?:\s+the)?"
+            rf"\s*(tv|television|roku|firestick|chromecast|apple\s*tv|shield)"
             rf"\s*$",
             re.IGNORECASE
         )
@@ -156,12 +181,37 @@ class IntentParser:
         # Examples: "dim the living room to 50%", "brighten kitchen lights"
         self._dim_pattern = re.compile(
             rf"^(?:please\s+)?(?:can\s+you\s+)?"
-            rf"(dim|brighten)"
+            rf"(dim|brighten|lower|raise)"
             rf"(?:\s+the)?"
             rf"(?:\s+({location_pattern}))?"
             rf"(?:\s+(?:lights?|lamps?))?"
             rf"(?:\s+(?:to|at|by))?"
             rf"(?:\s+(\d+)\s*%?)?"
+            rf"\s*$",
+            re.IGNORECASE
+        )
+
+        # Pattern: "make it brighter/darker" or "make the lights brighter"
+        self._make_bright_pattern = re.compile(
+            rf"^(?:please\s+)?(?:can\s+you\s+)?"
+            rf"make"
+            rf"(?:\s+the)?"
+            rf"(?:\s+({location_pattern}))?"
+            rf"(?:\s+(?:lights?|room|it))?"
+            rf"\s+(brighter|darker|dimmer|lighter)"
+            rf"\s*$",
+            re.IGNORECASE
+        )
+
+        # Pattern: brightness presets - "lights to full", "set to max", "low brightness"
+        self._brightness_preset_pattern = re.compile(
+            rf"^(?:please\s+)?(?:can\s+you\s+)?(?:set\s+)?"
+            rf"(?:the\s+)?"
+            rf"(?:({location_pattern})\s+)?"
+            rf"(?:lights?\s+)?"
+            rf"(?:to\s+)?"
+            rf"(full|max|maximum|high|low|minimum|min|half|medium|mid)"
+            rf"(?:\s+brightness)?"
             rf"\s*$",
             re.IGNORECASE
         )
@@ -192,10 +242,10 @@ class IntentParser:
         )
 
         # Pattern for "all" commands
-        # Examples: "turn off all lights", "turn on all the lights"
+        # Examples: "turn off all lights", "kill all the lights", "shut off all lights"
         self._all_pattern = re.compile(
             rf"^(?:please\s+)?(?:can\s+you\s+)?"
-            rf"(turn\s*on|turn\s*off)"
+            rf"({turn_on_verbs}|{turn_off_verbs})"
             rf"(?:\s+all)(?:\s+the)?"
             rf"\s+({device_words})"
             rf"\s*$",
@@ -208,6 +258,40 @@ class IntentParser:
             rf"({device_words})"
             rf"\s+(on|off)"
             rf"\s*$",
+            re.IGNORECASE
+        )
+
+        # Pattern: "I need light" / "it's too dark" / "it's too bright"
+        self._contextual_pattern = re.compile(
+            rf"^(?:it'?s?\s+)?(?:too\s+)?(dark|bright)"
+            rf"(?:\s+in\s+(?:here|the\s+({location_pattern})))?"
+            rf"\s*$",
+            re.IGNORECASE
+        )
+
+        # Pattern: media controls - play, pause, stop, mute
+        self._media_control_pattern = re.compile(
+            rf"^(?:please\s+)?(?:can\s+you\s+)?"
+            rf"(play|pause|stop|resume|mute|unmute)"
+            rf"(?:\s+the)?"
+            rf"(?:\s+(tv|television|roku|music|video|media|speaker|speakers))?"
+            rf"\s*$",
+            re.IGNORECASE
+        )
+
+        # Pattern: volume control
+        self._volume_pattern = re.compile(
+            rf"^(?:please\s+)?(?:can\s+you\s+)?"
+            rf"(?:turn\s+)?"
+            rf"(volume\s+up|volume\s+down|louder|quieter)"
+            rf"(?:\s+(?:the\s+)?(tv|television|roku|speaker|speakers))?"
+            rf"\s*$",
+            re.IGNORECASE
+        )
+
+        # Pattern: "lights" or "light" alone (often means toggle or turn on)
+        self._bare_device_pattern = re.compile(
+            rf"^({device_words})$",
             re.IGNORECASE
         )
 
@@ -259,12 +343,37 @@ class IntentParser:
 
         # Action keywords
         action_words = [
-            "turn", "switch", "toggle", "dim", "brighten",
-            "set", "power", "lights", "light", "tv", "on", "off"
+            # Power control
+            "turn", "switch", "toggle", "power", "kill", "shut",
+            "enable", "disable", "activate", "deactivate",
+            # Lighting
+            "dim", "brighten", "darker", "brighter", "lights", "light", "lamp",
+            # Devices
+            "tv", "television", "roku", "fan", "thermostat",
+            # State
+            "on", "off",
+            # Brightness
+            "set", "brightness", "full", "max", "low", "half",
+            # Media
+            "play", "pause", "stop", "mute", "volume", "louder", "quieter",
+            # Contextual
+            "dark", "bright", "sleep", "wake",
         ]
 
         # Check for action keywords
         return any(word in query_lower for word in action_words)
+
+    def _determine_on_off_action(self, action_str: str) -> str:
+        """Determine if action string means turn_on or turn_off."""
+        action_lower = action_str.lower()
+        # Keywords that mean "turn on"
+        if any(kw in action_lower for kw in ["on", "enable", "activate", "light up"]):
+            return "turn_on"
+        # Keywords that mean "turn off"
+        if any(kw in action_lower for kw in ["off", "disable", "deactivate", "kill", "shut"]):
+            return "turn_off"
+        # Default to turn_on if unclear
+        return "turn_on"
 
     def _parse_regex(self, query: str) -> Optional[Intent]:
         """Try to parse intent using regex patterns."""
@@ -274,11 +383,37 @@ class IntentParser:
         match = self._tv_pattern.match(query_lower)
         if match:
             action_str, device = match.groups()
-            action = "turn_on" if "on" in action_str else "turn_off"
+            action = self._determine_on_off_action(action_str)
             return Intent(
                 action=action,
                 target_type="tv",
-                target_name=device,
+                target_name=device.replace(" ", ""),  # "apple tv" -> "appletv"
+                parameters={},
+                confidence=0.95,
+                raw_query=query,
+            )
+
+        # Try TV sleep pattern ("put the tv to sleep")
+        match = self._tv_sleep_pattern.match(query_lower)
+        if match:
+            _, device = match.groups()
+            return Intent(
+                action="turn_off",
+                target_type="tv",
+                target_name=device.replace(" ", ""),
+                parameters={},
+                confidence=0.95,
+                raw_query=query,
+            )
+
+        # Try TV wake pattern ("wake up the tv")
+        match = self._tv_wake_pattern.match(query_lower)
+        if match:
+            device = match.group(1)
+            return Intent(
+                action="turn_on",
+                target_type="tv",
+                target_name=device.replace(" ", ""),
                 parameters={},
                 confidence=0.95,
                 raw_query=query,
@@ -288,7 +423,7 @@ class IntentParser:
         match = self._all_pattern.match(query_lower)
         if match:
             action_str, device = match.groups()
-            action = "turn_on" if "on" in action_str else "turn_off"
+            action = self._determine_on_off_action(action_str)
             device_type = self.DEVICE_TYPES.get(device, "light")
             return Intent(
                 action=action,
@@ -303,7 +438,7 @@ class IntentParser:
         match = self._turn_pattern.match(query_lower)
         if match:
             action_str, location, device = match.groups()
-            action = "turn_on" if "on" in action_str else "turn_off"
+            action = self._determine_on_off_action(action_str)
             device_type = self.DEVICE_TYPES.get(device, "light") if device else "light"
             return Intent(
                 action=action,
@@ -318,7 +453,7 @@ class IntentParser:
         match = self._turn_reverse_pattern.match(query_lower)
         if match:
             action_str, device, location = match.groups()
-            action = "turn_on" if "on" in action_str else "turn_off"
+            action = self._determine_on_off_action(action_str)
             device_type = self.DEVICE_TYPES.get(device, "light") if device else "light"
             return Intent(
                 action=action,
@@ -337,7 +472,7 @@ class IntentParser:
             # Default brightness for dim/brighten without percentage
             if brightness:
                 brightness_value = int(int(brightness) * 255 / 100)
-            elif "dim" in action_str:
+            elif action_str in ("dim", "lower"):
                 brightness_value = int(30 * 255 / 100)  # Default dim to 30%
             else:
                 brightness_value = int(100 * 255 / 100)  # Default brighten to 100%
@@ -348,6 +483,45 @@ class IntentParser:
                 target_name=location,
                 parameters={"brightness": brightness_value},
                 confidence=0.90,
+                raw_query=query,
+            )
+
+        # Try "make it brighter/darker" pattern
+        match = self._make_bright_pattern.match(query_lower)
+        if match:
+            location, direction = match.groups()
+            if direction in ("brighter", "lighter"):
+                brightness_value = int(80 * 255 / 100)  # Increase to 80%
+            else:  # darker, dimmer
+                brightness_value = int(30 * 255 / 100)  # Decrease to 30%
+
+            return Intent(
+                action="set_brightness",
+                target_type="light",
+                target_name=location,
+                parameters={"brightness": brightness_value},
+                confidence=0.85,
+                raw_query=query,
+            )
+
+        # Try brightness preset pattern ("full brightness", "lights to max")
+        match = self._brightness_preset_pattern.match(query_lower)
+        if match:
+            location, preset = match.groups()
+            preset_values = {
+                "full": 100, "max": 100, "maximum": 100, "high": 100,
+                "half": 50, "medium": 50, "mid": 50,
+                "low": 20, "min": 10, "minimum": 10,
+            }
+            percent = preset_values.get(preset.lower(), 100)
+            brightness_value = int(percent * 255 / 100)
+
+            return Intent(
+                action="set_brightness",
+                target_type="light",
+                target_name=location,
+                parameters={"brightness": brightness_value},
+                confidence=0.85,
                 raw_query=query,
             )
 
@@ -376,6 +550,53 @@ class IntentParser:
                 action="toggle",
                 target_type=device_type,
                 target_name=location,
+                parameters={},
+                confidence=0.90,
+                raw_query=query,
+            )
+
+        # Try contextual pattern ("it's too dark", "too bright")
+        match = self._contextual_pattern.match(query_lower)
+        if match:
+            condition, location = match.groups()
+            if condition == "dark":
+                action = "turn_on"
+            else:  # bright
+                action = "turn_off"
+
+            return Intent(
+                action=action,
+                target_type="light",
+                target_name=location,
+                parameters={},
+                confidence=0.80,
+                raw_query=query,
+            )
+
+        # Try media control pattern (play, pause, stop, mute)
+        match = self._media_control_pattern.match(query_lower)
+        if match:
+            control, device = match.groups()
+            device_type = "tv" if device in ("tv", "television", "roku") else "media_player"
+            return Intent(
+                action=control,  # play, pause, stop, mute, unmute, resume
+                target_type=device_type,
+                target_name=device,
+                parameters={},
+                confidence=0.90,
+                raw_query=query,
+            )
+
+        # Try volume pattern
+        match = self._volume_pattern.match(query_lower)
+        if match:
+            direction, device = match.groups()
+            action = "volume_up" if direction in ("volume up", "louder") else "volume_down"
+            device_type = "tv" if device in ("tv", "television", "roku") else "media_player"
+            return Intent(
+                action=action,
+                target_type=device_type,
+                target_name=device,
                 parameters={},
                 confidence=0.90,
                 raw_query=query,
