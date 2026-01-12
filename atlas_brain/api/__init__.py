@@ -13,6 +13,7 @@ from .orchestration import router as orchestration_router
 from .query import router as query_router
 from .speaker_id import router as speaker_id_router
 from .tts import router as tts_router
+from .session import router as session_router
 
 # Main router that aggregates all sub-routers
 router = APIRouter()
@@ -26,3 +27,4 @@ router.include_router(audio_events_router)
 router.include_router(speaker_id_router)
 router.include_router(tts_router)
 router.include_router(llm_router)
+router.include_router(session_router)
