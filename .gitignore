@@ -24,6 +24,9 @@ logs/
 # Models (large binary files)
 models/
 
+# Database (PostgreSQL data files - now using Docker named volume)
+data/
+
 # Temp files
 *.tmp
 .DS_Store

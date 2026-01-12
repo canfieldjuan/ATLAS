@@ -147,3 +147,297 @@
 9.  **Success!** A final test of the `POST /api/v1/query/text` endpoint returned a live, generated response from the `moondream2` model: `"I walk."`.
 
 **Outcome:** The Atlas Brain server can now process text queries using a live AI model. The core pipeline from API endpoint to model inference is fully functional.
+
+
+## Session 10: 2026-01-10 - Conversation Persistence Planning
+
+**Objective:** Design and plan a persistent conversation storage system to enable seamless multi-location conversations (office → car → home without context loss).
+
+**Analysis Performed:**
+
+1.  **Codebase Audit:** Thoroughly analyzed the existing Atlas codebase to understand current conversation handling:
+    - `orchestration/context.py`: In-memory `ContextAggregator` with `ConversationTurn` dataclass
+    - `api/llm.py`: Chat endpoint with no session/user tracking
+    - `config.py`: Pydantic Settings pattern for configuration
+    - No existing database layer
+
+2.  **Integration Points Identified:**
+    - `context.py:278-306` - `add_conversation_turn()` and `get_conversation_history()`
+    - `api/llm.py:40-44` - `ChatRequest` model needs session_id
+    - `api/llm.py:114-135` - `/chat` endpoint needs history loading
+    - `main.py:24-89` - Lifespan handler needs DB init/shutdown
+    - `config.py:100-131` - Needs `DatabaseConfig` class
+
+3.  **Database Selection Analysis:**
+    - SQLite: ~0.1-1ms latency, single-node only
+    - PostgreSQL (local): ~1-5ms latency, multi-node ready
+    - Self-hosted Supabase: ~5-20ms latency, full platform
+    - **Decision:** PostgreSQL with `asyncpg` driver for lowest latency + scalability
+
+**Deliverables:**
+
+1.  Created `CONVERSATION_PERSISTENCE_PLAN.md` with:
+    - 5-phase implementation plan
+    - Database schema design
+    - Exact code modification points
+    - Validation criteria per phase
+    - Rollback strategy
+    - Latency targets (<2ms for writes, <3ms for reads)
+
+**Key Design Decisions:**
+
+1.  **PostgreSQL over SQLite:** Multi-terminal support required from day one
+2.  **asyncpg over SQLAlchemy:** Raw driver is faster, ORM complexity not needed
+3.  **Repository pattern:** Clean separation, testable components
+4.  **Backward compatibility:** Existing endpoints work without session_id
+5.  **Feature flags:** Database can be disabled for fallback to in-memory
+
+**Outcome:** Comprehensive implementation plan created and awaiting user approval. No code changes made yet - plan first, then execute.
+
+
+## Session 11: 2026-01-10 - Conversation Persistence Phase 1 & 2 Implementation
+
+**Objective:** Implement the database infrastructure and repository layer for conversation persistence.
+
+**Actions:**
+
+1.  **PostgreSQL Setup:**
+    - Added PostgreSQL service to `docker-compose.yml` with healthcheck
+    - Started container: `atlas_postgres` running PostgreSQL 16-alpine
+    - Added `data/postgres/` to `.gitignore`
+
+2.  **Storage Module Created:**
+    - `atlas_brain/storage/__init__.py` - Module exports
+    - `atlas_brain/storage/config.py` - DatabaseConfig with pydantic-settings (env prefix: ATLAS_DB_)
+    - `atlas_brain/storage/database.py` - DatabasePool with asyncpg connection pooling
+    - `atlas_brain/storage/models.py` - User, Session, ConversationTurn, Terminal dataclasses
+    - `atlas_brain/storage/repositories/__init__.py` - Repository exports
+    - `atlas_brain/storage/repositories/conversation.py` - ConversationRepository (add_turn, get_history)
+    - `atlas_brain/storage/repositories/session.py` - SessionRepository (get_or_create_session, multi-terminal)
+    - `atlas_brain/storage/migrations/__init__.py` - Migration runner
+    - `atlas_brain/storage/migrations/001_initial_schema.sql` - Initial database schema
+
+3.  **Database Schema Created:**
+    - Tables: `users`, `sessions`, `conversation_turns`, `terminals`, `schema_migrations`
+    - Indexes optimized for low-latency queries
+    - UUID primary keys with `uuid-ossp` extension
+
+4.  **Integration with FastAPI:**
+    - Modified `main.py` to import storage module
+    - Added database initialization in lifespan startup handler
+    - Added database cleanup in lifespan shutdown handler
+
+5.  **Environment Configuration:**
+    - Added database environment variables to `.env`
+    - Added `asyncpg>=0.29.0` to `requirements.txt`
+    - Installed `pydantic`, `pydantic-settings`, `asyncpg` in venv
+
+**Verification:**
+
+```
+✅ PostgreSQL container running (atlas_postgres)
+✅ Connection pool initializes successfully
+✅ Tables created via migration script
+✅ Session creation works
+✅ Conversation turn creation/retrieval works
+✅ Multi-terminal session continuity works
+✅ No import errors or syntax errors
+```
+
+**Next Steps:** Phase 3 - Integration with existing conversation flow (context.py, api/llm.py)
+
+
+## Session 12: 2026-01-10 - Conversation Persistence Phase 3 Implementation
+
+**Objective:** Integrate the storage layer with the existing API layer for conversation persistence.
+
+**Actions:**
+
+1.  **Updated `api/llm.py`:**
+    - Added imports: `logging`, `UUID`, storage module
+    - Added `session_id`, `user_id`, `terminal_id` fields to `ChatRequest` model
+    - Modified `/chat` endpoint to load conversation history from DB when session_id provided
+    - Modified `/chat` endpoint to persist new turns (user + assistant) to DB
+    - All changes backward compatible - existing API works without session_id
+
+2.  **Created `api/session.py`:**
+    - `POST /api/v1/session/create` - Create new conversation session
+    - `POST /api/v1/session/continue` - Continue session from different terminal
+    - `GET /api/v1/session/{session_id}` - Get session details
+    - `GET /api/v1/session/{session_id}/history` - Get conversation history
+    - `POST /api/v1/session/{session_id}/close` - Close/deactivate session
+    - `GET /api/v1/session/status/db` - Check database connection status
+
+3.  **Updated `api/__init__.py`:**
+    - Added import for session router
+    - Included session_router in main API router
+
+**Verification:**
+
+```
+All imports work correctly
+Session creation and retrieval works
+Conversation persistence works
+History retrieval works
+ChatRequest backward compatible (session_id optional)
+No breaking changes to existing API
+Syntax checks pass for all modified files
+```
+
+**API Usage Example:**
+
+```bash
+# Create a session
+curl -X POST http://localhost:8000/api/v1/session/create \
+  -H "Content-Type: application/json" \
+  -d '{"terminal_id": "office"}'
+
+# Chat with session persistence
+curl -X POST http://localhost:8000/api/v1/llm/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [{"role": "user", "content": "Hello Atlas"}],
+    "session_id": "<session-uuid-from-above>"
+  }'
+
+# Get history
+curl http://localhost:8000/api/v1/session/<session-uuid>/history
+```
+
+**Next Steps:** Phase 4 - Multi-terminal session continuity (requires user registration)
+
+
+---
+
+
+## Session 18: 2026-01-10 - Voice Interface & Intelligent Routing Planning
+
+**Objective:** Fix voice input pipeline and plan intelligent model routing system.
+
+**Actions:**
+
+1. **Service Activation Debugging:**
+   - Discovered all AI services (STT, TTS, LLM) were not auto-loading despite configuration
+   - Manually activated STT (faster-whisper), TTS (piper), and LLM (Ministral-3B)
+   - Verified services active via `/api/v1/health` endpoint
+   - **Root Cause:** Auto-load config in main.py wasn't triggering properly (requires investigation)
+
+2. **Audio Recording Bug Fix:**
+   - Identified critical bug in `useAudioRecorder.ts` hook
+   - Problem: `isRecording` state variable not captured in audio processor closure
+   - **Solution:** Added `isRecordingRef` to persist recording state across closures
+   - Added console logging for audio chunk debugging
+   - Audio now properly captured and streamed to WebSocket
+
+3. **Voice Pipeline Verification:**
+   - Confirmed WebSocket connection established (ws://localhost:8000/api/v1/ws/orchestrated)
+   - Verified audio recording: 16kHz mono PCM16 format
+   - Tested orchestrator with text command (works correctly)
+   - **Issue:** Audio stream not reaching orchestrator (under investigation)
+
+4. **Model Routing Analysis:**
+   - Analyzed current architecture: static single-model approach (Hermes-8B)
+   - Identified available models:
+     * Simple: Ministral-3B (1.9GB) - Currently active
+     * Medium: Hermes-8B (4.6GB)
+     * Complex: BlackSheep-24B (14GB), Xortron-24B (14GB)
+   - **Finding:** No dynamic routing exists - all queries use same model
+
+5. **Comprehensive Planning:**
+   - Created `INTELLIGENT_MODEL_ROUTING_PLAN.md` with 5-phase implementation
+   - Verified all 17 usages of `llm_registry` for breaking change analysis
+   - Designed feature-flag protected rollout strategy
+   - Documented rollback procedures and performance considerations
+   - **Key Decision:** Use 3-tier system (simple/medium/complex) with configurable thresholds
+
+**Architecture Analysis:**
+
+Current request flow:
+```
+Voice Input → STT → Intent Parser (VLM) → [Device Action OR LLM Response] → TTS
+                                              ↑
+                                         STATIC MODEL
+                                         (Hermes-8B)
+```
+
+Planned intelligent routing:
+```
+Voice Input → STT → Intent Parser (VLM) → [Device Action OR LLM Response] → TTS
+                                              ↑
+                                    ┌─────────┴─────────┐
+                                    │ Complexity Analyzer│
+                                    │   Query Router    │
+                                    └───────┬───────────┘
+                                            │
+                        ┌───────────────────┼───────────────────┐
+                        │                   │                   │
+                   Simple (Fast)       Medium (Balanced)   Complex (Smart)
+                   Ministral-3B        Hermes-8B           BlackSheep-24B
+                   <1s response        2-3s response       5-10s response
+```
+
+**Files Created:**
+- `INTELLIGENT_MODEL_ROUTING_PLAN.md` - Comprehensive implementation plan with 5 phases
+
+**Files Modified:**
+- `atlas-ui/src/hooks/useAudioRecorder.ts` - Fixed recording state bug with ref
+- `atlas-ui/src/hooks/useAtlas.ts` - Added audio send logging
+
+**Configuration Verified:**
+- STT: faster-whisper (small.en) on CUDA ✅
+- TTS: piper (en_US-libritts-high) on CPU ✅
+- LLM: Ministral-3B on CUDA ✅ (should be Hermes-8B per .env)
+- VLM: moondream on CUDA ✅
+
+**Technical Findings:**
+
+1. **Service Registry Architecture:**
+   - Thread-safe with Lock for hot-swapping
+   - Supports factories and direct class registration
+   - Unloads previous model before loading new one
+   - Compatible with planned routing system ✅
+
+2. **Breaking Change Analysis:**
+   - All 17 llm_registry usages verified safe
+   - PipelineContext extensible with optional fields
+   - Config system supports nested ROUTING__ prefix
+   - No protocol changes needed ✅
+
+3. **Performance Considerations:**
+   - Model swap overhead: 5-10 seconds (one-time cost)
+   - VRAM available: 24GB (sufficient for all tiers)
+   - Routing decision overhead: <5ms (negligible)
+
+**Outstanding Issues:**
+
+1. **Auto-Load Failure:**
+   - LLM config shows `ATLAS_LOAD_LLM_ON_STARTUP=true`
+   - Services required manual activation via API
+   - **Action:** Need to investigate main.py startup sequence
+
+2. **Audio Pipeline:**
+   - Audio recording works, WebSocket connected
+   - Audio chunks not triggering transcription
+   - **Hypothesis:** Need to verify orchestrator audio stream processing
+
+3. **Model Mismatch:**
+   - .env specifies Hermes-8B
+   - Running Ministral-3B (manually activated)
+   - **Action:** Restart with proper auto-load to verify config
+
+**Implementation Plan Summary:**
+
+| Phase | Description | Breaking? | Time Est. |
+|-------|-------------|-----------|-----------|
+| 1 | Query Complexity Analyzer | No | 2-3h |
+| 2 | Model Routing Configuration | No | 1h |
+| 3 | Model Router Service | No | 3-4h |
+| 4 | Orchestrator Integration | Yes (flagged) | 4-6h |
+| 5 | API Monitoring & Telemetry | No | 1-2h |
+
+**Outcome:** Comprehensive plan created for intelligent model routing. All dependencies verified safe. Feature-flag strategy ensures no breaking changes. Ready for phased implementation when approved.
+
+**Next Session Goals:**
+1. Fix audio pipeline (verify orchestrator receives stream)
+2. Investigate and fix auto-load issue  
+3. Begin Phase 1 implementation (Complexity Analyzer) if approved

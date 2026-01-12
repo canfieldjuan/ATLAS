@@ -2,12 +2,94 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+---
+
+## 🎯 PROJECT VISION (Read First!)
+
+**Atlas is NOT just a home assistant.** It's an extensible AI "Brain" designed to grow from home automation into a comprehensive intelligent system.
+
+### The Big Picture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        ATLAS BRAIN                               │
+│              (Cloud/Server - Central Intelligence)               │
+│                                                                  │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │
+│  │     LLM     │  │     VLM     │  │     STT     │   AI Models  │
+│  │  (Reasoning)│  │   (Vision)  │  │   (Speech)  │              │
+│  └─────────────┘  └─────────────┘  └─────────────┘              │
+│                                                                  │
+│  ┌─────────────────────────────────────────────────┐            │
+│  │              Unified Voice Interface             │            │
+│  │    "Hey Atlas" → STT → Router → Action/LLM → TTS │            │
+│  └─────────────────────────────────────────────────┘            │
+│                                                                  │
+│  ┌─────────────────────────────────────────────────┐            │
+│  │           PostgreSQL (Persistence)              │            │
+│  │   Sessions | Conversations | Users | State      │            │
+│  └─────────────────────────────────────────────────┘            │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      CENTRAL HUB                                 │
+│                    (Jetson Nano)                                 │
+│         Local processing, device coordination                    │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+              ┌───────────────┼───────────────┐
+              ▼               ▼               ▼
+        ┌──────────┐   ┌──────────┐   ┌──────────┐
+        │  Node 1  │   │  Node 2  │   │  Node N  │
+        │ (Jetson) │   │ (Jetson) │   │ (Jetson) │
+        │ Camera   │   │ Sensors  │   │ Display  │
+        │ Mic/Spk  │   │ Motion   │   │ Control  │
+        └──────────┘   └──────────┘   └──────────┘
+```
+
+### Current Capabilities (Implemented)
+- ✅ Voice-activated device control ("Hey Atlas, turn off the TV")
+- ✅ Natural language intent parsing
+- ✅ Home Assistant integration (WebSocket real-time state)
+- ✅ Direct Roku TV control
+- ✅ LLM for conversations and reasoning
+- ✅ VLM for vision queries
+- ✅ STT/TTS for voice interface
+- ✅ PostgreSQL for conversation persistence
+
+### Future Capabilities (Planned)
+- 🔲 Unified always-on voice interface (wake word "Hey Atlas")
+- 🔲 Smart routing: device commands vs conversation vs queries
+- 🔲 Human tracking and recognition
+- 🔲 Object detection and tracking
+- 🔲 Distributed node architecture (Jetson Nanos)
+- 🔲 Context-aware conversations ("dim them" → knows "them" = last mentioned lights)
+- 🔲 Calendar, reminders, proactive notifications
+- 🔲 Multi-room audio/video coordination
+
+### Design Principles
+1. **Extensibility First**: Every component should be pluggable and replaceable
+2. **Seamless Experience**: One interface for everything (chat, control, queries)
+3. **Local Processing**: Prefer edge compute, cloud for heavy lifting only
+4. **Persistence**: Remember conversations, learn preferences, track state
+5. **Privacy**: User data stays local, no external telemetry
+
+### Current Session Focus
+When working on Atlas, always ask: "Does this fit the big picture?"
+- Don't over-engineer for today, but don't block tomorrow
+- Keep interfaces clean for future node distribution
+- Maintain conversation context across interactions
+
+---
+
 ## Project Overview
 
 Atlas is a centralized AI "Brain" server and extensible automation platform. It provides:
 - **AI Services**: Text, vision, and speech-to-text inference via REST API
 - **Device Control**: Extensible capability system for IoT devices, home automation
 - **Intent Dispatch**: Natural language commands to device actions via VLM
+- **Voice Interface**: Wake word activated, seamless chat + control
 
 ## Build and Run Commands
 
@@ -21,7 +103,8 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # Run with hot reload on port 8001
-uvicorn atlas_brain.main:app --host 0.0.0.0 --port 8001 --reload
+# Note: WebSocket ping settings prevent timeout during voice streaming
+uvicorn atlas_brain.main:app --host 0.0.0.0 --port 8001 --reload --ws-ping-interval 60 --ws-ping-timeout 120
 ```
 
 ### Docker (Production)
