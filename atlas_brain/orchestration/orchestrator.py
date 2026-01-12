@@ -382,6 +382,10 @@ class Orchestrator:
                     logger.info("Wake word detected: %s (%.2f)", wake_word, confidence)
                     self._state_machine.context.wake_detected_at = datetime.now()
                     self._state_machine.transition(PipelineEvent.WAKE_WORD_DETECTED)
+                    # Use longer silence tolerance after wake word
+                    self._audio_buffer.config.silence_duration_ms = self.config.post_wake_word_silence_ms
+                    # Reset audio buffer to start fresh after wake word
+                    self._audio_buffer.reset()
                     # Refresh state after transition
                     state = self._state_machine.state
 
