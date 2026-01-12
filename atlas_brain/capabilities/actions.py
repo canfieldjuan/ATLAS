@@ -135,20 +135,42 @@ class ActionDispatcher:
         """
         from .protocols import CapabilityType
 
+        # Type aliases for common names
+        TYPE_ALIASES = {
+            "tv": CapabilityType.MEDIA_PLAYER,
+            "television": CapabilityType.MEDIA_PLAYER,
+            "roku": CapabilityType.MEDIA_PLAYER,
+            "media": CapabilityType.MEDIA_PLAYER,
+        }
+
         for cap in self.registry.list_all():
             # Match by type if specified
             if intent.target_type:
-                try:
-                    expected_type = CapabilityType(intent.target_type)
+                target_type_lower = intent.target_type.lower()
+
+                # Check aliases first
+                if target_type_lower in TYPE_ALIASES:
+                    expected_type = TYPE_ALIASES[target_type_lower]
                     if cap.capability_type != expected_type:
                         continue
-                except ValueError:
-                    # Unknown type, skip type check
-                    pass
+                else:
+                    # Try direct type match
+                    try:
+                        expected_type = CapabilityType(target_type_lower)
+                        if cap.capability_type != expected_type:
+                            continue
+                    except ValueError:
+                        # Unknown type, skip type check
+                        pass
 
             # Match by name if specified (case-insensitive substring)
             if intent.target_name:
-                if intent.target_name.lower() in cap.name.lower():
+                target_lower = intent.target_name.lower()
+                cap_name_lower = cap.name.lower()
+                # Check for substring match or common aliases
+                if (target_lower in cap_name_lower or
+                    cap_name_lower in target_lower or
+                    (target_lower in ["tv", "television", "roku"] and "tv" in cap_name_lower)):
                     return cap
 
         # No match found

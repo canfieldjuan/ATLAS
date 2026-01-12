@@ -112,7 +112,10 @@ class MQTTSwitch(BaseSwitchCapability):
 
 
 class HomeAssistantSwitch(BaseSwitchCapability):
-    """Switch capability backed by Home Assistant."""
+    """Switch capability backed by Home Assistant.
+
+    Supports switch.*, input_boolean.*, and other binary entities.
+    """
 
     def __init__(
         self,
@@ -123,6 +126,8 @@ class HomeAssistantSwitch(BaseSwitchCapability):
         self._entity_id = entity_id
         self._name = name
         self._backend = backend
+        # Extract domain for service calls (e.g., "switch" or "input_boolean")
+        self._domain = entity_id.split(".", 1)[0]
 
     @property
     def id(self) -> str:
@@ -144,7 +149,7 @@ class HomeAssistantSwitch(BaseSwitchCapability):
     async def turn_on(self) -> ActionResult:
         """Turn on the switch."""
         await self._backend.send_command(
-            "switch/turn_on",
+            f"{self._domain}/turn_on",
             {"entity_id": self._entity_id},
         )
         return ActionResult(
@@ -155,7 +160,7 @@ class HomeAssistantSwitch(BaseSwitchCapability):
     async def turn_off(self) -> ActionResult:
         """Turn off the switch."""
         await self._backend.send_command(
-            "switch/turn_off",
+            f"{self._domain}/turn_off",
             {"entity_id": self._entity_id},
         )
         return ActionResult(

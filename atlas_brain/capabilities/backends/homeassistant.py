@@ -97,18 +97,70 @@ class HomeAssistantBackend:
         """
         Get state of a Home Assistant entity.
 
+        Checks the state cache first for instant response. Falls back to REST
+        API if cache miss or expired, and updates the cache with fresh data.
+
         Args:
             entity_id: Entity ID, e.g., "light.living_room"
 
         Returns:
             Entity state dict
         """
+        # Try cache first for instant response
+        try:
+            from ..state_cache import get_state_cache
+
+            cache = get_state_cache()
+            cached = await cache.get(entity_id)
+
+            if cached:
+                logger.debug("Cache hit: %s", entity_id)
+                return cached.to_dict()
+
+            logger.debug("Cache miss: %s", entity_id)
+        except Exception as e:
+            logger.debug("Cache lookup failed for %s: %s", entity_id, e)
+
+        # Fallback to REST API
         if not self._connected or not self._client:
             raise RuntimeError("Home Assistant client not connected")
 
         resp = await self._client.get(f"/api/states/{entity_id}")
         resp.raise_for_status()
-        return resp.json()
+        state_data = resp.json()
+
+        # Update cache with fresh data
+        try:
+            from datetime import datetime
+            from ..state_cache import get_state_cache
+
+            cache = get_state_cache()
+
+            last_changed = None
+            last_updated = None
+            try:
+                if state_data.get("last_changed"):
+                    last_changed = datetime.fromisoformat(
+                        state_data["last_changed"].replace("Z", "+00:00")
+                    )
+                if state_data.get("last_updated"):
+                    last_updated = datetime.fromisoformat(
+                        state_data["last_updated"].replace("Z", "+00:00")
+                    )
+            except (ValueError, TypeError):
+                pass
+
+            await cache.set(
+                entity_id=entity_id,
+                state=state_data.get("state", "unknown"),
+                attributes=state_data.get("attributes", {}),
+                last_changed=last_changed,
+                last_updated=last_updated,
+            )
+        except Exception as e:
+            logger.debug("Cache update failed for %s: %s", entity_id, e)
+
+        return state_data
 
     async def list_entities(self, domain_filter: Optional[list[str]] = None) -> list[dict[str, Any]]:
         """

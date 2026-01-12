@@ -19,8 +19,8 @@ INTENT_EXTRACTION_PROMPT = """You are an intent parser for a smart home system c
 Respond ONLY with a JSON object (no other text):
 {{
   "action": "turn_on|turn_off|toggle|set_brightness|read|none",
-  "target_type": "light|switch|sensor|camera|thermostat|null",
-  "target_name": "location name or null",
+  "target_type": "light|switch|sensor|camera|thermostat|tv|media_player|null",
+  "target_name": "location name or device name or null",
   "parameters": {{}},
   "confidence": 0.0-1.0
 }}
@@ -33,6 +33,9 @@ Examples:
 - "set bedroom lights to 50%" -> {{"action":"set_brightness","target_type":"light","target_name":"bedroom","parameters":{{"brightness":127}},"confidence":0.9}}
 - "dim kitchen to 30%" -> {{"action":"set_brightness","target_type":"light","target_name":"kitchen","parameters":{{"brightness":76}},"confidence":0.9}}
 - "turn off all lights" -> {{"action":"turn_off","target_type":"light","target_name":null,"parameters":{{}},"confidence":0.95}}
+- "turn off the tv" -> {{"action":"turn_off","target_type":"tv","target_name":"tv","parameters":{{}},"confidence":0.95}}
+- "turn on the roku" -> {{"action":"turn_on","target_type":"tv","target_name":"roku","parameters":{{}},"confidence":0.95}}
+- "put the television to sleep" -> {{"action":"turn_off","target_type":"tv","target_name":"television","parameters":{{}},"confidence":0.9}}
 - "what can you do?" -> {{"action":"none","target_type":null,"target_name":null,"parameters":{{}},"confidence":0.0}}
 - "hello" -> {{"action":"none","target_type":null,"target_name":null,"parameters":{{}},"confidence":0.0}}
 
