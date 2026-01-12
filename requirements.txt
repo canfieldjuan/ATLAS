@@ -12,10 +12,16 @@ accelerate
 bitsandbytes
 Pillow
 faster-whisper
+sentence-transformers
+opencv-python  # For video processing (SAM 3)
 
 # IoT backends
 aiomqtt
 httpx
+websockets
+
+# Database
+asyncpg>=0.29.0
 
 # Orchestration / Voice pipeline
 webrtcvad

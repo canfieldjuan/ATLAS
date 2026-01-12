@@ -1,4 +1,23 @@
 services:
+  # PostgreSQL database with pgvector for conversation persistence + RAG
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: atlas_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: atlas
+      POSTGRES_PASSWORD: atlas_dev_password
+      POSTGRES_DB: atlas
+    ports:
+      - "5432:5432"
+    volumes:
+      - atlas_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atlas -d atlas"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   brain:
     build: .
     ports:
@@ -7,6 +26,17 @@ services:
       - ./atlas_brain:/app/atlas_brain
       - ./logs:/app/logs
       - ./models:/app/models
+    environment:
+      # Database connection
+      ATLAS_DB_ENABLED: "true"
+      ATLAS_DB_HOST: postgres
+      ATLAS_DB_PORT: "5432"
+      ATLAS_DB_DATABASE: atlas
+      ATLAS_DB_USER: atlas
+      ATLAS_DB_PASSWORD: atlas_dev_password
+    depends_on:
+      postgres:
+        condition: service_healthy
     deploy:
       resources:
         reservations:
@@ -17,3 +47,6 @@ services:
     container_name: atlas_brain
     # The command is already specified in the Dockerfile's CMD,
     # but you could override it here if needed.
+
+volumes:
+  atlas_postgres_data:
