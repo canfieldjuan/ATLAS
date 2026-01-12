@@ -54,6 +54,32 @@ class HomeAssistantConfig(BaseSettings):
         description="Entity prefixes to auto-discover",
     )
 
+    # WebSocket settings for real-time state
+    websocket_enabled: bool = Field(
+        default=True,
+        description="Enable WebSocket for real-time state updates",
+    )
+    websocket_reconnect_interval: int = Field(
+        default=5,
+        description="Seconds between WebSocket reconnection attempts",
+    )
+    state_cache_ttl: int = Field(
+        default=300,
+        description="Seconds to cache entity state before considering stale",
+    )
+
+
+class RokuConfig(BaseSettings):
+    """Roku device configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_ROKU_")
+
+    enabled: bool = Field(default=False, description="Enable Roku backend")
+    devices: list[dict] = Field(
+        default=[],
+        description="List of Roku devices [{host: str, name: str}]",
+    )
+
 
 class LLMConfig(BaseSettings):
     """LLM (reasoning model) configuration."""
@@ -75,19 +101,73 @@ class TTSConfig(BaseSettings):
     voice: str = Field(default="en_US-ryan-medium", description="Voice model")
 
 
+class SpeakerIDConfig(BaseSettings):
+    """Speaker identification configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_SPEAKER_ID_",
+        env_file=".env",
+        extra="ignore",
+    )
+
+    enabled: bool = Field(default=False, description="Enable speaker identification")
+    default_model: str = Field(default="resemblyzer", description="Speaker ID backend")
+    require_known_speaker: bool = Field(
+        default=False,
+        description="Only respond to enrolled speakers"
+    )
+    unknown_speaker_response: str = Field(
+        default="I don't recognize your voice. Please ask the owner to enroll you.",
+        description="Response when unknown speaker detected"
+    )
+    confidence_threshold: float = Field(
+        default=0.75,
+        description="Minimum confidence for speaker match (0.0-1.0)"
+    )
+
+
+class VOSConfig(BaseSettings):
+    """VOS (Video Object Segmentation) configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_VOS_",
+        env_file=".env",
+        extra="ignore",
+    )
+
+    enabled: bool = Field(default=False, description="Enable VOS service")
+    default_model: str = Field(default="sam3", description="Default VOS model")
+    device: str = Field(default="cuda", description="Device for inference")
+    dtype: str = Field(default="float16", description="Model dtype")
+    bpe_path: Optional[str] = Field(
+        default=None,
+        description="Path to BPE vocab file (auto-detected if None)"
+    )
+    load_from_hf: bool = Field(
+        default=True,
+        description="Load model from HuggingFace"
+    )
+
+
 class OrchestrationConfig(BaseSettings):
     """Voice pipeline orchestration configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_ORCH_")
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_ORCH_",
+        env_file=".env",
+        extra="ignore",
+    )
 
     # Wake word
     wake_word_enabled: bool = Field(default=False, description="Enable wake word detection")
     require_wake_word: bool = Field(default=False, description="Require wake word before processing")
     wake_words: list[str] = Field(default=["hey_jarvis"], description="Wake words to detect")
+    wake_word_threshold: float = Field(default=0.3, description="Wake word detection threshold (0-1)")
+    post_wake_word_silence_ms: int = Field(default=1500, description="Silence tolerance after wake word (ms)")
 
-    # VAD
-    vad_aggressiveness: int = Field(default=2, description="VAD aggressiveness (0-3)")
-    silence_duration_ms: int = Field(default=1500, description="Silence to end utterance")
+    # VAD - Lower values = faster response, but may cut off speech
+    vad_aggressiveness: int = Field(default=3, description="VAD aggressiveness (0-3, higher=faster)")
+    silence_duration_ms: int = Field(default=800, description="Silence to end utterance (ms)")
 
     # Behavior
     auto_execute: bool = Field(default=True, description="Auto-execute device actions")
@@ -107,6 +187,21 @@ class ModelTierConfig(BaseSettings):
     complexity_threshold: float = Field(default=0.5, description="Complexity score threshold")
     max_tokens: int = Field(default=512, description="Max tokens for generation")
     temperature: float = Field(default=0.7, description="Sampling temperature")
+
+
+class DiscoveryConfig(BaseSettings):
+    """Network device discovery configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_DISCOVERY_")
+
+    enabled: bool = Field(default=True, description="Enable device discovery")
+    scan_on_startup: bool = Field(default=True, description="Scan network on startup")
+    scan_interval_seconds: int = Field(default=300, description="Periodic scan interval (0=disabled)")
+    ssdp_enabled: bool = Field(default=True, description="Enable SSDP scanning")
+    mdns_enabled: bool = Field(default=False, description="Enable mDNS scanning (future)")
+    auto_register: bool = Field(default=True, description="Auto-register discovered devices")
+    persist_devices: bool = Field(default=True, description="Save devices to database")
+    scan_timeout: float = Field(default=5.0, description="Scan timeout in seconds")
 
 
 class ModelRoutingConfig(BaseSettings):
@@ -148,6 +243,35 @@ class ModelRoutingConfig(BaseSettings):
     cache_duration_seconds: int = Field(default=300, description="Keep model loaded for N seconds")
 
 
+class MemoryConfig(BaseSettings):
+    """Long-term memory configuration (atlas-memory integration)."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_MEMORY_")
+
+    enabled: bool = Field(default=True, description="Enable memory service")
+    base_url: str = Field(
+        default="http://localhost:8001",
+        description="URL of the atlas-memory (graphiti-wrapper) service",
+    )
+    group_id: str = Field(
+        default="atlas-conversations",
+        description="Default group ID for conversation storage",
+    )
+    timeout: float = Field(default=30.0, description="Request timeout in seconds")
+    store_conversations: bool = Field(
+        default=True,
+        description="Store conversation turns in knowledge graph",
+    )
+    retrieve_context: bool = Field(
+        default=True,
+        description="Retrieve relevant context before LLM calls",
+    )
+    context_results: int = Field(
+        default=3,
+        description="Number of context results to retrieve",
+    )
+
+
 class Settings(BaseSettings):
     """Application-wide settings."""
 
@@ -170,15 +294,30 @@ class Settings(BaseSettings):
     load_tts_on_startup: bool = Field(default=False, description="Load TTS on startup (lazy load if False)")
     load_llm_on_startup: bool = Field(default=True, description="Load LLM on startup")
 
+    # Startup behavior - speaker ID
+    load_speaker_id_on_startup: bool = Field(
+        default=False, description="Load speaker ID on startup"
+    )
+
+    # Startup behavior - VOS
+    load_vos_on_startup: bool = Field(
+        default=False, description="Load VOS on startup"
+    )
+
     # Nested configs
     vlm: VLMConfig = Field(default_factory=VLMConfig)
     stt: STTConfig = Field(default_factory=STTConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     tts: TTSConfig = Field(default_factory=TTSConfig)
+    speaker_id: SpeakerIDConfig = Field(default_factory=SpeakerIDConfig)
+    vos: VOSConfig = Field(default_factory=VOSConfig)
     orchestration: OrchestrationConfig = Field(default_factory=OrchestrationConfig)
     mqtt: MQTTConfig = Field(default_factory=MQTTConfig)
     homeassistant: HomeAssistantConfig = Field(default_factory=HomeAssistantConfig)
+    roku: RokuConfig = Field(default_factory=RokuConfig)
     routing: ModelRoutingConfig = Field(default_factory=ModelRoutingConfig)
+    discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
 
 
 # Singleton settings instance

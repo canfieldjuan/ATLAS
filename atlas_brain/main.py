@@ -12,7 +12,7 @@ from fastapi import FastAPI
 
 from .api import router as api_router
 from .config import settings
-from .services import vlm_registry, stt_registry, llm_registry, tts_registry
+from .services import vlm_registry, stt_registry, llm_registry, tts_registry, vos_registry
 from .storage import db_settings
 from .storage.database import init_database, close_database
 
@@ -87,6 +87,29 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to load default LLM: %s", e)
 
+    # Load speaker ID if enabled
+    if settings.load_speaker_id_on_startup or settings.speaker_id.enabled:
+        try:
+            from .services import speaker_id_registry
+            logger.info("Loading speaker ID: %s", settings.speaker_id.default_model)
+            speaker_id_registry.activate(settings.speaker_id.default_model)
+            logger.info("Speaker ID loaded successfully")
+        except Exception as e:
+            logger.error("Failed to load speaker ID: %s", e)
+
+    # Load VOS if enabled
+    if settings.load_vos_on_startup or settings.vos.enabled:
+        try:
+            logger.info("Loading VOS: %s", settings.vos.default_model)
+            vos_registry.activate(
+                settings.vos.default_model,
+                device=settings.vos.device,
+                dtype=settings.vos.dtype,
+            )
+            logger.info("VOS loaded successfully")
+        except Exception as e:
+            logger.error("Failed to load VOS: %s", e)
+
     # Register test devices for development
     try:
         from .capabilities.devices import register_test_devices
@@ -104,6 +127,53 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Failed to initialize Home Assistant: %s", e)
 
+    # Initialize Roku devices if enabled
+    try:
+        from .capabilities.roku import init_roku
+        roku_devices = await init_roku()
+        if roku_devices:
+            logger.info("Registered Roku devices: %s", roku_devices)
+    except Exception as e:
+        logger.error("Failed to initialize Roku: %s", e)
+
+    # Initialize multi-model pool for fast routing
+    try:
+        from .services.model_pool import initialize_pool, ModelTier
+        pool = await initialize_pool([ModelTier.FAST, ModelTier.BALANCED])
+        logger.info("Model pool initialized: %s", pool.get_available_tiers())
+    except Exception as e:
+        logger.warning("Model pool initialization failed (will use single model): %s", e)
+
+    # Initialize device discovery service
+    if settings.discovery.enabled:
+        try:
+            from .discovery import init_discovery, run_discovery_scan, get_discovery_service
+            await init_discovery()
+
+            # Run initial scan if configured
+            if settings.discovery.scan_on_startup:
+                discovered = await run_discovery_scan(timeout=settings.discovery.scan_timeout)
+                logger.info(
+                    "Discovery scan complete: found %d devices",
+                    len(discovered),
+                )
+                for device in discovered:
+                    logger.info(
+                        "  - %s: %s (%s) at %s",
+                        device.device_type,
+                        device.name,
+                        device.device_id,
+                        device.host,
+                    )
+
+            # Start periodic scanning if interval > 0
+            if settings.discovery.scan_interval_seconds > 0:
+                service = get_discovery_service()
+                await service.start_periodic_scan()
+
+        except Exception as e:
+            logger.error("Failed to initialize discovery service: %s", e)
+
     logger.info("Atlas Brain startup complete")
 
     yield  # Application runs here
@@ -111,12 +181,37 @@ async def lifespan(app: FastAPI):
     # --- Shutdown ---
     logger.info("Atlas Brain shutting down...")
 
+    # Shutdown discovery service
+    if settings.discovery.enabled:
+        try:
+            from .discovery import shutdown_discovery
+            await shutdown_discovery()
+            logger.info("Discovery service shutdown complete")
+        except Exception as e:
+            logger.error("Error shutting down discovery service: %s", e)
+
+    # Shutdown model pool
+    try:
+        from .services.model_pool import get_model_pool
+        pool = get_model_pool()
+        await pool.shutdown()
+        logger.info("Model pool shutdown complete")
+    except Exception as e:
+        logger.error("Error shutting down model pool: %s", e)
+
     # Disconnect Home Assistant backend
     try:
         from .capabilities.homeassistant import shutdown_homeassistant
         await shutdown_homeassistant()
     except Exception as e:
         logger.error("Error shutting down Home Assistant: %s", e)
+
+    # Disconnect Roku devices
+    try:
+        from .capabilities.roku import shutdown_roku
+        await shutdown_roku()
+    except Exception as e:
+        logger.error("Error shutting down Roku: %s", e)
 
     # Close database connection pool
     if db_settings.enabled:
@@ -127,6 +222,7 @@ async def lifespan(app: FastAPI):
             logger.error("Error closing database: %s", e)
 
     # Unload models to free resources
+    vos_registry.deactivate()
     vlm_registry.deactivate()
     stt_registry.deactivate()
     tts_registry.deactivate()
