@@ -74,15 +74,32 @@ class OpenWakeWordDetector(WakeWordDetector):
         try:
             from openwakeword.model import Model
 
-            # Load pre-trained models for specified wake words
-            self._model = Model(
-                wakeword_models=self.config.wake_words,
-                inference_framework="onnx",
-            )
-            logger.info(
-                "OpenWakeWord initialized with wake words: %s",
-                self.config.wake_words,
-            )
+            # OpenWakeWord 0.4.0+ API: load all pre-trained models by default
+            # Available models: alexa, hey_mycroft, hey_jarvis, timer, weather
+            self._model = Model()
+
+            # Get available model names from loaded models
+            available_models = list(self._model.models.keys())
+
+            # Filter to only use configured wake words that are available
+            active_wake_words = [
+                ww for ww in self.config.wake_words
+                if ww in available_models
+            ]
+
+            if not active_wake_words:
+                logger.warning(
+                    "No configured wake words (%s) are available. "
+                    "Available models: %s",
+                    self.config.wake_words,
+                    available_models,
+                )
+            else:
+                logger.info(
+                    "OpenWakeWord initialized with wake words: %s (available: %s)",
+                    active_wake_words,
+                    available_models,
+                )
         except ImportError:
             logger.warning(
                 "openwakeword not installed. Install with: pip install openwakeword"
@@ -100,22 +117,32 @@ class OpenWakeWordDetector(WakeWordDetector):
         try:
             import numpy as np
 
-            # Convert bytes to numpy array (16-bit signed int to float)
+            # Convert bytes to numpy array (16-bit signed int to float32)
+            # Note: OpenWakeWord expects raw int16-range values, NOT normalized
             audio_array = np.frombuffer(audio_frame, dtype=np.int16).astype(np.float32)
-            audio_array = audio_array / 32768.0  # Normalize to [-1, 1]
 
-            # Run prediction
+            # Run prediction (pass raw int16-range audio, NOT normalized)
             predictions = self._model.predict(audio_array)
 
-            # Check each wake word
+            # Check each wake word (only those in configured list)
+            best_score = 0.0
+            best_word = None
             for wake_word, scores in predictions.items():
+                # Only respond to configured wake words
+                if wake_word not in self.config.wake_words:
+                    continue
+
                 if scores:
                     score = scores[-1] if isinstance(scores, list) else scores
+                    if score > best_score:
+                        best_score = score
+                        best_word = wake_word
                     if score >= self.config.threshold:
                         logger.info(
-                            "Wake word detected: %s (confidence: %.2f)",
+                            "Wake word detected: %s (confidence: %.2f, threshold: %.2f)",
                             wake_word,
                             score,
+                            self.config.threshold,
                         )
                         return True, float(score), wake_word
 
