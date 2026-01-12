@@ -54,6 +54,7 @@ class IntentParser:
 
     def __init__(self):
         self._vlm = None
+        self._llm = None
 
     def _get_vlm(self):
         """Lazy import VLM for intent extraction."""
@@ -62,11 +63,18 @@ class IntentParser:
             self._vlm = vlm_registry.get_active()
         return self._vlm
 
+    def _get_llm(self):
+        """Lazy import LLM as fallback for intent extraction."""
+        if self._llm is None:
+            from ..services import llm_registry
+            self._llm = llm_registry.get_active()
+        return self._llm
+
     async def parse(self, query: str) -> Optional[Intent]:
         """
         Parse a natural language query into an Intent.
 
-        Uses VLM for fast structured intent extraction.
+        Uses VLM for fast structured intent extraction, falls back to LLM.
 
         Args:
             query: Natural language query from the user
@@ -74,24 +82,42 @@ class IntentParser:
         Returns:
             Intent object if a device action is detected, None otherwise
         """
-        vlm = self._get_vlm()
-        if vlm is None:
-            logger.warning("VLM not available for intent parsing")
-            return None
-
         prompt = INTENT_EXTRACTION_PROMPT.format(query=query)
 
-        try:
-            result = vlm.process_text(prompt)
-            response_text = result.get("response", "")
-            logger.info("VLM response for '%s': %s", query[:30], response_text[:200])
-            intent = self._parse_response(response_text, query)
-            if intent:
-                logger.info("Parsed intent: action=%s, target=%s", intent.action, intent.target_name)
-                return intent
-        except Exception as e:
-            logger.warning("Intent parsing failed: %s", e)
+        # Try VLM first (faster)
+        vlm = self._get_vlm()
+        if vlm is not None:
+            try:
+                result = vlm.process_text(prompt)
+                response_text = result.get("response", "")
+                logger.info("VLM intent for '%s': %s", query[:30], response_text[:100])
+                intent = self._parse_response(response_text, query)
+                if intent:
+                    logger.info("Intent: action=%s, target=%s", intent.action, intent.target_name)
+                    return intent
+            except Exception as e:
+                logger.warning("VLM intent parsing failed: %s", e)
 
+        # Fall back to LLM
+        llm = self._get_llm()
+        if llm is not None:
+            try:
+                from ..services.protocols import Message
+                messages = [
+                    Message(role="system", content="You parse commands. Output ONLY valid JSON."),
+                    Message(role="user", content=prompt),
+                ]
+                result = llm.chat(messages=messages, max_tokens=150, temperature=0.1)
+                response_text = result.get("response", "")
+                logger.info("LLM intent for '%s': %s", query[:30], response_text[:100])
+                intent = self._parse_response(response_text, query)
+                if intent:
+                    logger.info("Intent: action=%s, target=%s", intent.action, intent.target_name)
+                    return intent
+            except Exception as e:
+                logger.warning("LLM intent parsing failed: %s", e)
+
+        logger.warning("No model available for intent parsing")
         return None
 
     def _normalize_action(self, raw_action: str) -> str:
