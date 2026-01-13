@@ -105,6 +105,7 @@ class OrchestratorResult:
     action_ms: float = 0.0
     llm_ms: float = 0.0  # LLM response generation
     memory_ms: float = 0.0  # RAG/memory retrieval
+    tools_ms: float = 0.0  # Tool execution (weather, traffic, location)
     tts_ms: float = 0.0
     storage_ms: float = 0.0  # Database persistence
 
@@ -118,6 +119,7 @@ class OrchestratorResult:
             "action": self.action_ms,
             "llm": self.llm_ms,
             "memory": self.memory_ms,
+            "tools": self.tools_ms,
             "tts": self.tts_ms,
             "storage": self.storage_ms,
         }
