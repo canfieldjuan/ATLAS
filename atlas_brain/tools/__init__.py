@@ -10,11 +10,13 @@ from .registry import ToolRegistry, tool_registry
 from .weather import WeatherTool, weather_tool
 from .traffic import TrafficTool, traffic_tool
 from .location import LocationTool, location_tool
+from .time import TimeTool, time_tool
 
 # Register tools on import
 tool_registry.register(weather_tool)
 tool_registry.register(traffic_tool)
 tool_registry.register(location_tool)
+tool_registry.register(time_tool)
 
 __all__ = [
     "Tool",
@@ -28,4 +30,6 @@ __all__ = [
     "traffic_tool",
     "LocationTool",
     "location_tool",
+    "TimeTool",
+    "time_tool",
 ]

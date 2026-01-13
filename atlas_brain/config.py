@@ -92,13 +92,17 @@ class LLMConfig(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="ATLAS_LLM_")
 
-    # Backend selection: "llama-cpp" or "transformers-flash"
+    # Backend selection: "llama-cpp", "transformers-flash", or "ollama"
     default_model: str = Field(default="llama-cpp", description="Default LLM backend")
 
     # llama-cpp settings (GGUF models)
     model_path: Optional[str] = Field(default=None, description="Path to GGUF model file")
     n_ctx: int = Field(default=4096, description="Context window size")
     n_gpu_layers: int = Field(default=-1, description="GPU layers (-1 = all)")
+
+    # ollama settings (Ollama API backend)
+    ollama_model: str = Field(default="qwen3-coder:30b", description="Ollama model name")
+    ollama_url: str = Field(default="http://localhost:11434", description="Ollama API URL")
 
     # transformers-flash settings (HuggingFace models)
     hf_model_id: str = Field(
@@ -122,10 +126,11 @@ class LLMConfig(BaseSettings):
 class TTSConfig(BaseSettings):
     """TTS configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_TTS_")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_TTS_", env_file=".env", extra="ignore")
 
     default_model: str = Field(default="piper", description="Default TTS backend")
     voice: str = Field(default="en_US-ryan-medium", description="Voice model")
+    speed: float = Field(default=1.0, description="Speech speed (1.0 = normal)")
 
 
 class SpeakerIDConfig(BaseSettings):
@@ -185,16 +190,13 @@ class OrchestrationConfig(BaseSettings):
         extra="ignore",
     )
 
-    # Wake word
-    wake_word_enabled: bool = Field(default=False, description="Enable wake word detection")
-    require_wake_word: bool = Field(default=False, description="Require wake word before processing")
-    wake_words: list[str] = Field(default=["hey_jarvis"], description="Wake words to detect")
-    wake_word_threshold: float = Field(default=0.3, description="Wake word detection threshold (0-1)")
-    post_wake_word_silence_ms: int = Field(default=1500, description="Silence tolerance after wake word (ms)")
-
     # VAD - Lower values = faster response, but may cut off speech
     vad_aggressiveness: int = Field(default=3, description="VAD aggressiveness (0-3, higher=faster)")
     silence_duration_ms: int = Field(default=800, description="Silence to end utterance (ms)")
+
+    # Keyword detection - only respond when keyword is in transcript
+    keyword_enabled: bool = Field(default=True, description="Enable keyword detection")
+    keyword: str = Field(default="atlas", description="Keyword to listen for (case-insensitive)")
 
     # Behavior
     auto_execute: bool = Field(default=True, description="Auto-execute device actions")
@@ -341,7 +343,6 @@ class VoiceClientConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ATLAS_VOICE_")
 
     enabled: bool = Field(default=True, description="Enable voice client on startup")
-    require_wake_word: bool = Field(default=True, description="Require wake word")
     input_device: int | None = Field(default=None, description="Audio input device index")
     output_device: int | None = Field(default=None, description="Audio output device index")
     sample_rate: int = Field(default=16000, description="Audio sample rate")

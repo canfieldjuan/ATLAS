@@ -25,7 +25,6 @@ asyncpg>=0.29.0
 
 # Orchestration / Voice pipeline
 webrtcvad
-openwakeword
 piper-tts
 
 # Optional: For GGUF model support

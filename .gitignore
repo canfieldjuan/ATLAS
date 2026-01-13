@@ -49,5 +49,4 @@ voice_client.py
 test_sam3.py
 
 # Experimental directories (not ready for production)
-atlas_voice/
 sam3/

@@ -16,6 +16,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from ..orchestration import Orchestrator, PipelineState
 from ..orchestration.context import get_context
+from ..agents import create_atlas_agent
 from ..storage import db_settings
 from ..storage.database import get_db_pool
 from ..storage.repositories.session import get_session_repo
@@ -85,8 +86,7 @@ async def orchestrated_audio_stream(websocket: WebSocket):
     - Server sends: JSON status updates {"state": "...", "data": {...}}
 
     Status Updates:
-    - {"state": "listening", "wake_word_enabled": true}
-    - {"state": "wake_detected", "wake_word": "hey_jarvis"}
+    - {"state": "listening"}
     - {"state": "recording", "duration_ms": 1500}
     - {"state": "transcribing"}
     - {"state": "transcript", "text": "turn on the lights"}
@@ -146,8 +146,9 @@ async def orchestrated_audio_stream(websocket: WebSocket):
             except Exception as e:
                 logger.warning("Failed to create session: %s", e)
 
-    # Create orchestrator with session_id for persistence
-    orchestrator = Orchestrator(session_id=session_id)
+    # Create agent for reasoning and orchestrator for audio pipeline
+    agent = create_atlas_agent(session_id=session_id)
+    orchestrator = Orchestrator(session_id=session_id, agent=agent)
     context = get_context()
 
     # Load conversation history if session exists
@@ -233,7 +234,6 @@ async def orchestrated_audio_stream(websocket: WebSocket):
     # Send initial status
     await send_status(
         "listening",
-        wake_word_enabled=orchestrator.config.require_wake_word,
         follow_up_mode=orchestrator.in_follow_up_mode,
         context=context.build_context_dict(),
     )
@@ -275,12 +275,9 @@ async def orchestrated_audio_stream(websocket: WebSocket):
 
                             elif command == "config":
                                 # Update configuration
-                                if "wake_word_enabled" in cmd:
-                                    orchestrator.config.require_wake_word = cmd["wake_word_enabled"]
                                 if "auto_execute" in cmd:
                                     orchestrator.config.auto_execute = cmd["auto_execute"]
                                 await send_status("config_updated", config={
-                                    "wake_word_enabled": orchestrator.config.require_wake_word,
                                     "auto_execute": orchestrator.config.auto_execute,
                                 })
 
@@ -328,9 +325,12 @@ async def orchestrated_audio_stream(websocket: WebSocket):
                 # Calculate cooldown based on TTS audio duration
                 cooldown_seconds = 0.5  # Minimum cooldown
                 if result and result.response_audio:
-                    # Estimate audio duration: 16kHz, 16-bit mono = 32000 bytes/sec
-                    audio_duration = len(result.response_audio) / 32000.0
-                    cooldown_seconds = audio_duration + 0.5  # Add buffer
+                    # WAV format: 44 byte header + PCM data
+                    # Kokoro outputs 24kHz, 16-bit mono = 48000 bytes/sec
+                    # Subtract header and calculate duration
+                    pcm_bytes = max(0, len(result.response_audio) - 44)
+                    audio_duration = pcm_bytes / 48000.0
+                    cooldown_seconds = audio_duration + 0.8  # Buffer for room reverb
 
                 # Wait for TTS to finish, discarding incoming audio
                 if cooldown_seconds > 0:
@@ -348,7 +348,6 @@ async def orchestrated_audio_stream(websocket: WebSocket):
                 orchestrator.reset()
                 await send_status(
                     "listening",
-                    wake_word_enabled=orchestrator.config.require_wake_word,
                     follow_up_mode=orchestrator.in_follow_up_mode,
                 )
 
@@ -390,8 +389,6 @@ async def get_orchestration_status():
     return {
         "state": orchestrator.state.name.lower(),
         "config": {
-            "wake_word_enabled": orchestrator.config.wake_word_enabled,
-            "require_wake_word": orchestrator.config.require_wake_word,
             "auto_execute": orchestrator.config.auto_execute,
         },
         "context": context.build_context_dict(),
@@ -432,7 +429,9 @@ async def process_text_command(body: dict):
             except Exception as e:
                 logger.warning("Failed to create session: %s", e)
 
-    orchestrator = Orchestrator(session_id=session_id)
+    # Create agent for reasoning and orchestrator for text processing
+    agent = create_atlas_agent(session_id=session_id)
+    orchestrator = Orchestrator(session_id=session_id, agent=agent)
 
     # Load conversation history for context
     if session_id:

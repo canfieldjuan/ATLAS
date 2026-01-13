@@ -17,7 +17,6 @@ from typing import Any, AsyncIterator, Callable, Optional
 from .audio_buffer import AudioBuffer, VADConfig
 from .states import PipelineContext, PipelineEvent, PipelineState, PipelineStateMachine
 from .streaming_intent import IntentCategory, StreamingIntentDetector, streaming_intent_detector
-from .wake_word import WakeWordConfig, WakeWordManager
 
 logger = logging.getLogger("atlas.orchestration.streaming")
 
@@ -25,11 +24,6 @@ logger = logging.getLogger("atlas.orchestration.streaming")
 @dataclass
 class StreamingConfig:
     """Configuration for streaming orchestrator."""
-
-    # Wake word
-    wake_word_enabled: bool = True
-    wake_word_config: WakeWordConfig = field(default_factory=WakeWordConfig)
-    require_wake_word: bool = False
 
     # VAD
     vad_config: VADConfig = field(default_factory=VADConfig)
@@ -57,20 +51,12 @@ class StreamingConfig:
 
         orch = settings.orchestration
 
-        wake_word_config = WakeWordConfig(
-            threshold=orch.wake_word_threshold,
-            wake_words=orch.wake_words,
-        )
-
         vad_config = VADConfig(
             aggressiveness=orch.vad_aggressiveness,
             silence_duration_ms=orch.silence_duration_ms,
         )
 
         return cls(
-            wake_word_enabled=orch.wake_word_enabled,
-            wake_word_config=wake_word_config,
-            require_wake_word=orch.require_wake_word,
             vad_config=vad_config,
             auto_execute=orch.auto_execute,
             recording_timeout_ms=orch.recording_timeout_ms,
@@ -110,13 +96,20 @@ class StreamingOrchestrator:
     5. Play audio while still generating
     """
 
-    def __init__(self, config: Optional[StreamingConfig] = None):
+    def __init__(
+        self,
+        config: Optional[StreamingConfig] = None,
+        agent: Optional[Any] = None,
+    ):
         self.config = config or StreamingConfig.from_settings()
+
+        # Agent for delegated reasoning (optional)
+        # Note: Agent is used for intent/action only; streaming LLM is handled separately
+        self._agent = agent
 
         # Components
         self._state_machine = PipelineStateMachine()
         self._audio_buffer = AudioBuffer(self.config.vad_config)
-        self._wake_word: Optional[WakeWordManager] = None
 
         # Service references (lazy loaded)
         self._stt = None
@@ -138,10 +131,21 @@ class StreamingOrchestrator:
         self._on_response_chunk: Optional[Callable] = None
         self._on_audio_chunk: Optional[Callable] = None
 
-        if self.config.wake_word_enabled:
-            self._wake_word = WakeWordManager(self.config.wake_word_config)
+        logger.info(
+            "Streaming orchestrator initialized (agent=%s)",
+            "enabled" if self._agent else "disabled",
+        )
 
-        logger.info("Streaming orchestrator initialized")
+    @property
+    def agent(self) -> Optional[Any]:
+        """Get the agent instance (if any)."""
+        return self._agent
+
+    @agent.setter
+    def agent(self, value: Any) -> None:
+        """Set the agent instance."""
+        self._agent = value
+        logger.info("Streaming orchestrator agent %s", "enabled" if value else "disabled")
 
     def _get_stt(self):
         if self._stt is None:

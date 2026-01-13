@@ -76,8 +76,11 @@ async def lifespan(app: FastAPI):
     # Load default TTS if configured
     if settings.load_tts_on_startup:
         try:
-            logger.info("Loading default TTS: %s (voice=%s)", settings.tts.default_model, settings.tts.voice)
-            tts_registry.activate(settings.tts.default_model, voice=settings.tts.voice)
+            logger.info("Loading default TTS: %s (voice=%s, speed=%.2f)",
+                       settings.tts.default_model, settings.tts.voice, settings.tts.speed)
+            tts_registry.activate(settings.tts.default_model,
+                                 voice=settings.tts.voice,
+                                 speed=settings.tts.speed)
         except Exception as e:
             logger.error("Failed to load default TTS: %s", e)
 
@@ -100,6 +103,15 @@ async def lifespan(app: FastAPI):
                            settings.llm.hf_model_id,
                            settings.llm.torch_dtype,
                            settings.llm.use_flash_attention)
+            elif backend == "ollama":
+                # Ollama API backend
+                kwargs = {
+                    "model": settings.llm.ollama_model,
+                    "base_url": settings.llm.ollama_url,
+                }
+                logger.info("Ollama model: %s, url: %s",
+                           settings.llm.ollama_model,
+                           settings.llm.ollama_url)
             else:
                 # llama-cpp (GGUF models)
                 kwargs = {}
@@ -164,13 +176,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Failed to initialize Roku: %s", e)
 
-    # Initialize multi-model pool for fast routing
-    try:
-        from .services.model_pool import initialize_pool, ModelTier
-        pool = await initialize_pool([ModelTier.FAST, ModelTier.BALANCED])
-        logger.info("Model pool initialized: %s", pool.get_available_tiers())
-    except Exception as e:
-        logger.warning("Model pool initialization failed (will use single model): %s", e)
+    # Initialize multi-model pool for fast routing (only if routing is enabled)
+    if settings.routing.enabled:
+        try:
+            from .services.model_pool import initialize_pool, ModelTier
+            pool = await initialize_pool([ModelTier.FAST, ModelTier.BALANCED])
+            logger.info("Model pool initialized: %s", pool.get_available_tiers())
+        except Exception as e:
+            logger.warning("Model pool initialization failed (will use single model): %s", e)
+    else:
+        logger.info("Model routing disabled, using single LLM")
 
     # Initialize device discovery service
     if settings.discovery.enabled:
@@ -213,7 +228,6 @@ async def lifespan(app: FastAPI):
                 input_device=settings.voice.input_device,
                 output_device=settings.voice.output_device,
                 sample_rate=settings.voice.sample_rate,
-                require_wake_word=settings.voice.require_wake_word,
             )
             runner = VoiceRunner(voice_config)
 
@@ -226,7 +240,7 @@ async def lifespan(app: FastAPI):
                     logger.error("Voice client error: %s", e)
 
             _voice_client_task = asyncio.create_task(run_voice_client())
-            logger.info("Voice client started (wake_word=%s)", settings.voice.require_wake_word)
+            logger.info("Voice client started (always listening)")
         except ImportError as e:
             logger.warning("Voice client not available (atlas_voice not installed): %s", e)
         except Exception as e:
@@ -295,6 +309,10 @@ async def lifespan(app: FastAPI):
     stt_registry.deactivate()
     tts_registry.deactivate()
     llm_registry.deactivate()
+
+    # Force garbage collection to clean up semaphores from NeMo/PyTorch
+    import gc
+    gc.collect()
 
     logger.info("Atlas Brain shutdown complete")
 

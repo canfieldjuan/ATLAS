@@ -18,35 +18,72 @@ from .states import (
     PipelineState,
     PipelineStateMachine,
 )
-from .wake_word import WakeWordConfig, WakeWordManager
 
 logger = logging.getLogger("atlas.orchestration")
+
+# Global lock to prevent concurrent CUDA operations (STT + LLM conflict)
+_cuda_lock = asyncio.Lock()
+
+
+def calculate_audio_rms(wav_bytes: bytes) -> float:
+    """
+    Calculate RMS (root mean square) energy of WAV audio.
+
+    Args:
+        wav_bytes: WAV file bytes with header
+
+    Returns:
+        RMS energy value (0-32768 for 16-bit audio)
+    """
+    import struct
+    import wave
+    import io
+
+    try:
+        with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
+            n_frames = wav_file.getnframes()
+            if n_frames == 0:
+                return 0.0
+            audio_data = wav_file.readframes(n_frames)
+
+        # Convert to 16-bit samples
+        samples = struct.unpack(f"<{len(audio_data)//2}h", audio_data)
+        if not samples:
+            return 0.0
+
+        # Calculate RMS
+        sum_squares = sum(s * s for s in samples)
+        rms = (sum_squares / len(samples)) ** 0.5
+        return rms
+    except Exception as e:
+        logger.warning("Failed to calculate audio RMS: %s", e)
+        return 0.0
 
 
 @dataclass
 class OrchestratorConfig:
     """Configuration for the orchestrator."""
 
-    # Wake word settings
-    wake_word_enabled: bool = True
-    wake_word_config: WakeWordConfig = field(default_factory=WakeWordConfig)
-    post_wake_word_silence_ms: int = 1500  # Longer silence after wake word
-
     # VAD settings
     vad_config: VADConfig = field(default_factory=VADConfig)
 
+    # Keyword detection - only respond when keyword is in transcript
+    keyword_enabled: bool = True
+    keyword: str = "atlas"
+
     # Behavior
     auto_execute: bool = True  # Auto-execute actions or return for confirmation
-    require_wake_word: bool = False  # If False, any speech triggers pipeline
 
     # Follow-up mode: After a response, stay "hot" for follow-up commands
     follow_up_enabled: bool = True
     follow_up_duration_ms: int = 20000  # 20 seconds of hot mic after response
 
     # Timeouts
-    wake_word_timeout_ms: int = 30000  # Max time waiting for wake word
     recording_timeout_ms: int = 30000  # Max recording duration
     processing_timeout_ms: int = 10000  # Max time for LLM processing
+
+    # Audio quality threshold - skip STT if audio RMS is below this
+    min_audio_rms: int = 0  # Disabled for testing
 
     @classmethod
     def from_settings(cls) -> "OrchestratorConfig":
@@ -55,12 +92,6 @@ class OrchestratorConfig:
 
         orch = settings.orchestration
 
-        # Build wake word config from settings
-        wake_word_config = WakeWordConfig(
-            threshold=orch.wake_word_threshold,
-            wake_words=orch.wake_words,
-        )
-
         # Build VAD config from settings
         vad_config = VADConfig(
             aggressiveness=orch.vad_aggressiveness,
@@ -68,12 +99,10 @@ class OrchestratorConfig:
         )
 
         return cls(
-            wake_word_enabled=orch.wake_word_enabled,
-            wake_word_config=wake_word_config,
-            post_wake_word_silence_ms=orch.post_wake_word_silence_ms,
             vad_config=vad_config,
+            keyword_enabled=getattr(orch, "keyword_enabled", True),
+            keyword=getattr(orch, "keyword", "atlas"),
             auto_execute=orch.auto_execute,
-            require_wake_word=orch.require_wake_word,
             follow_up_enabled=getattr(orch, "follow_up_enabled", True),
             follow_up_duration_ms=getattr(orch, "follow_up_duration_ms", 20000),
             recording_timeout_ms=orch.recording_timeout_ms,
@@ -130,19 +159,27 @@ class Orchestrator:
     Central coordinator for the Atlas voice pipeline.
 
     Manages the complete flow from audio input to action execution.
+
+    Can optionally delegate reasoning to an Agent instance.
+    When an agent is provided, the orchestrator handles only audio I/O
+    (STT, TTS) and delegates intent parsing, action execution, and
+    response generation to the agent.
     """
 
     def __init__(
         self,
         config: Optional[OrchestratorConfig] = None,
         session_id: Optional[str] = None,
+        agent: Optional[Any] = None,
     ):
         self.config = config or OrchestratorConfig.from_settings()
+
+        # Agent for delegated reasoning (optional)
+        self._agent = agent
 
         # Components
         self._state_machine = PipelineStateMachine()
         self._audio_buffer = AudioBuffer(self.config.vad_config)
-        self._wake_word: Optional[WakeWordManager] = None
 
         # Service references (lazy loaded)
         self._stt = None
@@ -166,16 +203,13 @@ class Orchestrator:
         # Follow-up mode tracking
         self._last_response_time: Optional[datetime] = None
 
-        # Initialize wake word if enabled
-        if self.config.wake_word_enabled:
-            self._wake_word = WakeWordManager(self.config.wake_word_config)
-
         logger.info(
-            "Orchestrator initialized (wake_word=%s, require_wake=%s, follow_up=%s/%dms)",
-            self.config.wake_word_enabled,
-            self.config.require_wake_word,
+            "Orchestrator initialized (keyword=%s/%s, follow_up=%s/%dms, agent=%s)",
+            self.config.keyword_enabled,
+            self.config.keyword if self.config.keyword_enabled else "disabled",
             self.config.follow_up_enabled,
             self.config.follow_up_duration_ms,
+            "enabled" if self._agent else "disabled",
         )
 
     @property
@@ -197,6 +231,17 @@ class Orchestrator:
             return False
         elapsed = (datetime.now() - self._last_response_time).total_seconds() * 1000
         return elapsed < self.config.follow_up_duration_ms
+
+    @property
+    def agent(self) -> Optional[Any]:
+        """Get the agent instance (if any)."""
+        return self._agent
+
+    @agent.setter
+    def agent(self, value: Any) -> None:
+        """Set the agent instance."""
+        self._agent = value
+        logger.info("Agent %s", "enabled" if value else "disabled")
 
     def _get_stt(self):
         """Lazy load STT service."""
@@ -282,8 +327,6 @@ class Orchestrator:
         """Reset the orchestrator to idle state."""
         self._state_machine.reset()
         self._audio_buffer.reset()
-        if self._wake_word:
-            self._wake_word.reset()
         logger.debug("Orchestrator reset")
 
     def _log_latency_summary(
@@ -355,11 +398,8 @@ class Orchestrator:
         start_time = datetime.now()
         self.reset()
 
-        # Start in listening state
-        if self.config.require_wake_word:
-            self._state_machine._state = PipelineState.LISTENING
-        else:
-            self._state_machine._state = PipelineState.IDLE
+        # Start in idle state (always listening mode)
+        self._state_machine._state = PipelineState.IDLE
 
         try:
             async for audio_chunk in audio_stream:
@@ -404,43 +444,16 @@ class Orchestrator:
 
         state = self._state_machine.state
 
-        # Check if we need wake word (skip if in follow-up mode)
-        need_wake_word = self.config.require_wake_word and not self.in_follow_up_mode
-
-        # Check for wake word if required
-        if state in (PipelineState.IDLE, PipelineState.LISTENING):
-            if need_wake_word and self._wake_word:
-                detected, confidence, wake_word = self._wake_word.detect(audio_chunk)
-                if detected:
-                    logger.info("Wake word detected: %s (%.2f)", wake_word, confidence)
-                    self._state_machine.context.wake_detected_at = datetime.now()
-                    self._state_machine.transition(PipelineEvent.WAKE_WORD_DETECTED)
-                    # Use longer silence tolerance after wake word
-                    self._audio_buffer.config.silence_duration_ms = self.config.post_wake_word_silence_ms
-                    # Reset audio buffer to start fresh after wake word
-                    self._audio_buffer.reset()
-                    # Refresh state after transition
-                    state = self._state_machine.state
-            elif self.in_follow_up_mode:
-                # In follow-up mode, treat as if wake word was detected
-                state = PipelineState.WAKE_DETECTED
-
-        # Process audio through VAD
-        if state in (
-            PipelineState.IDLE,
-            PipelineState.WAKE_DETECTED,
-            PipelineState.RECORDING,
-        ):
+        # Process audio through VAD (always listening mode)
+        if state in (PipelineState.IDLE, PipelineState.RECORDING):
             event = self._audio_buffer.add_audio(audio_chunk)
 
             if event == "speech_start":
-                # Allow speech to start if: no wake word required, wake word detected, or in follow-up mode
-                if not need_wake_word or state == PipelineState.WAKE_DETECTED or self.in_follow_up_mode:
-                    if self.in_follow_up_mode:
-                        logger.info("Follow-up speech detected (no wake word needed)")
-                    self._state_machine.context.recording_started_at = datetime.now()
-                    self._state_machine.transition(PipelineEvent.SPEECH_START)
-                    logger.debug("Speech started")
+                if self.in_follow_up_mode:
+                    logger.info("Follow-up speech detected")
+                self._state_machine.context.recording_started_at = datetime.now()
+                self._state_machine.transition(PipelineEvent.SPEECH_START)
+                logger.debug("Speech started")
 
             elif event in ("speech_end", "max_duration"):
                 self._state_machine.context.recording_ended_at = datetime.now()
@@ -510,8 +523,17 @@ class Orchestrator:
         if stt is None:
             return OrchestratorResult(success=False, error="STT service not available")
 
+        # Check audio quality before STT to filter noise/echo
+        audio_rms = calculate_audio_rms(ctx.audio_bytes)
+        logger.info("Audio RMS: %.1f (threshold: %d)", audio_rms, self.config.min_audio_rms)
+        if audio_rms < self.config.min_audio_rms:
+            logger.info("Audio below threshold, skipping STT")
+            result.success = True
+            return result
+
         try:
-            transcription = await stt.transcribe(ctx.audio_bytes)
+            async with _cuda_lock:
+                transcription = await stt.transcribe(ctx.audio_bytes)
             ctx.transcript = transcription.get("transcript", "")
             ctx.transcript_confidence = transcription.get("confidence", 0.0)
             result.transcript = ctx.transcript
@@ -528,11 +550,31 @@ class Orchestrator:
                 result.success = True
                 return result
 
+            # Keyword detection - only respond if keyword is in transcript
+            # Skip keyword check if in follow-up mode (already in conversation)
+            if self.config.keyword_enabled and not self.in_follow_up_mode:
+                keyword_lower = self.config.keyword.lower()
+                transcript_lower = ctx.transcript.lower()
+                if keyword_lower not in transcript_lower:
+                    logger.info(
+                        "Keyword '%s' not found in transcript, ignoring",
+                        self.config.keyword
+                    )
+                    result.success = True
+                    return result
+                logger.info("Keyword '%s' detected, processing command", self.config.keyword)
+            elif self.in_follow_up_mode:
+                logger.info("Follow-up mode active, skipping keyword check")
+
         except Exception as e:
             logger.error("Transcription failed: %s", e)
             return OrchestratorResult(success=False, error=f"Transcription failed: {e}")
 
-        # Intent parsing / LLM processing
+        # Delegate to agent if available
+        if self._agent is not None:
+            return await self._process_with_agent(ctx, result)
+
+        # Intent parsing / LLM processing (legacy path when no agent)
         proc_start = datetime.now()
 
         intent_parser = self._get_intent_parser()
@@ -610,6 +652,120 @@ class Orchestrator:
 
         # Log latency summary
         self._log_latency_summary(result, pipeline_type="audio")
+
+        return result
+
+    async def _process_with_agent(
+        self,
+        ctx: PipelineContext,
+        result: OrchestratorResult,
+    ) -> OrchestratorResult:
+        """
+        Process utterance using the Agent for reasoning.
+
+        The agent handles:
+        - Intent parsing
+        - Action execution
+        - Response generation
+        - Conversation storage
+
+        This method handles:
+        - Building agent context from pipeline context
+        - TTS synthesis of agent response
+        - Follow-up mode management
+        """
+        from ..agents import AgentContext
+
+        logger.info("Delegating to agent for processing")
+
+        # Build agent context from pipeline context
+        agent_context = AgentContext(
+            input_text=ctx.transcript,
+            input_type="voice",
+            session_id=self._session_id,
+            speaker_id=ctx.speaker_id,
+            speaker_confidence=ctx.speaker_confidence,
+        )
+
+        # Load conversation history into context
+        if self._session_id:
+            try:
+                history = await self.load_session_history(limit=6)
+                agent_context.conversation_history = [
+                    {"role": turn.role, "content": turn.content}
+                    for turn in history
+                ]
+            except Exception as e:
+                logger.warning("Failed to load history for agent: %s", e)
+
+        # Call agent
+        try:
+            agent_result = await self._agent.run(agent_context)
+
+            # Transfer results to orchestrator result
+            result.success = agent_result.success
+            result.response_text = agent_result.response_text
+            result.intent = agent_result.intent
+            result.action_results = [
+                r if isinstance(r, dict) else r.to_dict() if hasattr(r, "to_dict") else {"result": str(r)}
+                for r in agent_result.action_results
+            ]
+            result.processing_ms = agent_result.think_ms
+            result.action_ms = agent_result.act_ms
+            result.llm_ms = agent_result.llm_ms
+            result.memory_ms = agent_result.memory_ms
+            result.tools_ms = agent_result.tools_ms
+            result.storage_ms = agent_result.storage_ms
+            result.error = agent_result.error
+
+            # Update pipeline context
+            ctx.intent = agent_result.intent
+            ctx.response_text = agent_result.response_text
+
+            logger.info(
+                "Agent result: success=%s, action_type=%s, response=%.50s...",
+                agent_result.success,
+                agent_result.action_type,
+                agent_result.response_text or "",
+            )
+
+        except Exception as e:
+            logger.exception("Agent processing failed: %s", e)
+            result.success = False
+            result.error = str(e)
+            result.response_text = f"I'm sorry, I encountered an error: {e}"
+
+        # TTS (if available)
+        tts = self._get_tts()
+        if tts is not None and result.response_text:
+            try:
+                tts_start = datetime.now()
+                result.response_audio = await tts.synthesize(result.response_text)
+                ctx.response_audio = result.response_audio
+                result.tts_ms = (datetime.now() - tts_start).total_seconds() * 1000
+                logger.info(
+                    "TTS synthesized: %d bytes in %.0fms",
+                    len(result.response_audio) if result.response_audio else 0,
+                    result.tts_ms,
+                )
+            except Exception as e:
+                logger.warning("TTS synthesis failed: %s", e)
+
+        self._state_machine.transition(PipelineEvent.RESPONSE_READY)
+
+        if self._on_response:
+            await self._on_response(result)
+
+        # Enter follow-up mode for subsequent commands without wake word
+        if self.config.follow_up_enabled and result.success:
+            self._last_response_time = datetime.now()
+            logger.info("Entering follow-up mode for %dms", self.config.follow_up_duration_ms)
+
+        # Calculate total latency
+        result.latency_ms = ctx.elapsed_ms()
+
+        # Log latency summary
+        self._log_latency_summary(result, pipeline_type="audio-agent")
 
         return result
 
@@ -799,6 +955,79 @@ class Orchestrator:
         else:
             return "I couldn't complete that action."
 
+    async def _execute_tools_for_query(
+        self,
+        transcript: str,
+        result: Optional[OrchestratorResult] = None,
+    ) -> dict[str, str]:
+        """Execute relevant tools based on query keywords."""
+        from ..tools import tool_registry
+        from datetime import datetime
+
+        tool_results = {}
+        transcript_lower = transcript.lower()
+        tools_start = datetime.now()
+
+        # Weather tool detection
+        weather_keywords = ["weather", "temperature", "forecast", "rain", "sunny"]
+        if any(kw in transcript_lower for kw in weather_keywords):
+            try:
+                loc_result = await tool_registry.execute("get_location", {})
+                params = {}
+                if loc_result.success and loc_result.data:
+                    params["latitude"] = loc_result.data.get("latitude")
+                    params["longitude"] = loc_result.data.get("longitude")
+                weather_result = await tool_registry.execute("get_weather", params)
+                if weather_result.success:
+                    tool_results["weather"] = weather_result.message
+                    logger.info("Weather tool: %s", weather_result.message)
+            except Exception as e:
+                logger.warning("Weather tool failed: %s", e)
+
+        # Traffic tool detection
+        traffic_keywords = ["traffic", "commute", "drive", "driving", "route"]
+        if any(kw in transcript_lower for kw in traffic_keywords):
+            try:
+                loc_result = await tool_registry.execute("get_location", {})
+                if loc_result.success and loc_result.data:
+                    params = {
+                        "latitude": loc_result.data.get("latitude"),
+                        "longitude": loc_result.data.get("longitude"),
+                    }
+                    traffic_result = await tool_registry.execute("get_traffic", params)
+                    if traffic_result.success:
+                        tool_results["traffic"] = traffic_result.message
+                        logger.info("Traffic tool: %s", traffic_result.message)
+            except Exception as e:
+                logger.warning("Traffic tool failed: %s", e)
+
+        # Location tool detection
+        location_keywords = ["where am i", "my location", "current location", "gps"]
+        if any(kw in transcript_lower for kw in location_keywords):
+            try:
+                loc_result = await tool_registry.execute("get_location", {})
+                if loc_result.success:
+                    tool_results["location"] = loc_result.message
+                    logger.info("Location tool: %s", loc_result.message)
+            except Exception as e:
+                logger.warning("Location tool failed: %s", e)
+
+        # Time tool detection
+        time_keywords = ["what time", "current time", "what day", "what date", "today"]
+        if any(kw in transcript_lower for kw in time_keywords):
+            try:
+                time_result = await tool_registry.execute("get_time", {})
+                if time_result.success:
+                    tool_results["time"] = time_result.message
+                    logger.info("Time tool: %s", time_result.message)
+            except Exception as e:
+                logger.warning("Time tool failed: %s", e)
+
+        if result and tool_results:
+            result.tools_ms = (datetime.now() - tools_start).total_seconds() * 1000
+
+        return tool_results
+
     async def _generate_llm_response(
         self,
         ctx: PipelineContext,
@@ -849,11 +1078,23 @@ class Orchestrator:
             except Exception as e:
                 logger.warning("Failed to retrieve memory context: %s", e)
 
+        # Execute tools if query matches tool keywords
+        tool_results = await self._execute_tools_for_query(ctx.transcript, result)
+        tool_context = ""
+        if tool_results:
+            tool_context = "IMPORTANT - Use this exact information in your response:\n"
+            for tool_name, tool_msg in tool_results.items():
+                tool_context += f"- {tool_msg}\n"
+
         system_msg = "You are Atlas, a helpful home automation assistant. Respond briefly and naturally in 1-2 sentences."
+        if tool_context:
+            system_msg += " Use ONLY the provided information below. Do NOT make up facts."
         if ctx.speaker_id != "unknown":
             system_msg += f" The speaker is {ctx.speaker_id}."
         if memory_context:
             system_msg += f"\n\n{memory_context}"
+        if tool_context:
+            system_msg += f"\n\n{tool_context}"
 
         messages = [Message(role="system", content=system_msg)]
 
@@ -873,11 +1114,12 @@ class Orchestrator:
 
         try:
             llm_start = datetime.now()
-            llm_result = llm.chat(
-                messages=messages,
-                max_tokens=100,
-                temperature=0.7,
-            )
+            async with _cuda_lock:
+                llm_result = llm.chat(
+                    messages=messages,
+                    max_tokens=100,
+                    temperature=0.7,
+                )
             llm_elapsed = (datetime.now() - llm_start).total_seconds() * 1000
             if result:
                 result.llm_ms = llm_elapsed
@@ -918,7 +1160,11 @@ class Orchestrator:
 
         result = OrchestratorResult(success=True, transcript=text)
 
-        # Intent parsing
+        # Delegate to agent if available
+        if self._agent is not None:
+            return await self._process_text_with_agent(text, result, start_time)
+
+        # Intent parsing (legacy path when no agent)
         proc_start = datetime.now()
         intent_parser = self._get_intent_parser()
         if intent_parser:
@@ -960,6 +1206,80 @@ class Orchestrator:
 
         # Log latency summary
         self._log_latency_summary(result, pipeline_type="text")
+
+        return result
+
+    async def _process_text_with_agent(
+        self,
+        text: str,
+        result: OrchestratorResult,
+        start_time: datetime,
+    ) -> OrchestratorResult:
+        """
+        Process text input using the Agent for reasoning.
+
+        Similar to _process_with_agent but for text-only input.
+        """
+        from ..agents import AgentContext
+
+        logger.info("Delegating text to agent for processing")
+
+        # Build agent context
+        agent_context = AgentContext(
+            input_text=text,
+            input_type="text",
+            session_id=self._session_id,
+        )
+
+        # Load conversation history into context
+        if self._session_id:
+            try:
+                history = await self.load_session_history(limit=6)
+                agent_context.conversation_history = [
+                    {"role": turn.role, "content": turn.content}
+                    for turn in history
+                ]
+            except Exception as e:
+                logger.warning("Failed to load history for agent: %s", e)
+
+        # Call agent
+        try:
+            agent_result = await self._agent.run(agent_context)
+
+            # Transfer results to orchestrator result
+            result.success = agent_result.success
+            result.response_text = agent_result.response_text
+            result.intent = agent_result.intent
+            result.action_results = [
+                r if isinstance(r, dict) else r.to_dict() if hasattr(r, "to_dict") else {"result": str(r)}
+                for r in agent_result.action_results
+            ]
+            result.processing_ms = agent_result.think_ms
+            result.action_ms = agent_result.act_ms
+            result.llm_ms = agent_result.llm_ms
+            result.memory_ms = agent_result.memory_ms
+            result.tools_ms = agent_result.tools_ms
+            result.storage_ms = agent_result.storage_ms
+            result.error = agent_result.error
+
+            logger.info(
+                "Agent result: success=%s, action_type=%s, response=%.50s...",
+                agent_result.success,
+                agent_result.action_type,
+                agent_result.response_text or "",
+            )
+
+        except Exception as e:
+            logger.exception("Agent processing failed: %s", e)
+            result.success = False
+            result.error = str(e)
+            result.response_text = f"I'm sorry, I encountered an error: {e}"
+
+        # Calculate total latency
+        result.latency_ms = (datetime.now() - start_time).total_seconds() * 1000
+
+        # Log latency summary
+        self._log_latency_summary(result, pipeline_type="text-agent")
 
         return result
 

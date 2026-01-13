@@ -1,0 +1,221 @@
+"""
+Ollama LLM Backend.
+
+Uses Ollama's HTTP API for inference, supporting any model Ollama can run.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import httpx
+
+from ..base import BaseModelService
+from ..protocols import Message, ModelInfo
+from ..registry import register_llm
+
+logger = logging.getLogger("atlas.llm.ollama")
+
+
+@register_llm("ollama")
+class OllamaLLM(BaseModelService):
+    """LLM service using Ollama's HTTP API."""
+
+    CAPABILITIES = ["text", "chat", "reasoning"]
+
+    def __init__(
+        self,
+        model: str = "qwen3-coder:30b",
+        base_url: str = "http://localhost:11434",
+        **kwargs: Any,
+    ) -> None:
+        """
+        Initialize Ollama LLM.
+
+        Args:
+            model: Ollama model name (e.g., "qwen3-coder:30b", "hermes3:8b")
+            base_url: Ollama API base URL
+            **kwargs: Additional options
+        """
+        super().__init__(name="ollama", model_id=model)
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self._client: httpx.AsyncClient | None = None
+        self._sync_client: httpx.Client | None = None
+        self._loaded = False
+
+    @property
+    def model_info(self) -> ModelInfo:
+        """Return model information."""
+        return ModelInfo(
+            name=self.name,
+            model_id=self.model_id,
+            is_loaded=self.is_loaded,
+            device="api",  # Ollama runs on its own process
+            capabilities=self.CAPABILITIES,
+        )
+
+    def load(self) -> None:
+        """Initialize HTTP clients."""
+        self._sync_client = httpx.Client(timeout=120.0)
+        self._client = httpx.AsyncClient(timeout=120.0)
+        self._loaded = True
+        logger.info("Ollama LLM initialized: model=%s, url=%s", self.model, self.base_url)
+
+    def unload(self) -> None:
+        """Close HTTP clients."""
+        if self._sync_client:
+            self._sync_client.close()
+            self._sync_client = None
+        if self._client:
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._client.aclose())
+            except RuntimeError:
+                asyncio.run(self._client.aclose())
+            self._client = None
+        self._loaded = False
+        logger.info("Ollama LLM unloaded")
+
+    @property
+    def is_loaded(self) -> bool:
+        """Check if service is loaded."""
+        return self._loaded
+
+    def chat(
+        self,
+        messages: list[Message],
+        max_tokens: int = 256,
+        temperature: float = 0.7,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """
+        Synchronous chat completion.
+
+        Args:
+            messages: List of Message objects
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+            **kwargs: Additional options
+
+        Returns:
+            Dict with response text and metadata
+        """
+        if not self._sync_client:
+            raise RuntimeError("Ollama LLM not loaded")
+
+        # Convert messages to Ollama format
+        ollama_messages = []
+        for msg in messages:
+            ollama_messages.append({
+                "role": msg.role,
+                "content": msg.content,
+            })
+
+        payload = {
+            "model": self.model,
+            "messages": ollama_messages,
+            "stream": False,
+            "options": {
+                "num_predict": max_tokens,
+                "temperature": temperature,
+            },
+        }
+
+        try:
+            response = self._sync_client.post(
+                f"{self.base_url}/api/chat",
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+            response_text = data.get("message", {}).get("content", "").strip()
+            return {
+                "response": response_text,
+                "message": {"role": "assistant", "content": response_text},
+            }
+        except httpx.HTTPError as e:
+            logger.error("Ollama chat error: %s", e)
+            raise
+
+    async def chat_async(
+        self,
+        messages: list[Message],
+        max_tokens: int = 256,
+        temperature: float = 0.7,
+        **kwargs: Any,
+    ) -> str:
+        """
+        Async chat completion.
+
+        Args:
+            messages: List of Message objects
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+            **kwargs: Additional options
+
+        Returns:
+            Generated response text
+        """
+        if not self._client:
+            raise RuntimeError("Ollama LLM not loaded")
+
+        # Convert messages to Ollama format
+        ollama_messages = []
+        for msg in messages:
+            ollama_messages.append({
+                "role": msg.role,
+                "content": msg.content,
+            })
+
+        payload = {
+            "model": self.model,
+            "messages": ollama_messages,
+            "stream": False,
+            "options": {
+                "num_predict": max_tokens,
+                "temperature": temperature,
+            },
+        }
+
+        try:
+            response = await self._client.post(
+                f"{self.base_url}/api/chat",
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get("message", {}).get("content", "")
+        except httpx.HTTPError as e:
+            logger.error("Ollama chat error: %s", e)
+            raise
+
+    def process_text(self, query: str, **kwargs: Any) -> str:
+        """
+        Process a text query.
+
+        Args:
+            query: Text query
+            **kwargs: Additional options
+
+        Returns:
+            Generated response
+        """
+        messages = [Message(role="user", content=query)]
+        return self.chat(messages, **kwargs)
+
+    async def process_text_async(self, query: str, **kwargs: Any) -> str:
+        """
+        Async process a text query.
+
+        Args:
+            query: Text query
+            **kwargs: Additional options
+
+        Returns:
+            Generated response
+        """
+        messages = [Message(role="user", content=query)]
+        return await self.chat_async(messages, **kwargs)
