@@ -28,6 +28,12 @@ class STTConfig(BaseSettings):
     default_model: str = Field(default="faster-whisper", description="Default STT to load on startup")
     whisper_model_size: str = Field(default="small.en", description="Whisper model size")
 
+    # Nemotron streaming settings
+    nemotron_frame_len_ms: int = Field(default=160, description="Streaming frame length in milliseconds")
+    nemotron_buffer_sec: float = Field(default=2.0, description="Total audio buffer in seconds")
+    nemotron_tokens_per_chunk: int = Field(default=8, description="Tokens per chunk for RNNT decoding")
+    nemotron_decoding_delay: int = Field(default=8, description="Decoding delay for latency/accuracy tradeoff")
+
 
 class MQTTConfig(BaseSettings):
     """MQTT backend configuration."""
@@ -296,6 +302,38 @@ class MemoryConfig(BaseSettings):
         description="Number of context results to retrieve",
     )
 
+    # Nightly sync settings - batch processing for long-term memory
+    nightly_sync_enabled: bool = Field(
+        default=True,
+        description="Enable nightly batch sync of conversations to GraphRAG",
+    )
+    purge_days: int = Field(
+        default=30,
+        description="Purge PostgreSQL messages older than N days",
+    )
+    similarity_threshold: float = Field(
+        default=0.85,
+        description="Skip facts with embedding similarity > this threshold (deduplication)",
+    )
+
+
+class ToolsConfig(BaseSettings):
+    """Configuration for Atlas tools (weather, traffic, etc.)."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_TOOLS_")
+
+    enabled: bool = Field(default=True, description="Enable tools system")
+
+    # Weather tool (Open-Meteo)
+    weather_enabled: bool = Field(default=True, description="Enable weather tool")
+    weather_default_lat: float = Field(default=32.78, description="Default latitude")
+    weather_default_lon: float = Field(default=-96.80, description="Default longitude")
+    weather_units: str = Field(default="fahrenheit", description="Temperature units")
+
+    # Traffic tool (TomTom)
+    traffic_enabled: bool = Field(default=False, description="Enable traffic tool")
+    traffic_api_key: str | None = Field(default=None, description="TomTom API key")
+
 
 class VoiceClientConfig(BaseSettings):
     """Voice client configuration - unified audio capture and playback."""
@@ -356,6 +394,7 @@ class Settings(BaseSettings):
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     voice: VoiceClientConfig = Field(default_factory=VoiceClientConfig)
+    tools: ToolsConfig = Field(default_factory=ToolsConfig)
 
 
 # Singleton settings instance

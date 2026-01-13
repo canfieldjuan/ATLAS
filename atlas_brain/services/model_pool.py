@@ -67,6 +67,7 @@ class ModelPool:
         self.config = config or self._default_config()
         self._models: dict[ModelTier, Any] = {}
         self._initialized = False
+        self._warmup_state: dict[ModelTier, dict] = {}  # tier -> {warmed: bool, prompt_hash: int}
 
     def _default_config(self) -> PoolConfig:
         """Create default pool configuration."""
@@ -233,6 +234,111 @@ class ModelPool:
         available = [ModelTier.ACTION]  # Always available
         available.extend(self._models.keys())
         return sorted(available, key=lambda t: t.value)
+
+    async def warmup_context(
+        self,
+        tier: ModelTier,
+        system_prompt: str,
+    ) -> bool:
+        """
+        Pre-load system prompt into model KV cache to reduce first-token latency.
+
+        This processes the system prompt tokens without generating output,
+        populating the KV cache for faster subsequent generation.
+
+        Args:
+            tier: Which model tier to warm up
+            system_prompt: The system prompt to pre-load
+
+        Returns:
+            True if warmup succeeded, False otherwise
+        """
+        if tier == ModelTier.ACTION:
+            return True  # No warmup needed
+
+        model_info = self._models.get(tier)
+        if not model_info:
+            logger.warning("Cannot warmup tier %s: not loaded", tier)
+            return False
+
+        # Check if already warmed with same prompt
+        prompt_hash = hash(system_prompt)
+        warmup_info = self._warmup_state.get(tier, {})
+        if warmup_info.get("warmed") and warmup_info.get("prompt_hash") == prompt_hash:
+            logger.debug("Tier %s already warmed with same prompt", tier)
+            return True
+
+        model_type = model_info["type"]
+
+        if model_type == "llama-cpp":
+            success = await self._warmup_llama_cpp(model_info, system_prompt)
+        elif model_type in ("openai", "anthropic"):
+            # Cloud APIs don't benefit from warmup
+            success = True
+        else:
+            logger.warning("Unknown model type for warmup: %s", model_type)
+            success = False
+
+        if success:
+            self._warmup_state[tier] = {"warmed": True, "prompt_hash": prompt_hash}
+            logger.info("Warmed up tier %s with system prompt (%d chars)",
+                       tier.name, len(system_prompt))
+
+        return success
+
+    async def _warmup_llama_cpp(
+        self,
+        model_info: dict,
+        system_prompt: str,
+    ) -> bool:
+        """
+        Warm up llama-cpp model by doing a minimal generation.
+
+        This processes the system prompt through the model, populating
+        internal caches and warming up CUDA kernels for faster subsequent calls.
+        """
+        import asyncio
+
+        model = model_info["model"]
+
+        def _warmup():
+            try:
+                # Do a minimal chat completion to warm up the model
+                # This processes the system prompt and warms CUDA kernels
+                model.create_chat_completion(
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": "Hi"},
+                    ],
+                    max_tokens=1,  # Generate minimal tokens
+                    temperature=0.0,
+                )
+                return True
+
+            except Exception as e:
+                logger.error("Llama warmup failed: %s", e)
+                return False
+
+        try:
+            return await asyncio.get_event_loop().run_in_executor(None, _warmup)
+        except Exception as e:
+            logger.error("Warmup executor failed: %s", e)
+            return False
+
+    def is_warmed_up(self, tier: ModelTier) -> bool:
+        """Check if a tier has been warmed up."""
+        return self._warmup_state.get(tier, {}).get("warmed", False)
+
+    def clear_warmup(self, tier: ModelTier) -> None:
+        """Clear warmup state for a tier."""
+        if tier in self._warmup_state:
+            del self._warmup_state[tier]
+            logger.debug("Cleared warmup state for tier %s", tier)
+
+    def clear_all_warmup(self) -> None:
+        """Clear warmup state for all tiers."""
+        self._warmup_state.clear()
+        logger.debug("Cleared all warmup states")
 
     async def chat(
         self,
@@ -545,6 +651,7 @@ class ModelPool:
                 del model_info["model"]
 
         self._models.clear()
+        self._warmup_state.clear()
         self._initialized = False
 
         # Clear GPU memory

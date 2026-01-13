@@ -16,6 +16,7 @@ from typing import Any, AsyncIterator, Callable, Optional
 
 from .audio_buffer import AudioBuffer, VADConfig
 from .states import PipelineContext, PipelineEvent, PipelineState, PipelineStateMachine
+from .streaming_intent import IntentCategory, StreamingIntentDetector, streaming_intent_detector
 from .wake_word import WakeWordConfig, WakeWordManager
 
 logger = logging.getLogger("atlas.orchestration.streaming")
@@ -32,6 +33,10 @@ class StreamingConfig:
 
     # VAD
     vad_config: VADConfig = field(default_factory=VADConfig)
+
+    # Streaming STT
+    streaming_stt_enabled: bool = True  # Use streaming STT for early intent detection
+    early_warmup_enabled: bool = True  # Warm up LLM when conversation detected early
 
     # Streaming behavior
     stream_tts: bool = True  # Stream TTS as response generates
@@ -123,6 +128,11 @@ class StreamingOrchestrator:
         self._model_pool = None
         self._intent_router = None
 
+        # Streaming intent detection
+        self._streaming_intent_detector = streaming_intent_detector
+        self._warmup_task: Optional[asyncio.Task] = None
+        self._warmup_triggered = False
+
         # Streaming callbacks
         self._on_transcript: Optional[Callable] = None
         self._on_response_chunk: Optional[Callable] = None
@@ -182,6 +192,124 @@ class StreamingOrchestrator:
         self._on_response_chunk = on_response_chunk
         self._on_audio_chunk = on_audio_chunk
 
+    async def _trigger_llm_warmup(self) -> None:
+        """Trigger LLM warmup in the background."""
+        if self._warmup_triggered:
+            return
+
+        self._warmup_triggered = True
+        pool = self._get_model_pool()
+
+        if pool is None or not pool._initialized:
+            logger.debug("Model pool not initialized, skipping warmup")
+            return
+
+        from ..services.model_pool import ModelTier
+
+        # Warm up the FAST tier with the system prompt
+        system_prompt = (
+            "You are Atlas, a helpful voice assistant. "
+            "Respond naturally and concisely in 1-2 sentences."
+        )
+
+        try:
+            await pool.warmup_context(ModelTier.FAST, system_prompt)
+            logger.info("LLM warmup completed (early intent detection)")
+        except Exception as e:
+            logger.warning("LLM warmup failed: %s", e)
+
+    def _reset_warmup_state(self) -> None:
+        """Reset warmup state for new utterance."""
+        self._warmup_triggered = False
+        if self._warmup_task and not self._warmup_task.done():
+            self._warmup_task.cancel()
+        self._warmup_task = None
+
+    async def _process_streaming_stt(self, stt, audio_bytes: bytes) -> str:
+        """
+        Process audio through streaming STT with early intent detection.
+
+        Args:
+            stt: STT service with transcribe_streaming method
+            audio_bytes: Complete audio bytes to process
+
+        Returns:
+            Final transcript
+        """
+        import numpy as np
+        from ..config import settings
+
+        # Load audio from bytes
+        try:
+            from ..services.stt.nemotron import _load_audio_from_bytes, SAMPLE_RATE
+            audio, orig_sr = _load_audio_from_bytes(audio_bytes)
+
+            # Resample if needed
+            if orig_sr != SAMPLE_RATE:
+                from ..services.stt.nemotron import _resample_audio
+                audio = _resample_audio(audio, orig_sr, SAMPLE_RATE)
+        except Exception as e:
+            logger.warning("Failed to load audio for streaming: %s", e)
+            # Fall back to batch transcription
+            result = await stt.transcribe(audio_bytes)
+            return result.get("transcript", "")
+
+        # Get chunk size from config
+        frame_len_ms = settings.stt.nemotron_frame_len_ms
+        chunk_samples = int(SAMPLE_RATE * frame_len_ms / 1000)
+
+        # Clear STT buffer for new utterance
+        if hasattr(stt, "clear_audio_buffer"):
+            stt.clear_audio_buffer()
+
+        # Process audio in chunks
+        last_transcript = ""
+        last_category = None
+
+        for i in range(0, len(audio), chunk_samples):
+            chunk = audio[i:i + chunk_samples]
+
+            # Pad last chunk if needed
+            if len(chunk) < chunk_samples:
+                chunk = np.pad(chunk, (0, chunk_samples - len(chunk)))
+
+            # Get streaming transcription result
+            result = await stt.transcribe_streaming(chunk)
+            transcript = result.get("transcript", "")
+
+            # Skip if no transcript or unchanged
+            if not transcript or transcript == last_transcript:
+                continue
+
+            last_transcript = transcript
+
+            # Classify partial transcript for early intent detection
+            if self.config.early_warmup_enabled:
+                streaming_intent = self._streaming_intent_detector.classify(transcript)
+
+                # Log category change
+                if streaming_intent.category != last_category:
+                    last_category = streaming_intent.category
+                    logger.debug(
+                        "Partial intent: '%s...' -> %s (conf=%.2f)",
+                        transcript[:30],
+                        streaming_intent.category.value,
+                        streaming_intent.confidence,
+                    )
+
+                # Trigger warmup for conversation/question intents
+                if streaming_intent.should_warmup_llm():
+                    logger.info("Early intent detected: %s - triggering LLM warmup",
+                               streaming_intent.category.value)
+                    asyncio.create_task(self._trigger_llm_warmup())
+
+        # Get final transcript from buffer
+        if hasattr(stt, "transcribe_buffer"):
+            final_result = await stt.transcribe_buffer()
+            return final_result.get("transcript", last_transcript)
+
+        return last_transcript
+
     async def process_utterance_streaming(
         self,
         audio_bytes: bytes,
@@ -190,6 +318,7 @@ class StreamingOrchestrator:
         Process utterance with streaming responses.
 
         Yields events as they happen:
+        - {"type": "partial_transcript", "text": "...", "category": "..."}
         - {"type": "transcript", "text": "..."}
         - {"type": "intent", "action": "...", ...}
         - {"type": "response_chunk", "text": "..."}
@@ -199,15 +328,27 @@ class StreamingOrchestrator:
         start_time = datetime.now()
         first_audio_time = None
 
-        # Phase 1: STT (can't parallelize - need transcript first)
+        # Reset warmup state for this utterance
+        self._reset_warmup_state()
+
+        # Phase 1: STT with streaming intent detection
         stt = self._get_stt()
         if stt is None:
             yield {"type": "error", "message": "STT not available"}
             return
 
+        transcript = ""
         try:
-            transcription = await stt.transcribe(audio_bytes)
-            transcript = transcription.get("transcript", "")
+            # Check if streaming STT is available and enabled
+            has_streaming = hasattr(stt, "transcribe_streaming")
+
+            if self.config.streaming_stt_enabled and has_streaming:
+                # Use streaming STT with early intent detection
+                transcript = await self._process_streaming_stt(stt, audio_bytes)
+            else:
+                # Fall back to batch transcription
+                transcription = await stt.transcribe(audio_bytes)
+                transcript = transcription.get("transcript", "")
 
             yield {"type": "transcript", "text": transcript}
 
@@ -218,7 +359,7 @@ class StreamingOrchestrator:
             yield {"type": "error", "message": f"STT failed: {e}"}
             return
 
-        # Phase 2: Intent parsing (fast - VLM)
+        # Phase 2: Intent parsing (fast - regex)
         intent_parser = self._get_intent_parser()
         intent = None
         if intent_parser:
