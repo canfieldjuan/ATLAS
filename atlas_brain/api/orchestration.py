@@ -405,15 +405,52 @@ async def process_text_command(body: dict):
 
     Bypasses audio processing - useful for testing or text interfaces.
 
-    Request body: {"text": "turn on the lights"}
+    Request body: {"text": "turn on the lights", "session_id": "optional-uuid"}
     """
-    from ..orchestration.orchestrator import get_orchestrator
+    from ..orchestration.orchestrator import Orchestrator
+    from ..storage import db_settings
+    from ..storage.database import get_db_pool
+    from ..storage.repositories.session import get_session_repo
 
     text = body.get("text", "")
     if not text:
         return {"error": "No text provided"}
 
-    orchestrator = get_orchestrator()
+    session_id = body.get("session_id")
+
+    # Create or get session for persistence
+    if not session_id and db_settings.enabled:
+        pool = get_db_pool()
+        if pool.is_initialized:
+            try:
+                session_repo = get_session_repo()
+                session = await session_repo.get_or_create_session(
+                    terminal_id="rest-api",
+                )
+                session_id = str(session.id)
+                logger.info("REST text command using session: %s", session_id)
+            except Exception as e:
+                logger.warning("Failed to create session: %s", e)
+
+    orchestrator = Orchestrator(session_id=session_id)
+
+    # Load conversation history for context
+    if session_id:
+        try:
+            from ..orchestration.context import get_context
+            context = get_context()
+            history = await orchestrator.load_session_history(limit=10)
+            for turn in history:
+                context.add_conversation_turn(
+                    turn.role,
+                    turn.content,
+                    speaker_id=turn.speaker_id,
+                )
+            if history:
+                logger.info("Loaded %d turns from session history", len(history))
+        except Exception as e:
+            logger.warning("Failed to load session history: %s", e)
+
     result = await orchestrator.process_text(text)
 
     return {
@@ -429,6 +466,7 @@ async def process_text_command(body: dict):
         "response": result.response_text,
         "latency_ms": result.latency_ms,
         "error": result.error,
+        "session_id": session_id,
     }
 
 

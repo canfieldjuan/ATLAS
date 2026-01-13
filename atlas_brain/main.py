@@ -60,11 +60,16 @@ async def lifespan(app: FastAPI):
     # Load default STT if configured
     if settings.load_stt_on_startup:
         try:
-            logger.info("Loading default STT: %s", settings.stt.default_model)
-            stt_registry.activate(
-                settings.stt.default_model,
-                model_size=settings.stt.whisper_model_size,
-            )
+            stt_model = settings.stt.default_model
+            logger.info("Loading default STT: %s", stt_model)
+            # Only pass model_size for faster-whisper
+            if stt_model == "faster-whisper":
+                stt_registry.activate(
+                    stt_model,
+                    model_size=settings.stt.whisper_model_size,
+                )
+            else:
+                stt_registry.activate(stt_model)
         except Exception as e:
             logger.error("Failed to load default STT: %s", e)
 

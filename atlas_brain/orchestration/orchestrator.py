@@ -564,7 +564,7 @@ class Orchestrator:
 
         # Generate response text (includes LLM and memory timing)
         response_start = datetime.now()
-        result.response_text = self._generate_response_text(ctx, result)
+        result.response_text = await self._generate_response_text(ctx, result)
         ctx.response_text = result.response_text
         logger.info("Response generated: intent=%s, action_results=%d, text='%s'",
                    ctx.intent.action if ctx.intent else None,
@@ -616,15 +616,17 @@ class Orchestrator:
         ctx: PipelineContext,
         result: OrchestratorResult,
     ) -> None:
-        """Store conversation turns in PostgreSQL (primary) and GraphRAG (secondary)."""
-        from ..config import settings
+        """Store conversation turns in PostgreSQL (primary).
 
-        # 1. Store in PostgreSQL (primary storage for session continuity)
+        GraphRAG ingestion is handled by nightly batch job, not real-time.
+        This keeps daytime operations fast while still building long-term memory.
+        """
+        # Store in PostgreSQL (primary storage for session continuity)
         await self._store_to_postgresql(ctx, result)
 
-        # 2. Store in GraphRAG (secondary storage for semantic memory)
-        if settings.memory.enabled and settings.memory.store_conversations:
-            await self._store_to_graphrag(ctx, result)
+        # NOTE: GraphRAG writes disabled for real-time operations.
+        # Nightly batch job processes daily sessions → extracts facts → embeds → stores
+        # See: atlas_brain/jobs/nightly_memory_sync.py
 
     async def _store_to_postgresql(
         self,
@@ -765,7 +767,7 @@ class Orchestrator:
             logger.warning("Failed to load session history: %s", e)
             return []
 
-    def _generate_response_text(
+    async def _generate_response_text(
         self,
         ctx: PipelineContext,
         result: Optional[OrchestratorResult] = None,
@@ -776,7 +778,7 @@ class Orchestrator:
 
         # No intent means this is a conversational query - use LLM
         if not ctx.intent:
-            return self._generate_llm_response(ctx, result)
+            return await self._generate_llm_response(ctx, result)
 
         # We had an intent - check if actions were executed
         if not ctx.action_results:
@@ -795,7 +797,7 @@ class Orchestrator:
         else:
             return "I couldn't complete that action."
 
-    def _generate_llm_response(
+    async def _generate_llm_response(
         self,
         ctx: PipelineContext,
         result: Optional[OrchestratorResult] = None,
@@ -821,25 +823,27 @@ class Orchestrator:
         if llm is None:
             return f"I heard: {ctx.transcript}"
 
-        # Retrieve context from memory if enabled
+        # Retrieve context from memory if enabled (with timeout to avoid blocking)
         memory_context = ""
         if settings.memory.enabled and settings.memory.retrieve_context:
             try:
-                import asyncio
                 memory_start = datetime.now()
                 memory_client = self._get_memory_client()
-                loop = asyncio.get_event_loop()
-                memory_context = loop.run_until_complete(
+                # 2 second timeout - fail fast if GraphRAG is slow
+                memory_context = await asyncio.wait_for(
                     memory_client.get_context_for_query(
                         ctx.transcript,
                         num_results=settings.memory.context_results,
-                    )
+                    ),
+                    timeout=2.0
                 )
                 memory_elapsed = (datetime.now() - memory_start).total_seconds() * 1000
                 if result:
                     result.memory_ms = memory_elapsed
                 if memory_context:
                     logger.info("Retrieved memory context: %d chars in %.0fms", len(memory_context), memory_elapsed)
+            except asyncio.TimeoutError:
+                logger.warning("Memory retrieval timed out (>2s), skipping")
             except Exception as e:
                 logger.warning("Failed to retrieve memory context: %s", e)
 
@@ -849,10 +853,21 @@ class Orchestrator:
         if memory_context:
             system_msg += f"\n\n{memory_context}"
 
-        messages = [
-            Message(role="system", content=system_msg),
-            Message(role="user", content=ctx.transcript),
-        ]
+        messages = [Message(role="system", content=system_msg)]
+
+        # Include conversation history from session if available
+        if self._session_id:
+            try:
+                history = await self.load_session_history(limit=6)  # Last 3 exchanges
+                for turn in history:
+                    messages.append(Message(role=turn.role, content=turn.content))
+                if history:
+                    logger.info("Added %d history turns to LLM context", len(history))
+            except Exception as e:
+                logger.warning("Failed to load history for LLM: %s", e)
+
+        # Add current user message
+        messages.append(Message(role="user", content=ctx.transcript))
 
         try:
             llm_start = datetime.now()
@@ -930,7 +945,7 @@ class Orchestrator:
             result.action_ms = (datetime.now() - action_start).total_seconds() * 1000
 
         # Generate response (includes LLM and memory timing)
-        result.response_text = self._generate_response_text(ctx, result)
+        result.response_text = await self._generate_response_text(ctx, result)
         ctx.response_text = result.response_text
 
         # Store conversation in memory
