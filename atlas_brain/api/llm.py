@@ -218,30 +218,3 @@ async def get_status():
     }
 
 
-@router.get("/routing/status")
-async def get_routing_status():
-    """Get intelligent routing status and statistics."""
-    from ..config import settings
-    from ..orchestration.model_router import get_model_router
-
-    router_instance = get_model_router()
-    stats = router_instance.get_stats()
-
-    return {
-        "enabled": settings.routing.enabled,
-        "current_model": llm_registry.get_active_name(),
-        "tiers": {
-            "simple": {
-                "name": settings.routing.simple_model_name,
-                "threshold": settings.routing.simple_threshold,
-            },
-            "medium": {
-                "name": settings.routing.medium_model_name,
-                "threshold": settings.routing.medium_threshold,
-            },
-            "complex": {
-                "name": settings.routing.complex_model_name,
-            },
-        },
-        "statistics": stats,
-    }

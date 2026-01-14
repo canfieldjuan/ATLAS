@@ -210,18 +210,6 @@ class OrchestrationConfig(BaseSettings):
     processing_timeout_ms: int = Field(default=10000, description="Max processing time")
 
 
-class ModelTierConfig(BaseSettings):
-    """Configuration for a single model tier."""
-
-    model_config = SettingsConfigDict(extra="ignore")
-
-    name: str = Field(default="", description="Model identifier")
-    model_path: str = Field(default="", description="Path to GGUF model file")
-    complexity_threshold: float = Field(default=0.5, description="Complexity score threshold")
-    max_tokens: int = Field(default=512, description="Max tokens for generation")
-    temperature: float = Field(default=0.7, description="Sampling temperature")
-
-
 class DiscoveryConfig(BaseSettings):
     """Network device discovery configuration."""
 
@@ -235,45 +223,6 @@ class DiscoveryConfig(BaseSettings):
     auto_register: bool = Field(default=True, description="Auto-register discovered devices")
     persist_devices: bool = Field(default=True, description="Save devices to database")
     scan_timeout: float = Field(default=5.0, description="Scan timeout in seconds")
-
-
-class ModelRoutingConfig(BaseSettings):
-    """Intelligent model routing configuration."""
-
-    model_config = SettingsConfigDict(env_prefix="ATLAS_ROUTING_")
-
-    enabled: bool = Field(default=False, description="Enable intelligent routing")
-
-    simple_model_name: str = Field(
-        default="llama-1b",
-        description="Model name for simple queries"
-    )
-    simple_model_path: str = Field(
-        default="models/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct-Q4_K_M.gguf",
-        description="Path to simple tier model"
-    )
-    simple_threshold: float = Field(default=0.3, description="Max complexity for simple tier")
-
-    medium_model_name: str = Field(
-        default="hermes-8b",
-        description="Model name for medium queries"
-    )
-    medium_model_path: str = Field(
-        default="models/Hermes-3-Llama-3.1-8B-GGUF/Hermes-3-Llama-3.1-8B-Q4_K_M.gguf",
-        description="Path to medium tier model"
-    )
-    medium_threshold: float = Field(default=0.7, description="Max complexity for medium tier")
-
-    complex_model_name: str = Field(
-        default="blacksheep-24b",
-        description="Model name for complex queries"
-    )
-    complex_model_path: str = Field(
-        default="models/BlackSheep-24B-GGUF/BlackSheep-24B-Q4_K_M.gguf",
-        description="Path to complex tier model"
-    )
-
-    cache_duration_seconds: int = Field(default=300, description="Keep model loaded for N seconds")
 
 
 class MemoryConfig(BaseSettings):
@@ -337,6 +286,25 @@ class ToolsConfig(BaseSettings):
     traffic_api_key: str | None = Field(default=None, description="TomTom API key")
 
 
+class IntentConfig(BaseSettings):
+    """Intent parsing configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_INTENT_")
+
+    # LLM settings for intent parsing
+    temperature: float = Field(default=0.1, description="LLM temperature for intent parsing")
+    max_tokens: int = Field(default=150, description="Max tokens for intent response")
+
+    # Device cache settings
+    device_cache_ttl: int = Field(default=60, description="Device list cache TTL in seconds")
+
+    # Available tools (can be extended via config)
+    available_tools: list[str] = Field(
+        default=["time", "weather", "traffic", "location"],
+        description="List of available tool names",
+    )
+
+
 class VoiceClientConfig(BaseSettings):
     """Voice client configuration - unified audio capture and playback."""
 
@@ -391,11 +359,11 @@ class Settings(BaseSettings):
     mqtt: MQTTConfig = Field(default_factory=MQTTConfig)
     homeassistant: HomeAssistantConfig = Field(default_factory=HomeAssistantConfig)
     roku: RokuConfig = Field(default_factory=RokuConfig)
-    routing: ModelRoutingConfig = Field(default_factory=ModelRoutingConfig)
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     voice: VoiceClientConfig = Field(default_factory=VoiceClientConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    intent: IntentConfig = Field(default_factory=IntentConfig)
 
 
 # Singleton settings instance

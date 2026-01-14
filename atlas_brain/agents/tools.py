@@ -13,12 +13,12 @@ from .protocols import AgentTools as AgentToolsProtocol
 logger = logging.getLogger("atlas.agents.tools")
 
 
-# Tool trigger keywords - used by Agent to decide which tools to call
-TOOL_KEYWORDS = {
-    "get_weather": ["weather", "temperature", "forecast", "rain", "sunny", "cold", "hot", "humid"],
-    "get_traffic": ["traffic", "commute", "drive", "driving", "route", "highway", "road"],
-    "get_location": ["where am i", "my location", "current location", "gps", "coordinates"],
-    "get_time": ["what time", "current time", "what day", "what date", "today", "now"],
+# Tool name mapping - maps intent target_name to tool registry names
+TOOL_MAP = {
+    "time": "get_time",
+    "weather": "get_weather",
+    "traffic": "get_traffic",
+    "location": "get_location",
 }
 
 
@@ -230,50 +230,38 @@ class AtlasAgentTools:
                 "error": "TOOL_ERROR",
             }
 
-    async def execute_relevant_tools(
+    async def execute_tool_by_intent(
         self,
-        query: str,
-    ) -> dict[str, dict[str, Any]]:
+        target_name: str,
+        parameters: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
         """
-        Execute all tools relevant to the query based on keywords.
+        Execute a tool based on intent target_name.
 
-        This replicates the tool execution logic from the Orchestrator,
-        providing a single call to get all relevant tool results.
+        Maps intent target names to tool registry names and executes.
 
         Args:
-            query: User's query text
+            target_name: Tool name from intent (e.g., "time", "weather")
+            parameters: Optional parameters from intent
 
         Returns:
-            Dictionary mapping tool names to their results
+            Tool result dictionary
         """
-        query_lower = query.lower()
-        results = {}
+        # Map intent target_name to tool registry name
+        tool_name = TOOL_MAP.get(target_name, target_name)
+        params = parameters or {}
 
-        for tool_name, keywords in TOOL_KEYWORDS.items():
-            # Check if any keyword matches
-            if any(kw in query_lower for kw in keywords):
-                try:
-                    # Location is often needed for weather/traffic
-                    if tool_name in ("get_weather", "get_traffic"):
-                        # Get location first
-                        loc_result = await self.execute_tool("get_location", {})
-                        params = {}
-                        if loc_result["success"] and loc_result.get("data"):
-                            params["latitude"] = loc_result["data"].get("latitude")
-                            params["longitude"] = loc_result["data"].get("longitude")
+        # Weather and traffic need location
+        if tool_name in ("get_weather", "get_traffic"):
+            try:
+                loc_result = await self.execute_tool("get_location", {})
+                if loc_result["success"] and loc_result.get("data"):
+                    params["latitude"] = loc_result["data"].get("latitude")
+                    params["longitude"] = loc_result["data"].get("longitude")
+            except Exception as e:
+                logger.warning("Location fetch failed: %s", e)
 
-                        result = await self.execute_tool(tool_name, params)
-                    else:
-                        result = await self.execute_tool(tool_name, {})
-
-                    if result["success"]:
-                        results[tool_name] = result
-                        logger.debug("Tool %s: %s", tool_name, result.get("message", ""))
-
-                except Exception as e:
-                    logger.warning("Tool %s failed: %s", tool_name, e)
-
-        return results
+        return await self.execute_tool(tool_name, params)
 
     def list_tools(self) -> list[str]:
         """List available tool names."""
@@ -281,30 +269,7 @@ class AtlasAgentTools:
             registry = self._get_tool_registry()
             return registry.list_names()
         except Exception:
-            return list(TOOL_KEYWORDS.keys())
-
-    def get_tool_keywords(self, tool_name: str) -> list[str]:
-        """Get trigger keywords for a tool."""
-        return TOOL_KEYWORDS.get(tool_name, [])
-
-    def get_tools_for_query(self, query: str) -> list[str]:
-        """
-        Get list of tools that should be executed for a query.
-
-        Args:
-            query: User's query text
-
-        Returns:
-            List of tool names to execute
-        """
-        query_lower = query.lower()
-        tools = []
-
-        for tool_name, keywords in TOOL_KEYWORDS.items():
-            if any(kw in query_lower for kw in keywords):
-                tools.append(tool_name)
-
-        return tools
+            return list(TOOL_MAP.values())
 
     # Capability listing
 

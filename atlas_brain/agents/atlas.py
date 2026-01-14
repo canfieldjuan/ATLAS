@@ -87,7 +87,6 @@ class AtlasAgent(BaseAgent):
 
         self._session_id = session_id
         self._llm = None
-        self._model_router = None
 
     # Lazy loading
 
@@ -110,13 +109,6 @@ class AtlasAgent(BaseAgent):
             self._llm = llm_registry.get_active()
         return self._llm
 
-    def _get_model_router(self):
-        """Get or create model router."""
-        if self._model_router is None:
-            from ..orchestration.model_router import get_model_router
-            self._model_router = get_model_router()
-        return self._model_router
-
     # Core agent methods
 
     async def _do_think(
@@ -126,14 +118,9 @@ class AtlasAgent(BaseAgent):
         """
         Analyze input and decide what to do.
 
-        Steps:
-        1. Parse intent from input
-        2. If device command → return with intent
-        3. If conversation → check for tool triggers
-        4. Retrieve memory context if needed
+        Uses unified intent parsing for devices, tools, and conversation.
         """
         tools = self._get_tools()
-        memory = self._get_memory()
 
         result = ThinkResult(
             action_type="none",
@@ -142,34 +129,42 @@ class AtlasAgent(BaseAgent):
 
         start_time = time.perf_counter()
 
-        # Step 1: Try to parse as device command
+        # Parse intent using unified LLM-based parser
         intent = await tools.parse_intent(context.input_text)
 
-        if intent and intent.action != "none":
-            # Device command detected
-            result.action_type = "device_command"
+        if intent:
             result.intent = intent
             result.confidence = intent.confidence
-            result.needs_llm = False
-            logger.debug(
-                "Intent parsed: %s %s/%s (conf=%.2f)",
-                intent.action,
-                intent.target_type,
-                intent.target_name,
-                intent.confidence,
-            )
+
+            # Determine action type based on intent
+            device_actions = {"turn_on", "turn_off", "toggle", "set_brightness", "set_temperature"}
+
+            if intent.action in device_actions:
+                result.action_type = "device_command"
+                result.needs_llm = False
+                logger.debug(
+                    "Device command: %s %s/%s (conf=%.2f)",
+                    intent.action,
+                    intent.target_type,
+                    intent.target_name,
+                    intent.confidence,
+                )
+            elif intent.action == "query" and intent.target_type == "tool":
+                result.action_type = "tool_use"
+                result.needs_llm = True
+                logger.debug("Tool query: %s (conf=%.2f)", intent.target_name, intent.confidence)
+            elif intent.action == "conversation":
+                result.action_type = "conversation"
+                result.needs_llm = True
+                logger.debug("Conversation detected (conf=%.2f)", intent.confidence)
+            else:
+                result.action_type = "conversation"
+                result.needs_llm = True
         else:
-            # Not a device command - this is a conversation
+            # No intent parsed - default to conversation
             result.action_type = "conversation"
             result.needs_llm = True
-            result.confidence = 1.0
-
-            # Check if tools are needed
-            tools_needed = tools.get_tools_for_query(context.input_text)
-            if tools_needed:
-                result.action_type = "tool_use"
-                result.tools_to_call = tools_needed
-                logger.debug("Tools needed: %s", tools_needed)
+            result.confidence = 0.5
 
         # Step 2: Retrieve memory context if this is a conversation
         if result.needs_llm:
@@ -212,6 +207,41 @@ class AtlasAgent(BaseAgent):
         except Exception:
             return None
 
+    def _filter_tool_data(
+        self,
+        tool_name: str,
+        data: dict,
+        query: str,
+    ) -> dict:
+        """
+        Filter tool data to only include fields relevant to the query.
+
+        This ensures the LLM gets focused context and produces specific answers.
+        """
+        # Normalize tool name (intent uses "time", registry uses "get_time")
+        if tool_name in ("time", "get_time"):
+            # Exclude internal fields
+            exclude = {"iso", "time_24h", "timezone"}
+
+            # Check what specifically was asked
+            wants_time = "time" in query and "date" not in query
+            wants_day = "day" in query and "time" not in query
+            wants_date = "date" in query and "time" not in query
+
+            if wants_time:
+                return {"time": data.get("time")}
+            elif wants_day:
+                return {"day_of_week": data.get("day_of_week")}
+            elif wants_date:
+                return {"date": data.get("date")}
+            else:
+                # General query - return time, day, date
+                return {k: v for k, v in data.items() if k not in exclude and v}
+
+        # Default: return all data except internal fields
+        exclude = {"iso", "time_24h", "raw", "debug"}
+        return {k: v for k, v in data.items() if k not in exclude and v}
+
     async def _do_act(
         self,
         context: AgentContext,
@@ -250,22 +280,28 @@ class AtlasAgent(BaseAgent):
                 result.error = str(e)
                 result.error_code = "EXECUTION_ERROR"
 
-        elif think_result.action_type == "tool_use":
-            # Execute tools
+        elif think_result.action_type == "tool_use" and think_result.intent:
+            # Execute tool based on intent
             try:
-                tool_results = await tools.execute_relevant_tools(context.input_text)
-                result.success = bool(tool_results)
-                result.tool_results = tool_results
+                target_name = think_result.intent.target_name
+                parameters = think_result.intent.parameters
 
-                # Build tool context for LLM
-                if tool_results:
-                    tool_messages = []
-                    for tool_name, tool_result in tool_results.items():
-                        if tool_result.get("success"):
-                            tool_messages.append(tool_result.get("message", ""))
-                    result.response_data["tool_context"] = "\n".join(tool_messages)
+                tool_result = await tools.execute_tool_by_intent(target_name, parameters)
+                result.success = tool_result.get("success", False)
+                result.tool_results = {target_name: tool_result}
 
-                logger.info("Tools executed: %s", list(tool_results.keys()))
+                # Build tool context for LLM using filtered data
+                if tool_result.get("success"):
+                    data = tool_result.get("data", {})
+                    if data:
+                        query_lower = context.input_text.lower()
+                        tool_name = tool_result.get("tool_name", target_name)
+                        filtered = self._filter_tool_data(tool_name, data, query_lower)
+                        if filtered:
+                            data_str = ", ".join(f"{k}: {v}" for k, v in filtered.items())
+                            result.response_data["tool_context"] = f"[{tool_name}] {data_str}"
+
+                logger.info("Tool executed: %s", target_name)
 
             except Exception as e:
                 logger.warning("Tool execution failed: %s", e)
@@ -318,18 +354,6 @@ class AtlasAgent(BaseAgent):
         from ..config import settings
         from ..services.protocols import Message
 
-        # Model routing
-        if settings.routing.enabled:
-            try:
-                router = self._get_model_router()
-                tier = router.select_tier(context.input_text, None)
-                swapped = router.ensure_model_loaded(tier)
-                if swapped:
-                    self._llm = None  # Clear cached LLM
-                    logger.info("Model routed: %s (complexity=%.2f)", tier.name, tier.score)
-            except Exception as e:
-                logger.warning("Model routing failed: %s", e)
-
         llm = self._get_llm()
         if llm is None:
             return f"I heard: {context.input_text}"
@@ -343,8 +367,11 @@ class AtlasAgent(BaseAgent):
         # Add tool context if available
         tool_context = act_result.response_data.get("tool_context") if act_result else None
         if tool_context:
-            system_parts.append("Use ONLY the provided information below. Do NOT make up facts.")
-            system_parts.append(f"\nINFORMATION:\n{tool_context}")
+            system_parts.append(
+                "Answer ONLY what was specifically asked using the data below. "
+                "Do not include extra information unless requested."
+            )
+            system_parts.append(f"\nDATA:\n{tool_context}")
 
         # Add speaker info
         if context.speaker_id and context.speaker_id != "unknown":

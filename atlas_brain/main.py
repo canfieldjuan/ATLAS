@@ -176,17 +176,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Failed to initialize Roku: %s", e)
 
-    # Initialize multi-model pool for fast routing (only if routing is enabled)
-    if settings.routing.enabled:
-        try:
-            from .services.model_pool import initialize_pool, ModelTier
-            pool = await initialize_pool([ModelTier.FAST, ModelTier.BALANCED])
-            logger.info("Model pool initialized: %s", pool.get_available_tiers())
-        except Exception as e:
-            logger.warning("Model pool initialization failed (will use single model): %s", e)
-    else:
-        logger.info("Model routing disabled, using single LLM")
-
     # Initialize device discovery service
     if settings.discovery.enabled:
         try:
@@ -271,15 +260,6 @@ async def lifespan(app: FastAPI):
             logger.info("Discovery service shutdown complete")
         except Exception as e:
             logger.error("Error shutting down discovery service: %s", e)
-
-    # Shutdown model pool
-    try:
-        from .services.model_pool import get_model_pool
-        pool = get_model_pool()
-        await pool.shutdown()
-        logger.info("Model pool shutdown complete")
-    except Exception as e:
-        logger.error("Error shutting down model pool: %s", e)
 
     # Disconnect Home Assistant backend
     try:

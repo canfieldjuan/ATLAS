@@ -46,7 +46,7 @@ from .tools import (
     AtlasAgentTools,
     get_agent_tools,
     reset_agent_tools,
-    TOOL_KEYWORDS,
+    TOOL_MAP,
 )
 
 from .atlas import (
@@ -80,7 +80,7 @@ __all__ = [
     "AtlasAgentTools",
     "get_agent_tools",
     "reset_agent_tools",
-    "TOOL_KEYWORDS",
+    "TOOL_MAP",
     # Atlas Agent
     "AtlasAgent",
     "get_atlas_agent",
