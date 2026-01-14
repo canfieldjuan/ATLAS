@@ -32,3 +32,4 @@ piper-tts
 
 # Optional: Flash Attention 2 for faster inference (Ampere+ GPUs)
 # Install separately: pip install flash-attn --no-build-isolation
+rich>=13.0.0

@@ -18,6 +18,7 @@ from .states import (
     PipelineState,
     PipelineStateMachine,
 )
+from ..debug import debug
 
 logger = logging.getLogger("atlas.orchestration")
 
@@ -400,6 +401,7 @@ class Orchestrator:
 
         # Start in idle state (always listening mode)
         self._state_machine._state = PipelineState.IDLE
+        debug.state("LISTENING")
 
         try:
             async for audio_chunk in audio_stream:
@@ -449,16 +451,18 @@ class Orchestrator:
             event = self._audio_buffer.add_audio(audio_chunk)
 
             if event == "speech_start":
+                debug.speech_detected()
                 if self.in_follow_up_mode:
-                    logger.info("Follow-up speech detected")
+                    debug.state("RECORDING", "[follow-up mode]")
+                else:
+                    debug.state("RECORDING")
                 self._state_machine.context.recording_started_at = datetime.now()
                 self._state_machine.transition(PipelineEvent.SPEECH_START)
-                logger.debug("Speech started")
 
             elif event in ("speech_end", "max_duration"):
                 self._state_machine.context.recording_ended_at = datetime.now()
                 self._state_machine.transition(PipelineEvent.SPEECH_END)
-                logger.debug("Speech ended")
+                debug.state("TRANSCRIBING")
 
                 # Get the recorded audio
                 audio_bytes = self._audio_buffer.get_utterance()
@@ -539,7 +543,7 @@ class Orchestrator:
             result.transcript = ctx.transcript
             result.transcription_ms = (datetime.now() - trans_start).total_seconds() * 1000
 
-            logger.info("Transcription: '%s' (%.0fms)", ctx.transcript, result.transcription_ms)
+            debug.transcript(ctx.transcript, latency_ms=result.transcription_ms)
 
             if self._on_transcript:
                 await self._on_transcript(ctx.transcript)
@@ -556,15 +560,12 @@ class Orchestrator:
                 keyword_lower = self.config.keyword.lower()
                 transcript_lower = ctx.transcript.lower()
                 if keyword_lower not in transcript_lower:
-                    logger.info(
-                        "Keyword '%s' not found in transcript, ignoring",
-                        self.config.keyword
-                    )
+                    debug.keyword(self.config.keyword, found=False)
                     result.success = True
                     return result
-                logger.info("Keyword '%s' detected, processing command", self.config.keyword)
+                debug.keyword(self.config.keyword, found=True)
             elif self.in_follow_up_mode:
-                logger.info("Follow-up mode active, skipping keyword check")
+                debug.info("Follow-up mode - keyword check skipped")
 
         except Exception as e:
             logger.error("Transcription failed: %s", e)
@@ -577,15 +578,21 @@ class Orchestrator:
         # Intent parsing / LLM processing (legacy path when no agent)
         proc_start = datetime.now()
 
+        debug.state("PROCESSING")
         intent_parser = self._get_intent_parser()
         if intent_parser:
             try:
                 intent = await intent_parser.parse(ctx.transcript)
                 ctx.intent = intent
                 result.intent = intent
-                logger.info("Intent: %s", intent)
+                if intent:
+                    debug.intent(
+                        intent.action,
+                        target=intent.target_name,
+                        confidence=intent.confidence,
+                    )
             except Exception as e:
-                logger.warning("Intent parsing failed: %s", e)
+                debug.error("Intent parsing failed", exc=e, context="intent_parser")
 
         result.processing_ms = (datetime.now() - proc_start).total_seconds() * 1000
         self._state_machine.transition(PipelineEvent.INTENT_PARSED)
@@ -600,8 +607,17 @@ class Orchestrator:
                     action_result = await dispatcher.dispatch_intent(ctx.intent)
                     ctx.action_results.append(action_result)
                     result.action_results = ctx.action_results
+                    # Log action result
+                    success = action_result.success if hasattr(action_result, 'success') else action_result.get('success', False)
+                    message = action_result.message if hasattr(action_result, 'message') else action_result.get('message', '')
+                    debug.action(
+                        ctx.intent.action,
+                        ctx.intent.target_name or "unknown",
+                        success=success,
+                        message=message,
+                    )
                 except Exception as e:
-                    logger.warning("Action execution failed: %s", e)
+                    debug.error("Action execution failed", exc=e, context="action_dispatcher")
 
             result.action_ms = (datetime.now() - action_start).total_seconds() * 1000
             self._state_machine.transition(PipelineEvent.ACTION_COMPLETE)
@@ -617,30 +633,31 @@ class Orchestrator:
 
         # TTS (if available)
         tts = self._get_tts()
-        logger.info("TTS check: tts=%s, response_text='%s'",
-                   tts is not None, result.response_text[:50] if result.response_text else None)
         if tts is not None and result.response_text:
             try:
                 tts_start = datetime.now()
                 result.response_audio = await tts.synthesize(result.response_text)
                 ctx.response_audio = result.response_audio
                 result.tts_ms = (datetime.now() - tts_start).total_seconds() * 1000
-                logger.info("TTS synthesized: %d bytes in %.0fms",
-                           len(result.response_audio) if result.response_audio else 0, result.tts_ms)
+                # Calculate audio duration from WAV (24kHz, 16-bit mono)
+                audio_duration = (len(result.response_audio) - 44) / 48000.0 if result.response_audio else 0
+                debug.tts(duration_sec=audio_duration, latency_ms=result.tts_ms)
             except Exception as e:
-                logger.warning("TTS synthesis failed: %s", e)
-        else:
-            logger.warning("TTS skipped: tts=%s, has_text=%s", tts is not None, bool(result.response_text))
+                debug.error("TTS synthesis failed", exc=e, context="tts")
+        elif not tts:
+            debug.error("TTS not available", context="tts")
 
         self._state_machine.transition(PipelineEvent.RESPONSE_READY)
 
         if self._on_response:
             await self._on_response(result)
 
+        debug.state("RESPONDING")
+
         # Enter follow-up mode for subsequent commands without wake word
         if self.config.follow_up_enabled and result.success:
             self._last_response_time = datetime.now()
-            logger.info("Entering follow-up mode for %dms", self.config.follow_up_duration_ms)
+            debug.state("LISTENING", f"[follow-up: {self.config.follow_up_duration_ms/1000:.0f}s]")
 
         # Store conversation in memory
         storage_start = datetime.now()
@@ -756,10 +773,12 @@ class Orchestrator:
         if self._on_response:
             await self._on_response(result)
 
+        debug.state("RESPONDING")
+
         # Enter follow-up mode for subsequent commands without wake word
         if self.config.follow_up_enabled and result.success:
             self._last_response_time = datetime.now()
-            logger.info("Entering follow-up mode for %dms", self.config.follow_up_duration_ms)
+            debug.state("LISTENING", f"[follow-up: {self.config.follow_up_duration_ms/1000:.0f}s]")
 
         # Calculate total latency
         result.latency_ms = ctx.elapsed_ms()
@@ -980,9 +999,11 @@ class Orchestrator:
                 weather_result = await tool_registry.execute("get_weather", params)
                 if weather_result.success:
                     tool_results["weather"] = weather_result.message
-                    logger.info("Weather tool: %s", weather_result.message)
+                    debug.tool("get_weather", params, result=weather_result.message[:50])
+                else:
+                    debug.tool("get_weather", params, error="No weather data")
             except Exception as e:
-                logger.warning("Weather tool failed: %s", e)
+                debug.tool("get_weather", error=str(e))
 
         # Traffic tool detection
         traffic_keywords = ["traffic", "commute", "drive", "driving", "route"]
@@ -997,9 +1018,11 @@ class Orchestrator:
                     traffic_result = await tool_registry.execute("get_traffic", params)
                     if traffic_result.success:
                         tool_results["traffic"] = traffic_result.message
-                        logger.info("Traffic tool: %s", traffic_result.message)
+                        debug.tool("get_traffic", params, result=traffic_result.message[:50])
+                    else:
+                        debug.tool("get_traffic", params, error="No traffic data")
             except Exception as e:
-                logger.warning("Traffic tool failed: %s", e)
+                debug.tool("get_traffic", error=str(e))
 
         # Location tool detection
         location_keywords = ["where am i", "my location", "current location", "gps"]
@@ -1008,9 +1031,11 @@ class Orchestrator:
                 loc_result = await tool_registry.execute("get_location", {})
                 if loc_result.success:
                     tool_results["location"] = loc_result.message
-                    logger.info("Location tool: %s", loc_result.message)
+                    debug.tool("get_location", result=loc_result.message[:50])
+                else:
+                    debug.tool("get_location", error="No location data")
             except Exception as e:
-                logger.warning("Location tool failed: %s", e)
+                debug.tool("get_location", error=str(e))
 
         # Time tool detection
         time_keywords = ["what time", "current time", "what day", "what date", "today"]
@@ -1019,9 +1044,11 @@ class Orchestrator:
                 time_result = await tool_registry.execute("get_time", {})
                 if time_result.success:
                     tool_results["time"] = time_result.message
-                    logger.info("Time tool: %s", time_result.message)
+                    debug.tool("get_time", result=time_result.message)
+                else:
+                    debug.tool("get_time", error="No time data")
             except Exception as e:
-                logger.warning("Time tool failed: %s", e)
+                debug.tool("get_time", error=str(e))
 
         if result and tool_results:
             result.tools_ms = (datetime.now() - tools_start).total_seconds() * 1000
@@ -1125,10 +1152,10 @@ class Orchestrator:
                 result.llm_ms = llm_elapsed
             response = llm_result.get("response", "").strip()
             if response:
-                logger.info("LLM response: %d chars in %.0fms", len(response), llm_elapsed)
+                debug.llm(response, latency_ms=llm_elapsed)
                 return response
         except Exception as e:
-            logger.warning("LLM response generation failed: %s", e)
+            debug.error("LLM response generation failed", exc=e, context="llm")
 
         return f"I heard: {ctx.transcript}"
 
