@@ -19,6 +19,10 @@ TOOL_MAP = {
     "weather": "get_weather",
     "traffic": "get_traffic",
     "location": "get_location",
+    "calendar": "get_calendar",
+    "reminder": "set_reminder",
+    "reminders": "list_reminders",
+    "complete_reminder": "complete_reminder",
 }
 
 

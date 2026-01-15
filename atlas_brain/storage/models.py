@@ -325,6 +325,46 @@ class RAGSourceUsage:
 
 
 @dataclass
+class VisionEventRecord:
+    """A vision detection event from an atlas_vision node."""
+
+    id: UUID
+    event_id: str  # Original event ID from vision node
+    event_type: str  # "new_track", "track_lost", "track_update"
+    track_id: int
+    class_name: str
+    source_id: str  # Camera ID
+    node_id: str  # Vision node ID
+    bbox_x1: Optional[float] = None
+    bbox_y1: Optional[float] = None
+    bbox_x2: Optional[float] = None
+    bbox_y2: Optional[float] = None
+    event_timestamp: datetime = field(default_factory=datetime.utcnow)
+    received_at: datetime = field(default_factory=datetime.utcnow)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": str(self.id),
+            "event_id": self.event_id,
+            "event_type": self.event_type,
+            "track_id": self.track_id,
+            "class_name": self.class_name,
+            "source_id": self.source_id,
+            "node_id": self.node_id,
+            "bbox": {
+                "x1": self.bbox_x1,
+                "y1": self.bbox_y1,
+                "x2": self.bbox_x2,
+                "y2": self.bbox_y2,
+            } if self.bbox_x1 is not None else None,
+            "event_timestamp": self.event_timestamp.isoformat(),
+            "received_at": self.received_at.isoformat(),
+            "metadata": self.metadata,
+        }
+
+
+@dataclass
 class RAGSourceStats:
     """Aggregate statistics for RAG source effectiveness."""
 
@@ -360,4 +400,72 @@ class RAGSourceStats:
             ),
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
+        }
+
+
+@dataclass
+class Alert:
+    """A triggered alert from any event source (unified alerts table)."""
+
+    id: UUID
+    rule_name: str
+    event_type: str
+    message: str
+    source_id: str
+    triggered_at: datetime = field(default_factory=datetime.utcnow)
+    acknowledged: bool = False
+    acknowledged_at: Optional[datetime] = None
+    acknowledged_by: Optional[str] = None
+    event_data: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": str(self.id),
+            "rule_name": self.rule_name,
+            "event_type": self.event_type,
+            "message": self.message,
+            "source_id": self.source_id,
+            "triggered_at": self.triggered_at.isoformat(),
+            "acknowledged": self.acknowledged,
+            "acknowledged_at": (
+                self.acknowledged_at.isoformat() if self.acknowledged_at else None
+            ),
+            "acknowledged_by": self.acknowledged_by,
+            "event_data": self.event_data,
+            "metadata": self.metadata,
+        }
+
+
+@dataclass
+class Reminder:
+    """A user reminder with scheduled delivery time."""
+
+    id: UUID
+    message: str
+    due_at: datetime
+    user_id: Optional[UUID] = None
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    completed: bool = False
+    completed_at: Optional[datetime] = None
+    delivered: bool = False
+    delivered_at: Optional[datetime] = None
+    repeat_pattern: Optional[str] = None  # "daily", "weekly", "monthly", or None
+    source: str = "voice"  # "voice", "api", "scheduled"
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": str(self.id),
+            "message": self.message,
+            "due_at": self.due_at.isoformat(),
+            "user_id": str(self.user_id) if self.user_id else None,
+            "created_at": self.created_at.isoformat(),
+            "completed": self.completed,
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "delivered": self.delivered,
+            "delivered_at": self.delivered_at.isoformat() if self.delivered_at else None,
+            "repeat_pattern": self.repeat_pattern,
+            "source": self.source,
+            "metadata": self.metadata,
         }

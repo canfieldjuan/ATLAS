@@ -5,7 +5,8 @@ Uses asyncpg for high-performance async PostgreSQL access.
 """
 
 import logging
-from typing import Optional
+from contextlib import asynccontextmanager
+from typing import AsyncIterator, Optional
 
 import asyncpg
 
@@ -115,6 +116,27 @@ class DatabasePool:
         if not self.is_initialized:
             raise RuntimeError("Database pool not initialized")
         return await self._pool.fetchval(query, *args)
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncIterator[asyncpg.Connection]:
+        """
+        Acquire a connection with an active transaction.
+
+        Usage:
+            async with pool.transaction() as conn:
+                await conn.execute("INSERT INTO ...")
+                await conn.execute("UPDATE ...")
+                # Commits on success, rolls back on exception
+
+        Yields:
+            asyncpg.Connection with active transaction
+        """
+        if not self.is_initialized:
+            raise RuntimeError("Database pool not initialized")
+
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                yield conn
 
 
 # Global pool instance

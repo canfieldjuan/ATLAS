@@ -206,6 +206,95 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to initialize discovery service: %s", e)
 
+    # Initialize centralized alert system
+    alert_manager = None
+    if settings.alerts.enabled:
+        try:
+            from .alerts import get_alert_manager, setup_default_callbacks, TTSDelivery, NtfyDelivery
+            from .api.orchestration import connection_manager
+
+            alert_manager = get_alert_manager()
+            setup_default_callbacks(alert_manager)
+
+            if settings.alerts.tts_enabled:
+                tts_delivery = TTSDelivery(tts_registry, connection_manager)
+                alert_manager.register_callback(tts_delivery.deliver)
+
+            if settings.alerts.ntfy_enabled:
+                ntfy_delivery = NtfyDelivery(
+                    base_url=settings.alerts.ntfy_url,
+                    topic=settings.alerts.ntfy_topic,
+                )
+                alert_manager.register_callback(ntfy_delivery.deliver)
+                logger.info("ntfy push notifications enabled (%s/%s)",
+                           settings.alerts.ntfy_url, settings.alerts.ntfy_topic)
+
+            logger.info("Centralized alerts enabled with %d rules", len(alert_manager.list_rules()))
+        except Exception as e:
+            logger.error("Failed to initialize alert system: %s", e)
+
+    # Initialize reminder service
+    reminder_service = None
+    if settings.reminder.enabled:
+        try:
+            from .services.reminders import initialize_reminder_service
+
+            reminder_service = await initialize_reminder_service()
+
+            # Connect reminders to alert system for TTS delivery
+            async def reminder_alert_callback(reminder):
+                """Deliver reminder via TTS to connected voice clients."""
+                import base64
+                from .api.orchestration import connection_manager
+
+                message = f"Reminder: {reminder.message}"
+                logger.info("REMINDER: %s", message)
+
+                try:
+                    active_tts = tts_registry.get_active()
+                    if active_tts:
+                        audio_bytes = await active_tts.synthesize(message)
+                        logger.info("TTS generated %d bytes for reminder", len(audio_bytes))
+
+                        audio_base64 = base64.b64encode(audio_bytes).decode()
+                        delivered = await connection_manager.queue_announcement({
+                            "state": "reminder",
+                            "text": message,
+                            "audio_base64": audio_base64,
+                        })
+                        if delivered:
+                            logger.info("Reminder delivered to connected clients")
+                        else:
+                            logger.info("Reminder queued for delivery when client connects")
+                except Exception as e:
+                    logger.warning("TTS not available for reminder: %s", e)
+
+            # Only set direct callback if alert system TTS is not handling delivery
+            # This prevents duplicate announcements
+            if not (settings.alerts.enabled and settings.alerts.tts_enabled):
+                reminder_service.set_alert_callback(reminder_alert_callback)
+                logger.info("Reminder direct callback enabled (alerts TTS disabled)")
+
+            logger.info("Reminder service initialized with %d pending", reminder_service.pending_count)
+        except Exception as e:
+            logger.error("Failed to initialize reminder service: %s", e)
+
+    # Start vision event subscriber if MQTT is enabled
+    vision_subscriber = None
+    if settings.mqtt.enabled:
+        try:
+            from .vision import get_vision_subscriber
+
+            vision_subscriber = get_vision_subscriber()
+            if await vision_subscriber.start():
+                logger.info("Vision subscriber started, listening for detection events")
+            else:
+                logger.warning("Failed to start vision subscriber")
+                vision_subscriber = None
+        except Exception as e:
+            logger.error("Failed to initialize vision subscriber: %s", e)
+            vision_subscriber = None
+
     # Start voice client if enabled
     global _voice_client_task
     if settings.voice.enabled:
@@ -242,6 +331,14 @@ async def lifespan(app: FastAPI):
     # --- Shutdown ---
     logger.info("Atlas Brain shutting down...")
 
+    # Stop vision subscriber
+    if vision_subscriber and vision_subscriber.is_running:
+        try:
+            await vision_subscriber.stop()
+            logger.info("Vision subscriber stopped")
+        except Exception as e:
+            logger.error("Error stopping vision subscriber: %s", e)
+
     # Stop voice client
     if _voice_client_task and not _voice_client_task.done():
         logger.info("Stopping voice client...")
@@ -260,6 +357,15 @@ async def lifespan(app: FastAPI):
             logger.info("Discovery service shutdown complete")
         except Exception as e:
             logger.error("Error shutting down discovery service: %s", e)
+
+    # Shutdown reminder service
+    if reminder_service:
+        try:
+            from .services.reminders import shutdown_reminder_service
+            await shutdown_reminder_service()
+            logger.info("Reminder service shutdown complete")
+        except Exception as e:
+            logger.error("Error shutting down reminder service: %s", e)
 
     # Disconnect Home Assistant backend
     try:

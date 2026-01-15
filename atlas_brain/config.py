@@ -7,7 +7,7 @@ Configuration is loaded from environment variables with sensible defaults.
 from pathlib import Path
 from typing import Optional
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,12 +27,6 @@ class STTConfig(BaseSettings):
 
     default_model: str = Field(default="faster-whisper", description="Default STT to load on startup")
     whisper_model_size: str = Field(default="small.en", description="Whisper model size")
-
-    # Nemotron streaming settings
-    nemotron_frame_len_ms: int = Field(default=160, description="Streaming frame length in milliseconds")
-    nemotron_buffer_sec: float = Field(default=2.0, description="Total audio buffer in seconds")
-    nemotron_tokens_per_chunk: int = Field(default=8, description="Tokens per chunk for RNNT decoding")
-    nemotron_decoding_delay: int = Field(default=8, description="Decoding delay for latency/accuracy tradeoff")
 
 
 class MQTTConfig(BaseSettings):
@@ -204,6 +198,16 @@ class OrchestrationConfig(BaseSettings):
     # Follow-up mode: stay "hot" after response for quick follow-up commands
     follow_up_enabled: bool = Field(default=True, description="Enable follow-up mode (no wake word after response)")
     follow_up_duration_ms: int = Field(default=20000, description="Follow-up window duration (ms)")
+    
+    # Progressive prompting: prefill LLM with partial transcripts during speech
+    progressive_prompting_enabled: bool = Field(
+        default=True,
+        description="Enable progressive prompting (prefill LLM during speech)"
+    )
+    progressive_interval_ms: int = Field(
+        default=500,
+        description="Interval between interim transcriptions (ms)"
+    )
 
     # Timeouts
     recording_timeout_ms: int = Field(default=30000, description="Max recording duration")
@@ -271,7 +275,7 @@ class MemoryConfig(BaseSettings):
 class ToolsConfig(BaseSettings):
     """Configuration for Atlas tools (weather, traffic, etc.)."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_TOOLS_")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_TOOLS_", env_file=".env", extra="ignore")
 
     enabled: bool = Field(default=True, description="Enable tools system")
 
@@ -285,6 +289,14 @@ class ToolsConfig(BaseSettings):
     traffic_enabled: bool = Field(default=False, description="Enable traffic tool")
     traffic_api_key: str | None = Field(default=None, description="TomTom API key")
 
+    # Calendar tool (Google Calendar)
+    calendar_enabled: bool = Field(default=False, description="Enable calendar tool")
+    calendar_client_id: str | None = Field(default=None, description="Google OAuth client ID")
+    calendar_client_secret: str | None = Field(default=None, description="Google OAuth client secret")
+    calendar_refresh_token: str | None = Field(default=None, description="Google OAuth refresh token")
+    calendar_id: str = Field(default="primary", description="Calendar ID to query")
+    calendar_cache_ttl: float = Field(default=300.0, description="Cache TTL in seconds")
+
 
 class IntentConfig(BaseSettings):
     """Intent parsing configuration."""
@@ -293,7 +305,7 @@ class IntentConfig(BaseSettings):
 
     # LLM settings for intent parsing
     temperature: float = Field(default=0.1, description="LLM temperature for intent parsing")
-    max_tokens: int = Field(default=150, description="Max tokens for intent response")
+    max_tokens: int = Field(default=80, description="Max tokens for intent response")
 
     # Device cache settings
     device_cache_ttl: int = Field(default=60, description="Device list cache TTL in seconds")
@@ -303,6 +315,61 @@ class IntentConfig(BaseSettings):
         default=["time", "weather", "traffic", "location"],
         description="List of available tool names",
     )
+
+
+class AlertsConfig(BaseSettings):
+    """Centralized alerts configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_ALERTS_")
+
+    enabled: bool = Field(default=True, description="Enable centralized alert system")
+    default_cooldown_seconds: int = Field(default=30, description="Default cooldown between alerts")
+    tts_enabled: bool = Field(default=True, description="Enable TTS announcements for alerts")
+    persist_alerts: bool = Field(default=True, description="Persist alerts to database")
+    ntfy_enabled: bool = Field(default=False, description="Enable ntfy push notifications")
+    ntfy_url: str = Field(default="http://localhost:8090", description="ntfy server URL")
+    ntfy_topic: str = Field(default="atlas-alerts", description="ntfy topic for alerts")
+
+
+class ReminderConfig(BaseSettings):
+    """Reminder system configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_REMINDER_",
+        env_file=".env",
+        extra="ignore",
+    )
+
+    enabled: bool = Field(default=True, description="Enable reminder system")
+    default_timezone: str = Field(default="America/Chicago", description="Default timezone for parsing")
+    max_reminders_per_user: int = Field(default=100, ge=1, le=1000, description="Max active reminders per user")
+    scheduler_check_interval_seconds: float = Field(
+        default=1.0,
+        ge=0.1,
+        le=3600.0,
+        description="How often to check for due reminders (0.1s - 1hr)"
+    )
+
+    @field_validator("default_timezone")
+    @classmethod
+    def validate_timezone(cls, v: str) -> str:
+        """Validate that the timezone string is a valid IANA timezone."""
+        try:
+            from zoneinfo import ZoneInfo
+            ZoneInfo(v)
+            return v
+        except Exception:
+            # Try pytz as fallback (if installed)
+            try:
+                import pytz
+                pytz.timezone(v)
+                return v
+            except Exception:
+                pass
+            raise ValueError(
+                f"Invalid timezone: '{v}'. Use IANA timezone names like "
+                "'America/New_York', 'Europe/London', 'UTC'"
+            )
 
 
 class VoiceClientConfig(BaseSettings):
@@ -364,6 +431,8 @@ class Settings(BaseSettings):
     voice: VoiceClientConfig = Field(default_factory=VoiceClientConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     intent: IntentConfig = Field(default_factory=IntentConfig)
+    alerts: AlertsConfig = Field(default_factory=AlertsConfig)
+    reminder: ReminderConfig = Field(default_factory=ReminderConfig)
 
 
 # Singleton settings instance

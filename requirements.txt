@@ -20,8 +20,14 @@ aiomqtt
 httpx
 websockets
 
+# Discovery
+zeroconf>=0.80.0
+
 # Database
 asyncpg>=0.29.0
+
+# Natural language parsing
+dateparser>=1.2.0
 
 # Orchestration / Voice pipeline
 webrtcvad

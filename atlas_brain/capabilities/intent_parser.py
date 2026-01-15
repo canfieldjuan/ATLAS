@@ -16,12 +16,15 @@ logger = logging.getLogger("atlas.capabilities.intent_parser")
 # Compact prompt for fast intent extraction
 UNIFIED_INTENT_PROMPT = """Parse intent. Output JSON only.
 DEVICES: {devices}
-TOOLS: time,weather,traffic,location
+TOOLS: time,weather,traffic,location,calendar,reminder,reminders
 ACTIONS: turn_on,turn_off,toggle,set_brightness,query,conversation
 Format: {{"action":"X","target_type":"Y","target_name":"Z","parameters":{{}},"confidence":0.95}}
 "turn on kitchen light"->{{"action":"turn_on","target_type":"light","target_name":"kitchen","parameters":{{}},"confidence":0.95}}
 "what time"->{{"action":"query","target_type":"tool","target_name":"time","parameters":{{}},"confidence":0.95}}
 "dim to 50%"->{{"action":"set_brightness","target_type":"light","target_name":null,"parameters":{{"brightness":50}},"confidence":0.95}}
+"what's on my calendar"->{{"action":"query","target_type":"tool","target_name":"calendar","parameters":{{}},"confidence":0.95}}
+"remind me to call mom at 5pm"->{{"action":"query","target_type":"tool","target_name":"reminder","parameters":{{"message":"call mom","when":"at 5pm"}},"confidence":0.95}}
+"list my reminders"->{{"action":"query","target_type":"tool","target_name":"reminders","parameters":{{}},"confidence":0.95}}
 "hello"->{{"action":"conversation","target_type":null,"target_name":null,"parameters":{{}},"confidence":0.9}}
 User: {query}
 JSON:"""
