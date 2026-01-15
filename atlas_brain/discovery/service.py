@@ -15,7 +15,7 @@ from ..config import settings
 from ..storage.database import get_db_pool
 from ..storage.models import DiscoveredDevice
 from ..storage.repositories.device import get_device_repo
-from .scanners import SSDPScanner, ScanResult
+from .scanners import SSDPScanner, MDNSScanner, ScanResult
 
 logger = logging.getLogger("atlas.discovery.service")
 
@@ -42,9 +42,10 @@ class DiscoveryService:
             self._scanners.append(SSDPScanner())
             logger.info("SSDP scanner enabled")
 
-        # Future: mDNS scanner
-        # if settings.discovery.mdns_enabled:
-        #     self._scanners.append(MDNSScanner())
+        # mDNS scanner for Atlas node discovery
+        if settings.discovery.mdns_enabled:
+            self._scanners.append(MDNSScanner())
+            logger.info("mDNS scanner enabled")
 
     async def initialize(self) -> None:
         """Initialize the discovery service."""
