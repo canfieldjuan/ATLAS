@@ -1,10 +1,9 @@
 """
-Nemotron Speech Streaming STT implementation.
+Nemotron Speech-to-Text STT implementation.
 
-NVIDIA's cache-aware streaming ASR model (600M params) optimized for:
+NVIDIA's ASR model (600M params) optimized for:
 - Real-time voice assistant applications
 - Native punctuation and capitalization output
-- Low-latency streaming inference
 """
 
 import asyncio
@@ -70,16 +69,15 @@ def _load_audio_from_bytes(audio_bytes: bytes) -> tuple[np.ndarray, int]:
 @register_stt("nemotron")
 class NemotronSTT(BaseModelService):
     """
-    Nemotron Speech Streaming STT implementation.
+    Nemotron Speech-to-Text STT implementation.
 
     Features:
-    - Cache-aware streaming for low latency
     - Native punctuation and capitalization
     - 600M parameter FastConformer + RNN-T architecture
     - Optimized for voice assistant applications
     """
 
-    CAPABILITIES = ["transcription", "punctuation", "streaming"]
+    CAPABILITIES = ["transcription", "punctuation"]
 
     def __init__(
         self,
@@ -93,14 +91,6 @@ class NemotronSTT(BaseModelService):
             log_file=Path("logs/atlas_stt.log"),
         )
         self._model_name = model_name
-
-        # Streaming state (initialized lazily)
-        self._streaming_asr = None
-        self._streaming_initialized = False
-
-        # Audio buffer for streaming transcription
-        self._audio_buffer = []
-        self._total_samples = 0
 
         # Lock to prevent concurrent CUDA access
         self._inference_lock = asyncio.Lock()
@@ -151,54 +141,12 @@ class NemotronSTT(BaseModelService):
 
     def unload(self) -> None:
         """Unload the model from memory."""
-        # Clean up streaming state first
-        if self._streaming_asr is not None:
-            self._streaming_asr = None
-            self._streaming_initialized = False
-
         if self._model is not None:
             self.logger.info("Unloading Nemotron model")
             del self._model
             self._model = None
             self._clear_gpu_memory()
             self.logger.info("Nemotron model unloaded")
-
-    def init_streaming(self) -> None:
-        """Initialize the streaming ASR wrapper for real-time transcription."""
-        if not self.is_loaded:
-            raise RuntimeError("Model not loaded. Call load() first.")
-
-        if self._streaming_initialized:
-            return
-
-        from ...config import settings
-        from nemo.collections.asr.parts.utils.streaming_utils import BatchedFrameASRRNNT
-
-        # Convert frame length from ms to seconds
-        frame_len_sec = settings.stt.nemotron_frame_len_ms / 1000.0
-
-        self._streaming_asr = BatchedFrameASRRNNT(
-            asr_model=self._model,
-            frame_len=frame_len_sec,
-            total_buffer=settings.stt.nemotron_buffer_sec,
-            batch_size=1,
-            stateful_decoding=True,
-        )
-        self._streaming_initialized = True
-        self.logger.info(
-            "Streaming ASR initialized (frame=%.0fms, buffer=%.1fs)",
-            settings.stt.nemotron_frame_len_ms,
-            settings.stt.nemotron_buffer_sec,
-        )
-
-    def reset_streaming(self) -> None:
-        """Reset streaming state for a new utterance."""
-        if self._streaming_asr is not None:
-            self._streaming_asr.reset()
-
-        # Clear audio buffer
-        self.clear_audio_buffer()
-        self.logger.debug("Streaming state reset")
 
     async def transcribe(
         self,
@@ -292,110 +240,3 @@ class NemotronSTT(BaseModelService):
             "confidence": 1.0,  # Nemotron doesn't provide confidence scores
             "metrics": metrics.to_dict(),
         }
-
-    def add_audio_chunk(self, audio_chunk: np.ndarray, sample_rate: int = SAMPLE_RATE) -> None:
-        """
-        Add an audio chunk to the streaming buffer.
-
-        Args:
-            audio_chunk: Audio samples as numpy array (float32, mono)
-            sample_rate: Sample rate of the audio
-        """
-        # Resample if needed
-        if sample_rate != SAMPLE_RATE:
-            audio_chunk = _resample_audio(audio_chunk, sample_rate, SAMPLE_RATE)
-
-        audio_chunk = audio_chunk.astype(np.float32)
-        self._audio_buffer.append(audio_chunk)
-        self._total_samples += len(audio_chunk)
-
-    def get_buffer_duration_ms(self) -> float:
-        """Get current buffer duration in milliseconds."""
-        return (self._total_samples / SAMPLE_RATE) * 1000.0
-
-    def clear_audio_buffer(self) -> None:
-        """Clear the streaming audio buffer."""
-        self._audio_buffer = []
-        self._total_samples = 0
-
-    async def transcribe_buffer(self) -> dict[str, Any]:
-        """
-        Transcribe the accumulated audio buffer.
-
-        Returns partial transcript from all accumulated audio.
-        Call this periodically during streaming for partial results.
-        """
-        if not self.is_loaded:
-            raise RuntimeError("Model not loaded. Call load() first.")
-
-        if not self._audio_buffer:
-            return {"transcript": "", "is_final": False, "latency_ms": 0.0}
-
-        import torch
-
-        # Concatenate all buffered audio
-        audio = np.concatenate(self._audio_buffer)
-
-        # Acquire lock to prevent concurrent CUDA access
-        async with self._inference_lock:
-            with InferenceTimer() as timer:
-                with torch.no_grad():
-                    results = self._model.transcribe([audio], batch_size=1)
-
-                result = results[0]
-                if hasattr(result, 'text'):
-                    text = result.text
-                else:
-                    text = str(result)
-
-        # Check for utterance end punctuation
-        is_final = text.rstrip().endswith((".", "?", "!"))
-
-        return {
-            "transcript": text,
-            "is_final": is_final,
-            "latency_ms": timer.duration * 1000,
-            "buffer_duration_ms": self.get_buffer_duration_ms(),
-        }
-
-    async def transcribe_streaming(
-        self,
-        audio_chunk: np.ndarray,
-        sample_rate: int = SAMPLE_RATE,
-    ) -> dict[str, Any]:
-        """
-        Process a streaming audio chunk and return partial transcript.
-
-        Adds chunk to buffer and transcribes if enough audio accumulated.
-        For real-time streaming, call this with successive audio chunks.
-
-        Args:
-            audio_chunk: Audio samples as numpy array (float32, mono)
-            sample_rate: Sample rate of the audio
-
-        Returns:
-            Dict with partial transcript, is_final flag, and timing info
-        """
-        from ...config import settings
-
-        # Add chunk to buffer
-        self.add_audio_chunk(audio_chunk, sample_rate)
-
-        # Get minimum transcription interval from config (frame_len_ms * 3 for stability)
-        min_interval_ms = settings.stt.nemotron_frame_len_ms * 3
-
-        # Only transcribe if we have enough audio
-        buffer_ms = self.get_buffer_duration_ms()
-        if buffer_ms < min_interval_ms:
-            return {
-                "transcript": "",
-                "is_final": False,
-                "latency_ms": 0.0,
-                "buffer_duration_ms": buffer_ms,
-                "needs_more_audio": True,
-            }
-
-        # Transcribe accumulated buffer
-        result = await self.transcribe_buffer()
-        result["needs_more_audio"] = False
-        return result

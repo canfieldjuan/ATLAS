@@ -219,3 +219,67 @@ class OllamaLLM(BaseModelService):
         """
         messages = [Message(role="user", content=query)]
         return await self.chat_async(messages, **kwargs)
+
+    async def prefill_async(
+        self,
+        messages: list[Message],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """
+        Prefill the KV cache without generating tokens.
+
+        Sends the prompt to the model with num_predict=0 to populate the KV cache.
+        This allows subsequent requests with the same prefix to skip the prefill phase,
+        reducing time-to-first-token (TTFT) for progressive prompting.
+
+        Args:
+            messages: List of Message objects to prefill
+
+        Returns:
+            Dict with prefill timing info
+        """
+        if not self._client:
+            raise RuntimeError("Ollama LLM not loaded")
+
+        # Convert messages to Ollama format
+        ollama_messages = []
+        for msg in messages:
+            ollama_messages.append({
+                "role": msg.role,
+                "content": msg.content,
+            })
+
+        payload = {
+            "model": self.model,
+            "messages": ollama_messages,
+            "stream": False,
+            "options": {
+                "num_predict": 0,  # Only prefill, no generation
+            },
+        }
+
+        try:
+            response = await self._client.post(
+                f"{self.base_url}/api/chat",
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            # Extract timing info
+            prompt_eval_duration = data.get("prompt_eval_duration", 0)
+            prompt_eval_count = data.get("prompt_eval_count", 0)
+            
+            logger.debug(
+                "Prefill complete: %d tokens in %.2f ms",
+                prompt_eval_count,
+                prompt_eval_duration / 1_000_000,  # ns to ms
+            )
+            
+            return {
+                "prompt_tokens": prompt_eval_count,
+                "prefill_time_ms": prompt_eval_duration / 1_000_000,
+            }
+        except httpx.HTTPError as e:
+            logger.warning("Prefill request failed: %s", e)
+            return {"prompt_tokens": 0, "prefill_time_ms": 0}

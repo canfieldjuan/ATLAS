@@ -172,6 +172,9 @@ class AudioMonitor:
                     except Exception as e:
                         logger.error("Event callback error: %s", e)
 
+                # Send to centralized alert system
+                asyncio.create_task(self._send_to_alerts(monitored_event))
+
                 # Log interesting events
                 if priority in ("high", "critical"):
                     logger.warning(
@@ -196,6 +199,20 @@ class AudioMonitor:
             self._event_history = self._event_history[-100:]
 
         return monitored
+
+    async def _send_to_alerts(self, monitored_event: MonitoredEvent) -> None:
+        """Send event to centralized alert system."""
+        try:
+            from ...alerts import AudioAlertEvent, get_alert_manager
+
+            alert_event = AudioAlertEvent.from_monitored_event(
+                monitored_event,
+                source_id=self.location or "audio_monitor",
+            )
+            manager = get_alert_manager()
+            await manager.process_event(alert_event)
+        except Exception as e:
+            logger.error("Failed to send audio event to alerts: %s", e)
 
     def _to_wav(self, audio_data: bytes) -> bytes:
         """Convert raw PCM to WAV format."""
