@@ -28,7 +28,7 @@ async def query_text(request: TextQueryRequest):
     messages = [
         Message(
             role="system",
-            content="You are Atlas, a helpful voice assistant. Respond naturally and concisely.",
+            content="You are Atlas, a capable personal assistant. You can control smart home devices, answer questions, and help with various tasks. Be conversational and concise.",
         ),
         Message(role="user", content=request.query_text),
     ]

@@ -20,6 +20,7 @@ from .protocols import (
     ThinkResult,
 )
 from .tools import AtlasAgentTools, get_agent_tools
+from .entity_tracker import EntityTracker, has_pronoun, extract_pronoun
 
 logger = logging.getLogger("atlas.agents.atlas")
 
@@ -83,10 +84,15 @@ class AtlasAgent(BaseAgent):
             "traffic",
             "time",
             "location",
+            "calendar",
+            "reminder",
         ]
 
         self._session_id = session_id
         self._llm = None
+
+        # Entity tracker for pronoun resolution
+        self._entity_tracker = EntityTracker()
 
     # Lazy loading
 
@@ -131,6 +137,26 @@ class AtlasAgent(BaseAgent):
 
         # Parse intent using unified LLM-based parser
         intent = await tools.parse_intent(context.input_text)
+
+        # Resolve pronouns if intent has no target but query contains pronoun
+        if intent and not intent.target_name and has_pronoun(context.input_text):
+            pronoun = extract_pronoun(context.input_text)
+            if pronoun:
+                resolved = self._entity_tracker.resolve_pronoun(
+                    pronoun,
+                    entity_type=intent.target_type,
+                )
+                if resolved:
+                    intent.target_name = resolved.entity_name
+                    intent.target_type = intent.target_type or resolved.entity_type
+                    if resolved.entity_id:
+                        intent.target_id = resolved.entity_id
+                    logger.info(
+                        "Resolved '%s' -> %s/%s",
+                        pronoun,
+                        resolved.entity_type,
+                        resolved.entity_name,
+                    )
 
         if intent:
             result.intent = intent
@@ -238,8 +264,28 @@ class AtlasAgent(BaseAgent):
                 # General query - return time, day, date
                 return {k: v for k, v in data.items() if k not in exclude and v}
 
+        # Calendar: return event summaries or empty indicator
+        if tool_name in ("calendar", "get_calendar"):
+            events = data.get("events", [])
+            if events:
+                # Return formatted event list
+                event_strs = []
+                for e in events[:5]:  # Limit to 5
+                    summary = e.get("summary", "Untitled")
+                    start = e.get("start", "")
+                    event_strs.append(f"{summary} at {start}")
+                return {"upcoming_events": "; ".join(event_strs)}
+            else:
+                # No events - return None to use message fallback
+                return {}
+
+        # Reminder: use message directly (data has IDs, not useful for LLM)
+        if tool_name in ("reminder", "set_reminder", "list_reminders", "complete_reminder"):
+            # Return empty to fall back to the well-formatted message
+            return {}
+
         # Default: return all data except internal fields
-        exclude = {"iso", "time_24h", "raw", "debug"}
+        exclude = {"iso", "time_24h", "raw", "debug", "cached"}
         return {k: v for k, v in data.items() if k not in exclude and v}
 
     async def _do_act(
@@ -270,10 +316,18 @@ class AtlasAgent(BaseAgent):
                 result.response_data["action_message"] = action_result.get("message", "")
 
                 logger.info(
-                    "Action executed: %s → %s",
+                    "Action executed: %s -> %s",
                     think_result.intent.action,
                     "success" if result.success else "failed",
                 )
+
+                # Track entity for pronoun resolution on success
+                if result.success and think_result.intent.target_name:
+                    self._entity_tracker.track(
+                        entity_type=think_result.intent.target_type or "device",
+                        entity_name=think_result.intent.target_name,
+                        entity_id=think_result.intent.target_id,
+                    )
 
             except Exception as e:
                 logger.warning("Action execution failed: %s", e)
@@ -284,22 +338,37 @@ class AtlasAgent(BaseAgent):
             # Execute tool based on intent
             try:
                 target_name = think_result.intent.target_name
-                parameters = think_result.intent.parameters
+                parameters = dict(think_result.intent.parameters or {})
+
+                # Pass query for calendar name matching
+                if target_name == "calendar":
+                    parameters["calendar_name"] = context.input_text
 
                 tool_result = await tools.execute_tool_by_intent(target_name, parameters)
                 result.success = tool_result.get("success", False)
                 result.tool_results = {target_name: tool_result}
 
-                # Build tool context for LLM using filtered data
+                # Build tool context for LLM
                 if tool_result.get("success"):
+                    tool_name = tool_result.get("tool_name", target_name)
                     data = tool_result.get("data", {})
+                    message = tool_result.get("message", "")
+
+                    # Try to filter relevant data fields
+                    tool_context = None
                     if data:
                         query_lower = context.input_text.lower()
-                        tool_name = tool_result.get("tool_name", target_name)
                         filtered = self._filter_tool_data(tool_name, data, query_lower)
                         if filtered:
                             data_str = ", ".join(f"{k}: {v}" for k, v in filtered.items())
-                            result.response_data["tool_context"] = f"[{tool_name}] {data_str}"
+                            tool_context = f"[{tool_name}] {data_str}"
+
+                    # Fall back to message if no filtered data
+                    if not tool_context and message:
+                        tool_context = f"[{tool_name}] {message}"
+
+                    if tool_context:
+                        result.response_data["tool_context"] = tool_context
 
                 logger.info("Tool executed: %s", target_name)
 
@@ -360,8 +429,9 @@ class AtlasAgent(BaseAgent):
 
         # Build system prompt
         system_parts = [
-            "You are Atlas, a helpful home automation assistant.",
-            "Respond briefly and naturally in 1-2 sentences.",
+            "You are Atlas, a capable personal assistant.",
+            "You can control smart home devices, answer questions, have conversations, and help with various tasks.",
+            "Be conversational, helpful, and concise. Keep responses to 1-3 sentences unless more detail is needed.",
         ]
 
         # Add tool context if available

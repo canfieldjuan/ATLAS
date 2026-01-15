@@ -56,6 +56,13 @@ from .atlas import (
     create_atlas_agent,
 )
 
+from .entity_tracker import (
+    EntityTracker,
+    TrackedEntity,
+    has_pronoun,
+    extract_pronoun,
+)
+
 __all__ = [
     # Enums
     "AgentState",
@@ -86,4 +93,9 @@ __all__ = [
     "get_atlas_agent",
     "reset_atlas_agent",
     "create_atlas_agent",
+    # Entity tracking
+    "EntityTracker",
+    "TrackedEntity",
+    "has_pronoun",
+    "extract_pronoun",
 ]

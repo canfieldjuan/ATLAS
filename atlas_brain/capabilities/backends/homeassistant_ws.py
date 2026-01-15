@@ -203,6 +203,17 @@ class HomeAssistantWebSocket:
                 self._connected = False
                 await self._cleanup_connection()
 
+    async def _send_to_alerts(self, event_data: dict[str, Any]) -> None:
+        """Send state change to centralized alert system."""
+        try:
+            from ...alerts import HAStateAlertEvent, get_alert_manager
+
+            alert_event = HAStateAlertEvent.from_ha_event(event_data)
+            manager = get_alert_manager()
+            await manager.process_event(alert_event)
+        except Exception as e:
+            logger.debug("Failed to send HA event to alerts: %s", e)
+
     async def _handle_message(self, msg: dict[str, Any]) -> None:
         """Handle incoming WebSocket message."""
         msg_type = msg.get("type")
@@ -211,17 +222,21 @@ class HomeAssistantWebSocket:
             event = msg.get("event", {})
             event_type = event.get("event_type")
 
-            if event_type == "state_changed" and self._on_state_changed:
+            if event_type == "state_changed":
                 event_data = event.get("data", {})
                 entity_id = event_data.get("entity_id", "unknown")
 
-                try:
-                    # Call handler (may be sync or async)
-                    result = self._on_state_changed(event_data)
-                    if asyncio.iscoroutine(result):
-                        await result
-                except Exception as e:
-                    logger.warning("State change handler error for %s: %s", entity_id, e)
+                # Send to centralized alert system
+                await self._send_to_alerts(event_data)
+
+                # Call user handler if set (may be sync or async)
+                if self._on_state_changed:
+                    try:
+                        result = self._on_state_changed(event_data)
+                        if asyncio.iscoroutine(result):
+                            await result
+                    except Exception as e:
+                        logger.warning("State change handler error for %s: %s", entity_id, e)
 
         elif msg_type == "result":
             # Command response - log failures
