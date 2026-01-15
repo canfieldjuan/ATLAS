@@ -16,3 +16,9 @@ docker-compose.override.yml
 # Other
 *.log
 .DS_Store
+
+# Large binaries
+kafka/
+*.tgz
+*.pt
+test_video.mp4
