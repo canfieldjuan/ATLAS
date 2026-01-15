@@ -1,0 +1,7 @@
+# Add any specific Python dependencies here
+# For now, we'll keep it minimal.
+# Later, this might include libraries for video capture, networking, etc.
+# For example:
+# opencv-python
+# paho-mqtt
+kafka-python

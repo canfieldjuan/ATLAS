@@ -1,0 +1,2 @@
+# For video processing and eventually object detection
+opencv-python-headless

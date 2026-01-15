@@ -1,0 +1,26 @@
+# Atlas Vision Dockerfile
+FROM python:3.11-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies (minimal for now)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY atlas_vision/ atlas_vision/
+
+# Expose port
+EXPOSE 5002
+
+# Set environment variables
+ENV ATLAS_VISION_HOST=0.0.0.0
+ENV ATLAS_VISION_PORT=5002
+
+# Run the application
+CMD ["python", "-m", "atlas_vision"]

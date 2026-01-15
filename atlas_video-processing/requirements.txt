@@ -1,0 +1,29 @@
+# Atlas Vision dependencies
+
+# Web framework
+fastapi>=0.100.0
+uvicorn>=0.23.0
+
+# Configuration
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# HTTP client (for future integrations)
+httpx>=0.24.0
+
+# Async support
+anyio>=3.0.0
+
+# Computer vision
+opencv-python-headless>=4.8.0
+numpy>=1.24.0
+
+# Discovery
+zeroconf>=0.80.0
+
+# MQTT for event publishing
+aiomqtt>=2.0.0
+
+# Object detection and tracking
+ultralytics>=8.0.0  # YOLOv8 with built-in ByteTrack
+lapx>=0.5.0  # Linear assignment for tracking

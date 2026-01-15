@@ -1,0 +1,88 @@
+version: '3.8'
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:5.5.3
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  ingest-drone:
+    build:
+      context: ./ingest/drone_client
+    image: atlas/ingest-drone
+    container_name: ingest-drone
+    depends_on:
+      - kafka
+    # ports:
+    #   - "5000:5000"
+
+  ingest-camera:
+    build:
+      context: ./ingest/camera_client
+    image: atlas/ingest-camera
+    container_name: ingest-camera
+    depends_on:
+      - kafka
+    # ports:
+    #   - "5001:5001"
+
+  processing:
+    build:
+      context: ./processing/video_stream_processor
+    image: atlas/processing
+    container_name: processing
+    depends_on:
+      - kafka
+    # ports:
+    #   - "5002:5002"
+
+  control:
+    build:
+      context: ./control
+    image: atlas/control
+    container_name: control
+    # ports:
+    #   - "5003:5003"
+
+  llm_service:
+    build:
+      context: ./llm_service
+    image: atlas/llm_service
+    container_name: llm_service
+    # ports:
+    #   - "5004:5004"
+
+  db:
+    image: postgres:13
+    container_name: db
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=atlas
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+
+volumes:
+  postgres_data:
