@@ -78,6 +78,10 @@ class OrchestratorConfig:
     # Follow-up mode: After a response, stay "hot" for follow-up commands
     follow_up_enabled: bool = True
     follow_up_duration_ms: int = 20000  # 20 seconds of hot mic after response
+    
+    # Progressive prompting: prefill LLM with partial transcripts during speech
+    progressive_prompting_enabled: bool = True
+    progressive_interval_ms: int = 500  # Interval between interim transcriptions
 
     # Timeouts
     recording_timeout_ms: int = 30000  # Max recording duration
@@ -97,6 +101,7 @@ class OrchestratorConfig:
         vad_config = VADConfig(
             aggressiveness=orch.vad_aggressiveness,
             silence_duration_ms=orch.silence_duration_ms,
+            interim_interval_ms=getattr(orch, "progressive_interval_ms", 500),
         )
 
         return cls(
@@ -106,6 +111,8 @@ class OrchestratorConfig:
             auto_execute=orch.auto_execute,
             follow_up_enabled=getattr(orch, "follow_up_enabled", True),
             follow_up_duration_ms=getattr(orch, "follow_up_duration_ms", 20000),
+            progressive_prompting_enabled=getattr(orch, "progressive_prompting_enabled", True),
+            progressive_interval_ms=getattr(orch, "progressive_interval_ms", 500),
             recording_timeout_ms=orch.recording_timeout_ms,
             processing_timeout_ms=orch.processing_timeout_ms,
         )
@@ -202,13 +209,19 @@ class Orchestrator:
 
         # Follow-up mode tracking
         self._last_response_time: Optional[datetime] = None
+        
+        # Progressive prompting state
+        self._last_interim_transcript: Optional[str] = None
+        self._prefill_task: Optional[asyncio.Task] = None
 
         logger.info(
-            "Orchestrator initialized (keyword=%s/%s, follow_up=%s/%dms, agent=%s)",
+            "Orchestrator initialized (keyword=%s/%s, follow_up=%s/%dms, progressive=%s/%dms, agent=%s)",
             self.config.keyword_enabled,
             self.config.keyword if self.config.keyword_enabled else "disabled",
             self.config.follow_up_enabled,
             self.config.follow_up_duration_ms,
+            self.config.progressive_prompting_enabled,
+            self.config.progressive_interval_ms if self.config.progressive_prompting_enabled else 0,
             "enabled" if self._agent else "disabled",
         )
 
@@ -450,11 +463,25 @@ class Orchestrator:
                     debug.state("RECORDING")
                 self._state_machine.context.recording_started_at = datetime.now()
                 self._state_machine.transition(PipelineEvent.SPEECH_START)
+                # Reset progressive prompting state
+                self._last_interim_transcript = None
+                if self._prefill_task and not self._prefill_task.done():
+                    self._prefill_task.cancel()
+                self._prefill_task = None
+            
+            elif event == "speech_interim":
+                # Progressive prompting: transcribe interim audio and prefill LLM
+                await self._process_interim_audio()
 
             elif event in ("speech_end", "max_duration"):
                 self._state_machine.context.recording_ended_at = datetime.now()
                 self._state_machine.transition(PipelineEvent.SPEECH_END)
                 debug.state("TRANSCRIBING")
+                
+                # Cancel any pending prefill task
+                if self._prefill_task and not self._prefill_task.done():
+                    self._prefill_task.cancel()
+                self._prefill_task = None
 
                 # Get the recorded audio
                 audio_bytes = self._audio_buffer.get_utterance()
@@ -463,6 +490,71 @@ class Orchestrator:
                     return await self._process_utterance()
 
         return None
+    
+    async def _process_interim_audio(self) -> None:
+        """
+        Process interim audio for progressive prompting.
+        
+        Transcribes the current speech-in-progress and sends it to the LLM
+        for prefill (KV cache warming) without generating a response.
+        This reduces time-to-first-token when the user finishes speaking.
+        """
+        # Check if progressive prompting is enabled
+        if not self.config.progressive_prompting_enabled:
+            return
+        
+        # Get interim audio snapshot (doesn't reset buffer)
+        interim_audio = self._audio_buffer.get_interim_audio()
+        if not interim_audio:
+            return
+        
+        # Get STT service
+        stt = self._get_stt()
+        if stt is None:
+            return
+        
+        try:
+            # Transcribe interim audio (don't hold CUDA lock long)
+            async with _cuda_lock:
+                transcription = await stt.transcribe(interim_audio)
+            
+            interim_text = transcription.get("transcript", "").strip()
+            
+            # Skip if empty or same as last interim
+            if not interim_text or interim_text == self._last_interim_transcript:
+                return
+            
+            self._last_interim_transcript = interim_text
+            logger.debug("Interim transcript: %s", interim_text[:50])
+            
+            # Send to LLM for prefill (non-blocking)
+            llm = self._get_llm()
+            if llm and hasattr(llm, "prefill_async"):
+                from ..services.protocols import Message
+                messages = [Message(role="user", content=interim_text)]
+                
+                # Fire and forget prefill (don't block audio processing)
+                self._prefill_task = asyncio.create_task(
+                    self._do_prefill(llm, messages),
+                    name="llm_prefill",
+                )
+        except Exception as e:
+            logger.debug("Interim transcription failed: %s", e)
+    
+    async def _do_prefill(self, llm: Any, messages: list) -> None:
+        """Execute LLM prefill in background."""
+        try:
+            result = await llm.prefill_async(messages)
+            if result.get("prompt_tokens", 0) > 0:
+                logger.debug(
+                    "Prefill complete: %d tokens in %.1f ms",
+                    result.get("prompt_tokens", 0),
+                    result.get("prefill_time_ms", 0),
+                )
+        except asyncio.CancelledError:
+            logger.debug("Prefill cancelled (speech ended)")
+        except Exception as e:
+            logger.debug("Prefill failed: %s", e)
 
     async def _process_utterance(self) -> OrchestratorResult:
         """Process a complete utterance through STT → Intent → Action → TTS."""
@@ -1042,6 +1134,19 @@ class Orchestrator:
             except Exception as e:
                 debug.tool("get_time", error=str(e))
 
+        # Calendar tool detection
+        calendar_keywords = ["calendar", "schedule", "appointment", "meeting", "event", "events"]
+        if any(kw in transcript_lower for kw in calendar_keywords):
+            try:
+                cal_result = await tool_registry.execute("get_calendar", {})
+                if cal_result.success:
+                    tool_results["calendar"] = cal_result.message
+                    debug.tool("get_calendar", result=cal_result.message[:50])
+                else:
+                    debug.tool("get_calendar", error="No calendar data")
+            except Exception as e:
+                debug.tool("get_calendar", error=str(e))
+
         if result and tool_results:
             result.tools_ms = (datetime.now() - tools_start).total_seconds() * 1000
 
@@ -1092,7 +1197,7 @@ class Orchestrator:
             for tool_name, tool_msg in tool_results.items():
                 tool_context += f"- {tool_msg}\n"
 
-        system_msg = "You are Atlas, a helpful home automation assistant. Respond briefly and naturally in 1-2 sentences."
+        system_msg = "You are Atlas, a capable personal assistant. You can control smart home devices, answer questions, and help with various tasks. Be conversational and concise."
         if tool_context:
             system_msg += " Use ONLY the provided information below. Do NOT make up facts."
         if ctx.speaker_id != "unknown":

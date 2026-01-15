@@ -230,14 +230,17 @@ class VoiceRunner:
                     audio_bytes = base64.b64decode(audio_b64)
                     # Mute before playback to prevent wake word self-trigger
                     self._muted = True
-                    logger.debug("Muted mic for TTS playback")
+                    logger.info("PLAYBACK: Muted mic, starting TTS playback (%d bytes)", len(audio_bytes))
                     try:
                         loop = asyncio.get_event_loop()
+                        logger.info("PLAYBACK: Playing audio...")
                         await loop.run_in_executor(
                             None, lambda: self._output.play(audio_bytes, blocking=True)
                         )
+                        logger.info("PLAYBACK: Audio done, waiting for reverb decay")
                         # Wait for residual audio to decay (room reverb, speaker resonance)
                         await asyncio.sleep(0.6)
+                        logger.info("PLAYBACK: Draining audio buffer")
                         # Aggressively drain all buffered audio that may contain TTS echo
                         # Multiple passes to ensure we get everything
                         drained = 0
@@ -248,11 +251,10 @@ class VoiceRunner:
                                     break
                                 drained += 1
                             await asyncio.sleep(0.1)  # Wait for more audio to arrive
-                        if drained > 0:
-                            logger.debug("Drained %d frames of residual audio", drained)
+                        logger.info("PLAYBACK: Drained %d frames", drained)
                     finally:
                         self._muted = False
-                        logger.debug("Unmuted mic after TTS playback")
+                        logger.info("PLAYBACK: Unmuted mic, ready for next command")
 
             elif state == "error":
                 error_msg = data.get("message", "Unknown error")

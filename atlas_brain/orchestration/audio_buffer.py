@@ -36,6 +36,9 @@ class VADConfig:
     max_speech_duration_ms: int = 30000  # Maximum recording length
     silence_duration_ms: int = 1500  # Silence duration to end utterance
     pre_speech_buffer_ms: int = 300  # Audio to keep before speech starts
+    
+    # Progressive streaming
+    interim_interval_ms: int = 500  # Emit interim audio every N ms during speech
 
 
 class AudioBuffer:
@@ -68,6 +71,10 @@ class AudioBuffer:
         self._voiced_frames = 0
         self._unvoiced_frames = 0
         self._total_speech_frames = 0
+        
+        # Progressive streaming state
+        self._last_interim_frame = 0  # Track when last interim was emitted
+        self._interim_interval_frames = self._frames_for_ms(self.config.interim_interval_ms)
 
     def _init_vad(self) -> None:
         """Initialize the VAD engine."""
@@ -93,6 +100,7 @@ class AudioBuffer:
         self._voiced_frames = 0
         self._unvoiced_frames = 0
         self._total_speech_frames = 0
+        self._last_interim_frame = 0
 
     @property
     def is_speaking(self) -> bool:
@@ -110,6 +118,7 @@ class AudioBuffer:
 
         Returns:
             - "speech_start" when speech begins
+            - "speech_interim" periodically during speech (for progressive transcription)
             - "speech_end" when speech ends (utterance ready)
             - "max_duration" when max recording length reached
             - None otherwise
@@ -172,6 +181,12 @@ class AudioBuffer:
             silence_frames = self._frames_for_ms(self.config.silence_duration_ms)
             if self._unvoiced_frames >= silence_frames:
                 return "speech_end"
+            
+            # Check for interim event (progressive streaming)
+            frames_since_last_interim = self._total_speech_frames - self._last_interim_frame
+            if frames_since_last_interim >= self._interim_interval_frames:
+                self._last_interim_frame = self._total_speech_frames
+                return "speech_interim"
 
         return None
 
@@ -261,3 +276,42 @@ class AudioBuffer:
         audio_data = b"".join(self._speech_buffer)
         self.reset()
         return audio_data
+
+    def get_interim_audio(self) -> Optional[bytes]:
+        """
+        Get current accumulated audio as WAV for interim transcription.
+        
+        Unlike get_utterance(), this does NOT reset the buffer - it returns
+        a snapshot of the current speech for progressive transcription.
+        
+        Returns:
+            WAV-formatted audio bytes of current speech, or None if insufficient data.
+        """
+        if not self._speech_buffer:
+            return None
+        
+        # Require minimum duration for meaningful transcription
+        min_interim_ms = 300  # 300ms minimum for interim
+        if self.speech_duration_ms < min_interim_ms:
+            return None
+        
+        # Combine all frames (snapshot, don't clear)
+        audio_data = b"".join(self._speech_buffer)
+        
+        # Convert to WAV
+        wav_buffer = io.BytesIO()
+        with wave.open(wav_buffer, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)  # 16-bit
+            wav_file.setframerate(self.config.sample_rate)
+            wav_file.writeframes(audio_data)
+        
+        wav_bytes = wav_buffer.getvalue()
+        
+        logger.debug(
+            "Interim audio snapshot: %d ms, %d bytes",
+            self.speech_duration_ms,
+            len(wav_bytes),
+        )
+        
+        return wav_bytes

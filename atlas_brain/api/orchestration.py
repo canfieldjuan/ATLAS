@@ -32,6 +32,8 @@ class ConnectionManager:
     def __init__(self):
         self.active_connections: Set[WebSocket] = set()
         self._lock = asyncio.Lock()
+        self._pending_announcements: list[dict] = []
+        self._pending_lock = asyncio.Lock()
 
     async def connect(self, websocket: WebSocket):
         """Add a new connection."""
@@ -50,7 +52,6 @@ class ConnectionManager:
         if not self.active_connections:
             logger.debug("No active connections for broadcast")
             return
-        state = message.get("state", "unknown")
         disconnected = []
         async with self._lock:
             for connection in self.active_connections:
@@ -61,6 +62,36 @@ class ConnectionManager:
                     disconnected.append(connection)
             for conn in disconnected:
                 self.active_connections.discard(conn)
+
+    async def queue_announcement(self, message: dict) -> bool:
+        """
+        Queue an announcement for delivery.
+
+        If clients are connected, broadcasts immediately and returns True.
+        If no clients, queues for delivery when a client connects and returns False.
+        """
+        if self.active_connections:
+            await self.broadcast(message)
+            return True
+        else:
+            async with self._pending_lock:
+                self._pending_announcements.append(message)
+            logger.info("Queued announcement for later delivery (no clients)")
+            return False
+
+    async def flush_pending(self, websocket: WebSocket):
+        """Send all pending announcements to a specific websocket."""
+        async with self._pending_lock:
+            if not self._pending_announcements:
+                return
+            count = len(self._pending_announcements)
+            for message in self._pending_announcements:
+                try:
+                    await websocket.send_json(message)
+                except Exception as e:
+                    logger.warning("Failed to send pending announcement: %s", e)
+            self._pending_announcements.clear()
+            logger.info("Flushed %d pending announcements", count)
 
 
 # Global connection manager for broadcasting state updates
@@ -101,6 +132,9 @@ async def orchestrated_audio_stream(websocket: WebSocket):
 
     # Register with connection manager for broadcasts
     await connection_manager.connect(websocket)
+
+    # Flush any pending announcements (reminders, alerts queued while offline)
+    await connection_manager.flush_pending(websocket)
 
     # Keepalive task to prevent WebSocket timeout
     keepalive_interval = 15  # Send keepalive every 15 seconds
@@ -334,22 +368,43 @@ async def orchestrated_audio_stream(websocket: WebSocket):
 
                 # Wait for TTS to finish, discarding incoming audio
                 if cooldown_seconds > 0:
-                    logger.debug("Cooldown for %.1f seconds", cooldown_seconds)
+                    logger.info("SERVER: Entering cooldown for %.1f seconds (audio=%.1fs)", cooldown_seconds, audio_duration if result and result.response_audio else 0)
                     await send_status("responding")
-                    cooldown_end = asyncio.get_event_loop().time() + cooldown_seconds
-                    # Drain audio during cooldown to prevent buffer buildup
-                    async for _ in audio_generator():
-                        if asyncio.get_event_loop().time() >= cooldown_end:
+                    loop = asyncio.get_running_loop()
+                    cooldown_end = loop.time() + cooldown_seconds
+                    drained_count = 0
+                    # Drain audio during cooldown with timeout to prevent blocking
+                    # Client may stop sending audio during TTS playback (muted)
+                    while is_connected:
+                        remaining = cooldown_end - loop.time()
+                        if remaining <= 0:
                             break
-                        if not is_connected:
+                        try:
+                            timeout = min(0.1, remaining)
+                            message = await asyncio.wait_for(
+                                websocket.receive(),
+                                timeout=timeout
+                            )
+                            if message.get("type") == "websocket.disconnect":
+                                is_connected = False
+                                break
+                            if "bytes" in message:
+                                drained_count += 1
+                        except asyncio.TimeoutError:
+                            continue
+                        except WebSocketDisconnect:
+                            is_connected = False
                             break
+                    logger.info("SERVER: Cooldown complete, drained %d audio frames", drained_count)
 
                 # Reset for next utterance
                 orchestrator.reset()
+                logger.info("SERVER: Sending 'listening' status, follow_up=%s", orchestrator.in_follow_up_mode)
                 await send_status(
                     "listening",
                     follow_up_mode=orchestrator.in_follow_up_mode,
                 )
+                logger.info("SERVER: Ready for next utterance")
 
             except WebSocketDisconnect:
                 break
