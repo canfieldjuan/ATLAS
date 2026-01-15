@@ -320,7 +320,7 @@ class IntentConfig(BaseSettings):
 class AlertsConfig(BaseSettings):
     """Centralized alerts configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_ALERTS_")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_ALERTS_", env_file=".env", extra="ignore")
 
     enabled: bool = Field(default=True, description="Enable centralized alert system")
     default_cooldown_seconds: int = Field(default=30, description="Default cooldown between alerts")
