@@ -1,0 +1,4 @@
+base-url: "http://localhost:8090"
+listen-http: ":8090"
+cache-file: "/var/lib/ntfy/cache.db"
+behind-proxy: false

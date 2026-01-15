@@ -281,6 +281,17 @@ ATLAS_MQTT_PORT=1883
 ATLAS_HA_ENABLED=false
 ATLAS_HA_URL=http://homeassistant.local:8123
 ATLAS_HA_TOKEN=your_token
+
+# Reminder System
+ATLAS_REMINDER_ENABLED=true
+ATLAS_REMINDER_DEFAULT_TIMEZONE=America/Chicago
+ATLAS_REMINDER_MAX_REMINDERS_PER_USER=100
+
+# Calendar Tool (Google Calendar)
+ATLAS_TOOLS_CALENDAR_ENABLED=true
+ATLAS_TOOLS_CALENDAR_CLIENT_ID=your_client_id
+ATLAS_TOOLS_CALENDAR_CLIENT_SECRET=your_client_secret
+ATLAS_TOOLS_CALENDAR_REFRESH_TOKEN=your_refresh_token
 ```
 
 ## Environment Requirements

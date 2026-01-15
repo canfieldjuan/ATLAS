@@ -1,0 +1,13 @@
+[Unit]
+Description=ntfy push notification server
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/ntfy serve --listen-http :8090
+Restart=always
+User=juan-canfield
+Group=juan-canfield
+WorkingDirectory=/home/juan-canfield
+
+[Install]
+WantedBy=multi-user.target
