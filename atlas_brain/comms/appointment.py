@@ -13,12 +13,12 @@ Flow:
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta, timezone
 from enum import Enum, auto
-from typing import Any, Callable, Coroutine, Optional
+from typing import Any, Callable, Coroutine, Optional, TYPE_CHECKING
 from uuid import UUID
 
-from .config import BusinessContext, SchedulingConfig
+from .config import BusinessContext, BusinessHours, SchedulingConfig
 from .services import (
     Appointment,
     CalendarService,
@@ -30,7 +30,54 @@ from .services import (
     StubSMSService,
 )
 
+if TYPE_CHECKING:
+    from .protocols import TelephonyProvider, Call
+
 logger = logging.getLogger("atlas.comms.appointment")
+
+
+# === Scheduling Helpers ===
+
+
+def parse_time(time_str: str) -> Optional[time]:
+    """Parse a time string like '09:00' to a time object."""
+    if not time_str:
+        return None
+    try:
+        parts = time_str.split(":")
+        return time(int(parts[0]), int(parts[1]) if len(parts) > 1 else 0)
+    except (ValueError, IndexError):
+        return None
+
+
+def is_within_business_hours(
+    dt: datetime,
+    hours: BusinessHours,
+) -> bool:
+    """Check if a datetime falls within business hours."""
+    day_name = dt.strftime("%A").lower()
+    open_attr = f"{day_name}_open"
+    close_attr = f"{day_name}_close"
+
+    open_time = parse_time(getattr(hours, open_attr, None))
+    close_time = parse_time(getattr(hours, close_attr, None))
+
+    if open_time is None or close_time is None:
+        return False  # Closed this day
+
+    dt_time = dt.time()
+    return open_time <= dt_time < close_time
+
+
+def get_business_hours_for_day(
+    dt: datetime,
+    hours: BusinessHours,
+) -> tuple[Optional[time], Optional[time]]:
+    """Get open/close times for a specific day."""
+    day_name = dt.strftime("%A").lower()
+    open_time = parse_time(getattr(hours, f"{day_name}_open", None))
+    close_time = parse_time(getattr(hours, f"{day_name}_close", None))
+    return open_time, close_time
 
 
 # === States ===
@@ -219,9 +266,17 @@ APPOINTMENT_TRANSITIONS: dict[tuple[AppointmentState, AppointmentEvent], Appoint
     (AppointmentState.ERROR, AppointmentEvent.RESET): AppointmentState.IDLE,
     (AppointmentState.ERROR, AppointmentEvent.HANGUP): AppointmentState.ENDED,
 
-    # Global hangup handling
+    # From RESCHEDULE - need to find existing appointment first
+    (AppointmentState.RESCHEDULE, AppointmentEvent.CONFIRMED): AppointmentState.COLLECT_DATE,
+    (AppointmentState.RESCHEDULE, AppointmentEvent.DECLINED): AppointmentState.GREETING,
     (AppointmentState.RESCHEDULE, AppointmentEvent.HANGUP): AppointmentState.ENDED,
+    (AppointmentState.RESCHEDULE, AppointmentEvent.ERROR_OCCURRED): AppointmentState.ERROR,
+
+    # From CANCEL_APPOINTMENT
+    (AppointmentState.CANCEL_APPOINTMENT, AppointmentEvent.CONFIRMED): AppointmentState.COMPLETE,
+    (AppointmentState.CANCEL_APPOINTMENT, AppointmentEvent.DECLINED): AppointmentState.GREETING,
     (AppointmentState.CANCEL_APPOINTMENT, AppointmentEvent.HANGUP): AppointmentState.ENDED,
+    (AppointmentState.CANCEL_APPOINTMENT, AppointmentEvent.ERROR_OCCURRED): AppointmentState.ERROR,
 }
 
 
@@ -267,6 +322,10 @@ class AppointmentContext:
 
     # Created appointment
     appointment: Optional[Appointment] = None
+
+    # For reschedule/cancel flows - existing appointment
+    existing_appointments: list[dict] = field(default_factory=list)
+    appointment_to_modify: Optional[dict] = None
 
     # Conversation tracking
     transcript: list[dict] = field(default_factory=list)
@@ -350,6 +409,9 @@ class AppointmentStateMachine:
         calendar_service: Optional[CalendarService] = None,
         email_service: Optional[EmailService] = None,
         sms_service: Optional[SMSService] = None,
+        telephony_provider: Optional["TelephonyProvider"] = None,
+        call: Optional["Call"] = None,
+        intent_parser: Optional[Callable] = None,  # LLM-based parser
     ):
         self.business_context = business_context
         self.scheduling_config = business_context.scheduling
@@ -358,6 +420,13 @@ class AppointmentStateMachine:
         self.calendar = calendar_service or StubCalendarService()
         self.email = email_service or StubEmailService()
         self.sms = sms_service or StubSMSService()
+
+        # Telephony for transfer operations
+        self._telephony_provider = telephony_provider
+        self._call = call
+
+        # Optional LLM-based intent parser
+        self._intent_parser = intent_parser
 
         # State
         self._state = AppointmentState.IDLE
@@ -386,6 +455,8 @@ class AppointmentStateMachine:
             AppointmentState.COMPLETE: self._handle_complete,
             AppointmentState.TRANSFER: self._handle_transfer,
             AppointmentState.TAKE_MESSAGE: self._handle_take_message,
+            AppointmentState.RESCHEDULE: self._handle_reschedule,
+            AppointmentState.CANCEL_APPOINTMENT: self._handle_cancel_appointment,
             AppointmentState.ERROR: self._handle_error,
         }
 
@@ -515,8 +586,23 @@ class AppointmentStateMachine:
 
         Returns (event, extracted_data).
 
-        This is a simplified parser - in production, use LLM for intent detection.
+        Uses LLM parser if available, otherwise falls back to keyword matching.
         """
+        # Try LLM-based parsing first if available
+        if self._intent_parser:
+            try:
+                result = await self._intent_parser(
+                    user_input,
+                    self._state,
+                    self._context,
+                    self.business_context,
+                )
+                if result:
+                    return result
+            except Exception as e:
+                logger.warning("LLM intent parser failed, using fallback: %s", e)
+
+        # Fallback to keyword-based parsing
         text = user_input.lower().strip()
         data = {}
 
@@ -736,13 +822,25 @@ class AppointmentStateMachine:
         )
 
     async def _handle_check_availability(self) -> str:
-        """Check calendar for available slots."""
+        """Check calendar for available slots with scheduling rule enforcement."""
         config = self.scheduling_config
-        preferred = self._context.preferred_date or datetime.now()
+        hours = self.business_context.hours
+        now = datetime.now(timezone.utc)
+
+        # Enforce minimum notice
+        min_start = now + timedelta(hours=config.min_notice_hours)
+        preferred = self._context.preferred_date or now
+
+        # If preferred date is before minimum notice, adjust
+        if preferred < min_start:
+            preferred = min_start
+
+        # Enforce maximum advance booking
+        max_end = now + timedelta(days=config.max_advance_days)
 
         # Search window
         start = preferred
-        end = preferred + timedelta(days=7)
+        end = min(preferred + timedelta(days=7), max_end)
 
         try:
             slots = await self.calendar.get_available_slots(
@@ -753,18 +851,48 @@ class AppointmentStateMachine:
                 calendar_id=config.calendar_id,
             )
 
+            # Filter slots by business hours
+            filtered_slots = []
+            for slot in slots:
+                if is_within_business_hours(slot.start, hours):
+                    # Also check end time is within hours
+                    if is_within_business_hours(
+                        slot.end - timedelta(minutes=1), hours
+                    ):
+                        filtered_slots.append(slot)
+
+            slots = filtered_slots
+
             # Filter by time of day preference
-            if self._context.preferred_time_of_day:
-                filtered = []
+            if self._context.preferred_time_of_day and slots:
+                preference_filtered = []
                 for slot in slots:
                     hour = slot.start.hour
                     if self._context.preferred_time_of_day == "morning" and 6 <= hour < 12:
-                        filtered.append(slot)
+                        preference_filtered.append(slot)
                     elif self._context.preferred_time_of_day == "afternoon" and 12 <= hour < 17:
-                        filtered.append(slot)
+                        preference_filtered.append(slot)
                     elif self._context.preferred_time_of_day == "evening" and 17 <= hour < 21:
-                        filtered.append(slot)
-                slots = filtered or slots  # Fall back to all if no matches
+                        preference_filtered.append(slot)
+                slots = preference_filtered or slots  # Fall back to all if no matches
+
+            # Double-check against database for conflicts
+            try:
+                from ..storage.repositories.appointment import get_appointment_repo
+                repo = get_appointment_repo()
+                final_slots = []
+                for slot in slots[:10]:  # Check up to 10 slots
+                    has_conflict = await repo.check_conflict(
+                        start=slot.start,
+                        end=slot.end,
+                        business_context_id=self._context.business_context_id,
+                    )
+                    if not has_conflict:
+                        final_slots.append(slot)
+                slots = final_slots
+            except Exception as e:
+                logger.warning("Could not check database conflicts: %s", e)
+                # Continue with calendar-only slots
 
             self._context.available_slots = slots
 
@@ -856,16 +984,60 @@ class AppointmentStateMachine:
         )
 
     async def _handle_create_booking(self) -> str:
-        """Create the calendar event."""
+        """Create the calendar event and persist to database."""
         try:
             appointment = self._context.build_appointment()
 
+            # Final conflict check before booking
+            try:
+                from ..storage.repositories.appointment import get_appointment_repo
+                repo = get_appointment_repo()
+                has_conflict = await repo.check_conflict(
+                    start=appointment.start,
+                    end=appointment.end,
+                    business_context_id=self._context.business_context_id,
+                )
+                if has_conflict:
+                    logger.warning("Slot became unavailable during booking flow")
+                    self._transition(AppointmentEvent.SLOT_UNAVAILABLE)
+                    return ""
+            except Exception as e:
+                logger.warning("Could not verify slot availability: %s", e)
+
+            # Create calendar event
             event_id = await self.calendar.create_event(
                 appointment=appointment,
                 calendar_id=self.scheduling_config.calendar_id,
             )
-
             appointment.calendar_event_id = event_id
+
+            # Persist to database
+            try:
+                from ..storage.repositories.appointment import get_appointment_repo
+                repo = get_appointment_repo()
+                db_appointment = await repo.create(
+                    start_time=appointment.start,
+                    end_time=appointment.end,
+                    service_type=appointment.service_type,
+                    customer_name=appointment.customer_name,
+                    customer_phone=appointment.customer_phone,
+                    customer_email=appointment.customer_email,
+                    customer_address=appointment.customer_address,
+                    calendar_event_id=event_id,
+                    business_context_id=self._context.business_context_id,
+                    call_id=self._context.call_id,
+                    notes=appointment.notes,
+                )
+                # Update appointment with database ID
+                appointment.id = db_appointment["id"]
+                logger.info(
+                    "Persisted appointment %s to database",
+                    appointment.id,
+                )
+            except Exception as e:
+                logger.error("Failed to persist appointment to database: %s", e)
+                # Continue anyway - calendar event was created
+
             self._context.appointment = appointment
 
             logger.info(
@@ -943,8 +1115,27 @@ class AppointmentStateMachine:
     async def _handle_transfer(self) -> str:
         """Handle transfer to human."""
         transfer_number = self.business_context.transfer_number
+
+        if transfer_number and self._telephony_provider and self._call:
+            # Actually perform the transfer
+            try:
+                success = await self._telephony_provider.transfer(
+                    self._call,
+                    transfer_number,
+                )
+                if success:
+                    self._transition(AppointmentEvent.CONFIRMED)
+                    return "Please hold while I transfer you to someone who can help."
+                else:
+                    self._transition(AppointmentEvent.ERROR_OCCURRED)
+            except Exception as e:
+                logger.error("Transfer failed: %s", e)
+                self._transition(AppointmentEvent.ERROR_OCCURRED)
+
         if transfer_number:
-            return f"Please hold while I transfer you to someone who can help."
+            # No telephony provider, but transfer number exists
+            return "Please hold while I transfer you to someone who can help."
+
         return (
             "I apologize, but there's no one available to take your call right now. "
             "Would you like to leave a message instead?"
@@ -953,11 +1144,168 @@ class AppointmentStateMachine:
     async def _handle_take_message(self) -> str:
         """Handle taking a message."""
         if self._context.message_text:
+            # Persist the message to database
+            try:
+                from ..storage.repositories.appointment import get_appointment_repo
+                repo = get_appointment_repo()
+                await repo.create_message(
+                    caller_phone=self._context.caller_phone,
+                    caller_name=self._context.caller_name,
+                    message_text=self._context.message_text,
+                    business_context_id=self._context.business_context_id,
+                    call_id=self._context.call_id,
+                )
+                logger.info("Saved message from %s", self._context.caller_phone)
+            except Exception as e:
+                logger.error("Failed to save message: %s", e)
+
             return (
-                f"Thank you. I've noted your message and someone will get back to you soon. "
-                f"Is there anything else I can help you with?"
+                "Thank you. I've noted your message and someone will get back to you soon. "
+                "Is there anything else I can help you with?"
             )
         return "Of course, what message would you like to leave?"
+
+    async def _handle_reschedule(self) -> str:
+        """Handle rescheduling an existing appointment."""
+        # First time entering - look up existing appointments
+        if not self._context.existing_appointments:
+            try:
+                from ..storage.repositories.appointment import get_appointment_repo
+                repo = get_appointment_repo()
+                appointments = await repo.get_by_phone(
+                    phone=self._context.caller_phone,
+                    status="confirmed",
+                    upcoming_only=True,
+                )
+                self._context.existing_appointments = appointments
+            except Exception as e:
+                logger.error("Failed to lookup appointments: %s", e)
+                self._transition(AppointmentEvent.ERROR_OCCURRED)
+                return ""
+
+        if not self._context.existing_appointments:
+            return (
+                "I don't see any upcoming appointments for this phone number. "
+                "Would you like to schedule a new appointment instead?"
+            )
+
+        if len(self._context.existing_appointments) == 1:
+            appt = self._context.existing_appointments[0]
+            self._context.appointment_to_modify = appt
+            # Pre-fill context with existing appointment data
+            self._context.service_type = appt.get("service_type")
+            self._context.customer_name = appt.get("customer_name", "")
+            self._context.customer_email = appt.get("customer_email", "")
+            self._context.customer_address = appt.get("customer_address", "")
+
+            start_time = appt.get("start_time")
+            if isinstance(start_time, datetime):
+                formatted = start_time.strftime("%A, %B %d at %I:%M %p")
+            else:
+                formatted = str(start_time)
+
+            return (
+                f"I found your appointment for {appt.get('service_type')} "
+                f"on {formatted}. "
+                "When would you like to reschedule it to?"
+            )
+
+        # Multiple appointments - list them
+        response = "I found multiple upcoming appointments:\n"
+        for i, appt in enumerate(self._context.existing_appointments[:5], 1):
+            start_time = appt.get("start_time")
+            if isinstance(start_time, datetime):
+                formatted = start_time.strftime("%m/%d at %I:%M %p")
+            else:
+                formatted = str(start_time)
+            response += f"{i}. {appt.get('service_type')} on {formatted}\n"
+
+        response += "\nWhich appointment would you like to reschedule?"
+        return response
+
+    async def _handle_cancel_appointment(self) -> str:
+        """Handle cancelling an existing appointment."""
+        # First time entering - look up existing appointments
+        if not self._context.existing_appointments:
+            try:
+                from ..storage.repositories.appointment import get_appointment_repo
+                repo = get_appointment_repo()
+                appointments = await repo.get_by_phone(
+                    phone=self._context.caller_phone,
+                    status="confirmed",
+                    upcoming_only=True,
+                )
+                self._context.existing_appointments = appointments
+            except Exception as e:
+                logger.error("Failed to lookup appointments: %s", e)
+                self._transition(AppointmentEvent.ERROR_OCCURRED)
+                return ""
+
+        if not self._context.existing_appointments:
+            return (
+                "I don't see any upcoming appointments for this phone number. "
+                "Is there anything else I can help you with?"
+            )
+
+        # If we have an appointment to cancel (selected or only one)
+        if self._context.appointment_to_modify:
+            appt = self._context.appointment_to_modify
+            try:
+                from ..storage.repositories.appointment import get_appointment_repo
+                repo = get_appointment_repo()
+                await repo.cancel(
+                    appointment_id=appt["id"],
+                    reason="Customer requested cancellation",
+                )
+
+                # Also delete from calendar if we have the event ID
+                if appt.get("calendar_event_id"):
+                    try:
+                        await self.calendar.delete_event(
+                            event_id=appt["calendar_event_id"],
+                            calendar_id=self.scheduling_config.calendar_id,
+                        )
+                    except Exception as e:
+                        logger.warning("Failed to delete calendar event: %s", e)
+
+                self._transition(AppointmentEvent.CONFIRMED)
+                return (
+                    f"Your appointment for {appt.get('service_type')} has been cancelled. "
+                    "Is there anything else I can help you with?"
+                )
+            except Exception as e:
+                logger.error("Failed to cancel appointment: %s", e)
+                self._transition(AppointmentEvent.ERROR_OCCURRED)
+                return ""
+
+        if len(self._context.existing_appointments) == 1:
+            self._context.appointment_to_modify = self._context.existing_appointments[0]
+            appt = self._context.appointment_to_modify
+
+            start_time = appt.get("start_time")
+            if isinstance(start_time, datetime):
+                formatted = start_time.strftime("%A, %B %d at %I:%M %p")
+            else:
+                formatted = str(start_time)
+
+            return (
+                f"I found your appointment for {appt.get('service_type')} "
+                f"on {formatted}. "
+                "Are you sure you want to cancel this appointment?"
+            )
+
+        # Multiple appointments
+        response = "I found multiple upcoming appointments:\n"
+        for i, appt in enumerate(self._context.existing_appointments[:5], 1):
+            start_time = appt.get("start_time")
+            if isinstance(start_time, datetime):
+                formatted = start_time.strftime("%m/%d at %I:%M %p")
+            else:
+                formatted = str(start_time)
+            response += f"{i}. {appt.get('service_type')} on {formatted}\n"
+
+        response += "\nWhich appointment would you like to cancel?"
+        return response
 
     async def _handle_error(self) -> str:
         """Handle error state."""
@@ -975,15 +1323,32 @@ def create_appointment_machine(
     calendar_service: Optional[CalendarService] = None,
     email_service: Optional[EmailService] = None,
     sms_service: Optional[SMSService] = None,
+    telephony_provider: Optional["TelephonyProvider"] = None,
+    call: Optional["Call"] = None,
+    intent_parser: Optional[Callable] = None,
 ) -> AppointmentStateMachine:
     """
     Factory function to create an appointment state machine.
 
-    If services are not provided, stub implementations are used.
+    Args:
+        business_context: Business configuration (hours, services, etc.)
+        calendar_service: Calendar integration (or stub if None)
+        email_service: Email integration (or stub if None)
+        sms_service: SMS integration (or stub if None)
+        telephony_provider: For call transfer operations
+        call: The current call object (for transfers)
+        intent_parser: Optional LLM-based intent parser callback.
+            Signature: async (user_input, state, context, business_context) -> (event, data)
+
+    Returns:
+        Configured AppointmentStateMachine instance
     """
     return AppointmentStateMachine(
         business_context=business_context,
         calendar_service=calendar_service,
         email_service=email_service,
         sms_service=sms_service,
+        telephony_provider=telephony_provider,
+        call=call,
+        intent_parser=intent_parser,
     )

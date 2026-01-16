@@ -5,6 +5,7 @@ Repositories provide a clean interface for data access,
 hiding the SQL implementation details.
 """
 
+from .appointment import AppointmentRepository, get_appointment_repo
 from .conversation import ConversationRepository
 from .device import DeviceRepository, get_device_repo
 from .feedback import FeedbackRepository, get_feedback_repo
@@ -16,6 +17,7 @@ from .vector import VectorRepository, get_vector_repository
 from .vision import VisionEventRepository, get_vision_event_repo
 
 __all__ = [
+    "AppointmentRepository",
     "ConversationRepository",
     "DeviceRepository",
     "FeedbackRepository",
@@ -25,6 +27,7 @@ __all__ = [
     "UnifiedAlertRepository",
     "VectorRepository",
     "VisionEventRepository",
+    "get_appointment_repo",
     "get_device_repo",
     "get_feedback_repo",
     "get_profile_repo",
