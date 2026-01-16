@@ -54,8 +54,21 @@ def is_within_business_hours(
     dt: datetime,
     hours: BusinessHours,
 ) -> bool:
-    """Check if a datetime falls within business hours."""
-    day_name = dt.strftime("%A").lower()
+    """Check if a datetime falls within business hours.
+
+    Converts the datetime to business timezone before comparing
+    to ensure correct evaluation regardless of input timezone.
+    """
+    from zoneinfo import ZoneInfo
+
+    # Convert to business timezone for accurate time comparison
+    if dt.tzinfo is not None:
+        business_tz = ZoneInfo(hours.timezone)
+        dt_local = dt.astimezone(business_tz)
+    else:
+        dt_local = dt
+
+    day_name = dt_local.strftime("%A").lower()
     open_attr = f"{day_name}_open"
     close_attr = f"{day_name}_close"
 
@@ -65,7 +78,7 @@ def is_within_business_hours(
     if open_time is None or close_time is None:
         return False  # Closed this day
 
-    dt_time = dt.time()
+    dt_time = dt_local.time()
     return open_time <= dt_time < close_time
 
 
@@ -164,6 +177,8 @@ class AppointmentEvent(Enum):
     RESET = auto()  # Reset to start
     ERROR_OCCURRED = auto()  # Error happened
     HANGUP = auto()  # User hung up
+    INVALID_INPUT = auto()  # Could not understand user input
+    TOO_MANY_RETRIES = auto()  # Max retry attempts exceeded
 
 
 # === Transition Table ===
@@ -277,6 +292,20 @@ APPOINTMENT_TRANSITIONS: dict[tuple[AppointmentState, AppointmentEvent], Appoint
     (AppointmentState.CANCEL_APPOINTMENT, AppointmentEvent.DECLINED): AppointmentState.GREETING,
     (AppointmentState.CANCEL_APPOINTMENT, AppointmentEvent.HANGUP): AppointmentState.ENDED,
     (AppointmentState.CANCEL_APPOINTMENT, AppointmentEvent.ERROR_OCCURRED): AppointmentState.ERROR,
+
+    # Too many retries escalation - from any collection state, go to transfer
+    (AppointmentState.GREETING, AppointmentEvent.TOO_MANY_RETRIES): AppointmentState.TRANSFER,
+    (AppointmentState.COLLECT_SERVICE, AppointmentEvent.TOO_MANY_RETRIES): AppointmentState.TRANSFER,
+    (AppointmentState.COLLECT_DATE, AppointmentEvent.TOO_MANY_RETRIES): AppointmentState.TRANSFER,
+    (AppointmentState.OFFER_SLOTS, AppointmentEvent.TOO_MANY_RETRIES): AppointmentState.TRANSFER,
+    (AppointmentState.CONFIRM_SLOT, AppointmentEvent.TOO_MANY_RETRIES): AppointmentState.TRANSFER,
+    (AppointmentState.COLLECT_NAME, AppointmentEvent.TOO_MANY_RETRIES): AppointmentState.TRANSFER,
+    (AppointmentState.COLLECT_PHONE, AppointmentEvent.TOO_MANY_RETRIES): AppointmentState.TRANSFER,
+    (AppointmentState.COLLECT_EMAIL, AppointmentEvent.TOO_MANY_RETRIES): AppointmentState.TRANSFER,
+    (AppointmentState.COLLECT_ADDRESS, AppointmentEvent.TOO_MANY_RETRIES): AppointmentState.TRANSFER,
+    (AppointmentState.CONFIRM_DETAILS, AppointmentEvent.TOO_MANY_RETRIES): AppointmentState.TRANSFER,
+    (AppointmentState.RESCHEDULE, AppointmentEvent.TOO_MANY_RETRIES): AppointmentState.TRANSFER,
+    (AppointmentState.CANCEL_APPOINTMENT, AppointmentEvent.TOO_MANY_RETRIES): AppointmentState.TRANSFER,
 }
 
 
@@ -439,6 +468,7 @@ class AppointmentStateMachine:
 
         # State handlers - each state has a handler that generates the response
         self._state_handlers: dict[AppointmentState, StateHandler] = {
+            AppointmentState.IDLE: self._handle_idle,
             AppointmentState.GREETING: self._handle_greeting,
             AppointmentState.COLLECT_SERVICE: self._handle_collect_service,
             AppointmentState.COLLECT_DATE: self._handle_collect_date,
@@ -503,6 +533,7 @@ class AppointmentStateMachine:
         Process user input and return response.
 
         This is the main method called for each turn of conversation.
+        Includes retry logic - after max_retries invalid inputs, escalates to transfer.
         """
         self._context.add_turn("user", user_input)
 
@@ -511,6 +542,32 @@ class AppointmentStateMachine:
 
         # Apply extracted data to context
         self._apply_data(data)
+
+        # Handle retry logic for invalid/unrecognized input
+        if event is None:
+            self._context.retry_count += 1
+            logger.debug(
+                "No event parsed, retry count: %d/%d",
+                self._context.retry_count,
+                self._context.max_retries,
+            )
+
+            if self._context.retry_count >= self._context.max_retries:
+                # Too many failed attempts - escalate to transfer
+                logger.info(
+                    "Max retries reached in state %s, escalating to transfer",
+                    self._state.name,
+                )
+                event = AppointmentEvent.TOO_MANY_RETRIES
+                self._context.retry_count = 0
+            else:
+                # Return a retry prompt without transitioning
+                response = self._get_retry_prompt()
+                self._context.add_turn("assistant", response)
+                return response
+        else:
+            # Valid input - reset retry counter
+            self._context.retry_count = 0
 
         # Perform transition
         if event:
@@ -527,6 +584,27 @@ class AppointmentStateMachine:
 
         self._context.add_turn("assistant", response)
         return response
+
+    def _get_retry_prompt(self) -> str:
+        """Get a context-appropriate retry prompt based on current state."""
+        state_prompts = {
+            AppointmentState.GREETING: "I'm sorry, I didn't quite catch that. Would you like to schedule an appointment, reschedule, or speak with someone?",
+            AppointmentState.COLLECT_SERVICE: "I'm sorry, I didn't understand. What type of service are you looking for?",
+            AppointmentState.COLLECT_DATE: "I'm sorry, I didn't catch that. When would you like to schedule? You can say things like 'tomorrow' or 'next Monday'.",
+            AppointmentState.OFFER_SLOTS: "I'm sorry, I didn't understand your selection. Could you tell me which time slot number you'd prefer?",
+            AppointmentState.CONFIRM_SLOT: "I'm sorry, I didn't catch that. Does this time work for you? Please say yes or no.",
+            AppointmentState.COLLECT_NAME: "I'm sorry, I didn't catch your name. Could you please tell me your name?",
+            AppointmentState.COLLECT_PHONE: "I'm sorry, I couldn't get that. Could you please provide your phone number?",
+            AppointmentState.COLLECT_EMAIL: "I'm sorry, I didn't catch that. What's your email address? Or say 'skip' if you don't want to provide one.",
+            AppointmentState.COLLECT_ADDRESS: "I'm sorry, I didn't understand. What's the service address? Or say 'skip' to continue.",
+            AppointmentState.CONFIRM_DETAILS: "I'm sorry, I didn't catch that. Does everything look correct? Please say yes to confirm or no to make changes.",
+            AppointmentState.RESCHEDULE: "I'm sorry, I didn't understand. Which appointment would you like to reschedule? Please say the number.",
+            AppointmentState.CANCEL_APPOINTMENT: "I'm sorry, I didn't catch that. Which appointment would you like to cancel? Please say the number.",
+        }
+        return state_prompts.get(
+            self._state,
+            "I'm sorry, I didn't understand. Could you please repeat that?"
+        )
 
     def _transition(self, event: AppointmentEvent) -> bool:
         """Attempt a state transition."""
@@ -637,14 +715,18 @@ class AppointmentStateMachine:
         elif self._state == AppointmentState.COLLECT_DATE:
             # Simple date parsing - in production use dateparser
             from datetime import date
+            from zoneinfo import ZoneInfo
+
+            # Use business timezone for date calculations
+            tz = ZoneInfo(self.business_context.hours.timezone)
             today = date.today()
 
             if "today" in text:
-                data["preferred_date"] = datetime.combine(today, datetime.min.time())
+                data["preferred_date"] = datetime.combine(today, datetime.min.time(), tzinfo=tz)
             elif "tomorrow" in text:
-                data["preferred_date"] = datetime.combine(today + timedelta(days=1), datetime.min.time())
+                data["preferred_date"] = datetime.combine(today + timedelta(days=1), datetime.min.time(), tzinfo=tz)
             elif "next week" in text:
-                data["preferred_date"] = datetime.combine(today + timedelta(days=7), datetime.min.time())
+                data["preferred_date"] = datetime.combine(today + timedelta(days=7), datetime.min.time(), tzinfo=tz)
             elif any(w in text for w in ["monday", "tuesday", "wednesday", "thursday", "friday"]):
                 # Find next occurrence of day
                 days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
@@ -653,11 +735,11 @@ class AppointmentStateMachine:
                         days_ahead = i - today.weekday()
                         if days_ahead <= 0:
                             days_ahead += 7
-                        data["preferred_date"] = datetime.combine(today + timedelta(days=days_ahead), datetime.min.time())
+                        data["preferred_date"] = datetime.combine(today + timedelta(days=days_ahead), datetime.min.time(), tzinfo=tz)
                         break
             else:
                 # Default to this week
-                data["preferred_date"] = datetime.combine(today, datetime.min.time())
+                data["preferred_date"] = datetime.combine(today, datetime.min.time(), tzinfo=tz)
 
             # Time of day preference
             if any(w in text for w in ["morning", "am"]):
@@ -761,6 +843,50 @@ class AppointmentStateMachine:
                 data["message_text"] = user_input.strip()
                 return AppointmentEvent.CONFIRMED, data
 
+        # Reschedule - selecting from multiple appointments or confirming
+        elif self._state == AppointmentState.RESCHEDULE:
+            appointments = self._context.existing_appointments
+            # If single appointment was found, user confirms to proceed
+            if self._context.appointment_to_modify:
+                # Any response with date info means they want to proceed
+                return AppointmentEvent.CONFIRMED, data
+            # Multiple appointments - select by number
+            if appointments and len(appointments) > 1:
+                for i, appt in enumerate(appointments[:5], 1):
+                    if str(i) in text or f"option {i}" in text or f"number {i}" in text:
+                        data["appointment_to_modify"] = appt
+                        return AppointmentEvent.CONFIRMED, data
+                ordinals = ["first", "second", "third", "fourth", "fifth"]
+                for i, ordinal in enumerate(ordinals):
+                    if ordinal in text and i < len(appointments):
+                        data["appointment_to_modify"] = appointments[i]
+                        return AppointmentEvent.CONFIRMED, data
+            if any(w in text for w in ["no", "nevermind", "cancel"]):
+                return AppointmentEvent.DECLINED, data
+
+        # Cancel appointment - selecting from multiple or confirming cancellation
+        elif self._state == AppointmentState.CANCEL_APPOINTMENT:
+            appointments = self._context.existing_appointments
+            # If we have appointment_to_modify, user is confirming cancellation
+            if self._context.appointment_to_modify:
+                if any(w in text for w in ["yes", "yeah", "correct", "sure", "confirm"]):
+                    return AppointmentEvent.CONFIRMED, data
+                elif any(w in text for w in ["no", "nevermind", "keep"]):
+                    return AppointmentEvent.DECLINED, data
+            # Multiple appointments - select by number
+            elif appointments and len(appointments) > 1:
+                for i, appt in enumerate(appointments[:5], 1):
+                    if str(i) in text or f"option {i}" in text or f"number {i}" in text:
+                        data["appointment_to_modify"] = appt
+                        return AppointmentEvent.CONFIRMED, data
+                ordinals = ["first", "second", "third", "fourth", "fifth"]
+                for i, ordinal in enumerate(ordinals):
+                    if ordinal in text and i < len(appointments):
+                        data["appointment_to_modify"] = appointments[i]
+                        return AppointmentEvent.CONFIRMED, data
+            if any(w in text for w in ["no", "nevermind"]):
+                return AppointmentEvent.DECLINED, data
+
         # Global: check for hangup/cancel
         if any(w in text for w in ["bye", "goodbye", "hang up", "end call"]):
             return AppointmentEvent.HANGUP, data
@@ -790,8 +916,22 @@ class AppointmentStateMachine:
             self._context.customer_address = data["customer_address"]
         if "message_text" in data:
             self._context.message_text = data["message_text"]
+        if "appointment_to_modify" in data:
+            self._context.appointment_to_modify = data["appointment_to_modify"]
+            # Pre-fill context with existing appointment data for reschedule
+            appt = data["appointment_to_modify"]
+            self._context.service_type = appt.get("service_type")
+            self._context.customer_name = appt.get("customer_name", "")
+            self._context.customer_email = appt.get("customer_email", "")
+            self._context.customer_address = appt.get("customer_address", "")
 
     # === State Handlers ===
+
+    async def _handle_idle(self) -> str:
+        """Handle idle state - waiting for conversation to start."""
+        # IDLE state typically doesn't produce output - it waits for start_session()
+        # This handler is here for completeness; transitions happen via events
+        return ""
 
     async def _handle_greeting(self) -> str:
         """Generate greeting response."""
@@ -823,17 +963,22 @@ class AppointmentStateMachine:
 
     async def _handle_check_availability(self) -> str:
         """Check calendar for available slots with scheduling rule enforcement."""
+        from zoneinfo import ZoneInfo
+
         config = self.scheduling_config
         hours = self.business_context.hours
+        business_tz = ZoneInfo(hours.timezone)
         now = datetime.now(timezone.utc)
+        now_local = now.astimezone(business_tz)
 
         # Enforce minimum notice
         min_start = now + timedelta(hours=config.min_notice_hours)
-        preferred = self._context.preferred_date or now
+        # Use business timezone for fallback to ensure consistent slot generation
+        preferred = self._context.preferred_date or now_local
 
         # If preferred date is before minimum notice, adjust
         if preferred < min_start:
-            preferred = min_start
+            preferred = min_start.astimezone(business_tz)
 
         # Enforce maximum advance booking
         max_end = now + timedelta(days=config.max_advance_days)
@@ -1046,6 +1191,34 @@ class AppointmentStateMachine:
                 appointment.customer_name,
                 appointment.start,
             )
+
+            # If this is a reschedule, cancel the old appointment
+            if self._context.appointment_to_modify:
+                old_appt = self._context.appointment_to_modify
+                try:
+                    from ..storage.repositories.appointment import get_appointment_repo
+                    repo = get_appointment_repo()
+                    await repo.cancel(
+                        appointment_id=old_appt["id"],
+                        reason="Rescheduled to new time",
+                    )
+                    logger.info(
+                        "Cancelled old appointment %s (rescheduled)",
+                        old_appt["id"],
+                    )
+
+                    # Also delete from calendar
+                    if old_appt.get("calendar_event_id"):
+                        try:
+                            await self.calendar.delete_event(
+                                event_id=old_appt["calendar_event_id"],
+                                calendar_id=self.scheduling_config.calendar_id,
+                            )
+                        except Exception as e:
+                            logger.warning("Failed to delete old calendar event: %s", e)
+                except Exception as e:
+                    logger.error("Failed to cancel old appointment: %s", e)
+                    # Continue anyway - new appointment was created
 
             self._transition(AppointmentEvent.BOOKING_SUCCESS)
 
