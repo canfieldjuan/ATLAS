@@ -295,6 +295,43 @@ async def lifespan(app: FastAPI):
             logger.error("Failed to initialize vision subscriber: %s", e)
             vision_subscriber = None
 
+    # Initialize presence service for room-aware device control
+    presence_service = None
+    espresense_subscriber = None
+    if settings.presence_enabled:
+        try:
+            from .presence import (
+                get_presence_service,
+                start_espresense_subscriber,
+                start_camera_presence_consumer,
+                presence_config,
+            )
+
+            # Start core presence service
+            presence_service = get_presence_service()
+            await presence_service.start()
+            logger.info("Presence service started")
+
+            # Start ESPresense subscriber if enabled
+            if presence_config.espresense_enabled and settings.mqtt.enabled:
+                espresense_subscriber = await start_espresense_subscriber(
+                    mqtt_host=settings.mqtt.host,
+                    mqtt_port=settings.mqtt.port,
+                    mqtt_username=settings.mqtt.username,
+                    mqtt_password=settings.mqtt.password,
+                )
+                if espresense_subscriber:
+                    logger.info("ESPresense BLE tracking enabled")
+
+            # Start camera presence consumer if vision is running
+            if presence_config.camera_enabled and vision_subscriber:
+                camera_consumer = await start_camera_presence_consumer()
+                if camera_consumer:
+                    logger.info("Camera presence detection enabled")
+
+        except Exception as e:
+            logger.error("Failed to initialize presence service: %s", e)
+
     # Start voice client if enabled
     global _voice_client_task
     if settings.voice.enabled:
@@ -330,6 +367,16 @@ async def lifespan(app: FastAPI):
 
     # --- Shutdown ---
     logger.info("Atlas Brain shutting down...")
+
+    # Stop presence service
+    if presence_service:
+        try:
+            from .presence import stop_espresense_subscriber
+            await stop_espresense_subscriber()
+            await presence_service.stop()
+            logger.info("Presence service stopped")
+        except Exception as e:
+            logger.error("Error stopping presence service: %s", e)
 
     # Stop vision subscriber
     if vision_subscriber and vision_subscriber.is_running:

@@ -434,6 +434,16 @@ class Settings(BaseSettings):
     alerts: AlertsConfig = Field(default_factory=AlertsConfig)
     reminder: ReminderConfig = Field(default_factory=ReminderConfig)
 
+    # Presence tracking - imported from presence module
+    @property
+    def presence_enabled(self) -> bool:
+        """Check if presence tracking is enabled."""
+        try:
+            from .presence.config import presence_config
+            return presence_config.enabled
+        except ImportError:
+            return False
+
 
 # Singleton settings instance
 settings = Settings()
