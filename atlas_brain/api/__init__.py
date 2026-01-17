@@ -6,6 +6,7 @@ from fastapi import APIRouter
 
 from .alerts import router as alerts_router
 from .audio_events import router as audio_events_router
+from .comms import router as comms_router
 from .devices import router as devices_router
 from .health import router as health_router
 from .llm import router as llm_router
@@ -16,6 +17,8 @@ from .speaker_id import router as speaker_id_router
 from .tts import router as tts_router
 from .session import router as session_router
 from .vision import router as vision_router
+from .video import router as video_router
+from .recognition import router as recognition_router
 
 # Main router that aggregates all sub-routers
 router = APIRouter()
@@ -27,8 +30,11 @@ router.include_router(devices_router)
 router.include_router(orchestration_router)
 router.include_router(alerts_router)
 router.include_router(audio_events_router)
+router.include_router(comms_router)
 router.include_router(speaker_id_router)
 router.include_router(tts_router)
 router.include_router(llm_router)
 router.include_router(session_router)
 router.include_router(vision_router)
+router.include_router(video_router)
+router.include_router(recognition_router)

@@ -152,6 +152,58 @@ class SpeakerIDConfig(BaseSettings):
     )
 
 
+class RecognitionConfig(BaseSettings):
+    """Face and gait recognition configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_RECOGNITION_",
+        env_file=".env",
+        extra="ignore",
+    )
+
+    enabled: bool = Field(default=True, description="Enable recognition services")
+    face_threshold: float = Field(
+        default=0.6,
+        description="Face match similarity threshold (0.0-1.0)"
+    )
+    gait_threshold: float = Field(
+        default=0.5,
+        description="Gait match similarity threshold (0.0-1.0)"
+    )
+    use_averaged: bool = Field(
+        default=True,
+        description="Use averaged centroid embeddings for matching"
+    )
+    auto_enroll_unknown: bool = Field(
+        default=True,
+        description="Auto-create profiles for unknown faces"
+    )
+    insightface_model: str = Field(
+        default="buffalo_l",
+        description="InsightFace model name"
+    )
+    gait_sequence_length: int = Field(
+        default=60,
+        description="Number of frames for gait analysis"
+    )
+    mediapipe_detection_confidence: float = Field(
+        default=0.5,
+        description="MediaPipe pose detection confidence"
+    )
+    mediapipe_tracking_confidence: float = Field(
+        default=0.5,
+        description="MediaPipe pose tracking confidence"
+    )
+    cache_ttl: float = Field(
+        default=5.0,
+        description="Recognition result cache TTL in seconds"
+    )
+    recognition_interval: float = Field(
+        default=0.5,
+        description="Interval between recognition attempts in seconds"
+    )
+
+
 class VOSConfig(BaseSettings):
     """VOS (Video Object Segmentation) configuration."""
 
@@ -331,6 +383,32 @@ class AlertsConfig(BaseSettings):
     ntfy_topic: str = Field(default="atlas-alerts", description="ntfy topic for alerts")
 
 
+class EmailConfig(BaseSettings):
+    """Email tool configuration (Resend API)."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_EMAIL_", env_file=".env", extra="ignore")
+
+    enabled: bool = Field(default=False, description="Enable email tool")
+    api_key: str | None = Field(default=None, description="Resend API key")
+    default_from: str | None = Field(default=None, description="Default sender email address")
+    timeout: int = Field(default=10, description="API timeout in seconds")
+    max_recipients: int = Field(default=50, description="Maximum recipients per email")
+
+    # Attachment settings
+    proposals_dirs: list[str] = Field(
+        default=[],
+        description="Directories containing proposal PDFs for auto-attach (searched in order)"
+    )
+    attachment_whitelist_dirs: list[str] = Field(
+        default=[],
+        description="Directories allowed for email attachments"
+    )
+    max_attachment_size_mb: int = Field(
+        default=10,
+        description="Maximum attachment size in MB"
+    )
+
+
 class ReminderConfig(BaseSettings):
     """Reminder system configuration."""
 
@@ -383,6 +461,39 @@ class VoiceClientConfig(BaseSettings):
     sample_rate: int = Field(default=16000, description="Audio sample rate")
 
 
+class WebcamConfig(BaseSettings):
+    """Webcam person detection configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_WEBCAM_")
+
+    enabled: bool = Field(default=False, description="Enable webcam person detection")
+    device_index: int = Field(default=0, description="Video device index (0 = /dev/video0)")
+    source_id: str = Field(default="webcam_office", description="Camera source ID for room mapping")
+    fps: int = Field(default=30, description="Detection frames per second")
+
+
+class RTSPCameraConfig(BaseSettings):
+    """Single RTSP camera configuration."""
+
+    camera_id: str = Field(description="Unique camera identifier")
+    rtsp_url: str = Field(description="RTSP stream URL")
+    source_id: str = Field(description="Camera source ID for room mapping")
+    fps: int = Field(default=10, description="Detection frames per second")
+
+
+class RTSPConfig(BaseSettings):
+    """RTSP camera detection configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_RTSP_")
+
+    enabled: bool = Field(default=False, description="Enable RTSP camera detection")
+    wyze_bridge_host: str = Field(default="localhost", description="Wyze bridge host")
+    wyze_bridge_port: int = Field(default=8554, description="Wyze bridge RTSP port")
+    fps: int = Field(default=10, description="Default detection FPS for RTSP cameras")
+    # Camera list loaded from JSON config or added programmatically
+    cameras_json: str = Field(default="", description="JSON list of camera configs")
+
+
 class Settings(BaseSettings):
     """Application-wide settings."""
 
@@ -421,6 +532,7 @@ class Settings(BaseSettings):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     tts: TTSConfig = Field(default_factory=TTSConfig)
     speaker_id: SpeakerIDConfig = Field(default_factory=SpeakerIDConfig)
+    recognition: RecognitionConfig = Field(default_factory=RecognitionConfig)
     vos: VOSConfig = Field(default_factory=VOSConfig)
     orchestration: OrchestrationConfig = Field(default_factory=OrchestrationConfig)
     mqtt: MQTTConfig = Field(default_factory=MQTTConfig)
@@ -429,10 +541,13 @@ class Settings(BaseSettings):
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     voice: VoiceClientConfig = Field(default_factory=VoiceClientConfig)
+    webcam: WebcamConfig = Field(default_factory=WebcamConfig)
+    rtsp: RTSPConfig = Field(default_factory=RTSPConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     intent: IntentConfig = Field(default_factory=IntentConfig)
     alerts: AlertsConfig = Field(default_factory=AlertsConfig)
     reminder: ReminderConfig = Field(default_factory=ReminderConfig)
+    email: EmailConfig = Field(default_factory=EmailConfig)
 
     # Presence tracking - imported from presence module
     @property
