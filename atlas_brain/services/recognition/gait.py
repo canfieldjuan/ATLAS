@@ -1,9 +1,11 @@
 """
 Gait recognition service using MediaPipe Pose.
+
+Supports multi-person concurrent tracking with per-track pose buffers.
 """
 
 import logging
-import math
+import time
 from collections import deque
 from typing import Optional
 from uuid import UUID
@@ -31,7 +33,10 @@ POSE_LANDMARKS = {
 
 
 class GaitRecognitionService:
-    """Gait analysis and embedding extraction using MediaPipe."""
+    """Gait analysis and embedding extraction using MediaPipe.
+
+    Supports multi-person tracking with per-track pose buffers.
+    """
 
     def __init__(self, sequence_length: Optional[int] = None):
         from ...config import settings
@@ -40,6 +45,13 @@ class GaitRecognitionService:
         self._initialized = False
         self._config = settings.recognition
         self.sequence_length = sequence_length or self._config.gait_sequence_length
+
+        # Per-track pose buffers: track_key -> deque of poses
+        self._track_buffers: dict[str, deque] = {}
+        # Track last activity timestamps: track_key -> timestamp
+        self._track_last_seen: dict[str, float] = {}
+
+        # Legacy single buffer for backward compatibility
         self._pose_buffer: deque = deque(maxlen=self.sequence_length)
 
     def _ensure_initialized(self) -> bool:
@@ -121,6 +133,74 @@ class GaitRecognitionService:
 
         return landmarks
 
+    def extract_pose_bbox(
+        self,
+        pose: dict,
+        frame_width: int,
+        frame_height: int,
+        padding: float = 0.1,
+    ) -> list[int]:
+        """
+        Extract bounding box from pose landmarks.
+
+        Args:
+            pose: Dict of pose landmarks with normalized x,y coordinates
+            frame_width: Frame width in pixels
+            frame_height: Frame height in pixels
+            padding: Padding ratio to add around pose (0.1 = 10%)
+
+        Returns:
+            [x1, y1, x2, y2] in pixel coordinates
+        """
+        xs = [lm["x"] for lm in pose.values()]
+        ys = [lm["y"] for lm in pose.values()]
+
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+
+        # Add padding
+        width = max_x - min_x
+        height = max_y - min_y
+        min_x = max(0.0, min_x - width * padding)
+        max_x = min(1.0, max_x + width * padding)
+        min_y = max(0.0, min_y - height * padding)
+        max_y = min(1.0, max_y + height * padding)
+
+        # Convert to pixel coordinates
+        x1 = int(min_x * frame_width)
+        y1 = int(min_y * frame_height)
+        x2 = int(max_x * frame_width)
+        y2 = int(max_y * frame_height)
+
+        return [x1, y1, x2, y2]
+
+    @staticmethod
+    def compute_iou(bbox1: list[int], bbox2: list[int]) -> float:
+        """
+        Compute Intersection over Union between two bounding boxes.
+
+        Args:
+            bbox1: [x1, y1, x2, y2]
+            bbox2: [x1, y1, x2, y2]
+
+        Returns:
+            IoU value between 0.0 and 1.0
+        """
+        x1 = max(bbox1[0], bbox2[0])
+        y1 = max(bbox1[1], bbox2[1])
+        x2 = min(bbox1[2], bbox2[2])
+        y2 = min(bbox1[3], bbox2[3])
+
+        intersection = max(0, x2 - x1) * max(0, y2 - y1)
+
+        area1 = (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1])
+        area2 = (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1])
+        union = area1 + area2 - intersection
+
+        if union <= 0:
+            return 0.0
+        return intersection / union
+
     def add_pose_to_buffer(self, pose: dict) -> int:
         """Add pose to sequence buffer. Returns buffer length."""
         self._pose_buffer.append(pose)
@@ -133,6 +213,79 @@ class GaitRecognitionService:
     def is_buffer_full(self) -> bool:
         """Check if buffer has enough frames."""
         return len(self._pose_buffer) >= self.sequence_length
+
+    # Multi-track buffer management methods
+
+    def _make_track_key(self, camera_source: str, track_id: int) -> str:
+        """Create unique key for track buffer."""
+        return f"{camera_source}_{track_id}"
+
+    def _cleanup_stale_tracks(self) -> None:
+        """Remove tracks that have been inactive beyond timeout."""
+        now = time.time()
+        timeout = self._config.track_timeout
+        stale_keys = [
+            key for key, last_seen in self._track_last_seen.items()
+            if now - last_seen > timeout
+        ]
+        for key in stale_keys:
+            self._track_buffers.pop(key, None)
+            self._track_last_seen.pop(key, None)
+            logger.debug("Cleared stale track buffer: %s", key)
+
+    def add_pose_to_track(
+        self,
+        camera_source: str,
+        track_id: int,
+        pose: dict,
+    ) -> int:
+        """Add pose to track-specific buffer. Returns buffer length."""
+        self._cleanup_stale_tracks()
+
+        track_key = self._make_track_key(camera_source, track_id)
+
+        # Create buffer if needed (respecting max tracks)
+        if track_key not in self._track_buffers:
+            if len(self._track_buffers) >= self._config.max_tracked_persons:
+                # Remove oldest track
+                oldest_key = min(
+                    self._track_last_seen.keys(),
+                    key=lambda k: self._track_last_seen[k],
+                )
+                self._track_buffers.pop(oldest_key, None)
+                self._track_last_seen.pop(oldest_key, None)
+                logger.debug("Evicted oldest track: %s", oldest_key)
+
+            self._track_buffers[track_key] = deque(maxlen=self.sequence_length)
+
+        self._track_buffers[track_key].append(pose)
+        self._track_last_seen[track_key] = time.time()
+        return len(self._track_buffers[track_key])
+
+    def get_track_buffer_length(self, camera_source: str, track_id: int) -> int:
+        """Get buffer length for a track."""
+        track_key = self._make_track_key(camera_source, track_id)
+        buffer = self._track_buffers.get(track_key)
+        return len(buffer) if buffer else 0
+
+    def is_track_buffer_full(self, camera_source: str, track_id: int) -> bool:
+        """Check if track buffer is full."""
+        return self.get_track_buffer_length(camera_source, track_id) >= self.sequence_length
+
+    def clear_track_buffer(self, camera_source: str, track_id: int) -> None:
+        """Clear a specific track buffer."""
+        track_key = self._make_track_key(camera_source, track_id)
+        self._track_buffers.pop(track_key, None)
+        self._track_last_seen.pop(track_key, None)
+
+    def get_active_tracks(self) -> list[str]:
+        """Get list of active track keys."""
+        return list(self._track_buffers.keys())
+
+    def get_track_progress(self, camera_source: str, track_id: int) -> float:
+        """Get buffer fill progress as percentage (0.0-1.0)."""
+        length = self.get_track_buffer_length(camera_source, track_id)
+        return length / self.sequence_length
 
     def _compute_angle(
         self,
@@ -283,6 +436,58 @@ class GaitRecognitionService:
 
         return embedding.astype(np.float32)
 
+    def compute_track_gait_embedding(
+        self,
+        camera_source: str,
+        track_id: int,
+    ) -> Optional[np.ndarray]:
+        """
+        Compute gait embedding from track-specific buffer.
+
+        Returns 256-dim embedding or None if buffer not full.
+        """
+        track_key = self._make_track_key(camera_source, track_id)
+        buffer = self._track_buffers.get(track_key)
+
+        if not buffer or len(buffer) < self.sequence_length:
+            return None
+
+        # Extract features from each frame in track buffer
+        frame_features = []
+        for pose in buffer:
+            features = self._extract_frame_features(pose)
+            frame_features.append(features)
+
+        frame_features = np.array(frame_features)
+
+        # Same temporal statistics as compute_gait_embedding
+        embedding_parts = []
+        embedding_parts.append(np.mean(frame_features, axis=0))
+        embedding_parts.append(np.std(frame_features, axis=0))
+        embedding_parts.append(np.min(frame_features, axis=0))
+        embedding_parts.append(np.max(frame_features, axis=0))
+
+        velocity = np.diff(frame_features, axis=0)
+        embedding_parts.append(np.mean(velocity, axis=0))
+        embedding_parts.append(np.std(velocity, axis=0))
+
+        acceleration = np.diff(velocity, axis=0)
+        embedding_parts.append(np.mean(acceleration, axis=0))
+        embedding_parts.append(np.std(acceleration, axis=0))
+
+        embedding = np.concatenate(embedding_parts)
+
+        if len(embedding) < 256:
+            embedding = np.pad(embedding, (0, 256 - len(embedding)))
+        else:
+            embedding = embedding[:256]
+
+        norm = np.linalg.norm(embedding)
+        if norm > 0:
+            embedding = embedding / norm
+
+        return embedding.astype(np.float32)
+
     async def enroll_gait(
         self,
         person_id: UUID,
@@ -412,6 +617,148 @@ class GaitRecognitionService:
             }
 
         self.clear_buffer()
+        return None
+
+    async def enroll_track_gait(
+        self,
+        camera_source: str,
+        track_id: int,
+        person_id: UUID,
+        walking_direction: Optional[str] = None,
+        source: str = "enrollment",
+    ) -> Optional[UUID]:
+        """
+        Enroll gait from track-specific buffer.
+
+        Args:
+            camera_source: Camera identifier
+            track_id: Track ID for this person
+            person_id: UUID of the person
+            walking_direction: Direction of walking
+            source: Source of enrollment
+
+        Returns:
+            Gait embedding UUID or None if buffer not full
+        """
+        from .repository import get_person_repository
+
+        embedding = self.compute_track_gait_embedding(camera_source, track_id)
+        if embedding is None:
+            return None
+
+        repo = get_person_repository()
+        embedding_id = await repo.add_gait_embedding(
+            person_id=person_id,
+            embedding=embedding,
+            capture_duration_ms=int(self.sequence_length * 33.3),
+            frame_count=self.sequence_length,
+            walking_direction=walking_direction,
+            source=source,
+        )
+
+        logger.info("Enrolled track gait for person %s (track %d)", person_id, track_id)
+        self.clear_track_buffer(camera_source, track_id)
+        return embedding_id
+
+    async def recognize_track_gait(
+        self,
+        camera_source: str,
+        track_id: int,
+        threshold: Optional[float] = None,
+        use_averaged: bool = True,
+        auto_enroll_unknown: bool = False,
+    ) -> Optional[dict]:
+        """
+        Recognize gait from track-specific buffer.
+
+        Args:
+            camera_source: Camera identifier
+            track_id: Track ID for this person
+            threshold: Similarity threshold for match
+            use_averaged: Use averaged centroids
+            auto_enroll_unknown: Auto-create profile for unknown gaits
+
+        Returns:
+            Dict with person_id, name, similarity, matched, track_id
+        """
+        from .repository import get_person_repository
+
+        if threshold is None:
+            threshold = self._config.gait_threshold
+
+        embedding = self.compute_track_gait_embedding(camera_source, track_id)
+        if embedding is None:
+            return None
+
+        repo = get_person_repository()
+
+        if use_averaged:
+            match = await repo.find_matching_gait_averaged(embedding, threshold)
+        else:
+            match = await repo.find_matching_gait(embedding, threshold)
+
+        if match:
+            await repo.update_last_seen(match["person_id"])
+            await repo.log_recognition_event(
+                person_id=match["person_id"],
+                recognition_type="gait",
+                confidence=match["similarity"],
+                camera_source=camera_source,
+                matched=True,
+                metadata={"track_id": track_id},
+            )
+
+            self.clear_track_buffer(camera_source, track_id)
+            return {
+                "person_id": match["person_id"],
+                "name": match["name"],
+                "similarity": match["similarity"],
+                "is_known": match["is_known"],
+                "matched": True,
+                "track_id": track_id,
+            }
+
+        if auto_enroll_unknown:
+            unknown_count = await repo.get_unknown_person_count()
+            unknown_name = f"unknown_{unknown_count + 1}"
+
+            person_id = await repo.create_person(
+                name=unknown_name,
+                is_known=False,
+                auto_created=True,
+            )
+
+            await repo.add_gait_embedding(
+                person_id=person_id,
+                embedding=embedding,
+                capture_duration_ms=int(self.sequence_length * 33.3),
+                frame_count=self.sequence_length,
+                source="auto_enrollment",
+            )
+
+            await repo.log_recognition_event(
+                person_id=person_id,
+                recognition_type="gait",
+                confidence=0.0,
+                camera_source=camera_source,
+                matched=False,
+                metadata={"auto_enrolled": True, "track_id": track_id},
+            )
+
+            logger.info("Auto-enrolled unknown track gait: %s", unknown_name)
+
+            self.clear_track_buffer(camera_source, track_id)
+            return {
+                "person_id": person_id,
+                "name": unknown_name,
+                "similarity": 1.0,
+                "is_known": False,
+                "matched": False,
+                "auto_enrolled": True,
+                "track_id": track_id,
+            }
+
+        self.clear_track_buffer(camera_source, track_id)
         return None
 
 
