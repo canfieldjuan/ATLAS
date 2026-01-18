@@ -175,6 +175,16 @@ class AtlasAgent(BaseAgent):
                     intent.target_name,
                     intent.confidence,
                 )
+            elif intent.action == "query" and intent.target_type in ["media_player", "light", "switch", "climate", "cover", "fan"]:
+                result.action_type = "device_command"
+                result.needs_llm = False
+                logger.debug(
+                    "Device query: %s %s/%s (conf=%.2f)",
+                    intent.action,
+                    intent.target_type,
+                    intent.target_name,
+                    intent.confidence,
+                )
             elif intent.action == "query" and intent.target_type == "tool":
                 result.action_type = "tool_use"
                 result.needs_llm = True
@@ -335,47 +345,12 @@ class AtlasAgent(BaseAgent):
                 result.error_code = "EXECUTION_ERROR"
 
         elif think_result.action_type == "tool_use" and think_result.intent:
-            # Execute tool based on intent
-            try:
-                target_name = think_result.intent.target_name
-                parameters = dict(think_result.intent.parameters or {})
-
-                # Pass query for calendar name matching
-                if target_name == "calendar":
-                    parameters["calendar_name"] = context.input_text
-
-                tool_result = await tools.execute_tool_by_intent(target_name, parameters)
-                result.success = tool_result.get("success", False)
-                result.tool_results = {target_name: tool_result}
-
-                # Build tool context for LLM
-                if tool_result.get("success"):
-                    tool_name = tool_result.get("tool_name", target_name)
-                    data = tool_result.get("data", {})
-                    message = tool_result.get("message", "")
-
-                    # Try to filter relevant data fields
-                    tool_context = None
-                    if data:
-                        query_lower = context.input_text.lower()
-                        filtered = self._filter_tool_data(tool_name, data, query_lower)
-                        if filtered:
-                            data_str = ", ".join(f"{k}: {v}" for k, v in filtered.items())
-                            tool_context = f"[{tool_name}] {data_str}"
-
-                    # Fall back to message if no filtered data
-                    if not tool_context and message:
-                        tool_context = f"[{tool_name}] {message}"
-
-                    if tool_context:
-                        result.response_data["tool_context"] = tool_context
-
-                logger.info("Tool executed: %s", target_name)
-
-            except Exception as e:
-                logger.warning("Tool execution failed: %s", e)
-                result.error = str(e)
-                result.error_code = "TOOL_ERROR"
+            # Tools will be executed by LLM in respond phase via execute_with_tools()
+            result.success = True
+            logger.info(
+                "Tool query detected: %s, deferring to LLM tool calling",
+                think_result.intent.target_name,
+            )
 
         result.duration_ms = (time.perf_counter() - start_time) * 1000
         return result
@@ -409,6 +384,10 @@ class AtlasAgent(BaseAgent):
                     return " ".join(messages)
                 return "Done."
             return f"I understood '{think_result.intent.action}' but couldn't execute it."
+
+        # Tool use - use LLM with tool calling loop
+        if think_result.action_type == "tool_use":
+            return await self._generate_llm_response_with_tools(context, think_result, act_result)
 
         # Conversation response - use LLM
         return await self._generate_llm_response(context, think_result, act_result)
@@ -481,6 +460,58 @@ class AtlasAgent(BaseAgent):
             logger.warning("LLM response generation failed: %s", e)
 
         return f"I heard: {context.input_text}"
+
+    async def _generate_llm_response_with_tools(
+        self,
+        context: AgentContext,
+        think_result: ThinkResult,
+        act_result: Optional[ActResult],
+    ) -> str:
+        """Generate response using LLM tool calling loop."""
+        from ..services.protocols import Message
+        from ..services.tool_executor import execute_with_tools
+
+        llm = self._get_llm()
+        if llm is None:
+            return f"I heard: {context.input_text}"
+
+        # Build system prompt
+        system_msg = (
+            "You are Atlas, a helpful home assistant. "
+            "Use the available tools to help the user. "
+            "Be conversational and concise in your responses."
+        )
+
+        messages = [Message(role="system", content=system_msg)]
+
+        # Add conversation history
+        if context.conversation_history:
+            for turn in context.conversation_history[-6:]:
+                messages.append(Message(
+                    role=turn.get("role", "user"),
+                    content=turn.get("content", ""),
+                ))
+
+        # Add current user message
+        messages.append(Message(role="user", content=context.input_text))
+
+        # Execute with tool calling loop
+        cuda_lock = _get_cuda_lock()
+        async with cuda_lock:
+            result = await execute_with_tools(
+                llm=llm,
+                messages=messages,
+                max_tokens=150,
+                temperature=0.7,
+            )
+
+        response = result.get("response", "").strip()
+        tools_executed = result.get("tools_executed", [])
+
+        if tools_executed:
+            logger.info("Tools executed via LLM: %s", tools_executed)
+
+        return response if response else "I couldn't process that request."
 
     async def store_turn(
         self,
