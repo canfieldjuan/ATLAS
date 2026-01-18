@@ -43,12 +43,29 @@ from .services import (
     StubEmailService,
     StubSMSService,
 )
+from .real_services import (
+    ResendEmailService,
+    SignalWireSMSService,
+    GoogleCalendarService,
+    get_email_service,
+    get_sms_service,
+    get_calendar_service,
+    create_appointment_machine_with_real_services,
+)
 from .appointment import (
     AppointmentStateMachine,
     AppointmentState,
     AppointmentEvent,
     AppointmentContext,
     create_appointment_machine,
+)
+from .context import ContextRouter, get_context_router
+from .scheduling import SchedulingService, scheduling_service
+from .service import (
+    CommsService,
+    get_comms_service,
+    init_comms_service,
+    shutdown_comms_service,
 )
 
 __all__ = [
@@ -63,20 +80,39 @@ __all__ = [
     "Call",
     "SMSMessage",
     "SMSDirection",
-    # Services
+    # Services (stubs and interfaces)
     "CalendarService",
     "EmailService",
     "SMSService",
-    "Appointment",
-    "TimeSlot",
     "EmailMessage",
     "StubCalendarService",
     "StubEmailService",
     "StubSMSService",
+    # Real service implementations
+    "ResendEmailService",
+    "SignalWireSMSService",
+    "GoogleCalendarService",
+    "get_email_service",
+    "get_sms_service",
+    "get_calendar_service",
+    "create_appointment_machine_with_real_services",
     # Appointment State Machine
     "AppointmentStateMachine",
     "AppointmentState",
     "AppointmentEvent",
     "AppointmentContext",
     "create_appointment_machine",
+    # Context
+    "ContextRouter",
+    "get_context_router",
+    # Scheduling
+    "SchedulingService",
+    "scheduling_service",
+    "TimeSlot",
+    "Appointment",
+    # Service
+    "CommsService",
+    "get_comms_service",
+    "init_comms_service",
+    "shutdown_comms_service",
 ]

@@ -59,3 +59,8 @@ try:
     from . import twilio_provider
 except ImportError:
     pass  # Twilio not installed
+
+try:
+    from . import signalwire_provider
+except ImportError:
+    pass  # SignalWire not installed
