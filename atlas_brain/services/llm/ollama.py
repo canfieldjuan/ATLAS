@@ -140,6 +140,65 @@ class OllamaLLM(BaseModelService):
             logger.error("Ollama chat error: %s", e)
             raise
 
+    def chat_with_tools(
+        self,
+        messages: list[Message],
+        tools: list[dict] | None = None,
+        max_tokens: int = 256,
+        temperature: float = 0.7,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """
+        Chat with optional tool calling support.
+
+        Args:
+            messages: List of Message objects
+            tools: List of tool schemas in Ollama format
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+
+        Returns:
+            Dict with response, tool_calls, and message
+        """
+        if not self._sync_client:
+            raise RuntimeError("Ollama LLM not loaded")
+
+        ollama_messages = [
+            {"role": msg.role, "content": msg.content}
+            for msg in messages
+        ]
+
+        payload = {
+            "model": self.model,
+            "messages": ollama_messages,
+            "stream": False,
+            "options": {
+                "num_predict": max_tokens,
+                "temperature": temperature,
+            },
+        }
+
+        if tools:
+            payload["tools"] = tools
+
+        try:
+            response = self._sync_client.post(
+                f"{self.base_url}/api/chat",
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            msg = data.get("message", {})
+            return {
+                "response": msg.get("content", "").strip(),
+                "tool_calls": msg.get("tool_calls", []),
+                "message": msg,
+            }
+        except httpx.HTTPError as e:
+            logger.error("Ollama chat_with_tools error: %s", e)
+            raise
+
     async def chat_async(
         self,
         messages: list[Message],
