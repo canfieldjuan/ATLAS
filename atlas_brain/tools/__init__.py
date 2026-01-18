@@ -20,6 +20,37 @@ from .reminder import (
     CompleteReminderTool,
     complete_reminder_tool,
 )
+from .notify import NotifyTool, notify_tool
+from .email import (
+    EmailTool,
+    email_tool,
+    EstimateEmailTool,
+    estimate_email_tool,
+    ProposalEmailTool,
+    proposal_email_tool,
+)
+from .scheduling import (
+    CheckAvailabilityTool,
+    check_availability_tool,
+    BookAppointmentTool,
+    book_appointment_tool,
+    CancelAppointmentTool,
+    cancel_appointment_tool,
+    RescheduleAppointmentTool,
+    reschedule_appointment_tool,
+    LookupCustomerTool,
+    lookup_customer_tool,
+)
+from .presence import (
+    LightsNearUserTool,
+    lights_near_user,
+    MediaNearUserTool,
+    media_near_user,
+    SceneNearUserTool,
+    scene_near_user,
+    WhereAmITool,
+    where_am_i,
+)
 
 # Register tools on import
 tool_registry.register(weather_tool)
@@ -30,6 +61,19 @@ tool_registry.register(calendar_tool)
 tool_registry.register(reminder_tool)
 tool_registry.register(list_reminders_tool)
 tool_registry.register(complete_reminder_tool)
+tool_registry.register(notify_tool)
+tool_registry.register(email_tool)
+tool_registry.register(estimate_email_tool)
+tool_registry.register(proposal_email_tool)
+tool_registry.register(check_availability_tool)
+tool_registry.register(book_appointment_tool)
+tool_registry.register(cancel_appointment_tool)
+tool_registry.register(reschedule_appointment_tool)
+tool_registry.register(lookup_customer_tool)
+tool_registry.register(lights_near_user)
+tool_registry.register(media_near_user)
+tool_registry.register(scene_near_user)
+tool_registry.register(where_am_i)
 
 __all__ = [
     "Tool",
@@ -53,4 +97,30 @@ __all__ = [
     "list_reminders_tool",
     "CompleteReminderTool",
     "complete_reminder_tool",
+    "NotifyTool",
+    "notify_tool",
+    "EmailTool",
+    "email_tool",
+    "EstimateEmailTool",
+    "estimate_email_tool",
+    "ProposalEmailTool",
+    "proposal_email_tool",
+    "CheckAvailabilityTool",
+    "check_availability_tool",
+    "BookAppointmentTool",
+    "book_appointment_tool",
+    "CancelAppointmentTool",
+    "cancel_appointment_tool",
+    "RescheduleAppointmentTool",
+    "reschedule_appointment_tool",
+    "LookupCustomerTool",
+    "lookup_customer_tool",
+    "LightsNearUserTool",
+    "lights_near_user",
+    "MediaNearUserTool",
+    "media_near_user",
+    "SceneNearUserTool",
+    "scene_near_user",
+    "WhereAmITool",
+    "where_am_i",
 ]

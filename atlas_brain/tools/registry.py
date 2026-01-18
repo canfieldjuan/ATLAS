@@ -46,6 +46,40 @@ class ToolRegistry:
         """List all tool names."""
         return list(self._tools.keys())
 
+    def get_tool_schemas(self) -> list[dict]:
+        """Generate Ollama-compatible tool schemas for LLM tool calling."""
+        schemas = []
+        for tool in self._tools.values():
+            properties = {}
+            required = []
+            for param in tool.parameters:
+                prop_type = "string"
+                if param.param_type == "int":
+                    prop_type = "integer"
+                elif param.param_type == "float":
+                    prop_type = "number"
+                elif param.param_type == "boolean":
+                    prop_type = "boolean"
+                properties[param.name] = {
+                    "type": prop_type,
+                    "description": param.description,
+                }
+                if param.required:
+                    required.append(param.name)
+            schemas.append({
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": {
+                        "type": "object",
+                        "properties": properties,
+                        "required": required,
+                    },
+                },
+            })
+        return schemas
+
     async def execute(self, name: str, params: dict) -> ToolResult:
         """Execute a tool by name."""
         tool = self.get(name)
