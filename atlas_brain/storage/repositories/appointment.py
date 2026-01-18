@@ -169,6 +169,59 @@ class AppointmentRepository:
         except Exception as e:
             raise DatabaseOperationError("get appointments by phone", e)
 
+    async def search_by_name(
+        self,
+        name: str,
+        include_history: bool = True,
+        limit: int = 10,
+    ) -> list[dict]:
+        """
+        Search appointments by customer name (case-insensitive partial match).
+
+        Args:
+            name: Customer name to search for (partial match)
+            include_history: If True, include past appointments
+            limit: Maximum results to return
+
+        Returns:
+            List of matching appointments, most recent first
+        """
+        pool = get_db_pool()
+
+        if not pool.is_initialized:
+            raise DatabaseUnavailableError("search appointments by name")
+
+        try:
+            # Use ILIKE for case-insensitive partial match
+            search_pattern = f"%{name}%"
+            conditions = ["customer_name ILIKE $1"]
+            params: list[Any] = [search_pattern]
+            param_idx = 2
+
+            if not include_history:
+                conditions.append(f"start_time > ${param_idx}")
+                params.append(datetime.now(timezone.utc))
+                param_idx += 1
+
+            params.append(limit)
+
+            rows = await pool.fetch(
+                f"""
+                SELECT * FROM appointments
+                WHERE {' AND '.join(conditions)}
+                ORDER BY start_time DESC
+                LIMIT ${param_idx}
+                """,
+                *params,
+            )
+
+            return [self._row_to_dict(row) for row in rows]
+
+        except DatabaseUnavailableError:
+            raise
+        except Exception as e:
+            raise DatabaseOperationError("search appointments by name", e)
+
     async def get_in_range(
         self,
         start: datetime,

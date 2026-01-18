@@ -4,6 +4,12 @@ Atlas Brain - Central Intelligence Server
 The main FastAPI application entry point.
 """
 
+# Load .env file FIRST, before any other imports
+from pathlib import Path
+from dotenv import load_dotenv
+_env_path = Path(__file__).parent.parent / ".env"
+load_dotenv(_env_path, override=True)
+
 import asyncio
 import logging
 from contextlib import asynccontextmanager
@@ -62,14 +68,7 @@ async def lifespan(app: FastAPI):
         try:
             stt_model = settings.stt.default_model
             logger.info("Loading default STT: %s", stt_model)
-            # Only pass model_size for faster-whisper
-            if stt_model == "faster-whisper":
-                stt_registry.activate(
-                    stt_model,
-                    model_size=settings.stt.whisper_model_size,
-                )
-            else:
-                stt_registry.activate(stt_model)
+            stt_registry.activate(stt_model)
         except Exception as e:
             logger.error("Failed to load default STT: %s", e)
 
@@ -332,6 +331,20 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to initialize presence service: %s", e)
 
+    # Initialize communications service if enabled
+    comms_service = None
+    try:
+        from .comms import comms_settings, init_comms_service
+        if comms_settings.enabled:
+            comms_service = await init_comms_service()
+            if comms_service:
+                logger.info("Communications service initialized with provider: %s",
+                           comms_service.provider.name if comms_service.provider else "none")
+            else:
+                logger.warning("Communications service failed to initialize")
+    except Exception as e:
+        logger.error("Failed to initialize communications service: %s", e)
+
     # Start voice client if enabled
     global _voice_client_task
     if settings.voice.enabled:
@@ -343,6 +356,7 @@ async def lifespan(app: FastAPI):
                 input_device=settings.voice.input_device,
                 output_device=settings.voice.output_device,
                 sample_rate=settings.voice.sample_rate,
+                input_gain=settings.voice.input_gain,
             )
             runner = VoiceRunner(voice_config)
 
@@ -360,6 +374,44 @@ async def lifespan(app: FastAPI):
             logger.warning("Voice client not available (atlas_voice not installed): %s", e)
         except Exception as e:
             logger.error("Failed to start voice client: %s", e)
+
+    # Start webcam person detector if enabled
+    webcam_detector = None
+    if settings.webcam.enabled:
+        try:
+            from .vision import start_webcam_detector
+
+            webcam_detector = await start_webcam_detector(
+                device_index=settings.webcam.device_index,
+                camera_source_id=settings.webcam.source_id,
+                fps=settings.webcam.fps,
+            )
+            if webcam_detector:
+                logger.info("Webcam detector started: /dev/video%d -> %s",
+                           settings.webcam.device_index, settings.webcam.source_id)
+            else:
+                logger.warning("Webcam detector failed to start")
+        except Exception as e:
+            logger.error("Failed to start webcam detector: %s", e)
+
+    # Start RTSP camera detectors if enabled
+    rtsp_manager = None
+    if settings.rtsp.enabled:
+        try:
+            import json
+            from .vision import start_rtsp_cameras
+
+            cameras = []
+            if settings.rtsp.cameras_json:
+                cameras = json.loads(settings.rtsp.cameras_json)
+
+            if cameras:
+                rtsp_manager = await start_rtsp_cameras(cameras)
+                logger.info("RTSP cameras started: %d cameras", len(cameras))
+            else:
+                logger.warning("RTSP enabled but no cameras configured")
+        except Exception as e:
+            logger.error("Failed to start RTSP cameras: %s", e)
 
     logger.info("Atlas Brain startup complete")
 
@@ -396,6 +448,24 @@ async def lifespan(app: FastAPI):
             pass
         logger.info("Voice client stopped")
 
+    # Stop webcam detector
+    if webcam_detector:
+        try:
+            from .vision import stop_webcam_detector
+            await stop_webcam_detector()
+            logger.info("Webcam detector stopped")
+        except Exception as e:
+            logger.error("Error stopping webcam detector: %s", e)
+
+    # Stop RTSP camera detectors
+    if rtsp_manager:
+        try:
+            from .vision import stop_rtsp_cameras
+            await stop_rtsp_cameras()
+            logger.info("RTSP cameras stopped")
+        except Exception as e:
+            logger.error("Error stopping RTSP cameras: %s", e)
+
     # Shutdown discovery service
     if settings.discovery.enabled:
         try:
@@ -427,6 +497,15 @@ async def lifespan(app: FastAPI):
         await shutdown_roku()
     except Exception as e:
         logger.error("Error shutting down Roku: %s", e)
+
+    # Shutdown communications service
+    if comms_service:
+        try:
+            from .comms import shutdown_comms_service
+            await shutdown_comms_service()
+            logger.info("Communications service shutdown complete")
+        except Exception as e:
+            logger.error("Error shutting down communications: %s", e)
 
     # Close database connection pool
     if db_settings.enabled:

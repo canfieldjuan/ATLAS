@@ -11,14 +11,20 @@ transformers
 accelerate
 bitsandbytes
 Pillow
-faster-whisper
+nemo_toolkit[asr]
 sentence-transformers
 opencv-python  # For video processing (SAM 3)
+sounddevice
+soundfile
 
 # IoT backends
 aiomqtt
 httpx
 websockets
+
+# Telephony (external communications)
+signalwire>=2.0.0
+# twilio  # Alternative provider
 
 # Discovery
 zeroconf>=0.80.0

@@ -25,8 +25,7 @@ class STTConfig(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="ATLAS_STT_")
 
-    default_model: str = Field(default="faster-whisper", description="Default STT to load on startup")
-    whisper_model_size: str = Field(default="small.en", description="Whisper model size")
+    default_model: str = Field(default="nemotron", description="Default STT to load on startup")
 
 
 class MQTTConfig(BaseSettings):
@@ -202,6 +201,18 @@ class RecognitionConfig(BaseSettings):
         default=0.5,
         description="Interval between recognition attempts in seconds"
     )
+    max_tracked_persons: int = Field(
+        default=10,
+        description="Maximum concurrent persons to track for gait"
+    )
+    track_timeout: float = Field(
+        default=30.0,
+        description="Seconds before inactive track buffer is cleared"
+    )
+    iou_threshold: float = Field(
+        default=0.3,
+        description="Min IoU to associate pose with track bounding box"
+    )
 
 
 class VOSConfig(BaseSettings):
@@ -237,8 +248,12 @@ class OrchestrationConfig(BaseSettings):
     )
 
     # VAD - Lower values = faster response, but may cut off speech
-    vad_aggressiveness: int = Field(default=3, description="VAD aggressiveness (0-3, higher=faster)")
+    vad_aggressiveness: int = Field(default=1, description="VAD aggressiveness (0-3, higher=faster)")
     silence_duration_ms: int = Field(default=800, description="Silence to end utterance (ms)")
+
+    # Wake word detection using OpenWakeWord
+    wakeword_enabled: bool = Field(default=False, description="Enable OpenWakeWord detection")
+    wakeword_threshold: float = Field(default=0.5, description="Wake word detection threshold")
 
     # Keyword detection - only respond when keyword is in transcript
     keyword_enabled: bool = Field(default=True, description="Enable keyword detection")
@@ -459,6 +474,7 @@ class VoiceClientConfig(BaseSettings):
     input_device: int | None = Field(default=None, description="Audio input device index")
     output_device: int | None = Field(default=None, description="Audio output device index")
     sample_rate: int = Field(default=16000, description="Audio sample rate")
+    input_gain: float = Field(default=5.0, description="Software gain for mic (boost quiet mics)")
 
 
 class WebcamConfig(BaseSettings):

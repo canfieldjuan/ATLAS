@@ -87,45 +87,64 @@ class PresenceConfig(BaseSettings):
 
 
 # Room definitions - can be loaded from DB or config file
-# This is the default/example configuration
+# Maps rooms to actual registered device IDs in the capability registry
+#
+# Camera source naming convention:
+#   - webcam_*: Local USB webcams (e.g., webcam_office)
+#   - wyze_*: Wyze cameras via wyze-bridge (e.g., wyze_living_room)
+#
+# Wyze-bridge camera names are derived from Wyze app names:
+#   "Living Room Cam" -> rtsp://localhost:8554/living-room-cam
+#   The source_id should match what you set in ATLAS_RTSP_CAMERAS_JSON
+#
 DEFAULT_ROOMS: list[RoomConfig] = [
     RoomConfig(
         id="living_room",
         name="Living Room",
         espresense_devices=["living-room"],
-        camera_sources=["living_room_cam"],
+        camera_sources=["wyze_living_room"],  # Ceiling Wyze cam
         ha_area="living_room",
-        lights=["light.living_room", "light.living_room_lamp"],
+        lights=["living_room_light"],
         switches=[],
-        media_players=["media_player.living_room_tv"],
+        media_players=["roku.192_168_1_2"],
     ),
     RoomConfig(
         id="kitchen",
         name="Kitchen",
         espresense_devices=["kitchen"],
-        camera_sources=["kitchen_cam"],
+        camera_sources=["wyze_kitchen"],  # Ceiling Wyze cam
         ha_area="kitchen",
-        lights=["light.kitchen", "light.kitchen_counter"],
-        switches=[],
+        lights=["kitchen_light"],
+        switches=["fan_switch"],
         media_players=[],
     ),
     RoomConfig(
         id="bedroom",
         name="Bedroom",
         espresense_devices=["bedroom"],
-        camera_sources=["bedroom_cam"],
+        camera_sources=["wyze_bedroom"],  # Ceiling Wyze cam
         ha_area="bedroom",
-        lights=["light.bedroom", "light.bedroom_lamp"],
+        lights=["bedroom_light"],
         switches=[],
-        media_players=["media_player.bedroom_tv"],
+        media_players=[],
     ),
     RoomConfig(
         id="office",
         name="Office",
         espresense_devices=["office"],
-        camera_sources=["office_cam"],
+        camera_sources=["webcam_office"],  # USB webcam
         ha_area="office",
-        lights=["light.office", "light.desk_lamp"],
+        lights=[],
+        switches=["input_boolean.office_light", "input_boolean.test_light"],
+        media_players=[],
+    ),
+    RoomConfig(
+        id="outdoor_front",
+        name="Front Yard",
+        espresense_devices=[],
+        camera_sources=["wyze_outdoor"],  # Wyze Outdoor Cam v2
+        ha_area=None,
+        lights=[],
         switches=[],
         media_players=[],
     ),

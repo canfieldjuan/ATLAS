@@ -120,9 +120,14 @@ class ActionDispatcher:
                 error="TARGET_NOT_RESOLVED",
             )
 
+        # Map generic "query" action to device-specific read action
+        action = intent.action
+        if action == "query":
+            action = "get_state"
+
         request = ActionRequest(
             capability_id=capability.id,
-            action=intent.action,
+            action=action,
             params=intent.parameters,
         )
         return await self.dispatch(request)
