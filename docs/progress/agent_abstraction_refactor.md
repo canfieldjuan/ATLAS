@@ -53,7 +53,7 @@ Refactor the Atlas orchestration system to introduce a formal Agent abstraction 
 1. `atlas_brain/services/protocols.py` - Service protocols (VLM, STT, LLM, TTS, etc.)
 2. `atlas_brain/services/registry.py` - ServiceRegistry with hot-swapping
 3. `atlas_brain/services/model_pool.py` - Multi-model pool management
-4. Service implementations: moondream, faster_whisper, llama_cpp, piper, etc.
+4. Service implementations: moondream, nemotron, llama_cpp, piper, etc.
 
 #### Storage Layer
 1. `atlas_brain/storage/repositories/session.py` - Session persistence

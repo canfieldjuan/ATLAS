@@ -197,7 +197,7 @@ atlas_brain/
 │   ├── vlm/
 │   │   └── moondream.py         # @register_vlm("moondream")
 │   └── stt/
-│       └── faster_whisper.py    # @register_stt("faster-whisper")
+│       └── nemotron.py          # @register_stt("nemotron")
 │
 └── capabilities/                # Device/integration system
     ├── protocols.py             # Capability, CapabilityState, ActionResult
