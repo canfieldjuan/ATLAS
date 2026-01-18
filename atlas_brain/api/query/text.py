@@ -1,22 +1,25 @@
 """
-Text query endpoint.
+Text query endpoint with LLM tool calling support.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+import logging
+from fastapi import APIRouter, HTTPException
 
 from ...schemas.query import TextQueryRequest
 from ...services import llm_registry
 from ...services.protocols import Message
+from ...services.tool_executor import execute_with_tools
 
 router = APIRouter()
+logger = logging.getLogger("atlas.api.query.text")
 
 
 @router.post("/text")
 async def query_text(request: TextQueryRequest):
     """
-    Process a text query using the active LLM.
+    Process a text query using the active LLM with tool calling.
 
-    The LLM will generate a response based on the input text.
+    The LLM decides which tools to use based on the query.
     """
     llm = llm_registry.get_active()
     if llm is None:
@@ -25,17 +28,32 @@ async def query_text(request: TextQueryRequest):
             detail="No LLM model is currently loaded. Use /models/llm/activate to load one.",
         )
 
+    system_msg = (
+        "You are Atlas, a capable personal assistant. "
+        "You can control smart home devices, answer questions, "
+        "send emails, check weather, and help with various tasks. "
+        "Be conversational and concise. "
+        "Use the available tools when appropriate to help the user."
+    )
+
     messages = [
-        Message(
-            role="system",
-            content="You are Atlas, a capable personal assistant. You can control smart home devices, answer questions, and help with various tasks. Be conversational and concise.",
-        ),
+        Message(role="system", content=system_msg),
         Message(role="user", content=request.query_text),
     ]
 
-    result = llm.chat(messages=messages, max_tokens=256, temperature=0.7)
+    result = await execute_with_tools(
+        llm=llm,
+        messages=messages,
+        max_tokens=256,
+        temperature=0.7,
+    )
+
+    tools_executed = result.get("tools_executed", [])
+    if tools_executed:
+        logger.info("Tools executed for query: %s", tools_executed)
 
     return {
         "response": result.get("response", ""),
         "query": request.query_text,
+        "tools_executed": tools_executed,
     }

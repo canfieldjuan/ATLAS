@@ -669,3 +669,359 @@ async def stream_webcam_recognition(
         ),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
+
+
+async def _generate_multitrack_recognition_mjpeg(
+    source: str,
+    fps: int = 15,
+    threshold: Optional[float] = None,
+    auto_enroll: Optional[bool] = None,
+    use_averaged: Optional[bool] = None,
+    width: int = 640,
+    height: int = 480,
+    enroll_gait: bool = True,
+    person_threshold: float = 0.5,
+) -> AsyncGenerator[bytes, None]:
+    """
+    Generate MJPEG with multi-person face + gait recognition.
+
+    Uses YOLO ByteTrack for multi-person tracking, then per-track:
+    - Face recognition and association
+    - Per-track gait pose buffers
+    - Independent enrollment/recognition per person
+    """
+    from ..services.recognition import (
+        get_face_service,
+        get_gait_service,
+        get_person_repository,
+        get_track_manager,
+    )
+
+    cfg = settings.recognition
+    threshold = threshold if threshold is not None else cfg.face_threshold
+    auto_enroll = auto_enroll if auto_enroll is not None else cfg.auto_enroll_unknown
+    use_averaged = use_averaged if use_averaged is not None else cfg.use_averaged
+    recognition_interval = cfg.recognition_interval
+
+    if source.isdigit():
+        cap = cv2.VideoCapture(int(source))
+    else:
+        cap = cv2.VideoCapture(source)
+
+    if not cap.isOpened():
+        raise HTTPException(status_code=503, detail=f"Cannot open video source: {source}")
+
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+
+    for _ in range(30):
+        cap.read()
+
+    frame_interval = 1.0 / fps
+    face_service = get_face_service()
+    gait_service = get_gait_service()
+    repo = get_person_repository()
+    track_manager = get_track_manager()
+
+    # Get YOLO model for person tracking
+    yolo_model = _get_yolo_model()
+    camera_source = f"cam_{source}"
+
+    # Per-track timing for face recognition
+    track_last_face_rec: dict[int, float] = {}
+
+    try:
+        while True:
+            start_time = asyncio.get_event_loop().time()
+
+            ret, frame = await asyncio.to_thread(cap.read)
+            if not ret or frame is None:
+                await asyncio.sleep(0.1)
+                continue
+
+            frame_h, frame_w = frame.shape[:2]
+
+            # Run YOLO tracking to get person bboxes with track IDs
+            person_tracks = []
+            if yolo_model:
+                results = await asyncio.to_thread(
+                    lambda: yolo_model.track(
+                        frame,
+                        verbose=False,
+                        persist=True,
+                        conf=person_threshold,
+                        classes=[0],  # person class only
+                        tracker="bytetrack.yaml",
+                    )
+                )
+                for r in results:
+                    for box in r.boxes:
+                        if hasattr(box, "id") and box.id is not None:
+                            track_id = int(box.id[0])
+                            bbox = list(map(int, box.xyxy[0].tolist()))
+                            conf = float(box.conf[0])
+                            person_tracks.append({
+                                "track_id": track_id,
+                                "bbox": bbox,
+                                "conf": conf,
+                            })
+                            track_manager.create_or_update_track(
+                                camera_source, track_id, bbox
+                            )
+
+            # Detect all faces in frame
+            faces = await asyncio.to_thread(face_service.detect_faces, frame)
+
+            # Associate faces with tracks using containment (face inside body)
+            face_to_track: dict[int, dict] = {}
+            for face in faces:
+                face_bbox = face["bbox"]
+                best_track = track_manager.find_track_containing_bbox(
+                    camera_source, face_bbox
+                )
+                if best_track:
+                    face_to_track[best_track.track_id] = face
+
+            # Process each person track for face recognition
+            for pt in person_tracks:
+                track_id = pt["track_id"]
+                track = track_manager.get_track(camera_source, track_id)
+                if not track:
+                    continue
+
+                # Face recognition for this track
+                if track_id in face_to_track:
+                    last_rec = track_last_face_rec.get(track_id, 0)
+                    if start_time - last_rec > recognition_interval:
+                        track_last_face_rec[track_id] = start_time
+                        face = face_to_track[track_id]
+                        fx1, fy1, fx2, fy2 = face["bbox"]
+
+                        # Crop face region for recognition
+                        face_crop = frame[fy1:fy2, fx1:fx2]
+                        if face_crop.size > 0:
+                            try:
+                                result = await face_service.recognize_face(
+                                    frame=frame,
+                                    threshold=threshold,
+                                    auto_enroll_unknown=auto_enroll,
+                                    use_averaged=use_averaged,
+                                )
+                                # Associate if matched OR auto-enrolled
+                                if result and (result.get("matched") or result.get("auto_enrolled")):
+                                    track_manager.associate_person(
+                                        camera_source,
+                                        track_id,
+                                        result["person_id"],
+                                        result["name"],
+                                        result.get("is_known", False),
+                                        result["similarity"],
+                                    )
+                                    # Check gait enrollment need for known persons
+                                    if enroll_gait and result.get("is_known"):
+                                        counts = await repo.get_person_embedding_counts(
+                                            result["person_id"]
+                                        )
+                                        if counts["gait_embeddings"] == 0:
+                                            track_manager.mark_needs_gait_enrollment(
+                                                camera_source, track_id
+                                            )
+                            except Exception as e:
+                                logger.warning("Face rec error track %d: %s", track_id, e)
+
+            # Extract pose ONCE per frame (outside person loop)
+            pose = gait_service.extract_pose(frame)
+            pose_added_to_track_id = None  # Track which track received the pose
+            if pose:
+                pose_bbox = gait_service.extract_pose_bbox(pose, frame_w, frame_h)
+                if pose_bbox:
+                    # Find which track contains this pose (center inside body)
+                    pose_track = track_manager.find_track_containing_bbox(
+                        camera_source, pose_bbox
+                    )
+                    if pose_track:
+                        gait_service.add_pose_to_track(
+                            camera_source, pose_track.track_id, pose
+                        )
+                        pose_added_to_track_id = pose_track.track_id
+
+                        # Check if buffer full for this track
+                        if gait_service.is_track_buffer_full(
+                            camera_source, pose_track.track_id
+                        ):
+                            pt_track = track_manager.get_track(
+                                camera_source, pose_track.track_id
+                            )
+                            if pt_track and pt_track.needs_gait_enrollment:
+                                # Enrollment mode
+                                try:
+                                    emb_id = await gait_service.enroll_track_gait(
+                                        camera_source=camera_source,
+                                        track_id=pose_track.track_id,
+                                        person_id=pt_track.person_id,
+                                        walking_direction="mixed",
+                                        source="auto_multitrack",
+                                    )
+                                    if emb_id:
+                                        track_manager.mark_gait_enrolled(
+                                            camera_source, pose_track.track_id
+                                        )
+                                        logger.info(
+                                            "Gait enrolled track %d: %s",
+                                            pose_track.track_id,
+                                            pt_track.person_name,
+                                        )
+                                except Exception as e:
+                                    logger.error("Gait enroll error: %s", e)
+                            elif pt_track and pt_track.person_id:
+                                # Recognition mode - verify gait matches face
+                                try:
+                                    gait_result = await gait_service.recognize_track_gait(
+                                        camera_source=camera_source,
+                                        track_id=pose_track.track_id,
+                                        threshold=cfg.gait_threshold,
+                                        use_averaged=use_averaged,
+                                    )
+                                    if gait_result and gait_result.get("matched"):
+                                        track_manager.update_gait_match(
+                                            camera_source,
+                                            pose_track.track_id,
+                                            gait_result["similarity"],
+                                        )
+                                except Exception as e:
+                                    logger.warning("Gait rec error: %s", e)
+
+            # Clean up stale tracks
+            track_manager.cleanup_stale_tracks(max_age=cfg.track_timeout)
+            gait_service._cleanup_stale_tracks()
+
+            # Draw overlays for all tracked persons
+            for pt in person_tracks:
+                track_id = pt["track_id"]
+                bbox = pt["bbox"]
+                x1, y1, x2, y2 = bbox
+                track = track_manager.get_track(camera_source, track_id)
+
+                # Determine color and label
+                if track and track.person_id:
+                    if track.combined_similarity > 0:
+                        color = (0, 255, 0)  # Bright green for combined
+                        label = f"#{track_id} {track.person_name} ({track.combined_similarity:.0%})"
+                    elif track.face_similarity > 0:
+                        color = (0, 200, 0)  # Green for face only
+                        label = f"#{track_id} {track.person_name} ({track.face_similarity:.0%})"
+                    else:
+                        color = (0, 165, 255)  # Orange for new
+                        label = f"#{track_id} NEW: {track.person_name}"
+                else:
+                    color = (128, 128, 128)  # Gray for unidentified
+                    label = f"#{track_id} Person ({pt['conf']:.0%})"
+
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+
+                # Gait progress indicator (progress is 0.0-1.0 ratio)
+                gait_progress = gait_service.get_track_progress(camera_source, track_id)
+                # Always draw progress bar background for any tracked person
+                bar_y1 = min(y2 + 2, frame_h - 10)
+                bar_y2 = min(y2 + 8, frame_h - 2)
+                # Draw gray outline always
+                cv2.rectangle(frame, (x1, bar_y1), (x2, bar_y2), (100, 100, 100), 1)
+                if gait_progress > 0:
+                    # Cap progress at 1.0 for display
+                    display_progress = min(gait_progress, 1.0)
+                    bar_width = max(int((x2 - x1) * display_progress), 2)  # Min 2px
+                    # Draw orange progress fill
+                    cv2.rectangle(
+                        frame, (x1, bar_y1), (x1 + bar_width, bar_y2), (0, 165, 255), -1
+                    )
+
+                # Label background
+                (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
+                cv2.rectangle(frame, (x1, y1 - 20), (x1 + tw + 4, y1), color, -1)
+                cv2.putText(
+                    frame, label, (x1 + 2, y1 - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2
+                )
+
+            # Stats overlay with debug info
+            summary = track_manager.get_track_summary(camera_source)
+            active_gait_tracks = gait_service.get_active_tracks()
+            pose_detected = pose is not None
+            # Show buffer info for the track that received the pose
+            debug_buf_len = 0
+            debug_track_id = pose_added_to_track_id
+            if debug_track_id is not None:
+                debug_buf_len = gait_service.get_track_buffer_length(camera_source, debug_track_id)
+            cv2.rectangle(frame, (5, 5), (440, 85), (0, 0, 0), -1)
+            stats_line1 = f"Multi-Track | Persons: {summary['total_tracks']}"
+            stats_line2 = f"Identified: {summary['identified']} | Gait: {summary['with_gait']}"
+            stats_line3 = f"Pose: {'YES' if pose_detected else 'NO'} | PoseTrack: {pose_added_to_track_id}"
+            stats_line4 = f"Track#{debug_track_id} buf: {debug_buf_len}/{gait_service.sequence_length} | Keys: {active_gait_tracks[:2]}"
+            cv2.putText(frame, stats_line1, (10, 16),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+            cv2.putText(frame, stats_line2, (10, 32),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+            cv2.putText(frame, stats_line3, (10, 48),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
+            cv2.putText(frame, stats_line4, (10, 64),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 0), 1)
+
+            _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
+            )
+
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if frame_interval - elapsed > 0:
+                await asyncio.sleep(frame_interval - elapsed)
+
+    finally:
+        cap.release()
+        logger.info("Multi-track recognition stream closed: %s", source)
+
+
+@router.get("/webcam/recognition/multitrack")
+async def stream_webcam_recognition_multitrack(
+    device: int = Query(default=0, description="Webcam device index"),
+    fps: int = Query(default=15, ge=1, le=30, description="Target FPS"),
+    threshold: float = Query(default=0.6, ge=0.3, le=1.0, description="Face threshold"),
+    auto_enroll: bool = Query(default=True, description="Auto-enroll unknown faces"),
+    enroll_gait: bool = Query(default=True, description="Auto-enroll gait"),
+    person_threshold: float = Query(default=0.5, ge=0.3, le=1.0, description="Person detection threshold"),
+    width: int = Query(default=640, description="Frame width"),
+    height: int = Query(default=480, description="Frame height"),
+):
+    """
+    Stream webcam with multi-person face + gait recognition.
+
+    Tracks multiple people simultaneously using YOLO ByteTrack.
+    Each person has independent face recognition and gait collection.
+
+    - Green box: Identified person with combined face+gait match
+    - Light green box: Identified by face only
+    - Orange box: Newly enrolled person
+    - Gray box: Unidentified person (being tracked)
+    - Orange bar below box: Gait collection progress
+
+    **URL:** http://localhost:8002/api/v1/video/webcam/recognition/multitrack
+    """
+    logger.info(
+        "Starting multi-track recognition: device=%d, threshold=%.2f",
+        device, threshold,
+    )
+
+    return StreamingResponse(
+        _generate_multitrack_recognition_mjpeg(
+            source=str(device),
+            fps=fps,
+            threshold=threshold,
+            auto_enroll=auto_enroll,
+            enroll_gait=enroll_gait,
+            width=width,
+            height=height,
+            person_threshold=person_threshold,
+        ),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )

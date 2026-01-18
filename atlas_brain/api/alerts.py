@@ -263,3 +263,32 @@ async def disable_alert_rule(rule_name: str):
         return {"success": True, "message": f"Rule '{rule_name}' disabled"}
     else:
         return {"success": False, "message": f"Rule '{rule_name}' not found"}
+
+
+@router.post("/test")
+async def trigger_test_alert(
+    message: str = Query(default="Test alert from Atlas", description="Test message"),
+):
+    """
+    Trigger a test alert to verify the delivery pipeline.
+
+    Creates a test reminder event and processes it through the alert system.
+    This will trigger all configured delivery methods (TTS, ntfy, etc.).
+    """
+    from ..alerts import ReminderAlertEvent
+
+    manager = get_alert_manager()
+    test_event = ReminderAlertEvent(
+        source_id="test_alert",
+        timestamp=datetime.utcnow(),
+        message=message,
+        reminder_id="test-000",
+        event_type="reminder",
+    )
+
+    result = await manager.process_event(test_event)
+
+    return {
+        "success": bool(result),
+        "message": "Alert triggered and delivered" if result else "No matching rule found",
+    }
