@@ -72,6 +72,10 @@ class OrchestratorConfig:
     keyword_enabled: bool = True
     keyword: str = "atlas"
 
+    # Wake word detection using OpenWakeWord (disabled until custom Atlas model trained)
+    wakeword_enabled: bool = False
+    wakeword_threshold: float = 0.5
+
     # Behavior
     auto_execute: bool = True  # Auto-execute actions or return for confirmation
 
@@ -88,7 +92,7 @@ class OrchestratorConfig:
     processing_timeout_ms: int = 10000  # Max time for LLM processing
 
     # Audio quality threshold - skip STT if audio RMS is below this
-    min_audio_rms: int = 0  # Disabled for testing
+    min_audio_rms: int = 50  # Filter noise below this RMS threshold
 
     @classmethod
     def from_settings(cls) -> "OrchestratorConfig":
@@ -108,6 +112,8 @@ class OrchestratorConfig:
             vad_config=vad_config,
             keyword_enabled=getattr(orch, "keyword_enabled", True),
             keyword=getattr(orch, "keyword", "atlas"),
+            wakeword_enabled=getattr(orch, "wakeword_enabled", False),
+            wakeword_threshold=getattr(orch, "wakeword_threshold", 0.5),
             auto_execute=orch.auto_execute,
             follow_up_enabled=getattr(orch, "follow_up_enabled", True),
             follow_up_duration_ms=getattr(orch, "follow_up_duration_ms", 20000),
@@ -198,6 +204,10 @@ class Orchestrator:
         self._intent_parser = None
         self._action_dispatcher = None
         self._memory_client = None
+        self._wakeword_detector = None
+
+        # Wake word state
+        self._wakeword_detected = False
 
         # Session management for persistence
         self._session_id: Optional[str] = session_id
@@ -209,15 +219,19 @@ class Orchestrator:
 
         # Follow-up mode tracking
         self._last_response_time: Optional[datetime] = None
-        
+
         # Progressive prompting state
         self._last_interim_transcript: Optional[str] = None
         self._prefill_task: Optional[asyncio.Task] = None
 
+        # Streaming STT state
+        self._streaming_stt_active = False
+        self._streaming_audio_buffer: list[bytes] = []  # Accumulate raw audio for streaming
+
         logger.info(
-            "Orchestrator initialized (keyword=%s/%s, follow_up=%s/%dms, progressive=%s/%dms, agent=%s)",
-            self.config.keyword_enabled,
-            self.config.keyword if self.config.keyword_enabled else "disabled",
+            "Orchestrator initialized (wakeword=%s/%.2f, follow_up=%s/%dms, progressive=%s/%dms, agent=%s)",
+            self.config.wakeword_enabled,
+            self.config.wakeword_threshold if self.config.wakeword_enabled else 0,
             self.config.follow_up_enabled,
             self.config.follow_up_duration_ms,
             self.config.progressive_prompting_enabled,
@@ -263,6 +277,11 @@ class Orchestrator:
             self._stt = stt_registry.get_active()
         return self._stt
 
+    def _stt_supports_streaming(self) -> bool:
+        """Check if the current STT service supports cache-aware streaming."""
+        stt = self._get_stt()
+        return stt is not None and hasattr(stt, 'reset_streaming') and hasattr(stt, 'transcribe_chunk')
+
     def _get_vlm(self):
         """Lazy load VLM service."""
         if self._vlm is None:
@@ -290,6 +309,19 @@ class Orchestrator:
             from ..services import llm_registry
             self._llm = llm_registry.get_active()
         return self._llm
+
+    def _get_wakeword_detector(self):
+        """Lazy load wake word detector."""
+        if self._wakeword_detector is None and self.config.wakeword_enabled:
+            try:
+                from ..services.wakeword import get_wakeword_detector
+                self._wakeword_detector = get_wakeword_detector(
+                    threshold=self.config.wakeword_threshold,
+                )
+                self._wakeword_detector.load()
+            except Exception as e:
+                logger.warning("Failed to load wake word detector: %s", e)
+        return self._wakeword_detector
 
     def _get_intent_parser(self):
         """Lazy load intent parser."""
@@ -333,6 +365,9 @@ class Orchestrator:
         """Reset the orchestrator to idle state."""
         self._state_machine.reset()
         self._audio_buffer.reset()
+        # Reset streaming STT state
+        self._streaming_stt_active = False
+        self._streaming_audio_buffer.clear()
         logger.debug("Orchestrator reset")
 
     def _log_latency_summary(
@@ -451,8 +486,28 @@ class Orchestrator:
 
         state = self._state_machine.state
 
-        # Process audio through VAD (always listening mode)
-        if state in (PipelineState.IDLE, PipelineState.RECORDING):
+        # Wake word detection (runs continuously when IDLE and not in follow-up mode)
+        if state == PipelineState.IDLE and not self._wakeword_detected and not self.in_follow_up_mode:
+            wakeword_detector = self._get_wakeword_detector()
+            if wakeword_detector:
+                result = wakeword_detector.process_audio(audio_chunk)
+                if result.detected:
+                    self._wakeword_detected = True
+                    debug.info(f"Wake word detected: {result.wake_word} ({result.confidence:.2f})")
+                    logger.info("Wake word detected: %s (confidence=%.3f)",
+                               result.wake_word, result.confidence)
+
+        # Process audio through VAD ONLY after wake word detected or in follow-up mode
+        # This prevents VAD from triggering on background noise and sending to Whisper
+        # If wakeword is disabled, always process VAD (use keyword detection instead)
+        should_process_vad = (
+            not self.config.wakeword_enabled or  # Wakeword disabled = always process VAD
+            self._wakeword_detected or
+            self.in_follow_up_mode or
+            state == PipelineState.RECORDING  # Continue if already recording
+        )
+
+        if state in (PipelineState.IDLE, PipelineState.RECORDING) and should_process_vad:
             event = self._audio_buffer.add_audio(audio_chunk)
 
             if event == "speech_start":
@@ -460,7 +515,7 @@ class Orchestrator:
                 if self.in_follow_up_mode:
                     debug.state("RECORDING", "[follow-up mode]")
                 else:
-                    debug.state("RECORDING")
+                    debug.state("RECORDING", "[wake word]")
                 self._state_machine.context.recording_started_at = datetime.now()
                 self._state_machine.transition(PipelineEvent.SPEECH_START)
                 # Reset progressive prompting state
@@ -468,16 +523,33 @@ class Orchestrator:
                 if self._prefill_task and not self._prefill_task.done():
                     self._prefill_task.cancel()
                 self._prefill_task = None
-            
-            elif event == "speech_interim":
-                # Progressive prompting: transcribe interim audio and prefill LLM
-                await self._process_interim_audio()
+
+                # Initialize streaming STT if supported
+                stt_supports = self._stt_supports_streaming()
+                if stt_supports:
+                    stt = self._get_stt()
+                    stt.reset_streaming()
+                    self._streaming_stt_active = True
+                    self._streaming_audio_buffer.clear()
+                    logger.debug("Streaming STT initialized")
+
+            # Always accumulate audio for streaming if active (captures every chunk)
+            if self._streaming_stt_active:
+                self._streaming_audio_buffer.append(audio_chunk)
+
+            if event == "speech_interim":
+                if self._streaming_stt_active:
+                    # Process streaming chunk
+                    await self._process_streaming_chunk()
+                else:
+                    # Fallback: Progressive prompting with batch transcription
+                    await self._process_interim_audio()
 
             elif event in ("speech_end", "max_duration"):
                 self._state_machine.context.recording_ended_at = datetime.now()
                 self._state_machine.transition(PipelineEvent.SPEECH_END)
                 debug.state("TRANSCRIBING")
-                
+
                 # Cancel any pending prefill task
                 if self._prefill_task and not self._prefill_task.done():
                     self._prefill_task.cancel()
@@ -487,7 +559,11 @@ class Orchestrator:
                 audio_bytes = self._audio_buffer.get_utterance()
                 if audio_bytes:
                     self._state_machine.context.audio_bytes = audio_bytes
-                    return await self._process_utterance()
+                    # Pass wake word detection status to utterance processing
+                    # Capture and reset flag before processing to avoid re-triggering
+                    wakeword_triggered = self._wakeword_detected
+                    self._wakeword_detected = False
+                    return await self._process_utterance(wakeword_triggered=wakeword_triggered)
 
         return None
     
@@ -556,8 +632,76 @@ class Orchestrator:
         except Exception as e:
             logger.debug("Prefill failed: %s", e)
 
-    async def _process_utterance(self) -> OrchestratorResult:
-        """Process a complete utterance through STT → Intent → Action → TTS."""
+    async def _process_streaming_chunk(self) -> None:
+        """
+        Process accumulated audio through streaming STT.
+
+        Uses cache-aware streaming to incrementally transcribe audio
+        while maintaining encoder state across chunks. This provides
+        ~17ms per-chunk latency after the first chunk.
+        """
+        import numpy as np
+
+        if not self._streaming_stt_active or not self._streaming_audio_buffer:
+            return
+
+        stt = self._get_stt()
+        if stt is None:
+            return
+
+        try:
+            # Combine accumulated audio chunks (don't clear yet - wait until we've sent to STT)
+            combined_audio = b"".join(self._streaming_audio_buffer)
+
+            # Convert int16 PCM to float32 numpy array
+            audio_samples = np.frombuffer(combined_audio, dtype=np.int16).astype(np.float32) / 32768.0
+
+            # Skip if too short (need at least 30ms for Nemotron streaming)
+            # Each 30ms frame = 480 samples at 16kHz
+            if len(audio_samples) < 480:  # 30ms minimum (1 frame)
+                return
+
+            # Clear buffer only after confirming we have enough data
+            self._streaming_audio_buffer.clear()
+
+            # Process through streaming STT
+            async with _cuda_lock:
+                result = await stt.transcribe_chunk(audio_samples)
+
+            interim_text = result.get("accumulated_text", "").strip()
+
+            # Log progress
+            if interim_text:
+                logger.debug(
+                    "Streaming chunk %d: '%s' (%.0fms)",
+                    result.get("chunk_count", 0),
+                    interim_text[:40],
+                    result.get("metrics", {}).get("duration_ms", 0),
+                )
+
+                # Update last interim for display
+                self._last_interim_transcript = interim_text
+
+                # Optional: prefill LLM with streaming transcript
+                if self.config.progressive_prompting_enabled:
+                    llm = self._get_llm()
+                    if llm and hasattr(llm, "prefill_async"):
+                        from ..services.protocols import Message
+                        messages = [Message(role="user", content=interim_text)]
+                        self._prefill_task = asyncio.create_task(
+                            self._do_prefill(llm, messages),
+                            name="llm_prefill_streaming",
+                        )
+
+        except Exception as e:
+            logger.warning("Streaming chunk processing failed: %s", e)
+
+    async def _process_utterance(self, wakeword_triggered: bool = False) -> OrchestratorResult:
+        """Process a complete utterance through STT → Intent → Action → TTS.
+
+        Args:
+            wakeword_triggered: If True, skip keyword checking (wake word already detected)
+        """
         ctx = self._state_machine.context
         result = OrchestratorResult(success=True)
 
@@ -616,14 +760,44 @@ class Orchestrator:
         logger.info("Audio RMS: %.1f (threshold: %d)", audio_rms, self.config.min_audio_rms)
         if audio_rms < self.config.min_audio_rms:
             logger.info("Audio below threshold, skipping STT")
+            # Clean up streaming state
+            if self._streaming_stt_active:
+                stt.finalize_streaming()  # Discard incomplete stream
+                self._streaming_stt_active = False
+                self._streaming_audio_buffer.clear()
             result.success = True
             return result
 
         try:
-            async with _cuda_lock:
-                transcription = await stt.transcribe(ctx.audio_bytes)
-            ctx.transcript = transcription.get("transcript", "")
-            ctx.transcript_confidence = transcription.get("confidence", 0.0)
+            # Use streaming finalization if streaming was active, otherwise batch transcribe
+            if self._streaming_stt_active and hasattr(stt, 'finalize_streaming'):
+                # Process any remaining buffered audio
+                if self._streaming_audio_buffer:
+                    import numpy as np
+                    combined_audio = b"".join(self._streaming_audio_buffer)
+                    self._streaming_audio_buffer.clear()
+                    audio_samples = np.frombuffer(combined_audio, dtype=np.int16).astype(np.float32) / 32768.0
+                    if len(audio_samples) >= 1600:
+                        async with _cuda_lock:
+                            await stt.transcribe_chunk(audio_samples)
+
+                # Finalize streaming and get complete transcript
+                final_result = stt.finalize_streaming()
+                ctx.transcript = final_result.get("transcript", "")
+                ctx.transcript_confidence = 1.0  # Streaming doesn't provide confidence
+                self._streaming_stt_active = False
+                logger.info(
+                    "Streaming STT finalized: %d chunks, %.2fs audio",
+                    final_result.get("chunk_count", 0),
+                    final_result.get("duration_seconds", 0),
+                )
+            else:
+                # Batch transcription (fallback)
+                async with _cuda_lock:
+                    transcription = await stt.transcribe(ctx.audio_bytes)
+                ctx.transcript = transcription.get("transcript", "")
+                ctx.transcript_confidence = transcription.get("confidence", 0.0)
+
             result.transcript = ctx.transcript
             result.transcription_ms = (datetime.now() - trans_start).total_seconds() * 1000
 
@@ -635,19 +809,50 @@ class Orchestrator:
             # Skip processing if transcription is empty (no speech detected)
             if not ctx.transcript or not ctx.transcript.strip():
                 logger.info("Empty transcription, skipping response generation")
+                # DEBUG: Save failing utterance for analysis
+                try:
+                    import wave
+                    debug_path = "/tmp/last_empty_utterance.wav"
+                    with wave.open(debug_path, "wb") as wf:
+                        wf.setnchannels(1)
+                        wf.setsampwidth(2)
+                        wf.setframerate(16000)
+                        wf.writeframes(ctx.audio_bytes)
+                    logger.warning("DEBUG: Saved empty utterance to %s (%d bytes)", debug_path, len(ctx.audio_bytes))
+                except Exception as e:
+                    logger.warning("DEBUG: Failed to save utterance: %s", e)
                 result.success = True
                 return result
 
             # Keyword detection - only respond if keyword is in transcript
-            # Skip keyword check if in follow-up mode (already in conversation)
-            if self.config.keyword_enabled and not self.in_follow_up_mode:
+            # Skip keyword check if:
+            # - Wake word was already detected via OpenWakeWord
+            # - In follow-up mode (already in conversation)
+            if self.config.keyword_enabled and not self.in_follow_up_mode and not wakeword_triggered:
                 keyword_lower = self.config.keyword.lower()
                 transcript_lower = ctx.transcript.lower()
-                if keyword_lower not in transcript_lower:
+
+                # Check for keyword or common Whisper mishearings
+                # "Atlas" often gets transcribed as "ass", "atlis", "atlus", "at las", "athlete"
+                keyword_variants = [keyword_lower]
+                if keyword_lower == "atlas":
+                    keyword_variants.extend([
+                        "atlis", "atlus", "at las", "at-las",
+                        "athlete", "athletes",  # Very common mishearing
+                        "hey atlas", "hey atlis", "hey atlus",
+                        "hey athlete",
+                        # Whisper commonly mishears "atlas" as "ass" in noisy audio
+                        "hey ass", "hey az",
+                    ])
+
+                keyword_found = any(variant in transcript_lower for variant in keyword_variants)
+                if not keyword_found:
                     debug.keyword(self.config.keyword, found=False)
                     result.success = True
                     return result
                 debug.keyword(self.config.keyword, found=True)
+            elif wakeword_triggered:
+                debug.info("Wake word triggered - keyword check skipped")
             elif self.in_follow_up_mode:
                 debug.info("Follow-up mode - keyword check skipped")
 
@@ -1147,6 +1352,36 @@ class Orchestrator:
             except Exception as e:
                 debug.tool("get_calendar", error=str(e))
 
+        # Notification tool detection - sends message to user's phone
+        notify_keywords = ["send me", "send a notification", "notify me", "remind me", "push notification"]
+        if any(kw in transcript_lower for kw in notify_keywords):
+            try:
+                # Extract the message content after the keyword
+                message_content = transcript
+                for kw in notify_keywords:
+                    if kw in transcript_lower:
+                        idx = transcript_lower.find(kw) + len(kw)
+                        message_content = transcript[idx:].strip()
+                        # Clean up common filler words at the start
+                        for prefix in ["with ", "about ", "that ", "a ", "my "]:
+                            if message_content.lower().startswith(prefix):
+                                message_content = message_content[len(prefix):]
+                        break
+
+                if message_content:
+                    notify_result = await tool_registry.execute("send_notification", {
+                        "message": message_content,
+                        "title": "Atlas",
+                    })
+                    if notify_result.success:
+                        tool_results["notification"] = "Notification sent to your phone."
+                        debug.tool("send_notification", {"message": message_content[:30]}, result="sent")
+                    else:
+                        tool_results["notification"] = f"Failed to send: {notify_result.message}"
+                        debug.tool("send_notification", error=notify_result.message)
+            except Exception as e:
+                debug.tool("send_notification", error=str(e))
+
         if result and tool_results:
             result.tools_ms = (datetime.now() - tools_start).total_seconds() * 1000
 
@@ -1189,30 +1424,24 @@ class Orchestrator:
             except Exception as e:
                 logger.warning("Failed to retrieve memory context: %s", e)
 
-        # Execute tools if query matches tool keywords
-        tool_results = await self._execute_tools_for_query(ctx.transcript, result)
-        tool_context = ""
-        if tool_results:
-            tool_context = "IMPORTANT - Use this exact information in your response:\n"
-            for tool_name, tool_msg in tool_results.items():
-                tool_context += f"- {tool_msg}\n"
-
-        system_msg = "You are Atlas, a capable personal assistant. You can control smart home devices, answer questions, and help with various tasks. Be conversational and concise."
-        if tool_context:
-            system_msg += " Use ONLY the provided information below. Do NOT make up facts."
+        # Build system message
+        system_msg = (
+            "You are Atlas, a voice assistant. "
+            "CRITICAL: Keep responses under 20 words. Be extremely brief. "
+            "Answer directly - no explanations unless asked. "
+            "Use tools when needed."
+        )
         if ctx.speaker_id != "unknown":
             system_msg += f" The speaker is {ctx.speaker_id}."
         if memory_context:
-            system_msg += f"\n\n{memory_context}"
-        if tool_context:
-            system_msg += f"\n\n{tool_context}"
+            system_msg += f"\n\nRelevant context:\n{memory_context}"
 
         messages = [Message(role="system", content=system_msg)]
 
         # Include conversation history from session if available
         if self._session_id:
             try:
-                history = await self.load_session_history(limit=6)  # Last 3 exchanges
+                history = await self.load_session_history(limit=6)
                 for turn in history:
                     messages.append(Message(role=turn.role, content=turn.content))
                 if history:
@@ -1223,18 +1452,28 @@ class Orchestrator:
         # Add current user message
         messages.append(Message(role="user", content=ctx.transcript))
 
+        # Use tool executor for LLM with tool calling
+        from ..services.tool_executor import execute_with_tools
+
         try:
             llm_start = datetime.now()
             async with _cuda_lock:
-                llm_result = llm.chat(
+                exec_result = await execute_with_tools(
+                    llm=llm,
                     messages=messages,
-                    max_tokens=100,
+                    max_tokens=40,
                     temperature=0.7,
                 )
             llm_elapsed = (datetime.now() - llm_start).total_seconds() * 1000
             if result:
                 result.llm_ms = llm_elapsed
-            response = llm_result.get("response", "").strip()
+                result.tools_ms = 0  # Included in llm_ms now
+
+            tools_executed = exec_result.get("tools_executed", [])
+            if tools_executed:
+                logger.info("Tools executed: %s", tools_executed)
+
+            response = exec_result.get("response", "").strip()
             if response:
                 debug.llm(response, latency_ms=llm_elapsed)
                 return response

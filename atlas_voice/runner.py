@@ -50,6 +50,7 @@ class RunnerConfig:
     input_device: Optional[int] = None
     output_device: Optional[int] = None
     sample_rate: int = 16000
+    input_gain: float = 1.0  # Software gain multiplier for quiet mics
 
     # Behavior
     require_wake_word: bool = True
@@ -76,6 +77,7 @@ class VoiceRunner:
         self._capture = AudioCapture(CaptureConfig(
             sample_rate=self.config.sample_rate,
             device=self.config.input_device,
+            gain=self.config.input_gain,
         ))
         self._output = AudioOutput(OutputConfig(
             device=self.config.output_device,
@@ -123,6 +125,7 @@ class VoiceRunner:
             self.config.atlas_url,
             ping_interval=30,  # Send ping every 30 seconds
             ping_timeout=120,  # Wait up to 120 seconds for pong
+            max_size=10 * 1024 * 1024,  # 10MB max frame size for TTS audio
         ) as ws:
             self._ws = ws
             self._connected = True
@@ -241,16 +244,19 @@ class VoiceRunner:
                         # Wait for residual audio to decay (room reverb, speaker resonance)
                         await asyncio.sleep(0.6)
                         logger.info("PLAYBACK: Draining audio buffer")
-                        # Aggressively drain all buffered audio that may contain TTS echo
-                        # Multiple passes to ensure we get everything
+                        # Drain buffered audio that may contain TTS echo
+                        # Limit to prevent infinite loop if capture keeps producing
                         drained = 0
+                        max_drain = 500  # ~5 seconds of audio at typical frame rate
                         for _ in range(3):  # Multiple drain passes
-                            while True:
-                                frame = self._capture.get_frame(timeout=0.05)
+                            pass_count = 0
+                            while pass_count < max_drain // 3:
+                                frame = self._capture.get_frame(timeout=0.01)
                                 if not frame:
                                     break
                                 drained += 1
-                            await asyncio.sleep(0.1)  # Wait for more audio to arrive
+                                pass_count += 1
+                            await asyncio.sleep(0.05)
                         logger.info("PLAYBACK: Drained %d frames", drained)
                     finally:
                         self._muted = False
@@ -432,12 +438,14 @@ Examples:
         return
 
     # Build configuration
+    input_gain = float(os.environ.get("ATLAS_VOICE_INPUT_GAIN", "1.0"))
     config = RunnerConfig(
         atlas_url=args.url,
         input_device=args.input,
         output_device=args.output,
         require_wake_word=not args.no_wake,
         play_responses=not args.no_audio,
+        input_gain=input_gain,
     )
 
     # Get wake word from environment for display

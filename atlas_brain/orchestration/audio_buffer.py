@@ -177,16 +177,17 @@ class AudioBuffer:
             if self.speech_duration_ms >= self.config.max_speech_duration_ms:
                 return "max_duration"
 
-            # Check for silence (speech end)
-            silence_frames = self._frames_for_ms(self.config.silence_duration_ms)
-            if self._unvoiced_frames >= silence_frames:
-                return "speech_end"
-            
-            # Check for interim event (progressive streaming)
+            # Check for interim event FIRST (progressive streaming)
+            # This must come before silence check so interim events fire during speech
             frames_since_last_interim = self._total_speech_frames - self._last_interim_frame
             if frames_since_last_interim >= self._interim_interval_frames:
                 self._last_interim_frame = self._total_speech_frames
                 return "speech_interim"
+
+            # Check for silence (speech end) AFTER interim
+            silence_frames = self._frames_for_ms(self.config.silence_duration_ms)
+            if self._unvoiced_frames >= silence_frames:
+                return "speech_end"
 
         return None
 

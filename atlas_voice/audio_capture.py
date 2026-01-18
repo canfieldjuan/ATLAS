@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 import numpy as np
+import scipy.signal
 import sounddevice as sd
 
 logger = logging.getLogger("atlas.voice.capture")
@@ -26,6 +27,7 @@ class CaptureConfig:
     dtype: str = "int16"
     frame_duration_ms: int = 30  # Frame size for VAD compatibility
     device: Optional[int] = None  # None = default device
+    gain: float = 1.0  # Software gain multiplier (1.0 = no boost)
 
     @property
     def frame_size(self) -> int:
@@ -63,12 +65,31 @@ class AudioCapture:
         if status:
             logger.warning("Audio capture status: %s", status)
 
-        # Convert to bytes and queue
-        audio_bytes = indata.tobytes()
+        # Process audio (Resample + Gain + Convert)
         try:
+            # 1. Convert to float32 for processing
+            audio_float = indata.flatten().astype(np.float32)
+
+            # 2. Resample if needed
+            if getattr(self, '_resample_needed', False):
+                # Calculate target length based on configured rate (likely 16000)
+                # self.config.frame_size is the target size
+                audio_float = scipy.signal.resample(audio_float, self.config.frame_size)
+
+            # 3. Apply Gain
+            if self.config.gain != 1.0:
+                audio_float = audio_float * self.config.gain
+
+            # 4. Clip and convert to int16 bytes
+            # Ensure we are saving as valid int16
+            audio_clipped = np.clip(audio_float, -32768, 32767)
+            audio_bytes = audio_clipped.astype(np.int16).tobytes()
+
             self._audio_queue.put_nowait(audio_bytes)
         except queue.Full:
             logger.warning("Audio queue full, dropping frame")
+        except Exception as e:
+            logger.error(f"Audio processing error: {e}")
 
     def start(self) -> None:
         """Start audio capture."""
@@ -76,19 +97,60 @@ class AudioCapture:
             return
 
         self._running = True
+        
+        # Determine capture rate (auto-detect or use config)
+        capture_rate = self.config.sample_rate
+        self._resample_needed = False
+        
+        # Try configured settings first
+        try:
+            sd.check_input_settings(
+                device=self.config.device,
+                channels=self.config.channels,
+                dtype=self.config.dtype,
+                samplerate=capture_rate
+            )
+        except Exception:
+            # Fallback to device default rate
+            try:
+                # If device is None (default), query default device
+                dev_id = self.config.device
+                if dev_id is None:
+                    dev_id = sd.default.device[0]
+                
+                dev_info = sd.query_devices(dev_id, 'input')
+                native_rate = int(dev_info['default_samplerate'])
+                
+                if native_rate != capture_rate:
+                    logger.warning(
+                        "Requested rate %d Hz failed. Using native %d Hz with real-time resampling.", 
+                        capture_rate, native_rate
+                    )
+                    capture_rate = native_rate
+                    self._resample_needed = True
+            except Exception as e:
+                logger.error("Failed to query device info: %s. Trying fallback to 48000Hz.", e)
+                capture_rate = 48000
+                self._resample_needed = True
+
+        # Calculate blocksize for the actual capture rate
+        # We want the duration to match the target frame_duration_ms
+        capture_frame_size = int(capture_rate * self.config.frame_duration_ms / 1000)
+
         self._stream = sd.InputStream(
-            samplerate=self.config.sample_rate,
+            samplerate=capture_rate,
             channels=self.config.channels,
             dtype=self.config.dtype,
-            blocksize=self.config.frame_size,
+            blocksize=capture_frame_size,
             device=self.config.device,
             callback=self._audio_callback,
         )
         self._stream.start()
 
         logger.info(
-            "Audio capture started (rate=%d, device=%s)",
-            self.config.sample_rate,
+            "Audio capture started (rate=%d, resample=%s, device=%s)",
+            capture_rate,
+            self._resample_needed,
             self.config.device or "default",
         )
 
