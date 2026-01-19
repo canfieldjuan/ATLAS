@@ -183,9 +183,15 @@ class OllamaLLM(BaseModelService):
         if tools:
             payload["tools"] = tools
             logger.info("Sending %d tools to Ollama", len(tools))
+            # Debug: log first tool schema
+            if tools:
+                import json
+                logger.debug("First tool schema: %s", json.dumps(tools[0], indent=2)[:500])
 
         try:
+            import json
             logger.debug("Ollama request payload keys: %s", list(payload.keys()))
+            logger.debug("Messages: %s", [{"role": m["role"], "content": m["content"][:100]} for m in ollama_messages])
             response = self._sync_client.post(
                 f"{self.base_url}/api/chat",
                 json=payload,
@@ -193,7 +199,11 @@ class OllamaLLM(BaseModelService):
             response.raise_for_status()
             data = response.json()
 
+            # Debug: log full response message
+            logger.debug("Full Ollama response data keys: %s", list(data.keys()))
+
             msg = data.get("message", {})
+            logger.debug("Message keys: %s", list(msg.keys()))
             tool_calls = msg.get("tool_calls", [])
             logger.info("Ollama response: content_len=%d, tool_calls=%d",
                        len(msg.get("content", "")), len(tool_calls))

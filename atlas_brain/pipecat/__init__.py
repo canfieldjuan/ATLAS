@@ -24,6 +24,7 @@ from .router import (
     route_query,
 )
 from .llm import GptOssToolService, ToolCallResult, get_gptoss_service, process_complex_query
+from .agent_processor import AtlasAgentProcessor
 
 __all__ = [
     # STT/TTS
@@ -42,4 +43,6 @@ __all__ = [
     "ToolCallResult",
     "get_gptoss_service",
     "process_complex_query",
+    # Agent processor (unified entry point)
+    "AtlasAgentProcessor",
 ]

@@ -120,6 +120,11 @@ class IntentParser:
         if not query:
             return None
 
+        # Filter out very short queries (likely garbage from mic feedback)
+        if len(query) < 3 or len(query.split()) < 2:
+            logger.debug("Query too short, likely garbage: '%s'", query)
+            return None
+
         return await self._parse_with_llm(query)
 
     def _strip_wake_word(self, query: str) -> str:
@@ -140,6 +145,8 @@ class IntentParser:
 
         config = self._get_config()
         device_list = self._get_device_list()
+        logger.info("Intent parsing with LLM: %s", llm.model if hasattr(llm, 'model') else 'unknown')
+        logger.debug("Device list for intent: %s", device_list)
         prompt = UNIFIED_INTENT_PROMPT.format(devices=device_list, query=query)
 
         try:

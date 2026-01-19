@@ -11,7 +11,6 @@ from .devices import router as devices_router
 from .health import router as health_router
 from .llm import router as llm_router
 from .models import router as models_router
-from .orchestration import router as orchestration_router
 from .query import router as query_router
 from .speaker_id import router as speaker_id_router
 from .tts import router as tts_router
@@ -27,7 +26,6 @@ router.include_router(health_router)
 router.include_router(query_router)
 router.include_router(models_router)
 router.include_router(devices_router)
-router.include_router(orchestration_router)
 router.include_router(alerts_router)
 router.include_router(audio_events_router)
 router.include_router(comms_router)

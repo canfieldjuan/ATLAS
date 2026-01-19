@@ -20,6 +20,7 @@ from pipecat.frames.frames import (
     EndFrame,
     ErrorFrame,
     Frame,
+    StartFrame,
     TranscriptionFrame,
 )
 from pipecat.services.stt_service import SegmentedSTTService
@@ -63,11 +64,10 @@ class ParakeetSTTService(SegmentedSTTService):
         self._model = None
         self._sample_rate = 16000  # Parakeet expects 16kHz
 
-    async def start(self, frame: Frame) -> AsyncGenerator[Frame, None]:
+    async def start(self, frame: StartFrame):
         """Initialize the model on pipeline start."""
         await self._load_model()
-        async for f in super().start(frame):
-            yield f
+        await super().start(frame)
 
     async def _load_model(self):
         """Load the Parakeet model."""
@@ -180,11 +180,13 @@ class NemotronSTTService(SegmentedSTTService):
         self._params = params or self.InputParams()
         self._model = None
         self._sample_rate = 16000
+        self._audio_buffer_count = 0
 
-    async def start(self, frame: Frame) -> AsyncGenerator[Frame, None]:
+    async def start(self, frame: StartFrame):
+        """Initialize the model on pipeline start."""
         await self._load_model()
-        async for f in super().start(frame):
-            yield f
+        await super().start(frame)
+        logger.info("NemotronSTTService started - listening for speech segments")
 
     async def _load_model(self):
         if self._model is not None:
@@ -214,7 +216,14 @@ class NemotronSTTService(SegmentedSTTService):
             raise
 
     async def run_stt(self, audio: bytes) -> AsyncGenerator[Frame, None]:
+        logger.info("run_stt called with %d bytes of audio", len(audio) if audio else 0)
+
+        if not audio or len(audio) < 100:
+            logger.warning("run_stt: Audio too short (%d bytes), skipping", len(audio) if audio else 0)
+            return
+
         if self._model is None:
+            logger.error("run_stt: Nemotron model not loaded!")
             yield ErrorFrame(error="Nemotron model not loaded")
             return
 
@@ -222,6 +231,7 @@ class NemotronSTTService(SegmentedSTTService):
             start_time = time.time()
 
             audio_array = np.frombuffer(audio, dtype=np.int16).astype(np.float32) / 32768.0
+            logger.info("run_stt: Processing %.2f seconds of audio", len(audio_array) / 16000)
 
             loop = asyncio.get_event_loop()
 

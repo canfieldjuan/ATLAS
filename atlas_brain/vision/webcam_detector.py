@@ -23,9 +23,50 @@ class WebcamPersonDetector:
     Feeds detections directly to PresenceService for room-aware control.
     """
 
+    @staticmethod
+    def find_device_by_name(name_substring: str) -> int | None:
+        """Find video device index by name substring.
+
+        Args:
+            name_substring: Substring to search for in device name (case-insensitive)
+
+        Returns:
+            Device index if found, None otherwise
+        """
+        import subprocess
+        try:
+            # List video devices with v4l2-ctl
+            result = subprocess.run(
+                ["v4l2-ctl", "--list-devices"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode != 0:
+                logger.warning("v4l2-ctl not available, falling back to index")
+                return None
+
+            lines = result.stdout.strip().split('\n')
+            current_name = ""
+            for line in lines:
+                if not line.startswith('\t'):
+                    current_name = line.strip()
+                elif '/dev/video' in line and name_substring.lower() in current_name.lower():
+                    # Extract device number
+                    dev_path = line.strip()
+                    if dev_path.startswith('/dev/video'):
+                        idx = int(dev_path.replace('/dev/video', ''))
+                        logger.info("Found video device '%s' at index %d: %s",
+                                   name_substring, idx, current_name)
+                        return idx
+            logger.warning("Video device '%s' not found", name_substring)
+            return None
+        except Exception as e:
+            logger.warning("Error finding video device: %s", e)
+            return None
+
     def __init__(
         self,
         device_index: int = 0,
+        device_name: str | None = None,
         camera_source_id: str = "webcam_office",
         fps: int = 5,
         confidence_threshold: float = 0.5,
@@ -34,11 +75,20 @@ class WebcamPersonDetector:
         Initialize webcam detector.
 
         Args:
-            device_index: Video device index (0 = /dev/video0)
+            device_index: Video device index (deprecated, use device_name)
+            device_name: Video device name substring (e.g. "C920", "Logitech")
             camera_source_id: ID used to map to room in presence config
             fps: Detection rate (lower = less CPU, 5 is usually enough)
             confidence_threshold: YOLO confidence threshold
         """
+        # Resolve device name to index if provided
+        if device_name:
+            resolved_idx = self.find_device_by_name(device_name)
+            if resolved_idx is not None:
+                device_index = resolved_idx
+            else:
+                logger.warning("Device '%s' not found, using index %d", device_name, device_index)
+
         self.device_index = device_index
         self.camera_source_id = camera_source_id
         self.fps = fps
@@ -239,6 +289,7 @@ _webcam_detector: Optional[WebcamPersonDetector] = None
 
 async def start_webcam_detector(
     device_index: int = 0,
+    device_name: str | None = None,
     camera_source_id: str = "webcam_office",
     fps: int = 5,
 ) -> Optional[WebcamPersonDetector]:
@@ -248,6 +299,7 @@ async def start_webcam_detector(
     if _webcam_detector is None:
         _webcam_detector = WebcamPersonDetector(
             device_index=device_index,
+            device_name=device_name,
             camera_source_id=camera_source_id,
             fps=fps,
         )

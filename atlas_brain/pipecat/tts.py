@@ -67,11 +67,10 @@ class KokoroTTSService(TTSService):
         self._pipeline = None
         self._sample_rate = 24000  # Kokoro outputs 24kHz
 
-    async def start(self, frame: Frame) -> AsyncGenerator[Frame, None]:
+    async def start(self, frame: Frame):
         """Initialize the model on pipeline start."""
+        await super().start(frame)
         await self._load_model()
-        async for f in super().start(frame):
-            yield f
 
     async def _load_model(self):
         """Load the Kokoro model."""
@@ -195,10 +194,9 @@ class StreamingKokoroTTSService(TTSService):
         self._pipeline = None
         self._sample_rate = 24000
 
-    async def start(self, frame: Frame) -> AsyncGenerator[Frame, None]:
+    async def start(self, frame: Frame):
+        await super().start(frame)
         await self._load_model()
-        async for f in super().start(frame):
-            yield f
 
     async def _load_model(self):
         if self._pipeline is not None:

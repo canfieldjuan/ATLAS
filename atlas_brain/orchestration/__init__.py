@@ -1,33 +1,20 @@
 """
-Orchestration layer for Atlas Brain.
+Context aggregation for Atlas Brain.
 
-Manages the complete pipeline from audio input to device action:
-- Voice activity detection
-- Speech-to-text
-- Intent parsing / LLM reasoning
-- Action execution
-- Text-to-speech response
+Provides runtime context tracking for:
+- Who's in the room (face IDs, speaker IDs)
+- What's visible (objects, scenes)
+- Recent audio events
+- Device states
+- Conversation history
+
+Note: The old orchestration pipeline has been replaced by Pipecat.
+See atlas_brain/pipecat/ for the voice pipeline.
 """
 
-from .audio_buffer import AudioBuffer, VADConfig
 from .context import ContextAggregator, get_context
-from .orchestrator import Orchestrator, OrchestratorConfig, OrchestratorResult
-from .states import PipelineContext, PipelineEvent, PipelineState, PipelineStateMachine
 
 __all__ = [
-    # Core orchestrator
-    "Orchestrator",
-    "OrchestratorConfig",
-    "OrchestratorResult",
-    # State machine
-    "PipelineState",
-    "PipelineEvent",
-    "PipelineContext",
-    "PipelineStateMachine",
-    # Audio
-    "AudioBuffer",
-    "VADConfig",
-    # Context
     "ContextAggregator",
     "get_context",
 ]

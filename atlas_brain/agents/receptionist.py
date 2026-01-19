@@ -399,8 +399,10 @@ Info collected: {call_ctx.summary()}
 
     def _is_rejection(self, text: str) -> bool:
         """Check if caller wants changes."""
-        keywords = ["no", "change", "different", "actually", "wait", "not right"]
-        return any(kw in text for kw in keywords)
+        import re
+        # Use word boundaries to avoid "tomorrow" matching "no"
+        keywords = [r"\bno\b", r"\bchange\b", r"\bdifferent\b", r"\bactually\b", r"\bwait\b", r"not right"]
+        return any(re.search(kw, text, re.IGNORECASE) for kw in keywords)
 
     async def _do_act(
         self,

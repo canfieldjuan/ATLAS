@@ -63,31 +63,9 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to load default VLM: %s", e)
 
-    # Load default STT if configured (skip if Omni is enabled - it has built-in STT)
-    if settings.load_stt_on_startup and not (settings.load_omni_on_startup or settings.omni.enabled):
-        try:
-            stt_model = settings.stt.default_model
-            logger.info("Loading default STT: %s", stt_model)
-            stt_registry.activate(stt_model)
-        except Exception as e:
-            logger.error("Failed to load default STT: %s", e)
-    elif settings.load_omni_on_startup or settings.omni.enabled:
-        logger.info("Skipping STT load - Omni mode has built-in STT")
+    # STT is loaded by Pipecat voice pipeline - no need to load here
 
-    # Load default TTS if configured (skip if Omni is enabled - it has built-in TTS)
-    if settings.load_tts_on_startup and not (settings.load_omni_on_startup or settings.omni.enabled):
-        try:
-            logger.info("Loading default TTS: %s (voice=%s, speed=%.2f, device=%s)",
-                       settings.tts.default_model, settings.tts.voice, settings.tts.speed,
-                       settings.tts.device or "auto")
-            tts_registry.activate(settings.tts.default_model,
-                                 voice=settings.tts.voice,
-                                 speed=settings.tts.speed,
-                                 device=settings.tts.device)
-        except Exception as e:
-            logger.error("Failed to load default TTS: %s", e)
-    elif settings.load_omni_on_startup or settings.omni.enabled:
-        logger.info("Skipping TTS load - Omni mode has built-in TTS")
+    # TTS is loaded by Pipecat voice pipeline - no need to load here
 
     # Load default LLM if configured
     if settings.load_llm_on_startup:
@@ -238,15 +216,14 @@ async def lifespan(app: FastAPI):
     alert_manager = None
     if settings.alerts.enabled:
         try:
-            from .alerts import get_alert_manager, setup_default_callbacks, TTSDelivery, NtfyDelivery
-            from .api.orchestration import connection_manager
+            from .alerts import get_alert_manager, setup_default_callbacks, NtfyDelivery
 
             alert_manager = get_alert_manager()
             setup_default_callbacks(alert_manager)
 
+            # Note: TTS delivery via WebSocket removed - use Pipecat voice pipeline instead
             if settings.alerts.tts_enabled:
-                tts_delivery = TTSDelivery(tts_registry, connection_manager)
-                alert_manager.register_callback(tts_delivery.deliver)
+                logger.info("TTS alerts will be delivered via Pipecat voice pipeline")
 
             if settings.alerts.ntfy_enabled:
                 ntfy_delivery = NtfyDelivery(
@@ -269,40 +246,15 @@ async def lifespan(app: FastAPI):
 
             reminder_service = await initialize_reminder_service()
 
-            # Connect reminders to alert system for TTS delivery
+            # Simple reminder callback - logs reminder (TTS delivery via Pipecat)
             async def reminder_alert_callback(reminder):
-                """Deliver reminder via TTS to connected voice clients."""
-                import base64
-                from .api.orchestration import connection_manager
-
+                """Log reminder - TTS delivery handled by Pipecat voice pipeline."""
                 message = f"Reminder: {reminder.message}"
                 logger.info("REMINDER: %s", message)
+                # Note: For TTS delivery, use Pipecat voice pipeline
+                # The reminder will be announced when user interacts with Atlas
 
-                try:
-                    active_tts = tts_registry.get_active()
-                    if active_tts:
-                        audio_bytes = await active_tts.synthesize(message)
-                        logger.info("TTS generated %d bytes for reminder", len(audio_bytes))
-
-                        audio_base64 = base64.b64encode(audio_bytes).decode()
-                        delivered = await connection_manager.queue_announcement({
-                            "state": "reminder",
-                            "text": message,
-                            "audio_base64": audio_base64,
-                        })
-                        if delivered:
-                            logger.info("Reminder delivered to connected clients")
-                        else:
-                            logger.info("Reminder queued for delivery when client connects")
-                except Exception as e:
-                    logger.warning("TTS not available for reminder: %s", e)
-
-            # Only set direct callback if alert system TTS is not handling delivery
-            # This prevents duplicate announcements
-            if not (settings.alerts.enabled and settings.alerts.tts_enabled):
-                reminder_service.set_alert_callback(reminder_alert_callback)
-                logger.info("Reminder direct callback enabled (alerts TTS disabled)")
-
+            reminder_service.set_alert_callback(reminder_alert_callback)
             logger.info("Reminder service initialized with %d pending", reminder_service.pending_count)
         except Exception as e:
             logger.error("Failed to initialize reminder service: %s", e)
@@ -374,35 +326,51 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Failed to initialize communications service: %s", e)
 
-    # Start voice client if enabled
+    # Start Pipecat voice pipeline if enabled
     global _voice_client_task
     if settings.voice.enabled:
         try:
-            from atlas_voice.runner import VoiceRunner, RunnerConfig
+            from .pipecat.pipeline import run_voice_pipeline
 
-            voice_config = RunnerConfig(
-                atlas_url="ws://localhost:8000/api/v1/ws/orchestrated",
-                input_device=settings.voice.input_device,
-                output_device=settings.voice.output_device,
-                sample_rate=settings.voice.sample_rate,
-                input_gain=settings.voice.input_gain,
-            )
-            runner = VoiceRunner(voice_config)
-
-            async def run_voice_client():
+            async def run_pipecat_voice():
                 try:
-                    await runner.run()
-                except asyncio.CancelledError:
-                    logger.info("Voice client task cancelled")
-                except Exception as e:
-                    logger.error("Voice client error: %s", e)
+                    # Generate session ID for conversation persistence
+                    import uuid
+                    voice_session_id = str(uuid.uuid4())
+                    logger.info("Pipecat voice session: %s", voice_session_id)
 
-            _voice_client_task = asyncio.create_task(run_voice_client())
-            logger.info("Voice client started (always listening)")
+                    # Build wake phrases from keyword setting
+                    keyword = settings.orchestration.keyword
+                    wake_phrases = [f"hey {keyword}", keyword]
+
+                    await run_voice_pipeline(
+                        input_device=settings.voice.input_device,
+                        output_device=settings.voice.output_device,
+                        input_device_name=settings.voice.input_device_name,
+                        output_device_name=settings.voice.output_device_name,
+                        input_sample_rate=settings.voice.input_sample_rate,
+                        stt_model="nemotron",
+                        ollama_model=settings.llm.ollama_model,
+                        ollama_url=settings.llm.ollama_url,
+                        tts_voice=settings.tts.voice,
+                        tts_speed=settings.tts.speed,
+                        device="cuda",
+                        session_id=voice_session_id,
+                        wake_word_enabled=settings.orchestration.keyword_enabled,
+                        wake_phrases=wake_phrases,
+                        wake_keepalive_secs=settings.orchestration.follow_up_duration_ms / 1000.0,
+                    )
+                except asyncio.CancelledError:
+                    logger.info("Pipecat voice pipeline cancelled")
+                except Exception as e:
+                    logger.error("Pipecat voice pipeline error: %s", e)
+
+            _voice_client_task = asyncio.create_task(run_pipecat_voice())
+            logger.info("Pipecat voice pipeline started")
         except ImportError as e:
-            logger.warning("Voice client not available (atlas_voice not installed): %s", e)
+            logger.warning("Pipecat voice not available: %s", e)
         except Exception as e:
-            logger.error("Failed to start voice client: %s", e)
+            logger.error("Failed to start Pipecat voice pipeline: %s", e)
 
     # Start webcam person detector if enabled
     webcam_detector = None
@@ -412,12 +380,14 @@ async def lifespan(app: FastAPI):
 
             webcam_detector = await start_webcam_detector(
                 device_index=settings.webcam.device_index,
+                device_name=settings.webcam.device_name,
                 camera_source_id=settings.webcam.source_id,
                 fps=settings.webcam.fps,
             )
             if webcam_detector:
-                logger.info("Webcam detector started: /dev/video%d -> %s",
-                           settings.webcam.device_index, settings.webcam.source_id)
+                logger.info("Webcam detector started: device=%s (name=%s) -> %s",
+                           webcam_detector.device_index, settings.webcam.device_name,
+                           settings.webcam.source_id)
             else:
                 logger.warning("Webcam detector failed to start")
         except Exception as e:
