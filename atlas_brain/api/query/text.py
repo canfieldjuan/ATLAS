@@ -41,12 +41,18 @@ async def query_text(request: TextQueryRequest):
         Message(role="user", content=request.query_text),
     ]
 
+    logger.info("Calling execute_with_tools with LLM: %s, has chat_with_tools: %s",
+                type(llm).__name__, hasattr(llm, "chat_with_tools"))
+
     result = await execute_with_tools(
         llm=llm,
         messages=messages,
         max_tokens=256,
         temperature=0.7,
     )
+
+    logger.info("execute_with_tools result: tools=%s, response_len=%d",
+                result.get("tools_executed", []), len(result.get("response", "")))
 
     tools_executed = result.get("tools_executed", [])
     if tools_executed:

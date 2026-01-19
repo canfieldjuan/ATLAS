@@ -501,32 +501,3 @@ def get_calendar_service() -> CalendarService:
         return GoogleCalendarService()
     from .services import StubCalendarService
     return StubCalendarService()
-
-
-def create_appointment_machine_with_real_services(
-    business_context,
-    telephony_provider=None,
-    call=None,
-    intent_parser=None,
-):
-    """
-    Create an appointment state machine with real services wired up.
-
-    Automatically uses:
-    - GoogleCalendarService for calendar operations
-    - ResendEmailService for email confirmations
-    - SignalWireSMSService for SMS confirmations
-
-    Falls back to stubs if services are not configured.
-    """
-    from .appointment import AppointmentStateMachine
-
-    return AppointmentStateMachine(
-        business_context=business_context,
-        calendar_service=get_calendar_service(),
-        email_service=get_email_service(),
-        sms_service=get_sms_service(business_context.id),
-        telephony_provider=telephony_provider,
-        call=call,
-        intent_parser=intent_parser,
-    )

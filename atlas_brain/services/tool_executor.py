@@ -94,13 +94,28 @@ async def execute_with_tools(
             "tool_results": {},
         }
 
-    tools = tool_registry.get_tool_schemas()
+    # Filter to commonly used tools to avoid overwhelming the model
+    # Full list of 36+ tools can confuse smaller models
+    priority_tools = [
+        "get_time", "get_weather", "get_calendar", "get_location",
+        "set_reminder", "list_reminders", "send_notification",
+    ]
+
+    all_tools = tool_registry.get_tool_schemas()
+    tools = [t for t in all_tools if t.get("function", {}).get("name") in priority_tools]
+
+    # If no priority tools found, use all (shouldn't happen)
+    if not tools:
+        tools = all_tools
+
+    logger.info("Tool executor: %d tools available (filtered from %d)", len(tools), len(all_tools))
+
     current_messages = list(messages)
     tool_results = {}
     last_response = ""
 
     for iteration in range(MAX_TOOL_ITERATIONS):
-        logger.debug("Tool calling iteration %d", iteration + 1)
+        logger.info("Tool calling iteration %d", iteration + 1)
 
         result = llm.chat_with_tools(
             messages=current_messages,
@@ -111,6 +126,8 @@ async def execute_with_tools(
 
         last_response = result.get("response", "")
         tool_calls = result.get("tool_calls", [])
+        logger.info("LLM response: len=%d, tool_calls=%d, response_preview='%s'",
+                   len(last_response), len(tool_calls), last_response[:100] if last_response else "")
 
         # If no structured tool calls, try parsing text-based calls
         if not tool_calls and last_response:

@@ -124,6 +124,18 @@ class TTSConfig(BaseSettings):
     default_model: str = Field(default="piper", description="Default TTS backend")
     voice: str = Field(default="en_US-ryan-medium", description="Voice model")
     speed: float = Field(default=1.0, description="Speech speed (1.0 = normal)")
+    device: str | None = Field(default=None, description="Device for TTS: 'cuda', 'cpu', or None for auto")
+
+
+class OmniConfig(BaseSettings):
+    """Omni (unified speech-to-speech) configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_OMNI_", env_file=".env", extra="ignore")
+
+    enabled: bool = Field(default=False, description="Enable unified omni mode (Qwen-Omni)")
+    default_model: str = Field(default="qwen-omni", description="Default omni model")
+    max_new_tokens: int = Field(default=256, description="Max tokens for response generation")
+    temperature: float = Field(default=0.7, description="Sampling temperature")
 
 
 class SpeakerIDConfig(BaseSettings):
@@ -510,6 +522,33 @@ class RTSPConfig(BaseSettings):
     cameras_json: str = Field(default="", description="JSON list of camera configs")
 
 
+class SecurityConfig(BaseSettings):
+    """Security system configuration (video processing, cameras, zones)."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_SECURITY_", env_file=".env", extra="ignore")
+
+    enabled: bool = Field(default=True, description="Enable security tools")
+    video_processing_url: str = Field(
+        default="http://localhost:5002",
+        description="Video processing API URL"
+    )
+    timeout: float = Field(default=10.0, description="API request timeout in seconds")
+    camera_aliases: dict[str, str] = Field(
+        default={
+            "front door": "cam_front_door",
+            "front": "cam_front_door",
+            "back door": "cam_back_door",
+            "back": "cam_back_door",
+            "backyard": "cam_backyard",
+            "garage": "cam_garage",
+            "driveway": "cam_driveway",
+            "living room": "cam_living_room",
+            "kitchen": "cam_kitchen",
+        },
+        description="Camera name aliases to camera IDs"
+    )
+
+
 class Settings(BaseSettings):
     """Application-wide settings."""
 
@@ -542,11 +581,17 @@ class Settings(BaseSettings):
         default=False, description="Load VOS on startup"
     )
 
+    # Startup behavior - Omni (unified speech-to-speech)
+    load_omni_on_startup: bool = Field(
+        default=False, description="Load Omni (unified voice) on startup"
+    )
+
     # Nested configs
     vlm: VLMConfig = Field(default_factory=VLMConfig)
     stt: STTConfig = Field(default_factory=STTConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     tts: TTSConfig = Field(default_factory=TTSConfig)
+    omni: OmniConfig = Field(default_factory=OmniConfig)
     speaker_id: SpeakerIDConfig = Field(default_factory=SpeakerIDConfig)
     recognition: RecognitionConfig = Field(default_factory=RecognitionConfig)
     vos: VOSConfig = Field(default_factory=VOSConfig)
@@ -564,6 +609,7 @@ class Settings(BaseSettings):
     alerts: AlertsConfig = Field(default_factory=AlertsConfig)
     reminder: ReminderConfig = Field(default_factory=ReminderConfig)
     email: EmailConfig = Field(default_factory=EmailConfig)
+    security: SecurityConfig = Field(default_factory=SecurityConfig)
 
     # Presence tracking - imported from presence module
     @property

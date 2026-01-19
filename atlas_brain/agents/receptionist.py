@@ -142,11 +142,11 @@ class ReceptionistAgent(BaseAgent):
             self._llm = llm_registry.get_active()
         return self._llm
 
-    def _get_phone_tools(self):
-        """Get phone-specific tools registry."""
+    def _get_tools(self):
+        """Get main tool registry."""
         if self._phone_tools is None:
-            from ..tools.phone import get_phone_tool_registry
-            self._phone_tools = get_phone_tool_registry()
+            from ..tools import tool_registry
+            self._phone_tools = tool_registry
         return self._phone_tools
 
     def _build_system_prompt(self) -> str:
@@ -246,14 +246,13 @@ Info collected: {call_ctx.summary()}
             elif self._wants_message(query_lower):
                 self._call_context.intent_detected = "message"
                 result.action_type = "tool_use"
-                result.tools_to_call = ["take_message"]
+                result.tools_to_call = ["send_notification"]
                 logger.info("Intent: leave message")
             elif self._is_asking_questions(query_lower):
-                # Info seeker or price shopper - answer then pivot
+                # Info seeker or price shopper - LLM answers from system prompt
                 self._call_context.intent_detected = "question"
                 self._call_context.phase = ConversationPhase.ANSWERING
-                result.action_type = "tool_use"
-                result.tools_to_call = ["get_services"]
+                # No tool needed - business info is in system prompt
                 logger.info("Intent: asking questions (info seeker)")
             else:
                 # Default assumption: they probably want an estimate
@@ -270,9 +269,7 @@ Info collected: {call_ctx.summary()}
                 result.tools_to_call = ["check_availability"]
                 logger.info("Question phase → now wants estimate")
             elif self._is_asking_questions(query_lower):
-                # Still asking questions, that's fine
-                result.action_type = "tool_use"
-                result.tools_to_call = ["get_services"]
+                # Still asking questions - LLM answers from system prompt
                 logger.debug("Still in question phase")
             elif self._is_not_interested(query_lower):
                 # They're just shopping, be polite
@@ -420,7 +417,7 @@ Info collected: {call_ctx.summary()}
             return result
 
         start_time = time.perf_counter()
-        phone_tools = self._get_phone_tools()
+        tools = self._get_tools()
         call_ctx = self._call_context
 
         for tool_name in think_result.tools_to_call:
@@ -434,20 +431,32 @@ Info collected: {call_ctx.summary()}
                 if self._business_context:
                     params["context_id"] = self._business_context.id
 
+                # Handle send_notification (callback request)
+                if tool_name == "send_notification":
+                    business_name = ""
+                    if self._business_context:
+                        business_name = self._business_context.name
+                    msg = (
+                        f"Callback request from {call_ctx.caller_name or 'Unknown'} "
+                        f"({call_ctx.caller_phone or 'no phone'})"
+                    )
+                    params.update({
+                        "message": msg,
+                        "title": f"Callback - {business_name}",
+                        "priority": "high",
+                    })
+
                 # Add collected info for booking
-                if tool_name == "book_appointment":
-                    # Build date/time from preferences
+                elif tool_name == "book_appointment":
                     from datetime import datetime, timedelta
 
                     # Default to tomorrow if no date specified
                     if call_ctx.preferred_date:
-                        # Parse relative dates
                         if call_ctx.preferred_date == "tomorrow":
                             book_date = datetime.now() + timedelta(days=1)
                         elif call_ctx.preferred_date == "next week":
                             book_date = datetime.now() + timedelta(days=7)
                         else:
-                            # Day name - find next occurrence
                             book_date = datetime.now() + timedelta(days=1)
                     else:
                         book_date = datetime.now() + timedelta(days=1)
@@ -460,18 +469,18 @@ Info collected: {call_ctx.summary()}
                     elif call_ctx.preferred_time == "evening":
                         book_time = "17:00"
                     else:
-                        book_time = "10:00"  # Default
+                        book_time = "10:00"
 
                     params.update({
                         "date": book_date.strftime("%Y-%m-%d"),
                         "time": book_time,
-                        "caller_name": call_ctx.caller_name or "Customer",
-                        "caller_phone": call_ctx.caller_phone or "",
+                        "customer_name": call_ctx.caller_name or "Customer",
+                        "customer_phone": call_ctx.caller_phone or "",
                         "service_type": "Free Estimate",
-                        "notes": f"Address: {call_ctx.service_address or 'TBD'}",
+                        "address": call_ctx.service_address or "",
                     })
 
-                tool_result = await phone_tools.execute(tool_name, params)
+                tool_result = await tools.execute(tool_name, params)
                 result.tool_results[tool_name] = {
                     "success": tool_result.success,
                     "data": tool_result.data,

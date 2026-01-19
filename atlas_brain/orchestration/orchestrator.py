@@ -200,6 +200,7 @@ class Orchestrator:
         self._vlm = None
         self._llm = None
         self._tts = None
+        self._omni = None
         self._speaker_id = None
         self._intent_parser = None
         self._action_dispatcher = None
@@ -309,6 +310,54 @@ class Orchestrator:
             from ..services import llm_registry
             self._llm = llm_registry.get_active()
         return self._llm
+
+    def _get_omni(self):
+        """Lazy load Omni (unified speech-to-speech) service."""
+        if self._omni is None:
+            from ..services import omni_registry
+            self._omni = omni_registry.get_active()
+        return self._omni
+
+    def _omni_enabled(self) -> bool:
+        """Check if omni mode is enabled and available."""
+        from ..config import settings
+        if not settings.omni.enabled:
+            return False
+        omni = self._get_omni()
+        return omni is not None
+
+    def _is_tool_query(self, transcript: str) -> bool:
+        """
+        Check if transcript contains tool-related keywords.
+
+        Tool queries need real data (time, weather, calendar, etc) so they
+        should be routed to the agent path instead of omni for accurate responses.
+        """
+        if not transcript:
+            return False
+
+        transcript_lower = transcript.lower()
+
+        # Keywords that require real data from tools
+        tool_keywords = [
+            # Time
+            "what time", "current time", "what day", "what date", "today's date",
+            # Weather
+            "weather", "temperature", "forecast", "rain", "sunny", "cold", "hot outside",
+            # Calendar
+            "calendar", "schedule", "appointment", "meeting", "event", "events",
+            "what do i have", "my agenda", "any meetings",
+            # Location
+            "where am i", "my location", "current location",
+            # Traffic
+            "traffic", "commute", "drive time", "how long to get",
+            # Reminders
+            "set a reminder", "remind me", "create reminder",
+            # News/stocks (future tools)
+            "news", "stock", "stocks",
+        ]
+
+        return any(kw in transcript_lower for kw in tool_keywords)
 
     def _get_wakeword_detector(self):
         """Lazy load wake word detector."""
@@ -860,6 +909,29 @@ class Orchestrator:
             logger.error("Transcription failed: %s", e)
             return OrchestratorResult(success=False, error=f"Transcription failed: {e}")
 
+        # Check for device commands first (fast path) - these skip omni/agent
+        intent_parser = self._get_intent_parser()
+        if intent_parser:
+            try:
+                quick_intent = await intent_parser.parse(ctx.transcript)
+                if quick_intent and quick_intent.action in ("turn_on", "turn_off", "set", "toggle"):
+                    # Device command detected - use fast path
+                    logger.info("Device command detected: %s %s", quick_intent.action, quick_intent.target_name)
+                    ctx.intent = quick_intent
+                    result.intent = quick_intent
+                    return await self._process_device_command(ctx, result)
+            except Exception as e:
+                logger.debug("Quick intent parse failed: %s", e)
+
+        # Use Omni (unified speech-to-speech) if enabled
+        # But skip omni for tool queries - route those to agent for real data
+        if self._omni_enabled() and ctx.audio_bytes:
+            if not self._is_tool_query(ctx.transcript):
+                return await self._process_with_omni(ctx, result)
+            else:
+                logger.info("Tool query detected, routing to agent instead of omni")
+                debug.info("Tool query - using agent path for real data")
+
         # Delegate to agent if available
         if self._agent is not None:
             return await self._process_with_agent(ctx, result)
@@ -1074,6 +1146,199 @@ class Orchestrator:
 
         # Log latency summary
         self._log_latency_summary(result, pipeline_type="audio-agent")
+
+        return result
+
+    async def _process_with_omni(
+        self,
+        ctx: PipelineContext,
+        result: OrchestratorResult,
+    ) -> OrchestratorResult:
+        """
+        Process utterance using Qwen-Omni unified speech-to-speech.
+
+        Uses the omni model for end-to-end audio understanding and response
+        generation, bypassing separate LLM and TTS.
+        """
+        from ..services.protocols import Message
+
+        logger.info("Processing with Omni (unified speech-to-speech)")
+        debug.state("OMNI_PROCESSING")
+
+        omni = self._get_omni()
+        if omni is None:
+            logger.error("Omni service not available")
+            result.success = False
+            result.error = "Omni service not available"
+            return result
+
+        try:
+            omni_start = datetime.now()
+
+            # Build conversation history from session
+            messages = []
+            if self._session_id:
+                try:
+                    history = await self.load_session_history(limit=6)
+                    messages = [
+                        Message(role=turn.role, content=turn.content)
+                        for turn in history
+                    ]
+                except Exception as e:
+                    logger.warning("Failed to load history for omni: %s", e)
+
+            # Add current user message
+            messages.append(Message(role="user", content=ctx.transcript))
+
+            # Use omni.chat() for text-based conversation with audio output
+            # (We already have the transcript from STT, so we use chat mode
+            # rather than speech_to_speech to leverage keyword detection)
+            async with _cuda_lock:
+                omni_response = await omni.chat(
+                    messages=messages,
+                    include_audio=True,
+                )
+
+            result.response_text = omni_response.text
+            result.response_audio = omni_response.audio_bytes
+            ctx.response_text = omni_response.text
+            ctx.response_audio = omni_response.audio_bytes
+
+            omni_ms = (datetime.now() - omni_start).total_seconds() * 1000
+            result.llm_ms = omni_ms  # Omni handles both LLM and TTS
+            result.tts_ms = 0  # Included in omni processing
+
+            logger.info(
+                "Omni response: text=%d chars, audio=%.1fs, latency=%.0fms",
+                len(omni_response.text),
+                omni_response.audio_duration_sec,
+                omni_ms,
+            )
+
+            debug.info(f"Omni: {omni_response.text[:50]}...")
+            if omni_response.audio_bytes:
+                debug.tts(
+                    duration_sec=omni_response.audio_duration_sec,
+                    latency_ms=omni_ms,
+                )
+
+            result.success = True
+
+        except Exception as e:
+            logger.exception("Omni processing failed: %s", e)
+            result.success = False
+            result.error = str(e)
+            result.response_text = f"I'm sorry, I encountered an error: {e}"
+            # Try fallback TTS for error message
+            tts = self._get_tts()
+            if tts:
+                try:
+                    result.response_audio = await tts.synthesize(result.response_text)
+                except Exception:
+                    pass
+
+        self._state_machine.transition(PipelineEvent.RESPONSE_READY)
+
+        if self._on_response:
+            await self._on_response(result)
+
+        debug.state("RESPONDING")
+
+        # Enter follow-up mode
+        if self.config.follow_up_enabled and result.success:
+            self._last_response_time = datetime.now()
+            debug.state("LISTENING", f"[follow-up: {self.config.follow_up_duration_ms/1000:.0f}s]")
+
+        # Store conversation
+        storage_start = datetime.now()
+        await self._store_conversation(ctx, result)
+        result.storage_ms = (datetime.now() - storage_start).total_seconds() * 1000
+
+        # Calculate total latency
+        result.latency_ms = ctx.elapsed_ms()
+
+        # Log latency summary
+        self._log_latency_summary(result, pipeline_type="omni")
+
+        return result
+
+    async def _process_device_command(
+        self,
+        ctx: PipelineContext,
+        result: OrchestratorResult,
+    ) -> OrchestratorResult:
+        """
+        Fast path for device commands.
+
+        Executes device action directly without LLM, generates simple response.
+        """
+        debug.state("DEVICE_COMMAND")
+
+        action_start = datetime.now()
+        dispatcher = self._get_action_dispatcher()
+
+        if dispatcher and ctx.intent:
+            try:
+                action_result = await dispatcher.dispatch_intent(ctx.intent)
+                ctx.action_results.append(action_result)
+                result.action_results = ctx.action_results
+
+                # Use action result message as response
+                message = (
+                    action_result.message
+                    if hasattr(action_result, "message")
+                    else action_result.get("message", "Done")
+                )
+                result.response_text = message
+                ctx.response_text = message
+                result.success = action_result.success if hasattr(action_result, "success") else True
+
+                debug.action(
+                    ctx.intent.action,
+                    ctx.intent.target_name or "unknown",
+                    success=result.success,
+                    message=message,
+                )
+            except Exception as e:
+                logger.exception("Device action failed: %s", e)
+                result.response_text = f"Sorry, I couldn't do that: {e}"
+                result.success = False
+
+        result.action_ms = (datetime.now() - action_start).total_seconds() * 1000
+
+        # TTS for response
+        tts = self._get_tts()
+        if tts is not None and result.response_text:
+            try:
+                tts_start = datetime.now()
+                result.response_audio = await tts.synthesize(result.response_text)
+                ctx.response_audio = result.response_audio
+                result.tts_ms = (datetime.now() - tts_start).total_seconds() * 1000
+            except Exception as e:
+                logger.warning("TTS synthesis failed: %s", e)
+
+        self._state_machine.transition(PipelineEvent.RESPONSE_READY)
+
+        if self._on_response:
+            await self._on_response(result)
+
+        debug.state("RESPONDING")
+
+        # Enter follow-up mode
+        if self.config.follow_up_enabled and result.success:
+            self._last_response_time = datetime.now()
+            debug.state("LISTENING", f"[follow-up: {self.config.follow_up_duration_ms/1000:.0f}s]")
+
+        # Store conversation
+        storage_start = datetime.now()
+        await self._store_conversation(ctx, result)
+        result.storage_ms = (datetime.now() - storage_start).total_seconds() * 1000
+
+        # Calculate total latency
+        result.latency_ms = ctx.elapsed_ms()
+
+        # Log latency summary
+        self._log_latency_summary(result, pipeline_type="device")
 
         return result
 
@@ -1624,6 +1889,21 @@ class Orchestrator:
             result.success = False
             result.error = str(e)
             result.response_text = f"I'm sorry, I encountered an error: {e}"
+
+        # Synthesize TTS if text response available
+        tts = self._get_tts()
+        if tts is not None and result.response_text:
+            try:
+                tts_start = datetime.now()
+                result.response_audio = await tts.synthesize(result.response_text)
+                result.tts_ms = (datetime.now() - tts_start).total_seconds() * 1000
+                logger.info(
+                    "TTS synthesized: %d bytes in %.0fms",
+                    len(result.response_audio) if result.response_audio else 0,
+                    result.tts_ms,
+                )
+            except Exception as e:
+                logger.warning("TTS synthesis failed: %s", e)
 
         # Calculate total latency
         result.latency_ms = (datetime.now() - start_time).total_seconds() * 1000

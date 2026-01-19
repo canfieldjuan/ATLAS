@@ -43,6 +43,7 @@ class KokoroTTS(BaseModelService):
         speed: float = 1.0,
         lang_code: str = "a",  # 'a' for American English
         sample_rate: int = 24000,
+        device: str | None = None,  # 'cuda', 'cpu', or None for auto
         **kwargs: Any,
     ):
         super().__init__(
@@ -54,6 +55,7 @@ class KokoroTTS(BaseModelService):
         self._speed = speed
         self._lang_code = lang_code
         self._sample_rate = sample_rate
+        self._device = device
         self._pipeline = None
         self._loaded = False
 
@@ -88,13 +90,14 @@ class KokoroTTS(BaseModelService):
         try:
             from kokoro import KPipeline
 
-            self.logger.info("Loading Kokoro pipeline (lang=%s, voice=%s)...",
-                           self._lang_code, self._voice)
+            device_str = self._device or ("cuda" if self._use_cuda() else "cpu")
+            self.logger.info("Loading Kokoro pipeline (lang=%s, voice=%s, device=%s)...",
+                           self._lang_code, self._voice, device_str)
 
-            self._pipeline = KPipeline(lang_code=self._lang_code)
+            self._pipeline = KPipeline(lang_code=self._lang_code, device=self._device)
             self._loaded = True
 
-            self.logger.info("Kokoro TTS loaded successfully")
+            self.logger.info("Kokoro TTS loaded successfully on %s", device_str)
 
         except Exception as e:
             self.logger.error("Failed to load Kokoro: %s", e)

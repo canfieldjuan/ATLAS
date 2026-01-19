@@ -46,10 +46,55 @@ class ToolRegistry:
         """List all tool names."""
         return list(self._tools.keys())
 
+    def get_tools_by_names(self, names: list[str]) -> list[Tool]:
+        """Get tools filtered by a list of names."""
+        return [
+            self._tools[name]
+            for name in names
+            if name in self._tools
+        ]
+
     def get_tool_schemas(self) -> list[dict]:
         """Generate Ollama-compatible tool schemas for LLM tool calling."""
         schemas = []
         for tool in self._tools.values():
+            properties = {}
+            required = []
+            for param in tool.parameters:
+                prop_type = "string"
+                if param.param_type == "int":
+                    prop_type = "integer"
+                elif param.param_type == "float":
+                    prop_type = "number"
+                elif param.param_type == "boolean":
+                    prop_type = "boolean"
+                properties[param.name] = {
+                    "type": prop_type,
+                    "description": param.description,
+                }
+                if param.required:
+                    required.append(param.name)
+            schemas.append({
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": {
+                        "type": "object",
+                        "properties": properties,
+                        "required": required,
+                    },
+                },
+            })
+        return schemas
+
+    def get_tool_schemas_filtered(self, tool_names: list[str]) -> list[dict]:
+        """Generate tool schemas for specific tools only."""
+        schemas = []
+        for name in tool_names:
+            tool = self._tools.get(name)
+            if not tool:
+                continue
             properties = {}
             required = []
             for param in tool.parameters:

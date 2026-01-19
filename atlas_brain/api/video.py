@@ -11,6 +11,7 @@ import colorsys
 from typing import AsyncGenerator, Optional
 
 import cv2
+import httpx
 import numpy as np
 from fastapi import APIRouter, Query, HTTPException
 from fastapi.responses import StreamingResponse
@@ -20,6 +21,119 @@ from ..config import settings
 logger = logging.getLogger("atlas.api.video")
 
 router = APIRouter(prefix="/video", tags=["video"])
+
+
+# =============================================================================
+# Unified Frame Source - fetches frames from atlas_vision (single camera owner)
+# =============================================================================
+
+def get_atlas_vision_url() -> str:
+    """Get atlas_vision API URL."""
+    return settings.security.video_processing_url
+
+
+class AtlasVisionFrameSource:
+    """
+    Frame source that fetches from atlas_vision API.
+
+    Provides same interface as cv2.VideoCapture but fetches frames
+    from atlas_vision's /cameras/{id}/snapshot endpoint.
+    """
+
+    def __init__(self, camera_id: str):
+        self.camera_id = camera_id
+        self.base_url = get_atlas_vision_url()
+        self._client: Optional[httpx.AsyncClient] = None
+        self._opened = False
+
+    async def open(self) -> bool:
+        """Open connection to atlas_vision."""
+        try:
+            self._client = httpx.AsyncClient(timeout=5.0)
+            # Test connection
+            response = await self._client.get(f"{self.base_url}/cameras/{self.camera_id}")
+            if response.status_code == 200:
+                self._opened = True
+                return True
+            logger.warning("Camera %s not found in atlas_vision", self.camera_id)
+            return False
+        except Exception as e:
+            logger.error("Failed to connect to atlas_vision: %s", e)
+            return False
+
+    def isOpened(self) -> bool:
+        return self._opened
+
+    async def read(self) -> tuple[bool, Optional[np.ndarray]]:
+        """Fetch a frame from atlas_vision."""
+        if not self._opened or not self._client:
+            return False, None
+
+        try:
+            response = await self._client.get(
+                f"{self.base_url}/cameras/{self.camera_id}/snapshot"
+            )
+            if response.status_code != 200:
+                return False, None
+
+            # Decode JPEG to numpy array
+            jpeg_bytes = response.content
+            nparr = np.frombuffer(jpeg_bytes, np.uint8)
+            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+            if frame is None:
+                return False, None
+            return True, frame
+
+        except Exception as e:
+            logger.warning("Frame fetch error: %s", e)
+            return False, None
+
+    async def release(self) -> None:
+        """Close connection."""
+        if self._client:
+            await self._client.aclose()
+            self._client = None
+        self._opened = False
+
+
+# Map device indices to camera IDs in atlas_vision
+DEVICE_TO_CAMERA_MAP = {
+    0: "webcam_office",
+    # Add more mappings as needed
+}
+
+
+async def get_frame_source(source: str) -> AtlasVisionFrameSource:
+    """
+    Get a frame source for the given source identifier.
+
+    Args:
+        source: Either a device index ("0") or camera ID ("webcam_office")
+
+    Returns:
+        AtlasVisionFrameSource connected to atlas_vision
+    """
+    # Map device index to camera ID
+    if source.isdigit():
+        device_idx = int(source)
+        camera_id = DEVICE_TO_CAMERA_MAP.get(device_idx)
+        if not camera_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No camera mapped for device index {device_idx}. "
+                       f"Available: {DEVICE_TO_CAMERA_MAP}"
+            )
+    else:
+        camera_id = source
+
+    frame_source = AtlasVisionFrameSource(camera_id)
+    if not await frame_source.open():
+        raise HTTPException(
+            status_code=503,
+            detail=f"Cannot connect to camera {camera_id} via atlas_vision"
+        )
+    return frame_source
 
 # Shared YOLO models
 _yolo_model = None
@@ -188,7 +302,7 @@ async def _generate_mjpeg(
     Generate MJPEG frames with detection/tracking overlay.
 
     Args:
-        source: Video source (device index or RTSP URL)
+        source: Video source (device index or camera ID)
         fps: Target frame rate
         detect: Run object detection
         track: Enable object tracking
@@ -196,21 +310,8 @@ async def _generate_mjpeg(
         threshold: Confidence threshold
         custom_classes: Custom class list for YOLO-World (None = use default comprehensive list)
     """
-    if source.isdigit():
-        cap = cv2.VideoCapture(int(source))
-    else:
-        cap = cv2.VideoCapture(source)
-
-    if not cap.isOpened():
-        raise HTTPException(status_code=503, detail=f"Cannot open video source: {source}")
-
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-
-    # Warm up camera
-    for _ in range(30):
-        cap.read()
+    # Use atlas_vision as frame source (unified camera access)
+    frame_source = await get_frame_source(source)
 
     frame_interval = 1.0 / fps
 
@@ -231,7 +332,7 @@ async def _generate_mjpeg(
         while True:
             start_time = asyncio.get_event_loop().time()
 
-            ret, frame = await asyncio.to_thread(cap.read)
+            ret, frame = await frame_source.read()
             if not ret or frame is None:
                 await asyncio.sleep(0.1)
                 continue
@@ -285,7 +386,7 @@ async def _generate_mjpeg(
                 await asyncio.sleep(sleep_time)
 
     finally:
-        cap.release()
+        await frame_source.release()
         logger.info("Video stream closed: %s", source)
 
 
@@ -395,19 +496,14 @@ async def snapshot_webcam(
     threshold: float = Query(default=0.3, description="Confidence threshold"),
 ):
     """Get a single snapshot with detection."""
-    cap = cv2.VideoCapture(device)
-    if not cap.isOpened():
-        raise HTTPException(status_code=503, detail="Cannot open webcam")
+    # Use atlas_vision as frame source (unified camera access)
+    frame_source = await get_frame_source(str(device))
 
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    for _ in range(30):
-        cap.read()
-
-    ret, frame = cap.read()
-    cap.release()
+    ret, frame = await frame_source.read()
+    await frame_source.release()
 
     if not ret or frame is None:
-        raise HTTPException(status_code=503, detail="Failed to capture frame")
+        raise HTTPException(status_code=503, detail="Failed to capture frame from atlas_vision")
 
     if detect:
         model = _get_yolo_world_model() if world else _get_yolo_model()
@@ -456,20 +552,8 @@ async def _generate_recognition_mjpeg(
     use_averaged = use_averaged if use_averaged is not None else cfg.use_averaged
     recognition_interval = cfg.recognition_interval
 
-    if source.isdigit():
-        cap = cv2.VideoCapture(int(source))
-    else:
-        cap = cv2.VideoCapture(source)
-
-    if not cap.isOpened():
-        raise HTTPException(status_code=503, detail=f"Cannot open video source: {source}")
-
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-
-    for _ in range(30):
-        cap.read()
+    # Use atlas_vision as frame source (unified camera access)
+    frame_source = await get_frame_source(source)
 
     frame_interval = 1.0 / fps
     face_service = get_face_service()
@@ -487,7 +571,7 @@ async def _generate_recognition_mjpeg(
         while True:
             start_time = asyncio.get_event_loop().time()
 
-            ret, frame = await asyncio.to_thread(cap.read)
+            ret, frame = await frame_source.read()
             if not ret or frame is None:
                 await asyncio.sleep(0.1)
                 continue
@@ -628,7 +712,7 @@ async def _generate_recognition_mjpeg(
                 await asyncio.sleep(frame_interval - elapsed)
 
     finally:
-        cap.release()
+        await frame_source.release()
         logger.info("Recognition stream closed: %s", source)
 
 
@@ -703,20 +787,8 @@ async def _generate_multitrack_recognition_mjpeg(
     use_averaged = use_averaged if use_averaged is not None else cfg.use_averaged
     recognition_interval = cfg.recognition_interval
 
-    if source.isdigit():
-        cap = cv2.VideoCapture(int(source))
-    else:
-        cap = cv2.VideoCapture(source)
-
-    if not cap.isOpened():
-        raise HTTPException(status_code=503, detail=f"Cannot open video source: {source}")
-
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-
-    for _ in range(30):
-        cap.read()
+    # Use atlas_vision as frame source (unified camera access)
+    frame_source = await get_frame_source(source)
 
     frame_interval = 1.0 / fps
     face_service = get_face_service()
@@ -735,7 +807,7 @@ async def _generate_multitrack_recognition_mjpeg(
         while True:
             start_time = asyncio.get_event_loop().time()
 
-            ret, frame = await asyncio.to_thread(cap.read)
+            ret, frame = await frame_source.read()
             if not ret or frame is None:
                 await asyncio.sleep(0.1)
                 continue
@@ -978,7 +1050,7 @@ async def _generate_multitrack_recognition_mjpeg(
                 await asyncio.sleep(frame_interval - elapsed)
 
     finally:
-        cap.release()
+        await frame_source.release()
         logger.info("Multi-track recognition stream closed: %s", source)
 
 

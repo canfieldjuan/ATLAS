@@ -118,6 +118,7 @@ class OllamaLLM(BaseModelService):
             "model": self.model,
             "messages": ollama_messages,
             "stream": False,
+            "keep_alive": "30m",  # Keep model in VRAM
             "options": {
                 "num_predict": max_tokens,
                 "temperature": temperature,
@@ -172,6 +173,7 @@ class OllamaLLM(BaseModelService):
             "model": self.model,
             "messages": ollama_messages,
             "stream": False,
+            "keep_alive": "30m",  # Keep model in VRAM
             "options": {
                 "num_predict": max_tokens,
                 "temperature": temperature,
@@ -180,8 +182,10 @@ class OllamaLLM(BaseModelService):
 
         if tools:
             payload["tools"] = tools
+            logger.info("Sending %d tools to Ollama", len(tools))
 
         try:
+            logger.debug("Ollama request payload keys: %s", list(payload.keys()))
             response = self._sync_client.post(
                 f"{self.base_url}/api/chat",
                 json=payload,
@@ -190,9 +194,14 @@ class OllamaLLM(BaseModelService):
             data = response.json()
 
             msg = data.get("message", {})
+            tool_calls = msg.get("tool_calls", [])
+            logger.info("Ollama response: content_len=%d, tool_calls=%d",
+                       len(msg.get("content", "")), len(tool_calls))
+            if tool_calls:
+                logger.info("Tool calls received: %s", [tc.get("function", {}).get("name") for tc in tool_calls])
             return {
                 "response": msg.get("content", "").strip(),
-                "tool_calls": msg.get("tool_calls", []),
+                "tool_calls": tool_calls,
                 "message": msg,
             }
         except httpx.HTTPError as e:
@@ -233,6 +242,7 @@ class OllamaLLM(BaseModelService):
             "model": self.model,
             "messages": ollama_messages,
             "stream": False,
+            "keep_alive": "30m",  # Keep model in VRAM
             "options": {
                 "num_predict": max_tokens,
                 "temperature": temperature,
@@ -312,6 +322,7 @@ class OllamaLLM(BaseModelService):
             "model": self.model,
             "messages": ollama_messages,
             "stream": False,
+            "keep_alive": "30m",  # Keep model in VRAM
             "options": {
                 "num_predict": 0,  # Only prefill, no generation
             },

@@ -3,8 +3,9 @@ Audio query endpoints for speech-to-text.
 """
 
 from fastapi import APIRouter, Depends, File, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import Response
 
-from ...services import stt_registry
+from ...services import stt_registry, omni_registry
 from ...services.protocols import STTService
 from ..dependencies import get_stt
 
@@ -98,3 +99,64 @@ async def stream_audio(websocket: WebSocket):
     except Exception:
         await websocket.close(code=1011, reason="Internal error")
         raise
+
+
+@router.post("/audio/omni")
+async def query_audio_omni(
+    audio_file: UploadFile = File(...),
+):
+    """
+    Process audio through the Omni (unified speech-to-speech) model.
+
+    Returns both text response and audio response.
+
+    Requires omni model to be active: POST /api/v1/models/omni/activate
+    """
+    omni = omni_registry.get_active()
+    if omni is None:
+        return {
+            "error": "Omni model not loaded. Activate with POST /api/v1/models/omni/activate",
+            "available_models": omni_registry.list_available(),
+        }
+
+    contents = await audio_file.read()
+
+    # Use speech-to-speech for full audio in/out
+    response = await omni.speech_to_speech(contents)
+
+    return {
+        "text": response.text,
+        "audio_duration_sec": response.audio_duration_sec,
+        "has_audio": response.audio_bytes is not None,
+        "audio_size_bytes": len(response.audio_bytes) if response.audio_bytes else 0,
+        "metrics": response.metrics,
+    }
+
+
+@router.post("/audio/omni/full")
+async def query_audio_omni_full(
+    audio_file: UploadFile = File(...),
+):
+    """
+    Process audio through Omni and return audio response directly.
+
+    Returns WAV audio file.
+    """
+    omni = omni_registry.get_active()
+    if omni is None:
+        return {"error": "Omni model not loaded"}
+
+    contents = await audio_file.read()
+    response = await omni.speech_to_speech(contents)
+
+    if response.audio_bytes:
+        return Response(
+            content=response.audio_bytes,
+            media_type="audio/wav",
+            headers={
+                "X-Text-Response": response.text[:200],
+                "X-Audio-Duration": str(response.audio_duration_sec),
+            }
+        )
+    else:
+        return {"error": "No audio generated", "text": response.text}

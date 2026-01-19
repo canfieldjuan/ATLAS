@@ -9,11 +9,11 @@ import logging
 from threading import Lock
 from typing import Any, Callable, Generic, Optional, Type, TypeVar
 
-from .protocols import AudioEventService, LLMService, ModelInfo, SpeakerIDService, STTService, TTSService, VLMService, VOSService
+from .protocols import AudioEventService, LLMService, ModelInfo, OmniService, SpeakerIDService, STTService, TTSService, VLMService, VOSService
 
 logger = logging.getLogger("atlas.registry")
 
-T = TypeVar("T", VLMService, STTService, LLMService, TTSService, AudioEventService, SpeakerIDService, VOSService)
+T = TypeVar("T", VLMService, STTService, LLMService, TTSService, AudioEventService, SpeakerIDService, VOSService, OmniService)
 
 
 class ServiceRegistry(Generic[T]):
@@ -201,5 +201,17 @@ def register_vos(name: str) -> Callable[[Type[VOSService]], Type[VOSService]]:
     """Decorator to register a VOS implementation."""
     def decorator(cls: Type[VOSService]) -> Type[VOSService]:
         vos_registry.register(name, cls)
+        return cls
+    return decorator
+
+
+# Global registry for Omni (speech-to-speech) services
+omni_registry: ServiceRegistry[OmniService] = ServiceRegistry("Omni")
+
+
+def register_omni(name: str) -> Callable[[Type[OmniService]], Type[OmniService]]:
+    """Decorator to register an Omni (speech-to-speech) implementation."""
+    def decorator(cls: Type[OmniService]) -> Type[OmniService]:
+        omni_registry.register(name, cls)
         return cls
     return decorator

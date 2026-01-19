@@ -20,7 +20,7 @@ from fastapi import FastAPI
 
 from .api import router as api_router
 from .config import settings
-from .services import vlm_registry, stt_registry, llm_registry, tts_registry, vos_registry
+from .services import vlm_registry, stt_registry, llm_registry, tts_registry, vos_registry, omni_registry
 from .storage import db_settings
 from .storage.database import init_database, close_database
 
@@ -63,25 +63,31 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to load default VLM: %s", e)
 
-    # Load default STT if configured
-    if settings.load_stt_on_startup:
+    # Load default STT if configured (skip if Omni is enabled - it has built-in STT)
+    if settings.load_stt_on_startup and not (settings.load_omni_on_startup or settings.omni.enabled):
         try:
             stt_model = settings.stt.default_model
             logger.info("Loading default STT: %s", stt_model)
             stt_registry.activate(stt_model)
         except Exception as e:
             logger.error("Failed to load default STT: %s", e)
+    elif settings.load_omni_on_startup or settings.omni.enabled:
+        logger.info("Skipping STT load - Omni mode has built-in STT")
 
-    # Load default TTS if configured
-    if settings.load_tts_on_startup:
+    # Load default TTS if configured (skip if Omni is enabled - it has built-in TTS)
+    if settings.load_tts_on_startup and not (settings.load_omni_on_startup or settings.omni.enabled):
         try:
-            logger.info("Loading default TTS: %s (voice=%s, speed=%.2f)",
-                       settings.tts.default_model, settings.tts.voice, settings.tts.speed)
+            logger.info("Loading default TTS: %s (voice=%s, speed=%.2f, device=%s)",
+                       settings.tts.default_model, settings.tts.voice, settings.tts.speed,
+                       settings.tts.device or "auto")
             tts_registry.activate(settings.tts.default_model,
                                  voice=settings.tts.voice,
-                                 speed=settings.tts.speed)
+                                 speed=settings.tts.speed,
+                                 device=settings.tts.device)
         except Exception as e:
             logger.error("Failed to load default TTS: %s", e)
+    elif settings.load_omni_on_startup or settings.omni.enabled:
+        logger.info("Skipping TTS load - Omni mode has built-in TTS")
 
     # Load default LLM if configured
     if settings.load_llm_on_startup:
@@ -148,6 +154,19 @@ async def lifespan(app: FastAPI):
             logger.info("VOS loaded successfully")
         except Exception as e:
             logger.error("Failed to load VOS: %s", e)
+
+    # Load Omni (unified speech-to-speech) if enabled
+    if settings.load_omni_on_startup or settings.omni.enabled:
+        try:
+            logger.info("Loading Omni: %s", settings.omni.default_model)
+            omni_registry.activate(
+                settings.omni.default_model,
+                max_new_tokens=settings.omni.max_new_tokens,
+                temperature=settings.omni.temperature,
+            )
+            logger.info("Omni loaded successfully")
+        except Exception as e:
+            logger.error("Failed to load Omni: %s", e)
 
     # Register test devices for development
     try:

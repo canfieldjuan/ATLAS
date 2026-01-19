@@ -14,6 +14,8 @@ from .protocols import (
     LLMService,
     Message,
     ModelInfo,
+    OmniResponse,
+    OmniService,
     SegmentationResult,
     SpeakerIDService,
     SpeakerInfo,
@@ -26,8 +28,10 @@ from .protocols import (
 from .registry import (
     audio_events_registry,
     llm_registry,
+    omni_registry,
     register_audio_events,
     register_llm,
+    register_omni,
     register_speaker_id,
     register_stt,
     register_tts,
@@ -49,6 +53,7 @@ from . import speaker_id  # noqa: F401
 from . import llm  # noqa: F401
 from . import tts  # noqa: F401
 from . import vos  # noqa: F401
+from . import omni  # noqa: F401
 
 # New services
 from .embedding import SentenceTransformerEmbedding
@@ -64,6 +69,8 @@ __all__ = [
     "AudioEventService",
     "SpeakerIDService",
     "VOSService",
+    "OmniService",
+    "OmniResponse",
     "AudioEvent",
     "SpeakerInfo",
     "SpeakerMatch",
@@ -79,6 +86,7 @@ __all__ = [
     "audio_events_registry",
     "speaker_id_registry",
     "vos_registry",
+    "omni_registry",
     # Decorators
     "register_vlm",
     "register_stt",
@@ -87,6 +95,7 @@ __all__ = [
     "register_audio_events",
     "register_speaker_id",
     "register_vos",
+    "register_omni",
     # Embedding and Memory
     "SentenceTransformerEmbedding",
     "get_embedding_service",

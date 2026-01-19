@@ -399,3 +399,91 @@ class VOSService(Protocol):
     ) -> list[dict[str, Any]]:
         """Segment objects across video frames."""
         ...
+
+
+@dataclass
+class OmniResponse:
+    """Response from an omni (speech-to-speech) model."""
+
+    text: str  # Text response
+    audio_bytes: Optional[bytes] = None  # WAV audio output
+    audio_duration_sec: float = 0.0
+    metrics: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "text": self.text,
+            "has_audio": self.audio_bytes is not None,
+            "audio_duration_sec": self.audio_duration_sec,
+            "metrics": self.metrics,
+        }
+
+
+@runtime_checkable
+class OmniService(Protocol):
+    """Protocol for unified speech-to-speech (Omni) services.
+
+    These services combine STT + LLM + TTS into a single model,
+    providing end-to-end speech-in, speech-out capabilities.
+    """
+
+    @property
+    def model_info(self) -> ModelInfo:
+        """Return metadata about the current model."""
+        ...
+
+    def load(self) -> None:
+        """Load the model into memory."""
+        ...
+
+    def unload(self) -> None:
+        """Unload the model from memory to free resources."""
+        ...
+
+    async def speech_to_speech(
+        self,
+        audio_bytes: bytes,
+        conversation_history: Optional[list[Message]] = None,
+        max_new_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ) -> "OmniResponse":
+        """
+        Process speech input and generate speech + text response.
+
+        Args:
+            audio_bytes: Input audio (WAV format)
+            conversation_history: Previous conversation turns
+            max_new_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+
+        Returns:
+            OmniResponse with text and audio output
+        """
+        ...
+
+    async def transcribe(
+        self,
+        audio_bytes: bytes,
+        filename: str = "audio.wav",
+    ) -> dict[str, Any]:
+        """Transcribe audio to text (STT mode)."""
+        ...
+
+    async def synthesize(
+        self,
+        text: str,
+        voice: Optional[str] = None,
+        speed: float = 1.0,
+    ) -> bytes:
+        """Convert text to speech (TTS mode)."""
+        ...
+
+    async def chat(
+        self,
+        messages: list[Message],
+        include_audio: bool = True,
+        max_new_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ) -> "OmniResponse":
+        """Multi-turn text conversation with optional audio output."""
+        ...

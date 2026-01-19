@@ -51,6 +51,43 @@ from .presence import (
     WhereAmITool,
     where_am_i,
 )
+from .security import (
+    # Camera tools
+    ListCamerasTool,
+    list_cameras_tool,
+    GetCameraStatusTool,
+    get_camera_status_tool,
+    StartRecordingTool,
+    start_recording_tool,
+    StopRecordingTool,
+    stop_recording_tool,
+    PTZControlTool,
+    ptz_control_tool,
+    # Detection tools
+    GetCurrentDetectionsTool,
+    get_current_detections_tool,
+    QueryDetectionsTool,
+    query_detections_tool,
+    GetPersonAtLocationTool,
+    get_person_at_location_tool,
+    GetMotionEventsTool,
+    get_motion_events_tool,
+    # Access control tools
+    ListZonesTool,
+    list_zones_tool,
+    GetZoneStatusTool,
+    get_zone_status_tool,
+    ArmZoneTool,
+    arm_zone_tool,
+    DisarmZoneTool,
+    disarm_zone_tool,
+)
+from .display import (
+    ShowCameraFeedTool,
+    show_camera_feed_tool,
+    CloseCameraFeedTool,
+    close_camera_feed_tool,
+)
 
 # Register tools on import
 tool_registry.register(weather_tool)
@@ -74,6 +111,25 @@ tool_registry.register(lights_near_user)
 tool_registry.register(media_near_user)
 tool_registry.register(scene_near_user)
 tool_registry.register(where_am_i)
+# Security - Camera tools
+tool_registry.register(list_cameras_tool)
+tool_registry.register(get_camera_status_tool)
+tool_registry.register(start_recording_tool)
+tool_registry.register(stop_recording_tool)
+tool_registry.register(ptz_control_tool)
+# Security - Detection tools
+tool_registry.register(get_current_detections_tool)
+tool_registry.register(query_detections_tool)
+tool_registry.register(get_person_at_location_tool)
+tool_registry.register(get_motion_events_tool)
+# Security - Access control tools
+tool_registry.register(list_zones_tool)
+tool_registry.register(get_zone_status_tool)
+tool_registry.register(arm_zone_tool)
+tool_registry.register(disarm_zone_tool)
+# Display tools
+tool_registry.register(show_camera_feed_tool)
+tool_registry.register(close_camera_feed_tool)
 
 __all__ = [
     "Tool",
@@ -123,4 +179,38 @@ __all__ = [
     "scene_near_user",
     "WhereAmITool",
     "where_am_i",
+    # Security - Camera tools
+    "ListCamerasTool",
+    "list_cameras_tool",
+    "GetCameraStatusTool",
+    "get_camera_status_tool",
+    "StartRecordingTool",
+    "start_recording_tool",
+    "StopRecordingTool",
+    "stop_recording_tool",
+    "PTZControlTool",
+    "ptz_control_tool",
+    # Security - Detection tools
+    "GetCurrentDetectionsTool",
+    "get_current_detections_tool",
+    "QueryDetectionsTool",
+    "query_detections_tool",
+    "GetPersonAtLocationTool",
+    "get_person_at_location_tool",
+    "GetMotionEventsTool",
+    "get_motion_events_tool",
+    # Security - Access control tools
+    "ListZonesTool",
+    "list_zones_tool",
+    "GetZoneStatusTool",
+    "get_zone_status_tool",
+    "ArmZoneTool",
+    "arm_zone_tool",
+    "DisarmZoneTool",
+    "disarm_zone_tool",
+    # Display tools
+    "ShowCameraFeedTool",
+    "show_camera_feed_tool",
+    "CloseCameraFeedTool",
+    "close_camera_feed_tool",
 ]
