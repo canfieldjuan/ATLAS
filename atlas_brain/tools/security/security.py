@@ -5,10 +5,12 @@ Provides granular tools for camera management, detection queries,
 and access control. Tools are designed for LLM tool calling.
 """
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from functools import wraps
+from typing import Any, Callable, Optional, TypeVar
 
 import httpx
 
@@ -16,6 +18,47 @@ from ..base import Tool, ToolResult, ToolParameter
 from ...config import settings
 
 logger = logging.getLogger("atlas.tools.security")
+
+T = TypeVar("T")
+
+
+def with_retry(
+    max_attempts: int = 3,
+    backoff_base: float = 0.5,
+    retry_on: tuple = (httpx.HTTPError, httpx.TimeoutException),
+) -> Callable:
+    """
+    Retry decorator for async HTTP calls with exponential backoff.
+
+    Args:
+        max_attempts: Maximum number of retry attempts
+        backoff_base: Base delay in seconds (doubles each retry)
+        retry_on: Exception types to retry on
+    """
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        @wraps(func)
+        async def wrapper(*args: Any, **kwargs: Any) -> T:
+            last_error = None
+            for attempt in range(max_attempts):
+                try:
+                    return await func(*args, **kwargs)
+                except retry_on as e:
+                    last_error = e
+                    if attempt < max_attempts - 1:
+                        delay = backoff_base * (2 ** attempt)
+                        logger.warning(
+                            "Retry %d/%d for %s after error: %s",
+                            attempt + 1, max_attempts, func.__name__, e
+                        )
+                        await asyncio.sleep(delay)
+                    else:
+                        logger.error(
+                            "Failed after %d attempts for %s: %s",
+                            max_attempts, func.__name__, e
+                        )
+            raise last_error
+        return wrapper
+    return decorator
 
 
 # =============================================================================
@@ -120,6 +163,7 @@ class SecurityClient:
     # Camera Operations
     # -------------------------------------------------------------------------
 
+    @with_retry(max_attempts=2)
     async def list_cameras(self) -> list[Camera]:
         """Get list of all cameras."""
         try:
@@ -142,6 +186,7 @@ class SecurityClient:
             logger.error("Failed to list cameras: %s", e)
             return []
 
+    @with_retry(max_attempts=2)
     async def get_camera(self, camera_id: str) -> Camera | None:
         """Get specific camera information."""
         camera_id = self.resolve_camera_id(camera_id)
@@ -161,6 +206,7 @@ class SecurityClient:
             logger.error("Failed to get camera %s: %s", camera_id, e)
             return None
 
+    @with_retry(max_attempts=2)
     async def start_recording(self, camera_id: str) -> bool:
         """Start recording on a camera."""
         camera_id = self.resolve_camera_id(camera_id)
@@ -176,6 +222,7 @@ class SecurityClient:
             logger.error("Failed to start recording on %s: %s", camera_id, e)
             return False
 
+    @with_retry(max_attempts=2)
     async def stop_recording(self, camera_id: str) -> bool:
         """Stop recording on a camera."""
         camera_id = self.resolve_camera_id(camera_id)
@@ -191,6 +238,7 @@ class SecurityClient:
             logger.error("Failed to stop recording on %s: %s", camera_id, e)
             return False
 
+    @with_retry(max_attempts=2)
     async def ptz_control(self, camera_id: str, action: str, value: float = 1.0) -> bool:
         """Control PTZ (pan/tilt/zoom) cameras."""
         camera_id = self.resolve_camera_id(camera_id)
@@ -210,10 +258,25 @@ class SecurityClient:
             logger.error("Failed PTZ control on %s: %s", camera_id, e)
             return False
 
+    @with_retry(max_attempts=2)
+    async def get_snapshot(self, camera_id: str) -> bytes | None:
+        """Get current snapshot from camera as bytes."""
+        camera_id = self.resolve_camera_id(camera_id)
+        try:
+            response = await self.client.get(
+                f"{self.base_url}/cameras/{camera_id}/snapshot"
+            )
+            response.raise_for_status()
+            return response.content
+        except Exception as e:
+            logger.error("Failed to get snapshot from %s: %s", camera_id, e)
+            return None
+
     # -------------------------------------------------------------------------
     # Detection Operations
     # -------------------------------------------------------------------------
 
+    @with_retry(max_attempts=2)
     async def get_current_detections(
         self,
         camera_id: str | None = None,
@@ -251,6 +314,7 @@ class SecurityClient:
             logger.error("Failed to get current detections: %s", e)
             return []
 
+    @with_retry(max_attempts=2)
     async def query_detections(
         self,
         camera_id: str | None = None,
@@ -292,6 +356,7 @@ class SecurityClient:
             logger.error("Failed to query detections: %s", e)
             return []
 
+    @with_retry(max_attempts=2)
     async def get_motion_events(
         self,
         camera_id: str | None = None,
@@ -332,6 +397,7 @@ class SecurityClient:
     # Access Control Operations
     # -------------------------------------------------------------------------
 
+    @with_retry(max_attempts=2)
     async def list_zones(self) -> list[SecurityZone]:
         """Get all security zones."""
         try:
@@ -352,6 +418,7 @@ class SecurityClient:
             logger.error("Failed to list zones: %s", e)
             return []
 
+    @with_retry(max_attempts=2)
     async def get_zone(self, zone_id: str) -> SecurityZone | None:
         """Get specific zone status."""
         try:
@@ -369,6 +436,7 @@ class SecurityClient:
             logger.error("Failed to get zone %s: %s", zone_id, e)
             return None
 
+    @with_retry(max_attempts=2)
     async def arm_zone(self, zone_id: str) -> bool:
         """Arm a security zone."""
         try:
@@ -383,6 +451,7 @@ class SecurityClient:
             logger.error("Failed to arm zone %s: %s", zone_id, e)
             return False
 
+    @with_retry(max_attempts=2)
     async def disarm_zone(self, zone_id: str) -> bool:
         """Disarm a security zone."""
         try:
