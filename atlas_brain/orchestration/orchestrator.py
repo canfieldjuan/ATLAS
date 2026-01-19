@@ -206,6 +206,7 @@ class Orchestrator:
         self._action_dispatcher = None
         self._memory_client = None
         self._wakeword_detector = None
+        self._tool_router = None
 
         # Wake word state
         self._wakeword_detected = False
@@ -392,6 +393,13 @@ class Orchestrator:
             from ..services.memory import get_memory_client
             self._memory_client = get_memory_client()
         return self._memory_client
+
+    def _get_tool_router(self):
+        """Lazy load two-tier tool router (FunctionGemma + gpt-oss)."""
+        if self._tool_router is None:
+            from ..pipecat.router import ToolRouterProcessor
+            self._tool_router = ToolRouterProcessor()
+        return self._tool_router
 
     def set_callbacks(
         self,
@@ -923,14 +931,19 @@ class Orchestrator:
             except Exception as e:
                 logger.debug("Quick intent parse failed: %s", e)
 
+        # Try two-tier tool router (fast path for tool queries)
+        # Simple queries: ~200ms, Complex queries: ~1.5s
+        if self._is_tool_query(ctx.transcript):
+            tool_result = await self._process_with_tool_router(ctx, result)
+            if tool_result is not None:
+                return tool_result
+            # Fall through to agent/LLM if tool router couldn't handle it
+
         # Use Omni (unified speech-to-speech) if enabled
-        # But skip omni for tool queries - route those to agent for real data
+        # Skip omni for tool queries - they were handled above or need agent
         if self._omni_enabled() and ctx.audio_bytes:
             if not self._is_tool_query(ctx.transcript):
                 return await self._process_with_omni(ctx, result)
-            else:
-                logger.info("Tool query detected, routing to agent instead of omni")
-                debug.info("Tool query - using agent path for real data")
 
         # Delegate to agent if available
         if self._agent is not None:
@@ -1339,6 +1352,86 @@ class Orchestrator:
 
         # Log latency summary
         self._log_latency_summary(result, pipeline_type="device")
+
+        return result
+
+    async def _process_with_tool_router(
+        self,
+        ctx: PipelineContext,
+        result: OrchestratorResult,
+    ) -> Optional[OrchestratorResult]:
+        """
+        Fast path for tool queries using two-tier router.
+
+        Simple queries: FunctionGemma (~120ms) + direct execution (~80ms) = ~200ms
+        Complex queries: gpt-oss:20b multi-turn tool calling (~1.5s)
+
+        Returns:
+            OrchestratorResult if handled, None to fall through to agent/LLM
+        """
+        debug.state("TOOL_ROUTER")
+
+        try:
+            tool_router = self._get_tool_router()
+            router_result = await tool_router.process(ctx.transcript)
+
+            # Not a tool query - fall through to agent/LLM
+            if not router_result.was_tool_query:
+                logger.debug("Tool router: not a tool query, falling through")
+                return None
+
+            # Tool query handled - build response
+            result.response_text = router_result.response
+            ctx.response_text = router_result.response
+            result.tools_ms = router_result.latency_ms
+            result.success = True
+
+            logger.info(
+                "Tool router: %s in %.0fms (llm_tools=%s)",
+                router_result.tools_executed,
+                router_result.latency_ms,
+                router_result.used_llm_tools,
+            )
+
+            debug.tool(
+                "tool_router",
+                {"tools": router_result.tools_executed},
+                result=router_result.response[:50] if router_result.response else None,
+            )
+
+        except Exception as e:
+            logger.warning("Tool router failed: %s, falling through", e)
+            return None
+
+        # TTS for response
+        tts = self._get_tts()
+        if tts is not None and result.response_text:
+            try:
+                tts_start = datetime.now()
+                result.response_audio = await tts.synthesize(result.response_text)
+                ctx.response_audio = result.response_audio
+                result.tts_ms = (datetime.now() - tts_start).total_seconds() * 1000
+            except Exception as e:
+                logger.warning("TTS synthesis failed: %s", e)
+
+        self._state_machine.transition(PipelineEvent.RESPONSE_READY)
+
+        if self._on_response:
+            await self._on_response(result)
+
+        debug.state("RESPONDING")
+
+        # Enter follow-up mode
+        if self.config.follow_up_enabled and result.success:
+            self._last_response_time = datetime.now()
+
+        # Store conversation
+        storage_start = datetime.now()
+        await self._store_conversation(ctx, result)
+        result.storage_ms = (datetime.now() - storage_start).total_seconds() * 1000
+
+        result.latency_ms = ctx.elapsed_ms()
+        self._log_latency_summary(result, pipeline_type="tool-router")
 
         return result
 
@@ -1774,6 +1867,14 @@ class Orchestrator:
         ctx.transcript = text
 
         result = OrchestratorResult(success=True, transcript=text)
+
+        # Try two-tier tool router first (fast path for tool queries)
+        if self._is_tool_query(text):
+            tool_result = await self._process_with_tool_router(ctx, result)
+            if tool_result is not None:
+                tool_result.latency_ms = (datetime.now() - start_time).total_seconds() * 1000
+                return tool_result
+            # Fall through if tool router couldn't handle it
 
         # Delegate to agent if available
         if self._agent is not None:

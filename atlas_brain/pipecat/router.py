@@ -4,20 +4,40 @@ FunctionGemma Tool Router for fast tool calling.
 Uses Google's FunctionGemma-270M model to quickly determine
 if a query needs a tool and which tool to use.
 
-This bypasses the slower LLM for simple tool queries like
-"what time is it?" - achieving ~100ms routing vs 1.5s LLM.
+Two-tier architecture:
+- Simple queries (single tool): Direct execution via FunctionGemma (~200ms)
+- Complex queries (multi-tool/reasoning): gpt-oss:20b multi-turn tool calling (~1.5s)
 """
 
 import asyncio
 import logging
 import re
 import time
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Any, Optional
 
 import torch
 
 logger = logging.getLogger("atlas.pipecat.router")
+
+# Patterns indicating complex queries that need multi-turn reasoning
+COMPLEX_QUERY_PATTERNS = [
+    r"\b(and|then|also|after that)\b.*\b(remind|set|check|get)\b",  # Multiple actions
+    r"\bplan\s+(my|the|a)\s+(day|week|schedule)\b",  # Planning requests
+    r"\b(help me|assist)\b.*\b(with|to)\b",  # Help requests often need reasoning
+    r"\bif\s+.*(then|remind|set)\b",  # Conditional logic
+    r"\b(first|next|finally)\b",  # Sequential instructions
+    r"\bsummarize\b.*\b(calendar|schedule|events)\b",  # Summarization
+    r"\bbased on\b",  # Contextual reasoning
+]
+
+# Keywords that strongly indicate simple single-tool queries
+SIMPLE_QUERY_PATTERNS = [
+    r"^what('s|\s+is)\s+(the\s+)?(time|date)\??$",  # "what time is it"
+    r"^what('s|\s+is)\s+(the\s+)?weather\b",  # "what's the weather"
+    r"^(get|check)\s+(the\s+)?(time|date|weather)\b",  # "get the time"
+    r"^tell me the (time|date)\b",  # "tell me the time"
+]
 
 
 @dataclass
@@ -28,6 +48,17 @@ class ToolRouteResult:
     tool_args: Optional[dict] = None
     route_time_ms: float = 0
     confidence: float = 0.0
+
+
+@dataclass
+class ProcessedQueryResult:
+    """Full result from processing a query through the router."""
+    response: str
+    was_tool_query: bool
+    latency_ms: float
+    tools_executed: list[str] = field(default_factory=list)
+    tool_results: dict[str, Any] = field(default_factory=dict)
+    used_llm_tools: bool = False  # True if routed to gpt-oss multi-turn
 
 
 class FunctionGemmaRouter:
@@ -332,23 +363,62 @@ async def route_query(query: str) -> ToolRouteResult:
     return await router.route(query)
 
 
+def is_complex_query(text: str) -> bool:
+    """
+    Determine if a query requires multi-turn reasoning (gpt-oss).
+
+    Complex queries:
+    - Multiple tool calls needed
+    - Conditional logic
+    - Planning/scheduling
+    - Summarization requests
+
+    Simple queries:
+    - Single tool call with clear parameters
+    - Direct questions (time, weather, etc.)
+    """
+    text_lower = text.lower().strip()
+
+    # Check for simple patterns first (fast path)
+    for pattern in SIMPLE_QUERY_PATTERNS:
+        if re.match(pattern, text_lower, re.IGNORECASE):
+            return False
+
+    # Check for complex patterns
+    for pattern in COMPLEX_QUERY_PATTERNS:
+        if re.search(pattern, text_lower, re.IGNORECASE):
+            logger.debug("Complex query detected: '%s' matched pattern", text[:50])
+            return True
+
+    # Heuristic: multiple tool-related keywords suggest complexity
+    tool_keywords = ["time", "weather", "calendar", "remind", "schedule", "event"]
+    matches = sum(1 for kw in tool_keywords if kw in text_lower)
+    if matches >= 2:
+        logger.debug("Complex query detected: multiple tool keywords (%d)", matches)
+        return True
+
+    return False
+
+
 class ToolRouterProcessor:
     """
-    Pipecat-compatible processor that routes tool queries via FunctionGemma.
+    Two-tier tool router for voice pipeline.
 
-    Intercepts TranscriptionFrames and:
-    - Tool queries: Execute tool, return TextFrame directly (bypass LLM)
-    - Non-tool queries: Pass through to LLM
+    Routing logic:
+    1. Simple tool queries -> FunctionGemma (~120ms) -> Direct execution (~80ms)
+    2. Complex queries -> gpt-oss:20b multi-turn tool calling (~1.5s)
+    3. Non-tool queries -> Pass to conversational LLM
 
     Usage in pipeline:
         router_proc = ToolRouterProcessor()
-        # Use router_proc.process() to handle transcriptions
+        result = await router_proc.process(text)
     """
 
     def __init__(self, router: Optional[FunctionGemmaRouter] = None):
         """Initialize with optional pre-loaded router."""
         self._router = router
         self._tool_registry = None
+        self._gptoss_service = None
 
     async def _ensure_router(self):
         """Ensure router is loaded."""
@@ -362,32 +432,52 @@ class ToolRouterProcessor:
             self._tool_registry = tool_registry
         return self._tool_registry
 
-    async def process(self, text: str) -> tuple[str, bool, float]:
+    async def _get_gptoss_service(self):
+        """Lazy load gpt-oss service."""
+        if self._gptoss_service is None:
+            from .llm import get_gptoss_service
+            self._gptoss_service = get_gptoss_service()
+        return self._gptoss_service
+
+    async def process(self, text: str) -> ProcessedQueryResult:
         """
-        Process a text query through the router.
+        Process a text query through the two-tier router.
 
         Args:
             text: User query text
 
         Returns:
-            Tuple of (response_text, was_tool_query, latency_ms)
+            ProcessedQueryResult with response and execution details
         """
         if not text or not text.strip():
-            return "", False, 0.0
+            return ProcessedQueryResult(
+                response="",
+                was_tool_query=False,
+                latency_ms=0,
+            )
 
+        start_time = time.time()
+
+        # Check if this is a complex query that needs gpt-oss
+        if is_complex_query(text):
+            return await self._process_complex(text, start_time)
+
+        # Simple query path: FunctionGemma routing
         await self._ensure_router()
-
-        # Route the query
         route_result = await self._router.route(text)
 
         if not route_result.needs_tool:
-            # Not a tool query - pass through to LLM
-            logger.info("Router: '%s' -> LLM (no tool)", text[:30])
-            return "", False, route_result.route_time_ms
+            # Not a tool query - pass through to conversational LLM
+            logger.info("Router: '%s' -> conversation (no tool)", text[:30])
+            return ProcessedQueryResult(
+                response="",
+                was_tool_query=False,
+                latency_ms=route_result.route_time_ms,
+            )
 
-        # Tool query - execute directly
+        # Simple tool query - execute directly (fast path)
         logger.info(
-            "Router: '%s' -> %s (%.0fms)",
+            "Router: '%s' -> %s (simple, %.0fms)",
             text[:30],
             route_result.tool_name,
             route_result.route_time_ms,
@@ -399,10 +489,73 @@ class ToolRouterProcessor:
             route_result.tool_args or {},
         )
 
-        # Create response text from tool result
+        total_latency = (time.time() - start_time) * 1000
+
         if tool_result.success:
             response_text = tool_result.message
         else:
-            response_text = f"Sorry, I couldn't get that information."
+            response_text = "Sorry, I couldn't get that information."
 
-        return response_text, True, route_result.route_time_ms
+        return ProcessedQueryResult(
+            response=response_text,
+            was_tool_query=True,
+            latency_ms=total_latency,
+            tools_executed=[route_result.tool_name],
+            tool_results={route_result.tool_name: tool_result.message},
+            used_llm_tools=False,
+        )
+
+    async def _process_complex(self, text: str, start_time: float) -> ProcessedQueryResult:
+        """
+        Process a complex query through gpt-oss multi-turn tool calling.
+
+        Args:
+            text: User query text
+            start_time: Time when processing started
+
+        Returns:
+            ProcessedQueryResult with LLM response and all tools executed
+        """
+        logger.info("Router: '%s' -> gpt-oss (complex query)", text[:30])
+
+        try:
+            gptoss = await self._get_gptoss_service()
+            result = await gptoss.process_with_tools(text)
+
+            total_latency = (time.time() - start_time) * 1000
+
+            logger.info(
+                "gpt-oss completed: %d tools in %d turns (%.0fms)",
+                len(result.tools_executed),
+                result.turns,
+                total_latency,
+            )
+
+            return ProcessedQueryResult(
+                response=result.response,
+                was_tool_query=True,
+                latency_ms=total_latency,
+                tools_executed=result.tools_executed,
+                tool_results=result.tool_results,
+                used_llm_tools=True,
+            )
+
+        except Exception as e:
+            logger.error("gpt-oss error: %s", e)
+            total_latency = (time.time() - start_time) * 1000
+            return ProcessedQueryResult(
+                response="Sorry, I had trouble processing that request.",
+                was_tool_query=True,
+                latency_ms=total_latency,
+                used_llm_tools=True,
+            )
+
+    # Legacy method for backward compatibility
+    async def process_legacy(self, text: str) -> tuple[str, bool, float]:
+        """
+        Legacy process method that returns tuple.
+
+        Deprecated: Use process() which returns ProcessedQueryResult.
+        """
+        result = await self.process(text)
+        return result.response, result.was_tool_query, result.latency_ms

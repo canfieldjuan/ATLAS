@@ -586,6 +586,11 @@ class Settings(BaseSettings):
         default=False, description="Load Omni (unified voice) on startup"
     )
 
+    # Startup behavior - Tool router (FunctionGemma for fast tool routing)
+    load_tool_router_on_startup: bool = Field(
+        default=False, description="Load FunctionGemma tool router on startup"
+    )
+
     # Nested configs
     vlm: VLMConfig = Field(default_factory=VLMConfig)
     stt: STTConfig = Field(default_factory=STTConfig)

@@ -168,6 +168,16 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to load Omni: %s", e)
 
+    # Load FunctionGemma tool router if enabled (for fast tool query routing)
+    if settings.load_tool_router_on_startup:
+        try:
+            from .pipecat.router import get_router
+            logger.info("Loading FunctionGemma tool router...")
+            await get_router()
+            logger.info("FunctionGemma tool router loaded successfully")
+        except Exception as e:
+            logger.error("Failed to load tool router: %s", e)
+
     # Register test devices for development
     try:
         from .capabilities.devices import register_test_devices
