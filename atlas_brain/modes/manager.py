@@ -6,7 +6,7 @@ Handles mode switching, tool filtering, and model preferences.
 
 import logging
 import re
-from typing import Optional
+from typing import Any, Optional
 
 from .config import (
     ModeType,
@@ -142,6 +142,73 @@ class ModeManager:
     def get_model_preference(self) -> Optional[str]:
         """Get preferred model for current mode."""
         return self.current_config.model_preference
+
+    def _get_llm_registry(self) -> Any:
+        """Lazy-load LLM registry to avoid circular imports."""
+        from ..services.registry import llm_registry
+        return llm_registry
+
+    def _get_settings(self) -> Any:
+        """Lazy-load settings to avoid circular imports."""
+        from ..config import settings
+        return settings
+
+    async def swap_model_for_mode(self, mode: Optional[ModeType] = None) -> bool:
+        """
+        Swap LLM model based on mode preference.
+
+        Args:
+            mode: Mode to get preference from (defaults to current mode)
+
+        Returns:
+            True if model was swapped, False if skipped (e.g., cloud mode)
+        """
+        if mode is None:
+            mode = self._current_mode
+
+        config = get_mode_config(mode)
+        model_pref = config.model_preference
+
+        if not model_pref:
+            logger.debug("No model preference for mode %s", mode.value)
+            return False
+
+        # Handle cloud preference (skip Ollama, use cloud API)
+        if model_pref == "cloud":
+            logger.info(
+                "Mode %s uses cloud model, skipping Ollama swap",
+                mode.value,
+            )
+            return False
+
+        # Swap to the preferred Ollama model
+        try:
+            llm_registry = self._get_llm_registry()
+            settings = self._get_settings()
+
+            # Check if already using this model
+            current = llm_registry.get_active_name()
+            current_info = llm_registry.get_active_info()
+            if current == "ollama" and current_info:
+                if current_info.model_id == model_pref:
+                    logger.debug("Already using model %s", model_pref)
+                    return False
+
+            logger.info(
+                "Swapping LLM model for %s mode: %s",
+                mode.value,
+                model_pref,
+            )
+            llm_registry.activate(
+                "ollama",
+                model=model_pref,
+                base_url=settings.llm.ollama_url,
+            )
+            return True
+
+        except Exception as e:
+            logger.error("Failed to swap model for mode %s: %s", mode.value, e)
+            return False
 
     def detect_mode_hint(self, text: str) -> Optional[ModeType]:
         """

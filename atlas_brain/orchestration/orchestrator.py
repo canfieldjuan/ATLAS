@@ -922,14 +922,16 @@ class Orchestrator:
             previous_mode = self._mode_manager.current_mode
             switched = self._mode_manager.switch_mode(requested_mode)
             if switched:
-                # Get model preference for new mode
+                # Swap LLM model for new mode
                 model_pref = self._mode_manager.get_model_preference()
+                model_swapped = await self._mode_manager.swap_model_for_mode()
                 response = f"Switched to {requested_mode.value} mode"
                 logger.info(
-                    "Mode switch: %s -> %s (model preference: %s)",
+                    "Mode switch: %s -> %s (model: %s, swapped: %s)",
                     previous_mode.value,
                     requested_mode.value,
                     model_pref or "default",
+                    model_swapped,
                 )
             else:
                 response = f"Already in {requested_mode.value} mode"
