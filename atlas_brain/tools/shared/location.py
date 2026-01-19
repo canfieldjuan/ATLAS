@@ -9,8 +9,8 @@ from typing import Any
 
 import httpx
 
-from ..config import settings
-from .base import Tool, ToolParameter, ToolResult
+from ...config import settings
+from ..base import Tool, ToolParameter, ToolResult
 
 logger = logging.getLogger("atlas.tools.location")
 

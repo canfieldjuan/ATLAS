@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from .base import ToolParameter, ToolResult
+from ..base import ToolParameter, ToolResult
 
 logger = logging.getLogger("atlas.tools.time")
 

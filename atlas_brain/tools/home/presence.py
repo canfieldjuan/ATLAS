@@ -11,7 +11,7 @@ of the tool layer, not something the LLM reasons about.
 import logging
 from typing import Any, Optional
 
-from .base import Tool, ToolParameter, ToolResult
+from ..base import Tool, ToolParameter, ToolResult
 
 logger = logging.getLogger("atlas.tools.presence")
 

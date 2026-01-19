@@ -14,8 +14,8 @@ from typing import Any, Optional
 
 import httpx
 
-from ..config import settings
-from .base import ToolParameter, ToolResult
+from ...config import settings
+from ..base import ToolParameter, ToolResult
 
 logger = logging.getLogger("atlas.tools.calendar")
 

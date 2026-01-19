@@ -12,14 +12,14 @@ from typing import Any
 
 import httpx
 
-from ..config import settings
-from ..templates.email import (
+from ...config import settings
+from ...templates.email import (
     format_business_email,
     format_residential_email,
     format_business_proposal,
     format_residential_proposal,
 )
-from .base import ToolParameter, ToolResult
+from ..base import ToolParameter, ToolResult
 
 logger = logging.getLogger("atlas.tools.email")
 

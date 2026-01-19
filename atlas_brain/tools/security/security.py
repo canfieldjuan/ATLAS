@@ -12,8 +12,8 @@ from typing import Any, Optional
 
 import httpx
 
-from .base import Tool, ToolResult, ToolParameter
-from ..config import settings
+from ..base import Tool, ToolResult, ToolParameter
+from ...config import settings
 
 logger = logging.getLogger("atlas.tools.security")
 

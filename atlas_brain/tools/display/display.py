@@ -9,8 +9,8 @@ import logging
 import subprocess
 from typing import Any
 
-from .base import Tool, ToolResult, ToolParameter
-from ..config import settings
+from ..base import Tool, ToolResult, ToolParameter
+from ...config import settings
 
 logger = logging.getLogger("atlas.tools.display")
 
