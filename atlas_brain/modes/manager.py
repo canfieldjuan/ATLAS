@@ -6,7 +6,10 @@ Handles mode switching, tool filtering, and model preferences.
 
 import logging
 import re
+import time
 from typing import Optional
+
+from ..config import settings
 
 from .config import (
     ModeType,
@@ -40,6 +43,8 @@ class ModeManager:
     def __init__(self, default_mode: ModeType = ModeType.HOME):
         self._current_mode = default_mode
         self._previous_mode: Optional[ModeType] = None
+        self._last_activity: float = time.time()
+        self._workflow_active: bool = False
         logger.info("ModeManager initialized with mode: %s", default_mode.value)
 
     @property
@@ -75,6 +80,58 @@ class ModeManager:
             new_mode.value,
         )
         return True
+
+    @property
+    def has_active_workflow(self) -> bool:
+        """Check if there is an active workflow that should prevent timeout."""
+        return self._workflow_active
+
+    def set_workflow_active(self, active: bool) -> None:
+        """Set workflow active state (prevents timeout during multi-turn workflows)."""
+        self._workflow_active = active
+        if active:
+            logger.debug("Workflow active - timeout disabled")
+        else:
+            logger.debug("Workflow complete - timeout enabled")
+
+    def update_activity(self) -> None:
+        """Update last activity timestamp (call on each user interaction)."""
+        self._last_activity = time.time()
+
+    def check_timeout(self) -> bool:
+        """
+        Check if mode should timeout and fall back to default.
+
+        Returns True if timeout triggered and mode switched.
+        Does NOT timeout if:
+        - Already in HOME (default) mode
+        - Workflow is active
+        """
+        # Get default mode from config
+        try:
+            default_mode = ModeType(settings.modes.default_mode)
+        except ValueError:
+            default_mode = ModeType.HOME
+
+        if self._current_mode == default_mode:
+            return False
+
+        if self._workflow_active:
+            return False
+
+        timeout_seconds = settings.modes.timeout_seconds
+        elapsed = time.time() - self._last_activity
+
+        if elapsed > timeout_seconds:
+            logger.info(
+                "Mode timeout after %.0fs inactivity - switching to %s",
+                elapsed,
+                default_mode.value,
+            )
+            self.switch_mode(default_mode)
+            return True
+
+        return False
 
     def switch_mode_by_name(self, mode_name: str) -> bool:
         """Switch mode by name string."""

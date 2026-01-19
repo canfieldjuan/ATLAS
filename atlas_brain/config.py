@@ -292,6 +292,12 @@ class OrchestrationConfig(BaseSettings):
     recording_timeout_ms: int = Field(default=30000, description="Max recording duration")
     processing_timeout_ms: int = Field(default=10000, description="Max processing time")
 
+    # Audio quality - filter ambient noise
+    min_audio_rms: int = Field(
+        default=200,
+        description="Min audio RMS to process (filters ambient noise hallucinations)"
+    )
+
 
 class DiscoveryConfig(BaseSettings):
     """Network device discovery configuration."""
@@ -483,9 +489,16 @@ class VoiceClientConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ATLAS_VOICE_")
 
     enabled: bool = Field(default=True, description="Enable voice client on startup")
-    input_device: int | None = Field(default=None, description="Audio input device index")
-    output_device: int | None = Field(default=None, description="Audio output device index")
-    sample_rate: int = Field(default=16000, description="Audio sample rate")
+    atlas_url: str = Field(
+        default="ws://localhost:8000/api/v1/ws/orchestrated",
+        description="WebSocket URL for Atlas orchestration endpoint"
+    )
+    input_device: int | None = Field(default=None, description="Audio input device index (deprecated, use input_device_name)")
+    output_device: int | None = Field(default=None, description="Audio output device index (deprecated, use output_device_name)")
+    input_device_name: str | None = Field(default=None, description="Audio input device name substring (e.g. 'SoloCast', 'HyperX')")
+    output_device_name: str | None = Field(default=None, description="Audio output device name substring")
+    sample_rate: int = Field(default=16000, description="Target audio sample rate for STT")
+    input_sample_rate: int = Field(default=44100, description="Mic native sample rate (44100 for SoloCast, 16000 if mic supports it)")
     input_gain: float = Field(default=5.0, description="Software gain for mic (boost quiet mics)")
 
 
@@ -495,7 +508,8 @@ class WebcamConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ATLAS_WEBCAM_")
 
     enabled: bool = Field(default=False, description="Enable webcam person detection")
-    device_index: int = Field(default=0, description="Video device index (0 = /dev/video0)")
+    device_index: int = Field(default=0, description="Video device index (deprecated, use device_name)")
+    device_name: str | None = Field(default=None, description="Video device name substring (e.g. 'C920', 'Logitech')")
     source_id: str = Field(default="webcam_office", description="Camera source ID for room mapping")
     fps: int = Field(default=30, description="Detection frames per second")
 
@@ -546,6 +560,23 @@ class SecurityConfig(BaseSettings):
             "kitchen": "cam_kitchen",
         },
         description="Camera name aliases to camera IDs"
+    )
+
+
+class ModeManagerConfig(BaseSettings):
+    """Mode manager configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_MODE_", env_file=".env", extra="ignore")
+
+    timeout_seconds: int = Field(
+        default=120,
+        ge=10,
+        le=3600,
+        description="Inactivity timeout before falling back to HOME mode (seconds)"
+    )
+    default_mode: str = Field(
+        default="home",
+        description="Default mode to start in and fall back to"
     )
 
 
@@ -615,6 +646,7 @@ class Settings(BaseSettings):
     reminder: ReminderConfig = Field(default_factory=ReminderConfig)
     email: EmailConfig = Field(default_factory=EmailConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
+    modes: ModeManagerConfig = Field(default_factory=ModeManagerConfig)
 
     # Presence tracking - imported from presence module
     @property

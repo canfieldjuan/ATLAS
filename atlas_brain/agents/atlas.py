@@ -22,6 +22,10 @@ from .protocols import (
 from .tools import AtlasAgentTools, get_agent_tools
 from .entity_tracker import EntityTracker, has_pronoun, extract_pronoun
 
+# Mode management imports
+from ..modes.manager import get_mode_manager, ModeManager
+from ..modes.config import ModeType
+
 logger = logging.getLogger("atlas.agents.atlas")
 
 # Global CUDA lock - shared with orchestrator to prevent conflicts
@@ -94,6 +98,27 @@ class AtlasAgent(BaseAgent):
         # Entity tracker for pronoun resolution
         self._entity_tracker = EntityTracker()
 
+        # Mode management - AtlasAgent acts as router
+        self._mode_manager: ModeManager = get_mode_manager()
+        self._mode_agents: dict = {}  # Lazy-loaded to avoid circular imports
+        self._workflow_state: Optional[str] = None  # Active workflow name or None
+
+    def _init_mode_agents(self) -> None:
+        """Initialize mode agents (lazy to avoid circular imports)."""
+        if self._mode_agents:
+            return  # Already initialized
+
+        # Import here to avoid circular imports
+        # Use singleton getters so agents are shared across AtlasAgent instances
+        from .home import get_home_agent
+        from .receptionist import get_receptionist_agent
+
+        self._mode_agents = {
+            ModeType.HOME: get_home_agent(session_id=self._session_id),
+            ModeType.RECEPTIONIST: get_receptionist_agent(),
+        }
+        logger.info("Mode agents initialized: %s", list(self._mode_agents.keys()))
+
     # Lazy loading
 
     def _get_memory(self) -> AtlasAgentMemory:
@@ -114,6 +139,52 @@ class AtlasAgent(BaseAgent):
             from ..services import llm_registry
             self._llm = llm_registry.get_active()
         return self._llm
+
+    # Router logic - AtlasAgent delegates to mode-specific agents
+
+    async def run(self, context: AgentContext) -> AgentResult:
+        """
+        Main entry point with mode routing.
+
+        Handles:
+        1. Check mode timeout (before updating activity)
+        2. Update activity timestamp
+        3. Check for mode switch command
+        4. Delegate to current mode agent (or fallback to self)
+        """
+        # Initialize mode agents on first run
+        self._init_mode_agents()
+
+        # 1. Check timeout BEFORE updating activity (skip if workflow active)
+        if not self._workflow_state:
+            self._mode_manager.check_timeout()
+
+        # 2. Update activity timestamp (resets timeout for next check)
+        self._mode_manager.update_activity()
+
+        # 3. Check for mode switch command
+        mode_switch = self._mode_manager.parse_mode_switch(context.input_text)
+        if mode_switch:
+            self._mode_manager.switch_mode(mode_switch)
+            # Clear workflow state on manual switch
+            self._workflow_state = None
+            return AgentResult(
+                success=True,
+                response_text=f"Switched to {mode_switch.value} mode.",
+                action_type="mode_switch",
+            )
+
+        # 4. Delegate to current mode agent
+        current_mode = self._mode_manager.current_mode
+        agent = self._mode_agents.get(current_mode)
+
+        if agent:
+            logger.info("Routing to %s agent (mode=%s)", agent.info.name, current_mode.value)
+            return await agent.run(context)
+
+        # Fallback to original AtlasAgent behavior (for modes without agents)
+        logger.info("No agent for mode %s, using AtlasAgent directly", current_mode.value)
+        return await super().run(context)
 
     # Core agent methods
 
@@ -371,19 +442,9 @@ class AtlasAgent(BaseAgent):
         if act_result and act_result.error:
             return f"I'm sorry, there was an error: {act_result.error}"
 
-        # Device command response
+        # Device command response - use LLM for natural response
         if think_result.action_type == "device_command":
-            if act_result and act_result.action_results:
-                # Use the action result message directly (fast path)
-                messages = []
-                for r in act_result.action_results:
-                    msg = r.get("message", "") if isinstance(r, dict) else getattr(r, "message", "")
-                    if msg:
-                        messages.append(msg)
-                if messages:
-                    return " ".join(messages)
-                return "Done."
-            return f"I understood '{think_result.intent.action}' but couldn't execute it."
+            return await self._generate_device_response(context, think_result, act_result)
 
         # Tool use - use LLM with tool calling loop
         if think_result.action_type == "tool_use":
@@ -461,6 +522,87 @@ class AtlasAgent(BaseAgent):
 
         return f"I heard: {context.input_text}"
 
+    async def _generate_device_response(
+        self,
+        context: AgentContext,
+        think_result: ThinkResult,
+        act_result: Optional[ActResult],
+    ) -> str:
+        """Generate natural response for device commands using LLM."""
+        from ..services.protocols import Message
+
+        # Get action details
+        intent = think_result.intent
+        action_message = ""
+        if act_result and act_result.response_data:
+            action_message = act_result.response_data.get("action_message", "")
+
+        success = act_result.success if act_result else False
+
+        # Build context for LLM
+        if intent:
+            action = intent.action or "unknown"
+            target = intent.target_name or "device"
+            target_type = intent.target_type or "device"
+        else:
+            action = "command"
+            target = "device"
+            target_type = "device"
+
+        llm = self._get_llm()
+        logger.info("Device response using LLM: %s", llm.model if hasattr(llm, 'model') else 'unknown')
+        if llm is None:
+            # Fallback to simple response
+            if success:
+                return f"Done. {action_message}" if action_message else "Done."
+            else:
+                return f"I couldn't complete that action. {action_message}"
+
+        # Build prompt for natural response
+        system_msg = (
+            "You are Atlas, a home assistant. Generate a brief, natural confirmation "
+            "for the device action that was just performed. Keep it to one short sentence. "
+            "Be conversational but concise."
+        )
+
+        if success:
+            user_prompt = (
+                f"I just successfully executed '{action}' on the {target_type} '{target}'. "
+                f"Result: {action_message if action_message else 'Success'}. "
+                f"Generate a brief, natural confirmation."
+            )
+        else:
+            user_prompt = (
+                f"I tried to execute '{action}' on the {target_type} '{target}' but it failed. "
+                f"Error: {action_message if action_message else 'Unknown error'}. "
+                f"Generate a brief, apologetic response."
+            )
+
+        messages = [
+            Message(role="system", content=system_msg),
+            Message(role="user", content=user_prompt),
+        ]
+
+        try:
+            cuda_lock = _get_cuda_lock()
+            async with cuda_lock:
+                llm_result = llm.chat(
+                    messages=messages,
+                    max_tokens=50,
+                    temperature=0.7,
+                )
+            response = llm_result.get("response", "").strip()
+            if response:
+                return response
+        except Exception as e:
+            logger.warning("Device response generation failed: %s", e)
+
+        # Fallback
+        if success:
+            return f"Done. {action_message}" if action_message else "Done."
+        else:
+            return f"I couldn't complete that. {action_message}"
+
     async def _generate_llm_response_with_tools(
         self,
         context: AgentContext,
@@ -475,12 +617,8 @@ class AtlasAgent(BaseAgent):
         if llm is None:
             return f"I heard: {context.input_text}"
 
-        # Build system prompt
-        system_msg = (
-            "You are Atlas, a helpful home assistant. "
-            "Use the available tools to help the user. "
-            "Be conversational and concise in your responses."
-        )
+        # Build system prompt - keep it simple for reliable tool calling
+        system_msg = "You are a helpful assistant. Use tools when needed."
 
         messages = [Message(role="system", content=system_msg)]
 
@@ -495,14 +633,23 @@ class AtlasAgent(BaseAgent):
         # Add current user message
         messages.append(Message(role="user", content=context.input_text))
 
+        # Get target tool from intent (if available)
+        # Passing a single tool to the LLM is MUCH more reliable (100% vs ~33%)
+        target_tool = None
+        if think_result.intent and think_result.intent.target_name:
+            target_tool = think_result.intent.target_name
+            logger.info("Tool use with target: %s", target_tool)
+
         # Execute with tool calling loop
+        # Lower temperature (0.3) for more consistent tool calling
         cuda_lock = _get_cuda_lock()
         async with cuda_lock:
             result = await execute_with_tools(
                 llm=llm,
                 messages=messages,
                 max_tokens=150,
-                temperature=0.7,
+                temperature=0.3,
+                target_tool=target_tool,
             )
 
         response = result.get("response", "").strip()
@@ -510,6 +657,10 @@ class AtlasAgent(BaseAgent):
 
         if tools_executed:
             logger.info("Tools executed via LLM: %s", tools_executed)
+            # Store tools in act_result so they flow to the API response
+            if act_result is not None:
+                for tool_name in tools_executed:
+                    act_result.action_results.append({"tool": tool_name})
 
         return response if response else "I couldn't process that request."
 
@@ -616,28 +767,3 @@ def reset_atlas_agent() -> None:
     """Reset the global Atlas agent instance."""
     global _atlas_agent
     _atlas_agent = None
-
-
-def create_atlas_agent(
-    session_id: Optional[str] = None,
-    memory: Optional[AtlasAgentMemory] = None,
-    tools: Optional[AtlasAgentTools] = None,
-) -> AtlasAgent:
-    """
-    Create a new Atlas agent instance.
-
-    Use this when you need a fresh agent (e.g., per-request).
-
-    Args:
-        session_id: Session ID for persistence
-        memory: Custom memory system
-        tools: Custom tools system
-
-    Returns:
-        New AtlasAgent instance
-    """
-    return AtlasAgent(
-        session_id=session_id,
-        memory=memory,
-        tools=tools,
-    )

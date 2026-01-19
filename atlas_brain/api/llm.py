@@ -9,16 +9,12 @@ Provides REST API for:
 import logging
 from pathlib import Path
 from typing import Optional
-from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from ..agents import get_atlas_agent, AgentContext
 from ..services import llm_registry
-from ..storage import db_settings
-from ..storage.database import get_db_pool
-from ..storage.repositories.session import get_session_repo
-from ..storage.repositories.conversation import get_conversation_repo
 
 logger = logging.getLogger("atlas.api.llm")
 
@@ -125,79 +121,51 @@ async def generate_text(request: GenerateRequest):
 @router.post("/chat")
 async def chat(request: ChatRequest):
     """
-    Chat with the LLM.
+    Chat using the Atlas Agent.
 
-    Optionally provide session_id to load conversation history
-    and persist new turns for multi-location continuity.
+    Routes through the unified Agent for full capabilities:
+    tools, device commands, and conversation memory.
+
+    Optionally provide session_id for conversation persistence.
     """
-    service = llm_registry.get_active()
-    if service is None:
+    # Extract user message from request
+    user_message = ""
+    for msg in reversed(request.messages):
+        if msg.role == "user":
+            user_message = msg.content
+            break
+
+    if not user_message:
         raise HTTPException(
             status_code=400,
-            detail="No LLM active. Call /llm/activate first.",
+            detail="No user message found in messages list.",
         )
+
+    logger.info("Chat request: %s (session=%s)", user_message[:50], request.session_id)
+
+    agent = get_atlas_agent(session_id=request.session_id)
+
+    context = AgentContext(
+        input_text=user_message,
+        input_type="text",
+        session_id=request.session_id,
+    )
 
     try:
-        from ..services.protocols import Message
+        result = await agent.run(context)
 
-        messages = [Message(role=m.role, content=m.content) for m in request.messages]
-        session_uuid = None
-
-        # Load conversation history if session_id provided and DB enabled
-        if request.session_id and db_settings.enabled:
-            pool = get_db_pool()
-            if pool.is_initialized:
-                try:
-                    session_uuid = UUID(request.session_id)
-                    conv_repo = get_conversation_repo()
-                    history = await conv_repo.get_history(session_uuid, limit=20)
-
-                    if history:
-                        history_messages = [
-                            Message(role=t.role, content=t.content)
-                            for t in history
-                        ]
-                        messages = history_messages + messages
-                        logger.debug(
-                            "Loaded %d turns from session %s",
-                            len(history),
-                            request.session_id
-                        )
-                except Exception as e:
-                    logger.warning("Failed to load history: %s", e)
-
-        result = service.chat(
-            messages=messages,
-            max_tokens=request.max_tokens,
-            temperature=request.temperature,
+        logger.info(
+            "Agent result: action_type=%s, response_len=%d",
+            result.action_type,
+            len(result.response_text or ""),
         )
 
-        # Persist new turns if session_id provided and DB enabled
-        if session_uuid and db_settings.enabled:
-            pool = get_db_pool()
-            if pool.is_initialized:
-                try:
-                    conv_repo = get_conversation_repo()
-                    user_content = request.messages[-1].content if request.messages else ""
-
-                    await conv_repo.add_turn(
-                        session_id=session_uuid,
-                        role="user",
-                        content=user_content,
-                    )
-
-                    response_content = result.get("response", "")
-                    await conv_repo.add_turn(
-                        session_id=session_uuid,
-                        role="assistant",
-                        content=response_content,
-                    )
-                    logger.debug("Persisted turns to session %s", request.session_id)
-                except Exception as e:
-                    logger.warning("Failed to persist turns: %s", e)
-
-        return result
+        # Return in same format as before for compatibility with voice_client.py
+        return {
+            "response": result.response_text or "",
+        }
     except Exception as e:
+        logger.exception("Chat failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Chat failed: {e}")
 
 

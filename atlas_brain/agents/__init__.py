@@ -53,7 +53,6 @@ from .atlas import (
     AtlasAgent,
     get_atlas_agent,
     reset_atlas_agent,
-    create_atlas_agent,
 )
 
 from .entity_tracker import (
@@ -68,6 +67,12 @@ from .receptionist import (
     get_receptionist_agent,
     create_receptionist_agent,
     reset_receptionist_agent,
+)
+
+from .home import (
+    HomeAgent,
+    get_home_agent,
+    create_home_agent,
 )
 
 __all__ = [
@@ -99,7 +104,6 @@ __all__ = [
     "AtlasAgent",
     "get_atlas_agent",
     "reset_atlas_agent",
-    "create_atlas_agent",
     # Entity tracking
     "EntityTracker",
     "TrackedEntity",
@@ -110,4 +114,8 @@ __all__ = [
     "get_receptionist_agent",
     "create_receptionist_agent",
     "reset_receptionist_agent",
+    # Home Agent
+    "HomeAgent",
+    "get_home_agent",
+    "create_home_agent",
 ]

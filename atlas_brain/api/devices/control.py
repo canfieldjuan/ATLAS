@@ -2,18 +2,21 @@
 Device control and management endpoints.
 """
 
+import logging
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from ...agents import get_atlas_agent, AgentContext
 from ...capabilities import (
     ActionRequest,
     CapabilityType,
     action_dispatcher,
     capability_registry,
 )
-from ...capabilities.intent_parser import intent_parser
+
+logger = logging.getLogger("atlas.api.devices")
 
 router = APIRouter()
 
@@ -39,6 +42,7 @@ class ActionRequestBody(BaseModel):
 class IntentRequestBody(BaseModel):
     """Request to parse and execute a natural language intent."""
     query: str
+    session_id: Optional[str] = None
 
 
 class ActionResponse(BaseModel):
@@ -148,36 +152,41 @@ async def execute_device_action(device_id: str, body: ActionRequestBody):
 @router.post("/intent", response_model=ActionResponse)
 async def execute_intent(body: IntentRequestBody):
     """
-    Parse a natural language query and execute the inferred action.
+    Parse a natural language query and execute via Atlas Agent.
 
-    This endpoint bridges VLM understanding with device control.
+    Routes through the unified Agent for full capabilities:
+    device commands, tools, and natural language response.
 
     Example queries:
     - "turn on the living room lights"
     - "set bedroom brightness to 50%"
     - "turn off all lights"
     """
-    intent = await intent_parser.parse(body.query)
-    if not intent:
-        raise HTTPException(
-            400,
-            "Could not parse intent from query. Make sure a VLM is loaded.",
-        )
+    logger.info("Intent request: %s (session=%s)", body.query[:50], body.session_id)
 
-    if intent.confidence < 0.5:
-        raise HTTPException(
-            400,
-            f"Low confidence ({intent.confidence:.2f}) in intent parsing. Please be more specific.",
-        )
+    agent = get_atlas_agent(session_id=body.session_id)
 
-    result = await action_dispatcher.dispatch_intent(intent)
+    context = AgentContext(
+        input_text=body.query,
+        input_type="text",
+        session_id=body.session_id,
+    )
+
+    result = await agent.run(context)
+
+    logger.info(
+        "Agent result: action_type=%s, success=%s",
+        result.action_type,
+        result.success,
+    )
 
     return ActionResponse(
         success=result.success,
-        message=result.message,
+        message=result.response_text or "",
         data={
-            "intent": intent.model_dump(),
-            "result": result.data,
+            "action_type": result.action_type,
+            "intent": result.intent.model_dump() if result.intent else None,
+            "action_results": result.action_results,
         },
         error=result.error,
     )

@@ -1,0 +1,336 @@
+"""
+Home Agent - Device control agent for Atlas Brain.
+
+Handles device commands: lights, TV, scenes.
+Fast path - no state machine, direct execution.
+"""
+
+import asyncio
+import logging
+import time
+from typing import Any, Optional
+
+from .base import BaseAgent
+from .protocols import (
+    ActResult,
+    AgentContext,
+    ThinkResult,
+)
+from .tools import AtlasAgentTools, get_agent_tools
+from .entity_tracker import EntityTracker, has_pronoun, extract_pronoun
+
+logger = logging.getLogger("atlas.agents.home")
+
+# Global CUDA lock - shared across agents
+_cuda_lock: Optional[asyncio.Lock] = None
+
+
+def _get_cuda_lock() -> asyncio.Lock:
+    """Get or create global CUDA lock."""
+    global _cuda_lock
+    if _cuda_lock is None:
+        _cuda_lock = asyncio.Lock()
+    return _cuda_lock
+
+
+class HomeAgent(BaseAgent):
+    """
+    Home device control agent.
+
+    Handles:
+    - Light control (on/off, brightness, color)
+    - Media control (TV, speakers)
+    - Scene activation
+    - Device queries
+
+    Fast path execution - no state machine needed.
+    """
+
+    def __init__(
+        self,
+        tools: Optional[AtlasAgentTools] = None,
+        session_id: Optional[str] = None,
+    ):
+        """
+        Initialize Home agent.
+
+        Args:
+            tools: Tools system (lazy-loaded if None)
+            session_id: Default session ID for persistence
+        """
+        super().__init__(
+            name="home",
+            description="Home device control agent",
+            tools=tools,
+        )
+
+        self._capabilities = [
+            "device_control",
+            "lights",
+            "media",
+            "scenes",
+        ]
+
+        self._session_id = session_id
+        self._llm = None
+        self._entity_tracker = EntityTracker()
+
+    def _get_tools(self) -> AtlasAgentTools:
+        """Get or create tools system."""
+        if self._tools is None:
+            self._tools = get_agent_tools()
+        return self._tools
+
+    def _get_llm(self):
+        """Get or create LLM service."""
+        if self._llm is None:
+            from ..services import llm_registry
+            self._llm = llm_registry.get_active()
+        return self._llm
+
+    async def _do_think(
+        self,
+        context: AgentContext,
+    ) -> ThinkResult:
+        """
+        Analyze input and decide what to do.
+
+        For HomeAgent, we only handle device commands.
+        """
+        tools = self._get_tools()
+
+        result = ThinkResult(
+            action_type="none",
+            confidence=0.0,
+        )
+
+        start_time = time.perf_counter()
+
+        # Parse intent
+        intent = await tools.parse_intent(context.input_text)
+
+        # Resolve pronouns if needed
+        if intent and not intent.target_name and has_pronoun(context.input_text):
+            pronoun = extract_pronoun(context.input_text)
+            if pronoun:
+                resolved = self._entity_tracker.resolve_pronoun(
+                    pronoun,
+                    entity_type=intent.target_type,
+                )
+                if resolved:
+                    intent.target_name = resolved.entity_name
+                    intent.target_type = intent.target_type or resolved.entity_type
+                    if resolved.entity_id:
+                        intent.target_id = resolved.entity_id
+                    logger.info(
+                        "Resolved '%s' -> %s/%s",
+                        pronoun,
+                        resolved.entity_type,
+                        resolved.entity_name,
+                    )
+
+        if intent:
+            result.intent = intent
+            result.confidence = intent.confidence
+
+            # Device actions we handle
+            device_actions = {
+                "turn_on", "turn_off", "toggle",
+                "set_brightness", "set_temperature",
+            }
+
+            # Device types we handle
+            device_types = {
+                "media_player", "light", "switch",
+                "climate", "cover", "fan", "scene",
+            }
+
+            if intent.action in device_actions:
+                result.action_type = "device_command"
+                result.needs_llm = False
+                logger.debug(
+                    "Device command: %s %s/%s (conf=%.2f)",
+                    intent.action,
+                    intent.target_type,
+                    intent.target_name,
+                    intent.confidence,
+                )
+            elif intent.action == "query" and intent.target_type in device_types:
+                result.action_type = "device_command"
+                result.needs_llm = False
+                logger.debug(
+                    "Device query: %s %s/%s (conf=%.2f)",
+                    intent.action,
+                    intent.target_type,
+                    intent.target_name,
+                    intent.confidence,
+                )
+            else:
+                # Not a device command - conversation fallback
+                result.action_type = "conversation"
+                result.needs_llm = True
+        else:
+            result.action_type = "conversation"
+            result.needs_llm = True
+            result.confidence = 0.5
+
+        result.duration_ms = (time.perf_counter() - start_time) * 1000
+        return result
+
+    async def _do_act(
+        self,
+        context: AgentContext,
+        think_result: ThinkResult,
+    ) -> ActResult:
+        """
+        Execute device commands.
+        """
+        tools = self._get_tools()
+        result = ActResult(
+            success=False,
+            action_type=think_result.action_type,
+        )
+
+        start_time = time.perf_counter()
+
+        if think_result.action_type == "device_command" and think_result.intent:
+            try:
+                action_result = await tools.execute_intent(think_result.intent)
+                result.success = action_result.get("success", False)
+                result.action_results.append(action_result)
+                result.response_data["action_message"] = action_result.get("message", "")
+
+                logger.info(
+                    "Action executed: %s -> %s",
+                    think_result.intent.action,
+                    "success" if result.success else "failed",
+                )
+
+                # Track entity for pronoun resolution
+                if result.success and think_result.intent.target_name:
+                    self._entity_tracker.track(
+                        entity_type=think_result.intent.target_type or "device",
+                        entity_name=think_result.intent.target_name,
+                        entity_id=think_result.intent.target_id,
+                    )
+
+            except Exception as e:
+                logger.warning("Action execution failed: %s", e)
+                result.error = str(e)
+                result.error_code = "EXECUTION_ERROR"
+
+        result.duration_ms = (time.perf_counter() - start_time) * 1000
+        return result
+
+    async def _do_respond(
+        self,
+        context: AgentContext,
+        think_result: ThinkResult,
+        act_result: Optional[ActResult],
+    ) -> str:
+        """
+        Generate response for device commands.
+        """
+        # Error case
+        if act_result and act_result.error:
+            return f"I'm sorry, there was an error: {act_result.error}"
+
+        # Device command response
+        if think_result.action_type == "device_command":
+            return await self._generate_device_response(context, think_result, act_result)
+
+        # Conversation fallback - simple response
+        return f"I heard: {context.input_text}"
+
+    async def _generate_device_response(
+        self,
+        context: AgentContext,
+        think_result: ThinkResult,
+        act_result: Optional[ActResult],
+    ) -> str:
+        """Generate natural response for device command."""
+        from ..services.protocols import Message
+
+        intent = think_result.intent
+        success = act_result.success if act_result else False
+        action_message = act_result.response_data.get("action_message", "") if act_result else ""
+
+        # Build context for LLM
+        if intent:
+            action = intent.action or "unknown"
+            target = intent.target_name or "device"
+            target_type = intent.target_type or "device"
+        else:
+            action = "command"
+            target = "device"
+            target_type = "device"
+
+        llm = self._get_llm()
+        if llm is None:
+            # Fallback to simple response
+            if success:
+                return f"Done. {action_message}" if action_message else "Done."
+            else:
+                return f"I couldn't complete that action. {action_message}"
+
+        # Build prompt for natural response
+        system_msg = (
+            "You are Atlas, a home assistant. Generate a brief, natural confirmation "
+            "for the device action that was just performed. Keep it to one short sentence. "
+            "Be conversational but concise."
+        )
+
+        if success:
+            user_prompt = (
+                f"I just successfully executed '{action}' on the {target_type} '{target}'. "
+                f"Result: {action_message if action_message else 'Success'}. "
+                f"Generate a brief, natural confirmation."
+            )
+        else:
+            user_prompt = (
+                f"I tried to execute '{action}' on the {target_type} '{target}' but it failed. "
+                f"Error: {action_message if action_message else 'Unknown error'}. "
+                f"Generate a brief, apologetic response."
+            )
+
+        messages = [
+            Message(role="system", content=system_msg),
+            Message(role="user", content=user_prompt),
+        ]
+
+        try:
+            cuda_lock = _get_cuda_lock()
+            async with cuda_lock:
+                llm_result = llm.chat(
+                    messages=messages,
+                    max_tokens=50,
+                    temperature=0.7,
+                )
+            response = llm_result.get("response", "").strip()
+            if response:
+                return response
+        except Exception as e:
+            logger.warning("Device response generation failed: %s", e)
+
+        # Fallback
+        if success:
+            return f"Done. {action_message}" if action_message else "Done."
+        else:
+            return f"I couldn't complete that. {action_message}"
+
+
+# Factory function
+_home_agent: Optional[HomeAgent] = None
+
+
+def get_home_agent(session_id: Optional[str] = None) -> HomeAgent:
+    """Get or create HomeAgent instance."""
+    global _home_agent
+    if _home_agent is None:
+        _home_agent = HomeAgent(session_id=session_id)
+    return _home_agent
+
+
+def create_home_agent(session_id: Optional[str] = None) -> HomeAgent:
+    """Create a new HomeAgent instance."""
+    return HomeAgent(session_id=session_id)
