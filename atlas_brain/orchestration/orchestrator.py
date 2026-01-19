@@ -19,6 +19,7 @@ from .states import (
     PipelineStateMachine,
 )
 from ..debug import debug
+from ..modes import ModeType, get_mode_manager
 
 logger = logging.getLogger("atlas.orchestration")
 
@@ -195,6 +196,9 @@ class Orchestrator:
         self._state_machine = PipelineStateMachine()
         self._audio_buffer = AudioBuffer(self.config.vad_config)
 
+        # Mode manager for tool filtering and model selection
+        self._mode_manager = get_mode_manager()
+
         # Service references (lazy loaded)
         self._stt = None
         self._vlm = None
@@ -230,13 +234,11 @@ class Orchestrator:
         self._streaming_audio_buffer: list[bytes] = []  # Accumulate raw audio for streaming
 
         logger.info(
-            "Orchestrator initialized (wakeword=%s/%.2f, follow_up=%s/%dms, progressive=%s/%dms, agent=%s)",
+            "Orchestrator initialized (mode=%s, wakeword=%s, follow_up=%s/%dms, agent=%s)",
+            self._mode_manager.current_mode.value,
             self.config.wakeword_enabled,
-            self.config.wakeword_threshold if self.config.wakeword_enabled else 0,
             self.config.follow_up_enabled,
             self.config.follow_up_duration_ms,
-            self.config.progressive_prompting_enabled,
-            self.config.progressive_interval_ms if self.config.progressive_prompting_enabled else 0,
             "enabled" if self._agent else "disabled",
         )
 
@@ -259,6 +261,11 @@ class Orchestrator:
             return False
         elapsed = (datetime.now() - self._last_response_time).total_seconds() * 1000
         return elapsed < self.config.follow_up_duration_ms
+
+    @property
+    def current_mode(self) -> ModeType:
+        """Get current operating mode."""
+        return self._mode_manager.current_mode
 
     @property
     def agent(self) -> Optional[Any]:
@@ -908,6 +915,34 @@ class Orchestrator:
         except Exception as e:
             logger.error("Transcription failed: %s", e)
             return OrchestratorResult(success=False, error=f"Transcription failed: {e}")
+
+        # Check for mode switch commands ("Atlas switch to security mode")
+        requested_mode = self._mode_manager.parse_mode_switch(ctx.transcript)
+        if requested_mode is not None:
+            previous_mode = self._mode_manager.current_mode
+            switched = self._mode_manager.switch_mode(requested_mode)
+            if switched:
+                # Get model preference for new mode
+                model_pref = self._mode_manager.get_model_preference()
+                response = f"Switched to {requested_mode.value} mode"
+                logger.info(
+                    "Mode switch: %s -> %s (model preference: %s)",
+                    previous_mode.value,
+                    requested_mode.value,
+                    model_pref or "default",
+                )
+            else:
+                response = f"Already in {requested_mode.value} mode"
+            result.response_text = response
+            result.success = True
+            # Generate TTS for mode switch confirmation
+            tts = self._get_tts()
+            if tts:
+                try:
+                    result.response_audio = await tts.synthesize(response)
+                except Exception as tts_err:
+                    logger.warning("TTS for mode switch failed: %s", tts_err)
+            return result
 
         # Check for device commands first (fast path) - these skip omni/agent
         intent_parser = self._get_intent_parser()

@@ -9,6 +9,7 @@ import logging
 from typing import Any, Optional
 
 from .protocols import AgentTools as AgentToolsProtocol
+from ..modes import get_mode_manager, get_mode_tools
 
 logger = logging.getLogger("atlas.agents.tools")
 
@@ -267,13 +268,43 @@ class AtlasAgentTools:
 
         return await self.execute_tool(tool_name, params)
 
-    def list_tools(self) -> list[str]:
-        """List available tool names."""
+    def list_tools(self, filter_by_mode: bool = True) -> list[str]:
+        """
+        List available tool names.
+
+        Args:
+            filter_by_mode: If True, only return tools allowed in current mode
+        """
         try:
             registry = self._get_tool_registry()
-            return registry.list_names()
+            all_tools = registry.list_names()
+
+            if not filter_by_mode:
+                return all_tools
+
+            # Filter by current mode
+            mode_manager = get_mode_manager()
+            allowed_tools = get_mode_tools(mode_manager.current_mode, include_shared=True)
+            return [t for t in all_tools if t in allowed_tools]
         except Exception:
             return list(TOOL_MAP.values())
+
+    def is_tool_allowed(self, tool_name: str) -> bool:
+        """Check if a tool is allowed in the current mode."""
+        mode_manager = get_mode_manager()
+        allowed_tools = get_mode_tools(mode_manager.current_mode, include_shared=True)
+        return tool_name in allowed_tools
+
+    def get_tool_schemas_for_mode(self) -> list[dict]:
+        """Get Ollama-compatible tool schemas for current mode."""
+        try:
+            registry = self._get_tool_registry()
+            mode_manager = get_mode_manager()
+            allowed_tools = get_mode_tools(mode_manager.current_mode, include_shared=True)
+            return registry.get_tool_schemas_filtered(allowed_tools)
+        except Exception as e:
+            logger.warning("Failed to get tool schemas for mode: %s", e)
+            return []
 
     # Capability listing
 
