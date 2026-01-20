@@ -367,7 +367,7 @@ async def run_voice_pipeline(
     session_id: Optional[str] = None,
     wake_word_enabled: bool = True,
     wake_phrases: Optional[list[str]] = None,
-    wake_keepalive_secs: float = 15.0,
+    wake_keepalive_secs: float = 30.0,
 ):
     """
     Run the full Pipecat voice pipeline with local audio.
@@ -458,7 +458,8 @@ async def run_voice_pipeline(
     # Create wake word filter (Pipecat's built-in WakeCheckFilter)
     # Only passes transcriptions through after wake phrase detected
     if wake_phrases is None:
-        wake_phrases = ["hey atlas", "atlas", "hey assistant"]
+        # Include common misheard variants
+        wake_phrases = ["hey atlas", "atlas", "hey assistant", "hey yeah", "a atlas"]
 
     wake_filter = None
     if wake_word_enabled:
