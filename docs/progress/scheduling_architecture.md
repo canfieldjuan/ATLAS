@@ -1,7 +1,7 @@
 # Scheduling Architecture Decision Log
 
-**Date:** 2026-01-19
-**Status:** Planning
+**Date:** 2026-01-19 (Updated: 2026-01-20)
+**Status:** Implemented
 
 ## Current State
 
@@ -27,15 +27,19 @@ Voice commands like "create an appointment for John Smith tomorrow at 9am" go th
 ## Desired Architecture
 
 ### 1. Inbound Customer Calls (Future)
-**Options being evaluated:**
-- **SignalWire service** - Let them handle the full conversation
-- **NVIDIA conversational model** - New model with:
+**Options evaluated:**
+- ~~SignalWire service~~ - Would handle conversation but less control
+- **NVIDIA PersonaFlex** - Voice agent model with:
   - Back-and-forth conversation capability
   - Built-in voice synthesis
   - Character/persona setting
-  - Could handle everything or just the model layer
+  - Handles the hard multi-turn conversational problem
 
-**Decision:** TBD - depends on model availability and cost
+**Decision:** NVIDIA PersonaFlex for voice agent layer
+- Deploy on serverless GPU in cloud
+- Use Together AI MOE model for tool calling (reasoning layer)
+- Current limitation: Uses all VRAM locally, needs CPU offloading
+- Architecture: PersonaFlex (voice) -> Together AI (tools) -> Atlas Tool Registry
 
 ### 2. Direct Voice Commands (Atlas)
 - User says: "Book an appointment for John Smith at 123 Main St tomorrow morning"
@@ -157,10 +161,17 @@ All modes now follow the same pattern as RECEPTIONIST (no dedicated agent, Atlas
 4. If found (HOME only): delegate to HomeAgent
 5. If not found: AtlasAgent handles directly with mode-specific tools
 
-## Previous Next Steps
+## Completed Items
 
 1. ~~Test direct `book_appointment` via AtlasAgent~~ DONE - works
 2. ~~Verify all modes follow same pattern~~ DONE - verified
-3. Configure calendar for production use
-4. Evaluate SignalWire vs NVIDIA model for inbound calls
-5. Potentially deprecate ReceptionistAgent phone flow if external service handles it
+3. ~~Evaluate SignalWire vs NVIDIA model for inbound calls~~ DONE - PersonaFlex selected
+4. ~~Add cloud LLM provider~~ DONE - Together AI added (2026-01-20)
+5. ~~STT/TTS auto-load on startup~~ DONE - loads by default now
+
+## Remaining Items
+
+1. ~~Configure calendar for production use~~ DONE - `ATLAS_COMMS_EFFINGHAM_MAIDS_CALENDAR_ID` set
+2. Build PersonaFlex pipeline for serverless GPU deployment
+3. Integrate PersonaFlex with Together AI for tool calling
+4. Potentially deprecate ReceptionistAgent if PersonaFlex handles all phone flows
