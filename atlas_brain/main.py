@@ -107,6 +107,14 @@ async def lifespan(app: FastAPI):
                 logger.info("Ollama model: %s, url: %s",
                            settings.llm.ollama_model,
                            settings.llm.ollama_url)
+            elif backend == "together":
+                # Together AI cloud backend
+                kwargs = {
+                    "model": settings.llm.together_model,
+                }
+                if settings.llm.together_api_key:
+                    kwargs["api_key"] = settings.llm.together_api_key
+                logger.info("Together AI model: %s", settings.llm.together_model)
             else:
                 # llama-cpp (GGUF models)
                 kwargs = {}

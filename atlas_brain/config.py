@@ -85,7 +85,7 @@ class LLMConfig(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="ATLAS_LLM_")
 
-    # Backend selection: "llama-cpp", "transformers-flash", or "ollama"
+    # Backend selection: "llama-cpp", "transformers-flash", "ollama", or "together"
     default_model: str = Field(default="llama-cpp", description="Default LLM backend")
 
     # llama-cpp settings (GGUF models)
@@ -113,6 +113,16 @@ class LLMConfig(BaseSettings):
     max_memory_gb: Optional[float] = Field(
         default=None,
         description="Max GPU memory in GB (None = no limit)"
+    )
+
+    # together settings (Together AI cloud API)
+    together_model: str = Field(
+        default="meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        description="Together AI model name"
+    )
+    together_api_key: Optional[str] = Field(
+        default=None,
+        description="Together AI API key (or set TOGETHER_API_KEY env var)"
     )
 
 
