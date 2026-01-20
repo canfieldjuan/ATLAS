@@ -130,9 +130,37 @@ Mode agents in AtlasAgent: [HOME only] - RECEPTIONIST not in dict (uses fallback
 Imports verified: AtlasAgent OK, PhoneCallProcessor OK
 ```
 
+## All Modes Verification (2026-01-19)
+
+**Status:** VERIFIED CORRECT
+
+All modes now follow the same pattern as RECEPTIONIST (no dedicated agent, AtlasAgent handles directly):
+
+| Mode | Dedicated Agent | Tools | Status |
+|------|-----------------|-------|--------|
+| HOME | HomeAgent | 8 (4 presence + 4 shared) | Has agent |
+| RECEPTIONIST | None (fallback) | 16 | AtlasAgent direct |
+| COMMS | None (fallback) | 10 | AtlasAgent direct |
+| SECURITY | None (fallback) | 19 | AtlasAgent direct |
+| CHAT | None (fallback) | 4 (shared only) | AtlasAgent direct |
+
+**Key Files:**
+- `atlas_brain/agents/atlas.py:118-120` - `_mode_agents` only contains HOME
+- `atlas_brain/agents/atlas.py:186-188` - Fallback to AtlasAgent for modes without agents
+- `atlas_brain/tools/__init__.py` - All 36 tools registered
+- `atlas_brain/modes/config.py` - Mode configurations with tool lists
+
+**Architecture Pattern:**
+1. User speaks command
+2. ModeManager determines current mode
+3. AtlasAgent checks `_mode_agents` for dedicated agent
+4. If found (HOME only): delegate to HomeAgent
+5. If not found: AtlasAgent handles directly with mode-specific tools
+
 ## Previous Next Steps
 
 1. ~~Test direct `book_appointment` via AtlasAgent~~ DONE - works
-2. Configure calendar for production use
-3. Evaluate SignalWire vs NVIDIA model for inbound calls
-4. Potentially deprecate ReceptionistAgent phone flow if external service handles it
+2. ~~Verify all modes follow same pattern~~ DONE - verified
+3. Configure calendar for production use
+4. Evaluate SignalWire vs NVIDIA model for inbound calls
+5. Potentially deprecate ReceptionistAgent phone flow if external service handles it

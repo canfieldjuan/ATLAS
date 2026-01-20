@@ -63,9 +63,21 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to load default VLM: %s", e)
 
-    # STT is loaded by Pipecat voice pipeline - no need to load here
+    # Load default STT if configured
+    if settings.load_stt_on_startup:
+        try:
+            logger.info("Loading default STT: %s", settings.stt.default_model)
+            stt_registry.activate(settings.stt.default_model)
+        except Exception as e:
+            logger.error("Failed to load default STT: %s", e)
 
-    # TTS is loaded by Pipecat voice pipeline - no need to load here
+    # Load default TTS if configured
+    if settings.load_tts_on_startup:
+        try:
+            logger.info("Loading default TTS: %s", settings.tts.default_model)
+            tts_registry.activate(settings.tts.default_model)
+        except Exception as e:
+            logger.error("Failed to load default TTS: %s", e)
 
     # Load default LLM if configured
     if settings.load_llm_on_startup:

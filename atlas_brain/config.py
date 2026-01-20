@@ -598,8 +598,8 @@ class Settings(BaseSettings):
 
     # Startup behavior
     load_vlm_on_startup: bool = Field(default=True, description="Load VLM on startup")
-    load_stt_on_startup: bool = Field(default=False, description="Load STT on startup (lazy load if False)")
-    load_tts_on_startup: bool = Field(default=False, description="Load TTS on startup (lazy load if False)")
+    load_stt_on_startup: bool = Field(default=True, description="Load STT on startup")
+    load_tts_on_startup: bool = Field(default=True, description="Load TTS on startup")
     load_llm_on_startup: bool = Field(default=True, description="Load LLM on startup")
 
     # Startup behavior - speaker ID
