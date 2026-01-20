@@ -218,6 +218,15 @@ class NemotronSTTService(SegmentedSTTService):
             self._model = self._model.to(self._device)
             self._model.eval()
 
+            # Try to set larger attention context for better accuracy
+            # [70, 6] = 560ms lookahead, trades latency for accuracy
+            if hasattr(self._model, 'encoder') and hasattr(self._model.encoder, 'set_default_att_context_size'):
+                try:
+                    self._model.encoder.set_default_att_context_size([70, 6])
+                    logger.info("Set encoder att_context_size to [70, 6] for better accuracy")
+                except Exception as e:
+                    logger.debug("Could not set att_context_size: %s", e)
+
             logger.info("Nemotron model loaded in %.2fs", time.time() - start)
 
         except Exception as e:

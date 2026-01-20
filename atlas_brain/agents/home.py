@@ -113,13 +113,17 @@ class HomeAgent(BaseAgent):
         if intent and not intent.target_name and has_pronoun(context.input_text):
             pronoun = extract_pronoun(context.input_text)
             if pronoun:
+                # Don't filter by type if target_type is generic "device"
+                filter_type = intent.target_type if intent.target_type != "device" else None
                 resolved = self._entity_tracker.resolve_pronoun(
                     pronoun,
-                    entity_type=intent.target_type,
+                    entity_type=filter_type,
                 )
                 if resolved:
                     intent.target_name = resolved.entity_name
-                    intent.target_type = intent.target_type or resolved.entity_type
+                    # Use resolved type, especially if original was generic "device"
+                    if intent.target_type == "device" or not intent.target_type:
+                        intent.target_type = resolved.entity_type
                     if resolved.entity_id:
                         intent.target_id = resolved.entity_id
                     logger.info(
@@ -268,75 +272,27 @@ class HomeAgent(BaseAgent):
         think_result: ThinkResult,
         act_result: Optional[ActResult],
     ) -> str:
-        """Generate natural response for device command."""
-        from ..services.protocols import Message
+        """Generate simple response for device command.
 
+        Uses templates instead of LLM for faster, more predictable responses.
+        """
         intent = think_result.intent
         success = act_result.success if act_result else False
         action_message = act_result.response_data.get("action_message", "") if act_result else ""
 
-        # Build context for LLM
         if intent:
-            action = intent.action or "unknown"
             target = intent.target_name or "device"
-            target_type = intent.target_type or "device"
         else:
-            action = "command"
             target = "device"
-            target_type = "device"
-
-        llm = self._get_llm()
-        if llm is None:
-            # Fallback to simple response
-            if success:
-                return f"Done. {action_message}" if action_message else "Done."
-            else:
-                return f"I couldn't complete that action. {action_message}"
-
-        # Build prompt for natural response
-        system_msg = (
-            "You are Atlas, a home assistant. Generate a brief, natural confirmation "
-            "for the device action that was just performed. Keep it to one short sentence. "
-            "Be conversational but concise."
-        )
 
         if success:
-            user_prompt = (
-                f"I just successfully executed '{action}' on the {target_type} '{target}'. "
-                f"Result: {action_message if action_message else 'Success'}. "
-                f"Generate a brief, natural confirmation."
-            )
+            if action_message:
+                return action_message
+            return f"Done."
         else:
-            user_prompt = (
-                f"I tried to execute '{action}' on the {target_type} '{target}' but it failed. "
-                f"Error: {action_message if action_message else 'Unknown error'}. "
-                f"Generate a brief, apologetic response."
-            )
-
-        messages = [
-            Message(role="system", content=system_msg),
-            Message(role="user", content=user_prompt),
-        ]
-
-        try:
-            cuda_lock = _get_cuda_lock()
-            async with cuda_lock:
-                llm_result = llm.chat(
-                    messages=messages,
-                    max_tokens=50,
-                    temperature=0.7,
-                )
-            response = llm_result.get("response", "").strip()
-            if response:
-                return response
-        except Exception as e:
-            logger.warning("Device response generation failed: %s", e)
-
-        # Fallback
-        if success:
-            return f"Done. {action_message}" if action_message else "Done."
-        else:
-            return f"I couldn't complete that. {action_message}"
+            if action_message:
+                return f"Sorry, {action_message}"
+            return "Sorry, I couldn't do that."
 
     async def _generate_llm_response_with_tools(
         self,

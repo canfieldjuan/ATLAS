@@ -20,6 +20,9 @@ TOOLS: time,weather,traffic,location,calendar,reminder,reminders
 ACTIONS: turn_on,turn_off,toggle,set_brightness,query,conversation
 Format: {{"action":"X","target_type":"Y","target_name":"Z","parameters":{{}},"confidence":0.95}}
 "turn on kitchen light"->{{"action":"turn_on","target_type":"light","target_name":"kitchen","parameters":{{}},"confidence":0.95}}
+"turn it on"->{{"action":"turn_on","target_type":"device","target_name":null,"parameters":{{}},"confidence":0.95}}
+"turn it back on"->{{"action":"turn_on","target_type":"device","target_name":null,"parameters":{{}},"confidence":0.95}}
+"turn them off"->{{"action":"turn_off","target_type":"device","target_name":null,"parameters":{{}},"confidence":0.95}}
 "what time"->{{"action":"query","target_type":"tool","target_name":"time","parameters":{{}},"confidence":0.95}}
 "dim to 50%"->{{"action":"set_brightness","target_type":"light","target_name":null,"parameters":{{"brightness":50}},"confidence":0.95}}
 "what's on my calendar"->{{"action":"query","target_type":"tool","target_name":"calendar","parameters":{{}},"confidence":0.95}}
