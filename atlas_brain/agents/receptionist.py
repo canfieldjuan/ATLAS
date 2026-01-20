@@ -58,6 +58,7 @@ class CallContext:
     # Caller info
     caller_name: Optional[str] = None
     caller_phone: Optional[str] = None  # From caller ID
+    caller_email: Optional[str] = None  # For confirmation email
 
     # Estimate booking
     service_address: Optional[str] = None
@@ -73,6 +74,8 @@ class CallContext:
         parts = []
         if self.caller_name:
             parts.append(f"Name: {self.caller_name}")
+        if self.caller_email:
+            parts.append(f"Email: {self.caller_email}")
         if self.service_address:
             parts.append(f"Address: {self.service_address}")
         if self.preferred_date:
@@ -383,6 +386,13 @@ Info collected: {call_ctx.summary()}
                     self._call_context.preferred_time = value
                 logger.debug("Extracted time pref: %s", value)
 
+        # Email detection
+        email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+        email_match = re.search(email_pattern, text_original)
+        if email_match and not self._call_context.caller_email:
+            self._call_context.caller_email = email_match.group(0)
+            logger.debug("Extracted email: %s", self._call_context.caller_email)
+
     def _has_enough_info(self) -> bool:
         """Check if we have minimum info to book."""
         ctx = self._call_context
@@ -478,6 +488,7 @@ Info collected: {call_ctx.summary()}
                         "time": book_time,
                         "customer_name": call_ctx.caller_name or "Customer",
                         "customer_phone": call_ctx.caller_phone or "",
+                        "customer_email": call_ctx.caller_email or "",
                         "service_type": "Free Estimate",
                         "address": call_ctx.service_address or "",
                     })

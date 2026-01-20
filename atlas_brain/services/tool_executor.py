@@ -25,7 +25,7 @@ MAX_TOOL_ITERATIONS = 3
 PRIORITY_TOOL_NAMES = [
     "get_time", "get_weather", "get_calendar", "get_location",
     "set_reminder", "list_reminders", "send_notification",
-    "check_availability", "book_appointment",
+    "send_email", "check_availability", "book_appointment",
 ]
 
 # Pattern to match text-based tool calls

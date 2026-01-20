@@ -106,85 +106,135 @@ class HomeAgent(BaseAgent):
 
         start_time = time.perf_counter()
 
-        # Parse intent
-        intent = await tools.parse_intent(context.input_text)
+        # Step 1: Fast intent routing (if enabled)
+        from ..config import settings
+        route_result = None
+        use_fast_path = False
 
-        # Resolve pronouns if needed
-        if intent and not intent.target_name and has_pronoun(context.input_text):
-            pronoun = extract_pronoun(context.input_text)
-            if pronoun:
-                # Don't filter by type if target_type is generic "device"
-                filter_type = intent.target_type if intent.target_type != "device" else None
-                resolved = self._entity_tracker.resolve_pronoun(
-                    pronoun,
-                    entity_type=filter_type,
-                )
-                if resolved:
-                    intent.target_name = resolved.entity_name
-                    # Use resolved type, especially if original was generic "device"
-                    if intent.target_type == "device" or not intent.target_type:
-                        intent.target_type = resolved.entity_type
-                    if resolved.entity_id:
-                        intent.target_id = resolved.entity_id
-                    logger.info(
-                        "Resolved '%s' -> %s/%s",
-                        pronoun,
-                        resolved.entity_type,
-                        resolved.entity_name,
-                    )
+        if settings.intent_router.enabled:
+            route_result = await tools.route_intent(context.input_text)
+            threshold = settings.intent_router.confidence_threshold
 
-        if intent:
-            result.intent = intent
-            result.confidence = intent.confidence
-
-            # Device actions we handle
-            device_actions = {
-                "turn_on", "turn_off", "toggle",
-                "set_brightness", "set_temperature",
-            }
-
-            # Device types we handle
-            device_types = {
-                "media_player", "light", "switch",
-                "climate", "cover", "fan", "scene",
-            }
-
-            if intent.action in device_actions:
-                result.action_type = "device_command"
-                result.needs_llm = False
-                logger.debug(
-                    "Device command: %s %s/%s (conf=%.2f)",
-                    intent.action,
-                    intent.target_type,
-                    intent.target_name,
-                    intent.confidence,
-                )
-            elif intent.action == "query" and intent.target_type in device_types:
-                result.action_type = "device_command"
-                result.needs_llm = False
-                logger.debug(
-                    "Device query: %s %s/%s (conf=%.2f)",
-                    intent.action,
-                    intent.target_type,
-                    intent.target_name,
-                    intent.confidence,
-                )
-            elif intent.action == "query" and intent.target_type == "tool":
+            # Fast path for high-confidence tool queries (parameterless only)
+            if (route_result.action_category == "tool_use"
+                    and route_result.confidence >= threshold
+                    and route_result.fast_path_ok):
                 result.action_type = "tool_use"
-                result.needs_llm = True
-                logger.debug(
-                    "Tool query: %s (conf=%.2f)",
-                    intent.target_name,
-                    intent.confidence,
+                result.confidence = route_result.confidence
+                result.needs_llm = False
+                result.tools_to_call = [route_result.tool_name]
+                use_fast_path = True
+                logger.info(
+                    "Fast route: tool_use/%s (conf=%.2f, %.0fms)",
+                    route_result.tool_name,
+                    route_result.confidence,
+                    route_result.route_time_ms,
                 )
+
+            # Fast path for high-confidence conversation
+            elif (route_result.action_category == "conversation"
+                    and route_result.confidence >= threshold):
+                result.action_type = "conversation"
+                result.confidence = route_result.confidence
+                result.needs_llm = True
+                use_fast_path = True
+                logger.info(
+                    "Fast route: conversation (conf=%.2f, %.0fms)",
+                    route_result.confidence,
+                    route_result.route_time_ms,
+                )
+
+            # Parameterized tool - use LLM tool calling (not fast path)
+            elif (route_result.action_category == "tool_use"
+                    and route_result.confidence >= threshold
+                    and route_result.tool_name
+                    and not route_result.fast_path_ok):
+                result.action_type = "tool_use"
+                result.confidence = route_result.confidence
+                result.needs_llm = True
+                use_fast_path = True  # Skip intent parsing, go straight to LLM
+                logger.info(
+                    "LLM tool route: %s (conf=%.2f, %.0fms)",
+                    route_result.tool_name,
+                    route_result.confidence,
+                    route_result.route_time_ms,
+                )
+
+        # Step 2: Full intent parsing (for device commands or low confidence)
+        intent = None
+        if not use_fast_path:
+            intent = await tools.parse_intent(context.input_text)
+
+            # Resolve pronouns if needed
+            if intent and not intent.target_name and has_pronoun(context.input_text):
+                pronoun = extract_pronoun(context.input_text)
+                if pronoun:
+                    filter_type = intent.target_type if intent.target_type != "device" else None
+                    resolved = self._entity_tracker.resolve_pronoun(
+                        pronoun,
+                        entity_type=filter_type,
+                    )
+                    if resolved:
+                        intent.target_name = resolved.entity_name
+                        if intent.target_type == "device" or not intent.target_type:
+                            intent.target_type = resolved.entity_type
+                        if resolved.entity_id:
+                            intent.target_id = resolved.entity_id
+                        logger.info(
+                            "Resolved '%s' -> %s/%s",
+                            pronoun,
+                            resolved.entity_type,
+                            resolved.entity_name,
+                        )
+
+            if intent:
+                result.intent = intent
+                result.confidence = intent.confidence
+
+                device_actions = {
+                    "turn_on", "turn_off", "toggle",
+                    "set_brightness", "set_temperature",
+                }
+                device_types = {
+                    "media_player", "light", "switch",
+                    "climate", "cover", "fan", "scene",
+                }
+
+                if intent.action in device_actions:
+                    result.action_type = "device_command"
+                    result.needs_llm = False
+                    logger.debug(
+                        "Device command: %s %s/%s (conf=%.2f)",
+                        intent.action,
+                        intent.target_type,
+                        intent.target_name,
+                        intent.confidence,
+                    )
+                elif intent.action == "query" and intent.target_type in device_types:
+                    result.action_type = "device_command"
+                    result.needs_llm = False
+                    logger.debug(
+                        "Device query: %s %s/%s (conf=%.2f)",
+                        intent.action,
+                        intent.target_type,
+                        intent.target_name,
+                        intent.confidence,
+                    )
+                elif intent.action == "query" and intent.target_type == "tool":
+                    result.action_type = "tool_use"
+                    result.needs_llm = True
+                    logger.debug(
+                        "Tool query: %s (conf=%.2f)",
+                        intent.target_name,
+                        intent.confidence,
+                    )
+                else:
+                    result.action_type = "conversation"
+                    result.needs_llm = True
             else:
-                # Not a device command - conversation fallback
                 result.action_type = "conversation"
                 result.needs_llm = True
-        else:
-            result.action_type = "conversation"
-            result.needs_llm = True
-            result.confidence = 0.5
+                result.confidence = 0.5
 
         result.duration_ms = (time.perf_counter() - start_time) * 1000
         return result
@@ -231,8 +281,26 @@ class HomeAgent(BaseAgent):
                 result.error = str(e)
                 result.error_code = "EXECUTION_ERROR"
 
+        elif think_result.action_type == "tool_use" and think_result.tools_to_call:
+            # Fast path: execute tool from router result
+            tool_name = think_result.tools_to_call[0]
+            try:
+                tool_result = await tools.execute_tool(tool_name, {})
+                result.success = tool_result.get("success", False)
+                result.tool_results[tool_name] = tool_result
+                result.response_data["tool_message"] = tool_result.get("message", "")
+                logger.info(
+                    "Fast tool executed: %s -> %s",
+                    tool_name,
+                    "success" if result.success else "failed",
+                )
+            except Exception as e:
+                logger.warning("Fast tool execution failed: %s", e)
+                result.error = str(e)
+                result.error_code = "TOOL_ERROR"
+
         elif think_result.action_type == "tool_use" and think_result.intent:
-            # Execute tool directly for faster response
+            # Slow path: execute tool from LLM intent
             target_name = think_result.intent.target_name
             params = think_result.intent.parameters or {}
 
