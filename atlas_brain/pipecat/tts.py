@@ -72,6 +72,13 @@ class KokoroTTSService(TTSService):
         await super().start(frame)
         await self._load_model()
 
+    async def process_frame(self, frame: Frame, direction):
+        """Process incoming frames - log to debug TTS issues."""
+        from pipecat.frames.frames import TextFrame
+        if isinstance(frame, TextFrame):
+            logger.info("TTS received TextFrame: '%s'", frame.text[:100] if frame.text else "")
+        await super().process_frame(frame, direction)
+
     async def _load_model(self):
         """Load the Kokoro model."""
         if self._pipeline is not None:
@@ -112,11 +119,15 @@ class KokoroTTSService(TTSService):
         Yields:
             TTSStartedFrame, TTSAudioRawFrame chunks, TTSStoppedFrame
         """
+        logger.info("TTS run_tts called with: '%s'", text[:100] if text else "")
+
         if self._pipeline is None:
+            logger.error("TTS pipeline not loaded!")
             yield ErrorFrame(error="Kokoro TTS not loaded")
             return
 
         if not text or not text.strip():
+            logger.warning("TTS received empty text, skipping")
             return
 
         try:
@@ -198,6 +209,13 @@ class StreamingKokoroTTSService(TTSService):
         await super().start(frame)
         await self._load_model()
 
+    async def process_frame(self, frame: Frame, direction):
+        """Process incoming frames - log to debug TTS issues."""
+        from pipecat.frames.frames import TextFrame
+        if isinstance(frame, TextFrame):
+            logger.info("StreamingTTS received TextFrame: '%s'", frame.text[:100] if frame.text else "")
+        await super().process_frame(frame, direction)
+
     async def _load_model(self):
         if self._pipeline is not None:
             return
@@ -222,11 +240,15 @@ class StreamingKokoroTTSService(TTSService):
             raise
 
     async def run_tts(self, text: str) -> AsyncGenerator[Frame, None]:
+        logger.info("StreamingTTS run_tts called with: '%s'", text[:100] if text else "")
+
         if self._pipeline is None:
+            logger.error("StreamingTTS pipeline not loaded!")
             yield ErrorFrame(error="Kokoro TTS not loaded")
             return
 
         if not text or not text.strip():
+            logger.warning("StreamingTTS received empty text, skipping")
             return
 
         try:

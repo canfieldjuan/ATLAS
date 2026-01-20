@@ -22,6 +22,12 @@ DEFAULT_OLLAMA_URL = settings.llm.ollama_url
 DEFAULT_TOOL_MODEL = "gpt-oss:20b"  # Specialized for tool calling
 MAX_TOOL_ITERATIONS = 5
 
+# Priority tools for LLM tool calling (reduces model confusion)
+PRIORITY_TOOL_NAMES = [
+    "get_time", "get_weather", "get_calendar", "get_location",
+    "set_reminder", "list_reminders", "send_notification",
+]
+
 
 @dataclass
 class ToolCallResult:
@@ -63,46 +69,8 @@ class GptOssToolService:
         """Get tool schemas in OpenAI format."""
         if self._tools_schema is None:
             registry = await self._get_tool_registry()
-
-            # Convert to OpenAI function calling format
-            schemas = []
-            for tool in registry.list_all():
-                schema = {
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "parameters": {
-                            "type": "object",
-                            "properties": {},
-                            "required": [],
-                        },
-                    },
-                }
-
-                # Add parameters
-                for param in tool.parameters:
-                    schema["function"]["parameters"]["properties"][param.name] = {
-                        "type": param.param_type,
-                        "description": param.description,
-                    }
-                    if param.required:
-                        schema["function"]["parameters"]["required"].append(param.name)
-
-                schemas.append(schema)
-
-            # Filter to common tools to avoid overwhelming the model
-            priority_tools = {
-                "get_time", "get_weather", "get_calendar", "get_location",
-                "set_reminder", "list_reminders", "send_notification",
-            }
-            self._tools_schema = [
-                s for s in schemas
-                if s["function"]["name"] in priority_tools
-            ]
-
+            self._tools_schema = registry.get_tool_schemas_filtered(PRIORITY_TOOL_NAMES)
             logger.info("Loaded %d tool schemas", len(self._tools_schema))
-
         return self._tools_schema
 
     async def _call_ollama(self, messages: list, tools: list) -> dict:

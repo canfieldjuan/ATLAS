@@ -199,6 +199,14 @@ class EmailTool:
             ),
         ]
 
+    @property
+    def aliases(self) -> list[str]:
+        return ["email", "send email", "mail", "compose email"]
+
+    @property
+    def category(self) -> str:
+        return "communication"
+
     async def _ensure_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client."""
         if self._client is None:
@@ -439,6 +447,14 @@ class EstimateEmailTool:
             ),
         ]
 
+    @property
+    def aliases(self) -> list[str]:
+        return ["estimate email", "send estimate", "cleaning estimate"]
+
+    @property
+    def category(self) -> str:
+        return "communication"
+
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         """Send estimate confirmation email using appropriate template."""
         # Validate required parameters
@@ -584,6 +600,14 @@ class ProposalEmailTool:
                 required=True,
             ),
         ]
+
+    @property
+    def aliases(self) -> list[str]:
+        return ["proposal email", "send proposal", "cleaning proposal"]
+
+    @property
+    def category(self) -> str:
+        return "communication"
 
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         """Send proposal email using appropriate template."""

@@ -71,6 +71,14 @@ class ReminderTool:
             ),
         ]
 
+    @property
+    def aliases(self) -> list[str]:
+        return ["reminder", "remind", "remind me", "set reminder"]
+
+    @property
+    def category(self) -> str:
+        return "utility"
+
     def _normalize_time_text(self, when_text: str) -> str:
         """
         Normalize time text for better dateparser compatibility.
@@ -301,6 +309,14 @@ class ListRemindersTool:
             ),
         ]
 
+    @property
+    def aliases(self) -> list[str]:
+        return ["reminders", "my reminders", "list reminders", "show reminders"]
+
+    @property
+    def category(self) -> str:
+        return "utility"
+
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         """Execute the list reminders query."""
         if not settings.reminder.enabled:
@@ -403,6 +419,14 @@ class CompleteReminderTool:
                 default=False,
             ),
         ]
+
+    @property
+    def aliases(self) -> list[str]:
+        return ["done", "dismiss reminder", "clear reminder", "complete reminder"]
+
+    @property
+    def category(self) -> str:
+        return "utility"
 
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         """Execute the complete reminder action."""

@@ -40,6 +40,14 @@ class TimeTool:
             ),
         ]
 
+    @property
+    def aliases(self) -> list[str]:
+        return ["time", "current time", "what time", "date", "today"]
+
+    @property
+    def category(self) -> str:
+        return "utility"
+
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         """Execute time query."""
         try:

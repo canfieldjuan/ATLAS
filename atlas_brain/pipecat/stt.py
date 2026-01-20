@@ -277,7 +277,7 @@ class NemotronSTTService(SegmentedSTTService):
             text = await loop.run_in_executor(None, transcribe)
 
             latency = (time.time() - start_time) * 1000
-            logger.info("Nemotron transcription: '%s' (%.0fms)", text[:50] if text else "", latency)
+            logger.info("Nemotron transcription: '%s' (%.0fms)", text, latency)
 
             if text:
                 yield TranscriptionFrame(

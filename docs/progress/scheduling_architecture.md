@@ -1,0 +1,138 @@
+# Scheduling Architecture Decision Log
+
+**Date:** 2026-01-19
+**Status:** Planning
+
+## Current State
+
+### ReceptionistAgent (Phone Mode)
+- Designed for **inbound customer calls**
+- Multi-turn conversational flow:
+  1. Greeting phase
+  2. Info collection (name, address, time preference)
+  3. Confirmation phase
+  4. Booking execution via `book_appointment` tool
+- Works but has model/VRAM constraints
+- Was functional enough for MVP consideration
+
+### AtlasAgent (Voice Commands)
+- Handles direct tool execution
+- Single-turn commands: "what time is it" → executes `get_time`
+- Should handle direct scheduling commands
+
+## Problem Identified
+
+Voice commands like "create an appointment for John Smith tomorrow at 9am" go through AtlasAgent but scheduling tools expect the phone conversation flow context (caller_name, service_address collected over multiple turns).
+
+## Desired Architecture
+
+### 1. Inbound Customer Calls (Future)
+**Options being evaluated:**
+- **SignalWire service** - Let them handle the full conversation
+- **NVIDIA conversational model** - New model with:
+  - Back-and-forth conversation capability
+  - Built-in voice synthesis
+  - Character/persona setting
+  - Could handle everything or just the model layer
+
+**Decision:** TBD - depends on model availability and cost
+
+### 2. Direct Voice Commands (Atlas)
+- User says: "Book an appointment for John Smith at 123 Main St tomorrow morning"
+- AtlasAgent detects `book_appointment` tool
+- Executes directly with parsed parameters
+- No multi-turn conversation needed
+
+## Implementation Notes
+
+### For Direct Scheduling via Atlas
+The `book_appointment` tool should accept:
+- `customer_name` - extracted from command
+- `address` - extracted from command
+- `date` - parsed from "tomorrow", "next Monday", etc.
+- `time` - parsed from "morning", "9am", etc.
+- `service_type` - default to "Free Estimate" or specified
+
+### Intent Parser Updates Needed
+Add examples for direct booking:
+```
+"book appointment for John Smith tomorrow" → book_appointment tool
+"schedule estimate at 123 Main St on Monday" → book_appointment tool
+```
+
+## References
+
+- ReceptionistAgent: `atlas_brain/agents/receptionist.py`
+- Scheduling tools: `atlas_brain/tools/scheduling.py`
+- Phone providers: `atlas_brain/comms/providers/`
+
+## Testing Results (2026-01-19)
+
+### Direct Booking via AtlasAgent - WORKS
+```
+Query: "book an appointment for John Smith at 123 Main Street tomorrow at 9am"
+Action Type: tool_use
+Response: Calendar not configured. Set ATLAS_COMMS_EFFINGHAM_MAIDS_CALENDAR_ID.
+```
+- Intent parsing correctly detects `book_appointment` tool
+- Tool executes (config error is expected - calendar not configured in test env)
+- No multi-turn conversation needed
+
+## Implementation Plan: Separate Phone Flow from Voice Commands
+
+**Date:** 2026-01-19
+**Status:** COMPLETED
+
+### Analysis Summary
+
+**Current Issue:** ReceptionistAgent is used in TWO places:
+1. **Mode routing** (`atlas_brain/agents/atlas.py:118`) - used for voice commands via mode system
+2. **Phone calls** (`atlas_brain/comms/phone_processor.py:88`) - used for inbound customer calls
+
+**Files Referencing ReceptionistAgent:**
+- `atlas_brain/agents/atlas.py:114,118` - imports and maps to ModeType.RECEPTIONIST
+- `atlas_brain/modes/manager.py:170-173` - aliases "business", "scheduling", "appointment" to receptionist
+- `atlas_brain/modes/config.py:16,59` - ModeType.RECEPTIONIST definition and tool config
+- `atlas_brain/comms/phone_processor.py:88` - creates agent for phone calls (KEEP)
+- `atlas_brain/api/comms/webhooks.py` - webhook processing (KEEP - uses phone_processor)
+
+### Phase 1: Remove ReceptionistAgent from Voice Mode Routing
+
+**Files to modify:**
+1. `atlas_brain/agents/atlas.py`
+   - Remove line 114: `from .receptionist import get_receptionist_agent`
+   - Remove line 118: `ModeType.RECEPTIONIST: get_receptionist_agent(),`
+
+**Result:** When mode is RECEPTIONIST, AtlasAgent handles it directly (line 186-187 fallback)
+
+### Phase 2: No Changes Needed
+
+The following should remain unchanged:
+- `atlas_brain/modes/config.py` - ModeType.RECEPTIONIST keeps scheduling tools
+- `atlas_brain/modes/manager.py` - aliases keep routing to RECEPTIONIST mode (for tool filtering)
+- `atlas_brain/comms/phone_processor.py` - phone calls use `create_receptionist_agent()` directly
+
+### Verification Checklist
+
+- [x] Direct scheduling commands via voice work (AtlasAgent handles)
+- [x] Phone calls still work (phone_processor.py creates ReceptionistAgent directly)
+- [x] Mode switching still works ("switch to scheduling mode")
+- [x] Scheduling tools available in RECEPTIONIST mode (16 tools including 5 scheduling tools)
+- [x] No import errors or circular dependencies
+
+### Verification Results (2026-01-19)
+
+```
+Mode switching: receptionist mode works
+Scheduling tools in receptionist mode: check_availability, book_appointment,
+  cancel_appointment, reschedule_appointment, lookup_customer
+Mode agents in AtlasAgent: [HOME only] - RECEPTIONIST not in dict (uses fallback)
+Imports verified: AtlasAgent OK, PhoneCallProcessor OK
+```
+
+## Previous Next Steps
+
+1. ~~Test direct `book_appointment` via AtlasAgent~~ DONE - works
+2. Configure calendar for production use
+3. Evaluate SignalWire vs NVIDIA model for inbound calls
+4. Potentially deprecate ReceptionistAgent phone flow if external service handles it

@@ -173,6 +173,14 @@ class CheckAvailabilityTool:
             ),
         ]
 
+    @property
+    def aliases(self) -> list[str]:
+        return ["availability", "available", "open slots", "free times"]
+
+    @property
+    def category(self) -> str:
+        return "scheduling"
+
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         """Find available appointment slots."""
         context = _get_default_context()
@@ -314,6 +322,14 @@ class BookAppointmentTool:
                 required=False,
             ),
         ]
+
+    @property
+    def aliases(self) -> list[str]:
+        return ["appointment", "booking", "book", "schedule appointment"]
+
+    @property
+    def category(self) -> str:
+        return "scheduling"
 
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         """Book an appointment."""
@@ -491,6 +507,14 @@ class CancelAppointmentTool:
             ),
         ]
 
+    @property
+    def aliases(self) -> list[str]:
+        return ["cancel", "cancel booking", "cancel appointment"]
+
+    @property
+    def category(self) -> str:
+        return "scheduling"
+
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         """Cancel an appointment."""
         context = _get_default_context()
@@ -628,6 +652,14 @@ class RescheduleAppointmentTool:
                 required=True,
             ),
         ]
+
+    @property
+    def aliases(self) -> list[str]:
+        return ["reschedule", "move appointment", "change appointment"]
+
+    @property
+    def category(self) -> str:
+        return "scheduling"
 
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         """Reschedule an appointment."""
@@ -789,6 +821,14 @@ class LookupCustomerTool:
                 default=True,
             ),
         ]
+
+    @property
+    def aliases(self) -> list[str]:
+        return ["customer", "find customer", "lookup", "customer info"]
+
+    @property
+    def category(self) -> str:
+        return "scheduling"
 
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         """Look up customer and their appointments."""

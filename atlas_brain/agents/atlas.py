@@ -111,11 +111,12 @@ class AtlasAgent(BaseAgent):
         # Import here to avoid circular imports
         # Use singleton getters so agents are shared across AtlasAgent instances
         from .home import get_home_agent
-        from .receptionist import get_receptionist_agent
 
+        # Note: ReceptionistAgent is NOT included here - it's for phone calls only
+        # (see atlas_brain/comms/phone_processor.py). Voice commands in RECEPTIONIST
+        # mode are handled by AtlasAgent directly via the fallback path.
         self._mode_agents = {
             ModeType.HOME: get_home_agent(session_id=self._session_id),
-            ModeType.RECEPTIONIST: get_receptionist_agent(),
         }
         logger.info("Mode agents initialized: %s", list(self._mode_agents.keys()))
 
@@ -416,12 +417,31 @@ class AtlasAgent(BaseAgent):
                 result.error_code = "EXECUTION_ERROR"
 
         elif think_result.action_type == "tool_use" and think_result.intent:
-            # Tools will be executed by LLM in respond phase via execute_with_tools()
-            result.success = True
-            logger.info(
-                "Tool query detected: %s, deferring to LLM tool calling",
-                think_result.intent.target_name,
-            )
+            # Execute tool directly for faster response
+            target_name = think_result.intent.target_name
+            params = think_result.intent.parameters or {}
+
+            if target_name:
+                try:
+                    tool_result = await tools.execute_tool_by_intent(
+                        target_name, params
+                    )
+                    result.success = tool_result.get("success", False)
+                    result.tool_results[target_name] = tool_result
+                    result.response_data["tool_message"] = tool_result.get("message", "")
+                    logger.info(
+                        "Tool executed: %s -> %s",
+                        target_name,
+                        "success" if result.success else "failed",
+                    )
+                except Exception as e:
+                    logger.warning("Tool execution failed: %s", e)
+                    result.error = str(e)
+                    result.error_code = "TOOL_ERROR"
+            else:
+                # No target, defer to LLM tool calling
+                result.success = True
+                logger.info("Tool query with no target, deferring to LLM")
 
         result.duration_ms = (time.perf_counter() - start_time) * 1000
         return result
@@ -446,8 +466,14 @@ class AtlasAgent(BaseAgent):
         if think_result.action_type == "device_command":
             return await self._generate_device_response(context, think_result, act_result)
 
-        # Tool use - use LLM with tool calling loop
+        # Tool use - check if already executed in act phase
         if think_result.action_type == "tool_use":
+            # Fast path: tool was executed in act phase, use its message
+            if act_result and act_result.tool_results:
+                tool_message = act_result.response_data.get("tool_message", "")
+                if tool_message:
+                    return tool_message
+            # Slow path: fall back to LLM tool calling
             return await self._generate_llm_response_with_tools(context, think_result, act_result)
 
         # Conversation response - use LLM

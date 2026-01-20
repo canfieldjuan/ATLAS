@@ -64,6 +64,14 @@ class TrafficTool:
             ),
         ]
 
+    @property
+    def aliases(self) -> list[str]:
+        return ["traffic", "commute", "road conditions", "drive time"]
+
+    @property
+    def category(self) -> str:
+        return "utility"
+
     async def _ensure_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client."""
         if self._client is None:

@@ -131,6 +131,14 @@ class CalendarTool:
             ),
         ]
 
+    @property
+    def aliases(self) -> list[str]:
+        return ["calendar", "events", "schedule", "appointments", "agenda"]
+
+    @property
+    def category(self) -> str:
+        return "utility"
+
     async def _ensure_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client with connection pooling."""
         if self._client is None:

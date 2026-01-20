@@ -13,8 +13,9 @@ from .protocols import AgentTools as AgentToolsProtocol
 logger = logging.getLogger("atlas.agents.tools")
 
 
-# Tool name mapping - maps intent target_name to tool registry names
-TOOL_MAP = {
+# Legacy tool name mapping - DEPRECATED, use tool_registry.resolve_alias() instead
+# Kept for backwards compatibility only
+_LEGACY_TOOL_MAP = {
     "time": "get_time",
     "weather": "get_weather",
     "traffic": "get_traffic",
@@ -251,8 +252,11 @@ class AtlasAgentTools:
         Returns:
             Tool result dictionary
         """
-        # Map intent target_name to tool registry name
-        tool_name = TOOL_MAP.get(target_name, target_name)
+        # Resolve alias via registry first, fall back to legacy map
+        registry = self._get_tool_registry()
+        tool_name = registry.resolve_alias(target_name)
+        if not tool_name:
+            tool_name = _LEGACY_TOOL_MAP.get(target_name, target_name)
         params = parameters or {}
 
         # Weather and traffic need location
@@ -265,6 +269,27 @@ class AtlasAgentTools:
             except Exception as e:
                 logger.warning("Location fetch failed: %s", e)
 
+        # Map intent parameter names to tool parameter names for booking
+        if tool_name == "book_appointment":
+            param_map = {
+                "name": "customer_name",
+                "phone": "customer_phone",
+                "when": "date",
+                "person": "customer_name",
+            }
+            mapped_params = {}
+            for key, value in params.items():
+                mapped_key = param_map.get(key, key)
+                mapped_params[mapped_key] = value
+            # Split "when" into date and time if needed
+            if "date" in mapped_params and "time" not in mapped_params:
+                when_val = mapped_params.get("date", "")
+                if " at " in when_val:
+                    date_part, time_part = when_val.split(" at ", 1)
+                    mapped_params["date"] = date_part
+                    mapped_params["time"] = time_part
+            params = mapped_params
+
         return await self.execute_tool(tool_name, params)
 
     def list_tools(self) -> list[str]:
@@ -273,7 +298,7 @@ class AtlasAgentTools:
             registry = self._get_tool_registry()
             return registry.list_names()
         except Exception:
-            return list(TOOL_MAP.values())
+            return list(_LEGACY_TOOL_MAP.values())
 
     # Capability listing
 

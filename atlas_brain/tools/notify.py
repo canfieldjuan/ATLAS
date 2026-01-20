@@ -59,6 +59,14 @@ class NotifyTool:
             ),
         ]
 
+    @property
+    def aliases(self) -> list[str]:
+        return ["notify", "notification", "push notification", "send to phone"]
+
+    @property
+    def category(self) -> str:
+        return "utility"
+
     async def _ensure_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client."""
         if self._client is None:

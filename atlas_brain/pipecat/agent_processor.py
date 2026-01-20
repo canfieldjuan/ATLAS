@@ -17,6 +17,7 @@ from pipecat.frames.frames import (
     EndFrame,
     CancelFrame,
     InputAudioRawFrame,
+    LLMFullResponseEndFrame,
 )
 
 from ..agents import get_atlas_agent, AgentContext
@@ -106,12 +107,14 @@ class AtlasAgentProcessor(FrameProcessor):
 
             if result.response_text:
                 logger.info(
-                    "Agent response: %s (action=%s)",
-                    result.response_text[:50],
+                    "Agent response [%s]: %s",
                     result.action_type,
+                    result.response_text,
                 )
                 response_frame = TextFrame(text=result.response_text)
                 await self.push_frame(response_frame, direction)
+                # Signal TTS to flush its buffer and synthesize
+                await self.push_frame(LLMFullResponseEndFrame(), direction)
             else:
                 logger.warning("Agent returned no response")
 
@@ -119,3 +122,4 @@ class AtlasAgentProcessor(FrameProcessor):
             logger.error("Agent processing error: %s", e)
             error_frame = TextFrame(text="Sorry, I encountered an error.")
             await self.push_frame(error_frame, direction)
+            await self.push_frame(LLMFullResponseEndFrame(), direction)

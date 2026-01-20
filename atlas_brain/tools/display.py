@@ -63,6 +63,14 @@ class ShowCameraFeedTool:
             ),
         ]
 
+    @property
+    def aliases(self) -> list[str]:
+        return ["show camera", "display camera", "camera feed", "show feed"]
+
+    @property
+    def category(self) -> str:
+        return "display"
+
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         camera_name = params.get("camera_name", "").lower().strip()
         display = params.get("display", "").lower().strip()
@@ -201,6 +209,14 @@ class CloseCameraFeedTool:
                 required=True,
             ),
         ]
+
+    @property
+    def aliases(self) -> list[str]:
+        return ["close camera", "hide camera", "close feed"]
+
+    @property
+    def category(self) -> str:
+        return "display"
 
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         import os

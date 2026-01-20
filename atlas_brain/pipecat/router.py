@@ -69,80 +69,10 @@ class FunctionGemmaRouter:
     Falls back to main LLM for complex queries.
     """
 
-    # Tool definitions for common queries - OpenAI function calling format
-    TOOLS = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_time",
-                "description": "Get the current time and date",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "timezone": {
-                            "type": "string",
-                            "description": "Timezone (optional)",
-                        }
-                    },
-                    "required": [],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "get_weather",
-                "description": "Get current weather for a location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "City or location name",
-                        }
-                    },
-                    "required": ["location"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "set_reminder",
-                "description": "Set a reminder for a specific time",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "message": {
-                            "type": "string",
-                            "description": "What to remind about",
-                        },
-                        "time": {
-                            "type": "string",
-                            "description": "When to remind (e.g., 'in 10 minutes', '3pm')",
-                        },
-                    },
-                    "required": ["message"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "get_calendar",
-                "description": "Get calendar events for today or a date",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "date": {
-                            "type": "string",
-                            "description": "Date to check (optional, defaults to today)",
-                        }
-                    },
-                    "required": [],
-                },
-            },
-        },
+    # Priority tools for quick routing (subset loaded on first use)
+    PRIORITY_TOOL_NAMES = [
+        "get_time", "get_weather", "get_calendar", "get_location",
+        "set_reminder", "list_reminders", "send_notification",
     ]
 
     def __init__(
@@ -161,6 +91,17 @@ class FunctionGemmaRouter:
         self._device = device
         self._model = None
         self._processor = None
+        self._tools = None
+
+    @property
+    def TOOLS(self) -> list:
+        """Get tool schemas from registry (lazy loaded)."""
+        if self._tools is None:
+            from ..tools import tool_registry
+            self._tools = tool_registry.get_tool_schemas_filtered(
+                self.PRIORITY_TOOL_NAMES
+            )
+        return self._tools
 
     async def load(self):
         """Load the FunctionGemma model."""

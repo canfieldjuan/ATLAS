@@ -13,10 +13,11 @@ from .actions import Intent
 
 logger = logging.getLogger("atlas.capabilities.intent_parser")
 
-# Compact prompt for fast intent extraction
+# Compact prompt template for fast intent extraction
+# NOTE: {tools} is populated dynamically from ToolRegistry
 UNIFIED_INTENT_PROMPT = """Parse intent. Output JSON only.
 DEVICES: {devices}
-TOOLS: time,weather,traffic,location,calendar,reminder,reminders
+TOOLS: {tools}
 ACTIONS: turn_on,turn_off,toggle,set_brightness,query,conversation
 Format: {{"action":"X","target_type":"Y","target_name":"Z","parameters":{{}},"confidence":0.95}}
 "turn on kitchen light"->{{"action":"turn_on","target_type":"light","target_name":"kitchen","parameters":{{}},"confidence":0.95}}
@@ -28,6 +29,8 @@ Format: {{"action":"X","target_type":"Y","target_name":"Z","parameters":{{}},"co
 "what's on my calendar"->{{"action":"query","target_type":"tool","target_name":"calendar","parameters":{{}},"confidence":0.95}}
 "remind me to call mom at 5pm"->{{"action":"query","target_type":"tool","target_name":"reminder","parameters":{{"message":"call mom","when":"at 5pm"}},"confidence":0.95}}
 "list my reminders"->{{"action":"query","target_type":"tool","target_name":"reminders","parameters":{{}},"confidence":0.95}}
+"book appointment for tomorrow"->{{"action":"query","target_type":"tool","target_name":"appointment","parameters":{{"when":"tomorrow"}},"confidence":0.95}}
+"check availability"->{{"action":"query","target_type":"tool","target_name":"availability","parameters":{{}},"confidence":0.95}}
 "hello"->{{"action":"conversation","target_type":null,"target_name":null,"parameters":{{}},"confidence":0.9}}
 User: {query}
 JSON:"""
@@ -44,6 +47,8 @@ class IntentParser:
         self._llm = None
         self._device_cache: Optional[str] = None
         self._device_cache_time: float = 0.0
+        self._tools_cache: Optional[str] = None
+        self._tools_cache_time: float = 0.0
         self._cache_ttl: int = 60
 
     def _get_llm(self) -> Any:
@@ -97,10 +102,47 @@ class IntentParser:
 
         return self._device_cache
 
+    def _get_tools_list(self) -> str:
+        """
+        Build tools list for prompt from ToolRegistry.
+
+        Dynamically discovers all registered tools and their aliases.
+        Caches the result for performance.
+        """
+        now = time.time()
+
+        # Return cached if still valid
+        if self._tools_cache and (now - self._tools_cache_time) < self._cache_ttl:
+            return self._tools_cache
+
+        try:
+            from ..tools import tool_registry
+
+            aliases = tool_registry.get_all_aliases()
+            if aliases:
+                self._tools_cache = ",".join(sorted(set(aliases)))
+            else:
+                # Fallback to tool names if no aliases defined
+                names = tool_registry.list_names()
+                self._tools_cache = ",".join(sorted(names)) if names else "time,weather,calendar"
+
+            self._tools_cache_time = now
+            logger.debug("Tools cache refreshed: %s", self._tools_cache)
+
+        except Exception as e:
+            logger.warning("Failed to get tools list: %s", e)
+            # Fallback to basic tools
+            self._tools_cache = "time,weather,calendar,reminder,reminders"
+            self._tools_cache_time = now
+
+        return self._tools_cache
+
     def invalidate_cache(self) -> None:
         """Force cache refresh on next call."""
         self._device_cache = None
         self._device_cache_time = 0.0
+        self._tools_cache = None
+        self._tools_cache_time = 0.0
 
     async def parse(self, query: str) -> Optional[Intent]:
         """
@@ -140,7 +182,7 @@ class IntentParser:
         return stripped
 
     async def _parse_with_llm(self, query: str) -> Optional[Intent]:
-        """Parse intent using LLM."""
+        """Parse intent using LLM with retry on truncated responses."""
         llm = self._get_llm()
         if llm is None:
             logger.warning("No LLM available for intent parsing")
@@ -148,42 +190,57 @@ class IntentParser:
 
         config = self._get_config()
         device_list = self._get_device_list()
+        tools_list = self._get_tools_list()
         logger.info("Intent parsing with LLM: %s", llm.model if hasattr(llm, 'model') else 'unknown')
         logger.debug("Device list for intent: %s", device_list)
-        prompt = UNIFIED_INTENT_PROMPT.format(devices=device_list, query=query)
+        logger.debug("Tools list for intent: %s", tools_list)
+        prompt = UNIFIED_INTENT_PROMPT.format(devices=device_list, tools=tools_list, query=query)
 
-        try:
-            from ..services.protocols import Message
+        from ..services.protocols import Message
 
-            messages = [
-                Message(role="system", content="You parse intents. Output ONLY valid JSON."),
-                Message(role="user", content=prompt),
-            ]
+        messages = [
+            Message(role="system", content="You parse intents. Output ONLY valid JSON."),
+            Message(role="user", content=prompt),
+        ]
 
-            start_time = time.perf_counter()
-            result = llm.chat(
-                messages=messages,
-                max_tokens=config.max_tokens,
-                temperature=config.temperature,
-            )
-            duration_ms = (time.perf_counter() - start_time) * 1000
-
-            response_text = result.get("response", "")
-            logger.info("LLM intent (%.0fms): %s", duration_ms, response_text[:100])
-
-            intent = self._parse_response(response_text, query)
-            if intent:
-                logger.info(
-                    "Intent: action=%s, target_type=%s, target_name=%s",
-                    intent.action,
-                    intent.target_type,
-                    intent.target_name,
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            try:
+                start_time = time.perf_counter()
+                result = llm.chat(
+                    messages=messages,
+                    max_tokens=config.max_tokens,
+                    temperature=config.temperature,
                 )
-            return intent
+                duration_ms = (time.perf_counter() - start_time) * 1000
 
-        except Exception as e:
-            logger.warning("LLM intent parsing failed: %s", e)
-            return None
+                response_text = result.get("response", "")
+                logger.info("LLM intent (%.0fms): '%s'", duration_ms, response_text)
+
+                intent = self._parse_response(response_text, query)
+                if intent:
+                    logger.info(
+                        "Intent: action=%s, target_type=%s, target_name=%s",
+                        intent.action,
+                        intent.target_type,
+                        intent.target_name,
+                    )
+                    return intent
+
+                # Retry if JSON was truncated (response has { but not valid JSON)
+                if "{" in response_text and attempt < max_retries:
+                    logger.warning("Truncated JSON response, retrying (%d/%d)", attempt + 1, max_retries)
+                    continue
+
+                return None
+
+            except Exception as e:
+                logger.warning("LLM intent parsing failed: %s", e)
+                if attempt < max_retries:
+                    continue
+                return None
+
+        return None
 
     def _parse_response(self, response_text: str, query: str) -> Optional[Intent]:
         """Parse the LLM response into an Intent."""

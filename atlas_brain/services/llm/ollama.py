@@ -125,21 +125,37 @@ class OllamaLLM(BaseModelService):
             },
         }
 
-        try:
-            response = self._sync_client.post(
-                f"{self.base_url}/api/chat",
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
-            response_text = data.get("message", {}).get("content", "").strip()
-            return {
-                "response": response_text,
-                "message": {"role": "assistant", "content": response_text},
-            }
-        except httpx.HTTPError as e:
-            logger.error("Ollama chat error: %s", e)
-            raise
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            try:
+                response = self._sync_client.post(
+                    f"{self.base_url}/api/chat",
+                    json=payload,
+                )
+                response.raise_for_status()
+                data = response.json()
+                response_text = data.get("message", {}).get("content", "").strip()
+                done_reason = data.get("done_reason", "unknown")
+                logger.info("Ollama chat: done_reason=%s, content_len=%d, response='%s'",
+                           done_reason, len(response_text), response_text)
+
+                # Retry if model hit token limit before producing output
+                if done_reason == "length" and not response_text and attempt < max_retries:
+                    logger.warning("Empty response with done_reason=length, retrying (%d/%d)",
+                                 attempt + 1, max_retries)
+                    continue
+
+                return {
+                    "response": response_text,
+                    "message": {"role": "assistant", "content": response_text},
+                }
+            except httpx.HTTPError as e:
+                logger.error("Ollama chat error: %s", e)
+                if attempt < max_retries:
+                    continue
+                raise
+
+        return {"response": "", "message": {"role": "assistant", "content": ""}}
 
     def chat_with_tools(
         self,
@@ -164,10 +180,13 @@ class OllamaLLM(BaseModelService):
         if not self._sync_client:
             raise RuntimeError("Ollama LLM not loaded")
 
-        ollama_messages = [
-            {"role": msg.role, "content": msg.content}
-            for msg in messages
-        ]
+        ollama_messages = []
+        for msg in messages:
+            m = {"role": msg.role, "content": msg.content}
+            # Include tool_calls for assistant messages
+            if msg.tool_calls:
+                m["tool_calls"] = msg.tool_calls
+            ollama_messages.append(m)
 
         payload = {
             "model": self.model,
@@ -191,7 +210,14 @@ class OllamaLLM(BaseModelService):
         try:
             import json
             logger.debug("Ollama request payload keys: %s", list(payload.keys()))
-            logger.debug("Messages: %s", [{"role": m["role"], "content": m["content"][:100]} for m in ollama_messages])
+            # Log messages with tool_calls info
+            msg_summary = []
+            for m in ollama_messages:
+                summary = {"role": m["role"], "content": m["content"][:100] if m["content"] else ""}
+                if m.get("tool_calls"):
+                    summary["tool_calls"] = [tc.get("function", {}).get("name") for tc in m["tool_calls"]]
+                msg_summary.append(summary)
+            logger.info("Ollama messages: %s", msg_summary)
             response = self._sync_client.post(
                 f"{self.base_url}/api/chat",
                 json=payload,
@@ -205,8 +231,10 @@ class OllamaLLM(BaseModelService):
             msg = data.get("message", {})
             logger.debug("Message keys: %s", list(msg.keys()))
             tool_calls = msg.get("tool_calls", [])
-            logger.info("Ollama response: content_len=%d, tool_calls=%d",
-                       len(msg.get("content", "")), len(tool_calls))
+            raw_content = msg.get("content", "")
+            logger.info("Ollama response: content_len=%d, tool_calls=%d, done_reason=%s",
+                       len(raw_content), len(tool_calls), data.get("done_reason", "unknown"))
+            logger.info("Ollama raw content: '%s'", raw_content)
             if tool_calls:
                 logger.info("Tool calls received: %s", [tc.get("function", {}).get("name") for tc in tool_calls])
             return {

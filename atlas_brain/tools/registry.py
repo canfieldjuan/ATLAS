@@ -19,6 +19,7 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
+        self._alias_map: dict[str, str] = {}  # alias -> tool_name
 
     @classmethod
     def get_instance(cls) -> "ToolRegistry":
@@ -28,15 +29,52 @@ class ToolRegistry:
         return cls._instance
 
     def register(self, tool: Tool) -> None:
-        """Register a tool."""
+        """Register a tool and its aliases."""
         if tool.name in self._tools:
             logger.warning("Tool %s already registered, overwriting", tool.name)
         self._tools[tool.name] = tool
-        logger.info("Registered tool: %s", tool.name)
+
+        # Register aliases
+        aliases = getattr(tool, "aliases", None)
+        if aliases:
+            for alias in aliases:
+                alias_lower = alias.lower()
+                if alias_lower in self._alias_map:
+                    logger.debug(
+                        "Alias '%s' already mapped to %s, remapping to %s",
+                        alias, self._alias_map[alias_lower], tool.name
+                    )
+                self._alias_map[alias_lower] = tool.name
+
+        logger.info("Registered tool: %s (aliases: %s)", tool.name, aliases or [])
 
     def get(self, name: str) -> Optional[Tool]:
         """Get a tool by name."""
         return self._tools.get(name)
+
+    def resolve_alias(self, alias: str) -> Optional[str]:
+        """Resolve an alias to a tool name. Returns None if not found."""
+        alias_lower = alias.lower()
+        # Check if it's already a tool name
+        if alias_lower in self._tools:
+            return alias_lower
+        # Check alias map
+        return self._alias_map.get(alias_lower)
+
+    def get_by_alias(self, alias: str) -> Optional[Tool]:
+        """Get a tool by alias or name."""
+        tool_name = self.resolve_alias(alias)
+        if tool_name:
+            return self._tools.get(tool_name)
+        return None
+
+    def get_all_aliases(self) -> list[str]:
+        """Get all registered aliases (for intent parser)."""
+        return list(self._alias_map.keys())
+
+    def get_alias_map(self) -> dict[str, str]:
+        """Get the full alias -> tool_name mapping."""
+        return dict(self._alias_map)
 
     def list_all(self) -> list[Tool]:
         """List all registered tools."""

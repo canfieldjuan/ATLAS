@@ -102,8 +102,10 @@ class STTService(Protocol):
 @dataclass
 class Message:
     """A chat message for LLM conversation."""
-    role: str  # "system", "user", "assistant"
+    role: str  # "system", "user", "assistant", "tool"
     content: str
+    tool_calls: list = None  # For assistant messages that call tools
+    tool_call_id: str = None  # For tool result messages
 
 
 @runtime_checkable
@@ -140,6 +142,27 @@ class LLMService(Protocol):
         temperature: float = 0.7,
     ) -> dict[str, Any]:
         """Generate a response in a chat conversation."""
+        ...
+
+    def chat_with_tools(
+        self,
+        messages: list[Message],
+        tools: list[dict[str, Any]],
+        max_tokens: int = 512,
+        temperature: float = 0.7,
+    ) -> dict[str, Any]:
+        """
+        Generate a response with tool calling capability.
+
+        Args:
+            messages: Conversation messages
+            tools: List of tool schemas in OpenAI format
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+
+        Returns:
+            Dict with 'response' text and optional 'tool_calls' list
+        """
         ...
 
 

@@ -21,6 +21,13 @@ logger = logging.getLogger("atlas.services.tool_executor")
 
 MAX_TOOL_ITERATIONS = 3
 
+# Priority tools for LLM tool calling (reduces model confusion)
+PRIORITY_TOOL_NAMES = [
+    "get_time", "get_weather", "get_calendar", "get_location",
+    "set_reminder", "list_reminders", "send_notification",
+    "check_availability", "book_appointment",
+]
+
 # Pattern to match text-based tool calls
 # Format 1: <function=tool_name>json_args</function>
 TEXT_TOOL_PATTERN = re.compile(
@@ -96,29 +103,24 @@ async def execute_with_tools(
             "tool_results": {},
         }
 
-    # Map common intent names to tool names
-    tool_name_map = {
-        "time": "get_time",
-        "weather": "get_weather",
-        "calendar": "get_calendar",
-        "location": "get_location",
-        "reminder": "set_reminder",
-        "reminders": "list_reminders",
-        "availability": "check_availability",
-        "appointment": "book_appointment",
-        "booking": "book_appointment",
-        "schedule": "book_appointment",
-    }
-
     # If a specific target tool was identified, use only that tool
     # This dramatically improves reliability (100% vs ~33% with multiple tools)
     if target_tool:
-        # Normalize tool name (intent uses "time", registry uses "get_time")
-        tool_name = tool_name_map.get(target_tool, target_tool)
-        # Only add prefix if tool name doesn't have a known prefix
-        known_prefixes = ("get_", "set_", "list_", "check_", "book_", "cancel_", "reschedule_")
-        if not any(tool_name.startswith(p) for p in known_prefixes):
-            tool_name = f"get_{target_tool}"
+        # Use registry to resolve alias to actual tool name
+        tool_name = tool_registry.resolve_alias(target_tool)
+
+        if not tool_name:
+            # Fallback: try adding common prefixes
+            known_prefixes = ("get_", "set_", "list_", "check_", "book_", "cancel_", "reschedule_")
+            for prefix in known_prefixes:
+                candidate = f"{prefix}{target_tool}"
+                if tool_registry.get(candidate):
+                    tool_name = candidate
+                    break
+
+        if not tool_name:
+            # Last resort: use as-is
+            tool_name = target_tool
 
         tools = tool_registry.get_tool_schemas_filtered([tool_name])
         if tools:
@@ -128,17 +130,11 @@ async def execute_with_tools(
             target_tool = None  # Fall through to priority tools
 
     if not target_tool:
-        # Filter to commonly used tools to avoid overwhelming the model
-        priority_tools = [
-            "get_time", "get_weather", "get_calendar", "get_location",
-            "set_reminder", "list_reminders", "send_notification",
-            "check_availability", "book_appointment",
-        ]
-        all_tools = tool_registry.get_tool_schemas()
-        tools = [t for t in all_tools if t.get("function", {}).get("name") in priority_tools]
+        # Use registry to get priority tool schemas
+        tools = tool_registry.get_tool_schemas_filtered(PRIORITY_TOOL_NAMES)
         if not tools:
-            tools = all_tools
-        logger.info("Tool executor: %d tools available (filtered from %d)", len(tools), len(all_tools))
+            tools = tool_registry.get_tool_schemas()
+        logger.info("Tool executor: %d tools available", len(tools))
 
     logger.info("Tool names: %s", [t.get("function", {}).get("name") for t in tools])
 
@@ -158,8 +154,8 @@ async def execute_with_tools(
 
         last_response = result.get("response", "")
         tool_calls = result.get("tool_calls", [])
-        logger.info("LLM response: len=%d, tool_calls=%d, response_preview='%s'",
-                   len(last_response), len(tool_calls), last_response[:100] if last_response else "")
+        logger.info("LLM response: len=%d, tool_calls=%d, response='%s'",
+                   len(last_response), len(tool_calls), last_response)
 
         # If no structured tool calls, try parsing text-based calls
         if not tool_calls and last_response:
@@ -168,9 +164,16 @@ async def execute_with_tools(
                 logger.info("Parsed %d text-based tool call(s)", len(tool_calls))
 
         if not tool_calls:
-            logger.info("No tool calls from LLM, returning response directly")
+            # If LLM returned empty but we have tool results, use tool result as response
+            final_response = last_response
+            if not final_response and tool_results:
+                # Use the last tool's result as the response
+                final_response = list(tool_results.values())[-1]
+                logger.info("LLM returned empty, using tool result as response: %s", final_response)
+            else:
+                logger.info("No tool calls from LLM, returning response directly")
             return {
-                "response": last_response,
+                "response": final_response,
                 "tools_executed": list(tool_results.keys()),
                 "tool_results": tool_results,
             }
@@ -181,6 +184,7 @@ async def execute_with_tools(
         current_messages.append(Message(
             role="assistant",
             content=last_response or "",
+            tool_calls=tool_calls,
         ))
 
         # Process each tool call
@@ -224,8 +228,13 @@ async def execute_with_tools(
 
     # Max iterations reached
     logger.warning("Max tool iterations (%d) reached", MAX_TOOL_ITERATIONS)
+    # Fallback to tool result if LLM response is empty
+    final_response = last_response
+    if not final_response and tool_results:
+        final_response = list(tool_results.values())[-1]
+        logger.info("Using tool result as fallback response: %s", final_response)
     return {
-        "response": last_response,
+        "response": final_response,
         "tools_executed": list(tool_results.keys()),
         "tool_results": tool_results,
     }

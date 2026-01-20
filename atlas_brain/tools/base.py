@@ -44,7 +44,7 @@ class Tool(Protocol):
 
     @property
     def name(self) -> str:
-        """Unique tool identifier."""
+        """Unique tool identifier (e.g., 'get_time', 'book_appointment')."""
         ...
 
     @property
@@ -56,6 +56,31 @@ class Tool(Protocol):
     def parameters(self) -> list[ToolParameter]:
         """List of parameters this tool accepts."""
         ...
+
+    @property
+    def aliases(self) -> list[str]:
+        """
+        Short names users might say to invoke this tool.
+
+        Examples:
+            - get_time: ["time", "current time", "what time"]
+            - get_weather: ["weather", "forecast"]
+            - book_appointment: ["appointment", "booking", "schedule"]
+
+        The intent parser uses these to recognize tool requests.
+        Default implementation returns empty list for backwards compatibility.
+        """
+        return []
+
+    @property
+    def category(self) -> str:
+        """
+        Tool category for grouping and filtering.
+
+        Categories: utility, scheduling, device, notification, security
+        Default is 'utility'.
+        """
+        return "utility"
 
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         """Execute the tool with given parameters."""

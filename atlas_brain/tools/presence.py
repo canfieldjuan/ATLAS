@@ -30,6 +30,8 @@ class LightsNearUserTool:
         "Use this when the user says 'turn on the lights' without specifying a room. "
         "Automatically determines which lights to control based on where the user is."
     )
+    aliases = ["lights", "turn on lights", "turn off lights", "my lights"]
+    category = "home"
     parameters = [
         ToolParameter(
             name="action",
@@ -155,6 +157,8 @@ class MediaNearUserTool:
         "Control TV or media player in the user's current location. "
         "Use this when the user says 'turn on the TV' without specifying a room."
     )
+    aliases = ["tv", "media", "turn on tv", "turn off tv", "play", "pause"]
+    category = "home"
     parameters = [
         ToolParameter(
             name="action",
@@ -259,6 +263,8 @@ class SceneNearUserTool:
         "Set a lighting scene or mood in the user's current location. "
         "Use for requests like 'make it cozy' or 'I'm going to watch a movie'."
     )
+    aliases = ["scene", "mood", "lighting scene", "make it cozy", "movie mode"]
+    category = "home"
     parameters = [
         ToolParameter(
             name="scene",
@@ -360,6 +366,8 @@ class WhereAmITool:
         "Tell the user which room the system detects them in. "
         "Use when user asks 'where am I?' or 'what room am I in?'"
     )
+    aliases = ["where am i", "what room", "my room", "current room"]
+    category = "home"
     parameters = []
 
     async def execute(self, params: dict[str, Any]) -> ToolResult:

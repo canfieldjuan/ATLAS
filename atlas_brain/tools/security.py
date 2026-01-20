@@ -429,6 +429,14 @@ class ListCamerasTool:
     def parameters(self) -> list[ToolParameter]:
         return []
 
+    @property
+    def aliases(self) -> list[str]:
+        return ["cameras", "show cameras", "camera list"]
+
+    @property
+    def category(self) -> str:
+        return "security"
+
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         client = get_security_client()
         cameras = await client.list_cameras()
@@ -471,6 +479,14 @@ class GetCameraStatusTool:
                 required=True,
             ),
         ]
+
+    @property
+    def aliases(self) -> list[str]:
+        return ["camera status", "check camera"]
+
+    @property
+    def category(self) -> str:
+        return "security"
 
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         camera_name = params.get("camera_name", "")
@@ -515,6 +531,14 @@ class StartRecordingTool:
             ),
         ]
 
+    @property
+    def aliases(self) -> list[str]:
+        return ["record", "start recording", "record camera"]
+
+    @property
+    def category(self) -> str:
+        return "security"
+
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         camera_name = params.get("camera_name", "")
         if not camera_name:
@@ -555,6 +579,14 @@ class StopRecordingTool:
                 required=True,
             ),
         ]
+
+    @property
+    def aliases(self) -> list[str]:
+        return ["stop recording", "stop record"]
+
+    @property
+    def category(self) -> str:
+        return "security"
 
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         camera_name = params.get("camera_name", "")
@@ -609,6 +641,14 @@ class PTZControlTool:
                 default=1.0,
             ),
         ]
+
+    @property
+    def aliases(self) -> list[str]:
+        return ["ptz", "pan camera", "tilt camera", "zoom camera"]
+
+    @property
+    def category(self) -> str:
+        return "security"
 
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         camera_name = params.get("camera_name", "")
@@ -675,6 +715,14 @@ class GetCurrentDetectionsTool:
                 required=False,
             ),
         ]
+
+    @property
+    def aliases(self) -> list[str]:
+        return ["detections", "what do you see", "who is there", "check detections"]
+
+    @property
+    def category(self) -> str:
+        return "security"
 
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         camera_name = params.get("camera_name")
@@ -753,6 +801,14 @@ class QueryDetectionsTool:
             ),
         ]
 
+    @property
+    def aliases(self) -> list[str]:
+        return ["detection history", "past detections", "what was detected"]
+
+    @property
+    def category(self) -> str:
+        return "security"
+
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         hours = int(params.get("hours", 1))
         camera_name = params.get("camera_name")
@@ -817,6 +873,14 @@ class GetPersonAtLocationTool:
                 required=True,
             ),
         ]
+
+    @property
+    def aliases(self) -> list[str]:
+        return ["who is at", "person at", "someone at door"]
+
+    @property
+    def category(self) -> str:
+        return "security"
 
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         location = params.get("location", "")
@@ -885,6 +949,14 @@ class GetMotionEventsTool:
             ),
         ]
 
+    @property
+    def aliases(self) -> list[str]:
+        return ["motion events", "motion history", "any motion"]
+
+    @property
+    def category(self) -> str:
+        return "security"
+
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         hours = int(params.get("hours", 1))
         camera_name = params.get("camera_name")
@@ -940,6 +1012,14 @@ class ListZonesTool:
     def parameters(self) -> list[ToolParameter]:
         return []
 
+    @property
+    def aliases(self) -> list[str]:
+        return ["zones", "security zones", "alarm zones"]
+
+    @property
+    def category(self) -> str:
+        return "security"
+
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         client = get_security_client()
         zones = await client.list_zones()
@@ -991,6 +1071,14 @@ class GetZoneStatusTool:
             ),
         ]
 
+    @property
+    def aliases(self) -> list[str]:
+        return ["zone status", "is zone armed"]
+
+    @property
+    def category(self) -> str:
+        return "security"
+
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         zone_name = params.get("zone_name", "")
         if not zone_name:
@@ -1033,6 +1121,14 @@ class ArmZoneTool:
                 required=True,
             ),
         ]
+
+    @property
+    def aliases(self) -> list[str]:
+        return ["arm", "arm alarm", "arm security"]
+
+    @property
+    def category(self) -> str:
+        return "security"
 
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         zone_name = params.get("zone_name", "")
@@ -1077,6 +1173,14 @@ class DisarmZoneTool:
                 required=True,
             ),
         ]
+
+    @property
+    def aliases(self) -> list[str]:
+        return ["disarm", "disarm alarm", "disarm security"]
+
+    @property
+    def category(self) -> str:
+        return "security"
 
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         zone_name = params.get("zone_name", "")

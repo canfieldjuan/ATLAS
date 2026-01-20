@@ -232,12 +232,31 @@ class HomeAgent(BaseAgent):
                 result.error_code = "EXECUTION_ERROR"
 
         elif think_result.action_type == "tool_use" and think_result.intent:
-            # Tools will be executed by LLM in respond phase via execute_with_tools()
-            result.success = True
-            logger.info(
-                "Tool query detected: %s, deferring to LLM tool calling",
-                think_result.intent.target_name,
-            )
+            # Execute tool directly for faster response
+            target_name = think_result.intent.target_name
+            params = think_result.intent.parameters or {}
+
+            if target_name:
+                try:
+                    tool_result = await tools.execute_tool_by_intent(
+                        target_name, params
+                    )
+                    result.success = tool_result.get("success", False)
+                    result.tool_results[target_name] = tool_result
+                    result.response_data["tool_message"] = tool_result.get("message", "")
+                    logger.info(
+                        "Tool executed: %s -> %s",
+                        target_name,
+                        "success" if result.success else "failed",
+                    )
+                except Exception as e:
+                    logger.warning("Tool execution failed: %s", e)
+                    result.error = str(e)
+                    result.error_code = "TOOL_ERROR"
+            else:
+                # No target, defer to LLM tool calling
+                result.success = True
+                logger.info("Tool query with no target, deferring to LLM")
 
         result.duration_ms = (time.perf_counter() - start_time) * 1000
         return result
@@ -259,8 +278,14 @@ class HomeAgent(BaseAgent):
         if think_result.action_type == "device_command":
             return await self._generate_device_response(context, think_result, act_result)
 
-        # Tool use - use LLM with tool calling loop
+        # Tool use - check if already executed in act phase
         if think_result.action_type == "tool_use":
+            # Fast path: tool was executed in act phase, use its message
+            if act_result and act_result.tool_results:
+                tool_message = act_result.response_data.get("tool_message", "")
+                if tool_message:
+                    return tool_message
+            # Slow path: fall back to LLM tool calling
             return await self._generate_llm_response_with_tools(context, think_result, act_result)
 
         # Conversation fallback - simple response
@@ -344,6 +369,7 @@ class HomeAgent(BaseAgent):
 
         response = result.get("response", "").strip()
         tools_executed = result.get("tools_executed", [])
+        logger.info("Tool LLM result: tools=%s, response='%s'", tools_executed, response)
 
         if tools_executed:
             logger.info("Tools executed via LLM: %s", tools_executed)

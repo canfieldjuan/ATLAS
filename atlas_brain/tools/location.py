@@ -41,6 +41,14 @@ class LocationTool:
             ),
         ]
 
+    @property
+    def aliases(self) -> list[str]:
+        return ["location", "where am i", "my location", "gps"]
+
+    @property
+    def category(self) -> str:
+        return "utility"
+
     async def _ensure_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client."""
         if self._client is None:

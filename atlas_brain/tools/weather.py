@@ -76,6 +76,14 @@ class WeatherTool:
             ),
         ]
 
+    @property
+    def aliases(self) -> list[str]:
+        return ["weather", "forecast", "temperature", "outside"]
+
+    @property
+    def category(self) -> str:
+        return "utility"
+
     async def _ensure_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client."""
         if self._client is None:

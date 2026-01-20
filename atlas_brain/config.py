@@ -390,7 +390,7 @@ class IntentConfig(BaseSettings):
 
     # LLM settings for intent parsing
     temperature: float = Field(default=0.1, description="LLM temperature for intent parsing")
-    max_tokens: int = Field(default=80, description="Max tokens for intent response")
+    max_tokens: int = Field(default=256, description="Max tokens for intent response")
 
     # Device cache settings
     device_cache_ttl: int = Field(default=60, description="Device list cache TTL in seconds")
