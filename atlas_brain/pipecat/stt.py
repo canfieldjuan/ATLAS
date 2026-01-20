@@ -117,8 +117,17 @@ class ParakeetSTTService(SegmentedSTTService):
         try:
             start_time = time.time()
 
-            # Convert bytes to numpy array
-            audio_array = np.frombuffer(audio, dtype=np.int16).astype(np.float32) / 32768.0
+            # SegmentedSTTService passes WAV-wrapped audio, need to extract raw PCM
+            # WAV files start with "RIFF" header
+            if audio[:4] == b'RIFF':
+                import wave
+                wav_io = io.BytesIO(audio)
+                with wave.open(wav_io, 'rb') as wav:
+                    raw_audio = wav.readframes(wav.getnframes())
+                audio_array = np.frombuffer(raw_audio, dtype=np.int16).astype(np.float32) / 32768.0
+                logger.debug("Extracted %d samples from WAV container", len(audio_array))
+            else:
+                audio_array = np.frombuffer(audio, dtype=np.int16).astype(np.float32) / 32768.0
 
             # Run transcription in thread pool
             loop = asyncio.get_event_loop()
@@ -230,7 +239,18 @@ class NemotronSTTService(SegmentedSTTService):
         try:
             start_time = time.time()
 
-            audio_array = np.frombuffer(audio, dtype=np.int16).astype(np.float32) / 32768.0
+            # SegmentedSTTService passes WAV-wrapped audio, need to extract raw PCM
+            # WAV files start with "RIFF" header
+            if audio[:4] == b'RIFF':
+                import wave
+                wav_io = io.BytesIO(audio)
+                with wave.open(wav_io, 'rb') as wav:
+                    raw_audio = wav.readframes(wav.getnframes())
+                audio_array = np.frombuffer(raw_audio, dtype=np.int16).astype(np.float32) / 32768.0
+                logger.debug("Extracted %d samples from WAV container", len(audio_array))
+            else:
+                audio_array = np.frombuffer(audio, dtype=np.int16).astype(np.float32) / 32768.0
+
             logger.info("run_stt: Processing %.2f seconds of audio", len(audio_array) / 16000)
 
             loop = asyncio.get_event_loop()
