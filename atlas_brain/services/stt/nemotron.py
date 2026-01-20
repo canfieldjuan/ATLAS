@@ -103,6 +103,32 @@ def _load_audio_from_bytes(audio_bytes: bytes) -> tuple[np.ndarray, int]:
         raise ValueError(f"Could not load audio: {e}")
 
 
+def _normalize_phone_numbers(text: str) -> str:
+    """
+    Normalize phone number patterns in transcript.
+
+    Finds digit sequences and formats them as phone numbers.
+    Handles: "5554321" -> "555-4321", "555 432 1234" -> "555-432-1234"
+    """
+    import re
+
+    # Find sequences of digits possibly separated by spaces
+    # Pattern: 3+ digits, optional space, more digits
+    pattern = r'\b(\d[\d\s]{5,12}\d)\b'
+
+    def format_phone(match: re.Match) -> str:
+        digits = re.sub(r'\s', '', match.group(1))
+        if len(digits) == 7:
+            return f"{digits[:3]}-{digits[3:]}"
+        elif len(digits) == 10:
+            return f"{digits[:3]}-{digits[3:6]}-{digits[6:]}"
+        elif len(digits) == 11 and digits[0] == '1':
+            return f"1-{digits[1:4]}-{digits[4:7]}-{digits[7:]}"
+        return match.group(0)
+
+    return re.sub(pattern, format_phone, text)
+
+
 @register_stt("nemotron")
 class NemotronSTT(BaseModelService):
     """
@@ -385,15 +411,17 @@ class NemotronSTT(BaseModelService):
             return {"transcript": "", "chunk_count": 0, "total_samples": 0}
 
         state = self._streaming_state
+        # Normalize phone numbers in final transcript
+        final_text = _normalize_phone_numbers(state.accumulated_text)
         result = {
-            "transcript": state.accumulated_text,
+            "transcript": final_text,
             "chunk_count": state.chunk_count,
             "total_samples": state.total_audio_samples,
             "duration_seconds": state.total_audio_samples / SAMPLE_RATE,
         }
 
         # Analyze punctuation
-        text = state.accumulated_text
+        text = final_text
         result["punctuation"] = {
             "has_period": "." in text,
             "has_question": "?" in text,
@@ -491,6 +519,9 @@ class NemotronSTT(BaseModelService):
         async with self._inference_lock:
             with InferenceTimer() as timer:
                 transcript, punct_info = await loop.run_in_executor(None, _transcribe)
+
+        # Normalize phone numbers in transcript
+        transcript = _normalize_phone_numbers(transcript)
 
         metrics = self.gather_metrics(timer.duration)
 

@@ -16,6 +16,41 @@ from ..protocols import ModelInfo
 from ..registry import register_tts
 
 
+def _verbalize_phone_numbers(text: str) -> str:
+    """
+    Convert phone numbers to spoken form for clearer TTS output.
+
+    Converts "555-4321" to "5 5 5, 4 3 2 1" with digit spacing.
+    This helps STT accurately transcribe phone numbers.
+    """
+    import re
+
+    digit_words = {
+        '0': 'zero', '1': 'one', '2': 'two', '3': 'three', '4': 'four',
+        '5': 'five', '6': 'six', '7': 'seven', '8': 'eight', '9': 'nine',
+    }
+
+    def verbalize(match: re.Match) -> str:
+        phone = match.group(0)
+        digits = re.sub(r'[^\d]', '', phone)
+        if len(digits) == 7:
+            # Format: XXX-XXXX -> "X X X, X X X X"
+            part1 = ' '.join(digit_words[d] for d in digits[:3])
+            part2 = ' '.join(digit_words[d] for d in digits[3:])
+            return f"{part1}, {part2}"
+        elif len(digits) == 10:
+            # Format: XXX-XXX-XXXX -> "X X X, X X X, X X X X"
+            part1 = ' '.join(digit_words[d] for d in digits[:3])
+            part2 = ' '.join(digit_words[d] for d in digits[3:6])
+            part3 = ' '.join(digit_words[d] for d in digits[6:])
+            return f"{part1}, {part2}, {part3}"
+        return phone
+
+    # Match phone patterns: 555-4321 (7 digits) or 555-123-4567 (10 digits)
+    pattern = r'\b(\d{3}[-.\s]?\d{4}|\d{3}[-.\s]?\d{3}[-.\s]?\d{4})\b'
+    return re.sub(pattern, verbalize, text)
+
+
 @register_tts("kokoro")
 class KokoroTTS(BaseModelService):
     """
@@ -144,6 +179,9 @@ class KokoroTTS(BaseModelService):
 
     def _synthesize_sync(self, text: str, voice: str) -> bytes:
         """Synchronous synthesis implementation."""
+        # Verbalize phone numbers for clearer speech
+        text = _verbalize_phone_numbers(text)
+
         with InferenceTimer() as timer:
             # Generate audio using Kokoro
             generator = self._pipeline(text, voice=voice, speed=self._speed)
