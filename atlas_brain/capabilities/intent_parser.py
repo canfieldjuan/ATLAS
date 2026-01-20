@@ -6,12 +6,66 @@ Uses LLM for unified intent extraction (devices, tools, conversation).
 
 import json
 import logging
+import re
 import time
 from typing import Any, Optional
 
 from .actions import Intent
 
 logger = logging.getLogger("atlas.capabilities.intent_parser")
+
+
+def _normalize_spoken_numbers(text: str) -> str:
+    """Convert spoken number words to digits for phone number recognition."""
+    singles = {
+        'zero': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4',
+        'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9',
+    }
+    teens = {
+        'ten': '10', 'eleven': '11', 'twelve': '12', 'thirteen': '13',
+        'fourteen': '14', 'fifteen': '15', 'sixteen': '16', 'seventeen': '17',
+        'eighteen': '18', 'nineteen': '19',
+    }
+    tens = {
+        'twenty': '20', 'thirty': '30', 'forty': '40', 'fifty': '50',
+        'sixty': '60', 'seventy': '70', 'eighty': '80', 'ninety': '90',
+    }
+    all_nums = {**singles, **teens, **tens}
+
+    # "twenty fifty" -> "2050"
+    p1 = r'\b(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)\s+'
+    p1 += r'(ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|'
+    p1 += r'eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)\b'
+    text = re.sub(p1, lambda m: all_nums[m.group(1).lower()] + all_nums[m.group(2).lower()],
+                  text, flags=re.IGNORECASE)
+
+    # "two seventeen" -> "217"
+    p2 = r'\b(one|two|three|four|five|six|seven|eight|nine)\s+'
+    p2 += r'(ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)\b'
+    text = re.sub(p2, lambda m: singles[m.group(1).lower()] + teens[m.group(2).lower()],
+                  text, flags=re.IGNORECASE)
+
+    # "twenty one" -> "21"
+    p3 = r'\b(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)\s+'
+    p3 += r'(one|two|three|four|five|six|seven|eight|nine)\b'
+    text = re.sub(p3, lambda m: str(int(tens[m.group(1).lower()]) + int(singles[m.group(2).lower()])),
+                  text, flags=re.IGNORECASE)
+
+    # Standalone numbers
+    for word, digit in sorted(all_nums.items(), key=lambda x: -len(x[0])):
+        text = re.sub(r'\b' + word + r'\b', digit, text, flags=re.IGNORECASE)
+
+    # Format digit sequences as phone numbers
+    def fmt(m: re.Match) -> str:
+        d = re.sub(r'\s', '', m.group(1))
+        if len(d) == 7:
+            return f"{d[:3]}-{d[3:]}"
+        if len(d) == 10:
+            return f"{d[:3]}-{d[3:6]}-{d[6:]}"
+        return m.group(0)
+
+    text = re.sub(r'\b(\d[\d\s]{5,12}\d)\b', fmt, text)
+    return text
 
 # Compact prompt template for fast intent extraction
 # NOTE: {tools} is populated dynamically from ToolRegistry
@@ -167,6 +221,9 @@ class IntentParser:
         query = self._strip_wake_word(query)
         if not query:
             return None
+
+        # Normalize spoken numbers to digits (e.g., "two seventeen" -> "217")
+        query = _normalize_spoken_numbers(query)
 
         # Filter out very short queries (likely garbage from mic feedback)
         if len(query) < 3 or len(query.split()) < 2:
