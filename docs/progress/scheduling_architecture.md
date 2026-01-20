@@ -162,5 +162,27 @@ All modes now follow the same pattern as RECEPTIONIST (no dedicated agent, Atlas
 1. ~~Test direct `book_appointment` via AtlasAgent~~ DONE - works
 2. ~~Verify all modes follow same pattern~~ DONE - verified
 3. Configure calendar for production use
-4. Evaluate SignalWire vs NVIDIA model for inbound calls
+4. ~~Evaluate SignalWire vs NVIDIA model for inbound calls~~ DONE - see below
 5. Potentially deprecate ReceptionistAgent phone flow if external service handles it
+
+## PersonaPlex Integration Decision (2026-01-20)
+
+**Decision:** Integrate NVIDIA PersonaPlex for inbound business calls
+
+**Rationale:**
+- PersonaPlex is a 7B speech-to-speech model with ~170ms latency
+- Handles natural conversation, interruptions, turn-taking natively
+- Replaces separate STT + LLM + TTS pipeline with unified model
+- Better voice quality and more natural conversation flow
+
+**Implementation:**
+- PersonaPlex handles voice layer (listen + speak)
+- Existing tool infrastructure (book_appointment, etc.) used via ToolBridge
+- ToolBridge monitors PersonaPlex text output, triggers tools when needed
+- Feature-flagged: `personaplex_enabled` toggle in config
+
+**Hardware Requirement:**
+- ~19GB VRAM (tested on RTX 3090)
+- Recommendation: Cloud GPU (A100) for production
+
+**See:** `docs/progress/personaplex_integration.md` for full implementation plan
