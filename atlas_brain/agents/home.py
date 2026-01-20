@@ -165,6 +165,14 @@ class HomeAgent(BaseAgent):
                     intent.target_name,
                     intent.confidence,
                 )
+            elif intent.action == "query" and intent.target_type == "tool":
+                result.action_type = "tool_use"
+                result.needs_llm = True
+                logger.debug(
+                    "Tool query: %s (conf=%.2f)",
+                    intent.target_name,
+                    intent.confidence,
+                )
             else:
                 # Not a device command - conversation fallback
                 result.action_type = "conversation"
@@ -219,6 +227,14 @@ class HomeAgent(BaseAgent):
                 result.error = str(e)
                 result.error_code = "EXECUTION_ERROR"
 
+        elif think_result.action_type == "tool_use" and think_result.intent:
+            # Tools will be executed by LLM in respond phase via execute_with_tools()
+            result.success = True
+            logger.info(
+                "Tool query detected: %s, deferring to LLM tool calling",
+                think_result.intent.target_name,
+            )
+
         result.duration_ms = (time.perf_counter() - start_time) * 1000
         return result
 
@@ -238,6 +254,10 @@ class HomeAgent(BaseAgent):
         # Device command response
         if think_result.action_type == "device_command":
             return await self._generate_device_response(context, think_result, act_result)
+
+        # Tool use - use LLM with tool calling loop
+        if think_result.action_type == "tool_use":
+            return await self._generate_llm_response_with_tools(context, think_result, act_result)
 
         # Conversation fallback - simple response
         return f"I heard: {context.input_text}"
@@ -317,6 +337,66 @@ class HomeAgent(BaseAgent):
             return f"Done. {action_message}" if action_message else "Done."
         else:
             return f"I couldn't complete that. {action_message}"
+
+    async def _generate_llm_response_with_tools(
+        self,
+        context: AgentContext,
+        think_result: ThinkResult,
+        act_result: Optional[ActResult],
+    ) -> str:
+        """Generate response using LLM tool calling loop."""
+        from ..services.protocols import Message
+        from ..services.tool_executor import execute_with_tools
+
+        llm = self._get_llm()
+        if llm is None:
+            return f"I heard: {context.input_text}"
+
+        # Build system prompt - keep it simple for reliable tool calling
+        system_msg = "You are a helpful assistant. Use tools when needed."
+
+        messages = [Message(role="system", content=system_msg)]
+
+        # Add conversation history if available
+        if context.conversation_history:
+            for turn in context.conversation_history[-6:]:
+                messages.append(Message(
+                    role=turn.get("role", "user"),
+                    content=turn.get("content", ""),
+                ))
+
+        # Add current user message
+        messages.append(Message(role="user", content=context.input_text))
+
+        # Get target tool from intent (if available)
+        # Passing a single tool to the LLM is more reliable (100% vs ~33%)
+        target_tool = None
+        if think_result.intent and think_result.intent.target_name:
+            target_tool = think_result.intent.target_name
+            logger.info("Tool use with target: %s", target_tool)
+
+        # Execute with tool calling loop
+        cuda_lock = _get_cuda_lock()
+        async with cuda_lock:
+            result = await execute_with_tools(
+                llm=llm,
+                messages=messages,
+                max_tokens=150,
+                temperature=0.3,
+                target_tool=target_tool,
+            )
+
+        response = result.get("response", "").strip()
+        tools_executed = result.get("tools_executed", [])
+
+        if tools_executed:
+            logger.info("Tools executed via LLM: %s", tools_executed)
+            # Store tools in act_result so they flow to the API response
+            if act_result is not None:
+                for tool_name in tools_executed:
+                    act_result.action_results.append({"tool": tool_name})
+
+        return response if response else "I couldn't process that request."
 
 
 # Factory function
