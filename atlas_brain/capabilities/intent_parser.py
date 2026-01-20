@@ -30,6 +30,9 @@ Format: {{"action":"X","target_type":"Y","target_name":"Z","parameters":{{}},"co
 "remind me to call mom at 5pm"->{{"action":"query","target_type":"tool","target_name":"reminder","parameters":{{"message":"call mom","when":"at 5pm"}},"confidence":0.95}}
 "list my reminders"->{{"action":"query","target_type":"tool","target_name":"reminders","parameters":{{}},"confidence":0.95}}
 "book appointment for tomorrow"->{{"action":"query","target_type":"tool","target_name":"appointment","parameters":{{"when":"tomorrow"}},"confidence":0.95}}
+"book appointment for John Smith 555-1234 tomorrow 10am"->{{"action":"query","target_type":"tool","target_name":"appointment","parameters":{{"name":"John Smith","phone":"555-1234","when":"tomorrow 10am"}},"confidence":0.95}}
+"schedule estimate for Jane Doe at 123 Main St, phone 555-5678, Monday 2pm"->{{"action":"query","target_type":"tool","target_name":"appointment","parameters":{{"name":"Jane Doe","address":"123 Main St","phone":"555-5678","when":"Monday 2pm"}},"confidence":0.95}}
+"book cleaning for Bob Johnson 555-9999 next Tuesday morning"->{{"action":"query","target_type":"tool","target_name":"appointment","parameters":{{"name":"Bob Johnson","phone":"555-9999","when":"next Tuesday morning"}},"confidence":0.95}}
 "check availability"->{{"action":"query","target_type":"tool","target_name":"availability","parameters":{{}},"confidence":0.95}}
 "hello"->{{"action":"conversation","target_type":null,"target_name":null,"parameters":{{}},"confidence":0.9}}
 User: {query}

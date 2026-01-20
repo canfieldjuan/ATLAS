@@ -288,6 +288,27 @@ class AtlasAgentTools:
                     date_part, time_part = when_val.split(" at ", 1)
                     mapped_params["date"] = date_part
                     mapped_params["time"] = time_part
+                else:
+                    # Try to extract time from end of string
+                    # Patterns: "Monday 2pm", "tomorrow 10am", "next Tuesday morning"
+                    import re
+                    time_pattern = r'\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)|morning|afternoon|evening|noon)$'
+                    match = re.search(time_pattern, when_val, re.IGNORECASE)
+                    if match:
+                        time_val = match.group(1).strip().lower()
+                        # Convert descriptive times to specific hours for dateparser
+                        time_map = {
+                            "morning": "9am",
+                            "afternoon": "2pm",
+                            "evening": "6pm",
+                            "noon": "12pm",
+                        }
+                        mapped_params["time"] = time_map.get(time_val, time_val)
+                        mapped_params["date"] = when_val[:match.start()].strip()
+                    else:
+                        # No time found - use the whole string as date
+                        # The booking tool will ask for time if needed
+                        pass
             params = mapped_params
 
         return await self.execute_tool(tool_name, params)
