@@ -20,7 +20,7 @@ class PersonaPlexConfig:
     voice_prompt: str = "NATM0"
     text_prompt: str = ""
     seed: int = 0
-    connect_timeout: float = 10.0
+    connect_timeout: float = 120.0  # Server takes ~80s to initialize prompts
     read_timeout: float = 30.0
 
 
@@ -42,7 +42,7 @@ def get_personaplex_config() -> PersonaPlexConfig:
         text_prompt=os.environ.get("ATLAS_PERSONAPLEX_TEXT_PROMPT", ""),
         seed=int(os.environ.get("ATLAS_PERSONAPLEX_SEED", "0")),
         connect_timeout=float(
-            os.environ.get("ATLAS_PERSONAPLEX_CONNECT_TIMEOUT", "10.0")
+            os.environ.get("ATLAS_PERSONAPLEX_CONNECT_TIMEOUT", "120.0")
         ),
         read_timeout=float(
             os.environ.get("ATLAS_PERSONAPLEX_READ_TIMEOUT", "30.0")

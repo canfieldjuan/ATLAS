@@ -61,9 +61,16 @@ class PersonaPlexService:
         """Build WebSocket URL with query parameters."""
         scheme = "wss" if self._config.use_ssl else "ws"
         base = f"{scheme}://{self._config.host}:{self._config.port}/api/chat"
+
+        # Ensure voice prompt has .pt extension
+        vp = voice_prompt or self._config.voice_prompt
+        if not vp.endswith(".pt"):
+            vp = f"{vp}.pt"
+
         params = {
-            "voice_prompt": voice_prompt or self._config.voice_prompt,
-            "seed": str(self._config.seed),
+            "voice_prompt": vp,
+            "text_seed": str(self._config.seed),
+            "audio_seed": str(self._config.seed),
         }
         prompt = text_prompt or self._config.text_prompt
         if prompt:
@@ -96,11 +103,21 @@ class PersonaPlexService:
             self._session = aiohttp.ClientSession(timeout=timeout)
             self._ws = await self._session.ws_connect(url, ssl=ssl_ctx)
 
-            handshake = await self._ws.receive_bytes()
-            if handshake[0] != MSG_HANDSHAKE:
-                logger.error("Invalid handshake from PersonaPlex")
-                await self.disconnect()
-                return False
+            # Wait for binary handshake, skip any text messages
+            while True:
+                msg = await self._ws.receive()
+                if msg.type == aiohttp.WSMsgType.BINARY:
+                    if len(msg.data) > 0 and msg.data[0] == MSG_HANDSHAKE:
+                        break
+                    logger.error("Invalid handshake byte: %s", msg.data[0] if msg.data else None)
+                    await self.disconnect()
+                    return False
+                elif msg.type == aiohttp.WSMsgType.TEXT:
+                    logger.debug("Received text during handshake: %s", msg.data[:100])
+                elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                    logger.error("WebSocket closed during handshake")
+                    await self.disconnect()
+                    return False
 
             self._connected = True
             self._audio_converter.reset()
