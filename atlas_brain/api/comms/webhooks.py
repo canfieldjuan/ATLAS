@@ -8,6 +8,7 @@ Supports both SWML (new) and LaML (legacy) formats.
 import asyncio
 import json
 import logging
+import time
 from typing import Optional
 
 from fastapi import APIRouter, Form, Request, WebSocket, WebSocketDisconnect
@@ -52,6 +53,47 @@ async def prewarm_llm():
             logger.info("LLM prewarmed successfully")
     except Exception as e:
         logger.warning("LLM prewarm failed: %s", e)
+
+
+async def prewarm_personaplex(call_sid: str, from_number: str, to_number: str, context):
+    """Pre-connect to PersonaPlex while SignalWire sets up the stream."""
+    try:
+        from ...comms.personaplex_processor import (
+            create_personaplex_processor,
+            get_personaplex_processor,
+        )
+
+        # Check if already exists
+        if get_personaplex_processor(call_sid):
+            return
+
+        t0 = time.time()
+        logger.info("Pre-warming PersonaPlex for call %s", call_sid)
+
+        # Create processor without audio callback (will be set later)
+        processor = create_personaplex_processor(
+            call_sid=call_sid,
+            from_number=from_number,
+            to_number=to_number,
+            context_id=context.id,
+            business_context=context,
+            on_audio_ready=None,  # Set later when stream connects
+        )
+
+        # Connect to PersonaPlex server
+        connected = await processor.connect()
+        t1 = time.time()
+
+        if connected:
+            logger.info(
+                "PersonaPlex pre-warmed in %.2fs for %s",
+                t1 - t0,
+                call_sid,
+            )
+        else:
+            logger.error("PersonaPlex prewarm failed for %s", call_sid)
+    except Exception as e:
+        logger.error("PersonaPlex prewarm error: %s", e)
 
 
 def is_laml_request(request: Request) -> bool:
@@ -151,6 +193,12 @@ async def handle_inbound_call(request: Request):
             # LaML: Use Atlas models via bidirectional WebSocket stream
             # Prewarm LLM in background
             asyncio.create_task(prewarm_llm())
+
+            # Pre-connect PersonaPlex in background (takes ~6s)
+            if comms_settings.personaplex_enabled:
+                asyncio.create_task(
+                    prewarm_personaplex(call_id, from_number, to_number, context)
+                )
 
             # Build WebSocket URL for audio streaming
             ws_url = comms_settings.webhook_base_url.replace(
@@ -542,16 +590,47 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
 
         if use_personaplex:
             processor = get_personaplex_processor(call_sid)
-            if processor is None:
-                async def send_audio(audio_b64: str):
-                    """Callback to send audio back to caller."""
-                    if stream_sid:
-                        await websocket.send_json({
-                            "event": "media",
-                            "streamSid": stream_sid,
-                            "media": {"payload": audio_b64},
-                        })
 
+            async def send_audio(audio_b64: str):
+                """Callback to send audio back to caller."""
+                logger.info(
+                    "send_audio callback: stream_sid=%s, audio_len=%d",
+                    stream_sid,
+                    len(audio_b64),
+                )
+                if stream_sid:
+                    await websocket.send_json({
+                        "event": "media",
+                        "streamSid": stream_sid,
+                        "media": {"payload": audio_b64},
+                    })
+                    logger.info("Audio sent to SignalWire")
+                else:
+                    logger.warning("No stream_sid, cannot send audio")
+
+            if processor is not None:
+                # Use pre-warmed processor, just set the audio callback
+                logger.info("Using pre-warmed PersonaPlex for %s", call_sid)
+                processor._on_audio_ready = lambda b64: asyncio.create_task(
+                    send_audio(b64)
+                )
+                # Wait for connection if still in progress
+                if not processor.state.is_connected:
+                    logger.info("Waiting for PersonaPlex pre-warm to complete...")
+                    for _ in range(120):  # Wait up to 12 seconds
+                        await asyncio.sleep(0.1)
+                        if processor.state.is_connected:
+                            logger.info("PersonaPlex pre-warm completed")
+                            break
+                    else:
+                        logger.error("PersonaPlex pre-warm timeout for %s", call_sid)
+                        await remove_personaplex_processor(call_sid)
+                        await websocket.close()
+                        return
+            else:
+                # Fallback: connect now (slower path)
+                t0 = time.time()
+                logger.info("Starting PersonaPlex connection for %s", call_sid)
                 processor = create_personaplex_processor(
                     call_sid=call_sid,
                     from_number=from_number,
@@ -561,6 +640,12 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
                     on_audio_ready=lambda b64: asyncio.create_task(send_audio(b64)),
                 )
                 connected = await processor.connect()
+                t1 = time.time()
+                logger.info(
+                    "PersonaPlex connect took %.2fs for %s",
+                    t1 - t0,
+                    call_sid,
+                )
                 if not connected:
                     logger.error("Failed to connect PersonaPlex for %s", call_sid)
                     await remove_personaplex_processor(call_sid)
