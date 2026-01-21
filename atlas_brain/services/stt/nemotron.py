@@ -103,6 +103,104 @@ def _load_audio_from_bytes(audio_bytes: bytes) -> tuple[np.ndarray, int]:
         raise ValueError(f"Could not load audio: {e}")
 
 
+def _convert_number_words(text: str) -> str:
+    """
+    Convert spoken number words to digits.
+
+    Handles phone patterns like:
+    - "two seventeen" -> "217" (area code)
+    - "twenty fifty" -> "2050" (subscriber)
+    - "five five five" -> "555"
+    """
+    import re
+
+    singles = {
+        'zero': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4',
+        'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9',
+    }
+    teens = {
+        'ten': '10', 'eleven': '11', 'twelve': '12', 'thirteen': '13',
+        'fourteen': '14', 'fifteen': '15', 'sixteen': '16', 'seventeen': '17',
+        'eighteen': '18', 'nineteen': '19',
+    }
+    tens = {
+        'twenty': '20', 'thirty': '30', 'forty': '40', 'fifty': '50',
+        'sixty': '60', 'seventy': '70', 'eighty': '80', 'ninety': '90',
+    }
+    all_nums = {**singles, **teens, **tens}
+
+    # Pattern 1: "twenty fifty" -> "2050" (4-digit subscriber)
+    tens_tens = r'\b(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)\s+'
+    tens_tens += r'(ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|'
+    tens_tens += r'seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|'
+    tens_tens += r'sixty|seventy|eighty|ninety)\b'
+
+    def replace_4digit(m: re.Match) -> str:
+        first = all_nums[m.group(1).lower()]
+        second = all_nums[m.group(2).lower()]
+        return first + second
+
+    text = re.sub(tens_tens, replace_4digit, text, flags=re.IGNORECASE)
+
+    # Pattern 2: "two seventeen" -> "217" (area code: single + teen)
+    single_teen = r'\b(one|two|three|four|five|six|seven|eight|nine)\s+'
+    single_teen += r'(ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|'
+    single_teen += r'seventeen|eighteen|nineteen)\b'
+
+    def replace_3digit(m: re.Match) -> str:
+        first = singles[m.group(1).lower()]
+        second = teens[m.group(2).lower()]
+        return first + second
+
+    text = re.sub(single_teen, replace_3digit, text, flags=re.IGNORECASE)
+
+    # Pattern 3: compound tens (twenty one -> 21)
+    tens_single = r'\b(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)\s+'
+    tens_single += r'(one|two|three|four|five|six|seven|eight|nine)\b'
+
+    def replace_compound(m: re.Match) -> str:
+        t = int(tens[m.group(1).lower()])
+        s = int(singles[m.group(2).lower()])
+        return str(t + s)
+
+    text = re.sub(tens_single, replace_compound, text, flags=re.IGNORECASE)
+
+    # Final pass: standalone numbers
+    for word, digit in sorted(all_nums.items(), key=lambda x: -len(x[0])):
+        text = re.sub(r'\b' + word + r'\b', digit, text, flags=re.IGNORECASE)
+
+    return text
+
+
+def _normalize_phone_numbers(text: str) -> str:
+    """
+    Normalize phone number patterns in transcript.
+
+    Finds digit sequences and formats them as phone numbers.
+    Handles: "5554321" -> "555-4321", "555 432 1234" -> "555-432-1234"
+    """
+    import re
+
+    # First convert any number words to digits
+    text = _convert_number_words(text)
+
+    # Find sequences of digits possibly separated by spaces
+    # Pattern: 3+ digits, optional space, more digits
+    pattern = r'\b(\d[\d\s]{5,12}\d)\b'
+
+    def format_phone(match: re.Match) -> str:
+        digits = re.sub(r'\s', '', match.group(1))
+        if len(digits) == 7:
+            return f"{digits[:3]}-{digits[3:]}"
+        elif len(digits) == 10:
+            return f"{digits[:3]}-{digits[3:6]}-{digits[6:]}"
+        elif len(digits) == 11 and digits[0] == '1':
+            return f"1-{digits[1:4]}-{digits[4:7]}-{digits[7:]}"
+        return match.group(0)
+
+    return re.sub(pattern, format_phone, text)
+
+
 @register_stt("nemotron")
 class NemotronSTT(BaseModelService):
     """
@@ -385,15 +483,17 @@ class NemotronSTT(BaseModelService):
             return {"transcript": "", "chunk_count": 0, "total_samples": 0}
 
         state = self._streaming_state
+        # Normalize phone numbers in final transcript
+        final_text = _normalize_phone_numbers(state.accumulated_text)
         result = {
-            "transcript": state.accumulated_text,
+            "transcript": final_text,
             "chunk_count": state.chunk_count,
             "total_samples": state.total_audio_samples,
             "duration_seconds": state.total_audio_samples / SAMPLE_RATE,
         }
 
         # Analyze punctuation
-        text = state.accumulated_text
+        text = final_text
         result["punctuation"] = {
             "has_period": "." in text,
             "has_question": "?" in text,
@@ -491,6 +591,9 @@ class NemotronSTT(BaseModelService):
         async with self._inference_lock:
             with InferenceTimer() as timer:
                 transcript, punct_info = await loop.run_in_executor(None, _transcribe)
+
+        # Normalize phone numbers in transcript
+        transcript = _normalize_phone_numbers(transcript)
 
         metrics = self.gather_metrics(timer.duration)
 

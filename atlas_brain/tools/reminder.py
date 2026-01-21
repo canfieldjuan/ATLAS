@@ -6,7 +6,7 @@ using dateparser and creates reminders via the ReminderService.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import dateparser
@@ -88,6 +88,11 @@ class ReminderTool:
         import re
 
         text = when_text.strip().lower()
+
+        # Handle "now" variants that dateparser doesn't recognize
+        now_variants = ("right now", "immediately", "asap", "straight away")
+        if text in now_variants:
+            return "in 2 seconds"
 
         weekdays = (
             "monday", "tuesday", "wednesday", "thursday",
@@ -187,14 +192,11 @@ class ReminderTool:
                 message=f"I couldn't understand '{when_text}'. Try something like 'in 30 minutes' or 'tomorrow at 5pm'",
             )
 
-        # Validate the time is in the future
+        # For immediate reminders ("now"), adjust to near-future
         now = datetime.now(timezone.utc)
         if due_at <= now:
-            return ToolResult(
-                success=False,
-                error="PAST_TIME",
-                message="The reminder time must be in the future",
-            )
+            due_at = now + timedelta(seconds=2)
+            logger.info("Adjusted immediate reminder to near-future: %s", due_at)
 
         # Validate repeat pattern
         repeat_pattern = self._validate_repeat(repeat)

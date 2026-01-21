@@ -6,9 +6,12 @@ to provide a unified tool interface for agents.
 """
 
 import logging
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 
 from .protocols import AgentTools as AgentToolsProtocol
+
+if TYPE_CHECKING:
+    from ..services.intent_router import IntentRouteResult
 
 logger = logging.getLogger("atlas.agents.tools")
 
@@ -121,6 +124,33 @@ class AtlasAgentTools:
         ]
 
         return any(kw in query_lower for kw in action_keywords)
+
+    async def route_intent(self, query: str) -> "IntentRouteResult":
+        """
+        Fast intent routing using DistilBERT classifier.
+
+        Classifies queries into: device_command, tool_use, or conversation.
+        Falls back to conversation if router is disabled or on error.
+
+        Args:
+            query: User query text
+
+        Returns:
+            IntentRouteResult with action_category, raw_label, confidence
+        """
+        try:
+            from ..services.intent_router import get_intent_router
+            router = get_intent_router()
+            return await router.route(query)
+        except Exception as e:
+            logger.warning("Intent routing failed: %s", e)
+            # Return fallback result
+            from ..services.intent_router import IntentRouteResult
+            return IntentRouteResult(
+                action_category="conversation",
+                raw_label="error",
+                confidence=0.0,
+            )
 
     # Action execution
 

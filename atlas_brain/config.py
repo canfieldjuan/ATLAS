@@ -590,6 +590,32 @@ class ModeManagerConfig(BaseSettings):
     )
 
 
+class IntentRouterConfig(BaseSettings):
+    """Intent router configuration for fast query classification."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_INTENT_ROUTER_",
+        env_file=".env",
+        extra="ignore",
+    )
+
+    enabled: bool = Field(default=False, description="Enable intent router for fast classification")
+    model_id: str = Field(
+        default="joaobarroca/distilbert-base-uncased-finetuned-massive-intent-detection-english",
+        description="HuggingFace model ID for intent classification",
+    )
+    device: str | None = Field(
+        default=None,
+        description="Device for inference: 'cuda', 'cpu', or None for auto",
+    )
+    confidence_threshold: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Minimum confidence to trust classification result",
+    )
+
+
 class Settings(BaseSettings):
     """Application-wide settings."""
 
@@ -657,6 +683,7 @@ class Settings(BaseSettings):
     email: EmailConfig = Field(default_factory=EmailConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     modes: ModeManagerConfig = Field(default_factory=ModeManagerConfig)
+    intent_router: IntentRouterConfig = Field(default_factory=IntentRouterConfig)
 
     # Presence tracking - imported from presence module
     @property
