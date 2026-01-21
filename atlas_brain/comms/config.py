@@ -122,6 +122,12 @@ class CommsConfig(BaseSettings):
 
     enabled: bool = Field(default=False, description="Enable communications module")
 
+    # PersonaPlex speech-to-speech for phone calls
+    personaplex_enabled: bool = Field(
+        default=False,
+        description="Use PersonaPlex for phone calls instead of STT+LLM+TTS"
+    )
+
     # Provider selection
     provider: str = Field(
         default="twilio",

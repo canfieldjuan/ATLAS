@@ -5,6 +5,7 @@ Handles incoming calls, SMS, and status updates from SignalWire.
 Supports both SWML (new) and LaML (legacy) formats.
 """
 
+import asyncio
 import json
 import logging
 from typing import Optional
@@ -482,15 +483,32 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
 
     This WebSocket receives audio from the caller and sends AI responses back.
     Audio format: 8kHz mulaw (base64 encoded in JSON messages)
+
+    Supports two modes:
+    - Legacy: STT -> LLM -> TTS (PhoneCallProcessor)
+    - PersonaPlex: Direct speech-to-speech (PersonaPlexProcessor)
     """
-    from ...comms.phone_processor import (
-        get_call_processor,
-        create_call_processor,
-        remove_call_processor,
-    )
+    use_personaplex = comms_settings.personaplex_enabled
+
+    if use_personaplex:
+        from ...comms.personaplex_processor import (
+            get_personaplex_processor,
+            create_personaplex_processor,
+            remove_personaplex_processor,
+        )
+    else:
+        from ...comms.phone_processor import (
+            get_call_processor,
+            create_call_processor,
+            remove_call_processor,
+        )
 
     await websocket.accept()
-    logger.info("Audio stream connected for call %s", call_sid)
+    logger.info(
+        "Audio stream connected for call %s (mode=%s)",
+        call_sid,
+        "personaplex" if use_personaplex else "legacy"
+    )
 
     stream_sid = None
     processor = None
@@ -518,19 +536,48 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
             await websocket.close()
             return
 
-        # Get or create call processor
-        processor = get_call_processor(call_sid)
-        if processor is None:
-            from_number = call.from_number if call else ""
-            to_number = call.to_number if call else ""
-            processor = create_call_processor(
-                call_sid=call_sid,
-                from_number=from_number,
-                to_number=to_number,
-                context_id=context.id,
-                business_context=context,
-            )
-            logger.info("Created processor for call %s", call_sid)
+        # Get or create call processor based on mode
+        from_number = call.from_number if call else ""
+        to_number = call.to_number if call else ""
+
+        if use_personaplex:
+            processor = get_personaplex_processor(call_sid)
+            if processor is None:
+                async def send_audio(audio_b64: str):
+                    """Callback to send audio back to caller."""
+                    if stream_sid:
+                        await websocket.send_json({
+                            "event": "media",
+                            "streamSid": stream_sid,
+                            "media": {"payload": audio_b64},
+                        })
+
+                processor = create_personaplex_processor(
+                    call_sid=call_sid,
+                    from_number=from_number,
+                    to_number=to_number,
+                    context_id=context.id,
+                    business_context=context,
+                    on_audio_ready=lambda b64: asyncio.create_task(send_audio(b64)),
+                )
+                connected = await processor.connect()
+                if not connected:
+                    logger.error("Failed to connect PersonaPlex for %s", call_sid)
+                    await remove_personaplex_processor(call_sid)
+                    await websocket.close()
+                    return
+                logger.info("Created PersonaPlex processor for call %s", call_sid)
+        else:
+            processor = get_call_processor(call_sid)
+            if processor is None:
+                processor = create_call_processor(
+                    call_sid=call_sid,
+                    from_number=from_number,
+                    to_number=to_number,
+                    context_id=context.id,
+                    business_context=context,
+                )
+                logger.info("Created legacy processor for call %s", call_sid)
 
         while True:
             data = await websocket.receive_json()
@@ -548,8 +595,8 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
                 if processor:
                     processor._state.stream_sid = stream_sid
 
-                # Play greeting via Atlas TTS (unified voice)
-                if processor and context and stream_sid:
+                # Play greeting - PersonaPlex generates its own, legacy uses TTS
+                if processor and context and stream_sid and not use_personaplex:
                     try:
                         # Try cached greeting first for instant playback
                         from ...comms.phone_processor import get_cached_greeting
@@ -577,16 +624,18 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
                             logger.warning("No greeting audio generated")
                     except Exception as e:
                         logger.error("Failed to send greeting: %s", e, exc_info=True)
+                elif use_personaplex:
+                    logger.info("PersonaPlex will generate greeting via text_prompt")
 
             elif event == "media":
                 # Audio data from caller
                 payload = data.get("media", {}).get("payload")
                 if payload and processor:
-                    # Process audio and get response
+                    # Process audio - PersonaPlex sends responses via callback
                     response_audio = await processor.process_audio_chunk(payload)
 
-                    if response_audio and stream_sid:
-                        # Send audio response back
+                    # Only legacy mode returns audio here
+                    if not use_personaplex and response_audio and stream_sid:
                         logger.info(
                             "Sending response audio to caller (%d bytes)",
                             len(response_audio)
@@ -599,7 +648,7 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
                             },
                         })
                         logger.info("Response audio sent successfully")
-                    elif response_audio:
+                    elif not use_personaplex and response_audio:
                         logger.warning(
                             "Response audio generated but no stream_sid"
                         )
@@ -614,7 +663,10 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
         logger.error("Audio stream error for call %s: %s", call_sid, e)
     finally:
         if processor:
-            remove_call_processor(call_sid)
+            if use_personaplex:
+                await remove_personaplex_processor(call_sid)
+            else:
+                remove_call_processor(call_sid)
         logger.info("Audio stream ended for call %s", call_sid)
 
 
