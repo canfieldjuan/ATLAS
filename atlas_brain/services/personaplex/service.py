@@ -7,6 +7,7 @@ Connects to PersonaPlex server for speech-to-speech conversation.
 import asyncio
 import logging
 import ssl
+import time
 from typing import Callable, Optional
 from urllib.parse import urlencode
 
@@ -122,7 +123,7 @@ class PersonaPlexService:
             self._connected = True
             self._audio_converter.reset()
             self._receive_task = asyncio.create_task(self._receive_loop())
-            logger.info("Connected to PersonaPlex")
+            logger.info("Connected to PersonaPlex at %.3f", time.time())
             return True
 
         except Exception as e:
@@ -154,8 +155,11 @@ class PersonaPlexService:
 
     async def _receive_loop(self) -> None:
         """Background task to receive messages from PersonaPlex."""
+        print("[PERSONAPLEX] Receive loop started", flush=True)
+        logger.info("PersonaPlex receive loop started")
         try:
             async for msg in self._ws:
+                print(f"[PERSONAPLEX] WS msg type: {msg.type}", flush=True)
                 if msg.type == aiohttp.WSMsgType.BINARY:
                     await self._handle_message(msg.data)
                 elif msg.type == aiohttp.WSMsgType.ERROR:
@@ -180,10 +184,22 @@ class PersonaPlexService:
         payload = data[1:]
 
         if msg_type == MSG_AUDIO:
+            print(f"[PERSONAPLEX] RX audio: {len(payload)} bytes", flush=True)
+            logger.info(
+                "RX audio from PersonaPlex: %d bytes at %.3f",
+                len(payload),
+                time.time(),
+            )
             if self._audio_callback is not None:
-                self._audio_callback(payload)
+                try:
+                    self._audio_callback(payload)
+                except Exception as e:
+                    logger.error("Audio callback error: %s", e, exc_info=True)
+            else:
+                logger.warning("Audio callback not set, dropping audio")
         elif msg_type == MSG_TEXT:
             text = payload.decode("utf-8", errors="replace")
+            logger.info("RX text from PersonaPlex: %s", text[:50])
             if self._text_callback is not None:
                 self._text_callback(text)
 
@@ -196,6 +212,7 @@ class PersonaPlexService:
         try:
             message = bytes([MSG_AUDIO]) + opus_data
             await self._ws.send_bytes(message)
+            logger.info("TX %d bytes opus at %.3f", len(opus_data), time.time())
             return True
         except Exception as e:
             logger.error("Failed to send audio: %s", e)
@@ -205,6 +222,8 @@ class PersonaPlexService:
         """Send mulaw audio (converted to Opus) to PersonaPlex."""
         try:
             opus_data = self._audio_converter.signalwire_to_personaplex(mulaw_data)
+            if not opus_data:
+                return True  # Buffering, no data to send yet
             return await self.send_audio(opus_data)
         except RuntimeError as e:
             logger.error("Audio conversion failed: %s", e)

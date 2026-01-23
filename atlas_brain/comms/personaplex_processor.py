@@ -152,12 +152,25 @@ class PersonaPlexProcessor:
 
     def _on_audio_response(self, opus_data: bytes) -> None:
         """Handle audio response from PersonaPlex."""
+        logger.info(
+            "PersonaPlex audio response: %d bytes opus",
+            len(opus_data),
+        )
         try:
             converter = self._service.audio_converter
             mulaw_data = converter.personaplex_to_signalwire(opus_data)
+            logger.info(
+                "Converted to mulaw: %d bytes",
+                len(mulaw_data) if mulaw_data else 0,
+            )
             if mulaw_data and self._on_audio_ready:
                 mulaw_b64 = base64.b64encode(mulaw_data).decode("ascii")
+                logger.info("Sending audio to caller via callback")
                 self._on_audio_ready(mulaw_b64)
+            elif not mulaw_data:
+                logger.warning("No mulaw data after conversion")
+            elif not self._on_audio_ready:
+                logger.warning("No audio callback set")
         except RuntimeError as e:
             logger.error("Audio conversion failed: %s", e)
 
@@ -187,7 +200,13 @@ class PersonaPlexProcessor:
             return None
 
         mulaw_data = base64.b64decode(mulaw_b64)
-        await self._service.send_audio_mulaw(mulaw_data)
+        logger.debug(
+            "Sending %d bytes mulaw to PersonaPlex",
+            len(mulaw_data),
+        )
+        sent = await self._service.send_audio_mulaw(mulaw_data)
+        if not sent:
+            logger.warning("Failed to send audio to PersonaPlex")
         return None
 
 

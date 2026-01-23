@@ -29,10 +29,15 @@ def _str_to_bool(value: str) -> bool:
     return value.lower() in ("true", "1", "yes", "on")
 
 
+import logging
+
+logger = logging.getLogger("atlas.personaplex.config")
+
+
 @lru_cache(maxsize=1)
 def get_personaplex_config() -> PersonaPlexConfig:
     """Load PersonaPlex configuration from environment variables."""
-    return PersonaPlexConfig(
+    config = PersonaPlexConfig(
         host=os.environ.get("ATLAS_PERSONAPLEX_HOST", "localhost"),
         port=int(os.environ.get("ATLAS_PERSONAPLEX_PORT", "8998")),
         use_ssl=_str_to_bool(
@@ -48,3 +53,10 @@ def get_personaplex_config() -> PersonaPlexConfig:
             os.environ.get("ATLAS_PERSONAPLEX_READ_TIMEOUT", "30.0")
         ),
     )
+    logger.info(
+        "PersonaPlex config: host=%s port=%d ssl=%s",
+        config.host,
+        config.port,
+        config.use_ssl,
+    )
+    return config

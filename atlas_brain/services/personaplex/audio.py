@@ -17,6 +17,9 @@ PERSONAPLEX_SAMPLE_RATE = 24000
 SAMPLE_WIDTH = 2
 
 
+OPUS_FRAME_SIZE = 1920  # 80ms at 24kHz - matches Mimi codec frame rate (12.5 Hz)
+
+
 class AudioConverter:
     """Bidirectional audio converter for SignalWire <-> PersonaPlex."""
 
@@ -24,6 +27,7 @@ class AudioConverter:
         self._opus_encoder: Optional[object] = None
         self._opus_decoder: Optional[object] = None
         self._sphn_available = False
+        self._pcm_buffer: bytes = b""  # Buffer for accumulating PCM samples
         self._check_sphn()
 
     def _check_sphn(self) -> None:
@@ -83,15 +87,33 @@ class AudioConverter:
         return pcm_8k
 
     def pcm_to_opus(self, pcm_24k: bytes) -> bytes:
-        """Encode PCM audio (24kHz) to Opus."""
+        """Encode PCM audio (24kHz) to Opus with buffering for valid frame sizes."""
         if not self._sphn_available:
             raise RuntimeError("sphn library required for Opus encoding")
         import numpy as np
+
+        # Add to buffer
+        self._pcm_buffer += pcm_24k
+
+        # Calculate bytes needed for one frame (2 bytes per sample)
+        frame_bytes = OPUS_FRAME_SIZE * SAMPLE_WIDTH
+        if len(self._pcm_buffer) < frame_bytes:
+            return b""  # Not enough data yet
+
+        # Process complete frames
         encoder = self._get_opus_encoder()
-        samples = np.frombuffer(pcm_24k, dtype=np.int16).astype(np.float32)
-        samples = samples / 32768.0
-        encoder.append_pcm(samples)
-        return encoder.read_bytes()
+        result = b""
+
+        while len(self._pcm_buffer) >= frame_bytes:
+            frame_data = self._pcm_buffer[:frame_bytes]
+            self._pcm_buffer = self._pcm_buffer[frame_bytes:]
+
+            samples = np.frombuffer(frame_data, dtype=np.int16).astype(np.float32)
+            samples = samples / 32768.0
+            encoder.append_pcm(samples)
+            result += encoder.read_bytes()
+
+        return result
 
     def opus_to_pcm(self, opus_data: bytes) -> bytes:
         """Decode Opus audio to PCM (24kHz)."""
@@ -124,3 +146,4 @@ class AudioConverter:
         """Reset encoder and decoder state for new conversation."""
         self._opus_encoder = None
         self._opus_decoder = None
+        self._pcm_buffer = b""
