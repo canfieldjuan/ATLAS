@@ -93,18 +93,22 @@ class PhoneCallProcessor:
         return self._agent
 
     def _get_stt(self):
-        """Lazy load STT service."""
-        if self._stt is None:
-            from ..services import stt_registry
-            self._stt = stt_registry.get_active()
-        return self._stt
+        """Lazy load STT service.
+
+        NOTE: Voice services removed. Phone STT/TTS to be re-integrated
+        with V3 voice pipeline.
+        """
+        logger.warning("STT service not available - voice services removed")
+        return None
 
     def _get_tts(self):
-        """Lazy load TTS service."""
-        if self._tts is None:
-            from ..services import tts_registry
-            self._tts = tts_registry.get_active()
-        return self._tts
+        """Lazy load TTS service.
+
+        NOTE: Voice services removed. Phone STT/TTS to be re-integrated
+        with V3 voice pipeline.
+        """
+        logger.warning("TTS service not available - voice services removed")
+        return None
 
     async def synthesize_greeting(self, text: str) -> Optional[str]:
         """
@@ -392,15 +396,14 @@ async def warm_greeting_cache(contexts: list[Any]) -> None:
     """
     Pre-synthesize greetings for all contexts at startup.
 
+    NOTE: Voice services removed. Phone TTS to be re-integrated
+    with V3 voice pipeline.
+
     Args:
         contexts: List of BusinessContext objects
     """
-    from ..services import tts_registry
-
-    tts = tts_registry.get_active()
-    if tts is None:
-        logger.warning("TTS not available for greeting cache warmup")
-        return
+    logger.warning("TTS not available for greeting cache warmup - voice services removed")
+    return
 
     # Create a temporary processor for audio conversion
     temp_state = PhoneCallState(

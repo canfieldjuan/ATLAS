@@ -1,20 +1,23 @@
 """
 Context aggregation for Atlas Brain.
 
-Provides runtime context tracking for:
-- Who's in the room (face IDs, speaker IDs)
-- What's visible (objects, scenes)
-- Recent audio events
-- Device states
-- Conversation history
-
-Note: The old orchestration pipeline has been replaced by Pipecat.
-See atlas_brain/pipecat/ for the voice pipeline.
+Provides:
+- Runtime context tracking (faces, speakers, objects, devices)
+- Global CUDA lock to prevent conflicts between services
 """
 
+import asyncio
+import logging
+
+logger = logging.getLogger("atlas.orchestration")
+
 from .context import ContextAggregator, get_context
+
+# Global CUDA lock to prevent conflicts between vision services (YOLO)
+cuda_lock = asyncio.Lock()
 
 __all__ = [
     "ContextAggregator",
     "get_context",
+    "cuda_lock",
 ]
