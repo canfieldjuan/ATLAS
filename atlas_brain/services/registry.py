@@ -9,11 +9,11 @@ import logging
 from threading import Lock
 from typing import Any, Callable, Generic, Optional, Type, TypeVar
 
-from .protocols import AudioEventService, LLMService, ModelInfo, OmniService, SpeakerIDService, STTService, TTSService, VLMService, VOSService
+from .protocols import LLMService, ModelInfo, VLMService, VOSService
 
 logger = logging.getLogger("atlas.registry")
 
-T = TypeVar("T", VLMService, STTService, LLMService, TTSService, AudioEventService, SpeakerIDService, VOSService, OmniService)
+T = TypeVar("T", VLMService, LLMService, VOSService)
 
 
 class ServiceRegistry(Generic[T]):
@@ -127,9 +127,9 @@ class ServiceRegistry(Generic[T]):
         return self._active_name == name
 
 
-# Global registries for VLM and STT services
+# Global registries for VLM and LLM services
 vlm_registry: ServiceRegistry[VLMService] = ServiceRegistry("VLM")
-stt_registry: ServiceRegistry[STTService] = ServiceRegistry("STT")
+llm_registry: ServiceRegistry[LLMService] = ServiceRegistry("LLM")
 
 
 def register_vlm(name: str) -> Callable[[Type[VLMService]], Type[VLMService]]:
@@ -140,55 +140,10 @@ def register_vlm(name: str) -> Callable[[Type[VLMService]], Type[VLMService]]:
     return decorator
 
 
-def register_stt(name: str) -> Callable[[Type[STTService]], Type[STTService]]:
-    """Decorator to register an STT implementation."""
-    def decorator(cls: Type[STTService]) -> Type[STTService]:
-        stt_registry.register(name, cls)
-        return cls
-    return decorator
-
-
-# Global registries for LLM and TTS services
-llm_registry: ServiceRegistry[LLMService] = ServiceRegistry("LLM")
-tts_registry: ServiceRegistry[TTSService] = ServiceRegistry("TTS")
-
-
 def register_llm(name: str) -> Callable[[Type[LLMService]], Type[LLMService]]:
     """Decorator to register an LLM implementation."""
     def decorator(cls: Type[LLMService]) -> Type[LLMService]:
         llm_registry.register(name, cls)
-        return cls
-    return decorator
-
-
-def register_tts(name: str) -> Callable[[Type[TTSService]], Type[TTSService]]:
-    """Decorator to register a TTS implementation."""
-    def decorator(cls: Type[TTSService]) -> Type[TTSService]:
-        tts_registry.register(name, cls)
-        return cls
-    return decorator
-
-
-# Global registry for audio event detection services
-audio_events_registry: ServiceRegistry[AudioEventService] = ServiceRegistry("AudioEvents")
-
-
-def register_audio_events(name: str) -> Callable[[Type[AudioEventService]], Type[AudioEventService]]:
-    """Decorator to register an audio event detection implementation."""
-    def decorator(cls: Type[AudioEventService]) -> Type[AudioEventService]:
-        audio_events_registry.register(name, cls)
-        return cls
-    return decorator
-
-
-# Global registry for speaker identification services
-speaker_id_registry: ServiceRegistry[SpeakerIDService] = ServiceRegistry("SpeakerID")
-
-
-def register_speaker_id(name: str) -> Callable[[Type[SpeakerIDService]], Type[SpeakerIDService]]:
-    """Decorator to register a speaker identification implementation."""
-    def decorator(cls: Type[SpeakerIDService]) -> Type[SpeakerIDService]:
-        speaker_id_registry.register(name, cls)
         return cls
     return decorator
 
@@ -201,17 +156,5 @@ def register_vos(name: str) -> Callable[[Type[VOSService]], Type[VOSService]]:
     """Decorator to register a VOS implementation."""
     def decorator(cls: Type[VOSService]) -> Type[VOSService]:
         vos_registry.register(name, cls)
-        return cls
-    return decorator
-
-
-# Global registry for Omni (speech-to-speech) services
-omni_registry: ServiceRegistry[OmniService] = ServiceRegistry("Omni")
-
-
-def register_omni(name: str) -> Callable[[Type[OmniService]], Type[OmniService]]:
-    """Decorator to register an Omni (speech-to-speech) implementation."""
-    def decorator(cls: Type[OmniService]) -> Type[OmniService]:
-        omni_registry.register(name, cls)
         return cls
     return decorator
