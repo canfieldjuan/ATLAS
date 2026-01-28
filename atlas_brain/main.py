@@ -138,6 +138,17 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to load tool router: %s", e)
 
+    # Preload intent router if enabled (DistilBERT for fast query classification)
+    if settings.intent_router.enabled:
+        try:
+            from .services.intent_router import get_intent_router
+            logger.info("Preloading intent router...")
+            router = get_intent_router()
+            await router.load()
+            logger.info("Intent router preloaded")
+        except Exception as e:
+            logger.error("Failed to preload intent router: %s", e)
+
     # Register test devices for development
     try:
         from .capabilities.devices import register_test_devices
