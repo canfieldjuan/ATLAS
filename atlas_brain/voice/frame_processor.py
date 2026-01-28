@@ -69,7 +69,6 @@ class FrameProcessor:
         self.interrupt_speech_counter = 0
         self._frame_count = 0
         self._streaming_active = False
-        self._max_wake_score = 0.0
         self._state_transitions = 0
         self._last_partial = ""
 
@@ -188,10 +187,6 @@ class FrameProcessor:
             wake_scores = {}
             max_score = 0.0
             detected = False
-
-        # Track max wake score seen for debugging
-        if max_score > self._max_wake_score:
-            self._max_wake_score = max_score
 
         self._frame_count += 1
 

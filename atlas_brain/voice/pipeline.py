@@ -301,6 +301,27 @@ class NemotronAsrStreamingClient:
         # Get final transcript
         return self.finalize()
 
+    def transcribe_pcm(self, pcm_bytes: bytes, sample_rate: int) -> Optional[str]:
+        """Transcribe PCM audio directly (avoids WAV encode/decode).
+
+        Args:
+            pcm_bytes: Raw PCM audio bytes (int16, mono)
+            sample_rate: Sample rate (for logging only)
+
+        Returns:
+            Transcript text
+        """
+        if not self._connected:
+            if not self.connect():
+                return None
+
+        chunk_size = 2560  # 80ms at 16kHz, int16
+        for i in range(0, len(pcm_bytes), chunk_size):
+            chunk = pcm_bytes[i : i + chunk_size]
+            self.send_audio(chunk)
+
+        return self.finalize()
+
     @property
     def is_connected(self) -> bool:
         """Check if client is connected."""
@@ -692,8 +713,12 @@ class VoicePipeline:
 
     def _handle_command(self, pcm_bytes: bytes):
         """Handle a completed voice command."""
-        wav_bytes = pcm_to_wav_bytes(pcm_bytes, self.sample_rate)
-        transcript = self.asr_client.transcribe(wav_bytes, self.sample_rate)
+        # Use PCM directly if client supports it (avoids WAV encode/decode)
+        if hasattr(self.asr_client, "transcribe_pcm"):
+            transcript = self.asr_client.transcribe_pcm(pcm_bytes, self.sample_rate)
+        else:
+            wav_bytes = pcm_to_wav_bytes(pcm_bytes, self.sample_rate)
+            transcript = self.asr_client.transcribe(wav_bytes, self.sample_rate)
         if not transcript:
             return
         logger.info("ASR: %s", transcript)
