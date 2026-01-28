@@ -318,7 +318,7 @@ class SentenceBuffer:
     SENTENCE_ENDINGS = ".!?"
 
     def __init__(self):
-        self._buffer = ""
+        self._tokens: list[str] = []
 
     def add_token(self, token: str) -> Optional[str]:
         """
@@ -330,24 +330,24 @@ class SentenceBuffer:
         Returns:
             Complete sentence if buffer ends with sentence punctuation, else None
         """
-        self._buffer += token
-        stripped = self._buffer.strip()
-        if stripped and stripped[-1] in self.SENTENCE_ENDINGS:
-            self._buffer = ""
-            return stripped
+        self._tokens.append(token)
+        combined = "".join(self._tokens).strip()
+        if combined and combined[-1] in self.SENTENCE_ENDINGS:
+            self._tokens.clear()
+            return combined
         return None
 
     def flush(self) -> Optional[str]:
         """Flush remaining buffer content."""
-        if self._buffer.strip():
-            content = self._buffer.strip()
-            self._buffer = ""
-            return content
+        combined = "".join(self._tokens).strip()
+        if combined:
+            self._tokens.clear()
+            return combined
         return None
 
     def clear(self):
         """Clear the buffer."""
-        self._buffer = ""
+        self._tokens.clear()
 
 
 class PiperTTS:

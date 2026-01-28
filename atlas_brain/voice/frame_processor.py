@@ -125,6 +125,32 @@ class FrameProcessor:
         self._conversation_speech_counter = 0
         self._conversation_silence_counter = 0
 
+    def _connect_streaming_asr(self, context: str = "") -> bool:
+        """Connect streaming ASR client if available.
+
+        Args:
+            context: Optional context string for logging (e.g., "for recording")
+
+        Returns:
+            True if connected, False otherwise
+        """
+        if self.streaming_asr_client is None:
+            return False
+        try:
+            if self.streaming_asr_client.connect():
+                self._streaming_active = True
+                if context:
+                    logger.info("Streaming ASR connected %s", context)
+                return True
+            else:
+                self._streaming_active = False
+                logger.warning("Streaming ASR connection failed, using batch mode")
+                return False
+        except Exception as e:
+            logger.warning("Error connecting streaming ASR: %s", e)
+            self._streaming_active = False
+            return False
+
     def process_frame(
         self,
         frame_bytes: bytes,
@@ -210,17 +236,7 @@ class FrameProcessor:
             self.segmenter.reset()
 
             # Connect streaming ASR if available
-            if self.streaming_asr_client is not None:
-                try:
-                    if self.streaming_asr_client.connect():
-                        self._streaming_active = True
-                        logger.info("Streaming ASR connected for recording")
-                    else:
-                        self._streaming_active = False
-                        logger.warning("Streaming ASR connection failed, using batch mode")
-                except Exception as e:
-                    logger.warning("Error connecting streaming ASR: %s", e)
-                    self._streaming_active = False
+            self._connect_streaming_asr("for recording")
 
             # Trigger LLM prefill in background while recording
             if self.on_wake_detected is not None:
@@ -248,16 +264,7 @@ class FrameProcessor:
                     self.segmenter.reset()
 
                     # Connect streaming ASR if available
-                    if self.streaming_asr_client is not None:
-                        try:
-                            if self.streaming_asr_client.connect():
-                                self._streaming_active = True
-                                logger.info("Streaming ASR connected for conversation follow-up")
-                            else:
-                                self._streaming_active = False
-                        except Exception as e:
-                            logger.warning("Error connecting streaming ASR: %s", e)
-                            self._streaming_active = False
+                    self._connect_streaming_asr("for conversation follow-up")
 
                     # Include this frame in the recording
                     self.segmenter.add_frame(frame_bytes, is_speech)
@@ -280,14 +287,7 @@ class FrameProcessor:
                 )
                 self.state = "recording"
                 self.segmenter.reset()
-
-                if self.streaming_asr_client is not None:
-                    try:
-                        if self.streaming_asr_client.connect():
-                            self._streaming_active = True
-                    except Exception as e:
-                        logger.warning("Error connecting streaming ASR: %s", e)
-                        self._streaming_active = False
+                self._connect_streaming_asr("for wake word re-engagement")
                 return
 
             # No speech or wake word - stay in conversing, timer continues
