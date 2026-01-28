@@ -92,6 +92,16 @@ class RecognitionConfig(BaseSettings):
     max_tracked_persons: int = Field(default=10, description="Max tracked persons")
 
 
+class PresenceConfig(BaseSettings):
+    """Presence tracking configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_VISION_PRESENCE_")
+
+    enabled: bool = Field(default=True, description="Enable presence tracking")
+    espresense_enabled: bool = Field(default=True, description="Use ESPresense BLE")
+    camera_enabled: bool = Field(default=True, description="Use camera detection")
+
+
 class Settings(BaseSettings):
     """Main settings aggregator."""
 
@@ -104,6 +114,7 @@ class Settings(BaseSettings):
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     detection: DetectionConfig = Field(default_factory=DetectionConfig)
     recognition: RecognitionConfig = Field(default_factory=RecognitionConfig)
+    presence: PresenceConfig = Field(default_factory=PresenceConfig)
 
     # Logging
     log_level: str = Field(default="INFO", description="Log level")

@@ -73,10 +73,53 @@ async def lifespan(app: FastAPI):
             logger.warning("Failed to connect MQTT publisher")
             mqtt_publisher = None
 
+    # Initialize presence service
+    presence_service = None
+    espresense_subscriber = None
+    camera_consumer = None
+    if settings.presence.enabled:
+        from ..presence import (
+            get_presence_service,
+            start_espresense_subscriber,
+            stop_espresense_subscriber,
+            start_camera_presence_consumer,
+            presence_config,
+        )
+
+        presence_service = get_presence_service()
+        await presence_service.start()
+        logger.info("Presence service started")
+
+        # Start ESPresense subscriber if MQTT enabled
+        if presence_config.espresense_enabled and settings.mqtt.enabled:
+            espresense_subscriber = await start_espresense_subscriber(
+                mqtt_host=settings.mqtt.host,
+                mqtt_port=settings.mqtt.port,
+                mqtt_username=settings.mqtt.username,
+                mqtt_password=settings.mqtt.password,
+            )
+            if espresense_subscriber:
+                logger.info("ESPresense BLE tracking enabled")
+
+        # Start camera presence consumer if detection enabled
+        if presence_config.camera_enabled and settings.detection.enabled:
+            camera_consumer = await start_camera_presence_consumer()
+            if camera_consumer:
+                logger.info("Camera presence detection enabled")
+
     yield
 
     # Shutdown
     logger.info("Atlas Vision shutting down")
+
+    # Stop presence service
+    if presence_service and presence_service.is_running:
+        if espresense_subscriber:
+            from ..presence import stop_espresense_subscriber
+            await stop_espresense_subscriber()
+            logger.info("ESPresense subscriber stopped")
+        await presence_service.stop()
+        logger.info("Presence service stopped")
 
     # Stop MQTT publisher
     if mqtt_publisher and mqtt_publisher.is_connected:
@@ -118,6 +161,7 @@ def create_app() -> FastAPI:
     from .security import router as security_router
     from .tracks import router as tracks_router
     from .recognition import router as recognition_router
+    from .presence import router as presence_router
 
     application.include_router(health_router, tags=["health"])
     application.include_router(cameras_router, prefix="/cameras", tags=["cameras"])
@@ -125,6 +169,7 @@ def create_app() -> FastAPI:
     application.include_router(security_router, prefix="/security", tags=["security"])
     application.include_router(tracks_router, prefix="/tracks", tags=["tracks"])
     application.include_router(recognition_router, prefix="/recognition", tags=["recognition"])
+    application.include_router(presence_router, prefix="/presence", tags=["presence"])
 
     return application
 
