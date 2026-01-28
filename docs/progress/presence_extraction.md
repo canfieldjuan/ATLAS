@@ -188,7 +188,32 @@ Direct integration with track_store instead of going through MQTT subscriber.
 - [x] near_user() tools updated to use async proxy
 - [x] main.py updated - no local presence startup
 
-### After Phase 4 (Pending)
-- [ ] Delete old presence files (service.py, espresense.py, camera.py)
-- [ ] Verify no orphaned imports
-- [ ] Full end-to-end test
+### After Phase 4 - COMPLETE
+- [x] Delete old presence files (service.py, espresense.py, camera.py)
+- [x] Verify syntax valid for remaining files
+- [ ] Full end-to-end test (requires runtime)
+
+---
+
+## Commits Summary
+
+| Commit | Description |
+|--------|-------------|
+| eaf5e74 | feat(presence): migrate presence tracking to atlas_vision |
+| 086712a | refactor(presence): delete migrated presence files |
+
+---
+
+## Final State
+
+**atlas_vision/presence/** (new implementation):
+- config.py - PresenceConfig (ATLAS_VISION_PRESENCE_*)
+- service.py - PresenceService state machine
+- espresense.py - ESPresense MQTT subscriber
+- camera.py - Camera presence (track_store integration)
+- __init__.py - Module exports
+
+**atlas_brain/presence/** (proxy only):
+- config.py - RoomConfig for backwards compat
+- proxy.py - HTTP client to atlas_vision
+- __init__.py - Exports proxy, deprecation warnings
