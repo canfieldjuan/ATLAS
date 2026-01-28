@@ -533,6 +533,10 @@ class VoiceClientConfig(BaseSettings):
     block_size: int = Field(default=1280, description="Audio block size (80ms at 16kHz)")
     use_arecord: bool = Field(default=False, description="Use arecord instead of PortAudio")
     arecord_device: str = Field(default="default", description="ALSA device for arecord")
+    input_device: str | None = Field(
+        default=None,
+        description="PortAudio input device index or name (e.g., 'sysdefault:CARD=SoloCast' or '13')",
+    )
     audio_gain: float = Field(default=1.0, description="Software gain for microphone")
 
     # Wake word settings
@@ -542,10 +546,20 @@ class VoiceClientConfig(BaseSettings):
     )
     wake_threshold: float = Field(default=0.25, description="Wake word detection threshold")
 
-    # ASR settings
-    asr_url: str | None = Field(default=None, description="Nemotron ASR HTTP endpoint URL")
+    # ASR settings (HTTP batch mode)
+    asr_url: str | None = Field(default="http://localhost:8081", description="Nemotron ASR HTTP endpoint URL")
     asr_api_key: str | None = Field(default=None, description="ASR API key if required")
     asr_timeout: int = Field(default=30, description="ASR request timeout in seconds")
+
+    # ASR streaming settings (WebSocket mode)
+    asr_streaming_enabled: bool = Field(
+        default=True,
+        description="Use WebSocket streaming ASR instead of HTTP batch mode"
+    )
+    asr_ws_url: str | None = Field(
+        default="ws://localhost:8081/v1/asr/stream",
+        description="Nemotron ASR WebSocket URL (e.g., ws://localhost:8080/v1/asr/stream)"
+    )
 
     # TTS settings (Piper)
     piper_binary: str | None = Field(default=None, description="Path to Piper binary")
@@ -560,6 +574,7 @@ class VoiceClientConfig(BaseSettings):
     silence_ms: int = Field(default=500, description="Silence duration to end utterance")
     hangover_ms: int = Field(default=300, description="Hangover time before finalizing")
     max_command_seconds: int = Field(default=5, description="Maximum command duration")
+    min_command_ms: int = Field(default=1500, description="Minimum recording time before silence can finalize (grace period)")
 
     # Interrupt settings
     stop_hotkey: bool = Field(default=True, description="Enable 's' hotkey to stop TTS")
@@ -575,6 +590,42 @@ class VoiceClientConfig(BaseSettings):
 
     # Processing settings
     command_workers: int = Field(default=2, description="Thread pool size for command processing")
+
+    # Debug logging
+    debug_logging: bool = Field(
+        default=False,
+        description="Enable verbose debug logging for voice pipeline troubleshooting"
+    )
+    log_interval_frames: int = Field(
+        default=160,
+        description="Log audio stats every N frames (160 frames = ~10 seconds at 16kHz/1280 block)"
+    )
+
+    # Conversation mode settings - allow follow-ups without wake word
+    conversation_mode_enabled: bool = Field(
+        default=False,
+        description="Enable multi-turn conversation mode (no wake word for follow-ups)"
+    )
+    conversation_timeout_ms: int = Field(
+        default=8000,
+        description="Timeout in ms to stay in conversation mode after TTS completes"
+    )
+    conversation_start_delay_ms: int = Field(
+        default=500,
+        description="Delay in ms after TTS ends before entering conversation mode (prevents echo detection)"
+    )
+    conversation_speech_frames: int = Field(
+        default=3,
+        description="Consecutive VAD speech frames required to trigger recording in conversation mode"
+    )
+    conversation_speech_tolerance: int = Field(
+        default=2,
+        description="Silence frames to tolerate before resetting speech counter (handles brief pauses)"
+    )
+    conversation_goodbye_phrases: list[str] = Field(
+        default=["goodbye", "bye", "that's all", "thanks that's it", "nevermind"],
+        description="Phrases that explicitly end conversation mode"
+    )
 
 
 class WebcamConfig(BaseSettings):

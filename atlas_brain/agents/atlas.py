@@ -7,6 +7,7 @@ The Orchestrator handles audio I/O and delegates to this Agent.
 
 import asyncio
 import logging
+import re
 import time
 from datetime import datetime
 from typing import Any, Optional
@@ -30,6 +31,20 @@ logger = logging.getLogger("atlas.agents.atlas")
 
 # Global CUDA lock - shared with orchestrator to prevent conflicts
 _cuda_lock: Optional[asyncio.Lock] = None
+
+# Wake word strip pattern - removes "hey jarvis", "hey atlas", etc. from start of query
+_WAKE_WORD_PATTERN = re.compile(
+    r"^(?:hey\s+)?(?:jarvis|atlas|computer|assistant)[,.\s]*",
+    re.IGNORECASE,
+)
+
+
+def _strip_wake_word(text: str) -> str:
+    """Strip wake word prefix from text."""
+    stripped = _WAKE_WORD_PATTERN.sub("", text).strip()
+    if stripped != text.strip():
+        logger.debug("Stripped wake word: '%s' -> '%s'", text[:30], stripped[:30])
+    return stripped if stripped else text
 
 
 def _get_cuda_lock() -> asyncio.Lock:
@@ -156,6 +171,9 @@ class AtlasAgent(BaseAgent):
         """
         # Initialize mode agents on first run
         self._init_mode_agents()
+
+        # Strip wake word from input (ASR may include "Hey Jarvis" etc.)
+        context.input_text = _strip_wake_word(context.input_text)
 
         # 1. Check timeout BEFORE updating activity (skip if workflow active)
         if not self._workflow_state:
@@ -734,60 +752,36 @@ class AtlasAgent(BaseAgent):
         think_result: ThinkResult,
         act_result: Optional[ActResult],
     ) -> str:
-        """Generate response using LLM tool calling loop."""
-        from ..services.protocols import Message
-        from ..services.tool_executor import execute_with_tools
+        """Generate response using Gorilla for tools, Cloud LLM for chat."""
+        from ..config import settings
 
-        llm = self._get_llm()
-        if llm is None:
-            return f"I heard: {context.input_text}"
+        # Try Gorilla router first (local tool calling)
+        if settings.tool_router.enabled:
+            try:
+                from ..services.tool_router import process_query
 
-        # Build system prompt - keep it simple for reliable tool calling
-        system_msg = "You are a helpful assistant. Use tools when needed."
+                gorilla_result = await process_query(context.input_text)
 
-        messages = [Message(role="system", content=system_msg)]
+                if not gorilla_result.needs_cloud_llm:
+                    # Gorilla handled it - tool was executed
+                    logger.info(
+                        "Gorilla executed tools: %s (%.0fms)",
+                        gorilla_result.tools_executed,
+                        gorilla_result.latency_ms,
+                    )
+                    # Store tools in act_result for API response
+                    if act_result is not None:
+                        for tool_name in gorilla_result.tools_executed:
+                            act_result.action_results.append({"tool": tool_name})
+                    return gorilla_result.response
 
-        # Add conversation history
-        if context.conversation_history:
-            for turn in context.conversation_history[-6:]:
-                messages.append(Message(
-                    role=turn.get("role", "user"),
-                    content=turn.get("content", ""),
-                ))
+                logger.info("Gorilla: no tool detected, routing to cloud LLM")
 
-        # Add current user message
-        messages.append(Message(role="user", content=context.input_text))
+            except Exception as e:
+                logger.warning("Gorilla router failed, falling back to cloud: %s", e)
 
-        # Get target tool from intent (if available)
-        # Passing a single tool to the LLM is MUCH more reliable (100% vs ~33%)
-        target_tool = None
-        if think_result.intent and think_result.intent.target_name:
-            target_tool = think_result.intent.target_name
-            logger.info("Tool use with target: %s", target_tool)
-
-        # Execute with tool calling loop
-        # Lower temperature (0.3) for more consistent tool calling
-        cuda_lock = _get_cuda_lock()
-        async with cuda_lock:
-            result = await execute_with_tools(
-                llm=llm,
-                messages=messages,
-                max_tokens=150,
-                temperature=0.3,
-                target_tool=target_tool,
-            )
-
-        response = result.get("response", "").strip()
-        tools_executed = result.get("tools_executed", [])
-
-        if tools_executed:
-            logger.info("Tools executed via LLM: %s", tools_executed)
-            # Store tools in act_result so they flow to the API response
-            if act_result is not None:
-                for tool_name in tools_executed:
-                    act_result.action_results.append({"tool": tool_name})
-
-        return response if response else "I couldn't process that request."
+        # Fall back to Cloud LLM for chat (no tool calling)
+        return await self._generate_llm_response(context, think_result, act_result)
 
     async def store_turn(
         self,

@@ -6,6 +6,7 @@ Supports optional streaming ASR for reduced latency.
 """
 
 import logging
+import threading
 from typing import Any, Callable, Dict, Optional, Union
 
 import numpy as np
@@ -41,6 +42,11 @@ class FrameProcessor:
         streaming_asr_client: Optional[Any] = None,
         debug_logging: bool = False,
         log_interval_frames: int = 160,
+        conversation_mode_enabled: bool = False,
+        conversation_timeout_ms: int = 8000,
+        conversation_speech_frames: int = 3,
+        conversation_speech_tolerance: int = 2,
+        on_conversation_timeout: Optional[Callable[[], None]] = None,
     ):
         self.wake_predict = wake_predict
         self.wake_threshold = wake_threshold
@@ -67,6 +73,16 @@ class FrameProcessor:
         self._state_transitions = 0
         self._last_partial = ""
 
+        # Conversation mode settings
+        self.conversation_mode_enabled = conversation_mode_enabled
+        self.conversation_timeout_ms = conversation_timeout_ms
+        self.conversation_speech_frames = max(1, conversation_speech_frames)
+        self.conversation_speech_tolerance = max(1, conversation_speech_tolerance)
+        self.on_conversation_timeout = on_conversation_timeout
+        self._conversation_timer: Optional[threading.Timer] = None
+        self._conversation_speech_counter = 0
+        self._conversation_silence_counter = 0
+
         # Warn if gain is too high (causes clipping that destroys wake word patterns)
         if audio_gain > 5.0:
             logger.warning(
@@ -81,6 +97,8 @@ class FrameProcessor:
                     allow_wake_barge_in, interrupt_on_speech)
         logger.info("  streaming_asr=%s", streaming_asr_client is not None)
         logger.info("  debug_logging=%s, log_interval=%d", debug_logging, log_interval_frames)
+        logger.info("  conversation_mode=%s, timeout=%dms, speech_frames=%d",
+                    conversation_mode_enabled, conversation_timeout_ms, self.conversation_speech_frames)
 
     def reset(self):
         """Reset processor to listening state."""
@@ -100,8 +118,12 @@ class FrameProcessor:
             except Exception as e:
                 logger.warning("Error disconnecting streaming ASR: %s", e)
         self._streaming_active = False
+        # Cancel conversation timer if active
+        self._cancel_conversation_timer()
         self.state = "listening"
         self.interrupt_speech_counter = 0
+        self._conversation_speech_counter = 0
+        self._conversation_silence_counter = 0
 
     def process_frame(
         self,
@@ -206,6 +228,71 @@ class FrameProcessor:
                 self.on_wake_detected()
             return
 
+        # Conversation mode - accept speech without wake word
+        if self.state == "conversing":
+            # Check for speech - require consecutive frames to avoid false triggers
+            is_speech = self._is_speech(frame_bytes)
+            if is_speech:
+                self._conversation_speech_counter += 1
+                self._conversation_silence_counter = 0  # Reset silence on speech
+                if self._conversation_speech_counter >= self.conversation_speech_frames:
+                    self._cancel_conversation_timer()
+                    self._state_transitions += 1
+                    logger.info(
+                        "SPEECH DETECTED in conversation mode after %d frames, recording (transition=%d)",
+                        self._conversation_speech_counter, self._state_transitions,
+                    )
+                    self._conversation_speech_counter = 0
+                    self._conversation_silence_counter = 0
+                    self.state = "recording"
+                    self.segmenter.reset()
+
+                    # Connect streaming ASR if available
+                    if self.streaming_asr_client is not None:
+                        try:
+                            if self.streaming_asr_client.connect():
+                                self._streaming_active = True
+                                logger.info("Streaming ASR connected for conversation follow-up")
+                            else:
+                                self._streaming_active = False
+                        except Exception as e:
+                            logger.warning("Error connecting streaming ASR: %s", e)
+                            self._streaming_active = False
+
+                    # Include this frame in the recording
+                    self.segmenter.add_frame(frame_bytes, is_speech)
+                    return
+            else:
+                # Tolerate brief silences - only reset after N consecutive silence frames
+                if self._conversation_speech_counter > 0:
+                    self._conversation_silence_counter += 1
+                    if self._conversation_silence_counter >= self.conversation_speech_tolerance:
+                        self._conversation_speech_counter = 0
+                        self._conversation_silence_counter = 0
+
+            # Also allow wake word to re-engage during conversation
+            if detected:
+                self._cancel_conversation_timer()
+                self._state_transitions += 1
+                logger.info(
+                    "WAKE WORD re-engaged during conversation (transition=%d)",
+                    self._state_transitions,
+                )
+                self.state = "recording"
+                self.segmenter.reset()
+
+                if self.streaming_asr_client is not None:
+                    try:
+                        if self.streaming_asr_client.connect():
+                            self._streaming_active = True
+                    except Exception as e:
+                        logger.warning("Error connecting streaming ASR: %s", e)
+                        self._streaming_active = False
+                return
+
+            # No speech or wake word - stay in conversing, timer continues
+            return
+
         # Recording state
         if self.state == "recording":
             # Stream audio to ASR if streaming mode is active
@@ -247,12 +334,23 @@ class FrameProcessor:
                         transcript = self.streaming_asr_client.finalize()
                         self.streaming_asr_client.disconnect()
                         self._streaming_active = False
+                        last_partial = self._last_partial
                         self._last_partial = ""  # Reset partial tracking
                         if transcript and on_streaming_finalize is not None:
                             logger.info("Streaming transcript: %s", transcript[:100])
                             on_streaming_finalize(transcript)
+                        elif last_partial and on_streaming_finalize is not None:
+                            # Use last partial as fallback
+                            logger.info("Using last partial as transcript: %s", last_partial[:100])
+                            on_streaming_finalize(last_partial)
                         elif transcript:
                             logger.warning("No streaming handler, transcript: %s", transcript[:50])
+                        else:
+                            # No transcript at all - fall back to batch ASR
+                            logger.warning("Streaming ASR empty, falling back to batch")
+                            audio_bytes = self.segmenter.consume_audio()
+                            if audio_bytes and on_finalize is not None:
+                                on_finalize(audio_bytes)
                     except Exception as e:
                         logger.error("Error finalizing streaming ASR: %s", e)
                         try:
@@ -360,3 +458,46 @@ class FrameProcessor:
         if arr.size == 0:
             return 0.0
         return float(np.sqrt(np.mean(arr * arr)))
+
+    # --- Conversation mode methods ---
+
+    def _start_conversation_timer(self) -> None:
+        """Start or reset the conversation timeout timer."""
+        self._cancel_conversation_timer()
+        self._conversation_timer = threading.Timer(
+            self.conversation_timeout_ms / 1000.0,
+            self._on_conversation_timeout_internal
+        )
+        self._conversation_timer.daemon = True
+        self._conversation_timer.start()
+        logger.debug("Conversation timer started: %dms", self.conversation_timeout_ms)
+
+    def _cancel_conversation_timer(self) -> None:
+        """Cancel any active conversation timer."""
+        if self._conversation_timer is not None:
+            self._conversation_timer.cancel()
+            self._conversation_timer = None
+
+    def _on_conversation_timeout_internal(self) -> None:
+        """Handle conversation timeout - return to listening state."""
+        logger.info("Conversation timeout, returning to listening state")
+        self._conversation_timer = None
+        self.state = "listening"
+        if self.on_conversation_timeout is not None:
+            try:
+                self.on_conversation_timeout()
+            except Exception as e:
+                logger.warning("Error in conversation timeout callback: %s", e)
+
+    def enter_conversation_mode(self) -> None:
+        """Enter conversation mode after TTS completes. Called by pipeline."""
+        if not self.conversation_mode_enabled:
+            return
+        if self.state != "listening":
+            logger.warning("enter_conversation_mode called in state=%s, ignoring", self.state)
+            return
+        self.state = "conversing"
+        self._conversation_speech_counter = 0
+        self._conversation_silence_counter = 0
+        self._start_conversation_timer()
+        logger.info("Entered conversation mode (timeout=%dms)", self.conversation_timeout_ms)

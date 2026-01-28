@@ -4,17 +4,20 @@ Voice pipeline for Atlas Brain.
 Main voice-to-voice pipeline that integrates:
 - Wake word detection (OpenWakeWord)
 - Voice Activity Detection (WebRTC VAD)
-- Speech recognition (HTTP ASR)
+- Speech recognition (HTTP or WebSocket streaming ASR)
 - Atlas agent for response generation
 - Text-to-speech (Piper)
 """
 
+import asyncio
 import io
+import json
 import logging
 import os
 import subprocess
 import tempfile
 import threading
+import time
 import uuid
 import wave
 from typing import Any, Callable, Dict, List, Optional
@@ -25,6 +28,13 @@ import sounddevice as sd
 import soundfile as sf
 import webrtcvad
 from openwakeword.model import Model as WakeWordModel
+
+try:
+    import websockets
+    from websockets.sync.client import connect as ws_connect
+    WEBSOCKETS_AVAILABLE = True
+except ImportError:
+    WEBSOCKETS_AVAILABLE = False
 
 from .audio_capture import AudioCapture
 from .command_executor import CommandExecutor
@@ -87,6 +97,219 @@ class NemotronAsrHttpClient:
                 return payload[key]
         logger.warning("Nemotron ASR response missing transcript: %s", payload)
         return None
+
+
+class NemotronAsrStreamingClient:
+    """WebSocket streaming client for Nemotron ASR service.
+
+    Streams audio chunks to the ASR server and receives transcripts.
+    Designed to reduce latency by processing audio incrementally.
+    """
+
+    def __init__(
+        self,
+        url: Optional[str],
+        timeout: int = 30,
+        sample_rate: int = 16000,
+    ):
+        """Initialize streaming ASR client.
+
+        Args:
+            url: WebSocket URL (e.g., ws://localhost:8080/v1/asr/stream)
+            timeout: Connection and receive timeout in seconds
+            sample_rate: Audio sample rate (default 16kHz)
+        """
+        if not WEBSOCKETS_AVAILABLE:
+            raise ImportError(
+                "websockets package required for streaming ASR. "
+                "Install with: pip install websockets"
+            )
+        self.url = url
+        self.timeout = timeout
+        self.sample_rate = sample_rate
+        self._ws: Optional[Any] = None
+        self._lock = threading.Lock()
+        self._connected = False
+        self._last_partial = ""
+
+    def connect(self) -> bool:
+        """Establish WebSocket connection.
+
+        Returns:
+            True if connected successfully
+        """
+        if not self.url:
+            logger.error("No streaming ASR URL configured")
+            return False
+
+        with self._lock:
+            if self._connected and self._ws:
+                return True
+
+            try:
+                self._ws = ws_connect(
+                    self.url,
+                    open_timeout=self.timeout,
+                    close_timeout=5,
+                )
+                self._connected = True
+                self._last_partial = ""
+                logger.info("Streaming ASR connected to %s", self.url)
+                return True
+            except Exception as e:
+                logger.error("Failed to connect to streaming ASR: %s", e)
+                self._ws = None
+                self._connected = False
+                return False
+
+    def disconnect(self) -> None:
+        """Close WebSocket connection."""
+        with self._lock:
+            if self._ws:
+                try:
+                    self._ws.close()
+                except Exception:
+                    pass
+                self._ws = None
+            self._connected = False
+            self._last_partial = ""
+
+    def send_audio(self, pcm_bytes: bytes) -> Optional[str]:
+        """Send audio chunk and return any partial transcript.
+
+        Args:
+            pcm_bytes: Raw PCM audio (int16, mono)
+
+        Returns:
+            Partial transcript if available, None otherwise
+        """
+        if not self._connected or not self._ws:
+            return None
+
+        try:
+            # Send binary audio
+            self._ws.send(pcm_bytes)
+
+            # Check for partial transcript (non-blocking)
+            try:
+                self._ws.socket.setblocking(False)
+                response = self._ws.recv(timeout=0.001)
+                self._ws.socket.setblocking(True)
+                data = json.loads(response)
+                if data.get("type") == "partial":
+                    self._last_partial = data.get("text", "")
+                    return self._last_partial
+            except (TimeoutError, BlockingIOError):
+                self._ws.socket.setblocking(True)
+            except Exception:
+                self._ws.socket.setblocking(True)
+
+            return None
+        except Exception as e:
+            logger.warning("Error sending audio to streaming ASR: %s", e)
+            self._connected = False
+            return None
+
+    def finalize(self) -> Optional[str]:
+        """Request final transcription.
+
+        Returns:
+            Final transcript text, or None on error
+        """
+        if not self._connected or not self._ws:
+            logger.warning("Cannot finalize: not connected to streaming ASR")
+            return None
+
+        try:
+            # Send finalize command
+            self._ws.send(json.dumps({"type": "finalize"}))
+
+            # Wait for final response
+            response = self._ws.recv(timeout=self.timeout)
+            data = json.loads(response)
+
+            if data.get("type") == "final":
+                text = data.get("text", "")
+                duration = data.get("duration_sec", 0)
+                logger.info(
+                    "Streaming ASR finalized: %.2fs -> '%s'",
+                    duration,
+                    text[:50] if text else "(empty)",
+                )
+                return text
+            elif data.get("type") == "error":
+                logger.error("Streaming ASR error: %s", data.get("message"))
+                return None
+            else:
+                logger.warning("Unexpected response type: %s", data.get("type"))
+                return data.get("text")
+
+        except Exception as e:
+            logger.error("Error finalizing streaming ASR: %s", e)
+            self._connected = False
+            return None
+
+    def reset(self) -> None:
+        """Reset the streaming session for a new utterance."""
+        if not self._connected or not self._ws:
+            return
+
+        try:
+            self._ws.send(json.dumps({"type": "reset"}))
+            # Drain any response
+            try:
+                self._ws.recv(timeout=0.5)
+            except Exception:
+                pass
+            self._last_partial = ""
+        except Exception as e:
+            logger.warning("Error resetting streaming ASR: %s", e)
+
+    def transcribe(self, wav_bytes: bytes, sample_rate: int) -> Optional[str]:
+        """Transcribe complete audio (compatibility with HTTP client).
+
+        This method provides compatibility with NemotronAsrHttpClient.
+        For streaming use, prefer connect/send_audio/finalize pattern.
+
+        Args:
+            wav_bytes: WAV audio bytes
+            sample_rate: Sample rate (unused, for compatibility)
+
+        Returns:
+            Transcript text
+        """
+        # Extract PCM from WAV
+        try:
+            buffer = io.BytesIO(wav_bytes)
+            with wave.open(buffer, "rb") as wf:
+                pcm_bytes = wf.readframes(wf.getnframes())
+        except Exception as e:
+            logger.error("Failed to extract PCM from WAV: %s", e)
+            return None
+
+        # Connect if needed
+        if not self._connected:
+            if not self.connect():
+                return None
+
+        # Send all audio
+        chunk_size = 2560  # 80ms at 16kHz, int16
+        for i in range(0, len(pcm_bytes), chunk_size):
+            chunk = pcm_bytes[i : i + chunk_size]
+            self.send_audio(chunk)
+
+        # Get final transcript
+        return self.finalize()
+
+    @property
+    def is_connected(self) -> bool:
+        """Check if client is connected."""
+        return self._connected
+
+    @property
+    def last_partial(self) -> str:
+        """Get the last partial transcript received."""
+        return self._last_partial
 
 
 class PiperTTS:
@@ -193,10 +416,12 @@ class VoicePipeline:
         block_size: int = 1280,
         silence_ms: int = 500,
         max_command_seconds: int = 5,
+        min_command_ms: int = 1500,
         vad_aggressiveness: int = 2,
         hangover_ms: int = 300,
         use_arecord: bool = False,
         arecord_device: str = "default",
+        input_device: Optional[str] = None,
         stop_hotkey: bool = True,
         allow_wake_barge_in: bool = False,
         interrupt_on_speech: bool = False,
@@ -207,8 +432,19 @@ class VoicePipeline:
         command_workers: int = 2,
         audio_gain: float = 1.0,
         prefill_runner: Optional[Callable[[], None]] = None,
+        debug_logging: bool = False,
+        log_interval_frames: int = 160,
+        conversation_mode_enabled: bool = False,
+        conversation_timeout_ms: int = 8000,
+        conversation_start_delay_ms: int = 500,
+        conversation_speech_frames: int = 3,
+        conversation_speech_tolerance: int = 2,
     ):
         self.sample_rate = sample_rate
+        self.conversation_mode_enabled = conversation_mode_enabled
+        self.conversation_timeout_ms = conversation_timeout_ms
+        self.conversation_start_delay_ms = conversation_start_delay_ms
+        self.conversation_speech_tolerance = conversation_speech_tolerance
         self.block_size = block_size
         self.wake_threshold = wake_threshold
         self.asr_client = asr_client
@@ -224,10 +460,13 @@ class VoicePipeline:
             silence_ms=silence_ms,
             hangover_ms=hangover_ms,
             max_command_seconds=max_command_seconds,
+            min_command_ms=min_command_ms,
         )
         self.vad = webrtcvad.Vad(vad_aggressiveness)
 
+        logger.info("Initializing wake word model with paths: %s", wakeword_model_paths)
         self.model = WakeWordModel(wakeword_model_paths=wakeword_model_paths)
+        logger.info("Wake word model initialized successfully")
         self.stop_hotkey = stop_hotkey
         self.stop_hotkey_thread: Optional[threading.Thread] = None
         self.allow_wake_barge_in = allow_wake_barge_in
@@ -245,6 +484,12 @@ class VoicePipeline:
             else None
         )
 
+        # Check if ASR client supports streaming (has connect method)
+        streaming_client = None
+        if hasattr(asr_client, "connect") and hasattr(asr_client, "send_audio"):
+            streaming_client = asr_client
+            logger.info("Streaming ASR client detected for frame processor")
+
         self.frame_processor = FrameProcessor(
             wake_predict=self.model.predict,
             wake_threshold=self.wake_threshold,
@@ -261,6 +506,14 @@ class VoicePipeline:
             audio_gain=audio_gain,
             wake_reset=self.model.reset,
             on_wake_detected=self._trigger_prefill,
+            streaming_asr_client=streaming_client,
+            debug_logging=debug_logging,
+            log_interval_frames=log_interval_frames,
+            conversation_mode_enabled=conversation_mode_enabled,
+            conversation_timeout_ms=conversation_timeout_ms,
+            conversation_speech_frames=conversation_speech_frames,
+            conversation_speech_tolerance=conversation_speech_tolerance,
+            on_conversation_timeout=self._on_conversation_timeout,
         )
 
         self.capture = AudioCapture(
@@ -268,11 +521,15 @@ class VoicePipeline:
             block_size=self.block_size,
             use_arecord=use_arecord,
             arecord_device=arecord_device,
+            input_device=input_device,
+            debug_logging=debug_logging,
+            log_interval_frames=log_interval_frames,
         )
 
         self.command_executor = CommandExecutor(
             handler=self._handle_command,
             max_workers=command_workers,
+            streaming_handler=self._handle_streaming_command,
         )
 
     def start(self):
@@ -305,6 +562,7 @@ class VoicePipeline:
             current_allow_barge_in=self.current_allow_barge_in,
             stop_playback=self._stop_playback,
             on_finalize=self.command_executor.submit,
+            on_streaming_finalize=self.command_executor.submit_streaming,
         )
 
     def _stop_playback(self):
@@ -335,14 +593,59 @@ class VoicePipeline:
             on_done=self._on_playback_done,
         )
 
+    def _handle_streaming_command(self, transcript: str):
+        """Handle a command with transcript from streaming ASR.
+
+        Skips batch ASR transcription since we already have the transcript.
+        """
+        logger.info("_handle_streaming_command called with transcript: %r", transcript)
+        if not transcript:
+            logger.warning("Empty transcript from streaming ASR, returning without TTS")
+            return
+        logger.info("Streaming ASR: %s", transcript)
+
+        context = {"session_id": self.session_id}
+        reply = self.agent_runner(transcript, context)
+
+        if not reply:
+            logger.warning("Agent returned empty reply")
+            return
+        logger.info("Speaking reply: %s", reply[:100] if len(reply) > 100 else reply)
+        self.playback.speak(
+            reply,
+            on_start=self._on_playback_start,
+            on_done=self._on_playback_done,
+        )
+
     def _on_playback_start(self):
         """Called when TTS playback starts."""
         self.frame_processor.interrupt_speech_counter = 0
 
     def _on_playback_done(self):
         """Called when TTS playback ends."""
-        self.model.reset()
-        logger.info("TTS done, wake word model reset")
+        try:
+            logger.info("TTS playback done, resetting wake word model")
+            self.model.reset()
+            logger.info("Wake word model reset after TTS")
+        except Exception as e:
+            logger.error("Error resetting wake word model after TTS: %s", e, exc_info=True)
+
+        # Enter conversation mode if enabled (with delay to avoid echo detection)
+        if self.conversation_mode_enabled:
+            delay_sec = self.conversation_start_delay_ms / 1000.0
+            logger.info("Scheduling conversation mode in %.0fms", self.conversation_start_delay_ms)
+            timer = threading.Timer(delay_sec, self._enter_conversation_mode_delayed)
+            timer.daemon = True
+            timer.start()
+
+    def _enter_conversation_mode_delayed(self):
+        """Enter conversation mode after delay (called by timer)."""
+        self.frame_processor.enter_conversation_mode()
+
+    def _on_conversation_timeout(self):
+        """Called when conversation mode times out."""
+        logger.info("Conversation mode ended (timeout)")
+        # Could play acknowledgment sound here if desired
 
     def _trigger_prefill(self):
         """Trigger LLM system prompt prefill in background.
@@ -352,11 +655,14 @@ class VoicePipeline:
         when the actual request is made.
         """
         if self.prefill_runner is None:
+            logger.debug("No prefill_runner configured")
             return
         # Guard against concurrent prefills
         if self._prefill_in_progress:
+            logger.debug("Prefill already in progress, skipping")
             return
         self._prefill_in_progress = True
+        logger.info("Spawning prefill thread...")
         # Run prefill in background thread to not block audio processing
         thread = threading.Thread(
             target=self._run_prefill,

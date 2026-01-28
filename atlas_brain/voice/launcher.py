@@ -14,7 +14,12 @@ from typing import Any, Dict, Optional
 from ..agents.atlas import get_atlas_agent
 from ..agents.protocols import AgentContext
 from ..config import settings
-from .pipeline import NemotronAsrHttpClient, PiperTTS, VoicePipeline
+from .pipeline import (
+    NemotronAsrHttpClient,
+    NemotronAsrStreamingClient,
+    PiperTTS,
+    VoicePipeline,
+)
 
 logger = logging.getLogger("atlas.voice.launcher")
 
@@ -66,24 +71,29 @@ def _create_prefill_runner():
     """Create a prefill runner to warm up LLM KV cache on wake word detection."""
     from ..services import llm_registry
     from ..services.protocols import Message
+    import time
 
     def runner() -> None:
         """Prefill the LLM system prompt."""
+        start_time = time.perf_counter()
+        logger.info("LLM prefill STARTING...")
+
         if _event_loop is None:
-            logger.debug("No event loop available for prefill")
+            logger.warning("No event loop available for prefill")
             return
 
         llm = llm_registry.get_active()
         if llm is None:
-            logger.debug("No active LLM for prefill")
+            logger.warning("No active LLM for prefill")
             return
 
         # Check if LLM supports prefill
         if not hasattr(llm, "prefill_async"):
-            logger.debug("LLM does not support prefill_async")
+            logger.warning("LLM does not support prefill_async")
             return
 
         messages = [Message(role="system", content=_PREFILL_SYSTEM_PROMPT)]
+        logger.info("Prefill sending system prompt (%d chars)", len(_PREFILL_SYSTEM_PROMPT))
 
         try:
             future = asyncio.run_coroutine_threadsafe(
@@ -92,9 +102,15 @@ def _create_prefill_runner():
             )
             result = future.result(timeout=10.0)
             prefill_ms = result.get("prefill_time_ms", 0)
-            logger.info("LLM prefill: %.1f ms", prefill_ms)
+            prompt_tokens = result.get("prompt_tokens", 0)
+            total_ms = (time.perf_counter() - start_time) * 1000
+            logger.info(
+                "LLM prefill DONE: ollama_time=%.1fms, total=%.1fms, tokens=%d",
+                prefill_ms, total_ms, prompt_tokens
+            )
         except Exception as e:
-            logger.debug("Prefill failed: %s", e)
+            logger.warning("Prefill failed after %.1fms: %s",
+                          (time.perf_counter() - start_time) * 1000, e)
 
     return runner
 
@@ -107,20 +123,56 @@ def create_voice_pipeline() -> Optional[VoicePipeline]:
         logger.info("Voice pipeline disabled in config")
         return None
 
+    # Log full configuration at startup for debugging
+    logger.info("=== Voice Pipeline Configuration ===")
+    logger.info("  enabled=%s", cfg.enabled)
+    logger.info("  sample_rate=%d, block_size=%d", cfg.sample_rate, cfg.block_size)
+    logger.info("  use_arecord=%s, arecord_device=%s", cfg.use_arecord, cfg.arecord_device)
+    logger.info("  input_device=%s", cfg.input_device)
+    logger.info("  audio_gain=%.2f", cfg.audio_gain)
+    logger.info("  wake_threshold=%.3f", cfg.wake_threshold)
+    logger.info("  wakeword_model_paths=%s", cfg.wakeword_model_paths)
+    logger.info("  asr_url=%s", cfg.asr_url)
+    logger.info("  asr_streaming_enabled=%s, asr_ws_url=%s", cfg.asr_streaming_enabled, cfg.asr_ws_url)
+    logger.info("  piper_binary=%s", cfg.piper_binary)
+    logger.info("  piper_model=%s", cfg.piper_model)
+    logger.info("  vad_aggressiveness=%d", cfg.vad_aggressiveness)
+    logger.info("  silence_ms=%d, hangover_ms=%d", cfg.silence_ms, cfg.hangover_ms)
+    logger.info("  debug_logging=%s, log_interval_frames=%d", cfg.debug_logging, cfg.log_interval_frames)
+    logger.info("  conversation_mode=%s, timeout=%dms", cfg.conversation_mode_enabled, cfg.conversation_timeout_ms)
+    logger.info("====================================")
+
     if not cfg.wakeword_model_paths:
         logger.warning("No wake word models configured")
-
-    if not cfg.asr_url:
-        logger.warning("No ASR URL configured")
 
     if not cfg.piper_binary or not cfg.piper_model:
         logger.warning("Piper TTS not fully configured")
 
-    asr_client = NemotronAsrHttpClient(
-        url=cfg.asr_url,
-        api_key=cfg.asr_api_key,
-        timeout=cfg.asr_timeout,
-    )
+    # Create ASR client (streaming or HTTP based on config)
+    if cfg.asr_streaming_enabled and cfg.asr_ws_url:
+        logger.info("Using streaming ASR: %s", cfg.asr_ws_url)
+        try:
+            asr_client = NemotronAsrStreamingClient(
+                url=cfg.asr_ws_url,
+                timeout=cfg.asr_timeout,
+                sample_rate=cfg.sample_rate,
+            )
+        except ImportError as e:
+            logger.warning("Streaming ASR unavailable (%s), falling back to HTTP", e)
+            asr_client = NemotronAsrHttpClient(
+                url=cfg.asr_url,
+                api_key=cfg.asr_api_key,
+                timeout=cfg.asr_timeout,
+            )
+    else:
+        if not cfg.asr_url:
+            logger.warning("No ASR URL configured")
+        logger.info("Using HTTP batch ASR: %s", cfg.asr_url)
+        asr_client = NemotronAsrHttpClient(
+            url=cfg.asr_url,
+            api_key=cfg.asr_api_key,
+            timeout=cfg.asr_timeout,
+        )
 
     tts = PiperTTS(
         binary_path=cfg.piper_binary,
@@ -144,10 +196,12 @@ def create_voice_pipeline() -> Optional[VoicePipeline]:
         block_size=cfg.block_size,
         silence_ms=cfg.silence_ms,
         max_command_seconds=cfg.max_command_seconds,
+        min_command_ms=cfg.min_command_ms,
         vad_aggressiveness=cfg.vad_aggressiveness,
         hangover_ms=cfg.hangover_ms,
         use_arecord=cfg.use_arecord,
         arecord_device=cfg.arecord_device,
+        input_device=cfg.input_device,
         stop_hotkey=cfg.stop_hotkey,
         allow_wake_barge_in=cfg.allow_wake_barge_in,
         interrupt_on_speech=cfg.interrupt_on_speech,
@@ -158,6 +212,13 @@ def create_voice_pipeline() -> Optional[VoicePipeline]:
         command_workers=cfg.command_workers,
         audio_gain=cfg.audio_gain,
         prefill_runner=prefill_runner,
+        debug_logging=cfg.debug_logging,
+        log_interval_frames=cfg.log_interval_frames,
+        conversation_mode_enabled=cfg.conversation_mode_enabled,
+        conversation_timeout_ms=cfg.conversation_timeout_ms,
+        conversation_start_delay_ms=cfg.conversation_start_delay_ms,
+        conversation_speech_frames=cfg.conversation_speech_frames,
+        conversation_speech_tolerance=cfg.conversation_speech_tolerance,
     )
 
     return pipeline
