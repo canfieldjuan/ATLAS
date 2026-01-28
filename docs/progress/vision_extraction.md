@@ -481,3 +481,123 @@ from .subscriber import (...)
 6. [ ] Copy recognition code to atlas_vision
 7. [ ] Update atlas_brain recognition API to proxy
 8. [ ] Delete migrated files from atlas_brain
+
+---
+
+## 2026-01-28 - Missing Recognition API Endpoints
+
+### Gap Analysis
+
+The atlas_vision `api/recognition.py` has 6 endpoints implemented.
+The atlas_brain proxy expects 18 total endpoints.
+
+**12 MISSING ENDPOINTS** that must be added to atlas_vision:
+
+### Group 1: Person Update (1 endpoint)
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/persons/{person_id}` | PATCH | Update person name, is_known, metadata |
+
+### Group 2: Face Enrollment/Identification (2 endpoints)
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/enroll/face` | POST | Capture frame, detect face, enroll embedding |
+| `/identify/face` | POST | Capture frame, detect face, match against DB |
+
+### Group 3: Gait Enrollment (5 endpoints)
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/enroll/gait/start` | POST | Start gait enrollment for person_id |
+| `/enroll/gait/frame` | POST | Capture frame, add pose to buffer |
+| `/enroll/gait/complete` | POST | Finalize enrollment from buffer |
+| `/enroll/gait/status` | GET | Get current enrollment buffer status |
+| `/enroll/gait/cancel` | POST | Cancel ongoing enrollment |
+
+### Group 4: Gait Identification (3 endpoints)
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/identify/gait/start` | POST | Clear buffer for new identification |
+| `/identify/gait/frame` | POST | Capture frame, add pose to buffer |
+| `/identify/gait/match` | POST | Match collected poses against DB |
+
+### Group 5: Combined Identification (1 endpoint)
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/identify/combined` | POST | Face + gait combined identification |
+
+### Implementation File
+
+**Target**: `atlas_video-processing/atlas_vision/api/recognition.py`
+
+**Current state**: 221 lines, ends at line 221
+
+**Insertion point**: After line 220 (end of get_recognition_events function)
+
+### Dependencies Required
+
+1. Frame capture from camera registry
+2. Face service (get_face_service)
+3. Gait service (get_gait_service)
+4. Config settings for thresholds
+
+### Implementation Order
+
+1. PATCH /persons/{person_id} - simplest, just DB update
+2. POST /enroll/face - uses face service + camera
+3. POST /identify/face - uses face service + camera
+4. Gait enrollment group (5 endpoints)
+5. Gait identification group (3 endpoints)
+6. POST /identify/combined - uses both services
+
+### 2026-01-28 - Missing Endpoints IMPLEMENTED
+
+**All 12 missing endpoints added to atlas_vision/api/recognition.py**
+
+**Imports added**:
+- `from ..core.config import settings`
+- `from ..devices.registry import device_registry`
+
+**Request models added**:
+- `UpdatePersonRequest` - for PATCH /persons/{id}
+- `EnrollFaceRequest` - for POST /enroll/face
+- `IdentifyRequest` - for POST /identify/face
+- `StartGaitEnrollRequest` - for POST /enroll/gait/start
+- `GaitIdentifyRequest` - for POST /identify/gait/match
+- `CombinedIdentifyRequest` - for POST /identify/combined
+
+**Helper functions added**:
+- `_check_recognition_enabled()` - validates recognition is enabled
+- `_get_camera_frame(camera_id)` - fetches frame from device registry
+
+**Module-level state added**:
+- `_gait_enrollment_state` - tracks active gait enrollment session
+
+**Endpoints implemented** (all 18 total):
+1. POST /persons - Create person
+2. GET /persons - List persons
+3. GET /persons/{id} - Get person
+4. DELETE /persons/{id} - Delete person
+5. PATCH /persons/{id} - Update person (NEW)
+6. GET /persons/{id}/embeddings - Get embedding counts
+7. GET /events - Get recognition events
+8. POST /enroll/face - Face enrollment (NEW)
+9. POST /identify/face - Face identification (NEW)
+10. POST /enroll/gait/start - Start gait enrollment (NEW)
+11. POST /enroll/gait/frame - Add gait frame (NEW)
+12. POST /enroll/gait/complete - Complete gait enrollment (NEW)
+13. GET /enroll/gait/status - Get gait enrollment status (NEW)
+14. POST /enroll/gait/cancel - Cancel gait enrollment (NEW)
+15. POST /identify/gait/start - Start gait identification (NEW)
+16. POST /identify/gait/frame - Add gait identify frame (NEW)
+17. POST /identify/gait/match - Match gait (NEW)
+18. POST /identify/combined - Combined face+gait identification (NEW)
+
+**Validation**:
+- [x] Syntax valid (py_compile passed)
+- [x] Imports work (atlas_vision.api.recognition imports successfully)
+- [x] 18 routes registered on router
+
+**File stats**:
+- Original: 221 lines
+- After changes: 768 lines
+- Lines added: 547
