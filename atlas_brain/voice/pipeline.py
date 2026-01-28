@@ -190,19 +190,15 @@ class NemotronAsrStreamingClient:
             # Send binary audio
             self._ws.send(pcm_bytes)
 
-            # Check for partial transcript (non-blocking)
+            # Check for partial transcript (native timeout, no socket mode toggle)
             try:
-                self._ws.socket.setblocking(False)
                 response = self._ws.recv(timeout=0.001)
-                self._ws.socket.setblocking(True)
                 data = json.loads(response)
                 if data.get("type") == "partial":
                     self._last_partial = data.get("text", "")
                     return self._last_partial
-            except (TimeoutError, BlockingIOError):
-                self._ws.socket.setblocking(True)
-            except Exception:
-                self._ws.socket.setblocking(True)
+            except TimeoutError:
+                pass  # No data available yet
 
             return None
         except Exception as e:
