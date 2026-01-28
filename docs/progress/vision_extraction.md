@@ -601,3 +601,51 @@ The atlas_brain proxy expects 18 total endpoints.
 - Original: 221 lines
 - After changes: 768 lines
 - Lines added: 547
+
+### 2026-01-28 - Recognition Streaming Migration COMPLETED
+
+**Goal**: Migrate recognition streaming endpoints from atlas_brain to atlas_vision
+
+**Analysis**:
+- atlas_brain/api/video.py had two recognition streaming functions:
+  - `_generate_recognition_mjpeg` (~180 lines) - single person
+  - `_generate_multitrack_recognition_mjpeg` (~300 lines) - multi-person with YOLO
+- Both used `services/recognition/` imports (GPU work in atlas_brain)
+- Consolidated into ONE endpoint in atlas_vision
+
+**Changes in atlas_vision**:
+
+1. **api/cameras.py** - Added consolidated endpoint:
+   - `GET /cameras/{camera_id}/stream/recognition/full`
+   - Uses YOLO ByteTrack for multi-person tracking
+   - Face recognition per track
+   - Gait collection and recognition per track
+   - Auto-enrollment support
+   - Visual overlays (green=identified, gray=tracking, orange=new)
+
+**Changes in atlas_brain**:
+
+1. **api/video.py** - Removed recognition streaming:
+   - Deleted `_generate_recognition_mjpeg` function
+   - Deleted `_generate_multitrack_recognition_mjpeg` function
+   - Replaced endpoints with deprecation notices (HTTP 410)
+   - Deprecation includes redirect URL to atlas_vision
+   - File reduced from 1100 lines to 592 lines
+
+2. **services/recognition/** - DELETED:
+   - face.py
+   - gait.py
+   - repository.py
+   - tracker.py
+   - __init__.py
+
+**Validation**:
+- [x] atlas_vision api/cameras.py syntax valid
+- [x] atlas_brain api/video.py syntax valid
+- [x] No orphan imports from services/recognition
+- [x] services/recognition/ deleted
+
+**Result**:
+- atlas_brain no longer has ANY GPU vision/recognition code
+- All vision GPU work consolidated in atlas_vision
+- Plain video streaming still works via AtlasVisionFrameSource proxy
