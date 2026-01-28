@@ -13,6 +13,7 @@ from .base import (
     StubEmailService,
     StubSMSService,
 )
+from .scheduling import SchedulingService, scheduling_service
 
 __all__ = [
     "CalendarService",
@@ -24,4 +25,6 @@ __all__ = [
     "StubCalendarService",
     "StubEmailService",
     "StubSMSService",
+    "SchedulingService",
+    "scheduling_service",
 ]

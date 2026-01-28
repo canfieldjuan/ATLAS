@@ -57,11 +57,13 @@ def create_app() -> FastAPI:
     from .calls import router as calls_router
     from .sms import router as sms_router
     from .contexts import router as contexts_router
+    from .scheduling import router as scheduling_router
 
     application.include_router(health_router, tags=["health"])
     application.include_router(calls_router, prefix="/calls", tags=["calls"])
     application.include_router(sms_router, prefix="/sms", tags=["sms"])
     application.include_router(contexts_router, prefix="/contexts", tags=["contexts"])
+    application.include_router(scheduling_router, prefix="/scheduling", tags=["scheduling"])
 
     return application
 

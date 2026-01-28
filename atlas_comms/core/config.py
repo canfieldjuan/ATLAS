@@ -119,6 +119,17 @@ class SignalWireProviderConfig(BaseModel):
     space_name: str = ""  # Your SignalWire space, e.g., "mycompany"
 
 
+class CalendarConfig(BaseSettings):
+    """Google Calendar OAuth configuration for scheduling."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_COMMS_CALENDAR_")
+
+    enabled: bool = Field(default=False, description="Enable calendar integration")
+    client_id: Optional[str] = Field(default=None, description="Google OAuth client ID")
+    client_secret: Optional[str] = Field(default=None, description="Google OAuth client secret")
+    refresh_token: Optional[str] = Field(default=None, description="Google OAuth refresh token")
+
+
 class AtlasBrainConfig(BaseSettings):
     """Configuration for connecting to atlas_brain for AI services."""
 
@@ -144,6 +155,9 @@ class CommsConfig(BaseSettings):
 
     # Atlas Brain connection (for AI services)
     brain: AtlasBrainConfig = Field(default_factory=AtlasBrainConfig)
+
+    # Calendar integration for scheduling
+    calendar: CalendarConfig = Field(default_factory=CalendarConfig)
 
     # PersonaPlex speech-to-speech for phone calls
     personaplex_enabled: bool = Field(

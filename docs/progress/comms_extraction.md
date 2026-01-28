@@ -223,8 +223,30 @@ For phone processor, create HTTP clients to atlas_brain:
 - `GET /contexts/{id}/status` - Get open/closed status
 
 **Remaining:**
-- [ ] Phone processor (requires AI integration decisions)
-- [ ] Webhooks for incoming calls/SMS
-- [ ] Scheduling service
+- [ ] Phone processor (deferred - requires AI integration)
+- [ ] Webhooks for incoming calls/SMS (deferred - part of phone processing)
+- [x] Scheduling service - COMPLETE
 - [ ] Update atlas_brain to proxy/remove comms
-- [ ] Calendar integration
+- [x] Calendar integration - COMPLETE (via scheduling service)
+
+### 2026-01-28 - Scheduling Service Added
+
+**Files created:**
+- `services/scheduling.py` - SchedulingService with Google Calendar integration
+- `api/scheduling.py` - Scheduling API endpoints
+
+**Files updated:**
+- `core/config.py` - Added CalendarConfig class with ATLAS_COMMS_CALENDAR_* env vars
+- `services/__init__.py` - Added SchedulingService exports
+- `api/main.py` - Added scheduling router
+
+**New API Endpoints:**
+- `GET /scheduling/available` - Get available appointment slots
+- `POST /scheduling/book` - Book an appointment
+- `POST /scheduling/cancel` - Cancel an appointment
+
+**Environment Variables (calendar):**
+- `ATLAS_COMMS_CALENDAR_ENABLED` - Enable calendar integration
+- `ATLAS_COMMS_CALENDAR_CLIENT_ID` - Google OAuth client ID
+- `ATLAS_COMMS_CALENDAR_CLIENT_SECRET` - Google OAuth client secret
+- `ATLAS_COMMS_CALENDAR_REFRESH_TOKEN` - Google OAuth refresh token
