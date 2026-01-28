@@ -392,45 +392,9 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to start Pipecat voice pipeline: %s", e)
 
-    # Start webcam person detector if enabled
-    webcam_detector = None
-    if settings.webcam.enabled:
-        try:
-            from .vision import start_webcam_detector
-
-            webcam_detector = await start_webcam_detector(
-                device_index=settings.webcam.device_index,
-                device_name=settings.webcam.device_name,
-                camera_source_id=settings.webcam.source_id,
-                fps=settings.webcam.fps,
-            )
-            if webcam_detector:
-                logger.info("Webcam detector started: device=%s (name=%s) -> %s",
-                           webcam_detector.device_index, settings.webcam.device_name,
-                           settings.webcam.source_id)
-            else:
-                logger.warning("Webcam detector failed to start")
-        except Exception as e:
-            logger.error("Failed to start webcam detector: %s", e)
-
-    # Start RTSP camera detectors if enabled
-    rtsp_manager = None
-    if settings.rtsp.enabled:
-        try:
-            import json
-            from .vision import start_rtsp_cameras
-
-            cameras = []
-            if settings.rtsp.cameras_json:
-                cameras = json.loads(settings.rtsp.cameras_json)
-
-            if cameras:
-                rtsp_manager = await start_rtsp_cameras(cameras)
-                logger.info("RTSP cameras started: %d cameras", len(cameras))
-            else:
-                logger.warning("RTSP enabled but no cameras configured")
-        except Exception as e:
-            logger.error("Failed to start RTSP cameras: %s", e)
+    # NOTE: Webcam and RTSP detection moved to atlas_vision service
+    # Detection events are received via MQTT subscriber (vision/subscriber.py)
+    # Configure atlas_vision with ATLAS_VISION_MQTT_ENABLED=true
 
     logger.info("Atlas Brain startup complete")
 
@@ -466,24 +430,6 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
         logger.info("Voice client stopped")
-
-    # Stop webcam detector
-    if webcam_detector:
-        try:
-            from .vision import stop_webcam_detector
-            await stop_webcam_detector()
-            logger.info("Webcam detector stopped")
-        except Exception as e:
-            logger.error("Error stopping webcam detector: %s", e)
-
-    # Stop RTSP camera detectors
-    if rtsp_manager:
-        try:
-            from .vision import stop_rtsp_cameras
-            await stop_rtsp_cameras()
-            logger.info("RTSP cameras stopped")
-        except Exception as e:
-            logger.error("Error stopping RTSP cameras: %s", e)
 
     # Shutdown discovery service
     if settings.discovery.enabled:
