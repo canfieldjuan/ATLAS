@@ -649,3 +649,82 @@ The atlas_brain proxy expects 18 total endpoints.
 - atlas_brain no longer has ANY GPU vision/recognition code
 - All vision GPU work consolidated in atlas_vision
 - Plain video streaming still works via AtlasVisionFrameSource proxy
+
+### 2026-01-28 - Config Deprecation COMPLETED
+
+**Goal**: Mark deprecated configs in atlas_brain/config.py
+
+**Changes**:
+
+1. **WebcamConfig** (line 515):
+   - Added deprecation notice in docstring
+   - Points to `POST /cameras/register/webcam` in atlas_vision
+   - All fields marked DEPRECATED
+
+2. **RTSPCameraConfig** (line 527):
+   - Added deprecation notice in docstring
+   - Points to `POST /cameras/register` in atlas_vision
+
+3. **RTSPConfig** (line 536):
+   - Added deprecation notice in docstring
+   - Points to `POST /cameras/register` in atlas_vision
+   - All fields marked DEPRECATED
+
+**Validation**:
+- [x] config.py syntax valid
+
+---
+
+## Final Status
+
+### Phase 1: Detection Migration - COMPLETE
+- [x] Remove detector startup from main.py
+- [x] Delete webcam_detector.py
+- [x] Delete rtsp_detector.py
+- [x] Update vision/__init__.py
+
+### Phase 2: Recognition Migration - COMPLETE
+- [x] Copy face.py, gait.py, tracker.py, repository.py to atlas_vision
+- [x] Create api/recognition.py with 18 endpoints
+- [x] Add storage module for database access
+
+### Phase 3: atlas_brain Cleanup - COMPLETE
+- [x] Convert api/recognition.py to proxy
+- [x] Remove recognition streaming from api/video.py
+- [x] Delete services/recognition/ directory
+- [x] Mark WebcamConfig deprecated
+- [x] Mark RTSPConfig deprecated
+
+### Phase 4: Consolidated Streaming - COMPLETE
+- [x] Add /cameras/{id}/stream/recognition/full to atlas_vision
+- [x] Consolidates single and multi-track recognition
+
+---
+
+## Commits Summary
+
+| Commit | Description |
+|--------|-------------|
+| b240c64 | Remove local detection from main.py |
+| 3d1eb8b | Delete migrated detector files |
+| 9ba5a5a | Migrate recognition to atlas_vision |
+| 6b55797 | Add missing API endpoints (18 total) |
+| 3fc6fa0 | Consolidate recognition streaming |
+| 9402d39 | Mark config classes deprecated |
+
+---
+
+## GPU Workload Distribution (Final)
+
+**atlas_brain** (orchestrator):
+- Voice pipeline (STT/TTS/LLM)
+- API routing and proxying
+- MQTT event subscription
+- No vision GPU work
+
+**atlas_vision** (vision service):
+- YOLO person detection
+- Face recognition (InsightFace)
+- Gait recognition (MediaPipe)
+- Recognition streaming
+- Camera management
