@@ -214,6 +214,7 @@ class VoicePipeline:
         self.asr_client = asr_client
         self.agent_runner = agent_runner
         self.prefill_runner = prefill_runner
+        self._prefill_in_progress = False
         self.session_id = str(uuid.uuid4())
         self.playback = PlaybackController(tts)
 
@@ -352,6 +353,10 @@ class VoicePipeline:
         """
         if self.prefill_runner is None:
             return
+        # Guard against concurrent prefills
+        if self._prefill_in_progress:
+            return
+        self._prefill_in_progress = True
         # Run prefill in background thread to not block audio processing
         thread = threading.Thread(
             target=self._run_prefill,
@@ -364,6 +369,7 @@ class VoicePipeline:
         """Execute the prefill runner."""
         try:
             self.prefill_runner()
-            logger.info("LLM prefill complete")
         except Exception as e:
             logger.warning("LLM prefill failed: %s", e)
+        finally:
+            self._prefill_in_progress = False
