@@ -772,7 +772,7 @@ class VoicePipeline:
 
         # Concatenate all sentences and speak as one utterance
         if sentences:
-            full_reply = "".join(sentences)
+            full_reply = " ".join(sentences)
             logger.info("Speaking concatenated reply (%d sentences): %s",
                        len(sentences), full_reply[:100] if len(full_reply) > 100 else full_reply)
             self.playback.speak(

@@ -175,22 +175,59 @@ async def _stream_llm_response(
     messages.append(Message(role="user", content=transcript))
 
     sentence_count = 0
+    collected_sentences = []
     try:
         async for token in llm.chat_stream_async(messages, max_tokens=150):
             sentence = buffer.add_token(token)
             if sentence:
                 sentence_count += 1
+                collected_sentences.append(sentence)
                 logger.info("Streaming sentence ready: %s", sentence[:60])
                 on_sentence(sentence)
         remaining = buffer.flush()
         if remaining:
             sentence_count += 1
+            collected_sentences.append(remaining)
             logger.info("Streaming final chunk: %s", remaining[:60])
             on_sentence(remaining)
+
+        # Persist conversation turns if streaming was successful
+        if sentence_count > 0 and session_id:
+            full_response = " ".join(collected_sentences)
+            await _persist_streaming_turns(session_id, transcript, full_response)
+
         return sentence_count > 0
     except Exception as e:
         logger.error("Streaming LLM error: %s", e)
         return False
+
+
+async def _persist_streaming_turns(
+    session_id: str,
+    user_text: str,
+    assistant_text: str,
+) -> None:
+    """Persist conversation turns from streaming LLM to database."""
+    from ..agents.memory import get_agent_memory
+
+    try:
+        memory = get_agent_memory()
+        if memory:
+            await memory.add_turn(
+                session_id=session_id,
+                role="user",
+                content=user_text,
+                turn_type="conversation",
+            )
+            await memory.add_turn(
+                session_id=session_id,
+                role="assistant",
+                content=assistant_text,
+                turn_type="conversation",
+            )
+            logger.debug("Persisted streaming conversation turns for session %s", session_id)
+    except Exception as e:
+        logger.warning("Failed to persist streaming turns: %s", e)
 
 
 async def _run_agent_fallback(
