@@ -287,6 +287,25 @@ If extraction causes issues:
 - Verify end-to-end event flow
 - Delete detector files after full validation
 
+### Phase 2 Assessment
+
+**Recognition API Analysis**:
+- 20+ endpoints in `api/recognition.py`
+- Uses `cv2.VideoCapture` directly for frame capture
+- Stores embeddings in PostgreSQL database
+- GPU usage: InsightFace (face) + MediaPipe (gait) - lighter than YOLO
+
+**Decision**: Recognition migration is LOWER priority because:
+1. InsightFace/MediaPipe are lighter than YOLO
+2. Database access would need to be shared/proxied
+3. Recognition is about WHO, not IF (detection)
+4. Main GPU contention was YOLO detection (now in atlas_vision)
+
+**Recommended approach for recognition** (future):
+- Keep recognition services in atlas_brain
+- Change `_capture_frame()` to fetch from atlas_vision API
+- This avoids webcam contention without moving DB code
+
 ---
 
 ## Exact Code Changes (Pending Approval)
