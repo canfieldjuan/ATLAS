@@ -108,7 +108,10 @@ def _create_streaming_agent_runner():
                     )
 
             if use_streaming:
-                await _stream_llm_response(transcript, on_sentence)
+                success = await _stream_llm_response(transcript, context_dict, on_sentence)
+                if not success:
+                    # Fallback to regular agent if streaming fails
+                    await _run_agent_fallback(transcript, context_dict, on_sentence)
             else:
                 await _run_agent_fallback(transcript, context_dict, on_sentence)
 
@@ -123,16 +126,21 @@ def _create_streaming_agent_runner():
 
 async def _stream_llm_response(
     transcript: str,
+    context_dict: Dict[str, Any],
     on_sentence: Callable[[str], None],
-) -> None:
-    """Stream LLM response for conversation queries."""
+) -> bool:
+    """Stream LLM response for conversation queries.
+
+    Returns True if successful, False if fallback needed.
+    """
     from ..services import llm_registry
     from ..services.protocols import Message
+    from ..storage.database import get_pool
 
     llm = llm_registry.get_active()
     if llm is None or not hasattr(llm, "chat_stream_async"):
         logger.warning("LLM does not support streaming")
-        return
+        return False
 
     buffer = SentenceBuffer()
     system_prompt = (
@@ -140,23 +148,49 @@ async def _stream_llm_response(
         "You can control smart home devices, answer questions, and help with tasks. "
         "Be conversational, helpful, and concise. Keep responses to 1-3 sentences."
     )
-    messages = [
-        Message(role="system", content=system_prompt),
-        Message(role="user", content=transcript),
-    ]
+    messages = [Message(role="system", content=system_prompt)]
 
+    # Try to get conversation history for context
+    session_id = context_dict.get("session_id")
+    if session_id:
+        try:
+            pool = get_pool()
+            if pool:
+                async with pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        """SELECT role, content FROM conversation_turns
+                           WHERE session_id = $1
+                           ORDER BY created_at DESC LIMIT 6""",
+                        session_id
+                    )
+                    # Add in chronological order (reverse the DESC results)
+                    for row in reversed(rows):
+                        messages.append(Message(role=row["role"], content=row["content"]))
+                    if rows:
+                        logger.info("Added %d conversation turns to streaming context", len(rows))
+        except Exception as e:
+            logger.debug("Could not fetch conversation history: %s", e)
+
+    # Add current user message
+    messages.append(Message(role="user", content=transcript))
+
+    sentence_count = 0
     try:
         async for token in llm.chat_stream_async(messages, max_tokens=150):
             sentence = buffer.add_token(token)
             if sentence:
+                sentence_count += 1
                 logger.info("Streaming sentence ready: %s", sentence[:60])
                 on_sentence(sentence)
         remaining = buffer.flush()
         if remaining:
+            sentence_count += 1
             logger.info("Streaming final chunk: %s", remaining[:60])
             on_sentence(remaining)
+        return sentence_count > 0
     except Exception as e:
         logger.error("Streaming LLM error: %s", e)
+        return False
 
 
 async def _run_agent_fallback(
