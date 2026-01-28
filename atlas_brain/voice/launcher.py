@@ -181,6 +181,7 @@ def create_voice_pipeline() -> Optional[VoicePipeline]:
         length_scale=cfg.piper_length_scale,
         noise_scale=cfg.piper_noise_scale,
         noise_w=cfg.piper_noise_w,
+        sample_rate=cfg.piper_sample_rate,
     )
 
     agent_runner = _create_agent_runner()

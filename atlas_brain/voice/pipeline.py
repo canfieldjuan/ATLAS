@@ -313,7 +313,7 @@ class NemotronAsrStreamingClient:
 
 
 class PiperTTS:
-    """Piper TTS engine for speech synthesis."""
+    """Piper TTS engine for speech synthesis with streaming support."""
 
     def __init__(
         self,
@@ -323,6 +323,7 @@ class PiperTTS:
         length_scale: float = 1.0,
         noise_scale: float = 0.667,
         noise_w: float = 0.8,
+        sample_rate: int = 16000,
     ):
         self.binary_path = binary_path
         self.model_path = model_path
@@ -330,11 +331,13 @@ class PiperTTS:
         self.length_scale = length_scale
         self.noise_scale = noise_scale
         self.noise_w = noise_w
+        self.sample_rate = sample_rate
         self.stop_event = threading.Event()
         self.current_stream: Optional[sd.OutputStream] = None
+        self._current_process: Optional[subprocess.Popen] = None
 
     def speak(self, text: str):
-        """Speak the given text using Piper TTS."""
+        """Speak the given text using Piper TTS with streaming."""
         if not self.binary_path or not os.path.isfile(self.binary_path):
             logger.error("Piper binary not found: %s", self.binary_path)
             return
@@ -342,6 +345,78 @@ class PiperTTS:
             logger.error("Piper model not found: %s", self.model_path)
             return
 
+        self.stop_event.clear()
+        try:
+            self._speak_streaming(text)
+        except Exception as exc:
+            logger.warning("Streaming TTS failed (%s), falling back to batch", exc)
+            self._speak_batch(text)
+
+    def _speak_streaming(self, text: str):
+        """Stream audio directly from Piper stdout."""
+        cmd = [
+            self.binary_path,
+            "--model",
+            self.model_path,
+            "--output-raw",
+            "--length_scale",
+            str(self.length_scale),
+            "--noise_scale",
+            str(self.noise_scale),
+            "--noise_w",
+            str(self.noise_w),
+        ]
+        if self.speaker is not None:
+            cmd.extend(["--speaker", str(self.speaker)])
+
+        start_time = time.perf_counter()
+        process = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self._current_process = process
+
+        try:
+            process.stdin.write(text.encode("utf-8"))
+            process.stdin.close()
+        except BrokenPipeError:
+            logger.error("Piper process died unexpectedly")
+            raise
+
+        chunk_bytes = 4096  # 2048 int16 samples = 128ms at 16kHz
+        first_chunk = True
+
+        with sd.OutputStream(
+            samplerate=self.sample_rate, channels=1, dtype="int16"
+        ) as stream:
+            self.current_stream = stream
+            while not self.stop_event.is_set():
+                chunk = process.stdout.read(chunk_bytes)
+                if not chunk:
+                    break
+                if first_chunk:
+                    latency_ms = (time.perf_counter() - start_time) * 1000
+                    logger.info("TTS first chunk latency: %.0fms", latency_ms)
+                    first_chunk = False
+                audio = np.frombuffer(chunk, dtype=np.int16)
+                stream.write(audio)
+            try:
+                stream.stop()
+            except Exception:
+                pass
+        self.current_stream = None
+        self._current_process = None
+
+        if self.stop_event.is_set():
+            process.terminate()
+            process.wait(timeout=1.0)
+        else:
+            process.wait(timeout=5.0)
+
+    def _speak_batch(self, text: str):
+        """Fallback: synthesize to file then play (original method)."""
         fd, wav_path = tempfile.mkstemp(suffix=".wav")
         os.close(fd)
         try:
@@ -364,24 +439,20 @@ class PiperTTS:
             audio, sr = sf.read(wav_path, dtype="float32")
             if audio.ndim > 1:
                 audio = audio[:, 0]
-            self.stop_event.clear()
             chunk = 2048
-            with sd.OutputStream(
-                samplerate=sr, channels=1, dtype="float32"
-            ) as stream:
+            with sd.OutputStream(samplerate=sr, channels=1, dtype="float32") as stream:
                 self.current_stream = stream
                 for start in range(0, len(audio), chunk):
                     if self.stop_event.is_set():
                         break
-                    end = start + chunk
-                    stream.write(audio[start:end])
+                    stream.write(audio[start:start + chunk])
                 try:
                     stream.stop()
                 except Exception:
                     pass
             self.current_stream = None
         except Exception as exc:
-            logger.error("Piper synthesis failed: %s", exc)
+            logger.error("Piper batch synthesis failed: %s", exc)
         finally:
             try:
                 os.remove(wav_path)
@@ -389,9 +460,14 @@ class PiperTTS:
                 pass
 
     def stop(self):
-        """Stop current playback."""
+        """Stop current playback and terminate Piper process."""
         self.stop_event.set()
         try:
+            if self._current_process is not None:
+                try:
+                    self._current_process.terminate()
+                except Exception:
+                    pass
             if self.current_stream is not None:
                 try:
                     self.current_stream.abort()
