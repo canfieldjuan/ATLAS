@@ -206,12 +206,14 @@ class VoicePipeline:
         interrupt_wake_threshold: float = 0.5,
         command_workers: int = 2,
         audio_gain: float = 1.0,
+        prefill_runner: Optional[Callable[[], None]] = None,
     ):
         self.sample_rate = sample_rate
         self.block_size = block_size
         self.wake_threshold = wake_threshold
         self.asr_client = asr_client
         self.agent_runner = agent_runner
+        self.prefill_runner = prefill_runner
         self.session_id = str(uuid.uuid4())
         self.playback = PlaybackController(tts)
 
@@ -257,6 +259,7 @@ class VoicePipeline:
             interrupt_rms_threshold=self.interrupt_rms_threshold,
             audio_gain=audio_gain,
             wake_reset=self.model.reset,
+            on_wake_detected=self._trigger_prefill,
         )
 
         self.capture = AudioCapture(
@@ -339,3 +342,28 @@ class VoicePipeline:
         """Called when TTS playback ends."""
         self.model.reset()
         logger.info("TTS done, wake word model reset")
+
+    def _trigger_prefill(self):
+        """Trigger LLM system prompt prefill in background.
+
+        Called when wake word is detected to warm up the LLM KV cache
+        while ASR is still recording. This reduces time-to-first-token
+        when the actual request is made.
+        """
+        if self.prefill_runner is None:
+            return
+        # Run prefill in background thread to not block audio processing
+        thread = threading.Thread(
+            target=self._run_prefill,
+            name="llm-prefill",
+            daemon=True,
+        )
+        thread.start()
+
+    def _run_prefill(self):
+        """Execute the prefill runner."""
+        try:
+            self.prefill_runner()
+            logger.info("LLM prefill complete")
+        except Exception as e:
+            logger.warning("LLM prefill failed: %s", e)

@@ -54,6 +54,51 @@ def _create_agent_runner():
     return runner
 
 
+# Static system prompt for prefill (matches AtlasAgent._generate_llm_response)
+_PREFILL_SYSTEM_PROMPT = (
+    "You are Atlas, a capable personal assistant. "
+    "You can control smart home devices, answer questions, have conversations, and help with various tasks. "
+    "Be conversational, helpful, and concise. Keep responses to 1-3 sentences unless more detail is needed."
+)
+
+
+def _create_prefill_runner():
+    """Create a prefill runner to warm up LLM KV cache on wake word detection."""
+    from ..services import llm_registry
+    from ..services.protocols import Message
+
+    def runner() -> None:
+        """Prefill the LLM system prompt."""
+        if _event_loop is None:
+            logger.debug("No event loop available for prefill")
+            return
+
+        llm = llm_registry.get_active()
+        if llm is None:
+            logger.debug("No active LLM for prefill")
+            return
+
+        # Check if LLM supports prefill
+        if not hasattr(llm, "prefill_async"):
+            logger.debug("LLM does not support prefill_async")
+            return
+
+        messages = [Message(role="system", content=_PREFILL_SYSTEM_PROMPT)]
+
+        try:
+            future = asyncio.run_coroutine_threadsafe(
+                llm.prefill_async(messages),
+                _event_loop,
+            )
+            result = future.result(timeout=10.0)
+            prefill_ms = result.get("prefill_time_ms", 0)
+            logger.info("LLM prefill: %.1f ms", prefill_ms)
+        except Exception as e:
+            logger.debug("Prefill failed: %s", e)
+
+    return runner
+
+
 def create_voice_pipeline() -> Optional[VoicePipeline]:
     """Create the voice pipeline from config."""
     cfg = settings.voice
@@ -87,6 +132,7 @@ def create_voice_pipeline() -> Optional[VoicePipeline]:
     )
 
     agent_runner = _create_agent_runner()
+    prefill_runner = _create_prefill_runner()
 
     pipeline = VoicePipeline(
         wakeword_model_paths=cfg.wakeword_model_paths,
@@ -111,6 +157,7 @@ def create_voice_pipeline() -> Optional[VoicePipeline]:
         interrupt_wake_threshold=cfg.interrupt_wake_threshold,
         command_workers=cfg.command_workers,
         audio_gain=cfg.audio_gain,
+        prefill_runner=prefill_runner,
     )
 
     return pipeline

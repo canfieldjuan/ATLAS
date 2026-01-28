@@ -31,6 +31,7 @@ class FrameProcessor:
         interrupt_rms_threshold: float = 0.05,
         audio_gain: float = 1.0,
         wake_reset: Optional[Callable[[], None]] = None,
+        on_wake_detected: Optional[Callable[[], None]] = None,
     ):
         self.wake_predict = wake_predict
         self.wake_threshold = wake_threshold
@@ -44,6 +45,7 @@ class FrameProcessor:
         self.interrupt_rms_threshold = interrupt_rms_threshold
         self.audio_gain = audio_gain
         self.wake_reset = wake_reset
+        self.on_wake_detected = on_wake_detected
 
         self.state = "listening"
         self.interrupt_speech_counter = 0
@@ -129,6 +131,9 @@ class FrameProcessor:
             logger.info("Wake word detected.")
             self.state = "recording"
             self.segmenter.reset()
+            # Trigger LLM prefill in background while recording
+            if self.on_wake_detected is not None:
+                self.on_wake_detected()
             return
 
         # Recording state
