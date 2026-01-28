@@ -125,6 +125,16 @@ class LLMConfig(BaseSettings):
         description="Together AI API key (or set TOGETHER_API_KEY env var)"
     )
 
+    # groq settings (Groq cloud API - primary for low latency)
+    groq_model: str = Field(
+        default="llama-3.3-70b-versatile",
+        description="Groq model name"
+    )
+    groq_api_key: Optional[str] = Field(
+        default=None,
+        description="Groq API key (or set GROQ_API_KEY env var)"
+    )
+
 
 class TTSConfig(BaseSettings):
     """TTS configuration."""
@@ -412,6 +422,24 @@ class IntentConfig(BaseSettings):
     )
 
 
+class ToolRouterConfig(BaseSettings):
+    """Tool router configuration for Gorilla-based routing."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_TOOL_ROUTER_", env_file=".env", extra="ignore")
+
+    enabled: bool = Field(default=True, description="Enable Gorilla tool router")
+    ollama_model: str = Field(
+        default="gorilla-functions",
+        description="Ollama model name for Gorilla"
+    )
+    ollama_url: str = Field(
+        default="http://localhost:11434",
+        description="Ollama API URL"
+    )
+    timeout: float = Field(default=30.0, description="Timeout for Gorilla requests")
+    temperature: float = Field(default=0.0, description="Temperature for tool routing")
+
+
 class AlertsConfig(BaseSettings):
     """Centralized alerts configuration."""
 
@@ -494,28 +522,69 @@ class ReminderConfig(BaseSettings):
 
 
 class VoiceClientConfig(BaseSettings):
-    """Voice client configuration - unified audio capture and playback."""
+    """Voice client configuration - local voice pipeline with wake word detection."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_VOICE_")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_VOICE_", env_file=".env", extra="ignore")
 
-    enabled: bool = Field(default=True, description="Enable voice client on startup")
-    atlas_url: str = Field(
-        default="ws://localhost:8000/api/v1/ws/orchestrated",
-        description="WebSocket URL for Atlas orchestration endpoint"
+    enabled: bool = Field(default=True, description="Enable voice pipeline on startup")
+
+    # Audio capture settings
+    sample_rate: int = Field(default=16000, description="Audio sample rate for pipeline")
+    block_size: int = Field(default=1280, description="Audio block size (80ms at 16kHz)")
+    use_arecord: bool = Field(default=False, description="Use arecord instead of PortAudio")
+    arecord_device: str = Field(default="default", description="ALSA device for arecord")
+    audio_gain: float = Field(default=1.0, description="Software gain for microphone")
+
+    # Wake word settings
+    wakeword_model_paths: list[str] = Field(
+        default=[],
+        description="Paths to OpenWakeWord model files"
     )
-    input_device: int | None = Field(default=None, description="Audio input device index (deprecated, use input_device_name)")
-    output_device: int | None = Field(default=None, description="Audio output device index (deprecated, use output_device_name)")
-    input_device_name: str | None = Field(default=None, description="Audio input device name substring (e.g. 'SoloCast', 'HyperX')")
-    output_device_name: str | None = Field(default=None, description="Audio output device name substring")
-    sample_rate: int = Field(default=16000, description="Target audio sample rate for STT")
-    input_sample_rate: int = Field(default=44100, description="Mic native sample rate (44100 for SoloCast, 16000 if mic supports it)")
-    input_gain: float = Field(default=5.0, description="Software gain for mic (boost quiet mics)")
+    wake_threshold: float = Field(default=0.25, description="Wake word detection threshold")
+
+    # ASR settings
+    asr_url: str | None = Field(default=None, description="Nemotron ASR HTTP endpoint URL")
+    asr_api_key: str | None = Field(default=None, description="ASR API key if required")
+    asr_timeout: int = Field(default=30, description="ASR request timeout in seconds")
+
+    # TTS settings (Piper)
+    piper_binary: str | None = Field(default=None, description="Path to Piper binary")
+    piper_model: str | None = Field(default=None, description="Path to Piper ONNX model")
+    piper_speaker: int | None = Field(default=None, description="Piper speaker ID for multi-speaker models")
+    piper_length_scale: float = Field(default=1.0, description="Piper speech rate")
+    piper_noise_scale: float = Field(default=0.667, description="Piper noise scale")
+    piper_noise_w: float = Field(default=0.8, description="Piper noise width")
+
+    # VAD and segmentation settings
+    vad_aggressiveness: int = Field(default=2, description="WebRTC VAD aggressiveness (0-3)")
+    silence_ms: int = Field(default=500, description="Silence duration to end utterance")
+    hangover_ms: int = Field(default=300, description="Hangover time before finalizing")
+    max_command_seconds: int = Field(default=5, description="Maximum command duration")
+
+    # Interrupt settings
+    stop_hotkey: bool = Field(default=True, description="Enable 's' hotkey to stop TTS")
+    allow_wake_barge_in: bool = Field(default=False, description="Allow wake word to interrupt TTS")
+    interrupt_on_speech: bool = Field(default=False, description="Interrupt TTS on detected speech")
+    interrupt_speech_frames: int = Field(default=5, description="Frames of speech to trigger interrupt")
+    interrupt_rms_threshold: float = Field(default=0.05, description="RMS threshold for speech interrupt")
+    interrupt_wake_models: list[str] = Field(
+        default=[],
+        description="Paths to interrupt wake word models"
+    )
+    interrupt_wake_threshold: float = Field(default=0.5, description="Interrupt wake word threshold")
+
+    # Processing settings
+    command_workers: int = Field(default=2, description="Thread pool size for command processing")
 
 
 class WebcamConfig(BaseSettings):
     """Webcam person detection configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_WEBCAM_")
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_WEBCAM_",
+        env_file=".env",
+        extra="ignore",
+    )
 
     enabled: bool = Field(default=False, description="Enable webcam person detection")
     device_index: int = Field(default=0, description="Video device index (deprecated, use device_name)")
@@ -653,9 +722,9 @@ class Settings(BaseSettings):
         default=False, description="Load Omni (unified voice) on startup"
     )
 
-    # Startup behavior - Tool router (FunctionGemma for fast tool routing)
+    # Startup behavior - Tool router (Gorilla for fast local tool routing)
     load_tool_router_on_startup: bool = Field(
-        default=False, description="Load FunctionGemma tool router on startup"
+        default=False, description="Load Gorilla tool router on startup"
     )
 
     # Nested configs
@@ -673,6 +742,7 @@ class Settings(BaseSettings):
     roku: RokuConfig = Field(default_factory=RokuConfig)
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    tool_router: ToolRouterConfig = Field(default_factory=ToolRouterConfig)
     voice: VoiceClientConfig = Field(default_factory=VoiceClientConfig)
     webcam: WebcamConfig = Field(default_factory=WebcamConfig)
     rtsp: RTSPConfig = Field(default_factory=RTSPConfig)

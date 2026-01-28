@@ -348,12 +348,36 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to start RTSP cameras: %s", e)
 
+    # Start voice pipeline if enabled
+    voice_pipeline_running = False
+    if settings.voice.enabled:
+        try:
+            from .voice import start_voice_pipeline
+
+            loop = asyncio.get_running_loop()
+            voice_pipeline_running = start_voice_pipeline(loop)
+            if voice_pipeline_running:
+                logger.info("Voice pipeline started")
+            else:
+                logger.warning("Voice pipeline failed to start")
+        except Exception as e:
+            logger.error("Failed to start voice pipeline: %s", e)
+
     logger.info("Atlas Brain startup complete")
 
     yield  # Application runs here
 
     # --- Shutdown ---
     logger.info("Atlas Brain shutting down...")
+
+    # Stop voice pipeline
+    if voice_pipeline_running:
+        try:
+            from .voice import stop_voice_pipeline
+            stop_voice_pipeline()
+            logger.info("Voice pipeline stopped")
+        except Exception as e:
+            logger.error("Error stopping voice pipeline: %s", e)
 
     # Stop presence service
     if presence_service:
