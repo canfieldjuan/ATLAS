@@ -18,6 +18,15 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Atlas Vision starting on %s:%d", settings.server.host, settings.server.port)
 
+    # Initialize database for recognition
+    from ..storage import db_settings, init_database, close_database
+    if db_settings.enabled:
+        try:
+            await init_database()
+            logger.info("Database initialized")
+        except Exception as e:
+            logger.warning("Database initialization failed: %s", e)
+
     # Initialize device registry with mock cameras
     from ..devices.registry import device_registry
     from ..devices.cameras.mock import create_mock_cameras
@@ -84,6 +93,14 @@ async def lifespan(app: FastAPI):
         await announcer.stop()
         logger.info("mDNS announcer stopped")
 
+    # Close database
+    if db_settings.enabled:
+        try:
+            await close_database()
+            logger.info("Database closed")
+        except Exception as e:
+            logger.warning("Database close error: %s", e)
+
 
 def create_app() -> FastAPI:
     """Create and configure FastAPI application."""
@@ -100,12 +117,14 @@ def create_app() -> FastAPI:
     from .detections import router as detections_router
     from .security import router as security_router
     from .tracks import router as tracks_router
+    from .recognition import router as recognition_router
 
     application.include_router(health_router, tags=["health"])
     application.include_router(cameras_router, prefix="/cameras", tags=["cameras"])
     application.include_router(detections_router, tags=["detections"])
     application.include_router(security_router, prefix="/security", tags=["security"])
     application.include_router(tracks_router, prefix="/tracks", tags=["tracks"])
+    application.include_router(recognition_router, prefix="/recognition", tags=["recognition"])
 
     return application
 

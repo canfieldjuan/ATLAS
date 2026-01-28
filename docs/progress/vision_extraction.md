@@ -301,10 +301,38 @@ If extraction causes issues:
 3. Recognition is about WHO, not IF (detection)
 4. Main GPU contention was YOLO detection (now in atlas_vision)
 
-**Recommended approach for recognition** (future):
-- Keep recognition services in atlas_brain
-- Change `_capture_frame()` to fetch from atlas_vision API
-- This avoids webcam contention without moving DB code
+### 2026-01-28 - Phase 2 Implementation COMPLETED
+
+**Recognition migrated to atlas_vision**:
+
+**Files created in atlas_vision**:
+- `storage/__init__.py` - Database module exports
+- `storage/config.py` - Database settings (ATLAS_VISION_DB_*)
+- `storage/database.py` - Connection pool
+- `recognition/__init__.py` - Recognition module exports
+- `recognition/repository.py` - Person/embedding storage
+- `recognition/face.py` - Face recognition service
+- `recognition/gait.py` - Gait recognition service
+- `recognition/tracker.py` - Multi-person tracking
+- `api/recognition.py` - REST API endpoints
+
+**Files updated in atlas_vision**:
+- `core/config.py` - Added RecognitionConfig
+- `api/main.py` - Added database init/close, recognition router
+- `.env.example` - Added DB and recognition settings
+
+**API Endpoints** (atlas_vision /recognition/):
+- `POST /persons` - Create person
+- `GET /persons` - List persons
+- `GET /persons/{id}` - Get person
+- `DELETE /persons/{id}` - Delete person
+- `GET /persons/{id}/embeddings` - Get embedding counts
+- `GET /events` - Get recognition events
+
+**Next Steps**:
+- Update atlas_brain api/recognition.py to proxy to atlas_vision
+- Delete atlas_brain services/recognition/ after validation
+- Test full integration
 
 ---
 
