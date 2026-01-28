@@ -135,7 +135,7 @@ async def _stream_llm_response(
     """
     from ..services import llm_registry
     from ..services.protocols import Message
-    from ..storage.database import get_pool
+    from ..storage.database import get_db_pool
 
     llm = llm_registry.get_active()
     if llm is None or not hasattr(llm, "chat_stream_async"):
@@ -149,20 +149,18 @@ async def _stream_llm_response(
     session_id = context_dict.get("session_id")
     if session_id:
         try:
-            pool = get_pool()
-            if pool:
-                async with pool.acquire() as conn:
-                    rows = await conn.fetch(
-                        """SELECT role, content FROM conversation_turns
-                           WHERE session_id = $1
-                           ORDER BY created_at DESC LIMIT 6""",
-                        session_id
-                    )
-                    # Add in chronological order (reverse the DESC results)
-                    for row in reversed(rows):
-                        messages.append(Message(role=row["role"], content=row["content"]))
-                    if rows:
-                        logger.info("Added %d conversation turns to streaming context", len(rows))
+            pool = get_db_pool()
+            if pool.is_initialized:
+                rows = await pool.fetch(
+                    """SELECT role, content FROM conversation_turns
+                       WHERE session_id = $1
+                       ORDER BY created_at DESC LIMIT 6""",
+                    session_id
+                )
+                for row in reversed(rows):
+                    messages.append(Message(role=row["role"], content=row["content"]))
+                if rows:
+                    logger.info("Added %d conversation turns to streaming context", len(rows))
         except Exception as e:
             logger.debug("Could not fetch conversation history: %s", e)
 
