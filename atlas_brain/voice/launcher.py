@@ -143,12 +143,7 @@ async def _stream_llm_response(
         return False
 
     buffer = SentenceBuffer()
-    system_prompt = (
-        "You are Atlas, a capable personal assistant. "
-        "You can control smart home devices, answer questions, and help with tasks. "
-        "Be conversational, helpful, and concise. Keep responses to 1-3 sentences."
-    )
-    messages = [Message(role="system", content=system_prompt)]
+    messages = [Message(role="system", content=_PREFILL_SYSTEM_PROMPT)]
 
     # Try to get conversation history for context
     session_id = context_dict.get("session_id")
