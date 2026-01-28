@@ -9,7 +9,7 @@ import logging
 import signal
 import sys
 import threading
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from ..agents.atlas import get_atlas_agent
 from ..agents.protocols import AgentContext
@@ -18,6 +18,7 @@ from .pipeline import (
     NemotronAsrHttpClient,
     NemotronAsrStreamingClient,
     PiperTTS,
+    SentenceBuffer,
     VoicePipeline,
 )
 
@@ -57,6 +58,124 @@ def _create_agent_runner():
             return ""
 
     return runner
+
+
+def _create_streaming_agent_runner():
+    """Create a streaming agent runner that yields sentences to TTS."""
+    from ..services import llm_registry
+    from ..services.protocols import Message
+    from ..services.intent_router import route_query
+    from ..config import settings
+
+    def runner(
+        transcript: str,
+        context_dict: Dict[str, Any],
+        on_sentence: Callable[[str], None],
+    ) -> None:
+        """
+        Run agent with streaming LLM for conversations, regular agent for tools.
+
+        Args:
+            transcript: User input text
+            context_dict: Session context
+            on_sentence: Callback for each complete sentence
+        """
+        if _event_loop is None:
+            logger.error("No event loop for streaming agent")
+            return
+
+        # First, check intent to decide streaming vs regular path
+        async def check_and_run():
+            use_streaming = False
+
+            if settings.intent_router.enabled:
+                route_result = await route_query(transcript)
+                threshold = settings.intent_router.confidence_threshold
+
+                if route_result.action_category == "conversation":
+                    if route_result.confidence >= threshold:
+                        use_streaming = True
+                        logger.info(
+                            "Streaming path: conversation (conf=%.2f)",
+                            route_result.confidence
+                        )
+                else:
+                    logger.info(
+                        "Non-streaming path: %s/%s (conf=%.2f)",
+                        route_result.action_category,
+                        route_result.tool_name or "none",
+                        route_result.confidence
+                    )
+
+            if use_streaming:
+                await _stream_llm_response(transcript, on_sentence)
+            else:
+                await _run_agent_fallback(transcript, context_dict, on_sentence)
+
+        try:
+            future = asyncio.run_coroutine_threadsafe(check_and_run(), _event_loop)
+            future.result(timeout=30.0)
+        except Exception as e:
+            logger.error("Streaming agent runner failed: %s", e)
+
+    return runner
+
+
+async def _stream_llm_response(
+    transcript: str,
+    on_sentence: Callable[[str], None],
+) -> None:
+    """Stream LLM response for conversation queries."""
+    from ..services import llm_registry
+    from ..services.protocols import Message
+
+    llm = llm_registry.get_active()
+    if llm is None or not hasattr(llm, "chat_stream_async"):
+        logger.warning("LLM does not support streaming")
+        return
+
+    buffer = SentenceBuffer()
+    system_prompt = (
+        "You are Atlas, a capable personal assistant. "
+        "You can control smart home devices, answer questions, and help with tasks. "
+        "Be conversational, helpful, and concise. Keep responses to 1-3 sentences."
+    )
+    messages = [
+        Message(role="system", content=system_prompt),
+        Message(role="user", content=transcript),
+    ]
+
+    try:
+        async for token in llm.chat_stream_async(messages, max_tokens=150):
+            sentence = buffer.add_token(token)
+            if sentence:
+                logger.info("Streaming sentence ready: %s", sentence[:60])
+                on_sentence(sentence)
+        remaining = buffer.flush()
+        if remaining:
+            logger.info("Streaming final chunk: %s", remaining[:60])
+            on_sentence(remaining)
+    except Exception as e:
+        logger.error("Streaming LLM error: %s", e)
+
+
+async def _run_agent_fallback(
+    transcript: str,
+    context_dict: Dict[str, Any],
+    on_sentence: Callable[[str], None],
+) -> None:
+    """Run regular agent for tool/device queries."""
+    agent = get_atlas_agent()
+    ctx = AgentContext(
+        input_text=transcript,
+        session_id=context_dict.get("session_id"),
+    )
+    try:
+        result = await agent.run(ctx)
+        if result.response_text:
+            on_sentence(result.response_text)
+    except Exception as e:
+        logger.error("Agent fallback failed: %s", e)
 
 
 # Static system prompt for prefill (matches AtlasAgent._generate_llm_response)
@@ -185,6 +304,7 @@ def create_voice_pipeline() -> Optional[VoicePipeline]:
     )
 
     agent_runner = _create_agent_runner()
+    streaming_agent_runner = _create_streaming_agent_runner()
     prefill_runner = _create_prefill_runner()
 
     pipeline = VoicePipeline(
@@ -193,6 +313,8 @@ def create_voice_pipeline() -> Optional[VoicePipeline]:
         asr_client=asr_client,
         tts=tts,
         agent_runner=agent_runner,
+        streaming_agent_runner=streaming_agent_runner,
+        streaming_llm_enabled=cfg.streaming_llm_enabled,
         sample_rate=cfg.sample_rate,
         block_size=cfg.block_size,
         silence_ms=cfg.silence_ms,

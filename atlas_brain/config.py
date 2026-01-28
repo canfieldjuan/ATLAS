@@ -569,6 +569,10 @@ class VoiceClientConfig(BaseSettings):
     piper_noise_scale: float = Field(default=0.667, description="Piper noise scale")
     piper_noise_w: float = Field(default=0.8, description="Piper noise width")
     piper_sample_rate: int = Field(default=16000, description="Piper output sample rate (from model config)")
+    streaming_llm_enabled: bool = Field(
+        default=True,
+        description="Enable streaming LLM to TTS (speak sentences as generated)"
+    )
 
     # VAD and segmentation settings
     vad_aggressiveness: int = Field(default=2, description="WebRTC VAD aggressiveness (0-3)")

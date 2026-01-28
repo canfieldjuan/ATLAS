@@ -312,6 +312,45 @@ class NemotronAsrStreamingClient:
         return self._last_partial
 
 
+class SentenceBuffer:
+    """Buffer that accumulates tokens and yields complete sentences."""
+
+    SENTENCE_ENDINGS = ".!?"
+
+    def __init__(self):
+        self._buffer = ""
+
+    def add_token(self, token: str) -> Optional[str]:
+        """
+        Add a token to buffer. Returns sentence if complete.
+
+        Args:
+            token: Token string from LLM
+
+        Returns:
+            Complete sentence if buffer ends with sentence punctuation, else None
+        """
+        self._buffer += token
+        stripped = self._buffer.rstrip()
+        if stripped and stripped[-1] in self.SENTENCE_ENDINGS:
+            sentence = stripped
+            self._buffer = ""
+            return sentence
+        return None
+
+    def flush(self) -> Optional[str]:
+        """Flush remaining buffer content."""
+        if self._buffer.strip():
+            content = self._buffer.strip()
+            self._buffer = ""
+            return content
+        return None
+
+    def clear(self):
+        """Clear the buffer."""
+        self._buffer = ""
+
+
 class PiperTTS:
     """Piper TTS engine for speech synthesis with streaming support."""
 
@@ -488,6 +527,8 @@ class VoicePipeline:
         asr_client: NemotronAsrHttpClient,
         tts: PiperTTS,
         agent_runner: Callable[[str, Dict[str, Any]], str],
+        streaming_agent_runner: Optional[Callable[[str, Dict[str, Any], Callable[[str], None]], None]] = None,
+        streaming_llm_enabled: bool = False,
         sample_rate: int = 16000,
         block_size: int = 1280,
         silence_ms: int = 500,
@@ -525,6 +566,8 @@ class VoicePipeline:
         self.wake_threshold = wake_threshold
         self.asr_client = asr_client
         self.agent_runner = agent_runner
+        self.streaming_agent_runner = streaming_agent_runner
+        self.streaming_llm_enabled = streaming_llm_enabled
         self.prefill_runner = prefill_runner
         self._prefill_in_progress = False
         self.session_id = str(uuid.uuid4())
@@ -656,6 +699,11 @@ class VoicePipeline:
             return
         logger.info("ASR: %s", transcript)
 
+        # Use streaming LLM if enabled
+        if self.streaming_llm_enabled and self.streaming_agent_runner:
+            self._handle_streaming_llm_command(transcript)
+            return
+
         context = {"session_id": self.session_id}
         reply = self.agent_runner(transcript, context)
 
@@ -680,6 +728,11 @@ class VoicePipeline:
             return
         logger.info("Streaming ASR: %s", transcript)
 
+        # Use streaming LLM if enabled
+        if self.streaming_llm_enabled and self.streaming_agent_runner:
+            self._handle_streaming_llm_command(transcript)
+            return
+
         context = {"session_id": self.session_id}
         reply = self.agent_runner(transcript, context)
 
@@ -692,6 +745,43 @@ class VoicePipeline:
             on_start=self._on_playback_start,
             on_done=self._on_playback_done,
         )
+
+    def _handle_streaming_llm_command(self, transcript: str):
+        """Handle command with streaming LLM to TTS - speak sentences as generated."""
+        if not transcript:
+            logger.warning("Empty transcript for streaming LLM")
+            return
+
+        logger.info("Streaming LLM command: %s", transcript)
+        context = {"session_id": self.session_id}
+        sentences = []
+
+        def on_sentence(sentence: str):
+            """Callback for each complete sentence from LLM."""
+            sentences.append(sentence)
+            log_text = sentence[:80] if len(sentence) > 80 else sentence
+            logger.info("Streaming LLM sentence %d: %s", len(sentences), log_text)
+
+        if self.streaming_agent_runner:
+            self.streaming_agent_runner(transcript, context, on_sentence)
+        else:
+            # Fallback to non-streaming
+            reply = self.agent_runner(transcript, context)
+            if reply:
+                on_sentence(reply)
+
+        # Concatenate all sentences and speak as one utterance
+        if sentences:
+            full_reply = "".join(sentences)
+            logger.info("Speaking concatenated reply (%d sentences): %s",
+                       len(sentences), full_reply[:100] if len(full_reply) > 100 else full_reply)
+            self.playback.speak(
+                full_reply,
+                on_start=self._on_playback_start,
+                on_done=self._on_playback_done,
+            )
+        else:
+            logger.warning("No sentences generated from streaming LLM")
 
     def _on_playback_start(self):
         """Called when TTS playback starts."""
