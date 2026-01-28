@@ -331,11 +331,10 @@ class SentenceBuffer:
             Complete sentence if buffer ends with sentence punctuation, else None
         """
         self._buffer += token
-        stripped = self._buffer.rstrip()
+        stripped = self._buffer.strip()
         if stripped and stripped[-1] in self.SENTENCE_ENDINGS:
-            sentence = stripped
             self._buffer = ""
-            return sentence
+            return stripped
         return None
 
     def flush(self) -> Optional[str]:
