@@ -406,6 +406,7 @@ def create_voice_pipeline() -> Optional[VoicePipeline]:
         conversation_start_delay_ms=cfg.conversation_start_delay_ms,
         conversation_speech_frames=cfg.conversation_speech_frames,
         conversation_speech_tolerance=cfg.conversation_speech_tolerance,
+        conversation_rms_threshold=cfg.conversation_rms_threshold,
     )
 
     return pipeline

@@ -46,6 +46,7 @@ class FrameProcessor:
         conversation_timeout_ms: int = 8000,
         conversation_speech_frames: int = 3,
         conversation_speech_tolerance: int = 2,
+        conversation_rms_threshold: float = 0.01,
         on_conversation_timeout: Optional[Callable[[], None]] = None,
     ):
         self.wake_predict = wake_predict
@@ -77,6 +78,7 @@ class FrameProcessor:
         self.conversation_timeout_ms = conversation_timeout_ms
         self.conversation_speech_frames = max(1, conversation_speech_frames)
         self.conversation_speech_tolerance = max(1, conversation_speech_tolerance)
+        self.conversation_rms_threshold = conversation_rms_threshold
         self.on_conversation_timeout = on_conversation_timeout
         self._conversation_timer: Optional[threading.Timer] = None
         self._conversation_speech_counter = 0
@@ -96,8 +98,9 @@ class FrameProcessor:
                     allow_wake_barge_in, interrupt_on_speech)
         logger.info("  streaming_asr=%s", streaming_asr_client is not None)
         logger.info("  debug_logging=%s, log_interval=%d", debug_logging, log_interval_frames)
-        logger.info("  conversation_mode=%s, timeout=%dms, speech_frames=%d",
-                    conversation_mode_enabled, conversation_timeout_ms, self.conversation_speech_frames)
+        logger.info("  conversation_mode=%s, timeout=%dms, speech_frames=%d, rms_thresh=%.3f",
+                    conversation_mode_enabled, conversation_timeout_ms,
+                    self.conversation_speech_frames, self.conversation_rms_threshold)
 
     def reset(self):
         """Reset processor to listening state."""
@@ -241,17 +244,20 @@ class FrameProcessor:
 
         # Conversation mode - accept speech without wake word
         if self.state == "conversing":
-            # Check for speech - require consecutive frames to avoid false triggers
+            # Check for speech - require consecutive frames AND RMS threshold
+            # RMS check filters out echo/reverb from TTS and ambient noise
             is_speech = self._is_speech(frame_bytes)
-            if is_speech:
+            rms = self._rms(frame_bytes)
+            if is_speech and rms > self.conversation_rms_threshold:
                 self._conversation_speech_counter += 1
                 self._conversation_silence_counter = 0  # Reset silence on speech
                 if self._conversation_speech_counter >= self.conversation_speech_frames:
                     self._cancel_conversation_timer()
                     self._state_transitions += 1
                     logger.info(
-                        "SPEECH DETECTED in conversation mode after %d frames, recording (transition=%d)",
-                        self._conversation_speech_counter, self._state_transitions,
+                        "SPEECH DETECTED in conversation mode after %d frames, "
+                        "rms=%.4f, recording (transition=%d)",
+                        self._conversation_speech_counter, rms, self._state_transitions,
                     )
                     self._conversation_speech_counter = 0
                     self._conversation_silence_counter = 0

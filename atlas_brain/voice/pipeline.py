@@ -572,6 +572,7 @@ class VoicePipeline:
         conversation_start_delay_ms: int = 500,
         conversation_speech_frames: int = 3,
         conversation_speech_tolerance: int = 2,
+        conversation_rms_threshold: float = 0.01,
     ):
         self.sample_rate = sample_rate
         self.conversation_mode_enabled = conversation_mode_enabled
@@ -648,6 +649,7 @@ class VoicePipeline:
             conversation_timeout_ms=conversation_timeout_ms,
             conversation_speech_frames=conversation_speech_frames,
             conversation_speech_tolerance=conversation_speech_tolerance,
+            conversation_rms_threshold=conversation_rms_threshold,
             on_conversation_timeout=self._on_conversation_timeout,
         )
 

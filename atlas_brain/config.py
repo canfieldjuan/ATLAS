@@ -627,6 +627,10 @@ class VoiceClientConfig(BaseSettings):
         default=2,
         description="Silence frames to tolerate before resetting speech counter (handles brief pauses)"
     )
+    conversation_rms_threshold: float = Field(
+        default=0.01,
+        description="Minimum RMS energy to count as speech in conversation mode (filters echo/noise)"
+    )
     conversation_goodbye_phrases: list[str] = Field(
         default=["goodbye", "bye", "that's all", "thanks that's it", "nevermind"],
         description="Phrases that explicitly end conversation mode"
