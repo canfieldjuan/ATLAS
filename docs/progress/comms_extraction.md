@@ -250,3 +250,97 @@ For phone processor, create HTTP clients to atlas_brain:
 - `ATLAS_COMMS_CALENDAR_CLIENT_ID` - Google OAuth client ID
 - `ATLAS_COMMS_CALENDAR_CLIENT_SECRET` - Google OAuth client secret
 - `ATLAS_COMMS_CALENDAR_REFRESH_TOKEN` - Google OAuth refresh token
+
+---
+
+## Current Status Summary
+
+### Completed in atlas_comms
+
+| Component | Files | Status |
+|-----------|-------|--------|
+| Core config | `core/config.py`, `core/protocols.py` | COMPLETE |
+| Context routing | `context/__init__.py` | COMPLETE |
+| Providers | `providers/twilio.py`, `providers/signalwire.py` | COMPLETE |
+| Services base | `services/base.py`, `services/__init__.py` | COMPLETE |
+| Scheduling | `services/scheduling.py`, `api/scheduling.py` | COMPLETE |
+| API endpoints | `api/main.py`, `api/health.py`, `api/calls.py`, `api/sms.py`, `api/contexts.py` | COMPLETE |
+| Main service | `service.py` | COMPLETE |
+
+### Deferred (Stays in atlas_brain)
+
+| Component | Reason |
+|-----------|--------|
+| `phone_processor.py` | Requires local STT/TTS/LLM (AI integration) |
+| `personaplex_processor.py` | Requires PersonaPlex service (AI integration) |
+| `tool_bridge.py` | Requires tool_registry (AI integration) |
+| `api/comms/webhooks.py` | Part of phone processing |
+
+### atlas_brain/comms/ - Now Compatibility Layer
+
+All core comms files now re-export from atlas_comms for backward compatibility:
+
+| File | Status |
+|------|--------|
+| `__init__.py` | Re-exports from atlas_comms |
+| `config.py` | Re-exports from atlas_comms.core.config |
+| `context.py` | Re-exports from atlas_comms.context |
+| `protocols.py` | Re-exports from atlas_comms.core.protocols |
+| `services.py` | Re-exports from atlas_comms.services |
+| `scheduling.py` | Re-exports from atlas_comms.services |
+| `service.py` | Re-exports from atlas_comms |
+| `providers/__init__.py` | Re-exports from atlas_comms.providers |
+| `providers/twilio_provider.py` | DELETED (using atlas_comms) |
+| `providers/signalwire_provider.py` | DELETED (using atlas_comms) |
+| `real_services.py` | LOCAL - email/SMS implementations |
+| `phone_processor.py` | LOCAL - requires atlas_brain AI |
+| `personaplex_processor.py` | LOCAL - requires atlas_brain AI |
+| `tool_bridge.py` | LOCAL - requires atlas_brain tools |
+
+### Completed Steps
+
+1. [x] Update `atlas_brain/comms/__init__.py` to re-export from atlas_comms
+2. [x] Update all submodule files to re-export from atlas_comms
+3. [x] Delete redundant provider implementation files
+4. [x] Verify all imports work correctly
+
+### Remaining (Deferred)
+
+- Phone processing (phone_processor.py, personaplex_processor.py, tool_bridge.py)
+- Webhooks (api/comms/webhooks.py)
+- real_services.py (email/SMS implementations)
+
+---
+
+## 2026-01-28 - Comms Finalization Complete
+
+**Changes made:**
+
+1. Updated `atlas_brain/comms/__init__.py`:
+   - Now imports from atlas_comms instead of local modules
+   - Re-exports everything for backward compatibility
+
+2. Updated submodule files to re-export from atlas_comms:
+   - `config.py` - re-exports from atlas_comms.core.config
+   - `protocols.py` - re-exports from atlas_comms.core.protocols
+   - `context.py` - re-exports from atlas_comms.context
+   - `services.py` - re-exports from atlas_comms.services
+   - `scheduling.py` - re-exports from atlas_comms.services
+   - `service.py` - re-exports from atlas_comms
+   - `providers/__init__.py` - re-exports from atlas_comms.providers
+
+3. Deleted redundant files:
+   - `providers/twilio_provider.py`
+   - `providers/signalwire_provider.py`
+
+4. Kept local files (require atlas_brain internals):
+   - `real_services.py` - uses atlas_brain config for OAuth
+   - `phone_processor.py` - uses STT/TTS/LLM registries
+   - `personaplex_processor.py` - uses PersonaPlex service
+   - `tool_bridge.py` - uses tool_registry
+
+**Validation:**
+- [x] All comms imports work correctly
+- [x] tools/scheduling.py imports work
+- [x] main.py style imports work
+- [x] Syntax valid for all updated files
