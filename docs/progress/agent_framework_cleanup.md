@@ -2,7 +2,7 @@
 
 **Created:** 2026-01-29
 **Last Updated:** 2026-01-29
-**Status:** COMPLETE - Phase 5 Complete (2,568 lines removed)
+**Status:** COMPLETE - All Phases Done (2,580+ lines removed)
 
 ---
 
@@ -497,3 +497,15 @@ Plus removal of duplicate logic across the codebase.
 - Verified all imports work correctly
 - Verified agent processing works with LangGraph backend
 - **Status:** COMPLETE - Old agent framework removed
+
+### 2026-01-29 Session - Phase 6 Complete
+- Removed `_LEGACY_TOOL_MAP` from `atlas_brain/agents/tools.py`:
+  - Verified all aliases resolve correctly through tool_registry
+  - Removed 14-line deprecated constant
+  - Simplified execute_tool() alias resolution
+  - Changed list_tools() fallback to return empty list
+- Evaluated other legacy code:
+  - `device_index` parameter: Still used as internal storage, skip
+  - Alert handler fallback: Safety mechanism for exceptions, skip
+- Verified tool execution still works (time query successful)
+- **Status:** CLEANUP COMPLETE
