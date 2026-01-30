@@ -74,6 +74,15 @@ from .home import (
     create_home_agent,
 )
 
+from .interface import (
+    AgentInterface,
+    LegacyAgentAdapter,
+    LangGraphAgentAdapter,
+    get_agent,
+    process_with_fallback,
+    reset_agent_cache,
+)
+
 __all__ = [
     # Enums
     "AgentState",
@@ -116,4 +125,11 @@ __all__ = [
     "HomeAgent",
     "get_home_agent",
     "create_home_agent",
+    # Unified Interface
+    "AgentInterface",
+    "LegacyAgentAdapter",
+    "LangGraphAgentAdapter",
+    "get_agent",
+    "process_with_fallback",
+    "reset_agent_cache",
 ]

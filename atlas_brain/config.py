@@ -181,6 +181,10 @@ class SpeakerIDConfig(BaseSettings):
         default=0.75,
         description="Minimum confidence for speaker match (0.0-1.0)"
     )
+    min_enrollment_samples: int = Field(
+        default=3,
+        description="Minimum voice samples needed for enrollment"
+    )
 
 
 class RecognitionConfig(BaseSettings):
@@ -745,6 +749,21 @@ class IntentRouterConfig(BaseSettings):
     )
 
 
+class AgentConfig(BaseSettings):
+    """Agent system configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_AGENT_")
+
+    backend: str = Field(
+        default="legacy",
+        description="Agent backend: 'legacy' (BaseAgent) or 'langgraph'",
+    )
+    fallback_enabled: bool = Field(
+        default=True,
+        description="Fall back to legacy agent if LangGraph fails",
+    )
+
+
 class Settings(BaseSettings):
     """Application-wide settings."""
 
@@ -814,6 +833,7 @@ class Settings(BaseSettings):
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     modes: ModeManagerConfig = Field(default_factory=ModeManagerConfig)
     intent_router: IntentRouterConfig = Field(default_factory=IntentRouterConfig)
+    agent: AgentConfig = Field(default_factory=AgentConfig)
 
     # Presence tracking - imported from presence module
     @property
