@@ -45,3 +45,7 @@ piper-tts
 # Optional: Flash Attention 2 for faster inference (Ampere+ GPUs)
 # Install separately: pip install flash-attn --no-build-isolation
 rich>=13.0.0
+
+# LangGraph for agent orchestration
+langgraph>=0.2.0
+langchain-core>=0.3.0

@@ -15,6 +15,7 @@ from .session import SessionRepository
 from .unified_alerts import UnifiedAlertRepository, get_unified_alert_repo
 from .vector import VectorRepository, get_vector_repository
 from .vision import VisionEventRepository, get_vision_event_repo
+from .speaker import SpeakerRepository, get_speaker_repo
 
 __all__ = [
     "AppointmentRepository",
@@ -35,4 +36,6 @@ __all__ = [
     "get_unified_alert_repo",
     "get_vector_repository",
     "get_vision_event_repo",
+    "SpeakerRepository",
+    "get_speaker_repo",
 ]
