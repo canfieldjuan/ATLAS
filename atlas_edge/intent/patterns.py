@@ -31,11 +31,51 @@ class ParsedDeviceIntent:
 
 # Device patterns with named groups
 # Format: (compiled_regex, action, target_type, extract_params_func)
+# NOTE: Order matters! More specific patterns must come before generic ones.
 DEVICE_PATTERNS = [
-    # Turn on/off patterns
+    # Fan patterns (before generic light pattern)
     (
         re.compile(
-            r"turn\s+(on|off)\s+(?:the\s+)?(.+?)(?:\s+light)?(?:\s+lights)?$",
+            r"turn\s+(on|off)\s+(?:the\s+)?(.+?)\s+fan$",
+            re.IGNORECASE,
+        ),
+        lambda m: ("turn_on" if m.group(1).lower() == "on" else "turn_off"),
+        "fan",
+        lambda m: {"target_name": m.group(2).strip()},
+    ),
+    (
+        re.compile(
+            r"(?:the\s+)?(.+?)\s+fan\s+(on|off)$",
+            re.IGNORECASE,
+        ),
+        lambda m: ("turn_on" if m.group(2).lower() == "on" else "turn_off"),
+        "fan",
+        lambda m: {"target_name": m.group(1).strip()},
+    ),
+    # Switch patterns (before generic light pattern)
+    (
+        re.compile(
+            r"turn\s+(on|off)\s+(?:the\s+)?(.+?)\s+switch$",
+            re.IGNORECASE,
+        ),
+        lambda m: ("turn_on" if m.group(1).lower() == "on" else "turn_off"),
+        "switch",
+        lambda m: {"target_name": m.group(2).strip()},
+    ),
+    # TV patterns (before generic light pattern)
+    (
+        re.compile(
+            r"turn\s+(on|off)\s+(?:the\s+)?(?:tv|television)(?:\s+in\s+(?:the\s+)?(.+))?$",
+            re.IGNORECASE,
+        ),
+        lambda m: ("turn_on" if m.group(1).lower() == "on" else "turn_off"),
+        "media_player",
+        lambda m: {"target_name": m.group(2).strip() if m.group(2) else "tv"},
+    ),
+    # Light patterns - turn on/off (requires "light" or "lights" in the phrase)
+    (
+        re.compile(
+            r"turn\s+(on|off)\s+(?:the\s+)?(.+?)\s+lights?$",
             re.IGNORECASE,
         ),
         lambda m: ("turn_on" if m.group(1).lower() == "on" else "turn_off"),
@@ -103,35 +143,6 @@ DEVICE_PATTERNS = [
         "light",
         lambda m: {"target_name": m.group(1).strip()},
     ),
-    # Fan patterns
-    (
-        re.compile(
-            r"turn\s+(on|off)\s+(?:the\s+)?(.+?)\s+fan$",
-            re.IGNORECASE,
-        ),
-        lambda m: ("turn_on" if m.group(1).lower() == "on" else "turn_off"),
-        "fan",
-        lambda m: {"target_name": m.group(2).strip()},
-    ),
-    (
-        re.compile(
-            r"(?:the\s+)?(.+?)\s+fan\s+(on|off)$",
-            re.IGNORECASE,
-        ),
-        lambda m: ("turn_on" if m.group(2).lower() == "on" else "turn_off"),
-        "fan",
-        lambda m: {"target_name": m.group(1).strip()},
-    ),
-    # Switch patterns
-    (
-        re.compile(
-            r"turn\s+(on|off)\s+(?:the\s+)?(.+?)\s+switch$",
-            re.IGNORECASE,
-        ),
-        lambda m: ("turn_on" if m.group(1).lower() == "on" else "turn_off"),
-        "switch",
-        lambda m: {"target_name": m.group(2).strip()},
-    ),
     # Scene patterns
     (
         re.compile(
@@ -160,15 +171,6 @@ DEVICE_PATTERNS = [
         lambda m: m.group(1).lower(),
         "media_player",
         lambda m: {"target_name": m.group(2).strip()},
-    ),
-    (
-        re.compile(
-            r"turn\s+(on|off)\s+(?:the\s+)?(?:tv|television)(?:\s+in\s+(?:the\s+)?(.+))?$",
-            re.IGNORECASE,
-        ),
-        lambda m: ("turn_on" if m.group(1).lower() == "on" else "turn_off"),
-        "media_player",
-        lambda m: {"target_name": m.group(2).strip() if m.group(2) else "tv"},
     ),
     # Volume patterns
     (

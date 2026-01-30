@@ -1,0 +1,20 @@
+# Atlas Edge - Jetson Device Dependencies
+
+# Core
+pydantic-settings
+python-dotenv
+numpy
+
+# ML Models
+torch
+transformers
+nemo_toolkit[asr]
+
+# Audio
+webrtcvad
+piper-tts
+sounddevice
+
+# Network
+httpx
+websockets
