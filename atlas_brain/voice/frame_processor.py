@@ -160,7 +160,7 @@ class FrameProcessor:
         current_allow_barge_in: bool,
         stop_playback: Callable[[], None],
         on_finalize: Callable[[bytes], None],
-        on_streaming_finalize: Optional[Callable[[str], None]] = None,
+        on_streaming_finalize: Optional[Callable[[str, bytes], None]] = None,
     ):
         """
         Process an audio frame.
@@ -171,7 +171,7 @@ class FrameProcessor:
             current_allow_barge_in: Whether barge-in is allowed
             stop_playback: Callback to stop TTS
             on_finalize: Callback when command is ready (batch mode - receives audio bytes)
-            on_streaming_finalize: Callback for streaming mode (receives transcript directly)
+            on_streaming_finalize: Callback for streaming mode (receives transcript and audio)
         """
         # OpenWakeWord expects int16 audio directly (not float32)
         # See: https://github.com/dscripka/openWakeWord/blob/main/examples/detect_from_microphone.py
@@ -337,19 +337,20 @@ class FrameProcessor:
                         self._streaming_active = False
                         last_partial = self._last_partial
                         self._last_partial = ""  # Reset partial tracking
+                        # Get audio bytes for speaker verification
+                        audio_bytes = self.segmenter.consume_audio()
                         if transcript and on_streaming_finalize is not None:
                             logger.info("Streaming transcript: %s", transcript[:100])
-                            on_streaming_finalize(transcript)
+                            on_streaming_finalize(transcript, audio_bytes)
                         elif last_partial and on_streaming_finalize is not None:
                             # Use last partial as fallback
                             logger.info("Using last partial as transcript: %s", last_partial[:100])
-                            on_streaming_finalize(last_partial)
+                            on_streaming_finalize(last_partial, audio_bytes)
                         elif transcript:
                             logger.warning("No streaming handler, transcript: %s", transcript[:50])
                         else:
                             # No transcript at all - fall back to batch ASR
                             logger.warning("Streaming ASR empty, falling back to batch")
-                            audio_bytes = self.segmenter.consume_audio()
                             if audio_bytes and on_finalize is not None:
                                 on_finalize(audio_bytes)
                     except Exception as e:

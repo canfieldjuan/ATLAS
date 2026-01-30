@@ -573,8 +573,18 @@ class VoicePipeline:
         conversation_speech_frames: int = 3,
         conversation_speech_tolerance: int = 2,
         conversation_rms_threshold: float = 0.01,
+        speaker_id_enabled: bool = False,
+        speaker_id_service: Optional[Any] = None,
+        require_known_speaker: bool = False,
+        unknown_speaker_response: str = "I don't recognize your voice.",
     ):
         self.sample_rate = sample_rate
+        self.speaker_id_enabled = speaker_id_enabled
+        self.speaker_id_service = speaker_id_service
+        self.require_known_speaker = require_known_speaker
+        self.unknown_speaker_response = unknown_speaker_response
+        self._last_audio_buffer: Optional[bytes] = None
+        self._last_speaker_match: Optional[Any] = None
         self.conversation_mode_enabled = conversation_mode_enabled
         self.conversation_timeout_ms = conversation_timeout_ms
         self.conversation_start_delay_ms = conversation_start_delay_ms
@@ -711,6 +721,13 @@ class VoicePipeline:
 
     def _handle_command(self, pcm_bytes: bytes):
         """Handle a completed voice command."""
+        # Store audio for speaker ID
+        self._last_audio_buffer = pcm_bytes
+
+        # Verify speaker if enabled
+        if not self._verify_speaker(pcm_bytes):
+            return
+
         # Use PCM directly if client supports it (avoids WAV encode/decode)
         if hasattr(self.asr_client, "transcribe_pcm"):
             transcript = self.asr_client.transcribe_pcm(pcm_bytes, self.sample_rate)
@@ -739,15 +756,25 @@ class VoicePipeline:
             on_done=self._on_playback_done,
         )
 
-    def _handle_streaming_command(self, transcript: str):
+    def _handle_streaming_command(self, transcript: str, audio_bytes: bytes):
         """Handle a command with transcript from streaming ASR.
 
         Skips batch ASR transcription since we already have the transcript.
+
+        Args:
+            transcript: Final transcript from streaming ASR
+            audio_bytes: Raw PCM audio bytes for speaker verification
         """
         logger.info("_handle_streaming_command called with transcript: %r", transcript)
         if not transcript:
             logger.warning("Empty transcript from streaming ASR, returning without TTS")
             return
+
+        # Store audio and verify speaker
+        self._last_audio_buffer = audio_bytes
+        if not self._verify_speaker(audio_bytes):
+            return
+
         logger.info("Streaming ASR: %s", transcript)
 
         # Use streaming LLM if enabled
@@ -867,3 +894,56 @@ class VoicePipeline:
             logger.warning("LLM prefill failed: %s", e)
         finally:
             self._prefill_in_progress = False
+
+    def _verify_speaker(self, pcm_bytes: bytes) -> bool:
+        """
+        Verify speaker identity from audio.
+
+        Args:
+            pcm_bytes: Raw PCM audio (int16, mono)
+
+        Returns:
+            True if speaker is allowed, False if rejected
+        """
+        if not self.speaker_id_enabled or self.speaker_id_service is None:
+            return True
+
+        try:
+            import asyncio
+            loop = asyncio.new_event_loop()
+            match = loop.run_until_complete(
+                self.speaker_id_service.identify_speaker_from_pcm(
+                    pcm_bytes, self.sample_rate
+                )
+            )
+            loop.close()
+            self._last_speaker_match = match
+
+            if match.matched:
+                logger.info(
+                    "Speaker identified: %s (confidence=%.2f)",
+                    match.user_name, match.confidence
+                )
+                return True
+
+            if self.require_known_speaker:
+                logger.warning(
+                    "Unknown speaker rejected (confidence=%.2f, threshold=%.2f)",
+                    match.confidence, self.speaker_id_service.threshold
+                )
+                self.playback.speak(
+                    self.unknown_speaker_response,
+                    on_start=self._on_playback_start,
+                    on_done=self._on_playback_done,
+                )
+                return False
+
+            logger.info(
+                "Unknown speaker allowed (require_known_speaker=False, conf=%.2f)",
+                match.confidence
+            )
+            return True
+
+        except Exception as e:
+            logger.error("Speaker verification failed: %s", e)
+            return not self.require_known_speaker
