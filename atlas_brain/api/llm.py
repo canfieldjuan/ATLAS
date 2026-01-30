@@ -13,7 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from ..agents import get_atlas_agent, AgentContext
+from ..agents.interface import get_agent
 from ..services import llm_registry
 
 logger = logging.getLogger("atlas.api.llm")
@@ -143,16 +143,14 @@ async def chat(request: ChatRequest):
 
     logger.info("Chat request: %s (session=%s)", user_message[:50], request.session_id)
 
-    agent = get_atlas_agent(session_id=request.session_id)
-
-    context = AgentContext(
-        input_text=user_message,
-        input_type="text",
-        session_id=request.session_id,
-    )
+    agent = get_agent("atlas")
 
     try:
-        result = await agent.run(context)
+        result = await agent.process(
+            input_text=user_message,
+            session_id=request.session_id,
+            input_type="text",
+        )
 
         logger.info(
             "Agent result: action_type=%s, response_len=%d",

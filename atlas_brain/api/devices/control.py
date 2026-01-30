@@ -8,7 +8,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from ...agents import get_atlas_agent, AgentContext
+from ...agents.interface import get_agent
 from ...capabilities import (
     ActionRequest,
     CapabilityType,
@@ -164,15 +164,12 @@ async def execute_intent(body: IntentRequestBody):
     """
     logger.info("Intent request: %s (session=%s)", body.query[:50], body.session_id)
 
-    agent = get_atlas_agent(session_id=body.session_id)
-
-    context = AgentContext(
+    agent = get_agent("atlas")
+    result = await agent.process(
         input_text=body.query,
-        input_type="text",
         session_id=body.session_id,
+        input_type="text",
     )
-
-    result = await agent.run(context)
 
     logger.info(
         "Agent result: action_type=%s, success=%s",

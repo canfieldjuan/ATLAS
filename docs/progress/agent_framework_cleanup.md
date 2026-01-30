@@ -2,7 +2,7 @@
 
 **Created:** 2026-01-29
 **Last Updated:** 2026-01-29
-**Status:** IN PROGRESS - Phase 2 Complete
+**Status:** IN PROGRESS - Phase 3 Complete
 
 ---
 
@@ -445,3 +445,19 @@ Plus removal of duplicate logic across the codebase.
 - Verified imports work correctly
 - Verified tool execution (time query) works through new interface
 - **Next:** Phase 3 - Migrate API Endpoints
+
+### 2026-01-29 Session - Phase 3 Complete
+- Updated `atlas_brain/api/query/text.py`:
+  - Changed import to `from ...agents.interface import get_agent`
+  - Updated endpoint to use `get_agent("atlas").process()`
+- Updated `atlas_brain/api/devices/control.py`:
+  - Changed import to use unified interface
+  - Updated `/intent` endpoint to use `get_agent("atlas").process()`
+- Updated `atlas_brain/api/llm.py`:
+  - Changed import to use unified interface
+  - Updated `/chat` endpoint to use `get_agent("atlas").process()`
+- Verified all endpoints work correctly:
+  - Text query returns time correctly
+  - Intent endpoint processes device commands
+  - Chat endpoint handles conversations
+- **Next:** Phase 4 - Migrate Phone/Receptionist (or skip to Phase 5 if not needed)
