@@ -2,7 +2,7 @@
 
 **Created:** 2026-01-29
 **Last Updated:** 2026-01-29
-**Status:** IN PROGRESS - Phase 3 Complete
+**Status:** COMPLETE - Phase 5 Complete (2,568 lines removed)
 
 ---
 
@@ -476,3 +476,24 @@ Plus removal of duplicate logic across the codebase.
   - Changed to use `agent.process()` instead of `AgentContext` + `agent.run()`
 - Verified all imports work correctly
 - **Next:** Phase 5 - Remove Old Agents (requires production testing first)
+
+### 2026-01-29 Session - Phase 5 Complete
+- Changed default agent backend to "langgraph" in config.py
+- Updated `atlas_brain/agents/interface.py`:
+  - Removed LegacyAgentAdapter class
+  - Removed _get_legacy_agent() function
+  - Removed _fallback_to_legacy() function
+  - Simplified get_agent() to only use LangGraph
+  - Simplified process_with_fallback() to just error handling
+- Deleted old agent files (2,375 lines):
+  - `atlas_brain/agents/base.py` (381 lines)
+  - `atlas_brain/agents/atlas.py` (888 lines)
+  - `atlas_brain/agents/home.py` (466 lines)
+  - `atlas_brain/agents/receptionist.py` (640 lines)
+- Updated `atlas_brain/agents/__init__.py`:
+  - Removed old agent exports (BaseAgent, AtlasAgent, HomeAgent, ReceptionistAgent)
+  - Updated docstring example to use unified interface
+- **Total lines removed: 2,568**
+- Verified all imports work correctly
+- Verified agent processing works with LangGraph backend
+- **Status:** COMPLETE - Old agent framework removed

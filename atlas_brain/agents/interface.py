@@ -1,14 +1,13 @@
 """
 Unified Agent Interface.
 
-Provides a common interface for both legacy (BaseAgent) and new (LangGraph)
-agent implementations, enabling gradual migration without breaking changes.
+Provides a common interface for LangGraph agent implementations.
 """
 
 import logging
 from typing import Any, Optional, Protocol, runtime_checkable
 
-from .protocols import AgentContext, AgentResult
+from .protocols import AgentResult
 
 logger = logging.getLogger("atlas.agents.interface")
 
@@ -39,43 +38,6 @@ class AgentInterface(Protocol):
             AgentResult with response and metadata
         """
         ...
-
-
-class LegacyAgentAdapter:
-    """Adapts old BaseAgent to unified interface."""
-
-    def __init__(self, agent: Any):
-        """
-        Initialize adapter with a legacy agent.
-
-        Args:
-            agent: A BaseAgent instance (AtlasAgent, HomeAgent, etc.)
-        """
-        self._agent = agent
-
-    async def process(
-        self,
-        input_text: str,
-        session_id: Optional[str] = None,
-        speaker_id: Optional[str] = None,
-        input_type: str = "text",
-        runtime_context: Optional[dict[str, Any]] = None,
-    ) -> AgentResult:
-        """Process input through legacy agent."""
-        ctx = runtime_context or {}
-        # Extract conversation_history if provided in runtime_context
-        conversation_history = ctx.get("conversation_history", [])
-        # Pass remaining context without conversation_history
-        remaining_ctx = {k: v for k, v in ctx.items() if k != "conversation_history"}
-        context = AgentContext(
-            input_text=input_text,
-            input_type=input_type,
-            session_id=session_id,
-            speaker_id=speaker_id,
-            conversation_history=conversation_history,
-            runtime_context=remaining_ctx,
-        )
-        return await self._agent.run(context)
 
 
 class LangGraphAgentAdapter:
@@ -135,62 +97,17 @@ def get_agent(
     business_context: Optional[Any] = None,
 ) -> AgentInterface:
     """
-    Get an agent instance with the configured backend.
+    Get an agent instance.
 
     Args:
         agent_type: Type of agent ("atlas", "home", "receptionist")
         session_id: Session ID for the agent
-        backend: Override backend ("legacy" or "langgraph")
+        backend: Ignored (kept for backwards compatibility)
         business_context: Business context for receptionist agent
 
     Returns:
         Agent adapter implementing AgentInterface
     """
-    from ..config import settings
-
-    # Determine backend
-    use_backend = backend or settings.agent.backend
-
-    if use_backend == "langgraph":
-        return _get_langgraph_agent(agent_type, session_id, business_context)
-    else:
-        return _get_legacy_agent(agent_type, session_id, business_context)
-
-
-def _get_legacy_agent(
-    agent_type: str,
-    session_id: Optional[str] = None,
-    business_context: Optional[Any] = None,
-) -> LegacyAgentAdapter:
-    """Get legacy agent wrapped in adapter."""
-    if agent_type == "atlas":
-        from .atlas import get_atlas_agent
-        agent = get_atlas_agent(session_id=session_id)
-        return LegacyAgentAdapter(agent)
-
-    elif agent_type == "home":
-        from .home import get_home_agent
-        agent = get_home_agent(session_id=session_id)
-        return LegacyAgentAdapter(agent)
-
-    elif agent_type == "receptionist":
-        from .receptionist import create_receptionist_agent
-        agent = create_receptionist_agent(
-            business_context=business_context,
-            session_id=session_id,
-        )
-        return LegacyAgentAdapter(agent)
-
-    else:
-        raise ValueError(f"Unknown agent type: {agent_type}")
-
-
-def _get_langgraph_agent(
-    agent_type: str,
-    session_id: Optional[str] = None,
-    business_context: Optional[Any] = None,
-) -> LangGraphAgentAdapter:
-    """Get LangGraph agent wrapped in adapter."""
     if agent_type == "atlas":
         from .graphs import get_atlas_agent_langgraph
         graph = get_atlas_agent_langgraph(session_id=session_id)
@@ -222,7 +139,7 @@ async def process_with_fallback(
     runtime_context: Optional[dict[str, Any]] = None,
 ) -> AgentResult:
     """
-    Process input with fallback to legacy agent on failure.
+    Process input with error handling.
 
     Args:
         input_text: User input text
@@ -233,18 +150,14 @@ async def process_with_fallback(
         runtime_context: Runtime context
 
     Returns:
-        AgentResult from primary or fallback agent
+        AgentResult from agent processing
     """
-    from ..config import settings
-
-    # Try primary backend
     try:
         agent = get_agent(
             agent_type=agent_type,
             session_id=session_id,
-            backend=settings.agent.backend,
         )
-        result = await agent.process(
+        return await agent.process(
             input_text=input_text,
             session_id=session_id,
             speaker_id=speaker_id,
@@ -252,65 +165,13 @@ async def process_with_fallback(
             runtime_context=runtime_context,
         )
 
-        if result.success:
-            return result
-
-        # If primary failed and fallback is enabled
-        if settings.agent.fallback_enabled and settings.agent.backend == "langgraph":
-            logger.warning(
-                "LangGraph agent failed, falling back to legacy: %s",
-                result.error,
-            )
-            return await _fallback_to_legacy(
-                input_text=input_text,
-                agent_type=agent_type,
-                session_id=session_id,
-                speaker_id=speaker_id,
-                input_type=input_type,
-                runtime_context=runtime_context,
-            )
-
-        return result
-
     except Exception as e:
         logger.exception("Agent processing failed: %s", e)
-
-        # Try fallback if enabled
-        if settings.agent.fallback_enabled and settings.agent.backend == "langgraph":
-            logger.warning("Falling back to legacy agent after exception")
-            return await _fallback_to_legacy(
-                input_text=input_text,
-                agent_type=agent_type,
-                session_id=session_id,
-                speaker_id=speaker_id,
-                input_type=input_type,
-                runtime_context=runtime_context,
-            )
-
         return AgentResult(
             success=False,
             error=str(e),
             response_text="I encountered an error processing your request.",
         )
-
-
-async def _fallback_to_legacy(
-    input_text: str,
-    agent_type: str,
-    session_id: Optional[str],
-    speaker_id: Optional[str],
-    input_type: str,
-    runtime_context: Optional[dict[str, Any]],
-) -> AgentResult:
-    """Fall back to legacy agent."""
-    agent = _get_legacy_agent(agent_type, session_id)
-    return await agent.process(
-        input_text=input_text,
-        session_id=session_id,
-        speaker_id=speaker_id,
-        input_type=input_type,
-        runtime_context=runtime_context,
-    )
 
 
 def reset_agent_cache() -> None:

@@ -2,17 +2,16 @@
 Agent system for Atlas.
 
 Agents handle reasoning, tool execution, and response generation.
-The Orchestrator handles audio I/O and delegates to Agents.
+Uses LangGraph for agent orchestration.
 
 Example usage:
-    from atlas_brain.agents import AtlasAgent, AgentContext
+    from atlas_brain.agents import get_agent
 
-    agent = AtlasAgent()
-    context = AgentContext(
+    agent = get_agent("atlas")
+    result = await agent.process(
         input_text="turn on the living room lights",
         session_id="abc-123",
     )
-    result = await agent.run(context)
     print(result.response_text)
 """
 
@@ -31,11 +30,6 @@ from .protocols import (
     AgentTools,
 )
 
-from .base import (
-    BaseAgent,
-    Timer,
-)
-
 from .memory import (
     AtlasAgentMemory,
     get_agent_memory,
@@ -48,12 +42,6 @@ from .tools import (
     reset_agent_tools,
 )
 
-from .atlas import (
-    AtlasAgent,
-    get_atlas_agent,
-    reset_atlas_agent,
-)
-
 from .entity_tracker import (
     EntityTracker,
     TrackedEntity,
@@ -61,22 +49,8 @@ from .entity_tracker import (
     extract_pronoun,
 )
 
-from .receptionist import (
-    ReceptionistAgent,
-    get_receptionist_agent,
-    create_receptionist_agent,
-    reset_receptionist_agent,
-)
-
-from .home import (
-    HomeAgent,
-    get_home_agent,
-    create_home_agent,
-)
-
 from .interface import (
     AgentInterface,
-    LegacyAgentAdapter,
     LangGraphAgentAdapter,
     get_agent,
     process_with_fallback,
@@ -96,9 +70,6 @@ __all__ = [
     "Agent",
     "AgentMemory",
     "AgentTools",
-    # Base class
-    "BaseAgent",
-    "Timer",
     # Memory system
     "AtlasAgentMemory",
     "get_agent_memory",
@@ -107,27 +78,13 @@ __all__ = [
     "AtlasAgentTools",
     "get_agent_tools",
     "reset_agent_tools",
-    # Atlas Agent
-    "AtlasAgent",
-    "get_atlas_agent",
-    "reset_atlas_agent",
     # Entity tracking
     "EntityTracker",
     "TrackedEntity",
     "has_pronoun",
     "extract_pronoun",
-    # Receptionist Agent
-    "ReceptionistAgent",
-    "get_receptionist_agent",
-    "create_receptionist_agent",
-    "reset_receptionist_agent",
-    # Home Agent
-    "HomeAgent",
-    "get_home_agent",
-    "create_home_agent",
     # Unified Interface
     "AgentInterface",
-    "LegacyAgentAdapter",
     "LangGraphAgentAdapter",
     "get_agent",
     "process_with_fallback",

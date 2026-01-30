@@ -755,12 +755,8 @@ class AgentConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ATLAS_AGENT_")
 
     backend: str = Field(
-        default="legacy",
-        description="Agent backend: 'legacy' (BaseAgent) or 'langgraph'",
-    )
-    fallback_enabled: bool = Field(
-        default=True,
-        description="Fall back to legacy agent if LangGraph fails",
+        default="langgraph",
+        description="Agent backend: 'langgraph' (default)",
     )
 
 
