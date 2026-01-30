@@ -11,8 +11,7 @@ import sys
 import threading
 from typing import Any, Callable, Dict, Optional
 
-from ..agents.atlas import get_atlas_agent
-from ..agents.protocols import AgentContext
+from ..agents.interface import get_agent, process_with_fallback
 from ..config import settings
 from .pipeline import (
     NemotronAsrHttpClient,
@@ -30,8 +29,8 @@ _event_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
 def _create_agent_runner():
-    """Create a sync wrapper for the async AtlasAgent."""
-    agent = get_atlas_agent()
+    """Create a sync wrapper for the async agent via unified interface."""
+    agent = get_agent("atlas")
 
     def runner(transcript: str, context_dict: Dict[str, Any]) -> str:
         """Run the agent synchronously."""
@@ -39,14 +38,15 @@ def _create_agent_runner():
             logger.error("No event loop available for agent runner")
             return ""
 
-        ctx = AgentContext(
-            input_text=transcript,
-            session_id=context_dict.get("session_id"),
-        )
+        session_id = context_dict.get("session_id")
 
         try:
             future = asyncio.run_coroutine_threadsafe(
-                agent.run(ctx),
+                agent.process(
+                    input_text=transcript,
+                    session_id=session_id,
+                    input_type="voice",
+                ),
                 _event_loop,
             )
             result = future.result(timeout=30.0)
@@ -228,14 +228,15 @@ async def _run_agent_fallback(
     context_dict: Dict[str, Any],
     on_sentence: Callable[[str], None],
 ) -> None:
-    """Run regular agent for tool/device queries."""
-    agent = get_atlas_agent()
-    ctx = AgentContext(
-        input_text=transcript,
-        session_id=context_dict.get("session_id"),
-    )
+    """Run regular agent for tool/device queries via unified interface."""
+    session_id = context_dict.get("session_id")
     try:
-        result = await agent.run(ctx)
+        result = await process_with_fallback(
+            input_text=transcript,
+            agent_type="atlas",
+            session_id=session_id,
+            input_type="voice",
+        )
         if result.response_text:
             on_sentence(result.response_text)
     except Exception as e:
@@ -371,6 +372,15 @@ def create_voice_pipeline() -> Optional[VoicePipeline]:
     streaming_agent_runner = _create_streaming_agent_runner()
     prefill_runner = _create_prefill_runner()
 
+    # Initialize speaker ID service if enabled
+    speaker_id_service = None
+    speaker_cfg = settings.speaker_id
+    if speaker_cfg.enabled:
+        from ..services.speaker_id import get_speaker_id_service
+        speaker_id_service = get_speaker_id_service()
+        logger.info("Speaker ID enabled (require_known=%s, threshold=%.2f)",
+                    speaker_cfg.require_known_speaker, speaker_cfg.confidence_threshold)
+
     pipeline = VoicePipeline(
         wakeword_model_paths=cfg.wakeword_model_paths,
         wake_threshold=cfg.wake_threshold,
@@ -407,6 +417,10 @@ def create_voice_pipeline() -> Optional[VoicePipeline]:
         conversation_speech_frames=cfg.conversation_speech_frames,
         conversation_speech_tolerance=cfg.conversation_speech_tolerance,
         conversation_rms_threshold=cfg.conversation_rms_threshold,
+        speaker_id_enabled=speaker_cfg.enabled,
+        speaker_id_service=speaker_id_service,
+        require_known_speaker=speaker_cfg.require_known_speaker,
+        unknown_speaker_response=speaker_cfg.unknown_speaker_response,
     )
 
     return pipeline
