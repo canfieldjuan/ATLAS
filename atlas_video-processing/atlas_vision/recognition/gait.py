@@ -12,7 +12,7 @@ from uuid import UUID
 
 import numpy as np
 
-logger = logging.getLogger("atlas.recognition.gait")
+logger = logging.getLogger("atlas.vision.recognition.gait")
 
 # MediaPipe pose landmark indices
 POSE_LANDMARKS = {
@@ -39,7 +39,7 @@ class GaitRecognitionService:
     """
 
     def __init__(self, sequence_length: Optional[int] = None):
-        from ...config import settings
+        from ..core.config import settings
 
         self._pose = None
         self._initialized = False

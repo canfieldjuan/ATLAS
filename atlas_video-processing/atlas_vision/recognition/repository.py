@@ -10,9 +10,9 @@ from uuid import UUID
 
 import numpy as np
 
-from ...storage.database import get_db_pool
+from ..storage.database import get_db_pool
 
-logger = logging.getLogger("atlas.recognition.repository")
+logger = logging.getLogger("atlas.vision.recognition.repository")
 
 
 class PersonRepository:

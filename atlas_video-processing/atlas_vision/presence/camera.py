@@ -1,25 +1,27 @@
 """
 Camera-based presence detection consumer.
 
-Integrates with the existing VisionSubscriber to receive person detection
+Integrates directly with atlas_vision's track_store to receive person detection
 events and feed them to the PresenceService.
+
+This is different from atlas_brain's version which used VisionSubscriber (MQTT).
+Here we integrate directly since we're already in atlas_vision.
 """
 
-import asyncio
 import logging
 from typing import Optional
 
 from .service import PresenceService, get_presence_service
 from .config import presence_config
 
-logger = logging.getLogger("atlas.presence.camera")
+logger = logging.getLogger("atlas.vision.presence.camera")
 
 
 class CameraPresenceConsumer:
     """
-    Consumes vision events and updates presence state.
+    Consumes track events and updates presence state.
 
-    Registers as a callback with VisionSubscriber to receive real-time
+    Registers as a callback with track_store to receive real-time
     person detection events from cameras.
     """
 
@@ -33,9 +35,14 @@ class CameraPresenceConsumer:
         # Track active persons per camera to detect "person left"
         self._active_tracks: dict[str, set[int]] = {}  # source_id -> set of track_ids
 
-    async def register_with_vision_subscriber(self) -> bool:
+    @property
+    def is_registered(self) -> bool:
+        """Check if registered with track_store."""
+        return self._registered
+
+    async def register_with_track_store(self) -> bool:
         """
-        Register as a callback with the VisionSubscriber.
+        Register as a callback with the track_store.
 
         Returns True if registration succeeded.
         """
@@ -43,31 +50,31 @@ class CameraPresenceConsumer:
             return True
 
         try:
-            from ..vision.subscriber import get_vision_subscriber
-            subscriber = get_vision_subscriber()
+            from ..processing.tracking import get_track_store
+            track_store = get_track_store()
 
-            if subscriber is None:
-                logger.warning("VisionSubscriber not available")
+            if track_store is None:
+                logger.warning("TrackStore not available")
                 return False
 
-            subscriber.register_event_callback(self._handle_vision_event)
+            track_store.register_callback(self._handle_track_event)
             self._registered = True
-            logger.info("Registered with VisionSubscriber for presence detection")
+            logger.info("Registered with TrackStore for presence detection")
             return True
 
         except ImportError as e:
-            logger.warning("Could not import VisionSubscriber: %s", e)
+            logger.warning("Could not import TrackStore: %s", e)
             return False
         except Exception as e:
-            logger.error("Failed to register with VisionSubscriber: %s", e)
+            logger.error("Failed to register with TrackStore: %s", e)
             return False
 
-    async def _handle_vision_event(self, event) -> None:
+    async def _handle_track_event(self, event) -> None:
         """
-        Handle a vision event from the subscriber.
+        Handle a track event from the track_store.
 
         Args:
-            event: VisionEvent from atlas_brain.vision.models
+            event: TrackEvent from atlas_vision.processing.tracking
         """
         # Only care about person detections
         if event.class_name != "person":
@@ -79,7 +86,7 @@ class CameraPresenceConsumer:
 
         source_id = event.source_id
         track_id = event.track_id
-        event_type = event.event_type.value  # "new_track", "track_lost"
+        event_type = event.event_type  # "new_track", "track_lost", "track_update"
 
         if source_id not in self._active_tracks:
             self._active_tracks[source_id] = set()
@@ -96,7 +103,7 @@ class CameraPresenceConsumer:
                 camera_source=source_id,
                 person_detected=True,
                 track_id=track_id,
-                confidence=0.85,  # Default confidence for YOLO detection
+                confidence=event.confidence if hasattr(event, 'confidence') else 0.85,
             )
 
         elif event_type == "track_lost":
@@ -117,6 +124,16 @@ class CameraPresenceConsumer:
                     track_id=track_id,
                 )
 
+        elif event_type == "track_update":
+            # Person still visible - update presence timestamp
+            if track_id in self._active_tracks[source_id]:
+                await self.presence_service.handle_camera_detection(
+                    camera_source=source_id,
+                    person_detected=True,
+                    track_id=track_id,
+                    confidence=event.confidence if hasattr(event, 'confidence') else 0.85,
+                )
+
 
 # Singleton
 _camera_consumer: Optional[CameraPresenceConsumer] = None
@@ -133,7 +150,7 @@ async def start_camera_presence_consumer() -> Optional[CameraPresenceConsumer]:
     if _camera_consumer is None:
         _camera_consumer = CameraPresenceConsumer()
 
-    success = await _camera_consumer.register_with_vision_subscriber()
+    success = await _camera_consumer.register_with_track_store()
     if success:
         return _camera_consumer
     return None

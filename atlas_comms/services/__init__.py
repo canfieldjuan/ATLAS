@@ -1,13 +1,8 @@
 """
-Service interfaces for external integrations.
-
-DEPRECATED: This module re-exports from atlas_comms for backward compatibility.
-Import from atlas_comms directly for new code:
-    from atlas_comms.services import CalendarService, EmailService, SMSService
+Service implementations for calendar, email, and SMS.
 """
 
-# Re-export everything from atlas_comms for backward compatibility
-from atlas_comms.services import (
+from .base import (
     CalendarService,
     EmailService,
     SMSService,
@@ -18,6 +13,7 @@ from atlas_comms.services import (
     StubEmailService,
     StubSMSService,
 )
+from .scheduling import SchedulingService, scheduling_service
 
 __all__ = [
     "CalendarService",
@@ -29,4 +25,6 @@ __all__ = [
     "StubCalendarService",
     "StubEmailService",
     "StubSMSService",
+    "SchedulingService",
+    "scheduling_service",
 ]

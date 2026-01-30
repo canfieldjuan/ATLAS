@@ -9,7 +9,7 @@ from uuid import UUID
 import cv2
 import numpy as np
 
-logger = logging.getLogger("atlas.recognition.face")
+logger = logging.getLogger("atlas.vision.recognition.face")
 
 
 class FaceRecognitionService:

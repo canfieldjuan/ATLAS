@@ -75,6 +75,33 @@ class DetectionConfig(BaseSettings):
     track_timeout: float = Field(default=5.0, description="Seconds before track is lost")
 
 
+class RecognitionConfig(BaseSettings):
+    """Person recognition configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_VISION_RECOGNITION_")
+
+    enabled: bool = Field(default=True, description="Enable recognition")
+    face_threshold: float = Field(default=0.6, description="Face match threshold")
+    gait_threshold: float = Field(default=0.5, description="Gait match threshold")
+    auto_enroll_unknown: bool = Field(default=True, description="Auto-enroll unknown")
+    use_averaged: bool = Field(default=True, description="Use averaged embeddings")
+    gait_sequence_length: int = Field(default=60, description="Frames for gait")
+    mediapipe_detection_confidence: float = Field(default=0.5, description="Pose detect")
+    mediapipe_tracking_confidence: float = Field(default=0.5, description="Pose track")
+    track_timeout: float = Field(default=10.0, description="Track timeout seconds")
+    max_tracked_persons: int = Field(default=10, description="Max tracked persons")
+
+
+class PresenceConfig(BaseSettings):
+    """Presence tracking configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_VISION_PRESENCE_")
+
+    enabled: bool = Field(default=True, description="Enable presence tracking")
+    espresense_enabled: bool = Field(default=True, description="Use ESPresense BLE")
+    camera_enabled: bool = Field(default=True, description="Use camera detection")
+
+
 class Settings(BaseSettings):
     """Main settings aggregator."""
 
@@ -86,6 +113,8 @@ class Settings(BaseSettings):
     camera: CameraConfig = Field(default_factory=CameraConfig)
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     detection: DetectionConfig = Field(default_factory=DetectionConfig)
+    recognition: RecognitionConfig = Field(default_factory=RecognitionConfig)
+    presence: PresenceConfig = Field(default_factory=PresenceConfig)
 
     # Logging
     log_level: str = Field(default="INFO", description="Log level")

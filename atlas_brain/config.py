@@ -642,7 +642,15 @@ class VoiceClientConfig(BaseSettings):
 
 
 class WebcamConfig(BaseSettings):
-    """Webcam person detection configuration."""
+    """
+    DEPRECATED: Webcam detection moved to atlas_vision service.
+
+    Configure webcams via atlas_vision API instead:
+        POST /cameras/register/webcam
+
+    This config is kept for backwards compatibility but is no longer used.
+    Detection now runs in atlas_vision to avoid GPU contention with voice pipeline.
+    """
 
     model_config = SettingsConfigDict(
         env_prefix="ATLAS_WEBCAM_",
@@ -650,33 +658,45 @@ class WebcamConfig(BaseSettings):
         extra="ignore",
     )
 
-    enabled: bool = Field(default=False, description="Enable webcam person detection")
-    device_index: int = Field(default=0, description="Video device index (deprecated, use device_name)")
-    device_name: str | None = Field(default=None, description="Video device name substring (e.g. 'C920', 'Logitech')")
-    source_id: str = Field(default="webcam_office", description="Camera source ID for room mapping")
-    fps: int = Field(default=30, description="Detection frames per second")
+    enabled: bool = Field(default=False, description="DEPRECATED - detection moved to atlas_vision")
+    device_index: int = Field(default=0, description="DEPRECATED")
+    device_name: str | None = Field(default=None, description="DEPRECATED")
+    source_id: str = Field(default="webcam_office", description="DEPRECATED")
+    fps: int = Field(default=30, description="DEPRECATED")
 
 
 class RTSPCameraConfig(BaseSettings):
-    """Single RTSP camera configuration."""
+    """
+    DEPRECATED: RTSP camera config moved to atlas_vision service.
 
-    camera_id: str = Field(description="Unique camera identifier")
-    rtsp_url: str = Field(description="RTSP stream URL")
-    source_id: str = Field(description="Camera source ID for room mapping")
-    fps: int = Field(default=10, description="Detection frames per second")
+    Configure RTSP cameras via atlas_vision API instead:
+        POST /cameras/register
+    """
+
+    camera_id: str = Field(description="DEPRECATED")
+    rtsp_url: str = Field(description="DEPRECATED")
+    source_id: str = Field(description="DEPRECATED")
+    fps: int = Field(default=10, description="DEPRECATED")
 
 
 class RTSPConfig(BaseSettings):
-    """RTSP camera detection configuration."""
+    """
+    DEPRECATED: RTSP detection moved to atlas_vision service.
+
+    Configure RTSP cameras via atlas_vision API instead:
+        POST /cameras/register
+
+    This config is kept for backwards compatibility but is no longer used.
+    Detection now runs in atlas_vision to avoid GPU contention with voice pipeline.
+    """
 
     model_config = SettingsConfigDict(env_prefix="ATLAS_RTSP_")
 
-    enabled: bool = Field(default=False, description="Enable RTSP camera detection")
-    wyze_bridge_host: str = Field(default="localhost", description="Wyze bridge host")
-    wyze_bridge_port: int = Field(default=8554, description="Wyze bridge RTSP port")
-    fps: int = Field(default=10, description="Default detection FPS for RTSP cameras")
-    # Camera list loaded from JSON config or added programmatically
-    cameras_json: str = Field(default="", description="JSON list of camera configs")
+    enabled: bool = Field(default=False, description="DEPRECATED - detection moved to atlas_vision")
+    wyze_bridge_host: str = Field(default="localhost", description="DEPRECATED")
+    wyze_bridge_port: int = Field(default=8554, description="DEPRECATED")
+    fps: int = Field(default=10, description="DEPRECATED")
+    cameras_json: str = Field(default="", description="DEPRECATED")
 
 
 class SecurityConfig(BaseSettings):

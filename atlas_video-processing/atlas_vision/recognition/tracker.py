@@ -12,7 +12,7 @@ from uuid import UUID
 
 import numpy as np
 
-logger = logging.getLogger("atlas.recognition.tracker")
+logger = logging.getLogger("atlas.vision.recognition.tracker")
 
 
 @dataclass
@@ -55,7 +55,7 @@ class TrackManager:
     """
 
     def __init__(self):
-        from ...config import settings
+        from ..core.config import settings
 
         self._config = settings.recognition
         # Per-camera track state: camera_source -> track_id -> TrackedPerson

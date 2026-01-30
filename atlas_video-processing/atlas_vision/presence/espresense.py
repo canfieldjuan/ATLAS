@@ -19,7 +19,7 @@ from typing import Optional
 from .service import PresenceService, get_presence_service
 from .config import presence_config
 
-logger = logging.getLogger("atlas.presence.espresense")
+logger = logging.getLogger("atlas.vision.presence.espresense")
 
 
 class ESPresenseSubscriber:
@@ -51,6 +51,11 @@ class ESPresenseSubscriber:
         self._topic_pattern = re.compile(
             rf"^{re.escape(topic_prefix)}/([^/]+)/([^/]+)$"
         )
+
+    @property
+    def is_running(self) -> bool:
+        """Check if subscriber is running."""
+        return self._running
 
     async def start(self) -> None:
         """Start the MQTT subscriber."""
@@ -190,3 +195,8 @@ async def stop_espresense_subscriber() -> None:
     if _espresense_subscriber:
         await _espresense_subscriber.stop()
         _espresense_subscriber = None
+
+
+def get_espresense_subscriber() -> Optional[ESPresenseSubscriber]:
+    """Get the ESPresense subscriber singleton."""
+    return _espresense_subscriber

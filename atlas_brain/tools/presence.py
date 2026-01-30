@@ -52,11 +52,11 @@ class LightsNearUserTool:
         action = params.get("action", "on").lower()
         brightness = params.get("brightness")
 
-        # Get user's current room from presence service
+        # Get user's current room from presence service (via atlas_vision proxy)
         try:
-            from ..presence import get_presence_service
-            presence = get_presence_service()
-            room_id = presence.get_current_room()
+            from ..presence import get_presence_proxy
+            presence = get_presence_proxy()
+            room_id = await presence.get_current_room()
 
             if not room_id:
                 return ToolResult(
@@ -66,8 +66,8 @@ class LightsNearUserTool:
                 )
 
             # Get lights in this room
-            lights = presence.get_devices_near_user(device_type="lights")
-            room_state = presence.get_room_state(room_id)
+            lights = await presence.get_devices_near_user(device_type="lights")
+            room_state = await presence.get_room_state(room_id)
             room_name = room_state.room_name if room_state else room_id
 
             if not lights:
@@ -173,9 +173,9 @@ class MediaNearUserTool:
         action = params.get("action", "on").lower()
 
         try:
-            from ..presence import get_presence_service
-            presence = get_presence_service()
-            room_id = presence.get_current_room()
+            from ..presence import get_presence_proxy
+            presence = get_presence_proxy()
+            room_id = await presence.get_current_room()
 
             if not room_id:
                 return ToolResult(
@@ -184,8 +184,8 @@ class MediaNearUserTool:
                     message="I'm not sure where you are right now.",
                 )
 
-            media_players = presence.get_devices_near_user(device_type="media_players")
-            room_state = presence.get_room_state(room_id)
+            media_players = await presence.get_devices_near_user(device_type="media_players")
+            room_state = await presence.get_room_state(room_id)
             room_name = room_state.room_name if room_state else room_id
 
             if not media_players:
@@ -297,9 +297,9 @@ class SceneNearUserTool:
             )
 
         try:
-            from ..presence import get_presence_service
-            presence = get_presence_service()
-            room_id = presence.get_current_room()
+            from ..presence import get_presence_proxy
+            presence = get_presence_proxy()
+            room_id = await presence.get_current_room()
 
             if not room_id:
                 return ToolResult(
@@ -308,8 +308,8 @@ class SceneNearUserTool:
                     message="I'm not sure where you are.",
                 )
 
-            lights = presence.get_devices_near_user(device_type="lights")
-            room_state = presence.get_room_state(room_id)
+            lights = await presence.get_devices_near_user(device_type="lights")
+            room_state = await presence.get_room_state(room_id)
             room_name = room_state.room_name if room_state else room_id
 
             if not lights:
@@ -373,9 +373,9 @@ class WhereAmITool:
     async def execute(self, params: dict[str, Any]) -> ToolResult:
         """Report user's current location."""
         try:
-            from ..presence import get_presence_service
-            presence = get_presence_service()
-            user_presence = presence.get_user_presence()
+            from ..presence import get_presence_proxy
+            presence = get_presence_proxy()
+            user_presence = await presence.get_user_presence()
 
             if not user_presence or not user_presence.current_room:
                 return ToolResult(

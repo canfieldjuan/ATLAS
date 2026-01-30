@@ -1,7 +1,7 @@
 """
-Person recognition services for Atlas.
+Person recognition services for Atlas Vision.
 
-Provides face and gait recognition with multi-person tracking.
+Provides face and gait recognition with person tracking.
 """
 
 from .face import FaceRecognitionService, get_face_service

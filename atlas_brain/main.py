@@ -20,9 +20,12 @@ from fastapi import FastAPI
 
 from .api import router as api_router
 from .config import settings
-from .services import vlm_registry, llm_registry, vos_registry
+from .services import vlm_registry, stt_registry, llm_registry, tts_registry, vos_registry, omni_registry
 from .storage import db_settings
 from .storage.database import init_database, close_database
+
+# Global voice client task
+_voice_client_task: Optional[asyncio.Task] = None
 
 # Configure logging
 logging.basicConfig(
@@ -60,6 +63,22 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to load default VLM: %s", e)
 
+    # Load default STT if configured
+    if settings.load_stt_on_startup:
+        try:
+            logger.info("Loading default STT: %s", settings.stt.default_model)
+            stt_registry.activate(settings.stt.default_model)
+        except Exception as e:
+            logger.error("Failed to load default STT: %s", e)
+
+    # Load default TTS if configured
+    if settings.load_tts_on_startup:
+        try:
+            logger.info("Loading default TTS: %s", settings.tts.default_model)
+            tts_registry.activate(settings.tts.default_model)
+        except Exception as e:
+            logger.error("Failed to load default TTS: %s", e)
+
     # Load default LLM if configured
     if settings.load_llm_on_startup:
         try:
@@ -96,10 +115,6 @@ async def lifespan(app: FastAPI):
                 if settings.llm.together_api_key:
                     kwargs["api_key"] = settings.llm.together_api_key
                 logger.info("Together AI model: %s", settings.llm.together_model)
-            elif backend == "cloud":
-                # Cloud LLM (Groq primary + Together fallback)
-                kwargs = {}
-                logger.info("Cloud LLM: Groq primary, Together fallback")
             else:
                 # llama-cpp (GGUF models)
                 kwargs = {}
@@ -115,6 +130,16 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to load default LLM: %s", e)
 
+    # Load speaker ID if enabled
+    if settings.load_speaker_id_on_startup or settings.speaker_id.enabled:
+        try:
+            from .services import speaker_id_registry
+            logger.info("Loading speaker ID: %s", settings.speaker_id.default_model)
+            speaker_id_registry.activate(settings.speaker_id.default_model)
+            logger.info("Speaker ID loaded successfully")
+        except Exception as e:
+            logger.error("Failed to load speaker ID: %s", e)
+
     # Load VOS if enabled
     if settings.load_vos_on_startup or settings.vos.enabled:
         try:
@@ -128,26 +153,28 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to load VOS: %s", e)
 
-    # Load Gorilla tool router if enabled (for fast local tool routing)
+    # Load Omni (unified speech-to-speech) if enabled
+    if settings.load_omni_on_startup or settings.omni.enabled:
+        try:
+            logger.info("Loading Omni: %s", settings.omni.default_model)
+            omni_registry.activate(
+                settings.omni.default_model,
+                max_new_tokens=settings.omni.max_new_tokens,
+                temperature=settings.omni.temperature,
+            )
+            logger.info("Omni loaded successfully")
+        except Exception as e:
+            logger.error("Failed to load Omni: %s", e)
+
+    # Load FunctionGemma tool router if enabled (for fast tool query routing)
     if settings.load_tool_router_on_startup:
         try:
-            from .services.tool_router import get_tool_router
-            logger.info("Loading Gorilla tool router...")
-            await get_tool_router()
-            logger.info("Gorilla tool router loaded successfully")
+            from .pipecat.router import get_router
+            logger.info("Loading FunctionGemma tool router...")
+            await get_router()
+            logger.info("FunctionGemma tool router loaded successfully")
         except Exception as e:
             logger.error("Failed to load tool router: %s", e)
-
-    # Preload intent router if enabled (DistilBERT for fast query classification)
-    if settings.intent_router.enabled:
-        try:
-            from .services.intent_router import get_intent_router
-            logger.info("Preloading intent router...")
-            router = get_intent_router()
-            await router.load()
-            logger.info("Intent router preloaded")
-        except Exception as e:
-            logger.error("Failed to preload intent router: %s", e)
 
     # Register test devices for development
     try:
@@ -214,9 +241,9 @@ async def lifespan(app: FastAPI):
             alert_manager = get_alert_manager()
             setup_default_callbacks(alert_manager)
 
-            # Note: TTS alerts via voice pipeline
+            # Note: TTS delivery via WebSocket removed - use Pipecat voice pipeline instead
             if settings.alerts.tts_enabled:
-                logger.info("TTS alerts will be delivered via voice pipeline")
+                logger.info("TTS alerts will be delivered via Pipecat voice pipeline")
 
             if settings.alerts.ntfy_enabled:
                 ntfy_delivery = NtfyDelivery(
@@ -239,12 +266,12 @@ async def lifespan(app: FastAPI):
 
             reminder_service = await initialize_reminder_service()
 
-            # Simple reminder callback - logs reminder (TTS delivery via voice loop)
+            # Simple reminder callback - logs reminder (TTS delivery via Pipecat)
             async def reminder_alert_callback(reminder):
-                """Log reminder - TTS delivery handled by voice pipeline."""
+                """Log reminder - TTS delivery handled by Pipecat voice pipeline."""
                 message = f"Reminder: {reminder.message}"
                 logger.info("REMINDER: %s", message)
-                # Note: For TTS delivery, use voice pipeline
+                # Note: For TTS delivery, use Pipecat voice pipeline
                 # The reminder will be announced when user interacts with Atlas
 
             reminder_service.set_alert_callback(reminder_alert_callback)
@@ -268,42 +295,11 @@ async def lifespan(app: FastAPI):
             logger.error("Failed to initialize vision subscriber: %s", e)
             vision_subscriber = None
 
-    # Initialize presence service for room-aware device control
-    presence_service = None
-    espresense_subscriber = None
+    # NOTE: Presence service moved to atlas_vision
+    # The presence module now proxies to atlas_vision API
+    # Configure atlas_vision with ATLAS_VISION_PRESENCE_ENABLED=true
     if settings.presence_enabled:
-        try:
-            from .presence import (
-                get_presence_service,
-                start_espresense_subscriber,
-                start_camera_presence_consumer,
-                presence_config,
-            )
-
-            # Start core presence service
-            presence_service = get_presence_service()
-            await presence_service.start()
-            logger.info("Presence service started")
-
-            # Start ESPresense subscriber if enabled
-            if presence_config.espresense_enabled and settings.mqtt.enabled:
-                espresense_subscriber = await start_espresense_subscriber(
-                    mqtt_host=settings.mqtt.host,
-                    mqtt_port=settings.mqtt.port,
-                    mqtt_username=settings.mqtt.username,
-                    mqtt_password=settings.mqtt.password,
-                )
-                if espresense_subscriber:
-                    logger.info("ESPresense BLE tracking enabled")
-
-            # Start camera presence consumer if vision is running
-            if presence_config.camera_enabled and vision_subscriber:
-                camera_consumer = await start_camera_presence_consumer()
-                if camera_consumer:
-                    logger.info("Camera presence detection enabled")
-
-        except Exception as e:
-            logger.error("Failed to initialize presence service: %s", e)
+        logger.info("Presence tracking enabled via atlas_vision proxy")
 
     # Initialize communications service if enabled
     comms_service = None
@@ -319,60 +315,55 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Failed to initialize communications service: %s", e)
 
-    # Start webcam person detector if enabled
-    webcam_detector = None
-    if settings.webcam.enabled:
-        try:
-            from .vision import start_webcam_detector
-
-            webcam_detector = await start_webcam_detector(
-                device_index=settings.webcam.device_index,
-                device_name=settings.webcam.device_name,
-                camera_source_id=settings.webcam.source_id,
-                fps=settings.webcam.fps,
-            )
-            if webcam_detector:
-                logger.info("Webcam detector started: device=%s (name=%s) -> %s",
-                           webcam_detector.device_index, settings.webcam.device_name,
-                           settings.webcam.source_id)
-            else:
-                logger.warning("Webcam detector failed to start")
-        except Exception as e:
-            logger.error("Failed to start webcam detector: %s", e)
-
-    # Start RTSP camera detectors if enabled
-    rtsp_manager = None
-    if settings.rtsp.enabled:
-        try:
-            import json
-            from .vision import start_rtsp_cameras
-
-            cameras = []
-            if settings.rtsp.cameras_json:
-                cameras = json.loads(settings.rtsp.cameras_json)
-
-            if cameras:
-                rtsp_manager = await start_rtsp_cameras(cameras)
-                logger.info("RTSP cameras started: %d cameras", len(cameras))
-            else:
-                logger.warning("RTSP enabled but no cameras configured")
-        except Exception as e:
-            logger.error("Failed to start RTSP cameras: %s", e)
-
-    # Start voice pipeline if enabled
-    voice_pipeline_running = False
+    # Start Pipecat voice pipeline if enabled
+    global _voice_client_task
     if settings.voice.enabled:
         try:
-            from .voice import start_voice_pipeline
+            from .pipecat.pipeline import run_voice_pipeline
 
-            loop = asyncio.get_running_loop()
-            voice_pipeline_running = start_voice_pipeline(loop)
-            if voice_pipeline_running:
-                logger.info("Voice pipeline started")
-            else:
-                logger.warning("Voice pipeline failed to start")
+            async def run_pipecat_voice():
+                try:
+                    # Generate session ID for conversation persistence
+                    import uuid
+                    voice_session_id = str(uuid.uuid4())
+                    logger.info("Pipecat voice session: %s", voice_session_id)
+
+                    # Build wake phrases from keyword setting
+                    keyword = settings.orchestration.keyword
+                    wake_phrases = [f"hey {keyword}", keyword]
+
+                    await run_voice_pipeline(
+                        input_device=settings.voice.input_device,
+                        output_device=settings.voice.output_device,
+                        input_device_name=settings.voice.input_device_name,
+                        output_device_name=settings.voice.output_device_name,
+                        input_sample_rate=settings.voice.input_sample_rate,
+                        stt_model="nemotron",
+                        ollama_model=settings.llm.ollama_model,
+                        ollama_url=settings.llm.ollama_url,
+                        tts_voice=settings.tts.voice,
+                        tts_speed=settings.tts.speed,
+                        device="cuda",
+                        session_id=voice_session_id,
+                        wake_word_enabled=settings.orchestration.keyword_enabled,
+                        wake_phrases=wake_phrases,
+                        wake_keepalive_secs=settings.orchestration.follow_up_duration_ms / 1000.0,
+                    )
+                except asyncio.CancelledError:
+                    logger.info("Pipecat voice pipeline cancelled")
+                except Exception as e:
+                    logger.error("Pipecat voice pipeline error: %s", e)
+
+            _voice_client_task = asyncio.create_task(run_pipecat_voice())
+            logger.info("Pipecat voice pipeline started")
+        except ImportError as e:
+            logger.warning("Pipecat voice not available: %s", e)
         except Exception as e:
-            logger.error("Failed to start voice pipeline: %s", e)
+            logger.error("Failed to start Pipecat voice pipeline: %s", e)
+
+    # NOTE: Webcam and RTSP detection moved to atlas_vision service
+    # Detection events are received via MQTT subscriber (vision/subscriber.py)
+    # Configure atlas_vision with ATLAS_VISION_MQTT_ENABLED=true
 
     logger.info("Atlas Brain startup complete")
 
@@ -381,24 +372,7 @@ async def lifespan(app: FastAPI):
     # --- Shutdown ---
     logger.info("Atlas Brain shutting down...")
 
-    # Stop voice pipeline
-    if voice_pipeline_running:
-        try:
-            from .voice import stop_voice_pipeline
-            stop_voice_pipeline()
-            logger.info("Voice pipeline stopped")
-        except Exception as e:
-            logger.error("Error stopping voice pipeline: %s", e)
-
-    # Stop presence service
-    if presence_service:
-        try:
-            from .presence import stop_espresense_subscriber
-            await stop_espresense_subscriber()
-            await presence_service.stop()
-            logger.info("Presence service stopped")
-        except Exception as e:
-            logger.error("Error stopping presence service: %s", e)
+    # NOTE: Presence service runs in atlas_vision, no local shutdown needed
 
     # Stop vision subscriber
     if vision_subscriber and vision_subscriber.is_running:
@@ -408,23 +382,15 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Error stopping vision subscriber: %s", e)
 
-    # Stop webcam detector
-    if webcam_detector:
+    # Stop voice client
+    if _voice_client_task and not _voice_client_task.done():
+        logger.info("Stopping voice client...")
+        _voice_client_task.cancel()
         try:
-            from .vision import stop_webcam_detector
-            await stop_webcam_detector()
-            logger.info("Webcam detector stopped")
-        except Exception as e:
-            logger.error("Error stopping webcam detector: %s", e)
-
-    # Stop RTSP camera detectors
-    if rtsp_manager:
-        try:
-            from .vision import stop_rtsp_cameras
-            await stop_rtsp_cameras()
-            logger.info("RTSP cameras stopped")
-        except Exception as e:
-            logger.error("Error stopping RTSP cameras: %s", e)
+            await _voice_client_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Voice client stopped")
 
     # Shutdown discovery service
     if settings.discovery.enabled:
@@ -478,6 +444,8 @@ async def lifespan(app: FastAPI):
     # Unload models to free resources
     vos_registry.deactivate()
     vlm_registry.deactivate()
+    stt_registry.deactivate()
+    tts_registry.deactivate()
     llm_registry.deactivate()
 
     # Force garbage collection to clean up semaphores from NeMo/PyTorch

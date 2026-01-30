@@ -19,7 +19,7 @@ from typing import Callable, Optional
 
 from .config import PresenceConfig, RoomConfig, DEFAULT_ROOMS, presence_config
 
-logger = logging.getLogger("atlas.presence")
+logger = logging.getLogger("atlas.vision.presence")
 
 
 class PresenceSource(str, Enum):
@@ -121,6 +121,11 @@ class PresenceService:
             list(self._rooms.keys()),
         )
 
+    @property
+    def is_running(self) -> bool:
+        """Check if service is running."""
+        return self._running
+
     async def start(self) -> None:
         """Start the presence service."""
         if self._running:
@@ -200,6 +205,10 @@ class PresenceService:
     def get_all_room_states(self) -> dict[str, RoomState]:
         """Get all room states."""
         return self._room_states.copy()
+
+    def get_all_user_presence(self) -> dict[str, UserPresence]:
+        """Get all user presence states."""
+        return self._user_presence.copy()
 
     # === Signal Ingestion ===
 

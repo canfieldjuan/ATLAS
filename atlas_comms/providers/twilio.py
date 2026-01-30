@@ -1,26 +1,22 @@
 """
-SignalWire telephony provider implementation.
+Twilio telephony provider implementation.
 
-SignalWire is a Twilio-compatible API with lower pricing.
-Uses RELAY for real-time communication and REST API for SMS.
+Handles voice calls and SMS through Twilio's API.
 
 Requirements:
-    pip install signalwire
+    pip install twilio
 
-SignalWire Concepts:
-- RELAY: Real-time WebSocket protocol for voice
-- LaML: SignalWire's markup language (Twilio TwiML compatible)
-- Spaces: Your SignalWire project namespace
+Twilio Concepts:
+- Media Streams: WebSocket connection for real-time audio
+- TwiML: XML-based instructions for call handling
+- Webhooks: HTTP callbacks for call/SMS events
 """
 
 import asyncio
-import base64
-import json
 import logging
-from datetime import datetime, timezone
 from typing import AsyncIterator, Optional
 
-from ..protocols import (
+from ..core.protocols import (
     TelephonyProvider,
     Call,
     CallState,
@@ -31,31 +27,27 @@ from ..protocols import (
     CallEventCallback,
     SMSCallback,
 )
-from ..config import comms_settings
+from ..core.config import comms_settings
 from . import register_provider
 
-logger = logging.getLogger("atlas.comms.signalwire")
+logger = logging.getLogger("atlas.comms.providers.twilio")
 
 
-@register_provider("signalwire")
-class SignalWireProvider(TelephonyProvider):
+@register_provider("twilio")
+class TwilioProvider(TelephonyProvider):
     """
-    SignalWire implementation of the TelephonyProvider protocol.
+    Twilio implementation of the TelephonyProvider protocol.
 
-    Uses SignalWire's REST API for call/SMS control and
-    RELAY protocol for real-time audio streaming.
+    Uses Twilio's REST API for call control and Media Streams
+    for real-time audio streaming.
     """
 
     def __init__(self):
         self._client = None
         self._connected = False
-        self._space_url = ""
 
         # Active calls by provider call ID
         self._calls: dict[str, Call] = {}
-
-        # WebSocket connections for audio streaming
-        self._audio_streams: dict[str, asyncio.Task] = {}
 
         # Callbacks
         self._call_event_callback: Optional[CallEventCallback] = None
@@ -64,67 +56,54 @@ class SignalWireProvider(TelephonyProvider):
 
     @property
     def name(self) -> str:
-        return "signalwire"
+        return "twilio"
 
     @property
     def is_connected(self) -> bool:
         return self._connected
 
     async def connect(self) -> None:
-        """Initialize SignalWire client."""
+        """Initialize Twilio client."""
         try:
-            from signalwire.rest import Client
+            from twilio.rest import Client
 
-            project_id = comms_settings.signalwire_project_id
-            api_token = comms_settings.signalwire_api_token
-            space = comms_settings.signalwire_space
+            account_sid = comms_settings.twilio_account_sid
+            auth_token = comms_settings.twilio_auth_token
 
-            if not project_id or not api_token or not space:
+            if not account_sid or not auth_token:
                 raise ValueError(
-                    "SignalWire credentials not configured. Set "
-                    "ATLAS_COMMS_SIGNALWIRE_PROJECT_ID, "
-                    "ATLAS_COMMS_SIGNALWIRE_API_TOKEN, and "
-                    "ATLAS_COMMS_SIGNALWIRE_SPACE"
+                    "Twilio credentials not configured. "
+                    "Set ATLAS_COMMS_TWILIO_ACCOUNT_SID and ATLAS_COMMS_TWILIO_AUTH_TOKEN"
                 )
 
-            self._space_url = f"https://{space}.signalwire.com"
-            self._client = Client(
-                project_id,
-                api_token,
-                signalwire_space_url=self._space_url,
-            )
+            self._client = Client(account_sid, auth_token)
             self._connected = True
-            logger.info("SignalWire provider connected to %s", self._space_url)
+            logger.info("Twilio provider connected")
 
         except ImportError:
             raise ImportError(
-                "SignalWire package not installed. Run: pip install signalwire"
+                "Twilio package not installed. Run: pip install twilio"
             )
 
     async def disconnect(self) -> None:
-        """Disconnect from SignalWire."""
-        # Cancel any active audio streams
-        for task in self._audio_streams.values():
-            task.cancel()
-        self._audio_streams.clear()
-
+        """Disconnect from Twilio."""
         self._client = None
         self._connected = False
         self._calls.clear()
-        logger.info("SignalWire provider disconnected")
+        logger.info("Twilio provider disconnected")
 
     async def answer_call(self, call: Call) -> bool:
         """
         Answer an incoming call.
 
-        In SignalWire (like Twilio), answering is implicit when
-        webhook returns LaML. This updates our tracking.
+        Note: In Twilio, answering is implicit - when the webhook returns
+        TwiML, the call is answered. This method updates our tracking.
         """
         if call.provider_call_id not in self._calls:
             self._calls[call.provider_call_id] = call
 
         call.state = CallState.CONNECTED
-        call.answered_at = datetime.now(timezone.utc)
+        call.answered_at = asyncio.get_event_loop().time()
 
         if self._call_event_callback:
             await self._call_event_callback(call, "answered")
@@ -137,6 +116,7 @@ class SignalWireProvider(TelephonyProvider):
             return False
 
         try:
+            # Update the call to reject it
             self._client.calls(call.provider_call_id).update(
                 status="completed"
             )
@@ -157,10 +137,15 @@ class SignalWireProvider(TelephonyProvider):
         from_number: str,
         context_id: Optional[str] = None,
     ) -> Call:
-        """Initiate an outbound call."""
+        """
+        Initiate an outbound call.
+
+        The webhook_base_url must be configured to handle the call flow.
+        """
         if not self._client:
             raise RuntimeError("Provider not connected")
 
+        # Create call tracking object
         call = Call(
             from_number=from_number,
             to_number=to_number,
@@ -170,23 +155,23 @@ class SignalWireProvider(TelephonyProvider):
         )
 
         try:
+            # Make the call via Twilio
             webhook_url = f"{comms_settings.webhook_base_url}/api/v1/comms/voice/outbound"
-            status_url = f"{comms_settings.webhook_base_url}/api/v1/comms/voice/status"
 
-            sw_call = self._client.calls.create(
+            twilio_call = self._client.calls.create(
                 to=to_number,
                 from_=from_number,
                 url=webhook_url,
-                status_callback=status_url,
+                status_callback=f"{comms_settings.webhook_base_url}/api/v1/comms/voice/status",
                 status_callback_event=["initiated", "ringing", "answered", "completed"],
             )
 
-            call.provider_call_id = sw_call.sid
-            self._calls[sw_call.sid] = call
+            call.provider_call_id = twilio_call.sid
+            self._calls[twilio_call.sid] = call
 
             logger.info(
                 "Initiated outbound call %s: %s -> %s",
-                sw_call.sid,
+                twilio_call.sid,
                 from_number,
                 to_number,
             )
@@ -208,12 +193,6 @@ class SignalWireProvider(TelephonyProvider):
                 status="completed"
             )
             call.state = CallState.ENDED
-            call.ended_at = datetime.now(timezone.utc)
-
-            # Clean up audio stream if active
-            if call.provider_call_id in self._audio_streams:
-                self._audio_streams[call.provider_call_id].cancel()
-                del self._audio_streams[call.provider_call_id]
 
             if self._call_event_callback:
                 await self._call_event_callback(call, "ended")
@@ -225,7 +204,9 @@ class SignalWireProvider(TelephonyProvider):
             return False
 
     async def hold(self, call: Call) -> bool:
-        """Place call on hold."""
+        """Place call on hold (plays hold music)."""
+        # Twilio hold is done via TwiML <Play> or <Say> in a loop
+        # This would require updating the call's TwiML
         call.state = CallState.ON_HOLD
         logger.info("Call %s placed on hold", call.provider_call_id)
         return True
@@ -242,15 +223,16 @@ class SignalWireProvider(TelephonyProvider):
             return False
 
         try:
-            # LaML (compatible with TwiML) for transfer
-            transfer_laml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say>Please hold while I transfer your call.</Say>
-    <Dial>{to_number}</Dial>
-</Response>"""
+            # Update call with new TwiML to dial the transfer number
+            transfer_twiml = f"""
+            <Response>
+                <Say>Please hold while I transfer your call.</Say>
+                <Dial>{to_number}</Dial>
+            </Response>
+            """
 
             self._client.calls(call.provider_call_id).update(
-                twiml=transfer_laml
+                twiml=transfer_twiml
             )
 
             call.state = CallState.TRANSFERRING
@@ -275,17 +257,15 @@ class SignalWireProvider(TelephonyProvider):
         audio_iterator: AsyncIterator[bytes],
     ) -> None:
         """
-        Stream TTS audio to the call.
+        Stream audio to the call.
 
-        SignalWire supports media streaming via WebSocket.
-        Audio should be base64-encoded mulaw at 8kHz.
+        This is used to play TTS responses. In Twilio, this is done
+        through Media Streams WebSocket.
         """
-        # TODO: Implement via SignalWire's Stream noun
-        # This requires bidirectional WebSocket to media stream
-        logger.warning("Audio streaming implementation pending")
-        async for chunk in audio_iterator:
-            # Will send to WebSocket when implemented
-            pass
+        # TODO: Implement Media Streams integration
+        # This requires a WebSocket connection to the media stream
+        logger.warning("Audio streaming not yet implemented")
+        pass
 
     def set_audio_callback(
         self,
@@ -318,6 +298,7 @@ class SignalWireProvider(TelephonyProvider):
         )
 
         try:
+            # Build message params
             params = {
                 "to": to_number,
                 "from_": from_number,
@@ -327,19 +308,20 @@ class SignalWireProvider(TelephonyProvider):
             if media_urls:
                 params["media_url"] = media_urls
 
+            # Add status callback
             if comms_settings.webhook_base_url:
                 params["status_callback"] = (
                     f"{comms_settings.webhook_base_url}/api/v1/comms/sms/status"
                 )
 
-            sw_message = self._client.messages.create(**params)
+            twilio_message = self._client.messages.create(**params)
 
-            message.provider_message_id = sw_message.sid
+            message.provider_message_id = twilio_message.sid
             message.status = "sent"
 
             logger.info(
                 "Sent SMS %s: %s -> %s",
-                sw_message.sid,
+                twilio_message.sid,
                 from_number,
                 to_number,
             )
@@ -365,16 +347,23 @@ class SignalWireProvider(TelephonyProvider):
         return self._calls.get(provider_call_id)
 
     async def lookup_caller_id(self, phone_number: str) -> Optional[str]:
-        """
-        Look up caller ID name.
+        """Look up caller ID name."""
+        if not self._client:
+            return None
 
-        SignalWire provides CNAM lookup as a separate service.
-        """
-        # SignalWire CNAM lookup would go here
-        # For now, return None
-        return None
+        try:
+            # Twilio Lookup API
+            lookup = self._client.lookups.v2.phone_numbers(phone_number).fetch(
+                fields="caller_name"
+            )
+            return lookup.caller_name.get("caller_name") if lookup.caller_name else None
+
+        except Exception as e:
+            logger.debug("Caller ID lookup failed for %s: %s", phone_number, e)
+            return None
 
     # === Webhook Handlers ===
+    # These are called by the API endpoints when Twilio sends webhooks
 
     async def handle_incoming_call(
         self,
@@ -383,7 +372,11 @@ class SignalWireProvider(TelephonyProvider):
         to_number: str,
         caller_name: Optional[str] = None,
     ) -> Call:
-        """Handle an incoming call webhook."""
+        """
+        Handle an incoming call webhook.
+
+        Returns the Call object for further processing.
+        """
         call = Call(
             provider_call_id=call_sid,
             from_number=from_number,
@@ -418,6 +411,7 @@ class SignalWireProvider(TelephonyProvider):
             logger.warning("Status update for unknown call: %s", call_sid)
             return
 
+        # Map Twilio status to our CallState
         status_map = {
             "initiated": CallState.INITIATED,
             "ringing": CallState.RINGING,
@@ -430,10 +424,6 @@ class SignalWireProvider(TelephonyProvider):
         }
 
         new_state = status_map.get(status, call.state)
-
-        if new_state == CallState.ENDED and call.state != CallState.ENDED:
-            call.ended_at = datetime.now(timezone.utc)
-
         call.state = new_state
 
         if self._call_event_callback:
@@ -472,52 +462,3 @@ class SignalWireProvider(TelephonyProvider):
         )
 
         return message
-
-    async def handle_media_stream(
-        self,
-        call_sid: str,
-        stream_data: dict,
-    ) -> None:
-        """
-        Handle incoming media stream data.
-
-        Called when audio data arrives via WebSocket.
-        """
-        call = self._calls.get(call_sid)
-        if not call:
-            return
-
-        callback = self._audio_callbacks.get(call_sid)
-        if not callback:
-            return
-
-        event = stream_data.get("event")
-
-        if event == "media":
-            # Decode audio payload
-            payload = stream_data.get("media", {}).get("payload", "")
-            if payload:
-                audio_bytes = base64.b64decode(payload)
-                await callback(audio_bytes)
-
-        elif event == "start":
-            logger.debug("Media stream started for call %s", call_sid)
-
-        elif event == "stop":
-            logger.debug("Media stream stopped for call %s", call_sid)
-
-    def generate_stream_laml(self, call: Call) -> str:
-        """
-        Generate LaML to start bidirectional audio streaming.
-
-        Returns LaML that tells SignalWire to connect audio to our WebSocket.
-        """
-        ws_url = comms_settings.webhook_base_url.replace("https://", "wss://").replace("http://", "ws://")
-        stream_url = f"{ws_url}/api/v1/comms/voice/stream/{call.provider_call_id}"
-
-        return f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Connect>
-        <Stream url="{stream_url}" />
-    </Connect>
-</Response>"""
