@@ -9,7 +9,7 @@ import logging
 
 from fastapi import APIRouter
 
-from ...agents import get_atlas_agent, AgentContext
+from ...agents.interface import get_agent
 from ...schemas.query import TextQueryRequest
 
 router = APIRouter()
@@ -32,15 +32,12 @@ async def query_text(request: TextQueryRequest):
     """
     logger.info("Text query: %s (session=%s)", request.query_text[:50], request.session_id)
 
-    agent = get_atlas_agent(session_id=request.session_id)
-
-    context = AgentContext(
+    agent = get_agent("atlas")
+    result = await agent.process(
         input_text=request.query_text,
-        input_type="text",
         session_id=request.session_id,
+        input_type="text",
     )
-
-    result = await agent.run(context)
 
     # Build tools_executed list from action_results
     tools_executed = []

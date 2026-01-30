@@ -7,7 +7,7 @@ Uses Ollama's HTTP API for inference, supporting any model Ollama can run.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, AsyncIterator
 
 import httpx
 
@@ -136,6 +136,20 @@ class OllamaLLM(BaseModelService):
                 data = response.json()
                 response_text = data.get("message", {}).get("content", "").strip()
                 done_reason = data.get("done_reason", "unknown")
+
+                # Log timing details to understand cache behavior
+                prompt_eval_count = data.get("prompt_eval_count", 0)
+                prompt_eval_duration = data.get("prompt_eval_duration", 0) / 1_000_000  # ns to ms
+                eval_count = data.get("eval_count", 0)
+                eval_duration = data.get("eval_duration", 0) / 1_000_000  # ns to ms
+                total_duration = data.get("total_duration", 0) / 1_000_000  # ns to ms
+
+                logger.info(
+                    "Ollama chat: prompt_tokens=%d (%.1fms), gen_tokens=%d (%.1fms), total=%.1fms",
+                    prompt_eval_count, prompt_eval_duration,
+                    eval_count, eval_duration,
+                    total_duration
+                )
                 logger.info("Ollama chat: done_reason=%s, content_len=%d, response='%s'",
                            done_reason, len(response_text), response_text)
 
@@ -297,6 +311,67 @@ class OllamaLLM(BaseModelService):
             return data.get("message", {}).get("content", "")
         except httpx.HTTPError as e:
             logger.error("Ollama chat error: %s", e)
+            raise
+
+    async def chat_stream_async(
+        self,
+        messages: list[Message],
+        max_tokens: int = 256,
+        temperature: float = 0.7,
+        **kwargs: Any,
+    ) -> AsyncIterator[str]:
+        """
+        Async streaming chat completion - yields tokens as generated.
+
+        Args:
+            messages: List of Message objects
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+
+        Yields:
+            Token strings as they are generated
+        """
+        import json as json_module
+
+        if not self._client:
+            raise RuntimeError("Ollama LLM not loaded")
+
+        ollama_messages = []
+        for msg in messages:
+            ollama_messages.append({
+                "role": msg.role,
+                "content": msg.content,
+            })
+
+        payload = {
+            "model": self.model,
+            "messages": ollama_messages,
+            "stream": True,
+            "keep_alive": "30m",
+            "options": {
+                "num_predict": max_tokens,
+                "temperature": temperature,
+            },
+        }
+
+        try:
+            async with self._client.stream(
+                "POST",
+                f"{self.base_url}/api/chat",
+                json=payload,
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line:
+                        continue
+                    data = json_module.loads(line)
+                    content = data.get("message", {}).get("content", "")
+                    if content:
+                        yield content
+                    if data.get("done", False):
+                        break
+        except httpx.HTTPError as e:
+            logger.error("Ollama streaming chat error: %s", e)
             raise
 
     def process_text(self, query: str, **kwargs: Any) -> str:

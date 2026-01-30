@@ -16,20 +16,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger("atlas.agents.tools")
 
 
-# Legacy tool name mapping - DEPRECATED, use tool_registry.resolve_alias() instead
-# Kept for backwards compatibility only
-_LEGACY_TOOL_MAP = {
-    "time": "get_time",
-    "weather": "get_weather",
-    "traffic": "get_traffic",
-    "location": "get_location",
-    "calendar": "get_calendar",
-    "reminder": "set_reminder",
-    "reminders": "list_reminders",
-    "complete_reminder": "complete_reminder",
-}
-
-
 class AtlasAgentTools:
     """
     Tools system for Atlas Agent.
@@ -282,11 +268,9 @@ class AtlasAgentTools:
         Returns:
             Tool result dictionary
         """
-        # Resolve alias via registry first, fall back to legacy map
+        # Resolve alias via registry
         registry = self._get_tool_registry()
-        tool_name = registry.resolve_alias(target_name)
-        if not tool_name:
-            tool_name = _LEGACY_TOOL_MAP.get(target_name, target_name)
+        tool_name = registry.resolve_alias(target_name) or target_name
         params = parameters or {}
 
         # Weather and traffic need location
@@ -349,7 +333,7 @@ class AtlasAgentTools:
             registry = self._get_tool_registry()
             return registry.list_names()
         except Exception:
-            return list(_LEGACY_TOOL_MAP.values())
+            return []
 
     # Capability listing
 

@@ -57,18 +57,23 @@ async def prewarm_llm():
 
 async def prewarm_personaplex(call_sid: str, from_number: str, to_number: str, context):
     """Pre-connect to PersonaPlex while SignalWire sets up the stream."""
-    try:
-        from ...comms.personaplex_processor import (
-            create_personaplex_processor,
-            get_personaplex_processor,
-        )
+    from ...comms.personaplex_processor import (
+        create_personaplex_processor,
+        get_personaplex_processor,
+        remove_personaplex_processor,
+    )
 
+    try:
         # Check if already exists
         if get_personaplex_processor(call_sid):
             return
 
         t0 = time.time()
-        logger.info("Pre-warming PersonaPlex for call %s", call_sid)
+        logger.info(
+            "Pre-warming PersonaPlex for call %s with context %s",
+            call_sid,
+            context.name if hasattr(context, 'name') else 'unknown',
+        )
 
         # Create processor without audio callback (will be set later)
         processor = create_personaplex_processor(
@@ -91,9 +96,15 @@ async def prewarm_personaplex(call_sid: str, from_number: str, to_number: str, c
                 call_sid,
             )
         else:
-            logger.error("PersonaPlex prewarm failed for %s", call_sid)
+            logger.error("PersonaPlex prewarm connection failed for %s", call_sid)
+            await remove_personaplex_processor(call_sid)
     except Exception as e:
-        logger.error("PersonaPlex prewarm error: %s", e)
+        logger.error("PersonaPlex prewarm error for %s: %s", call_sid, e)
+        # Clean up on error
+        try:
+            await remove_personaplex_processor(call_sid)
+        except Exception:
+            pass
 
 
 def is_laml_request(request: Request) -> bool:
@@ -329,22 +340,23 @@ async def handle_conversation(request: Request):
         if context_id:
             business_context = context_router.get_context(context_id)
 
-        # Process with ReceptionistAgent
-        from ...agents import AgentContext, create_receptionist_agent
+        # Process with ReceptionistAgent via unified interface
+        from ...agents.interface import get_agent
 
-        agent = create_receptionist_agent(
-            business_context=business_context,
+        agent = get_agent(
+            agent_type="receptionist",
             session_id=call_id,
+            business_context=business_context,
         )
 
-        agent_context = AgentContext(
+        agent_result = await agent.process(
             input_text=speech_text,
             input_type="voice",
             session_id=call_id,
-            conversation_history=_call_conversations[call_id],
+            runtime_context={
+                "conversation_history": _call_conversations[call_id],
+            },
         )
-
-        agent_result = await agent.run(agent_context)
         response_text = agent_result.response_text or "I'm not sure how to help with that."
 
         logger.info("Agent response: %s", response_text)
@@ -588,6 +600,9 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
         from_number = call.from_number if call else ""
         to_number = call.to_number if call else ""
 
+        # Track if we need to set callback after stream starts (pre-warm case)
+        needs_callback_setup = False
+
         if use_personaplex:
             processor = get_personaplex_processor(call_sid)
 
@@ -608,27 +623,36 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
                 else:
                     logger.warning("No stream_sid, cannot send audio")
 
-            if processor is not None:
-                # Use pre-warmed processor, just set the audio callback
+            if processor is not None and processor.state.is_connected:
+                # Pre-warmed and connected - wait for stream_sid before setting callback
                 logger.info("Using pre-warmed PersonaPlex for %s", call_sid)
-                processor._on_audio_ready = lambda b64: asyncio.create_task(
-                    send_audio(b64)
-                )
-                # Wait for connection if still in progress
+                needs_callback_setup = True
+            elif processor is not None and processor.state.is_connecting:
+                # Processor is connecting - wait for it
+                logger.info("Waiting for PersonaPlex connection for %s", call_sid)
+                for _ in range(300):  # Wait up to 30 seconds (handshake can take ~21s)
+                    await asyncio.sleep(0.1)
+                    if processor.state.is_connected:
+                        logger.info("PersonaPlex connection completed for %s", call_sid)
+                        needs_callback_setup = True
+                        break
+                    if not processor.state.is_connecting:
+                        # Connection failed
+                        logger.error("PersonaPlex connection failed for %s", call_sid)
+                        break
+                else:
+                    logger.error("PersonaPlex connection timeout for %s", call_sid)
+
                 if not processor.state.is_connected:
-                    logger.info("Waiting for PersonaPlex pre-warm to complete...")
-                    for _ in range(120):  # Wait up to 12 seconds
-                        await asyncio.sleep(0.1)
-                        if processor.state.is_connected:
-                            logger.info("PersonaPlex pre-warm completed")
-                            break
-                    else:
-                        logger.error("PersonaPlex pre-warm timeout for %s", call_sid)
-                        await remove_personaplex_processor(call_sid)
-                        await websocket.close()
-                        return
+                    await remove_personaplex_processor(call_sid)
+                    await websocket.close()
+                    return
             else:
-                # Fallback: connect now (slower path)
+                # No pre-warmed processor - create new one
+                if processor is not None:
+                    logger.info("Pre-warm failed for %s, recreating", call_sid)
+                    await remove_personaplex_processor(call_sid)
+
                 t0 = time.time()
                 logger.info("Starting PersonaPlex connection for %s", call_sid)
                 processor = create_personaplex_processor(
@@ -680,6 +704,32 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
                 if processor:
                     processor._state.stream_sid = stream_sid
 
+                # For pre-warmed PersonaPlex, now set callback and drain buffer
+                if use_personaplex and needs_callback_setup and processor:
+                    logger.info(
+                        "Setting PersonaPlex callback and draining buffer for %s",
+                        call_sid,
+                    )
+                    # Set callback and get any buffered audio
+                    buffered_audio = processor.set_audio_callback(
+                        lambda b64: asyncio.create_task(send_audio(b64))
+                    )
+                    # Send buffered audio (greeting from PersonaPlex)
+                    if buffered_audio:
+                        logger.info(
+                            "Sending %d buffered audio chunks for %s",
+                            len(buffered_audio),
+                            call_sid,
+                        )
+                        for audio_chunk in buffered_audio:
+                            await websocket.send_json({
+                                "event": "media",
+                                "streamSid": stream_sid,
+                                "media": {"payload": audio_chunk},
+                            })
+                        logger.info("Buffered audio sent to SignalWire")
+                    needs_callback_setup = False
+
                 # Play greeting - PersonaPlex generates its own, legacy uses TTS
                 if processor and context and stream_sid and not use_personaplex:
                     try:
@@ -709,8 +759,8 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
                             logger.warning("No greeting audio generated")
                     except Exception as e:
                         logger.error("Failed to send greeting: %s", e, exc_info=True)
-                elif use_personaplex:
-                    logger.info("PersonaPlex will generate greeting via text_prompt")
+                elif use_personaplex and not needs_callback_setup:
+                    logger.info("PersonaPlex greeting sent from buffer")
 
             elif event == "media":
                 # Audio data from caller

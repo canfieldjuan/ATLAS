@@ -83,12 +83,13 @@ class PhoneCallProcessor:
         self._processing_lock = asyncio.Lock()
 
     def _get_agent(self):
-        """Lazy load ReceptionistAgent."""
+        """Lazy load ReceptionistAgent via unified interface."""
         if self._agent is None:
-            from ..agents import create_receptionist_agent
-            self._agent = create_receptionist_agent(
-                business_context=self._business_context,
+            from ..agents.interface import get_agent
+            self._agent = get_agent(
+                agent_type="receptionist",
                 session_id=self._state.call_sid,
+                business_context=self._business_context,
             )
         return self._agent
 
@@ -257,18 +258,16 @@ class PhoneCallProcessor:
 
                 logger.info("Phone transcript: %s", transcript)
 
-                # Process with agent
+                # Process with agent via unified interface
                 agent = self._get_agent()
-                from ..agents import AgentContext
-
-                agent_context = AgentContext(
+                agent_result = await agent.process(
                     input_text=transcript,
                     input_type="voice",
                     session_id=self._state.call_sid,
-                    conversation_history=self._state.conversation_history,
+                    runtime_context={
+                        "conversation_history": self._state.conversation_history,
+                    },
                 )
-
-                agent_result = await agent.run(agent_context)
 
                 if not agent_result.response_text:
                     return None
