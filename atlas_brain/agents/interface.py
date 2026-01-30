@@ -62,12 +62,18 @@ class LegacyAgentAdapter:
         runtime_context: Optional[dict[str, Any]] = None,
     ) -> AgentResult:
         """Process input through legacy agent."""
+        ctx = runtime_context or {}
+        # Extract conversation_history if provided in runtime_context
+        conversation_history = ctx.get("conversation_history", [])
+        # Pass remaining context without conversation_history
+        remaining_ctx = {k: v for k, v in ctx.items() if k != "conversation_history"}
         context = AgentContext(
             input_text=input_text,
             input_type=input_type,
             session_id=session_id,
             speaker_id=speaker_id,
-            runtime_context=runtime_context or {},
+            conversation_history=conversation_history,
+            runtime_context=remaining_ctx,
         )
         return await self._agent.run(context)
 
@@ -126,6 +132,7 @@ def get_agent(
     agent_type: str = "atlas",
     session_id: Optional[str] = None,
     backend: Optional[str] = None,
+    business_context: Optional[Any] = None,
 ) -> AgentInterface:
     """
     Get an agent instance with the configured backend.
@@ -134,6 +141,7 @@ def get_agent(
         agent_type: Type of agent ("atlas", "home", "receptionist")
         session_id: Session ID for the agent
         backend: Override backend ("legacy" or "langgraph")
+        business_context: Business context for receptionist agent
 
     Returns:
         Agent adapter implementing AgentInterface
@@ -144,14 +152,15 @@ def get_agent(
     use_backend = backend or settings.agent.backend
 
     if use_backend == "langgraph":
-        return _get_langgraph_agent(agent_type, session_id)
+        return _get_langgraph_agent(agent_type, session_id, business_context)
     else:
-        return _get_legacy_agent(agent_type, session_id)
+        return _get_legacy_agent(agent_type, session_id, business_context)
 
 
 def _get_legacy_agent(
     agent_type: str,
     session_id: Optional[str] = None,
+    business_context: Optional[Any] = None,
 ) -> LegacyAgentAdapter:
     """Get legacy agent wrapped in adapter."""
     if agent_type == "atlas":
@@ -166,7 +175,10 @@ def _get_legacy_agent(
 
     elif agent_type == "receptionist":
         from .receptionist import create_receptionist_agent
-        agent = create_receptionist_agent()
+        agent = create_receptionist_agent(
+            business_context=business_context,
+            session_id=session_id,
+        )
         return LegacyAgentAdapter(agent)
 
     else:
@@ -176,6 +188,7 @@ def _get_legacy_agent(
 def _get_langgraph_agent(
     agent_type: str,
     session_id: Optional[str] = None,
+    business_context: Optional[Any] = None,
 ) -> LangGraphAgentAdapter:
     """Get LangGraph agent wrapped in adapter."""
     if agent_type == "atlas":
@@ -190,7 +203,10 @@ def _get_langgraph_agent(
 
     elif agent_type == "receptionist":
         from .graphs import get_receptionist_agent_langgraph
-        graph = get_receptionist_agent_langgraph(session_id=session_id)
+        graph = get_receptionist_agent_langgraph(
+            business_context=business_context,
+            session_id=session_id,
+        )
         return LangGraphAgentAdapter(graph)
 
     else:

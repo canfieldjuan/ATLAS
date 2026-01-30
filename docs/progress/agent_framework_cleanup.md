@@ -461,3 +461,18 @@ Plus removal of duplicate logic across the codebase.
   - Intent endpoint processes device commands
   - Chat endpoint handles conversations
 - **Next:** Phase 4 - Migrate Phone/Receptionist (or skip to Phase 5 if not needed)
+
+### 2026-01-29 Session - Phase 4 Complete
+- Updated `atlas_brain/agents/interface.py`:
+  - Added `business_context` parameter to `get_agent()` function
+  - Updated `_get_legacy_agent()` to pass `business_context` to receptionist
+  - Updated `_get_langgraph_agent()` to pass `business_context` to receptionist
+  - Updated `LegacyAgentAdapter.process()` to extract `conversation_history` from `runtime_context`
+- Updated `atlas_brain/comms/phone_processor.py`:
+  - Changed `_get_agent()` to use `get_agent("receptionist", ...)` from unified interface
+  - Changed `_process_utterance()` to use `agent.process()` instead of `AgentContext` + `agent.run()`
+- Updated `atlas_brain/api/comms/webhooks.py`:
+  - Changed `handle_conversation()` to use `get_agent("receptionist", ...)` from unified interface
+  - Changed to use `agent.process()` instead of `AgentContext` + `agent.run()`
+- Verified all imports work correctly
+- **Next:** Phase 5 - Remove Old Agents (requires production testing first)
