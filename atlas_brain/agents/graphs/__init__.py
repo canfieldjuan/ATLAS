@@ -14,6 +14,7 @@ from .state import (
     ReminderWorkflowState,
     SecurityWorkflowState,
     PresenceWorkflowState,
+    EmailWorkflowState,
 )
 from .home import HomeAgentGraph, get_home_agent_langgraph
 from .atlas import AtlasAgentGraph, get_atlas_agent_langgraph
@@ -44,6 +45,12 @@ from .presence import (
     build_presence_graph,
     compile_presence_graph,
     run_presence_workflow,
+)
+from .email import (
+    build_email_graph,
+    compile_email_graph,
+    run_email_workflow,
+    send_email_confirmed,
 )
 
 __all__ = [
@@ -86,4 +93,10 @@ __all__ = [
     "build_presence_graph",
     "compile_presence_graph",
     "run_presence_workflow",
+    # Email workflow
+    "EmailWorkflowState",
+    "build_email_graph",
+    "compile_email_graph",
+    "run_email_workflow",
+    "send_email_confirmed",
 ]

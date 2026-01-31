@@ -394,3 +394,80 @@ class PresenceWorkflowState(TypedDict, total=False):
     # Timing
     total_ms: float
     step_timings: dict[str, float]
+
+
+class EmailWorkflowState(TypedDict, total=False):
+    """
+    State for email workflow with draft preview and history.
+
+    Handles: send_email, send_estimate, send_proposal, query_history.
+    Supports draft preview mode before sending.
+    """
+
+    # Input
+    input_text: str
+    session_id: Optional[str]
+
+    # Intent classification
+    # send_email, send_estimate, send_proposal, query_history
+    intent: str
+
+    # Email parameters (generic)
+    to_address: Optional[str]
+    cc_addresses: Optional[str]
+    subject: Optional[str]
+    body: Optional[str]
+    reply_to: Optional[str]
+    attachments: list[str]
+
+    # Estimate/Proposal parameters
+    client_name: Optional[str]
+    client_type: Optional[str]  # business, residential
+    contact_name: Optional[str]
+    contact_phone: Optional[str]
+    address: Optional[str]
+    service_date: Optional[str]
+    service_time: Optional[str]
+    price: Optional[str]
+    frequency: Optional[str]
+    areas_to_clean: Optional[str]
+    cleaning_description: Optional[str]
+
+    # Draft preview
+    draft_mode: bool
+    draft_subject: Optional[str]
+    draft_body: Optional[str]
+    draft_to: Optional[str]
+    draft_template: Optional[str]
+    draft_confirmed: bool
+
+    # Follow-up reminder
+    create_follow_up: bool
+    follow_up_days: int
+
+    # Results
+    email_sent: bool
+    resend_message_id: Optional[str]
+    template_used: Optional[str]
+    attachment_included: bool
+    follow_up_created: bool
+    follow_up_reminder_id: Optional[str]
+
+    # History query results
+    history_queried: bool
+    email_history: list[dict[str, Any]]
+    history_count: int
+
+    # Workflow control
+    current_step: str
+    needs_clarification: bool
+    clarification_prompt: Optional[str]
+    awaiting_confirmation: bool
+
+    # Output
+    response: str
+    error: Optional[str]
+
+    # Timing
+    total_ms: float
+    step_timings: dict[str, float]
