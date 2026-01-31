@@ -458,6 +458,10 @@ class EmailWorkflowState(TypedDict, total=False):
     email_history: list[dict[str, Any]]
     history_count: int
 
+    # Context extraction results
+    context_extracted: bool
+    context_source: Optional[str]
+
     # Workflow control
     current_step: str
     needs_clarification: bool

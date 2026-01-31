@@ -343,6 +343,147 @@ async def create_follow_up_reminder(
         }
 
 
+# =============================================================================
+# Context Extraction Functions
+# =============================================================================
+
+async def lookup_booking_context(
+    client_name: str | None = None,
+    client_phone: str | None = None,
+    client_email: str | None = None,
+) -> dict[str, Any]:
+    """
+    Look up recent booking/appointment context for a client.
+
+    Searches by name, phone, or email to find recent appointments
+    and extract client information for auto-fill.
+    """
+    if not _use_real_tools():
+        # Mock mode - return sample context if name matches
+        if client_name and "test" in client_name.lower():
+            return {
+                "found": True,
+                "client_name": client_name,
+                "client_phone": "555-123-4567",
+                "client_email": "test@example.com",
+                "client_address": "123 Mock Street",
+                "client_type": "residential",
+                "last_service": "House Cleaning",
+                "last_service_date": "2026-01-15",
+            }
+        return {"found": False}
+
+    try:
+        from atlas_brain.storage.repositories.appointment import get_appointment_repo
+
+        repo = get_appointment_repo()
+        appointments = []
+
+        # Search by name if provided
+        if client_name:
+            appointments = await repo.search_by_name(client_name, include_history=True, limit=5)
+
+        # Search by phone if no name results
+        if not appointments and client_phone:
+            appointments = await repo.get_by_phone(client_phone, upcoming_only=False, limit=5)
+
+        if not appointments:
+            return {"found": False}
+
+        # Get the most recent appointment
+        latest = appointments[0]
+
+        # Determine client type based on service or metadata
+        client_type = "residential"
+        service_type = latest.get("service_type", "").lower()
+        if any(word in service_type for word in ["office", "commercial", "business"]):
+            client_type = "business"
+
+        return {
+            "found": True,
+            "client_name": latest.get("customer_name"),
+            "client_phone": latest.get("customer_phone"),
+            "client_email": latest.get("customer_email"),
+            "client_address": latest.get("customer_address"),
+            "client_type": client_type,
+            "last_service": latest.get("service_type"),
+            "last_service_date": latest.get("start_time", "").split("T")[0] if latest.get("start_time") else None,
+            "appointment_id": str(latest.get("id")) if latest.get("id") else None,
+        }
+
+    except Exception as e:
+        logger.warning("Failed to lookup booking context: %s", e)
+        return {"found": False, "error": str(e)}
+
+
+async def extract_context_node(state: EmailWorkflowState) -> EmailWorkflowState:
+    """
+    Extract context from recent bookings to auto-fill email fields.
+
+    This node runs after classification and before draft generation.
+    It looks up client info from recent appointments if not already provided.
+    """
+    start = time.time()
+
+    intent = state.get("intent", "unknown")
+
+    # Only extract context for estimate/proposal emails
+    if intent not in ("send_estimate", "send_proposal"):
+        return {
+            **state,
+            "step_timings": {**(state.get("step_timings") or {}), "context": (time.time() - start) * 1000},
+        }
+
+    # Check what info is missing
+    has_name = bool(state.get("client_name"))
+    has_address = bool(state.get("address"))
+    has_email = bool(state.get("to_address"))
+
+    # If we have all required info, skip lookup
+    if has_name and has_address and has_email:
+        return {
+            **state,
+            "step_timings": {**(state.get("step_timings") or {}), "context": (time.time() - start) * 1000},
+        }
+
+    # Try to look up context
+    context = await lookup_booking_context(
+        client_name=state.get("client_name"),
+        client_phone=state.get("contact_phone"),
+        client_email=state.get("to_address"),
+    )
+
+    updates: dict[str, Any] = {
+        "step_timings": {**(state.get("step_timings") or {}), "context": (time.time() - start) * 1000},
+    }
+
+    if context.get("found"):
+        # Auto-fill missing fields from context
+        if not has_name and context.get("client_name"):
+            updates["client_name"] = context["client_name"]
+        if not has_address and context.get("client_address"):
+            updates["address"] = context["client_address"]
+        if not has_email and context.get("client_email"):
+            updates["to_address"] = context["client_email"]
+        if not state.get("client_type") and context.get("client_type"):
+            updates["client_type"] = context["client_type"]
+        if not state.get("contact_phone") and context.get("client_phone"):
+            updates["contact_phone"] = context["client_phone"]
+
+        # Store context info for reference
+        updates["context_extracted"] = True
+        updates["context_source"] = "booking"
+
+        logger.info(
+            "Auto-filled from booking context: name=%s, address=%s, email=%s",
+            context.get("client_name"),
+            context.get("client_address"),
+            context.get("client_email"),
+        )
+
+    return {**state, **updates}
+
+
 def generate_estimate_draft(
     client_name: str,
     address: str,
@@ -805,7 +946,13 @@ def generate_draft_preview(state: EmailWorkflowState) -> EmailWorkflowState:
     # Truncate body for preview
     body_preview = body[:500] + "..." if len(body) > 500 else body
 
-    response = f"""DRAFT EMAIL PREVIEW
+    # Build context info if auto-filled
+    context_info = ""
+    if state.get("context_extracted"):
+        context_source = state.get("context_source", "booking")
+        context_info = f"\n[Auto-filled from recent {context_source}]"
+
+    response = f"""DRAFT EMAIL PREVIEW{context_info}
 ------------------
 To: {to}
 Subject: {subject}
@@ -925,7 +1072,11 @@ def route_after_classify(state: EmailWorkflowState) -> str:
     if intent == "query_history":
         return "execute_query_history"
 
-    # All other intents go to draft generation
+    # Estimate/proposal go through context extraction first
+    if intent in ("send_estimate", "send_proposal"):
+        return "extract_context"
+
+    # Generic email goes directly to draft
     return "generate_draft"
 
 
@@ -935,6 +1086,7 @@ def build_email_graph() -> StateGraph:
 
     # Add nodes
     graph.add_node("classify_intent", classify_intent)
+    graph.add_node("extract_context", extract_context_node)
     graph.add_node("generate_draft", generate_draft)
     graph.add_node("execute_send_email", execute_send_email)
     graph.add_node("execute_send_estimate", execute_send_estimate)
@@ -945,15 +1097,19 @@ def build_email_graph() -> StateGraph:
     # Set entry point
     graph.set_entry_point("classify_intent")
 
-    # Route after classification - query_history goes directly, others to draft
+    # Route after classification
     graph.add_conditional_edges(
         "classify_intent",
         route_after_classify,
         {
+            "extract_context": "extract_context",
             "generate_draft": "generate_draft",
             "execute_query_history": "execute_query_history",
         },
     )
+
+    # Context extraction goes to draft generation
+    graph.add_edge("extract_context", "generate_draft")
 
     # After draft, route based on state
     graph.add_conditional_edges(
@@ -1121,6 +1277,9 @@ async def run_email_workflow(
         # Follow-up reminder results
         "follow_up_created": result.get("follow_up_created", False),
         "follow_up_reminder_id": result.get("follow_up_reminder_id"),
+        # Context extraction results
+        "context_extracted": result.get("context_extracted", False),
+        "context_source": result.get("context_source"),
     }
 
 

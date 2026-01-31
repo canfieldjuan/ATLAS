@@ -138,6 +138,27 @@ async def test_mock():
         print(f"Follow-up Reminder ID: {send_result.get('follow_up_reminder_id')}")
         print(f"\nResponse:\n{send_result.get('response')}")
 
+    # Test 6: Context extraction (auto-fill from booking)
+    print("\n\nTest: Context Extraction (Auto-fill)")
+    print("-" * 50)
+
+    # Test with a name that triggers mock context lookup
+    result = await run_email_workflow(
+        "send estimate",
+        client_name="Test Client",  # "test" triggers mock context
+        service_date="February 15, 2026",
+        service_time="3:00 PM",
+        price="225.00",
+    )
+
+    print(f"Intent: {result.get('intent')}")
+    print(f"Context Extracted: {result.get('context_extracted')}")
+    print(f"Context Source: {result.get('context_source')}")
+    print(f"Auto-filled Address: {result.get('address')}")
+    print(f"Auto-filled Email: {result.get('to_address') or result.get('draft_to')}")
+    print(f"Auto-filled Client Type: {result.get('client_type')}")
+    print(f"\nResponse:\n{result.get('response')}")
+
     print("\n" + "=" * 70)
     print("MOCK TESTS COMPLETE")
     print("=" * 70)

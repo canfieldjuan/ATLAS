@@ -4,7 +4,7 @@
 Migrate 3 email tools to enhanced LangGraph workflow with draft preview, email history, and follow-up integration.
 
 **Start Date:** 2026-01-31
-**Status:** Phase 4 Complete - Follow-up Integration
+**Status:** Phase 5 Complete - Context Extraction
 
 ---
 
@@ -113,16 +113,26 @@ Migrate 3 email tools to enhanced LangGraph workflow with draft preview, email h
 
 ---
 
-### Phase 5: Context Extraction
+### Phase 5: Context Extraction - COMPLETE
 **Goal:** Auto-fill from recent bookings/calendar
 
 **Tasks:**
-- [ ] Add booking context lookup
-- [ ] Extract client info from recent appointments
-- [ ] Pre-fill estimate/proposal fields
-- [ ] Smart template selection
+- [x] Add lookup_booking_context function
+- [x] Extract client info from recent appointments
+- [x] Add extract_context_node to graph
+- [x] Pre-fill: address, email, phone, client_type
+- [x] Smart template selection based on service type
+- [x] Add context_extracted and context_source to state
+- [x] Show "[Auto-filled from recent booking]" in preview
 
-**Verification:** Create booking, send email, verify auto-fill
+**Auto-fill fields:**
+- client_name (from customer_name)
+- to_address (from customer_email)
+- address (from customer_address)
+- contact_phone (from customer_phone)
+- client_type (inferred from service_type)
+
+**Verification:** Test with "Test Client" triggers mock context lookup
 
 ---
 
@@ -201,6 +211,16 @@ Migrate 3 email tools to enhanced LangGraph workflow with draft preview, email h
 - Added create_follow_up and follow_up_days parameters to run_email_workflow
 - Updated response generation to mention follow-up creation
 - All tests pass including follow-up test
+
+### Session 5 - 2026-01-31
+- Implemented Phase 5: Context Extraction
+- Added lookup_booking_context function to search AppointmentRepository
+- Added extract_context_node to graph between classify and generate_draft
+- Auto-fill missing fields from recent bookings (address, email, phone, client_type)
+- Added context_extracted and context_source fields to EmailWorkflowState
+- Updated draft preview to show "[Auto-filled from recent booking]"
+- Added context extraction test case
+- All tests pass
 
 ---
 
