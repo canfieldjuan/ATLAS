@@ -208,3 +208,59 @@ class BookingWorkflowState(TypedDict, total=False):
     # Timing
     total_ms: float
     step_timings: dict[str, float]
+
+
+class ReminderWorkflowState(TypedDict, total=False):
+    """
+    State for reminder management workflow.
+
+    Handles: create, list, complete, delete reminders.
+    Routes based on detected intent within the graph.
+    """
+
+    # Input
+    input_text: str
+    session_id: Optional[str]
+
+    # Intent classification (determined by graph)
+    intent: str  # "create", "list", "complete", "delete", "unknown"
+
+    # Parsed from input (for create)
+    reminder_message: Optional[str]
+    reminder_time: Optional[str]  # Natural language time ("in 30 minutes")
+    repeat_pattern: Optional[str]  # "daily", "weekly", etc.
+
+    # Parsed datetime (after parsing)
+    parsed_due_at: Optional[str]  # ISO format
+
+    # For complete/delete operations
+    target_reminder_id: Optional[str]
+    target_by_index: Optional[int]  # "delete the first one"
+    complete_all: bool
+
+    # Results from operations
+    reminder_created: bool
+    created_reminder_id: Optional[str]
+
+    reminders_listed: bool
+    reminder_list: list[dict[str, Any]]
+    reminder_count: int
+
+    reminder_completed: bool
+    completed_reminder_id: Optional[str]
+
+    reminder_deleted: bool
+    deleted_reminder_id: Optional[str]
+
+    # Workflow control
+    current_step: str  # "classify", "parse", "execute", "respond"
+    needs_clarification: bool
+    clarification_prompt: Optional[str]
+
+    # Output
+    response: str
+    error: Optional[str]
+
+    # Timing
+    total_ms: float
+    step_timings: dict[str, float]
