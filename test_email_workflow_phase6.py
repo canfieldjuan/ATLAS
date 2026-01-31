@@ -22,6 +22,41 @@ from dotenv import load_dotenv
 load_dotenv("/home/juan-canfield/Desktop/Atlas/.env")
 
 
+# Database initialization flag
+_db_initialized = False
+
+
+async def initialize_database():
+    """Initialize database pool for real tests."""
+    global _db_initialized
+    if _db_initialized:
+        return True
+
+    try:
+        from atlas_brain.storage.database import get_db_pool
+        pool = get_db_pool()
+        await pool.initialize()
+        _db_initialized = True
+        print("  [DB] Database pool initialized successfully")
+        return True
+    except Exception as e:
+        print(f"  [DB] Failed to initialize database: {e}")
+        return False
+
+
+async def shutdown_database():
+    """Shutdown database pool."""
+    global _db_initialized
+    if _db_initialized:
+        try:
+            from atlas_brain.storage.database import get_db_pool
+            pool = get_db_pool()
+            await pool.close()
+            _db_initialized = False
+        except Exception:
+            pass
+
+
 class TestResults:
     """Track test results."""
     def __init__(self):
@@ -496,6 +531,9 @@ async def test_real_email_proposal():
 
     os.environ["USE_REAL_TOOLS"] = "true"
 
+    # Check if database was initialized (done in main before real tests)
+    db_available = _db_initialized
+
     import importlib
     import atlas_brain.agents.graphs.email as email_module
     importlib.reload(email_module)
@@ -542,17 +580,24 @@ async def test_real_email_proposal():
             send_result.get("template_used") == "business",
             f"template_used={send_result.get('template_used')}"
         )
-        # Note: Follow-up requires database connection which may not be available in test env
+        # Follow-up requires database connection
         if send_result.get("follow_up_created"):
             results.add(
                 "Follow-up auto-created",
                 True,
                 ""
             )
+        elif db_available:
+            # DB was available but follow-up still failed - this is a real failure
+            results.add(
+                "Follow-up auto-created",
+                False,
+                f"DB available but follow_up_created={send_result.get('follow_up_created')}"
+            )
         else:
             results.skip(
                 "Follow-up auto-created",
-                "Database not available (expected in standalone test)"
+                "Database not available"
             )
 
         if send_result.get("email_sent"):
@@ -645,6 +690,12 @@ async def main():
 
     # Real email tests (with delays to avoid rate limiting)
     print("\n>>> REAL EMAIL TESTS (sending to canfieldjuan24@gmail.com)")
+
+    # Initialize database for email history and follow-up reminders
+    db_ok = await initialize_database()
+    if not db_ok:
+        print("  [WARN] Database not available - email history won't be saved")
+
     all_passed &= await test_real_email_estimate()
     print("  (waiting 2s to avoid rate limit...)")
     await asyncio.sleep(2)
@@ -664,6 +715,9 @@ async def main():
     print("    1. Estimate email (residential)")
     print("    2. Proposal email (business)")
     print("    3. Generic email")
+
+    # Cleanup
+    await shutdown_database()
 
     return all_passed
 
