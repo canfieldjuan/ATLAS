@@ -340,3 +340,57 @@ class SecurityWorkflowState(TypedDict, total=False):
     # Timing
     total_ms: float
     step_timings: dict[str, float]
+
+
+class PresenceWorkflowState(TypedDict, total=False):
+    """
+    State for presence-aware device control workflow.
+
+    Handles: lights, media, scenes near user, and location queries.
+    Routes based on detected intent within the graph.
+    """
+
+    # Input
+    input_text: str
+    session_id: Optional[str]
+    user_id: Optional[str]
+
+    # Intent classification
+    # lights_control, media_control, scene_set, where_am_i
+    intent: str
+
+    # Presence context (resolved from presence service)
+    current_room_id: Optional[str]
+    current_room_name: Optional[str]
+    presence_confidence: float
+    presence_source: Optional[str]
+
+    # Lights parameters
+    light_action: Optional[str]  # on, off, toggle
+    brightness: Optional[int]  # 0-100
+    light_entities: list[str]
+
+    # Media parameters
+    media_action: Optional[str]  # on, off, play, pause, stop
+    media_entities: list[str]
+
+    # Scene parameters
+    scene_name: Optional[str]  # bright, dim, cozy, movie, focus, relax, off
+
+    # Results
+    action_executed: bool
+    devices_controlled: list[str]
+    location_reported: bool
+
+    # Workflow control
+    current_step: str
+    needs_clarification: bool
+    clarification_prompt: Optional[str]
+
+    # Output
+    response: str
+    error: Optional[str]
+
+    # Timing
+    total_ms: float
+    step_timings: dict[str, float]

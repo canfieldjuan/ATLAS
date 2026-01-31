@@ -13,6 +13,7 @@ from .state import (
     BookingWorkflowState,
     ReminderWorkflowState,
     SecurityWorkflowState,
+    PresenceWorkflowState,
 )
 from .home import HomeAgentGraph, get_home_agent_langgraph
 from .atlas import AtlasAgentGraph, get_atlas_agent_langgraph
@@ -38,6 +39,11 @@ from .security import (
     build_security_graph,
     compile_security_graph,
     run_security_workflow,
+)
+from .presence import (
+    build_presence_graph,
+    compile_presence_graph,
+    run_presence_workflow,
 )
 
 __all__ = [
@@ -75,4 +81,9 @@ __all__ = [
     "build_security_graph",
     "compile_security_graph",
     "run_security_workflow",
+    # Presence workflow
+    "PresenceWorkflowState",
+    "build_presence_graph",
+    "compile_presence_graph",
+    "run_presence_workflow",
 ]
