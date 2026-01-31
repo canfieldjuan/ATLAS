@@ -30,7 +30,7 @@ from urllib.request import Request, urlopen
 
 
 # OAuth configuration
-SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+SCOPES = ["https://www.googleapis.com/auth/calendar"]  # Full read/write access for booking
 REDIRECT_URI = "http://localhost:8085"
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"

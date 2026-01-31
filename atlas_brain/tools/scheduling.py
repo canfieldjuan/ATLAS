@@ -416,7 +416,7 @@ class BookAppointmentTool:
                     business_context_id=context.id,
                     customer_email=customer_email,
                     customer_address=address,
-                    calendar_event_id=appointment.id,
+                    calendar_event_id=str(appointment.id),
                     notes=notes or "",
                 )
                 db_id = str(db_record.get("id", ""))
