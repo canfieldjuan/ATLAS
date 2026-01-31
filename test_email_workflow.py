@@ -97,6 +97,17 @@ async def test_mock():
     print(f"Draft Subject: {result.get('draft_subject')}")
     print(f"\nResponse:\n{result.get('response')}")
 
+    # Test 4: Query email history
+    print("\n\nTest: Query Email History")
+    print("-" * 50)
+
+    result = await run_email_workflow("what emails did I send today")
+
+    print(f"Intent: {result.get('intent')}")
+    print(f"History Queried: {result.get('history_queried')}")
+    print(f"Email Count: {result.get('history_count')}")
+    print(f"\nResponse:\n{result.get('response')}")
+
     print("\n" + "=" * 70)
     print("MOCK TESTS COMPLETE")
     print("=" * 70)

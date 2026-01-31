@@ -176,6 +176,114 @@ async def tool_send_proposal_email(
         }
 
 
+# =============================================================================
+# Email History Functions
+# =============================================================================
+
+async def save_sent_email(
+    to_addresses: list[str],
+    subject: str,
+    body: str,
+    template_type: str | None = None,
+    session_id: str | None = None,
+    resend_message_id: str | None = None,
+    cc_addresses: list[str] | None = None,
+    attachments: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Save a sent email to the history database."""
+    if not _use_real_tools():
+        # Mock mode - just return success
+        return {
+            "success": True,
+            "email_id": f"mock_{datetime.now().strftime('%Y%m%d%H%M%S')}",
+        }
+
+    try:
+        from atlas_brain.storage.repositories.email import get_email_repo
+        from uuid import UUID
+
+        repo = get_email_repo()
+
+        session_uuid = UUID(session_id) if session_id else None
+
+        email = await repo.create(
+            to_addresses=to_addresses,
+            subject=subject,
+            body=body,
+            template_type=template_type,
+            session_id=session_uuid,
+            cc_addresses=cc_addresses,
+            attachments=attachments,
+            resend_message_id=resend_message_id,
+            metadata=metadata,
+        )
+
+        return {
+            "success": True,
+            "email_id": str(email.id),
+        }
+    except Exception as e:
+        logger.warning("Failed to save email to history: %s", e)
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+
+async def query_email_history(
+    hours: int | None = None,
+    template_type: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Query sent email history."""
+    if not _use_real_tools():
+        # Mock mode - return sample data
+        return {
+            "success": True,
+            "emails": [
+                {
+                    "id": "mock-1",
+                    "to": ["test@example.com"],
+                    "subject": "Test Email",
+                    "template": "estimate",
+                    "sent_at": datetime.now().isoformat(),
+                },
+            ],
+            "count": 1,
+        }
+
+    try:
+        from atlas_brain.storage.repositories.email import get_email_repo
+        from datetime import timedelta, timezone
+
+        repo = get_email_repo()
+
+        since = None
+        if hours:
+            since = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+        emails = await repo.query(
+            template_type=template_type,
+            since=since,
+            limit=limit,
+        )
+
+        return {
+            "success": True,
+            "emails": [e.to_dict() for e in emails],
+            "count": len(emails),
+        }
+    except Exception as e:
+        logger.warning("Failed to query email history: %s", e)
+        return {
+            "success": False,
+            "error": str(e),
+            "emails": [],
+            "count": 0,
+        }
+
+
 def generate_estimate_draft(
     client_name: str,
     address: str,
@@ -436,6 +544,17 @@ async def execute_send_email(state: EmailWorkflowState) -> EmailWorkflowState:
         updates["email_sent"] = True
         updates["resend_message_id"] = result.get("message_id")
         updates["template_used"] = "generic"
+
+        # Save to history
+        to_addr = state.get("draft_to") or state.get("to_address", "")
+        await save_sent_email(
+            to_addresses=[to_addr] if to_addr else [],
+            subject=state.get("draft_subject") or state.get("subject", ""),
+            body=state.get("draft_body") or state.get("body", ""),
+            template_type="generic",
+            session_id=state.get("session_id"),
+            resend_message_id=result.get("message_id"),
+        )
     else:
         updates["error"] = result.get("error") or result.get("message", "Failed to send email")
 
@@ -465,6 +584,22 @@ async def execute_send_estimate(state: EmailWorkflowState) -> EmailWorkflowState
         updates["email_sent"] = True
         updates["resend_message_id"] = result.get("message_id")
         updates["template_used"] = result.get("template", "estimate")
+
+        # Save to history
+        await save_sent_email(
+            to_addresses=[state.get("to_address", "")],
+            subject=state.get("draft_subject", "Estimate"),
+            body=state.get("draft_body", ""),
+            template_type="estimate",
+            session_id=state.get("session_id"),
+            resend_message_id=result.get("message_id"),
+            metadata={
+                "client_name": state.get("client_name"),
+                "client_type": state.get("client_type"),
+                "address": state.get("address"),
+                "price": state.get("price"),
+            },
+        )
     else:
         updates["error"] = result.get("error") or result.get("message", "Failed to send estimate")
 
@@ -498,8 +633,68 @@ async def execute_send_proposal(state: EmailWorkflowState) -> EmailWorkflowState
         updates["resend_message_id"] = result.get("message_id")
         updates["template_used"] = result.get("template", "proposal")
         updates["attachment_included"] = result.get("pdf_attached", False)
+
+        # Save to history
+        await save_sent_email(
+            to_addresses=[state.get("to_address", "")],
+            subject=state.get("draft_subject", "Proposal"),
+            body=state.get("draft_body", ""),
+            template_type="proposal",
+            session_id=state.get("session_id"),
+            resend_message_id=result.get("message_id"),
+            attachments=["proposal.pdf"] if result.get("pdf_attached") else None,
+            metadata={
+                "client_name": state.get("client_name"),
+                "client_type": state.get("client_type"),
+                "contact_name": state.get("contact_name"),
+                "address": state.get("address"),
+                "price": state.get("price"),
+                "frequency": state.get("frequency"),
+            },
+        )
     else:
         updates["error"] = result.get("error") or result.get("message", "Failed to send proposal")
+
+    return {**state, **updates}
+
+
+# -----------------------------------------------------------------------------
+# Email History Query Handler
+# -----------------------------------------------------------------------------
+
+async def execute_query_history(state: EmailWorkflowState) -> EmailWorkflowState:
+    """Execute email history query."""
+    start = time.time()
+
+    # Parse query for time range (e.g., "today", "last 24 hours", "this week")
+    input_text = state.get("input_text", "").lower()
+
+    hours = None
+    if "today" in input_text:
+        hours = 24
+    elif "week" in input_text:
+        hours = 168
+    elif "yesterday" in input_text:
+        hours = 48
+    elif "hour" in input_text:
+        # Try to extract number of hours
+        import re
+        match = re.search(r"(\d+)\s*hour", input_text)
+        if match:
+            hours = int(match.group(1))
+
+    result = await query_email_history(hours=hours, limit=20)
+
+    updates: dict[str, Any] = {
+        "current_step": "respond",
+        "step_timings": {**(state.get("step_timings") or {}), "execute": (time.time() - start) * 1000},
+        "history_queried": True,
+        "email_history": result.get("emails", []),
+        "history_count": result.get("count", 0),
+    }
+
+    if not result.get("success"):
+        updates["error"] = result.get("error", "Failed to query email history")
 
     return {**state, **updates}
 
@@ -551,6 +746,30 @@ def generate_response(state: EmailWorkflowState) -> EmailWorkflowState:
     elif state.get("awaiting_confirmation"):
         # Show draft preview
         return generate_draft_preview(state)
+    elif state.get("history_queried"):
+        emails = state.get("email_history", [])
+        count = state.get("history_count", 0)
+
+        if count == 0:
+            response = "No emails found in history."
+        else:
+            lines = [f"Found {count} email(s) in history:"]
+            for email in emails[:10]:  # Limit display to 10
+                to_list = email.get("to_addresses", [])
+                to_str = ", ".join(to_list) if to_list else "unknown"
+                subject = email.get("subject", "No subject")[:50]
+                template = email.get("template_type", "generic")
+                sent_at = email.get("sent_at", "")
+                if sent_at:
+                    # Format date nicely
+                    sent_at = sent_at.split("T")[0] if "T" in sent_at else sent_at
+
+                lines.append(f"  - {sent_at}: {subject} (to: {to_str}, {template})")
+
+            if count > 10:
+                lines.append(f"  ... and {count - 10} more")
+
+            response = "\n".join(lines)
     elif state.get("email_sent"):
         to = state.get("to_address") or state.get("draft_to", "")
         template = state.get("template_used", "")
@@ -604,6 +823,17 @@ def route_after_confirm(state: EmailWorkflowState) -> str:
     return route_map.get(intent, "respond")
 
 
+def route_after_classify(state: EmailWorkflowState) -> str:
+    """Route after intent classification."""
+    intent = state.get("intent", "unknown")
+
+    if intent == "query_history":
+        return "execute_query_history"
+
+    # All other intents go to draft generation
+    return "generate_draft"
+
+
 def build_email_graph() -> StateGraph:
     """Build the email workflow StateGraph."""
     graph = StateGraph(EmailWorkflowState)
@@ -614,13 +844,21 @@ def build_email_graph() -> StateGraph:
     graph.add_node("execute_send_email", execute_send_email)
     graph.add_node("execute_send_estimate", execute_send_estimate)
     graph.add_node("execute_send_proposal", execute_send_proposal)
+    graph.add_node("execute_query_history", execute_query_history)
     graph.add_node("respond", generate_response)
 
     # Set entry point
     graph.set_entry_point("classify_intent")
 
-    # Flow: classify -> generate_draft -> respond (with draft preview)
-    graph.add_edge("classify_intent", "generate_draft")
+    # Route after classification - query_history goes directly, others to draft
+    graph.add_conditional_edges(
+        "classify_intent",
+        route_after_classify,
+        {
+            "generate_draft": "generate_draft",
+            "execute_query_history": "execute_query_history",
+        },
+    )
 
     # After draft, route based on state
     graph.add_conditional_edges(
@@ -635,6 +873,7 @@ def build_email_graph() -> StateGraph:
     graph.add_edge("execute_send_email", "respond")
     graph.add_edge("execute_send_estimate", "respond")
     graph.add_edge("execute_send_proposal", "respond")
+    graph.add_edge("execute_query_history", "respond")
 
     # Respond goes to END
     graph.add_edge("respond", END)
@@ -768,6 +1007,10 @@ async def run_email_workflow(
         "areas_to_clean": result.get("areas_to_clean"),
         "cleaning_description": result.get("cleaning_description"),
         "frequency": result.get("frequency"),
+        # History query results
+        "history_queried": result.get("history_queried", False),
+        "email_history": result.get("email_history", []),
+        "history_count": result.get("history_count", 0),
     }
 
 
