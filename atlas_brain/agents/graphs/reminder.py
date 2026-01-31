@@ -331,14 +331,36 @@ def parse_create_intent(text: str) -> dict[str, Any]:
 
     Returns dict with 'message' and 'when' keys.
     """
-    text_lower = text.lower()
-
-    # Common patterns:
-    # "remind me to X in Y" / "remind me to X at Y"
-    # "set a reminder to X for Y"
-    # "remind me in Y to X"
+    text_lower = text.lower().strip()
 
     import re
+
+    # Handle "now" variants - these should trigger immediately
+    now_patterns = ["now", "right now", "immediately", "asap"]
+
+    # Pattern: "remind me now to [message]" or "remind me right now to [message]"
+    for now_word in now_patterns:
+        pattern_now = rf"remind(?:\s+me)?\s+{now_word}\s+to\s+(.+)"
+        match = re.search(pattern_now, text_lower)
+        if match:
+            message = match.group(1).strip()
+            return {"message": message, "when": "now"}
+
+    # Pattern: "remind me to [message] now"
+    pattern_msg_now = r"remind(?:\s+me)?\s+to\s+(.+?)\s+(?:right\s+)?now$"
+    match = re.search(pattern_msg_now, text_lower)
+    if match:
+        message = match.group(1).strip()
+        return {"message": message, "when": "now"}
+
+    # Pattern: "send me a reminder now" or "send a reminder" (no message = test reminder)
+    if re.search(r"send\s+(?:me\s+)?a?\s*reminder", text_lower):
+        # Check if "now" is present
+        if any(now in text_lower for now in now_patterns):
+            return {"message": "Test reminder", "when": "now"}
+        # No time specified = now
+        if not any(time_word in text_lower for time_word in ["in ", "at ", "tomorrow", "tonight", "morning"]):
+            return {"message": "Test reminder", "when": "now"}
 
     # Pattern: "remind me to [message] (in|at|on|tomorrow|...) [time]"
     pattern1 = r"remind(?:\s+me)?\s+to\s+(.+?)\s+(in\s+\d+|at\s+\d|tomorrow|tonight|next\s+\w+|on\s+\w+)"
@@ -359,7 +381,42 @@ def parse_create_intent(text: str) -> dict[str, Any]:
         message = match.group(2).strip()
         return {"message": message, "when": when}
 
-    # Pattern: "set a reminder for [time] to [message]"
+    # IMPORTANT: "from now" patterns must come BEFORE generic "set a reminder for X to Y"
+    # Pattern: "set a reminder for [X] minutes/hours from now to [message]"
+    pattern_set_from_now = r"set\s+a?\s*reminder\s+for\s+(\d+)\s*(minute|hour|second)s?\s+from\s+now\s+to\s+(.+)"
+    match = re.search(pattern_set_from_now, text_lower)
+    if match:
+        amount = match.group(1)
+        unit = match.group(2)
+        message = match.group(3).strip()
+        when = f"in {amount} {unit}s"
+        return {"message": message, "when": when}
+
+    # Pattern: "[X] minutes/hours from now to [message]"
+    pattern_from_now = r"(\d+)\s*(minute|hour|second)s?\s+from\s+now\s+to\s+(.+)"
+    match = re.search(pattern_from_now, text_lower)
+    if match:
+        amount = match.group(1)
+        unit = match.group(2)
+        message = match.group(3).strip()
+        when = f"in {amount} {unit}s"
+        return {"message": message, "when": when}
+
+    # Pattern: "[X] minutes/hours from now" (without "to [message]")
+    pattern_from_now_only = r"(\d+)\s*(minute|hour|second)s?\s+from\s+now"
+    match = re.search(pattern_from_now_only, text_lower)
+    if match:
+        amount = match.group(1)
+        unit = match.group(2)
+        when = f"in {amount} {unit}s"
+        # Extract message - everything before or after
+        before = text_lower[:match.start()].strip()
+        before = re.sub(r"^(set\s+a?\s*reminder\s+(?:for\s+)?|remind\s+me\s+to\s*)", "", before).strip()
+        if before:
+            return {"message": before, "when": when}
+        return {"message": "Reminder", "when": when}
+
+    # Pattern: "set a reminder for [time] to [message]" (generic, after specific patterns)
     pattern3 = r"set\s+a?\s*reminder\s+(?:for\s+)?(.+?)\s+to\s+(.+)"
     match = re.search(pattern3, text_lower)
     if match:
@@ -369,7 +426,7 @@ def parse_create_intent(text: str) -> dict[str, Any]:
 
     # Fallback: try to find time expression and use rest as message
     time_keywords = [
-        r"in\s+\d+\s+(?:minute|hour|day|week)",
+        r"in\s+\d+\s*(?:seconds?|minutes?|hours?|days?|weeks?)",
         r"at\s+\d+(?::\d+)?\s*(?:am|pm)?",
         r"tomorrow(?:\s+(?:at|morning|afternoon|evening|night))?",
         r"tonight",
