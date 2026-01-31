@@ -284,6 +284,65 @@ async def query_email_history(
         }
 
 
+# =============================================================================
+# Follow-up Reminder Functions
+# =============================================================================
+
+async def create_follow_up_reminder(
+    client_name: str,
+    email_type: str,
+    follow_up_days: int = 3,
+    to_address: str | None = None,
+) -> dict[str, Any]:
+    """Create a follow-up reminder after sending an email."""
+    from datetime import timedelta, timezone
+
+    if not _use_real_tools():
+        # Mock mode
+        due_at = datetime.now(timezone.utc) + timedelta(days=follow_up_days)
+        return {
+            "success": True,
+            "reminder_id": f"mock_reminder_{datetime.now().strftime('%Y%m%d%H%M%S')}",
+            "message": f"Follow up on {email_type} sent to {client_name}",
+            "due_at": due_at.isoformat(),
+        }
+
+    try:
+        from atlas_brain.services.reminders import get_reminder_service
+
+        service = get_reminder_service()
+
+        due_at = datetime.now(timezone.utc) + timedelta(days=follow_up_days)
+        message = f"Follow up on {email_type} sent to {client_name}"
+        if to_address:
+            message += f" ({to_address})"
+
+        reminder = await service.create_reminder(
+            message=message,
+            due_at=due_at,
+            source="email_workflow",
+        )
+
+        if reminder:
+            return {
+                "success": True,
+                "reminder_id": str(reminder.id),
+                "message": reminder.message,
+                "due_at": reminder.due_at.isoformat(),
+            }
+        else:
+            return {
+                "success": False,
+                "error": "Failed to create reminder",
+            }
+    except Exception as e:
+        logger.warning("Failed to create follow-up reminder: %s", e)
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+
 def generate_estimate_draft(
     client_name: str,
     address: str,
@@ -600,6 +659,19 @@ async def execute_send_estimate(state: EmailWorkflowState) -> EmailWorkflowState
                 "price": state.get("price"),
             },
         )
+
+        # Create follow-up reminder if requested
+        if state.get("create_follow_up"):
+            follow_up_days = state.get("follow_up_days", 3)
+            follow_up_result = await create_follow_up_reminder(
+                client_name=state.get("client_name", "Client"),
+                email_type="estimate",
+                follow_up_days=follow_up_days,
+                to_address=state.get("to_address"),
+            )
+            if follow_up_result.get("success"):
+                updates["follow_up_created"] = True
+                updates["follow_up_reminder_id"] = follow_up_result.get("reminder_id")
     else:
         updates["error"] = result.get("error") or result.get("message", "Failed to send estimate")
 
@@ -652,6 +724,24 @@ async def execute_send_proposal(state: EmailWorkflowState) -> EmailWorkflowState
                 "frequency": state.get("frequency"),
             },
         )
+
+        # Create follow-up reminder if requested (default for proposals)
+        create_follow_up = state.get("create_follow_up")
+        # Auto-suggest follow-up for proposals if not explicitly disabled
+        if create_follow_up is None:
+            create_follow_up = True  # Default to True for proposals
+
+        if create_follow_up:
+            follow_up_days = state.get("follow_up_days", 5)  # 5 days for proposals
+            follow_up_result = await create_follow_up_reminder(
+                client_name=state.get("client_name", "Client"),
+                email_type="proposal",
+                follow_up_days=follow_up_days,
+                to_address=state.get("to_address"),
+            )
+            if follow_up_result.get("success"):
+                updates["follow_up_created"] = True
+                updates["follow_up_reminder_id"] = follow_up_result.get("reminder_id")
     else:
         updates["error"] = result.get("error") or result.get("message", "Failed to send proposal")
 
@@ -782,6 +872,11 @@ def generate_response(state: EmailWorkflowState) -> EmailWorkflowState:
             response += " with PDF attachment"
         if msg_id:
             response += f". Message ID: {msg_id}"
+        if state.get("follow_up_created"):
+            follow_up_id = state.get("follow_up_reminder_id", "")
+            response += f". Follow-up reminder created"
+            if follow_up_id:
+                response += f" (ID: {follow_up_id})"
     else:
         response = "Email operation completed."
 
@@ -909,6 +1004,9 @@ async def run_email_workflow(
     # Draft control
     skip_draft: bool = False,
     confirmed: bool = False,
+    # Follow-up reminder
+    create_follow_up: bool | None = None,
+    follow_up_days: int | None = None,
 ) -> dict[str, Any]:
     """
     Run the email workflow with the given input.
@@ -932,6 +1030,8 @@ async def run_email_workflow(
         frequency: Cleaning frequency
         skip_draft: If True, skip draft preview and send directly
         confirmed: If True, treat as confirmed and send
+        create_follow_up: Create a follow-up reminder (default: True for proposals)
+        follow_up_days: Days until follow-up reminder (default: 3 for estimates, 5 for proposals)
 
     Returns:
         Dict with response and workflow results
@@ -976,6 +1076,10 @@ async def run_email_workflow(
         initial_state["cleaning_description"] = cleaning_description
     if frequency:
         initial_state["frequency"] = frequency
+    if create_follow_up is not None:
+        initial_state["create_follow_up"] = create_follow_up
+    if follow_up_days is not None:
+        initial_state["follow_up_days"] = follow_up_days
 
     result = await compiled.ainvoke(initial_state)
 
@@ -1007,10 +1111,16 @@ async def run_email_workflow(
         "areas_to_clean": result.get("areas_to_clean"),
         "cleaning_description": result.get("cleaning_description"),
         "frequency": result.get("frequency"),
+        # Follow-up settings (for send_email_confirmed)
+        "create_follow_up": result.get("create_follow_up"),
+        "follow_up_days": result.get("follow_up_days"),
         # History query results
         "history_queried": result.get("history_queried", False),
         "email_history": result.get("email_history", []),
         "history_count": result.get("history_count", 0),
+        # Follow-up reminder results
+        "follow_up_created": result.get("follow_up_created", False),
+        "follow_up_reminder_id": result.get("follow_up_reminder_id"),
     }
 
 
@@ -1067,4 +1177,6 @@ async def send_email_confirmed(
         "resend_message_id": final.get("resend_message_id"),
         "template_used": final.get("template_used"),
         "attachment_included": final.get("attachment_included", False),
+        "follow_up_created": final.get("follow_up_created", False),
+        "follow_up_reminder_id": final.get("follow_up_reminder_id"),
     }

@@ -4,7 +4,7 @@
 Migrate 3 email tools to enhanced LangGraph workflow with draft preview, email history, and follow-up integration.
 
 **Start Date:** 2026-01-31
-**Status:** Phase 3 Complete - Email History Storage
+**Status:** Phase 4 Complete - Follow-up Integration
 
 ---
 
@@ -94,16 +94,22 @@ Migrate 3 email tools to enhanced LangGraph workflow with draft preview, email h
 
 ---
 
-### Phase 4: Follow-up Integration
+### Phase 4: Follow-up Integration - COMPLETE
 **Goal:** Optionally create reminder after sending proposal/estimate
 
 **Tasks:**
-- [ ] Add follow_up_enabled state field
-- [ ] Add follow_up_days parameter
-- [ ] Integrate with reminder workflow
-- [ ] Auto-suggest follow-up after proposals
+- [x] Add create_follow_up and follow_up_days parameters
+- [x] Create create_follow_up_reminder function
+- [x] Integrate with ReminderService
+- [x] Auto-create follow-up after proposals (default: True)
+- [x] Optional follow-up after estimates (create_follow_up=True)
+- [x] Include follow-up info in response
 
-**Verification:** Send proposal, verify reminder created
+**Defaults:**
+- Estimates: follow_up_days=3 (optional, must set create_follow_up=True)
+- Proposals: follow_up_days=5 (auto-enabled by default)
+
+**Verification:** Send estimate with follow-up=True, verify reminder created
 
 ---
 
@@ -185,6 +191,16 @@ Migrate 3 email tools to enhanced LangGraph workflow with draft preview, email h
 - Updated graph with query_history routing
 - Updated response generation for history output
 - All tests pass (mock and real email modes)
+
+### Session 4 - 2026-01-31
+- Implemented Phase 4: Follow-up Integration
+- Added create_follow_up_reminder function
+- Integrated with ReminderService
+- Updated execute_send_estimate to create follow-ups (optional)
+- Updated execute_send_proposal to auto-create follow-ups (default)
+- Added create_follow_up and follow_up_days parameters to run_email_workflow
+- Updated response generation to mention follow-up creation
+- All tests pass including follow-up test
 
 ---
 

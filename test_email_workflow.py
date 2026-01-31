@@ -108,6 +108,36 @@ async def test_mock():
     print(f"Email Count: {result.get('history_count')}")
     print(f"\nResponse:\n{result.get('response')}")
 
+    # Test 5: Follow-up reminder with estimate
+    print("\n\nTest: Estimate with Follow-up Reminder")
+    print("-" * 50)
+
+    result = await run_email_workflow(
+        "send estimate",
+        to_address="canfieldjuan24@gmail.com",
+        client_name="Follow-up Test Client",
+        client_type="residential",
+        address="789 Test Lane",
+        service_date="February 10, 2026",
+        service_time="2:00 PM",
+        price="200.00",
+        create_follow_up=True,
+        follow_up_days=3,
+    )
+
+    print(f"Intent: {result.get('intent')}")
+    print(f"Awaiting Confirmation: {result.get('awaiting_confirmation')}")
+    print(f"Follow-up will be created: {result.get('create_follow_up', 'N/A')}")
+
+    # Simulate confirming the send
+    if result.get("awaiting_confirmation"):
+        print("\nSimulating send confirmation...")
+        send_result = await send_email_confirmed(result)
+        print(f"Email Sent: {send_result.get('email_sent')}")
+        print(f"Follow-up Created: {send_result.get('follow_up_created')}")
+        print(f"Follow-up Reminder ID: {send_result.get('follow_up_reminder_id')}")
+        print(f"\nResponse:\n{send_result.get('response')}")
+
     print("\n" + "=" * 70)
     print("MOCK TESTS COMPLETE")
     print("=" * 70)
