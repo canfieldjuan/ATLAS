@@ -291,11 +291,15 @@ async def query_email_history(
 async def create_follow_up_reminder(
     client_name: str,
     email_type: str,
-    follow_up_days: int = 3,
+    follow_up_days: int | None = 3,
     to_address: str | None = None,
 ) -> dict[str, Any]:
     """Create a follow-up reminder after sending an email."""
     from datetime import timedelta, timezone
+
+    # Handle None follow_up_days - default based on email type
+    if follow_up_days is None:
+        follow_up_days = 5 if email_type == "proposal" else 3
 
     if not _use_real_tools():
         # Mock mode
@@ -570,6 +574,8 @@ EMAIL_PATTERNS = [
     # Generic email
     (r"(?:send|compose|write)\s+(?:an?\s+)?email\s+to\s+(\S+@\S+)", "send_email"),
     (r"email\s+(\S+@\S+)", "send_email"),
+    (r"mail\s+(?:this\s+)?to\s+(\S+@\S+)", "send_email"),  # "mail this to x@y.com"
+    (r"(?:send|compose|write)\s+(?:an?\s+)?email", "send_email"),  # General "send email"
     # Estimate email
     (r"(?:send|email)\s+(?:an?\s+)?estimate\s+(?:to|email)", "send_estimate"),
     (r"estimate\s+(?:confirmation|email)\s+(?:to|for)", "send_estimate"),
@@ -582,6 +588,8 @@ EMAIL_PATTERNS = [
     (r"(?:what|which|show)\s+emails?\s+(?:did\s+)?(?:i\s+)?(?:send|sent)", "query_history"),
     (r"email\s+history", "query_history"),
     (r"(?:list|show)\s+(?:sent\s+)?emails?", "query_history"),
+    (r"emails?\s+(?:sent|from)\s+(?:today|yesterday|this\s+week)", "query_history"),  # "emails sent today"
+    (r"(?:check|view)\s+(?:my\s+)?email\s+history", "query_history"),
 ]
 
 
@@ -1280,6 +1288,9 @@ async def run_email_workflow(
         # Context extraction results
         "context_extracted": result.get("context_extracted", False),
         "context_source": result.get("context_source"),
+        # Clarification
+        "needs_clarification": result.get("needs_clarification", False),
+        "clarification_prompt": result.get("clarification_prompt"),
     }
 
 
