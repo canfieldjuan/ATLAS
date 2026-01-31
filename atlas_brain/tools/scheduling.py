@@ -24,13 +24,13 @@ logger = logging.getLogger("atlas.tools.scheduling")
 
 def _get_scheduling_service():
     """Lazy import to avoid circular dependency."""
-    from ..comms.scheduling import scheduling_service
+    from atlas_comms.services import scheduling_service
     return scheduling_service
 
 
 def _get_time_slot_class():
     """Lazy import TimeSlot to avoid circular dependency."""
-    from ..comms.scheduling import TimeSlot
+    from atlas_comms.services import TimeSlot
     return TimeSlot
 
 

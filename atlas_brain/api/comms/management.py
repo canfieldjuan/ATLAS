@@ -19,7 +19,7 @@ from ...comms import comms_settings
 from ...comms.config import BusinessContext, EFFINGHAM_MAIDS_CONTEXT
 from ...comms.context import get_context_router
 from ...comms.providers import get_provider, list_providers
-from ...comms.scheduling import scheduling_service, TimeSlot
+from atlas_comms.services import scheduling_service, TimeSlot
 
 logger = logging.getLogger("atlas.api.comms.management")
 
