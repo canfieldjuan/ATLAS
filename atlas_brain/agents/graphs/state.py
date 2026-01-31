@@ -157,3 +157,54 @@ class ReceptionistAgentState(AgentState):
     # Phone-specific
     is_phone_call: bool
     use_phone_tts: bool
+
+
+class BookingWorkflowState(TypedDict, total=False):
+    """
+    State for multi-step booking workflow.
+
+    Demonstrates graph-driven tool chaining:
+    lookup_customer -> check_availability -> book_appointment
+
+    The LLM only makes decisions at specific nodes.
+    LangGraph handles orchestration and routing.
+    """
+
+    # Input
+    input_text: str
+    session_id: Optional[str]
+
+    # Parsed from input (LLM extracts)
+    customer_name: Optional[str]
+    customer_phone: Optional[str]
+    requested_date: Optional[str]
+    requested_time: Optional[str]
+    service_type: Optional[str]
+
+    # From lookup_customer tool
+    customer_found: bool
+    customer_id: Optional[str]
+    customer_email: Optional[str]
+    customer_address: Optional[str]
+
+    # From check_availability tool
+    slot_available: bool
+    alternative_slots: list[str]
+
+    # From book_appointment tool
+    booking_confirmed: bool
+    booking_id: Optional[str]
+    confirmation_details: dict[str, Any]
+
+    # Workflow control
+    current_step: str  # "parse", "lookup", "availability", "book", "complete"
+    needs_info: list[str]  # Fields still needed from user
+    awaiting_user_input: bool
+
+    # Output
+    response: str
+    error: Optional[str]
+
+    # Timing
+    total_ms: float
+    step_timings: dict[str, float]
