@@ -264,3 +264,79 @@ class ReminderWorkflowState(TypedDict, total=False):
     # Timing
     total_ms: float
     step_timings: dict[str, float]
+
+
+class SecurityWorkflowState(TypedDict, total=False):
+    """
+    State for security system workflow.
+
+    Handles: cameras, detections, zones.
+    Routes based on detected intent within the graph.
+    """
+
+    # Input
+    input_text: str
+    session_id: Optional[str]
+
+    # Intent classification (determined by graph)
+    # camera_list, camera_status, camera_record_start, camera_record_stop, camera_ptz
+    # detection_current, detection_query, detection_person_location, detection_motion
+    # zone_list, zone_status, zone_arm, zone_disarm
+    intent: str
+
+    # Camera parameters
+    camera_name: Optional[str]
+    camera_id: Optional[str]
+    record_duration: Optional[int]  # seconds
+    ptz_action: Optional[str]  # "pan_left", "pan_right", "tilt_up", etc.
+    ptz_amount: Optional[float]
+
+    # Detection parameters
+    detection_type: Optional[str]  # "person", "vehicle", "motion", etc.
+    location: Optional[str]  # location to check
+    time_range_start: Optional[str]  # ISO format
+    time_range_end: Optional[str]
+    min_confidence: Optional[float]
+    limit: Optional[int]
+
+    # Zone parameters
+    zone_name: Optional[str]
+    zone_id: Optional[str]
+    arm_mode: Optional[str]  # "away", "home", "night"
+
+    # Results - Camera operations
+    cameras_listed: bool
+    camera_list: list[dict[str, Any]]
+    camera_count: int
+    camera_status: Optional[dict[str, Any]]
+    recording_started: bool
+    recording_stopped: bool
+
+    # Results - Detection operations
+    detections_retrieved: bool
+    detection_list: list[dict[str, Any]]
+    detection_count: int
+    person_found: bool
+    person_location_result: Optional[dict[str, Any]]
+    motion_events: list[dict[str, Any]]
+
+    # Results - Zone operations
+    zones_listed: bool
+    zone_list: list[dict[str, Any]]
+    zone_count: int
+    zone_status_result: Optional[dict[str, Any]]
+    zone_armed: bool
+    zone_disarmed: bool
+
+    # Workflow control
+    current_step: str  # "classify", "parse", "execute", "respond"
+    needs_clarification: bool
+    clarification_prompt: Optional[str]
+
+    # Output
+    response: str
+    error: Optional[str]
+
+    # Timing
+    total_ms: float
+    step_timings: dict[str, float]
