@@ -8,6 +8,7 @@ hiding the SQL implementation details.
 from .appointment import AppointmentRepository, get_appointment_repo
 from .conversation import ConversationRepository
 from .device import DeviceRepository, get_device_repo
+from .email import EmailRepository, get_email_repo
 from .feedback import FeedbackRepository, get_feedback_repo
 from .profile import ProfileRepository, get_profile_repo
 from .reminder import ReminderRepository, get_reminder_repo
@@ -21,6 +22,7 @@ __all__ = [
     "AppointmentRepository",
     "ConversationRepository",
     "DeviceRepository",
+    "EmailRepository",
     "FeedbackRepository",
     "ProfileRepository",
     "ReminderRepository",
@@ -30,6 +32,7 @@ __all__ = [
     "VisionEventRepository",
     "get_appointment_repo",
     "get_device_repo",
+    "get_email_repo",
     "get_feedback_repo",
     "get_profile_repo",
     "get_reminder_repo",
