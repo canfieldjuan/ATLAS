@@ -25,8 +25,12 @@ from typing import Any
 from langgraph.graph import END, StateGraph
 
 from .state import EmailWorkflowState
+from .workflow_state import get_workflow_state_manager
 
 logger = logging.getLogger("atlas.agents.graphs.email")
+
+# Workflow type constant for multi-turn support
+EMAIL_WORKFLOW_TYPE = "email"
 
 
 # =============================================================================
@@ -623,6 +627,69 @@ def classify_email_intent(text: str) -> tuple[str, dict[str, Any]]:
 # Graph Nodes
 # =============================================================================
 
+
+async def check_continuation(state: EmailWorkflowState) -> EmailWorkflowState:
+    """Check if this is a continuation of a saved workflow."""
+    session_id = state.get("session_id")
+    if not session_id:
+        return state
+
+    manager = get_workflow_state_manager()
+    saved = await manager.restore_workflow_state(session_id)
+
+    if saved and saved.workflow_type == EMAIL_WORKFLOW_TYPE:
+        if saved.is_expired():
+            logger.info("Email workflow expired for session %s", session_id)
+            await manager.clear_workflow_state(session_id)
+            return state
+
+        logger.info(
+            "Continuing email workflow from step %s for session %s",
+            saved.current_step,
+            session_id,
+        )
+
+        # Restore partial state
+        partial = saved.partial_state
+        return {
+            **state,
+            "is_continuation": True,
+            "restored_from_step": saved.current_step,
+            "intent": partial.get("intent"),
+            "to_address": partial.get("to_address") or state.get("to_address"),
+            "subject": partial.get("subject") or state.get("subject"),
+            "body": partial.get("body") or state.get("body"),
+            "client_name": partial.get("client_name") or state.get("client_name"),
+            "client_type": partial.get("client_type") or state.get("client_type"),
+            "address": partial.get("address") or state.get("address"),
+            "service_date": partial.get("service_date") or state.get("service_date"),
+            "service_time": partial.get("service_time") or state.get("service_time"),
+            "price": partial.get("price") or state.get("price"),
+            "contact_name": partial.get("contact_name") or state.get("contact_name"),
+            "areas_to_clean": partial.get("areas_to_clean") or state.get("areas_to_clean"),
+            "cleaning_description": partial.get("cleaning_description") or state.get("cleaning_description"),
+        }
+
+    return state
+
+
+def merge_continuation_input(state: EmailWorkflowState) -> EmailWorkflowState:
+    """Merge new user input with saved partial state for email workflow."""
+    input_text = state.get("input_text", "").strip()
+
+    # Try to extract email address from input
+    email_pattern = r"[\w\.-]+@[\w\.-]+\.\w+"
+    email_match = re.search(email_pattern, input_text)
+    if email_match and not state.get("to_address"):
+        return {**state, "to_address": email_match.group(0)}
+
+    # For other fields, the input might be providing a missing value
+    # We'll let generate_draft handle specific field extraction
+
+    logger.info("[EMAIL] Merge continuation: input=%s", input_text[:50])
+    return state
+
+
 def classify_intent(state: EmailWorkflowState) -> EmailWorkflowState:
     """Classify email intent from input text."""
     start = time.time()
@@ -652,6 +719,7 @@ async def generate_draft(state: EmailWorkflowState) -> EmailWorkflowState:
     """Generate email draft for preview."""
     start = time.time()
     intent = state.get("intent", "unknown")
+    session_id = state.get("session_id")
 
     updates: dict[str, Any] = {
         "current_step": "await_confirmation",
@@ -668,6 +736,25 @@ async def generate_draft(state: EmailWorkflowState) -> EmailWorkflowState:
             updates["needs_clarification"] = True
             updates["clarification_prompt"] = f"Missing required fields for estimate: {', '.join(missing)}"
             updates["awaiting_confirmation"] = False
+            # Save workflow state for continuation
+            if session_id:
+                manager = get_workflow_state_manager()
+                await manager.save_workflow_state(
+                    session_id=session_id,
+                    workflow_type=EMAIL_WORKFLOW_TYPE,
+                    current_step="awaiting_info",
+                    partial_state={
+                        "intent": intent,
+                        "to_address": state.get("to_address"),
+                        "client_name": state.get("client_name"),
+                        "client_type": state.get("client_type"),
+                        "address": state.get("address"),
+                        "service_date": state.get("service_date"),
+                        "service_time": state.get("service_time"),
+                        "price": state.get("price"),
+                    },
+                )
+                logger.info("Saved email workflow state for session %s", session_id)
             return {**state, **updates}
 
         subject, body = generate_estimate_draft(
@@ -691,6 +778,26 @@ async def generate_draft(state: EmailWorkflowState) -> EmailWorkflowState:
             updates["needs_clarification"] = True
             updates["clarification_prompt"] = f"Missing required fields for proposal: {', '.join(missing)}"
             updates["awaiting_confirmation"] = False
+            # Save workflow state for continuation
+            if session_id:
+                manager = get_workflow_state_manager()
+                await manager.save_workflow_state(
+                    session_id=session_id,
+                    workflow_type=EMAIL_WORKFLOW_TYPE,
+                    current_step="awaiting_info",
+                    partial_state={
+                        "intent": intent,
+                        "to_address": state.get("to_address"),
+                        "client_name": state.get("client_name"),
+                        "client_type": state.get("client_type"),
+                        "contact_name": state.get("contact_name"),
+                        "address": state.get("address"),
+                        "areas_to_clean": state.get("areas_to_clean"),
+                        "cleaning_description": state.get("cleaning_description"),
+                        "price": state.get("price"),
+                    },
+                )
+                logger.info("Saved email workflow state for session %s", session_id)
             return {**state, **updates}
 
         subject, body = generate_proposal_draft(
@@ -716,6 +823,21 @@ async def generate_draft(state: EmailWorkflowState) -> EmailWorkflowState:
             updates["needs_clarification"] = True
             updates["clarification_prompt"] = f"Missing required fields: {', '.join(missing)}"
             updates["awaiting_confirmation"] = False
+            # Save workflow state for continuation
+            if session_id:
+                manager = get_workflow_state_manager()
+                await manager.save_workflow_state(
+                    session_id=session_id,
+                    workflow_type=EMAIL_WORKFLOW_TYPE,
+                    current_step="awaiting_info",
+                    partial_state={
+                        "intent": intent,
+                        "to_address": state.get("to_address"),
+                        "subject": state.get("subject"),
+                        "body": state.get("body"),
+                    },
+                )
+                logger.info("Saved email workflow state for session %s", session_id)
             return {**state, **updates}
 
         updates["draft_subject"] = state["subject"]
@@ -763,6 +885,13 @@ async def execute_send_email(state: EmailWorkflowState) -> EmailWorkflowState:
             session_id=state.get("session_id"),
             resend_message_id=result.get("message_id"),
         )
+
+        # Clear workflow state on success
+        session_id = state.get("session_id")
+        if session_id:
+            manager = get_workflow_state_manager()
+            await manager.clear_workflow_state(session_id)
+            logger.info("Cleared email workflow state for session %s", session_id)
     else:
         updates["error"] = result.get("error") or result.get("message", "Failed to send email")
 
@@ -821,6 +950,13 @@ async def execute_send_estimate(state: EmailWorkflowState) -> EmailWorkflowState
             if follow_up_result.get("success"):
                 updates["follow_up_created"] = True
                 updates["follow_up_reminder_id"] = follow_up_result.get("reminder_id")
+
+        # Clear workflow state on success
+        session_id = state.get("session_id")
+        if session_id:
+            manager = get_workflow_state_manager()
+            await manager.clear_workflow_state(session_id)
+            logger.info("Cleared email workflow state for session %s", session_id)
     else:
         updates["error"] = result.get("error") or result.get("message", "Failed to send estimate")
 
@@ -891,6 +1027,13 @@ async def execute_send_proposal(state: EmailWorkflowState) -> EmailWorkflowState
             if follow_up_result.get("success"):
                 updates["follow_up_created"] = True
                 updates["follow_up_reminder_id"] = follow_up_result.get("reminder_id")
+
+        # Clear workflow state on success
+        session_id = state.get("session_id")
+        if session_id:
+            manager = get_workflow_state_manager()
+            await manager.clear_workflow_state(session_id)
+            logger.info("Cleared email workflow state for session %s", session_id)
     else:
         updates["error"] = result.get("error") or result.get("message", "Failed to send proposal")
 
@@ -1088,11 +1231,32 @@ def route_after_classify(state: EmailWorkflowState) -> str:
     return "generate_draft"
 
 
+def route_after_check_continuation(state: EmailWorkflowState) -> str:
+    """Route after checking for continuation."""
+    if state.get("is_continuation"):
+        return "merge_continuation"
+    return "classify_intent"
+
+
+def route_after_merge(state: EmailWorkflowState) -> str:
+    """Route after merging continuation input."""
+    intent = state.get("intent", "unknown")
+
+    # Estimate/proposal go through context extraction
+    if intent in ("send_estimate", "send_proposal"):
+        return "extract_context"
+
+    # Generic email goes directly to draft
+    return "generate_draft"
+
+
 def build_email_graph() -> StateGraph:
     """Build the email workflow StateGraph."""
     graph = StateGraph(EmailWorkflowState)
 
     # Add nodes
+    graph.add_node("check_continuation", check_continuation)
+    graph.add_node("merge_continuation", merge_continuation_input)
     graph.add_node("classify_intent", classify_intent)
     graph.add_node("extract_context", extract_context_node)
     graph.add_node("generate_draft", generate_draft)
@@ -1103,7 +1267,27 @@ def build_email_graph() -> StateGraph:
     graph.add_node("respond", generate_response)
 
     # Set entry point
-    graph.set_entry_point("classify_intent")
+    graph.set_entry_point("check_continuation")
+
+    # Check for continuation first
+    graph.add_conditional_edges(
+        "check_continuation",
+        route_after_check_continuation,
+        {
+            "merge_continuation": "merge_continuation",
+            "classify_intent": "classify_intent",
+        },
+    )
+
+    # After merging, route based on intent
+    graph.add_conditional_edges(
+        "merge_continuation",
+        route_after_merge,
+        {
+            "extract_context": "extract_context",
+            "generate_draft": "generate_draft",
+        },
+    )
 
     # Route after classification
     graph.add_conditional_edges(

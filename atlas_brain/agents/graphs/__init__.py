@@ -15,6 +15,7 @@ from .state import (
     SecurityWorkflowState,
     PresenceWorkflowState,
     EmailWorkflowState,
+    CalendarWorkflowState,
 )
 from .home import HomeAgentGraph, get_home_agent_langgraph
 from .atlas import AtlasAgentGraph, get_atlas_agent_langgraph
@@ -51,6 +52,16 @@ from .email import (
     compile_email_graph,
     run_email_workflow,
     send_email_confirmed,
+)
+from .calendar import (
+    build_calendar_graph,
+    compile_calendar_graph,
+    run_calendar_workflow,
+)
+from .workflow_state import (
+    ActiveWorkflowState,
+    WorkflowStateManager,
+    get_workflow_state_manager,
 )
 
 __all__ = [
@@ -99,4 +110,13 @@ __all__ = [
     "compile_email_graph",
     "run_email_workflow",
     "send_email_confirmed",
+    # Calendar workflow
+    "CalendarWorkflowState",
+    "build_calendar_graph",
+    "compile_calendar_graph",
+    "run_calendar_workflow",
+    # Workflow state manager
+    "ActiveWorkflowState",
+    "WorkflowStateManager",
+    "get_workflow_state_manager",
 ]

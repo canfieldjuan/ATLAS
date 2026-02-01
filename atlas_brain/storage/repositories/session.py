@@ -203,6 +203,70 @@ class SessionRepository:
             datetime.utcnow(),
         )
 
+    async def update_metadata(
+        self,
+        session_id: UUID,
+        metadata_updates: dict,
+    ) -> bool:
+        """
+        Update session metadata by merging new values.
+
+        Uses PostgreSQL JSONB concatenation to merge updates atomically.
+        Existing keys not in updates are preserved.
+
+        Args:
+            session_id: The session ID to update
+            metadata_updates: Dictionary of metadata to merge
+
+        Returns:
+            True if session was found and updated, False otherwise
+        """
+        pool = get_db_pool()
+        updates_json = json.dumps(metadata_updates)
+        result = await pool.execute(
+            """
+            UPDATE sessions
+            SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
+                last_activity_at = $3
+            WHERE id = $1
+            """,
+            session_id,
+            updates_json,
+            datetime.utcnow(),
+        )
+        updated = result and "UPDATE 1" in result
+        if updated:
+            logger.debug("Updated metadata for session %s", session_id)
+        return updated
+
+    async def clear_metadata_key(self, session_id: UUID, key: str) -> bool:
+        """
+        Remove a specific key from session metadata.
+
+        Args:
+            session_id: The session ID to update
+            key: The metadata key to remove
+
+        Returns:
+            True if session was found and updated, False otherwise
+        """
+        pool = get_db_pool()
+        result = await pool.execute(
+            """
+            UPDATE sessions
+            SET metadata = metadata - $2,
+                last_activity_at = $3
+            WHERE id = $1
+            """,
+            session_id,
+            key,
+            datetime.utcnow(),
+        )
+        updated = result and "UPDATE 1" in result
+        if updated:
+            logger.debug("Cleared metadata key '%s' for session %s", key, session_id)
+        return updated
+
     async def close_session(self, session_id: UUID) -> None:
         """Mark a session as inactive."""
         pool = get_db_pool()

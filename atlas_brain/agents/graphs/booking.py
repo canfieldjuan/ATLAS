@@ -21,8 +21,12 @@ from typing import Literal, Optional
 from langgraph.graph import END, StateGraph
 
 from .state import BookingWorkflowState
+from .workflow_state import get_workflow_state_manager
 
 logger = logging.getLogger("atlas.agents.graphs.booking")
+
+# Workflow type identifier for state persistence
+BOOKING_WORKFLOW_TYPE = "booking"
 
 # Toggle between mock and real tools
 USE_REAL_TOOLS = os.environ.get("USE_REAL_TOOLS", "false").lower() == "true"
@@ -212,6 +216,113 @@ async def tool_book_appointment(
 # =============================================================================
 # Graph Nodes
 # =============================================================================
+
+
+async def check_continuation(state: BookingWorkflowState) -> BookingWorkflowState:
+    """
+    Check if this is a continuation of a saved workflow.
+
+    Restores partial state from session.metadata if available.
+    """
+    session_id = state.get("session_id")
+    if not session_id:
+        return {**state, "is_continuation": False}
+
+    manager = get_workflow_state_manager()
+    saved = await manager.restore_workflow_state(session_id)
+
+    if saved and saved.workflow_type == BOOKING_WORKFLOW_TYPE:
+        logger.info(
+            "Restored booking workflow: step=%s",
+            saved.current_step,
+        )
+        return {
+            **state,
+            "is_continuation": True,
+            "restored_from_step": saved.current_step,
+            "customer_name": saved.partial_state.get("customer_name"),
+            "customer_phone": saved.partial_state.get("customer_phone"),
+            "customer_id": saved.partial_state.get("customer_id"),
+            "customer_email": saved.partial_state.get("customer_email"),
+            "requested_date": saved.partial_state.get("requested_date"),
+            "requested_time": saved.partial_state.get("requested_time"),
+            "service_type": saved.partial_state.get("service_type"),
+            "needs_info": saved.partial_state.get("needs_info", []),
+            "alternative_slots": saved.partial_state.get("alternative_slots", []),
+        }
+
+    return {**state, "is_continuation": False}
+
+
+async def merge_continuation_input(state: BookingWorkflowState) -> BookingWorkflowState:
+    """
+    Merge new user input with restored partial state.
+
+    Parses the new input and updates the relevant fields.
+    """
+    import re
+    from datetime import datetime, timedelta
+
+    start_time = time.perf_counter()
+    input_text = state.get("input_text", "")
+    input_lower = input_text.lower()
+    restored_step = state.get("restored_from_step", "")
+    needs_info = list(state.get("needs_info", []))
+
+    # Parse name from input if needed
+    if "customer_identifier" in needs_info or not state.get("customer_name"):
+        name_match = re.search(
+            r"(?:my name is|i'm|i am|this is|name is)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
+            input_text,
+            re.IGNORECASE,
+        )
+        if name_match:
+            state = {**state, "customer_name": name_match.group(1).title()}
+            if "customer_identifier" in needs_info:
+                needs_info.remove("customer_identifier")
+
+    # Parse phone from input if needed
+    phone_match = re.search(r"(\d{3}[-.\s]?\d{3}[-.\s]?\d{4})", input_text)
+    if phone_match:
+        state = {**state, "customer_phone": phone_match.group(1)}
+        if "customer_identifier" in needs_info:
+            needs_info.remove("customer_identifier")
+        if "phone" in needs_info:
+            needs_info.remove("phone")
+
+    # Parse date from input if needed
+    if "date" in needs_info or not state.get("requested_date"):
+        today = datetime.now().date()
+        if "tomorrow" in input_lower:
+            state = {**state, "requested_date": (today + timedelta(days=1)).isoformat()}
+            if "date" in needs_info:
+                needs_info.remove("date")
+        elif "today" in input_lower:
+            state = {**state, "requested_date": today.isoformat()}
+            if "date" in needs_info:
+                needs_info.remove("date")
+
+    # Parse time from input if needed
+    if "time" in needs_info or not state.get("requested_time"):
+        time_match = re.search(r"(\d{1,2})\s*(am|pm)", input_lower)
+        if time_match:
+            state = {
+                **state,
+                "requested_time": f"{time_match.group(1)}:00 {time_match.group(2).upper()}",
+            }
+            if "time" in needs_info:
+                needs_info.remove("time")
+
+    elapsed_ms = (time.perf_counter() - start_time) * 1000
+    step_timings = state.get("step_timings", {})
+    step_timings["merge"] = elapsed_ms
+
+    return {
+        **state,
+        "needs_info": needs_info,
+        "current_step": "merge",
+        "step_timings": step_timings,
+    }
 
 
 async def parse_request(state: BookingWorkflowState) -> BookingWorkflowState:
@@ -410,14 +521,12 @@ async def suggest_alternatives(state: BookingWorkflowState) -> BookingWorkflowSt
     """
     Generate response suggesting alternative time slots.
 
-    LLM node - generates natural language response.
+    Saves workflow state for multi-turn continuation.
     """
     start_time = time.perf_counter()
 
     alternatives = state.get("alternative_slots", [])
-    customer_name = state.get("customer_name", "")
 
-    # Mock LLM response generation
     if alternatives:
         alt_list = ", ".join(alternatives[:3])
         response = (
@@ -429,6 +538,27 @@ async def suggest_alternatives(state: BookingWorkflowState) -> BookingWorkflowSt
         response = (
             "I'm sorry, I couldn't find any available slots for that date. "
             "Would you like to try a different day?"
+        )
+
+    # Save workflow state for multi-turn continuation
+    session_id = state.get("session_id")
+    if session_id:
+        manager = get_workflow_state_manager()
+        await manager.save_workflow_state(
+            session_id=session_id,
+            workflow_type=BOOKING_WORKFLOW_TYPE,
+            current_step="suggest_alternatives",
+            partial_state={
+                "customer_name": state.get("customer_name"),
+                "customer_phone": state.get("customer_phone"),
+                "customer_id": state.get("customer_id"),
+                "customer_email": state.get("customer_email"),
+                "requested_date": state.get("requested_date"),
+                "requested_time": state.get("requested_time"),
+                "service_type": state.get("service_type"),
+                "alternative_slots": alternatives,
+                "needs_info": ["date", "time"],
+            },
         )
 
     elapsed_ms = (time.perf_counter() - start_time) * 1000
@@ -494,14 +624,12 @@ async def confirm_booking(state: BookingWorkflowState) -> BookingWorkflowState:
     """
     Generate booking confirmation response.
 
-    LLM node - generates natural language confirmation.
+    Clears workflow state on successful completion.
     """
     start_time = time.perf_counter()
 
     details = state.get("confirmation_details", {})
-    customer_name = state.get("customer_name", "")
 
-    # Mock LLM response generation
     response = (
         f"Your appointment has been booked. "
         f"Confirmation number: {details.get('confirmation_number', 'N/A')}. "
@@ -509,6 +637,12 @@ async def confirm_booking(state: BookingWorkflowState) -> BookingWorkflowState:
         f"Service: {details.get('service', 'general')}. "
         f"We'll send a reminder to your email."
     )
+
+    # Clear workflow state - booking complete
+    session_id = state.get("session_id")
+    if session_id:
+        manager = get_workflow_state_manager()
+        await manager.clear_workflow_state(session_id)
 
     elapsed_ms = (time.perf_counter() - start_time) * 1000
 
@@ -530,13 +664,12 @@ async def handle_missing_info(state: BookingWorkflowState) -> BookingWorkflowSta
     """
     Generate response asking for missing information.
 
-    LLM node - generates clarifying question.
+    Saves workflow state to session.metadata for multi-turn continuation.
     """
     start_time = time.perf_counter()
 
     needs_info = state.get("needs_info", [])
 
-    # Mock LLM response generation
     if "customer_identifier" in needs_info:
         response = "I'd be happy to help you book an appointment. Could you please tell me your name or phone number?"
     elif "date" in needs_info:
@@ -545,6 +678,24 @@ async def handle_missing_info(state: BookingWorkflowState) -> BookingWorkflowSta
         response = "What time works best for you?"
     else:
         response = "I need a bit more information to complete your booking. What else can you tell me?"
+
+    # Save workflow state for multi-turn continuation
+    session_id = state.get("session_id")
+    if session_id:
+        manager = get_workflow_state_manager()
+        await manager.save_workflow_state(
+            session_id=session_id,
+            workflow_type=BOOKING_WORKFLOW_TYPE,
+            current_step="awaiting_info",
+            partial_state={
+                "customer_name": state.get("customer_name"),
+                "customer_phone": state.get("customer_phone"),
+                "requested_date": state.get("requested_date"),
+                "requested_time": state.get("requested_time"),
+                "service_type": state.get("service_type"),
+                "needs_info": needs_info,
+            },
+        )
 
     elapsed_ms = (time.perf_counter() - start_time) * 1000
 
@@ -567,18 +718,35 @@ async def handle_customer_not_found(state: BookingWorkflowState) -> BookingWorkf
     """
     Handle case where customer is not in CRM.
 
-    LLM node - generates response for new customer.
+    Saves workflow state for multi-turn continuation.
     """
     start_time = time.perf_counter()
 
     customer_name = state.get("customer_name", "")
 
-    # Mock LLM response generation
     response = (
         f"I don't see {customer_name if customer_name else 'you'} in our system. "
         f"That's okay - I can create a new customer profile. "
         f"Could you please confirm your phone number and email address?"
     )
+
+    # Save workflow state for multi-turn continuation
+    session_id = state.get("session_id")
+    if session_id:
+        manager = get_workflow_state_manager()
+        await manager.save_workflow_state(
+            session_id=session_id,
+            workflow_type=BOOKING_WORKFLOW_TYPE,
+            current_step="create_customer",
+            partial_state={
+                "customer_name": state.get("customer_name"),
+                "customer_phone": state.get("customer_phone"),
+                "requested_date": state.get("requested_date"),
+                "requested_time": state.get("requested_time"),
+                "service_type": state.get("service_type"),
+                "needs_info": ["phone", "email"],
+            },
+        )
 
     elapsed_ms = (time.perf_counter() - start_time) * 1000
 
@@ -600,6 +768,54 @@ async def handle_customer_not_found(state: BookingWorkflowState) -> BookingWorkf
 # =============================================================================
 # Routing Functions
 # =============================================================================
+
+
+def route_after_check_continuation(
+    state: BookingWorkflowState,
+) -> Literal["merge_continuation", "parse_request"]:
+    """
+    Route after checking for continuation.
+
+    If continuing, merge new input with saved state.
+    Otherwise, start fresh with parse_request.
+    """
+    if state.get("is_continuation"):
+        return "merge_continuation"
+    return "parse_request"
+
+
+def route_after_merge(
+    state: BookingWorkflowState,
+) -> Literal["lookup_customer", "check_availability", "handle_missing_info"]:
+    """
+    Route after merging continuation input.
+
+    Determines next step based on what info we have and where we left off.
+    """
+    needs_info = state.get("needs_info", [])
+    restored_step = state.get("restored_from_step", "")
+
+    # Still missing customer identifier
+    if "customer_identifier" in needs_info:
+        return "handle_missing_info"
+
+    # If we came from suggest_alternatives and now have date/time, check availability
+    if restored_step == "suggest_alternatives":
+        if not needs_info or ("date" not in needs_info and "time" not in needs_info):
+            return "check_availability"
+        return "handle_missing_info"
+
+    # If we came from create_customer and now have phone, proceed to availability
+    if restored_step == "create_customer":
+        if state.get("customer_name") and state.get("customer_phone"):
+            return "check_availability"
+        return "handle_missing_info"
+
+    # Default: lookup customer if we have identifier
+    if state.get("customer_name") or state.get("customer_phone"):
+        return "lookup_customer"
+
+    return "handle_missing_info"
 
 
 def route_after_parse(
@@ -657,26 +873,32 @@ def route_after_availability(
 
 def build_booking_graph() -> StateGraph:
     """
-    Build the booking workflow graph.
+    Build the booking workflow graph with multi-turn support.
 
     Flow:
-        parse_request
+        check_continuation
             |
-            ├── [missing info] → handle_missing_info → END
+            ├── [continuation] → merge_continuation → route_after_merge
             |
-            └── [has customer] → lookup_customer
-                                    |
-                                    ├── [not found] → handle_customer_not_found → END
-                                    |
-                                    └── [found] → check_availability
+            └── [new] → parse_request
+                            |
+                            ├── [missing info] → handle_missing_info → END (saves state)
+                            |
+                            └── [has customer] → lookup_customer
                                                     |
-                                                    ├── [unavailable] → suggest_alternatives → END
+                                                    ├── [not found] → handle_customer_not_found → END
                                                     |
-                                                    └── [available] → book_appointment → confirm_booking → END
+                                                    └── [found] → check_availability
+                                                                    |
+                                                                    ├── [unavailable] → suggest_alternatives → END
+                                                                    |
+                                                                    └── [available] → book_appointment → confirm_booking → END
     """
     graph = StateGraph(BookingWorkflowState)
 
-    # Add nodes
+    # Add nodes - including new continuation nodes
+    graph.add_node("check_continuation", check_continuation)
+    graph.add_node("merge_continuation", merge_continuation_input)
     graph.add_node("parse_request", parse_request)
     graph.add_node("lookup_customer", lookup_customer)
     graph.add_node("check_availability", check_availability)
@@ -686,10 +908,31 @@ def build_booking_graph() -> StateGraph:
     graph.add_node("handle_missing_info", handle_missing_info)
     graph.add_node("handle_customer_not_found", handle_customer_not_found)
 
-    # Set entry point
-    graph.set_entry_point("parse_request")
+    # Set entry point to check_continuation
+    graph.set_entry_point("check_continuation")
 
-    # Add conditional edges
+    # Route after checking for continuation
+    graph.add_conditional_edges(
+        "check_continuation",
+        route_after_check_continuation,
+        {
+            "merge_continuation": "merge_continuation",
+            "parse_request": "parse_request",
+        },
+    )
+
+    # Route after merging continuation input
+    graph.add_conditional_edges(
+        "merge_continuation",
+        route_after_merge,
+        {
+            "lookup_customer": "lookup_customer",
+            "check_availability": "check_availability",
+            "handle_missing_info": "handle_missing_info",
+        },
+    )
+
+    # Route after parsing new request
     graph.add_conditional_edges(
         "parse_request",
         route_after_parse,

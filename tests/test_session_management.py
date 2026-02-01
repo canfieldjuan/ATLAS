@@ -252,3 +252,96 @@ class TestSessionLifecycle:
         active = await session_repo.list_active_sessions(limit=100)
         session_ids = [s.id for s in active]
         assert session.id not in session_ids
+
+
+@pytest.mark.integration
+class TestSessionMetadata:
+    """Test session metadata operations."""
+
+    @pytest.mark.asyncio
+    async def test_update_metadata_new_key(self, session_repo):
+        """update_metadata adds new keys to empty metadata."""
+        session = await session_repo.create_session(terminal_id="test")
+
+        updated = await session_repo.update_metadata(
+            session.id,
+            {"active_workflow": {"workflow_type": "booking", "step": "parse"}},
+        )
+        assert updated is True
+
+        # Verify the metadata was saved
+        refreshed = await session_repo.get_session(session.id)
+        assert refreshed.metadata.get("active_workflow") is not None
+        assert refreshed.metadata["active_workflow"]["workflow_type"] == "booking"
+
+        # Cleanup
+        await session_repo.close_session(session.id)
+
+    @pytest.mark.asyncio
+    async def test_update_metadata_merge(self, session_repo):
+        """update_metadata merges with existing metadata."""
+        session = await session_repo.create_session(
+            terminal_id="test",
+            metadata={"existing_key": "existing_value"},
+        )
+
+        # Add new key without overwriting existing
+        await session_repo.update_metadata(
+            session.id,
+            {"new_key": "new_value"},
+        )
+
+        refreshed = await session_repo.get_session(session.id)
+        assert refreshed.metadata.get("existing_key") == "existing_value"
+        assert refreshed.metadata.get("new_key") == "new_value"
+
+        # Cleanup
+        await session_repo.close_session(session.id)
+
+    @pytest.mark.asyncio
+    async def test_update_metadata_overwrite_key(self, session_repo):
+        """update_metadata overwrites existing keys."""
+        session = await session_repo.create_session(
+            terminal_id="test",
+            metadata={"step": "parse"},
+        )
+
+        await session_repo.update_metadata(session.id, {"step": "confirm"})
+
+        refreshed = await session_repo.get_session(session.id)
+        assert refreshed.metadata.get("step") == "confirm"
+
+        # Cleanup
+        await session_repo.close_session(session.id)
+
+    @pytest.mark.asyncio
+    async def test_clear_metadata_key(self, session_repo):
+        """clear_metadata_key removes specific key."""
+        session = await session_repo.create_session(
+            terminal_id="test",
+            metadata={"keep_this": "yes", "remove_this": "bye"},
+        )
+
+        cleared = await session_repo.clear_metadata_key(session.id, "remove_this")
+        assert cleared is True
+
+        refreshed = await session_repo.get_session(session.id)
+        assert "remove_this" not in refreshed.metadata
+        assert refreshed.metadata.get("keep_this") == "yes"
+
+        # Cleanup
+        await session_repo.close_session(session.id)
+
+    @pytest.mark.asyncio
+    async def test_update_metadata_nonexistent_session(self, session_repo):
+        """update_metadata returns False for nonexistent session."""
+        fake_id = uuid4()
+        updated = await session_repo.update_metadata(fake_id, {"test": "value"})
+        assert updated is False
+
+    @pytest.mark.asyncio
+    async def test_clear_metadata_key_nonexistent(self, session_repo):
+        """clear_metadata_key returns False for nonexistent session."""
+        fake_id = uuid4()
+        cleared = await session_repo.clear_metadata_key(fake_id, "some_key")
+        assert cleared is False

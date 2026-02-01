@@ -20,8 +20,12 @@ import dateparser
 from langgraph.graph import END, StateGraph
 
 from .state import ReminderWorkflowState
+from .workflow_state import get_workflow_state_manager
 
 logger = logging.getLogger("atlas.agents.graphs.reminder")
+
+# Workflow type constant for multi-turn support
+REMINDER_WORKFLOW_TYPE = "reminder"
 
 # Environment flag for using real tools vs mocks
 USE_REAL_TOOLS = os.environ.get("USE_REAL_TOOLS", "false").lower() == "true"
@@ -439,10 +443,21 @@ def parse_create_intent(text: str) -> dict[str, Any]:
             when = match.group(0)
             # Remove the time part and common filler words to get message
             message = text_lower.replace(when, "").strip()
-            message = re.sub(r"^(remind\s+me\s+to\s*|set\s+a?\s*reminder\s+to\s*|to\s+)", "", message)
+            # Remove filler phrases at start
+            filler_pattern = r"^(remind\s+me\s+to\s*|set\s+a?\s*reminder\s+(?:for\s+)?(?:to\s+)?|to\s+)"
+            message = re.sub(filler_pattern, "", message)
             message = message.strip()
-            if message:
-                return {"message": message, "when": when}
+            # Clear if message is just leftover filler words
+            if message in ("for", "to", "a", "the"):
+                message = None
+            return {"message": message if message else None, "when": when}
+
+    # Fallback: "remind me to [message]" without time
+    pattern_msg_only = r"remind(?:\s+me)?\s+to\s+(.+)"
+    match = re.search(pattern_msg_only, text_lower)
+    if match:
+        message = match.group(1).strip()
+        return {"message": message, "when": None}
 
     return {"message": None, "when": None}
 
@@ -485,6 +500,94 @@ def parse_complete_intent(text: str, reminder_list: list[dict]) -> dict[str, Any
 # =============================================================================
 
 
+async def check_continuation(state: ReminderWorkflowState) -> ReminderWorkflowState:
+    """Check if this is a continuation of a saved workflow."""
+    session_id = state.get("session_id")
+    if not session_id:
+        return state
+
+    manager = get_workflow_state_manager()
+    saved = await manager.restore_workflow_state(session_id)
+
+    if saved and saved.workflow_type == REMINDER_WORKFLOW_TYPE:
+        if saved.is_expired():
+            logger.info("Reminder workflow expired for session %s", session_id)
+            await manager.clear_workflow_state(session_id)
+            return state
+
+        logger.info(
+            "Continuing reminder workflow from step %s for session %s",
+            saved.current_step,
+            session_id,
+        )
+        return {
+            **state,
+            "is_continuation": True,
+            "restored_from_step": saved.current_step,
+            "intent": saved.partial_state.get("intent", "create"),
+            "reminder_message": saved.partial_state.get("reminder_message"),
+            "reminder_time": saved.partial_state.get("reminder_time"),
+            "parsed_due_at": saved.partial_state.get("parsed_due_at"),
+        }
+
+    return state
+
+
+async def merge_continuation_input(state: ReminderWorkflowState) -> ReminderWorkflowState:
+    """Merge new user input with saved partial state."""
+    input_text = state.get("input_text", "")
+    restored_step = state.get("restored_from_step", "")
+
+    # Parse the new input to extract any provided values
+    parsed = parse_create_intent(input_text)
+    new_message = parsed.get("message")
+    new_when = parsed.get("when")
+
+    # Merge with existing state
+    reminder_message = state.get("reminder_message")
+    reminder_time = state.get("reminder_time")
+    parsed_due_at = state.get("parsed_due_at")
+
+    # If we were waiting for a message and user provided one
+    if not reminder_message and new_message:
+        reminder_message = new_message
+
+    # If we were waiting for a time and user provided one
+    if not parsed_due_at and new_when:
+        dt = parse_datetime(new_when)
+        if dt:
+            parsed_due_at = dt.isoformat()
+        reminder_time = new_when
+
+    # If input looks like a plain time expression (no reminder keywords)
+    if not new_message and not new_when:
+        text_lower = input_text.strip().lower()
+        # Check if it looks like a time
+        time_patterns = ["in ", "at ", "tomorrow", "tonight", "morning", "hour", "minute"]
+        if any(p in text_lower for p in time_patterns):
+            dt = parse_datetime(input_text)
+            if dt:
+                parsed_due_at = dt.isoformat()
+                reminder_time = input_text
+        # Otherwise treat as message
+        elif not reminder_message:
+            reminder_message = input_text.strip()
+
+    logger.info(
+        "[REMINDER] Merged continuation: message=%s, time=%s, due_at=%s",
+        reminder_message,
+        reminder_time,
+        parsed_due_at,
+    )
+
+    return {
+        **state,
+        "reminder_message": reminder_message,
+        "reminder_time": reminder_time,
+        "parsed_due_at": parsed_due_at,
+    }
+
+
 async def classify_intent(state: ReminderWorkflowState) -> ReminderWorkflowState:
     """Classify the reminder intent from user input."""
     start = time.time()
@@ -510,18 +613,21 @@ async def parse_create_request(state: ReminderWorkflowState) -> ReminderWorkflow
     """Parse a create reminder request."""
     start = time.time()
 
-    input_text = state.get("input_text", "")
-    parsed = parse_create_intent(input_text)
-
-    message = parsed.get("message")
-    when = parsed.get("when")
-
-    # Parse the time expression
-    parsed_due_at = None
-    if when:
-        dt = parse_datetime(when)
-        if dt:
-            parsed_due_at = dt.isoformat()
+    # If this is a continuation, use merged values
+    if state.get("is_continuation"):
+        message = state.get("reminder_message")
+        when = state.get("reminder_time")
+        parsed_due_at = state.get("parsed_due_at")
+    else:
+        input_text = state.get("input_text", "")
+        parsed = parse_create_intent(input_text)
+        message = parsed.get("message")
+        when = parsed.get("when")
+        parsed_due_at = None
+        if when:
+            dt = parse_datetime(when)
+            if dt:
+                parsed_due_at = dt.isoformat()
 
     elapsed = (time.time() - start) * 1000
     step_timings = state.get("step_timings", {})
@@ -539,6 +645,23 @@ async def parse_create_request(state: ReminderWorkflowState) -> ReminderWorkflow
         clarification_prompt = f"When should I remind you to {message}?"
 
     logger.info("[REMINDER] Parsed create: message=%s, when=%s, due_at=%s", message, when, parsed_due_at)
+
+    # Save workflow state if clarification needed
+    session_id = state.get("session_id")
+    if needs_clarification and session_id:
+        manager = get_workflow_state_manager()
+        await manager.save_workflow_state(
+            session_id=session_id,
+            workflow_type=REMINDER_WORKFLOW_TYPE,
+            current_step="awaiting_info",
+            partial_state={
+                "intent": "create",
+                "reminder_message": message,
+                "reminder_time": when,
+                "parsed_due_at": parsed_due_at,
+            },
+        )
+        logger.info("Saved reminder workflow state for session %s", session_id)
 
     return {
         **state,
@@ -581,6 +704,13 @@ async def execute_create(state: ReminderWorkflowState) -> ReminderWorkflowState:
     step_timings["execute"] = elapsed
 
     logger.info("[REMINDER] Create result: %s", result)
+
+    # Clear workflow state on success
+    session_id = state.get("session_id")
+    if result.get("success") and session_id:
+        manager = get_workflow_state_manager()
+        await manager.clear_workflow_state(session_id)
+        logger.info("Cleared reminder workflow state for session %s", session_id)
 
     return {
         **state,
@@ -836,6 +966,26 @@ def route_after_parse(state: ReminderWorkflowState) -> str:
     return "execute_create"
 
 
+def route_after_check_continuation(
+    state: ReminderWorkflowState,
+) -> Literal["merge_continuation", "classify"]:
+    """Route after checking for continuation."""
+    if state.get("is_continuation"):
+        return "merge_continuation"
+    return "classify"
+
+
+def route_after_merge(
+    state: ReminderWorkflowState,
+) -> Literal["parse_create", "execute_create"]:
+    """Route after merging continuation input."""
+    # If we have both message and time, go to execute
+    if state.get("reminder_message") and state.get("parsed_due_at"):
+        return "execute_create"
+    # Otherwise go to parse to check what's missing
+    return "parse_create"
+
+
 # =============================================================================
 # Graph Builder
 # =============================================================================
@@ -846,6 +996,8 @@ def build_reminder_graph() -> StateGraph:
     graph = StateGraph(ReminderWorkflowState)
 
     # Add nodes
+    graph.add_node("check_continuation", check_continuation)
+    graph.add_node("merge_continuation", merge_continuation_input)
     graph.add_node("classify", classify_intent)
     graph.add_node("parse_create", parse_create_request)
     graph.add_node("execute_create", execute_create)
@@ -855,9 +1007,29 @@ def build_reminder_graph() -> StateGraph:
     graph.add_node("respond", generate_response)
 
     # Set entry point
-    graph.set_entry_point("classify")
+    graph.set_entry_point("check_continuation")
 
-    # Add edges
+    # Check for continuation first
+    graph.add_conditional_edges(
+        "check_continuation",
+        route_after_check_continuation,
+        {
+            "merge_continuation": "merge_continuation",
+            "classify": "classify",
+        },
+    )
+
+    # After merging, route based on what we have
+    graph.add_conditional_edges(
+        "merge_continuation",
+        route_after_merge,
+        {
+            "parse_create": "parse_create",
+            "execute_create": "execute_create",
+        },
+    )
+
+    # Add edges for normal flow
     graph.add_conditional_edges(
         "classify",
         route_by_intent,

@@ -464,6 +464,100 @@ class CalendarTool:
         else:
             return f"on {start.strftime('%A')} at {start.strftime('%-I:%M %p')}"
 
+    async def create_event(
+        self,
+        summary: str,
+        start: datetime,
+        end: datetime,
+        location: Optional[str] = None,
+        description: Optional[str] = None,
+        calendar_id: Optional[str] = None,
+    ) -> ToolResult:
+        """
+        Create a new calendar event.
+
+        Args:
+            summary: Event title
+            start: Event start datetime (timezone-aware)
+            end: Event end datetime (timezone-aware)
+            location: Optional location string
+            description: Optional description
+            calendar_id: Calendar to create in (default: primary)
+
+        Returns:
+            ToolResult with created event details
+        """
+        if not self._config.calendar_enabled:
+            return ToolResult(
+                success=False,
+                error="TOOL_DISABLED",
+                message="Calendar tool is disabled",
+            )
+
+        if not self._config.calendar_refresh_token:
+            return ToolResult(
+                success=False,
+                error="NOT_CONFIGURED",
+                message="Calendar not configured. Run calendar setup first.",
+            )
+
+        try:
+            client = await self._ensure_client()
+            headers = await self._get_auth_header()
+            headers["Content-Type"] = "application/json"
+
+            cal_id = calendar_id or "primary"
+
+            event_body = {
+                "summary": summary,
+                "start": {"dateTime": start.isoformat()},
+                "end": {"dateTime": end.isoformat()},
+            }
+
+            if location:
+                event_body["location"] = location
+            if description:
+                event_body["description"] = description
+
+            url = f"{CALENDAR_API_BASE}/calendars/{cal_id}/events"
+            response = await client.post(url, headers=headers, json=event_body)
+            response.raise_for_status()
+
+            created = response.json()
+            event_id = created.get("id", "")
+
+            # Invalidate cache since we added an event
+            self._cache.last_updated = 0.0
+
+            logger.info("Created calendar event: %s", event_id)
+
+            return ToolResult(
+                success=True,
+                data={
+                    "event_id": event_id,
+                    "summary": summary,
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "location": location,
+                },
+                message=f"Created event: {summary}",
+            )
+
+        except httpx.HTTPStatusError as e:
+            logger.error("Calendar create event HTTP error: %s", e)
+            return ToolResult(
+                success=False,
+                error="API_ERROR",
+                message=f"Calendar API error: {e.response.status_code}",
+            )
+        except Exception as e:
+            logger.exception("Calendar create event error")
+            return ToolResult(
+                success=False,
+                error="EXECUTION_ERROR",
+                message=str(e),
+            )
+
     async def prefetch(self) -> None:
         """Pre-fetch events to warm the cache. Call on startup."""
         if not self._config.calendar_enabled:

@@ -130,6 +130,9 @@ class AtlasAgentState(AgentState):
     tools_to_call: list[str]
     tools_executed: list[str]
 
+    # Active workflow continuation (multi-turn slot filling)
+    active_workflow: Optional[dict]
+
 
 class ReceptionistAgentState(AgentState):
     """
@@ -201,6 +204,10 @@ class BookingWorkflowState(TypedDict, total=False):
     needs_info: list[str]  # Fields still needed from user
     awaiting_user_input: bool
 
+    # Multi-turn continuation support
+    is_continuation: bool  # True if resuming from saved state
+    restored_from_step: Optional[str]  # Step we're continuing from
+
     # Output
     response: str
     error: Optional[str]
@@ -256,6 +263,10 @@ class ReminderWorkflowState(TypedDict, total=False):
     current_step: str  # "classify", "parse", "execute", "respond"
     needs_clarification: bool
     clarification_prompt: Optional[str]
+
+    # Multi-turn continuation support
+    is_continuation: bool  # True if resuming from saved state
+    restored_from_step: Optional[str]  # Step we're continuing from
 
     # Output
     response: str
@@ -467,6 +478,68 @@ class EmailWorkflowState(TypedDict, total=False):
     needs_clarification: bool
     clarification_prompt: Optional[str]
     awaiting_confirmation: bool
+
+    # Multi-turn continuation support
+    is_continuation: bool  # True if resuming from saved state
+    restored_from_step: Optional[str]  # Step we're continuing from
+
+    # Output
+    response: str
+    error: Optional[str]
+
+    # Timing
+    total_ms: float
+    step_timings: dict[str, float]
+
+
+class CalendarWorkflowState(TypedDict, total=False):
+    """
+    State for calendar event workflow.
+
+    Handles: create_event, query_events.
+    Supports multi-turn slot filling for event creation.
+    """
+
+    # Input
+    input_text: str
+    session_id: Optional[str]
+
+    # Intent classification
+    # create_event, query_events
+    intent: str
+
+    # Event parameters (for create)
+    event_title: Optional[str]
+    event_date: Optional[str]
+    event_time: Optional[str]
+    event_duration: Optional[str]
+    event_location: Optional[str]
+    event_description: Optional[str]
+    calendar_name: Optional[str]
+
+    # Parsed datetime (after parsing)
+    parsed_start_at: Optional[str]
+    parsed_end_at: Optional[str]
+
+    # Query parameters
+    hours_ahead: int
+    max_results: int
+
+    # Results
+    event_created: bool
+    created_event_id: Optional[str]
+    events_queried: bool
+    event_list: list[dict[str, Any]]
+    event_count: int
+
+    # Workflow control
+    current_step: str
+    needs_clarification: bool
+    clarification_prompt: Optional[str]
+
+    # Multi-turn continuation support
+    is_continuation: bool
+    restored_from_step: Optional[str]
 
     # Output
     response: str
