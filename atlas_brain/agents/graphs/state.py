@@ -130,6 +130,9 @@ class AtlasAgentState(AgentState):
     tools_to_call: list[str]
     tools_executed: list[str]
 
+    # Active workflow continuation (multi-turn slot filling)
+    active_workflow: Optional[dict]
+
 
 class ReceptionistAgentState(AgentState):
     """
@@ -200,6 +203,343 @@ class BookingWorkflowState(TypedDict, total=False):
     current_step: str  # "parse", "lookup", "availability", "book", "complete"
     needs_info: list[str]  # Fields still needed from user
     awaiting_user_input: bool
+
+    # Multi-turn continuation support
+    is_continuation: bool  # True if resuming from saved state
+    restored_from_step: Optional[str]  # Step we're continuing from
+
+    # Output
+    response: str
+    error: Optional[str]
+
+    # Timing
+    total_ms: float
+    step_timings: dict[str, float]
+
+
+class ReminderWorkflowState(TypedDict, total=False):
+    """
+    State for reminder management workflow.
+
+    Handles: create, list, complete, delete reminders.
+    Routes based on detected intent within the graph.
+    """
+
+    # Input
+    input_text: str
+    session_id: Optional[str]
+
+    # Intent classification (determined by graph)
+    intent: str  # "create", "list", "complete", "delete", "unknown"
+
+    # Parsed from input (for create)
+    reminder_message: Optional[str]
+    reminder_time: Optional[str]  # Natural language time ("in 30 minutes")
+    repeat_pattern: Optional[str]  # "daily", "weekly", etc.
+
+    # Parsed datetime (after parsing)
+    parsed_due_at: Optional[str]  # ISO format
+
+    # For complete/delete operations
+    target_reminder_id: Optional[str]
+    target_by_index: Optional[int]  # "delete the first one"
+    complete_all: bool
+
+    # Results from operations
+    reminder_created: bool
+    created_reminder_id: Optional[str]
+
+    reminders_listed: bool
+    reminder_list: list[dict[str, Any]]
+    reminder_count: int
+
+    reminder_completed: bool
+    completed_reminder_id: Optional[str]
+
+    reminder_deleted: bool
+    deleted_reminder_id: Optional[str]
+
+    # Workflow control
+    current_step: str  # "classify", "parse", "execute", "respond"
+    needs_clarification: bool
+    clarification_prompt: Optional[str]
+
+    # Multi-turn continuation support
+    is_continuation: bool  # True if resuming from saved state
+    restored_from_step: Optional[str]  # Step we're continuing from
+
+    # Output
+    response: str
+    error: Optional[str]
+
+    # Timing
+    total_ms: float
+    step_timings: dict[str, float]
+
+
+class SecurityWorkflowState(TypedDict, total=False):
+    """
+    State for security system workflow.
+
+    Handles: cameras, detections, zones.
+    Routes based on detected intent within the graph.
+    """
+
+    # Input
+    input_text: str
+    session_id: Optional[str]
+
+    # Intent classification (determined by graph)
+    # camera_list, camera_status, camera_record_start, camera_record_stop, camera_ptz
+    # detection_current, detection_query, detection_person_location, detection_motion
+    # zone_list, zone_status, zone_arm, zone_disarm
+    intent: str
+
+    # Camera parameters
+    camera_name: Optional[str]
+    camera_id: Optional[str]
+    record_duration: Optional[int]  # seconds
+    ptz_action: Optional[str]  # "pan_left", "pan_right", "tilt_up", etc.
+    ptz_amount: Optional[float]
+
+    # Detection parameters
+    detection_type: Optional[str]  # "person", "vehicle", "motion", etc.
+    location: Optional[str]  # location to check
+    time_range_start: Optional[str]  # ISO format
+    time_range_end: Optional[str]
+    min_confidence: Optional[float]
+    limit: Optional[int]
+
+    # Zone parameters
+    zone_name: Optional[str]
+    zone_id: Optional[str]
+    arm_mode: Optional[str]  # "away", "home", "night"
+
+    # Results - Camera operations
+    cameras_listed: bool
+    camera_list: list[dict[str, Any]]
+    camera_count: int
+    camera_status: Optional[dict[str, Any]]
+    recording_started: bool
+    recording_stopped: bool
+
+    # Results - Detection operations
+    detections_retrieved: bool
+    detection_list: list[dict[str, Any]]
+    detection_count: int
+    person_found: bool
+    person_location_result: Optional[dict[str, Any]]
+    motion_events: list[dict[str, Any]]
+
+    # Results - Zone operations
+    zones_listed: bool
+    zone_list: list[dict[str, Any]]
+    zone_count: int
+    zone_status_result: Optional[dict[str, Any]]
+    zone_armed: bool
+    zone_disarmed: bool
+
+    # Workflow control
+    current_step: str  # "classify", "parse", "execute", "respond"
+    needs_clarification: bool
+    clarification_prompt: Optional[str]
+
+    # Output
+    response: str
+    error: Optional[str]
+
+    # Timing
+    total_ms: float
+    step_timings: dict[str, float]
+
+
+class PresenceWorkflowState(TypedDict, total=False):
+    """
+    State for presence-aware device control workflow.
+
+    Handles: lights, media, scenes near user, and location queries.
+    Routes based on detected intent within the graph.
+    """
+
+    # Input
+    input_text: str
+    session_id: Optional[str]
+    user_id: Optional[str]
+
+    # Intent classification
+    # lights_control, media_control, scene_set, where_am_i
+    intent: str
+
+    # Presence context (resolved from presence service)
+    current_room_id: Optional[str]
+    current_room_name: Optional[str]
+    presence_confidence: float
+    presence_source: Optional[str]
+
+    # Lights parameters
+    light_action: Optional[str]  # on, off, toggle
+    brightness: Optional[int]  # 0-100
+    light_entities: list[str]
+
+    # Media parameters
+    media_action: Optional[str]  # on, off, play, pause, stop
+    media_entities: list[str]
+
+    # Scene parameters
+    scene_name: Optional[str]  # bright, dim, cozy, movie, focus, relax, off
+
+    # Results
+    action_executed: bool
+    devices_controlled: list[str]
+    location_reported: bool
+
+    # Workflow control
+    current_step: str
+    needs_clarification: bool
+    clarification_prompt: Optional[str]
+
+    # Output
+    response: str
+    error: Optional[str]
+
+    # Timing
+    total_ms: float
+    step_timings: dict[str, float]
+
+
+class EmailWorkflowState(TypedDict, total=False):
+    """
+    State for email workflow with draft preview and history.
+
+    Handles: send_email, send_estimate, send_proposal, query_history.
+    Supports draft preview mode before sending.
+    """
+
+    # Input
+    input_text: str
+    session_id: Optional[str]
+
+    # Intent classification
+    # send_email, send_estimate, send_proposal, query_history
+    intent: str
+
+    # Email parameters (generic)
+    to_address: Optional[str]
+    cc_addresses: Optional[str]
+    subject: Optional[str]
+    body: Optional[str]
+    reply_to: Optional[str]
+    attachments: list[str]
+
+    # Estimate/Proposal parameters
+    client_name: Optional[str]
+    client_type: Optional[str]  # business, residential
+    contact_name: Optional[str]
+    contact_phone: Optional[str]
+    address: Optional[str]
+    service_date: Optional[str]
+    service_time: Optional[str]
+    price: Optional[str]
+    frequency: Optional[str]
+    areas_to_clean: Optional[str]
+    cleaning_description: Optional[str]
+
+    # Draft preview
+    draft_mode: bool
+    draft_subject: Optional[str]
+    draft_body: Optional[str]
+    draft_to: Optional[str]
+    draft_template: Optional[str]
+    draft_confirmed: bool
+
+    # Follow-up reminder
+    create_follow_up: bool
+    follow_up_days: int
+
+    # Results
+    email_sent: bool
+    resend_message_id: Optional[str]
+    template_used: Optional[str]
+    attachment_included: bool
+    follow_up_created: bool
+    follow_up_reminder_id: Optional[str]
+
+    # History query results
+    history_queried: bool
+    email_history: list[dict[str, Any]]
+    history_count: int
+
+    # Context extraction results
+    context_extracted: bool
+    context_source: Optional[str]
+
+    # Workflow control
+    current_step: str
+    needs_clarification: bool
+    clarification_prompt: Optional[str]
+    awaiting_confirmation: bool
+
+    # Multi-turn continuation support
+    is_continuation: bool  # True if resuming from saved state
+    restored_from_step: Optional[str]  # Step we're continuing from
+
+    # Output
+    response: str
+    error: Optional[str]
+
+    # Timing
+    total_ms: float
+    step_timings: dict[str, float]
+
+
+class CalendarWorkflowState(TypedDict, total=False):
+    """
+    State for calendar event workflow.
+
+    Handles: create_event, query_events.
+    Supports multi-turn slot filling for event creation.
+    """
+
+    # Input
+    input_text: str
+    session_id: Optional[str]
+
+    # Intent classification
+    # create_event, query_events
+    intent: str
+
+    # Event parameters (for create)
+    event_title: Optional[str]
+    event_date: Optional[str]
+    event_time: Optional[str]
+    event_duration: Optional[str]
+    event_location: Optional[str]
+    event_description: Optional[str]
+    calendar_name: Optional[str]
+
+    # Parsed datetime (after parsing)
+    parsed_start_at: Optional[str]
+    parsed_end_at: Optional[str]
+
+    # Query parameters
+    hours_ahead: int
+    max_results: int
+
+    # Results
+    event_created: bool
+    created_event_id: Optional[str]
+    events_queried: bool
+    event_list: list[dict[str, Any]]
+    event_count: int
+
+    # Workflow control
+    current_step: str
+    needs_clarification: bool
+    clarification_prompt: Optional[str]
+
+    # Multi-turn continuation support
+    is_continuation: bool
+    restored_from_step: Optional[str]
 
     # Output
     response: str

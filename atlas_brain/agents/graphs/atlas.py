@@ -18,6 +18,11 @@ from .home import HomeAgentGraph
 from ..entity_tracker import EntityTracker, extract_pronoun, has_pronoun
 from ..tools import AtlasAgentTools, get_agent_tools
 from ..memory import AtlasAgentMemory, get_agent_memory
+from .workflow_state import get_workflow_state_manager
+from .booking import run_booking_workflow, BOOKING_WORKFLOW_TYPE
+from .reminder import run_reminder_workflow, REMINDER_WORKFLOW_TYPE
+from .email import run_email_workflow, EMAIL_WORKFLOW_TYPE
+from .calendar import run_calendar_workflow, CALENDAR_WORKFLOW_TYPE
 
 logger = logging.getLogger("atlas.agents.graphs.atlas")
 
@@ -35,6 +40,23 @@ def _strip_wake_word(text: str) -> str:
     """Strip wake word prefix from text."""
     stripped = _WAKE_WORD_PATTERN.sub("", text).strip()
     return stripped if stripped else text
+
+
+# Cancel patterns for active workflow interruption
+_CANCEL_PATTERNS = [
+    re.compile(r"^(?:never\s?mind|cancel|stop|forget\s+it|quit)$", re.IGNORECASE),
+    re.compile(r"^(?:I\s+)?(?:don'?t\s+)?(?:want\s+to\s+)?cancel", re.IGNORECASE),
+    re.compile(r"^stop\s+(?:that|this|booking|scheduling)", re.IGNORECASE),
+]
+
+
+def _is_cancel_intent(text: str) -> bool:
+    """Check if text matches a cancel pattern."""
+    text = text.strip()
+    for pattern in _CANCEL_PATTERNS:
+        if pattern.match(text):
+            return True
+    return False
 
 
 def _get_cuda_lock() -> asyncio.Lock:
@@ -80,6 +102,57 @@ async def preprocess_input(state: AtlasAgentState) -> AtlasAgentState:
         **state,
         "input_text": cleaned_text,
         "current_mode": mode_manager.current_mode.value,
+    }
+
+
+async def check_active_workflow(state: AtlasAgentState) -> AtlasAgentState:
+    """Check if session has an active workflow to continue."""
+    # Skip if mode switch already handled
+    if state.get("action_type") == "mode_switch":
+        return state
+
+    session_id = state.get("session_id")
+    if not session_id:
+        return state
+
+    manager = get_workflow_state_manager()
+    workflow = await manager.restore_workflow_state(session_id)
+
+    if workflow is None:
+        return state
+
+    # Check if workflow is expired
+    if workflow.is_expired():
+        logger.info("Workflow expired for session %s, clearing", session_id)
+        await manager.clear_workflow_state(session_id)
+        return state
+
+    # Check for cancel intent
+    input_text = state.get("input_text", "")
+    if _is_cancel_intent(input_text):
+        await manager.clear_workflow_state(session_id)
+        logger.info("User cancelled active workflow for session %s", session_id)
+        return {
+            **state,
+            "action_type": "workflow_cancelled",
+            "response": "Okay, I've cancelled that.",
+        }
+
+    # Active workflow found - mark for continuation
+    logger.info(
+        "Continuing %s workflow at step %s for session %s",
+        workflow.workflow_type,
+        workflow.current_step,
+        session_id,
+    )
+    return {
+        **state,
+        "active_workflow": {
+            "workflow_type": workflow.workflow_type,
+            "current_step": workflow.current_step,
+            "partial_state": workflow.partial_state,
+        },
+        "action_type": "workflow_continuation",
     }
 
 
@@ -436,6 +509,83 @@ async def delegate_to_home(state: AtlasAgentState) -> AtlasAgentState:
     }
 
 
+async def continue_workflow(state: AtlasAgentState) -> AtlasAgentState:
+    """Continue an active workflow with new user input."""
+    start_time = time.perf_counter()
+    active_workflow = state.get("active_workflow", {})
+    workflow_type = active_workflow.get("workflow_type")
+    session_id = state.get("session_id")
+    input_text = state.get("input_text", "")
+
+    if workflow_type == BOOKING_WORKFLOW_TYPE:
+        result = await run_booking_workflow(
+            input_text=input_text,
+            session_id=session_id,
+        )
+        response = result.get("response", "")
+        total_ms = (time.perf_counter() - start_time) * 1000
+
+        return {
+            **state,
+            "response": response,
+            "action_type": "tool_use",
+            "act_ms": total_ms,
+        }
+
+    if workflow_type == REMINDER_WORKFLOW_TYPE:
+        result = await run_reminder_workflow(
+            input_text=input_text,
+            session_id=session_id,
+        )
+        response = result.get("response", "")
+        total_ms = (time.perf_counter() - start_time) * 1000
+
+        return {
+            **state,
+            "response": response,
+            "action_type": "tool_use",
+            "act_ms": total_ms,
+        }
+
+    if workflow_type == EMAIL_WORKFLOW_TYPE:
+        result = await run_email_workflow(
+            input_text=input_text,
+            session_id=session_id,
+        )
+        response = result.get("response", "")
+        total_ms = (time.perf_counter() - start_time) * 1000
+
+        return {
+            **state,
+            "response": response,
+            "action_type": "tool_use",
+            "act_ms": total_ms,
+        }
+
+    if workflow_type == CALENDAR_WORKFLOW_TYPE:
+        result = await run_calendar_workflow(
+            input_text=input_text,
+            session_id=session_id,
+        )
+        response = result.get("response", "")
+        total_ms = (time.perf_counter() - start_time) * 1000
+
+        return {
+            **state,
+            "response": response,
+            "action_type": "tool_use",
+            "act_ms": total_ms,
+        }
+
+    # Unknown workflow type - should not happen
+    logger.warning("Unknown workflow type: %s", workflow_type)
+    return {
+        **state,
+        "response": "I'm not sure how to continue. Could you start over?",
+        "error": "unknown_workflow_type",
+    }
+
+
 async def _generate_llm_response(
     state: AtlasAgentState,
     with_tools: bool = False,
@@ -553,6 +703,24 @@ def route_after_parse(
     return "respond"
 
 
+def route_after_check_workflow(
+    state: AtlasAgentState,
+) -> Literal["continue_workflow", "classify", "respond"]:
+    """Route after checking for active workflow."""
+    action_type = state.get("action_type", "")
+
+    # Mode switch or workflow cancelled - go to respond
+    if action_type in ("mode_switch", "workflow_cancelled"):
+        return "respond"
+
+    # Active workflow found - continue it
+    if action_type == "workflow_continuation":
+        return "continue_workflow"
+
+    # No active workflow - proceed with normal classification
+    return "classify"
+
+
 # Build the graph
 
 
@@ -561,12 +729,14 @@ def build_atlas_agent_graph() -> StateGraph:
     Build the AtlasAgent LangGraph.
 
     Flow:
-    preprocess -> classify -> (delegate | memory -> parse -> execute -> respond)
+    preprocess -> check_workflow -> (continue | classify -> ...)
     """
     graph = StateGraph(AtlasAgentState)
 
     # Add nodes
     graph.add_node("preprocess", preprocess_input)
+    graph.add_node("check_workflow", check_active_workflow)
+    graph.add_node("continue_workflow", continue_workflow)
     graph.add_node("classify", classify_intent)
     graph.add_node("retrieve_memory", retrieve_memory)
     graph.add_node("parse", parse_intent)
@@ -578,7 +748,17 @@ def build_atlas_agent_graph() -> StateGraph:
     graph.set_entry_point("preprocess")
 
     # Add edges
-    graph.add_edge("preprocess", "classify")
+    graph.add_edge("preprocess", "check_workflow")
+
+    graph.add_conditional_edges(
+        "check_workflow",
+        route_after_check_workflow,
+        {
+            "continue_workflow": "continue_workflow",
+            "classify": "classify",
+            "respond": "respond",
+        },
+    )
 
     graph.add_conditional_edges(
         "classify",
@@ -611,6 +791,7 @@ def build_atlas_agent_graph() -> StateGraph:
 
     graph.add_edge("execute", "respond")
     graph.add_edge("delegate_home", END)
+    graph.add_edge("continue_workflow", END)
     graph.add_edge("respond", END)
 
     return graph

@@ -438,6 +438,40 @@ class Alert:
 
 
 @dataclass
+class SentEmail:
+    """A sent email record for history tracking."""
+
+    id: UUID
+    to_addresses: list[str]
+    subject: str
+    body: str
+    template_type: Optional[str] = None  # "generic", "estimate", "proposal"
+    session_id: Optional[UUID] = None
+    user_id: Optional[UUID] = None
+    cc_addresses: list[str] = field(default_factory=list)
+    attachments: list[str] = field(default_factory=list)
+    resend_message_id: Optional[str] = None
+    sent_at: datetime = field(default_factory=datetime.utcnow)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": str(self.id),
+            "to_addresses": self.to_addresses,
+            "cc_addresses": self.cc_addresses,
+            "subject": self.subject,
+            "body": self.body,
+            "template_type": self.template_type,
+            "session_id": str(self.session_id) if self.session_id else None,
+            "user_id": str(self.user_id) if self.user_id else None,
+            "attachments": self.attachments,
+            "resend_message_id": self.resend_message_id,
+            "sent_at": self.sent_at.isoformat(),
+            "metadata": self.metadata,
+        }
+
+
+@dataclass
 class Reminder:
     """A user reminder with scheduled delivery time."""
 
