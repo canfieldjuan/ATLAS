@@ -4,8 +4,11 @@ Command executor for voice pipeline.
 Runs command handling on a thread pool to keep audio capture responsive.
 """
 
-from concurrent.futures import ThreadPoolExecutor
+import logging
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Callable, Optional
+
+logger = logging.getLogger("atlas.voice.command_executor")
 
 
 class CommandExecutor:
@@ -21,9 +24,16 @@ class CommandExecutor:
         self.streaming_handler = streaming_handler
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
 
+    def _on_done(self, future: Future) -> None:
+        """Callback to log exceptions from completed futures."""
+        exc = future.exception()
+        if exc is not None:
+            logger.error("Command handler failed: %s", exc, exc_info=exc)
+
     def submit(self, payload: bytes):
         """Submit audio payload for processing."""
-        self.executor.submit(self.handler, payload)
+        future = self.executor.submit(self.handler, payload)
+        future.add_done_callback(self._on_done)
 
     def submit_streaming(self, transcript: str, audio_bytes: bytes):
         """Submit transcript and audio from streaming ASR for processing.
@@ -33,7 +43,8 @@ class CommandExecutor:
             audio_bytes: Raw PCM audio bytes for speaker verification
         """
         if self.streaming_handler is not None:
-            self.executor.submit(self.streaming_handler, transcript, audio_bytes)
+            future = self.executor.submit(self.streaming_handler, transcript, audio_bytes)
+            future.add_done_callback(self._on_done)
 
     def shutdown(self):
         """Shutdown the executor."""

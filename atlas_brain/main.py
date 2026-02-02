@@ -20,12 +20,11 @@ from fastapi import FastAPI
 
 from .api import router as api_router
 from .config import settings
-from .services import vlm_registry, stt_registry, llm_registry, tts_registry, vos_registry, omni_registry
+from .services import vlm_registry, llm_registry, vos_registry
 from .storage import db_settings
 from .storage.database import init_database, close_database
 
-# Global voice client task
-_voice_client_task: Optional[asyncio.Task] = None
+# Voice pipeline managed by voice.launcher module
 
 # Configure logging
 logging.basicConfig(
@@ -63,21 +62,9 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to load default VLM: %s", e)
 
-    # Load default STT if configured
-    if settings.load_stt_on_startup:
-        try:
-            logger.info("Loading default STT: %s", settings.stt.default_model)
-            stt_registry.activate(settings.stt.default_model)
-        except Exception as e:
-            logger.error("Failed to load default STT: %s", e)
-
-    # Load default TTS if configured
-    if settings.load_tts_on_startup:
-        try:
-            logger.info("Loading default TTS: %s", settings.tts.default_model)
-            tts_registry.activate(settings.tts.default_model)
-        except Exception as e:
-            logger.error("Failed to load default TTS: %s", e)
+    # Note: STT/TTS registries not implemented - voice uses Piper TTS directly
+    # via voice/pipeline.py. These can be added later if centralized
+    # STT/TTS management is needed.
 
     # Load default LLM if configured
     if settings.load_llm_on_startup:
@@ -130,15 +117,8 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to load default LLM: %s", e)
 
-    # Load speaker ID if enabled
-    if settings.load_speaker_id_on_startup or settings.speaker_id.enabled:
-        try:
-            from .services import speaker_id_registry
-            logger.info("Loading speaker ID: %s", settings.speaker_id.default_model)
-            speaker_id_registry.activate(settings.speaker_id.default_model)
-            logger.info("Speaker ID loaded successfully")
-        except Exception as e:
-            logger.error("Failed to load speaker ID: %s", e)
+    # Note: Speaker ID loaded lazily via get_speaker_id_service() when voice
+    # pipeline starts. No registry needed - single Resemblyzer implementation.
 
     # Load VOS if enabled
     if settings.load_vos_on_startup or settings.vos.enabled:
@@ -153,28 +133,11 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to load VOS: %s", e)
 
-    # Load Omni (unified speech-to-speech) if enabled
-    if settings.load_omni_on_startup or settings.omni.enabled:
-        try:
-            logger.info("Loading Omni: %s", settings.omni.default_model)
-            omni_registry.activate(
-                settings.omni.default_model,
-                max_new_tokens=settings.omni.max_new_tokens,
-                temperature=settings.omni.temperature,
-            )
-            logger.info("Omni loaded successfully")
-        except Exception as e:
-            logger.error("Failed to load Omni: %s", e)
+    # Note: Omni (speech-to-speech) not yet implemented as registry.
+    # Future: Add omni_registry for Qwen2-Audio or similar models.
 
-    # Load FunctionGemma tool router if enabled (for fast tool query routing)
-    if settings.load_tool_router_on_startup:
-        try:
-            from .pipecat.router import get_router
-            logger.info("Loading FunctionGemma tool router...")
-            await get_router()
-            logger.info("FunctionGemma tool router loaded successfully")
-        except Exception as e:
-            logger.error("Failed to load tool router: %s", e)
+    # Note: FunctionGemma tool router was in pipecat module (now removed).
+    # Tool routing handled by services/intent_router.py instead.
 
     # Register test devices for development
     try:
@@ -315,51 +278,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Failed to initialize communications service: %s", e)
 
-    # Start Pipecat voice pipeline if enabled
-    global _voice_client_task
+    # Start voice pipeline if enabled
     if settings.voice.enabled:
         try:
-            from .pipecat.pipeline import run_voice_pipeline
-
-            async def run_pipecat_voice():
-                try:
-                    # Generate session ID for conversation persistence
-                    import uuid
-                    voice_session_id = str(uuid.uuid4())
-                    logger.info("Pipecat voice session: %s", voice_session_id)
-
-                    # Build wake phrases from keyword setting
-                    keyword = settings.orchestration.keyword
-                    wake_phrases = [f"hey {keyword}", keyword]
-
-                    await run_voice_pipeline(
-                        input_device=settings.voice.input_device,
-                        output_device=settings.voice.output_device,
-                        input_device_name=settings.voice.input_device_name,
-                        output_device_name=settings.voice.output_device_name,
-                        input_sample_rate=settings.voice.input_sample_rate,
-                        stt_model="nemotron",
-                        ollama_model=settings.llm.ollama_model,
-                        ollama_url=settings.llm.ollama_url,
-                        tts_voice=settings.tts.voice,
-                        tts_speed=settings.tts.speed,
-                        device="cuda",
-                        session_id=voice_session_id,
-                        wake_word_enabled=settings.orchestration.keyword_enabled,
-                        wake_phrases=wake_phrases,
-                        wake_keepalive_secs=settings.orchestration.follow_up_duration_ms / 1000.0,
-                    )
-                except asyncio.CancelledError:
-                    logger.info("Pipecat voice pipeline cancelled")
-                except Exception as e:
-                    logger.error("Pipecat voice pipeline error: %s", e)
-
-            _voice_client_task = asyncio.create_task(run_pipecat_voice())
-            logger.info("Pipecat voice pipeline started")
+            from .voice.launcher import start_voice_pipeline
+            loop = asyncio.get_event_loop()
+            if start_voice_pipeline(loop):
+                logger.info("Voice pipeline started")
+            else:
+                logger.warning("Voice pipeline failed to start")
         except ImportError as e:
-            logger.warning("Pipecat voice not available: %s", e)
+            logger.warning("Voice pipeline not available: %s", e)
         except Exception as e:
-            logger.error("Failed to start Pipecat voice pipeline: %s", e)
+            logger.error("Failed to start voice pipeline: %s", e)
 
     # NOTE: Webcam and RTSP detection moved to atlas_vision service
     # Detection events are received via MQTT subscriber (vision/subscriber.py)
@@ -382,15 +313,14 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Error stopping vision subscriber: %s", e)
 
-    # Stop voice client
-    if _voice_client_task and not _voice_client_task.done():
-        logger.info("Stopping voice client...")
-        _voice_client_task.cancel()
+    # Stop voice pipeline
+    if settings.voice.enabled:
         try:
-            await _voice_client_task
-        except asyncio.CancelledError:
-            pass
-        logger.info("Voice client stopped")
+            from .voice.launcher import stop_voice_pipeline
+            stop_voice_pipeline()
+            logger.info("Voice pipeline stopped")
+        except Exception as e:
+            logger.error("Error stopping voice pipeline: %s", e)
 
     # Shutdown discovery service
     if settings.discovery.enabled:
@@ -444,8 +374,6 @@ async def lifespan(app: FastAPI):
     # Unload models to free resources
     vos_registry.deactivate()
     vlm_registry.deactivate()
-    stt_registry.deactivate()
-    tts_registry.deactivate()
     llm_registry.deactivate()
 
     # Force garbage collection to clean up semaphores from NeMo/PyTorch

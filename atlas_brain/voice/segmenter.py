@@ -64,7 +64,7 @@ class CommandSegmenter:
         return self._should_finalize()
 
     def consume_audio(self) -> bytes:
-        """Get collected audio and reset."""
+        """Get collected audio bytes. Does NOT reset state - call reset() separately."""
         audio = b"".join(self.frames)
         return audio
 

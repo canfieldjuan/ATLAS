@@ -39,17 +39,22 @@ def _create_agent_runner():
             return ""
 
         session_id = context_dict.get("session_id")
+        node_id = context_dict.get("node_id")
+        speaker_id = context_dict.get("speaker_id")
+        speaker_name = context_dict.get("speaker_name")
 
         try:
             future = asyncio.run_coroutine_threadsafe(
                 agent.process(
                     input_text=transcript,
                     session_id=session_id,
+                    speaker_id=speaker_name,
                     input_type="voice",
+                    runtime_context={"node_id": node_id, "speaker_uuid": speaker_id},
                 ),
                 _event_loop,
             )
-            result = future.result(timeout=30.0)
+            result = future.result(timeout=settings.voice.agent_timeout)
             response = result.response_text or ""
             logger.info("Agent runner response: %s", response[:100] if response else "(empty)")
             return response
@@ -66,6 +71,9 @@ def _create_streaming_agent_runner():
     from ..services.protocols import Message
     from ..services.intent_router import route_query
     from ..config import settings
+
+    # Store last route result for intent gating
+    _last_route_result = {"result": None}
 
     def runner(
         transcript: str,
@@ -87,9 +95,11 @@ def _create_streaming_agent_runner():
         # First, check intent to decide streaming vs regular path
         async def check_and_run():
             use_streaming = False
+            route_result = None
 
             if settings.intent_router.enabled:
                 route_result = await route_query(transcript)
+                _last_route_result["result"] = route_result
                 threshold = settings.intent_router.confidence_threshold
 
                 if route_result.action_category == "conversation":
@@ -115,13 +125,58 @@ def _create_streaming_agent_runner():
             else:
                 await _run_agent_fallback(transcript, context_dict, on_sentence)
 
+            # Check intent gating after processing
+            if route_result and settings.voice_filter.intent_gating_enabled:
+                _check_intent_gating(route_result)
+
         try:
             future = asyncio.run_coroutine_threadsafe(check_and_run(), _event_loop)
-            future.result(timeout=30.0)
+            future.result(timeout=settings.voice.agent_timeout)
         except Exception as e:
             logger.error("Streaming agent runner failed: %s", e)
 
     return runner
+
+
+def _check_intent_gating(route_result) -> None:
+    """Check intent confidence and exit conversation mode if needed.
+
+    Called after processing a command to determine if conversation should continue.
+    If confidence is below threshold or category is not in the continuation list,
+    exits conversation mode.
+
+    Args:
+        route_result: Result from intent router
+    """
+    from ..config import settings
+
+    if not settings.voice_filter.intent_gating_enabled:
+        return
+
+    filter_cfg = settings.voice_filter
+    confidence = route_result.confidence
+    category = route_result.action_category
+
+    # Check if category allows continuation
+    categories_continue = filter_cfg.intent_categories_continue
+    category_ok = category in categories_continue
+
+    # Check if confidence is above threshold
+    confidence_ok = confidence >= filter_cfg.intent_continuation_threshold
+
+    if not category_ok or not confidence_ok:
+        logger.info(
+            "Intent gating: exiting conversation (category=%s ok=%s, conf=%.2f ok=%s)",
+            category, category_ok, confidence, confidence_ok
+        )
+        # Exit conversation mode
+        if _voice_pipeline is not None:
+            _voice_pipeline.frame_processor.exit_conversation_mode("intent_gating")
+    else:
+        logger.debug(
+            "Intent gating: continuing conversation (category=%s, conf=%.2f)",
+            category, confidence
+        )
 
 
 async def _stream_llm_response(
@@ -147,6 +202,7 @@ async def _stream_llm_response(
 
     # Try to get conversation history for context
     session_id = context_dict.get("session_id")
+    speaker_name = context_dict.get("speaker_name")
     if session_id:
         try:
             pool = get_db_pool()
@@ -169,8 +225,9 @@ async def _stream_llm_response(
 
     sentence_count = 0
     collected_sentences = []
+    max_tokens = settings.voice.streaming_max_tokens
     try:
-        async for token in llm.chat_stream_async(messages, max_tokens=150):
+        async for token in llm.chat_stream_async(messages, max_tokens=max_tokens):
             sentence = buffer.add_token(token)
             if sentence:
                 sentence_count += 1
@@ -187,7 +244,7 @@ async def _stream_llm_response(
         # Persist conversation turns if streaming was successful
         if sentence_count > 0 and session_id:
             full_response = " ".join(collected_sentences)
-            await _persist_streaming_turns(session_id, transcript, full_response)
+            await _persist_streaming_turns(session_id, transcript, full_response, speaker_name)
 
         return sentence_count > 0
     except Exception as e:
@@ -199,6 +256,7 @@ async def _persist_streaming_turns(
     session_id: str,
     user_text: str,
     assistant_text: str,
+    speaker_name: Optional[str] = None,
 ) -> None:
     """Persist conversation turns from streaming LLM to database."""
     from ..agents.memory import get_agent_memory
@@ -210,6 +268,7 @@ async def _persist_streaming_turns(
                 session_id=session_id,
                 role="user",
                 content=user_text,
+                speaker_id=speaker_name,
                 turn_type="conversation",
             )
             await memory.add_turn(
@@ -230,12 +289,17 @@ async def _run_agent_fallback(
 ) -> None:
     """Run regular agent for tool/device queries via unified interface."""
     session_id = context_dict.get("session_id")
+    node_id = context_dict.get("node_id")
+    speaker_id = context_dict.get("speaker_id")
+    speaker_name = context_dict.get("speaker_name")
     try:
         result = await process_with_fallback(
             input_text=transcript,
             agent_type="atlas",
             session_id=session_id,
+            speaker_id=speaker_name,
             input_type="voice",
+            runtime_context={"node_id": node_id, "speaker_uuid": speaker_id},
         )
         if result.response_text:
             on_sentence(result.response_text)
@@ -284,7 +348,7 @@ def _create_prefill_runner():
                 llm.prefill_async(messages),
                 _event_loop,
             )
-            result = future.result(timeout=10.0)
+            result = future.result(timeout=settings.voice.prefill_timeout)
             prefill_ms = result.get("prefill_time_ms", 0)
             prompt_tokens = result.get("prompt_tokens", 0)
             total_ms = (time.perf_counter() - start_time) * 1000
@@ -299,7 +363,7 @@ def _create_prefill_runner():
     return runner
 
 
-def create_voice_pipeline() -> Optional[VoicePipeline]:
+def create_voice_pipeline(event_loop: Optional[asyncio.AbstractEventLoop] = None) -> Optional[VoicePipeline]:
     """Create the voice pipeline from config."""
     cfg = settings.voice
 
@@ -324,6 +388,17 @@ def create_voice_pipeline() -> Optional[VoicePipeline]:
     logger.info("  silence_ms=%d, hangover_ms=%d", cfg.silence_ms, cfg.hangover_ms)
     logger.info("  debug_logging=%s, log_interval_frames=%d", cfg.debug_logging, cfg.log_interval_frames)
     logger.info("  conversation_mode=%s, timeout=%dms", cfg.conversation_mode_enabled, cfg.conversation_timeout_ms)
+    logger.info("  node_id=%s, node_name=%s", cfg.node_id, cfg.node_name)
+    # Voice filter configuration
+    vf = settings.voice_filter
+    logger.info("=== Voice Filter Configuration ===")
+    logger.info("  enabled=%s, vad_backend=%s", vf.enabled, vf.vad_backend)
+    logger.info("  silero_threshold=%.2f", vf.silero_threshold)
+    logger.info("  rms_min=%.4f, adaptive=%s, above_ambient=%.1fx",
+                vf.rms_min_threshold, vf.rms_adaptive, vf.rms_above_ambient_factor)
+    logger.info("  turn_limit=%s (max=%d)", vf.turn_limit_enabled, vf.max_conversation_turns)
+    logger.info("  intent_gating=%s (threshold=%.2f)", vf.intent_gating_enabled, vf.intent_continuation_threshold)
+    logger.info("  speaker_continuity=%s", vf.speaker_continuity_enabled)
     logger.info("====================================")
 
     if not cfg.wakeword_model_paths:
@@ -380,6 +455,58 @@ def create_voice_pipeline() -> Optional[VoicePipeline]:
         speaker_id_service = get_speaker_id_service()
         logger.info("Speaker ID enabled (require_known=%s, threshold=%.2f)",
                     speaker_cfg.require_known_speaker, speaker_cfg.confidence_threshold)
+        # Preload the encoder to avoid first-command latency
+        try:
+            _ = speaker_id_service.embedder.encoder
+            logger.info("Speaker ID encoder preloaded")
+        except Exception as e:
+            logger.warning("Failed to preload speaker ID encoder: %s", e)
+
+    # Preload intent router if enabled
+    if settings.intent_router.enabled and event_loop is not None:
+        try:
+            from ..services.intent_router import get_intent_router
+            logger.info("Preloading intent router model...")
+            router = get_intent_router()
+            # Actually load the model (not just create the singleton)
+            future = asyncio.run_coroutine_threadsafe(router.load(), event_loop)
+            future.result(timeout=60.0)
+            logger.info("Intent router model preloaded successfully")
+        except Exception as e:
+            logger.warning(
+                "Failed to preload intent router: %s. "
+                "Model will load on first query (may cause delay).",
+                e
+            )
+
+    # Preload agent tools to avoid registration delay on first command
+    try:
+        from ..agents.tools import get_agent_tools
+        logger.info("Preloading agent tools...")
+        tools = get_agent_tools()
+        logger.info("Agent tools preloaded: %d tools registered", len(tools.get_tool_list()))
+    except Exception as e:
+        logger.warning("Failed to preload agent tools: %s", e)
+
+    # Get voice filter config
+    filter_cfg = settings.voice_filter
+
+    # Preload Silero VAD if using it
+    silero_vad = None
+    if filter_cfg.vad_backend == "silero":
+        try:
+            from .vad import SileroVAD
+            logger.info("Preloading Silero VAD model...")
+            silero_vad = SileroVAD(threshold=filter_cfg.silero_threshold)
+            silero_vad.preload()
+            logger.info("Silero VAD model preloaded successfully")
+        except Exception as e:
+            logger.warning(
+                "Failed to preload Silero VAD: %s. "
+                "Falling back to WebRTC VAD.",
+                e
+            )
+            filter_cfg = settings.voice_filter.__class__(vad_backend="webrtc")
 
     pipeline = VoicePipeline(
         wakeword_model_paths=cfg.wakeword_model_paths,
@@ -421,6 +548,22 @@ def create_voice_pipeline() -> Optional[VoicePipeline]:
         speaker_id_service=speaker_id_service,
         require_known_speaker=speaker_cfg.require_known_speaker,
         unknown_speaker_response=speaker_cfg.unknown_speaker_response,
+        speaker_id_timeout=cfg.speaker_id_timeout,
+        node_id=cfg.node_id,
+        event_loop=event_loop,
+        # Voice filter settings
+        vad_backend=filter_cfg.vad_backend,
+        silero_threshold=filter_cfg.silero_threshold,
+        rms_min_threshold=filter_cfg.rms_min_threshold,
+        rms_adaptive=filter_cfg.rms_adaptive,
+        rms_above_ambient_factor=filter_cfg.rms_above_ambient_factor,
+        turn_limit_enabled=filter_cfg.turn_limit_enabled,
+        max_conversation_turns=filter_cfg.max_conversation_turns,
+        intent_gating_enabled=filter_cfg.intent_gating_enabled,
+        intent_continuation_threshold=filter_cfg.intent_continuation_threshold,
+        intent_categories_continue=filter_cfg.intent_categories_continue,
+        speaker_continuity_enabled=filter_cfg.speaker_continuity_enabled,
+        speaker_continuity_threshold=filter_cfg.speaker_continuity_threshold,
     )
 
     return pipeline
@@ -445,7 +588,7 @@ def start_voice_pipeline(loop: asyncio.AbstractEventLoop) -> bool:
     _event_loop = loop
 
     try:
-        _voice_pipeline = create_voice_pipeline()
+        _voice_pipeline = create_voice_pipeline(event_loop=loop)
         if _voice_pipeline is None:
             return False
     except Exception as e:

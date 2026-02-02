@@ -577,6 +577,10 @@ class VoiceClientConfig(BaseSettings):
         default=True,
         description="Enable streaming LLM to TTS (speak sentences as generated)"
     )
+    streaming_max_tokens: int = Field(
+        default=256,
+        description="Max tokens for streaming LLM responses (prevents truncation)"
+    )
 
     # VAD and segmentation settings
     vad_aggressiveness: int = Field(default=2, description="WebRTC VAD aggressiveness (0-3)")
@@ -599,6 +603,18 @@ class VoiceClientConfig(BaseSettings):
 
     # Processing settings
     command_workers: int = Field(default=2, description="Thread pool size for command processing")
+    agent_timeout: float = Field(
+        default=30.0,
+        description="Timeout in seconds for agent processing (LLM + tool execution)"
+    )
+    prefill_timeout: float = Field(
+        default=10.0,
+        description="Timeout in seconds for LLM prefill on wake word"
+    )
+    speaker_id_timeout: float = Field(
+        default=5.0,
+        description="Timeout in seconds for speaker identification"
+    )
 
     # Debug logging
     debug_logging: bool = Field(
@@ -638,6 +654,16 @@ class VoiceClientConfig(BaseSettings):
     conversation_goodbye_phrases: list[str] = Field(
         default=["goodbye", "bye", "that's all", "thanks that's it", "nevermind"],
         description="Phrases that explicitly end conversation mode"
+    )
+
+    # Node identification for distributed deployments
+    node_id: str = Field(
+        default="local",
+        description="Unique identifier for this voice node (e.g., 'kitchen', 'office')"
+    )
+    node_name: str | None = Field(
+        default=None,
+        description="Human-readable name for this voice node"
     )
 
 
@@ -769,6 +795,95 @@ class IntentRouterConfig(BaseSettings):
     )
 
 
+class VoiceFilterConfig(BaseSettings):
+    """Multi-layer voice filtering configuration for conversation mode.
+
+    Implements a 5-layer filtering stack to reduce false triggers:
+    1. Silero VAD - More accurate speech detection
+    2. RMS Energy - Proximity/loudness check
+    3. Speaker Continuity - Same speaker as wake word (optional)
+    4. Intent Gating - Gate conversation continuation on intent confidence
+    5. Turn Limit - Require wake word after N turns
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_VOICE_FILTER_",
+        env_file=".env",
+        extra="ignore",
+    )
+
+    # Master enable
+    enabled: bool = Field(default=True, description="Enable multi-layer voice filtering")
+
+    # Layer 1: VAD backend selection
+    vad_backend: str = Field(
+        default="silero",
+        description="VAD backend: 'silero' (accurate, recommended) or 'webrtc' (lightweight)"
+    )
+    silero_threshold: float = Field(
+        default=0.25,
+        ge=0.0,
+        le=1.0,
+        description="Silero VAD speech probability threshold"
+    )
+
+    # Layer 2: RMS energy filtering
+    rms_min_threshold: float = Field(
+        default=0.004,
+        ge=0.0,
+        description="Minimum RMS for speech detection (filters distant conversations)"
+    )
+    rms_adaptive: bool = Field(
+        default=False,
+        description="Enable adaptive RMS threshold based on ambient noise"
+    )
+    rms_above_ambient_factor: float = Field(
+        default=3.0,
+        ge=1.0,
+        description="Speech must be this factor above ambient noise floor"
+    )
+
+    # Layer 3: Speaker continuity (optional, disabled by default)
+    speaker_continuity_enabled: bool = Field(
+        default=False,
+        description="Only accept follow-ups from same speaker as wake word"
+    )
+    speaker_continuity_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="Minimum speaker embedding similarity for continuity"
+    )
+
+    # Layer 4: Intent gating
+    intent_gating_enabled: bool = Field(
+        default=True,
+        description="Exit conversation mode on low intent confidence"
+    )
+    intent_continuation_threshold: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description="Minimum intent confidence to continue conversation"
+    )
+    intent_categories_continue: list[str] = Field(
+        default=["conversation", "tool_use", "device_control"],
+        description="Intent categories that allow conversation continuation"
+    )
+
+    # Layer 5: Turn limiting (disabled by default - use other filters instead)
+    turn_limit_enabled: bool = Field(
+        default=False,
+        description="Require wake word after max turns (not recommended)"
+    )
+    max_conversation_turns: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="Maximum turns before requiring wake word (if enabled)"
+    )
+
+
 class AgentConfig(BaseSettings):
     """Agent system configuration."""
 
@@ -849,6 +964,7 @@ class Settings(BaseSettings):
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     modes: ModeManagerConfig = Field(default_factory=ModeManagerConfig)
     intent_router: IntentRouterConfig = Field(default_factory=IntentRouterConfig)
+    voice_filter: VoiceFilterConfig = Field(default_factory=VoiceFilterConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
 
     # Presence tracking - imported from presence module

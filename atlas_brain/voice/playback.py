@@ -32,6 +32,7 @@ class PlaybackController:
     def speak(
         self,
         text: str,
+        target_node: Optional[str] = None,
         on_start: Optional[Callable[[], None]] = None,
         on_done: Optional[Callable[[], None]] = None,
     ):
@@ -40,9 +41,13 @@ class PlaybackController:
 
         Args:
             text: Text to speak
+            target_node: Node ID for remote routing (None=local, future use)
             on_start: Callback when speech starts
             on_done: Callback when speech ends
         """
+        # target_node reserved for future remote node routing
+        _ = target_node
+
         def runner():
             self.speaking.set()
             try:
@@ -68,5 +73,9 @@ class PlaybackController:
     def _stop_locked(self):
         """Internal stop without lock."""
         self.engine.stop()
+        thread = self._thread
         self._thread = None
         self.speaking.clear()
+        # Join thread with timeout to ensure clean shutdown
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=2.0)

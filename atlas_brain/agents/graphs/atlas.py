@@ -593,6 +593,7 @@ async def _generate_llm_response(
     """Generate response using LLM."""
     from ...services import llm_registry
     from ...services.protocols import Message
+    from ...storage.database import get_db_pool
 
     llm = llm_registry.get_active()
     if llm is None:
@@ -601,6 +602,26 @@ async def _generate_llm_response(
     input_text = state.get("input_text", "")
     retrieved_context = state.get("retrieved_context")
     speaker_id = state.get("speaker_id")
+    session_id = state.get("session_id")
+
+    # Fetch conversation history from PostgreSQL
+    history_messages: list[Message] = []
+    if session_id:
+        try:
+            pool = get_db_pool()
+            if pool.is_initialized:
+                rows = await pool.fetch(
+                    """SELECT role, content FROM conversation_turns
+                       WHERE session_id = $1
+                       ORDER BY created_at DESC LIMIT 6""",
+                    session_id
+                )
+                for row in reversed(rows):
+                    history_messages.append(Message(role=row["role"], content=row["content"]))
+                if rows:
+                    logger.debug("Added %d conversation turns to LLM context", len(rows))
+        except Exception as e:
+            logger.debug("Could not fetch conversation history: %s", e)
 
     # Build system prompt
     system_parts = [
@@ -626,10 +647,13 @@ async def _generate_llm_response(
         system_parts.append(f"\n{retrieved_context}")
 
     system_msg = " ".join(system_parts)
-    messages = [
-        Message(role="system", content=system_msg),
-        Message(role="user", content=input_text),
-    ]
+    messages = [Message(role="system", content=system_msg)]
+
+    # Add conversation history (provides context for follow-up questions)
+    messages.extend(history_messages)
+
+    # Add current user message
+    messages.append(Message(role="user", content=input_text))
 
     try:
         cuda_lock = _get_cuda_lock()

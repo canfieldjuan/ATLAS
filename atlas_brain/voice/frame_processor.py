@@ -7,7 +7,7 @@ Supports optional streaming ASR for reduced latency.
 
 import logging
 import threading
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import numpy as np
 
@@ -48,6 +48,15 @@ class FrameProcessor:
         conversation_speech_tolerance: int = 2,
         conversation_rms_threshold: float = 0.01,
         on_conversation_timeout: Optional[Callable[[], None]] = None,
+        # Voice filter settings
+        rms_min_threshold: float = 0.008,
+        rms_adaptive: bool = False,
+        rms_above_ambient_factor: float = 3.0,
+        turn_limit_enabled: bool = True,
+        max_conversation_turns: int = 3,
+        speaker_continuity_enabled: bool = False,
+        speaker_continuity_threshold: float = 0.7,
+        on_turn_limit_reached: Optional[Callable[[], None]] = None,
     ):
         self.wake_predict = wake_predict
         self.wake_threshold = wake_threshold
@@ -83,6 +92,29 @@ class FrameProcessor:
         self._conversation_timer: Optional[threading.Timer] = None
         self._conversation_speech_counter = 0
         self._conversation_silence_counter = 0
+        self._came_from_conversation = False  # Track if recording started from conversation mode
+        self._state_lock = threading.Lock()  # Protects state transitions from timer thread
+        # Buffer to capture frames before speech is confirmed (prevents first word cutoff)
+        self._conversation_buffer: List[bytes] = []
+        self._conversation_buffer_max = conversation_speech_frames + 5  # Extra margin
+
+        # Voice filter: RMS settings
+        self.rms_min_threshold = rms_min_threshold
+        self.rms_adaptive = rms_adaptive
+        self.rms_above_ambient_factor = rms_above_ambient_factor
+        self._ambient_rms = 0.002  # Initial estimate of ambient noise floor
+        self._ambient_rms_samples = 0  # Number of samples for running average
+
+        # Voice filter: Turn limit settings
+        self.turn_limit_enabled = turn_limit_enabled
+        self.max_conversation_turns = max_conversation_turns
+        self._turn_count = 0
+        self.on_turn_limit_reached = on_turn_limit_reached
+
+        # Voice filter: Speaker continuity settings
+        self.speaker_continuity_enabled = speaker_continuity_enabled
+        self.speaker_continuity_threshold = speaker_continuity_threshold
+        self._wake_speaker_embedding: Optional[np.ndarray] = None
 
         # Warn if gain is too high (causes clipping that destroys wake word patterns)
         if audio_gain > 5.0:
@@ -101,6 +133,10 @@ class FrameProcessor:
         logger.info("  conversation_mode=%s, timeout=%dms, speech_frames=%d, rms_thresh=%.3f",
                     conversation_mode_enabled, conversation_timeout_ms,
                     self.conversation_speech_frames, self.conversation_rms_threshold)
+        logger.info("  voice_filter: rms_min=%.4f, rms_adaptive=%s, above_ambient=%.1fx",
+                    rms_min_threshold, rms_adaptive, rms_above_ambient_factor)
+        logger.info("  voice_filter: turn_limit=%s (max=%d), speaker_continuity=%s",
+                    turn_limit_enabled, max_conversation_turns, speaker_continuity_enabled)
 
     def reset(self):
         """Reset processor to listening state."""
@@ -126,6 +162,11 @@ class FrameProcessor:
         self.interrupt_speech_counter = 0
         self._conversation_speech_counter = 0
         self._conversation_silence_counter = 0
+        self._conversation_buffer.clear()
+        # Reset turn count on full reset (wake word re-detection)
+        self._turn_count = 0
+        # Clear speaker embedding on reset
+        self._wake_speaker_embedding = None
 
     def _connect_streaming_asr(self, context: str = "") -> bool:
         """Connect streaming ASR client if available.
@@ -231,6 +272,7 @@ class FrameProcessor:
                 max_score, self.wake_threshold, self._state_transitions,
             )
             self.state = "recording"
+            self._came_from_conversation = False
             self.segmenter.reset()
 
             # Connect streaming ASR if available
@@ -244,31 +286,62 @@ class FrameProcessor:
 
         # Conversation mode - accept speech without wake word
         if self.state == "conversing":
-            # Check for speech - require consecutive frames AND RMS threshold
-            # RMS check filters out echo/reverb from TTS and ambient noise
-            is_speech = self._is_speech(frame_bytes)
             rms = self._rms(frame_bytes)
-            if is_speech and rms > self.conversation_rms_threshold:
+            is_speech = self._is_speech(frame_bytes)
+            # Require BOTH VAD and RMS to filter ambient conversations
+            # VAD (Silero) distinguishes speech from noise
+            # RMS ensures audio is loud enough (directed at mic, not distant)
+            rms_ok = rms > self.rms_min_threshold
+            speech_detected = is_speech and rms_ok
+
+            # Always buffer recent frames to prevent first word cutoff
+            self._conversation_buffer.append(frame_bytes)
+            if len(self._conversation_buffer) > self._conversation_buffer_max:
+                self._conversation_buffer.pop(0)
+
+            if speech_detected:
+                # Log when potential speech detected for debugging
+                logger.info(
+                    "Conversation speech: vad=%s rms=%.4f (min=%.4f)",
+                    is_speech, rms, self.rms_min_threshold,
+                )
                 self._conversation_speech_counter += 1
                 self._conversation_silence_counter = 0  # Reset silence on speech
+                # Reset timeout on any speech - ensures timeout is from last speech, not entry
+                self._start_conversation_timer()
                 if self._conversation_speech_counter >= self.conversation_speech_frames:
-                    self._cancel_conversation_timer()
-                    self._state_transitions += 1
-                    logger.info(
-                        "SPEECH DETECTED in conversation mode after %d frames, "
-                        "rms=%.4f, recording (transition=%d)",
-                        self._conversation_speech_counter, rms, self._state_transitions,
-                    )
-                    self._conversation_speech_counter = 0
-                    self._conversation_silence_counter = 0
-                    self.state = "recording"
+                    # Lock state transition to prevent race with timeout callback
+                    with self._state_lock:
+                        if self.state != "conversing":
+                            # Timeout fired while we were processing, abort transition
+                            return
+                        self._cancel_conversation_timer()
+                        self._state_transitions += 1
+                        logger.info(
+                            "SPEECH DETECTED in conversation mode after %d frames, "
+                            "rms=%.4f, recording (transition=%d), buffered=%d",
+                            self._conversation_speech_counter, rms,
+                            self._state_transitions, len(self._conversation_buffer),
+                        )
+                        self._conversation_speech_counter = 0
+                        self._conversation_silence_counter = 0
+                        self.state = "recording"
+                        self._came_from_conversation = True
                     self.segmenter.reset()
 
                     # Connect streaming ASR if available
                     self._connect_streaming_asr("for conversation follow-up")
 
-                    # Include this frame in the recording
-                    self.segmenter.add_frame(frame_bytes, is_speech)
+                    # Include buffered frames (captures first word)
+                    buffered = self._conversation_buffer[:]
+                    self._conversation_buffer.clear()
+                    for buf_frame in buffered:
+                        self.segmenter.add_frame(buf_frame, True)
+                        if self._streaming_active and self.streaming_asr_client is not None:
+                            try:
+                                self.streaming_asr_client.send_audio(buf_frame)
+                            except Exception as e:
+                                logger.warning("Error streaming buffered frame: %s", e)
                     return
             else:
                 # Tolerate brief silences - only reset after N consecutive silence frames
@@ -280,13 +353,17 @@ class FrameProcessor:
 
             # Also allow wake word to re-engage during conversation
             if detected:
-                self._cancel_conversation_timer()
-                self._state_transitions += 1
-                logger.info(
-                    "WAKE WORD re-engaged during conversation (transition=%d)",
-                    self._state_transitions,
-                )
-                self.state = "recording"
+                with self._state_lock:
+                    if self.state != "conversing":
+                        # Timeout fired while we were processing, abort transition
+                        return
+                    self._cancel_conversation_timer()
+                    self._state_transitions += 1
+                    logger.info(
+                        "WAKE WORD re-engaged during conversation (transition=%d)",
+                        self._state_transitions,
+                    )
+                    self.state = "recording"
                 self.segmenter.reset()
                 self._connect_streaming_asr("for wake word re-engagement")
                 return
@@ -350,17 +427,20 @@ class FrameProcessor:
                             logger.warning("No streaming handler, transcript: %s", transcript[:50])
                         else:
                             # No transcript at all - fall back to batch ASR
+                            # Don't continue conversation mode since we got no valid speech
                             logger.warning("Streaming ASR empty, falling back to batch")
+                            self._came_from_conversation = False
                             if audio_bytes and on_finalize is not None:
                                 on_finalize(audio_bytes)
                     except Exception as e:
                         logger.error("Error finalizing streaming ASR: %s", e)
                         try:
                             self.streaming_asr_client.disconnect()
-                        except Exception:
-                            pass
+                        except Exception as disc_err:
+                            logger.debug("Disconnect after error failed: %s", disc_err)
                         self._streaming_active = False
-                        # Fallback to batch mode
+                        # Fallback to batch mode - don't continue conversation since streaming failed
+                        self._came_from_conversation = False
                         audio_bytes = self.segmenter.consume_audio()
                         logger.info("Falling back to batch ASR, audio=%d bytes", len(audio_bytes))
                         on_finalize(audio_bytes)
@@ -371,9 +451,19 @@ class FrameProcessor:
                     on_finalize(audio_bytes)
 
                 self._state_transitions += 1
-                logger.info("State -> listening (transition %d)", self._state_transitions)
                 self.segmenter.reset()
-                self.state = "listening"
+
+                # Return to conversation mode if we came from it, otherwise go to listening
+                if self._came_from_conversation and self.conversation_mode_enabled:
+                    logger.info("State -> conversing (transition %d, returning to conversation)", self._state_transitions)
+                    self.state = "conversing"
+                    self._start_conversation_timer()
+                else:
+                    logger.info("State -> listening (transition %d)", self._state_transitions)
+                    self.state = "listening"
+
+                self._came_from_conversation = False
+
                 if self.wake_reset is not None:
                     try:
                         logger.info("Resetting wake word model after recording")
@@ -432,24 +522,38 @@ class FrameProcessor:
 
     def _is_speech(self, frame_bytes: bytes) -> bool:
         """Check if frame contains speech using VAD.
-        
-        webrtcvad only supports 10ms, 20ms, or 30ms frames at 16kHz.
-        Our 80ms frames (1280 samples) must be split into 30ms chunks (480 samples).
-        Returns True if ANY chunk contains speech.
+
+        Supports both webrtcvad and Silero VAD backends.
         """
         sample_rate = self.segmenter.sample_rate
-        # 30ms at 16kHz = 480 samples = 960 bytes
-        chunk_bytes = 960
-        
+
         try:
-            # Process 80ms frame in 30ms chunks (we get 2 full chunks + remainder)
-            for i in range(0, len(frame_bytes) - chunk_bytes + 1, chunk_bytes):
-                chunk = frame_bytes[i:i + chunk_bytes]
-                if self.vad.is_speech(chunk, sample_rate):
-                    return True
-            return False
-        except Exception:
-            # Fallback: use RMS-based detection if VAD fails
+            # Check if this is Silero VAD (has reset_states method)
+            if hasattr(self.vad, 'reset_states'):
+                # Silero VAD - pass entire frame, it handles chunking internally
+                return self.vad.is_speech(frame_bytes, sample_rate)
+            else:
+                # webrtcvad - needs specific frame sizes (10ms, 20ms, or 30ms)
+                # Split 80ms frame into 30ms + 30ms + 20ms chunks
+                chunk_30ms = 960  # 30ms at 16kHz = 480 samples = 960 bytes
+                chunk_20ms = 640  # 20ms at 16kHz = 320 samples = 640 bytes
+
+                offset = 0
+                while offset + chunk_30ms <= len(frame_bytes):
+                    chunk = frame_bytes[offset:offset + chunk_30ms]
+                    if self.vad.is_speech(chunk, sample_rate):
+                        return True
+                    offset += chunk_30ms
+
+                remaining = len(frame_bytes) - offset
+                if remaining >= chunk_20ms:
+                    chunk = frame_bytes[offset:offset + chunk_20ms]
+                    if self.vad.is_speech(chunk, sample_rate):
+                        return True
+
+                return False
+        except Exception as e:
+            logger.warning("VAD error: %s, falling back to RMS", e)
             rms = self._rms(frame_bytes)
             return rms > 0.01
 
@@ -482,24 +586,184 @@ class FrameProcessor:
 
     def _on_conversation_timeout_internal(self) -> None:
         """Handle conversation timeout - return to listening state."""
-        logger.info("Conversation timeout, returning to listening state")
-        self._conversation_timer = None
-        self.state = "listening"
+        with self._state_lock:
+            # Only transition if still in conversing state (avoid race with process_frame)
+            if self.state != "conversing":
+                logger.debug("Timeout fired but state is %s, ignoring", self.state)
+                return
+            logger.info("Conversation timeout, returning to listening state")
+            self._conversation_timer = None
+            self.state = "listening"
         if self.on_conversation_timeout is not None:
             try:
                 self.on_conversation_timeout()
             except Exception as e:
                 logger.warning("Error in conversation timeout callback: %s", e)
 
+    def pause_conversation_mode(self) -> None:
+        """Pause conversation mode timer during TTS playback. Called by pipeline."""
+        self._cancel_conversation_timer()
+        logger.debug("Conversation timer paused for TTS playback")
+
     def enter_conversation_mode(self) -> None:
-        """Enter conversation mode after TTS completes. Called by pipeline."""
+        """Enter or resume conversation mode after TTS completes. Called by pipeline."""
         if not self.conversation_mode_enabled:
             return
-        if self.state != "listening":
-            logger.warning("enter_conversation_mode called in state=%s, ignoring", self.state)
-            return
-        self.state = "conversing"
-        self._conversation_speech_counter = 0
-        self._conversation_silence_counter = 0
-        self._start_conversation_timer()
-        logger.info("Entered conversation mode (timeout=%dms)", self.conversation_timeout_ms)
+        with self._state_lock:
+            if self.state == "conversing":
+                # Already in conversation mode (follow-up response), just restart timer
+                self._conversation_speech_counter = 0
+                self._conversation_silence_counter = 0
+                self._conversation_buffer.clear()
+                self._start_conversation_timer()
+                logger.info("Resumed conversation mode (timeout=%dms)", self.conversation_timeout_ms)
+                return
+            if self.state != "listening":
+                logger.warning("enter_conversation_mode called in state=%s, ignoring", self.state)
+                return
+            self.state = "conversing"
+            self._conversation_speech_counter = 0
+            self._conversation_silence_counter = 0
+            self._conversation_buffer.clear()
+            self._start_conversation_timer()
+            logger.info("Entered conversation mode (timeout=%dms, turn=%d/%d)",
+                       self.conversation_timeout_ms, self._turn_count, self.max_conversation_turns)
+
+    # --- Turn limit methods ---
+
+    def increment_turn_count(self) -> bool:
+        """Increment conversation turn count.
+
+        Called after each successful response in conversation mode.
+
+        Returns:
+            True if turn limit reached (conversation should end)
+        """
+        self._turn_count += 1
+        logger.info("Conversation turn %d/%d", self._turn_count, self.max_conversation_turns)
+
+        if self.turn_limit_enabled and self._turn_count >= self.max_conversation_turns:
+            logger.info("Turn limit reached (%d), ending conversation mode", self._turn_count)
+            return True
+        return False
+
+    def reset_turn_count(self) -> None:
+        """Reset turn count to 0. Called on wake word detection."""
+        if self._turn_count > 0:
+            logger.info("Resetting turn count from %d to 0", self._turn_count)
+        self._turn_count = 0
+
+    def get_turn_count(self) -> int:
+        """Get current turn count."""
+        return self._turn_count
+
+    def exit_conversation_mode(self, reason: str = "manual") -> None:
+        """Exit conversation mode and return to listening.
+
+        Called when:
+        - Turn limit reached
+        - Intent confidence too low
+        - User says goodbye phrase
+
+        Args:
+            reason: Reason for exiting (for logging)
+        """
+        with self._state_lock:
+            if self.state != "conversing":
+                return
+            logger.info("Exiting conversation mode (reason=%s, turns=%d)",
+                       reason, self._turn_count)
+            self._cancel_conversation_timer()
+            self.state = "listening"
+            self._conversation_speech_counter = 0
+            self._conversation_silence_counter = 0
+            self._conversation_buffer.clear()
+
+        if self.on_turn_limit_reached is not None and reason == "turn_limit":
+            try:
+                self.on_turn_limit_reached()
+            except Exception as e:
+                logger.warning("Error in turn limit callback: %s", e)
+
+    # --- RMS filter methods ---
+
+    def _passes_rms_filter(self, frame_bytes: bytes) -> bool:
+        """Check if audio frame passes RMS energy filter.
+
+        Returns True if the frame has sufficient energy to be considered
+        potential speech (not ambient noise).
+
+        Args:
+            frame_bytes: Raw PCM audio bytes
+
+        Returns:
+            True if frame passes RMS filter
+        """
+        rms = self._rms(frame_bytes)
+
+        # Update ambient noise estimate (exponential moving average of low-energy frames)
+        if self.rms_adaptive and rms < self.rms_min_threshold:
+            # This is likely ambient noise, update estimate
+            alpha = 0.01  # Slow adaptation
+            self._ambient_rms = (1 - alpha) * self._ambient_rms + alpha * rms
+            self._ambient_rms_samples += 1
+
+        # Check minimum threshold
+        if rms < self.rms_min_threshold:
+            return False
+
+        # Check above-ambient factor (if adaptive mode enabled)
+        if self.rms_adaptive and self._ambient_rms_samples > 100:
+            required_rms = self._ambient_rms * self.rms_above_ambient_factor
+            if rms < required_rms:
+                return False
+
+        return True
+
+    def get_ambient_rms(self) -> float:
+        """Get current ambient noise floor estimate."""
+        return self._ambient_rms
+
+    # --- Speaker continuity methods ---
+
+    def set_wake_speaker_embedding(self, embedding: np.ndarray) -> None:
+        """Store speaker embedding from wake word audio.
+
+        Called after wake word detection with embedding extracted from
+        the audio segment containing the wake word.
+
+        Args:
+            embedding: Speaker embedding vector (numpy array)
+        """
+        self._wake_speaker_embedding = embedding
+        logger.info("Wake speaker embedding stored (shape=%s)", embedding.shape)
+
+    def clear_wake_speaker_embedding(self) -> None:
+        """Clear stored wake speaker embedding."""
+        self._wake_speaker_embedding = None
+        logger.debug("Wake speaker embedding cleared")
+
+    def get_wake_speaker_embedding(self) -> Optional[np.ndarray]:
+        """Get stored wake speaker embedding."""
+        return self._wake_speaker_embedding
+
+    def compare_speaker_embedding(self, embedding: np.ndarray) -> float:
+        """Compare embedding against stored wake speaker embedding.
+
+        Args:
+            embedding: Speaker embedding to compare
+
+        Returns:
+            Similarity score (0.0-1.0), or 1.0 if no wake embedding stored
+        """
+        if self._wake_speaker_embedding is None:
+            return 1.0  # No reference, allow all
+
+        # Cosine similarity
+        dot = np.dot(self._wake_speaker_embedding, embedding)
+        norm1 = np.linalg.norm(self._wake_speaker_embedding)
+        norm2 = np.linalg.norm(embedding)
+        if norm1 == 0 or norm2 == 0:
+            return 0.0
+        similarity = dot / (norm1 * norm2)
+        return float(max(0.0, similarity))

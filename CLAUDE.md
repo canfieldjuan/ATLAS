@@ -107,6 +107,37 @@ pip install -r requirements.txt
 uvicorn atlas_brain.main:app --host 0.0.0.0 --port 8001 --reload --ws-ping-interval 60 --ws-ping-timeout 120
 ```
 
+### ASR Server (Required for Voice Pipeline)
+
+The ASR server provides speech-to-text for the voice pipeline. It runs separately from the main Atlas server.
+
+```bash
+# Install ASR dependencies (first time only)
+pip install -r requirements.asr.txt
+
+# Start ASR server on GPU 0, port 8081
+python asr_server.py --model nvidia/nemotron-speech-streaming-en-0.6b --port 8081 --device cuda:0
+```
+
+**Endpoints:**
+- `GET /health` - Server status
+- `POST /v1/asr` - Batch transcription (WAV file)
+- `WS /v1/asr/stream` - Streaming transcription (PCM chunks)
+
+**Note:** The voice pipeline expects ASR at `http://127.0.0.1:8081`. Configure via `ATLAS_VOICE_ASR_URL` in `.env`.
+
+### LLM Model (Ollama)
+
+The main LLM runs via Ollama. Using `qwen3-30b-a3b-small` (17GB Q4_K_S quantization) to fit alongside ASR on a single 24GB GPU.
+
+```bash
+# Pull/create the model (if not already done)
+ollama create qwen3-30b-a3b-small -f Modelfile.qwen3-30b-a3b-small
+
+# Test the model
+ollama run qwen3-30b-a3b-small "Hello"
+```
+
 ### Docker (Production)
 
 ```bash
@@ -296,6 +327,9 @@ ATLAS_TOOLS_CALENDAR_REFRESH_TOKEN=your_refresh_token
 
 ## Environment Requirements
 
-- NVIDIA GPU with CUDA support
+- NVIDIA GPU with 24GB+ VRAM (RTX 3090/4090) - single GPU setup
+  - LLM (qwen3-30b-a3b-small): ~18GB VRAM
+  - ASR (Nemotron 0.6B): ~2GB VRAM
 - NVIDIA Container Toolkit installed on host (see `install_nvidia_toolkit.sh`)
 - Docker and Docker Compose
+- Ollama for LLM serving

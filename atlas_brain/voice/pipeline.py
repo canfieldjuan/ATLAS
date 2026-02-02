@@ -29,6 +29,8 @@ import soundfile as sf
 import webrtcvad
 from openwakeword.model import Model as WakeWordModel
 
+from .vad import SileroVAD
+
 try:
     import websockets
     from websockets.sync.client import connect as ws_connect
@@ -168,8 +170,8 @@ class NemotronAsrStreamingClient:
             if self._ws:
                 try:
                     self._ws.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("WebSocket close failed: %s", e)
                 self._ws = None
             self._connected = False
             self._last_partial = ""
@@ -190,9 +192,10 @@ class NemotronAsrStreamingClient:
             # Send binary audio
             self._ws.send(pcm_bytes)
 
-            # Check for partial transcript (native timeout, no socket mode toggle)
+            # Check for partial transcript (non-blocking with short timeout)
+            # 5ms timeout balances responsiveness with network latency tolerance
             try:
-                response = self._ws.recv(timeout=0.001)
+                response = self._ws.recv(timeout=0.005)
                 data = json.loads(response)
                 if data.get("type") == "partial":
                     self._last_partial = data.get("text", "")
@@ -255,8 +258,8 @@ class NemotronAsrStreamingClient:
             # Drain any response
             try:
                 self._ws.recv(timeout=0.5)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Reset drain failed (expected): %s", e)
             self._last_partial = ""
         except Exception as e:
             logger.warning("Error resetting streaming ASR: %s", e)
@@ -459,16 +462,26 @@ class PiperTTS:
                 stream.write(audio)
             try:
                 stream.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Stream stop failed: %s", e)
         self.current_stream = None
         self._current_process = None
 
         if self.stop_event.is_set():
             process.terminate()
-            process.wait(timeout=1.0)
+            try:
+                process.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                logger.warning("Piper did not terminate after stop, killing")
+                process.kill()
+                process.wait(timeout=1.0)
         else:
-            process.wait(timeout=5.0)
+            try:
+                process.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                logger.warning("Piper process timed out, killing")
+                process.kill()
+                process.wait(timeout=1.0)
 
     def _speak_batch(self, text: str):
         """Fallback: synthesize to file then play (original method)."""
@@ -503,16 +516,16 @@ class PiperTTS:
                     stream.write(audio[start:start + chunk])
                 try:
                     stream.stop()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Batch stream stop failed: %s", e)
             self.current_stream = None
         except Exception as exc:
             logger.error("Piper batch synthesis failed: %s", exc)
         finally:
             try:
                 os.remove(wav_path)
-            except OSError:
-                pass
+            except OSError as e:
+                logger.debug("WAV temp file removal failed: %s", e)
 
     def stop(self):
         """Stop current playback and terminate Piper process."""
@@ -521,16 +534,16 @@ class PiperTTS:
             if self._current_process is not None:
                 try:
                     self._current_process.terminate()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Process terminate failed: %s", e)
             if self.current_stream is not None:
                 try:
                     self.current_stream.abort()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Stream abort failed: %s", e)
             sd.stop()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("sd.stop() failed: %s", e)
 
 
 class VoicePipeline:
@@ -577,12 +590,30 @@ class VoicePipeline:
         speaker_id_service: Optional[Any] = None,
         require_known_speaker: bool = False,
         unknown_speaker_response: str = "I don't recognize your voice.",
+        speaker_id_timeout: float = 5.0,
+        node_id: str = "local",
+        event_loop: Optional[Any] = None,
+        # Voice filter config
+        vad_backend: str = "webrtc",
+        silero_threshold: float = 0.7,
+        rms_min_threshold: float = 0.008,
+        rms_adaptive: bool = False,
+        rms_above_ambient_factor: float = 3.0,
+        turn_limit_enabled: bool = True,
+        max_conversation_turns: int = 3,
+        intent_gating_enabled: bool = True,
+        intent_continuation_threshold: float = 0.6,
+        intent_categories_continue: Optional[List[str]] = None,
+        speaker_continuity_enabled: bool = False,
+        speaker_continuity_threshold: float = 0.7,
     ):
         self.sample_rate = sample_rate
+        self.event_loop = event_loop
         self.speaker_id_enabled = speaker_id_enabled
         self.speaker_id_service = speaker_id_service
         self.require_known_speaker = require_known_speaker
         self.unknown_speaker_response = unknown_speaker_response
+        self.speaker_id_timeout = speaker_id_timeout
         self._last_audio_buffer: Optional[bytes] = None
         self._last_speaker_match: Optional[Any] = None
         self.conversation_mode_enabled = conversation_mode_enabled
@@ -597,7 +628,9 @@ class VoicePipeline:
         self.streaming_llm_enabled = streaming_llm_enabled
         self.prefill_runner = prefill_runner
         self._prefill_in_progress = False
+        # Session ID stored as string for context passing, converted to UUID for database ops
         self.session_id = str(uuid.uuid4())
+        self.node_id = node_id
         self.playback = PlaybackController(tts)
 
         self.segmenter = CommandSegmenter(
@@ -608,7 +641,27 @@ class VoicePipeline:
             max_command_seconds=max_command_seconds,
             min_command_ms=min_command_ms,
         )
-        self.vad = webrtcvad.Vad(vad_aggressiveness)
+
+        # Voice filter settings
+        self.vad_backend = vad_backend
+        self.rms_min_threshold = rms_min_threshold
+        self.rms_adaptive = rms_adaptive
+        self.rms_above_ambient_factor = rms_above_ambient_factor
+        self.turn_limit_enabled = turn_limit_enabled
+        self.max_conversation_turns = max_conversation_turns
+        self.intent_gating_enabled = intent_gating_enabled
+        self.intent_continuation_threshold = intent_continuation_threshold
+        self.intent_categories_continue = intent_categories_continue or ["conversation", "tool_use", "device_control"]
+        self.speaker_continuity_enabled = speaker_continuity_enabled
+        self.speaker_continuity_threshold = speaker_continuity_threshold
+
+        # Create VAD based on backend selection
+        if vad_backend == "silero":
+            logger.info("Using Silero VAD with threshold=%.2f", silero_threshold)
+            self.vad = SileroVAD(threshold=silero_threshold)
+        else:
+            logger.info("Using WebRTC VAD with aggressiveness=%d", vad_aggressiveness)
+            self.vad = webrtcvad.Vad(vad_aggressiveness)
 
         logger.info("Initializing wake word model with paths: %s", wakeword_model_paths)
         self.model = WakeWordModel(wakeword_model_paths=wakeword_model_paths)
@@ -661,6 +714,15 @@ class VoicePipeline:
             conversation_speech_tolerance=conversation_speech_tolerance,
             conversation_rms_threshold=conversation_rms_threshold,
             on_conversation_timeout=self._on_conversation_timeout,
+            # Voice filter settings
+            rms_min_threshold=rms_min_threshold,
+            rms_adaptive=rms_adaptive,
+            rms_above_ambient_factor=rms_above_ambient_factor,
+            turn_limit_enabled=turn_limit_enabled,
+            max_conversation_turns=max_conversation_turns,
+            speaker_continuity_enabled=speaker_continuity_enabled,
+            speaker_continuity_threshold=speaker_continuity_threshold,
+            on_turn_limit_reached=self._on_turn_limit_reached,
         )
 
         self.capture = AudioCapture(
@@ -681,6 +743,7 @@ class VoicePipeline:
 
     def start(self):
         """Start the voice pipeline."""
+        self._ensure_session()
         if self.stop_hotkey:
             self.stop_hotkey_thread = threading.Thread(
                 target=self._stop_listener, daemon=True
@@ -691,6 +754,46 @@ class VoicePipeline:
             self.sample_rate,
         )
         self.capture.run(self._process_frame)
+
+    def _ensure_session(self):
+        """Ensure voice pipeline session exists in database."""
+        if self.event_loop is None:
+            logger.warning("No event loop, skipping session creation")
+            return
+
+        async def create_session():
+            from ..storage.database import get_db_pool
+            from datetime import datetime, date
+            import json
+
+            pool = get_db_pool()
+            if not pool.is_initialized:
+                logger.warning("Database pool not initialized, skipping session")
+                return
+
+            session_uuid = uuid.UUID(self.session_id)
+            now = datetime.utcnow()
+            today = date.today()
+            metadata = json.dumps({"source": "voice_pipeline", "node_id": self.node_id})
+
+            try:
+                await pool.execute(
+                    """INSERT INTO sessions
+                       (id, started_at, last_activity_at, is_active, session_date, metadata)
+                       VALUES ($1, $2, $3, true, $4, $5::jsonb)
+                       ON CONFLICT (id) DO NOTHING""",
+                    session_uuid, now, now, today, metadata,
+                )
+                logger.info("Voice session created: %s", self.session_id[:8])
+            except Exception as e:
+                logger.warning("Failed to create voice session: %s", e)
+
+        try:
+            import asyncio
+            future = asyncio.run_coroutine_threadsafe(create_session(), self.event_loop)
+            future.result(timeout=5.0)
+        except Exception as e:
+            logger.warning("Session creation failed: %s", e)
 
     def _stop_listener(self):
         """Listen for 's' + Enter to stop playback."""
@@ -743,7 +846,7 @@ class VoicePipeline:
             self._handle_streaming_llm_command(transcript)
             return
 
-        context = {"session_id": self.session_id}
+        context = self._build_context()
         reply = self.agent_runner(transcript, context)
 
         if not reply:
@@ -782,7 +885,7 @@ class VoicePipeline:
             self._handle_streaming_llm_command(transcript)
             return
 
-        context = {"session_id": self.session_id}
+        context = self._build_context()
         reply = self.agent_runner(transcript, context)
 
         if not reply:
@@ -796,13 +899,19 @@ class VoicePipeline:
         )
 
     def _handle_streaming_llm_command(self, transcript: str):
-        """Handle command with streaming LLM to TTS - speak sentences as generated."""
+        """Handle command with streaming LLM to TTS.
+
+        LLM response is streamed and sentences are collected, then spoken
+        together as one utterance. This provides better TTS prosody than
+        speaking sentences individually. Sentences are logged as they arrive
+        for debugging visibility.
+        """
         if not transcript:
             logger.warning("Empty transcript for streaming LLM")
             return
 
         logger.info("Streaming LLM command: %s", transcript)
-        context = {"session_id": self.session_id}
+        context = self._build_context()
         sentences = []
 
         def on_sentence(sentence: str):
@@ -819,10 +928,10 @@ class VoicePipeline:
             if reply:
                 on_sentence(reply)
 
-        # Concatenate all sentences and speak as one utterance
+        # Speak all sentences together for better prosody
         if sentences:
             full_reply = " ".join(sentences)
-            logger.info("Speaking concatenated reply (%d sentences): %s",
+            logger.info("Speaking reply (%d sentences): %s",
                        len(sentences), full_reply[:100] if len(full_reply) > 100 else full_reply)
             self.playback.speak(
                 full_reply,
@@ -835,6 +944,8 @@ class VoicePipeline:
     def _on_playback_start(self):
         """Called when TTS playback starts."""
         self.frame_processor.interrupt_speech_counter = 0
+        # Pause conversation timer during TTS to prevent timeout during playback
+        self.frame_processor.pause_conversation_mode()
 
     def _on_playback_done(self):
         """Called when TTS playback ends."""
@@ -844,6 +955,14 @@ class VoicePipeline:
             logger.info("Wake word model reset after TTS")
         except Exception as e:
             logger.error("Error resetting wake word model after TTS: %s", e, exc_info=True)
+
+        # Increment turn count and check if limit reached
+        if self.conversation_mode_enabled and self.turn_limit_enabled:
+            limit_reached = self.frame_processor.increment_turn_count()
+            if limit_reached:
+                # Turn limit reached - exit conversation mode instead of entering
+                self.frame_processor.exit_conversation_mode("turn_limit")
+                return
 
         # Enter conversation mode if enabled (with delay to avoid echo detection)
         if self.conversation_mode_enabled:
@@ -860,7 +979,14 @@ class VoicePipeline:
     def _on_conversation_timeout(self):
         """Called when conversation mode times out."""
         logger.info("Conversation mode ended (timeout)")
-        # Could play acknowledgment sound here if desired
+        # Reset turn count when conversation ends
+        self.frame_processor.reset_turn_count()
+
+    def _on_turn_limit_reached(self):
+        """Called when turn limit is reached in conversation mode."""
+        logger.info("Conversation mode ended (turn limit reached)")
+        # Reset turn count
+        self.frame_processor.reset_turn_count()
 
     def _trigger_prefill(self):
         """Trigger LLM system prompt prefill in background.
@@ -908,15 +1034,19 @@ class VoicePipeline:
         if not self.speaker_id_enabled or self.speaker_id_service is None:
             return True
 
+        if self.event_loop is None:
+            logger.warning("No event loop for speaker verification, skipping")
+            return True
+
         try:
             import asyncio
-            loop = asyncio.new_event_loop()
-            match = loop.run_until_complete(
+            future = asyncio.run_coroutine_threadsafe(
                 self.speaker_id_service.identify_speaker_from_pcm(
                     pcm_bytes, self.sample_rate
-                )
+                ),
+                self.event_loop,
             )
-            loop.close()
+            match = future.result(timeout=self.speaker_id_timeout)
             self._last_speaker_match = match
 
             if match.matched:
@@ -947,3 +1077,16 @@ class VoicePipeline:
         except Exception as e:
             logger.error("Speaker verification failed: %s", e)
             return not self.require_known_speaker
+
+    def _build_context(self) -> Dict[str, Any]:
+        """Build context dict with session, node, and speaker info."""
+        ctx = {
+            "session_id": self.session_id,
+            "node_id": self.node_id,
+        }
+        if self._last_speaker_match:
+            ctx["speaker_name"] = self._last_speaker_match.user_name
+            if self._last_speaker_match.user_id:
+                ctx["speaker_id"] = str(self._last_speaker_match.user_id)
+            ctx["speaker_confidence"] = self._last_speaker_match.confidence
+        return ctx

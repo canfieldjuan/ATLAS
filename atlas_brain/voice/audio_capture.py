@@ -142,8 +142,11 @@ class AudioCapture:
         """
         block_bytes = self.block_size * 2  # int16 mono
 
-        # Create FIFO in temp directory
-        fifo_path = os.path.join(tempfile.gettempdir(), "atlas_audio_fifo")
+        # Create FIFO in temp directory with unique name per process
+        fifo_path = os.path.join(
+            tempfile.gettempdir(),
+            "atlas_audio_fifo_{}".format(os.getpid())
+        )
         try:
             os.unlink(fifo_path)
         except FileNotFoundError:
@@ -208,12 +211,17 @@ class AudioCapture:
             if fifo_fd is not None:
                 try:
                     os.close(fifo_fd)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("FIFO fd close failed: %s", e)
             if proc is not None:
                 proc.terminate()
-                proc.wait()
+                try:
+                    proc.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    logger.warning("arecord did not terminate, killing")
+                    proc.kill()
+                    proc.wait(timeout=1.0)
             try:
                 os.unlink(fifo_path)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("FIFO unlink failed: %s", e)
