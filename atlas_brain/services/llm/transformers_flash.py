@@ -240,6 +240,7 @@ class TransformersFlashLLM(BaseModelService):
         max_tokens: int = 512,
         temperature: float = 0.7,
         stop: Optional[list[str]] = None,
+        tools: Optional[list[dict]] = None,
     ) -> dict[str, Any]:
         """Generate text from a prompt."""
         if not self.is_loaded:
@@ -253,11 +254,17 @@ class TransformersFlashLLM(BaseModelService):
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        # Apply chat template
+        # Apply chat template with optional tools for function calling
+        template_kwargs = {
+            'tokenize': False,
+            'add_generation_prompt': True,
+        }
+        if tools:
+            template_kwargs['tools'] = tools
+
         text = self._tokenizer.apply_chat_template(
             messages,
-            tokenize=False,
-            add_generation_prompt=True,
+            **template_kwargs,
         )
 
         # Tokenize
@@ -315,6 +322,7 @@ class TransformersFlashLLM(BaseModelService):
         max_tokens: int = 512,
         temperature: float = 0.7,
         stop: Optional[list[str]] = None,
+        tools: Optional[list[dict]] = None,
     ) -> dict[str, Any]:
         """Generate a chat response."""
         if not self.is_loaded:
@@ -325,11 +333,17 @@ class TransformersFlashLLM(BaseModelService):
         # Convert messages
         chat_messages = [{"role": m.role, "content": m.content} for m in messages]
 
-        # Apply chat template
+        # Apply chat template with optional tools for function calling
+        template_kwargs = {
+            'tokenize': False,
+            'add_generation_prompt': True,
+        }
+        if tools:
+            template_kwargs['tools'] = tools
+
         text = self._tokenizer.apply_chat_template(
             chat_messages,
-            tokenize=False,
-            add_generation_prompt=True,
+            **template_kwargs,
         )
 
         # Tokenize
@@ -387,6 +401,7 @@ class TransformersFlashLLM(BaseModelService):
         max_tokens: int = 512,
         temperature: float = 0.7,
         stop: Optional[list[str]] = None,
+        tools: Optional[list[dict]] = None,
     ) -> AsyncIterator[str]:
         """
         Stream chat response token by token.
@@ -403,11 +418,17 @@ class TransformersFlashLLM(BaseModelService):
         # Convert messages
         chat_messages = [{"role": m.role, "content": m.content} for m in messages]
 
-        # Apply chat template
+        # Apply chat template with optional tools for function calling
+        template_kwargs = {
+            'tokenize': False,
+            'add_generation_prompt': True,
+        }
+        if tools:
+            template_kwargs['tools'] = tools
+
         text = self._tokenizer.apply_chat_template(
             chat_messages,
-            tokenize=False,
-            add_generation_prompt=True,
+            **template_kwargs,
         )
 
         # Tokenize
