@@ -752,7 +752,7 @@ class IntentRouterConfig(BaseSettings):
         extra="ignore",
     )
 
-    enabled: bool = Field(default=False, description="Enable intent router for fast classification")
+    enabled: bool = Field(default=True, description="Enable intent router for fast classification")
     model_id: str = Field(
         default="joaobarroca/distilbert-base-uncased-finetuned-massive-intent-detection-english",
         description="HuggingFace model ID for intent classification",
