@@ -135,3 +135,14 @@ class CameraState(CapabilityState):
     """State for camera devices."""
     is_streaming: bool = False
     motion_detected: bool = False
+
+
+@dataclass
+class MediaPlayerState(CapabilityState):
+    """State for media player devices."""
+    is_on: bool = False
+    volume_level: Optional[float] = None     # 0.0-1.0
+    is_volume_muted: bool = False
+    source: Optional[str] = None             # Current input source
+    media_title: Optional[str] = None
+    app_name: Optional[str] = None

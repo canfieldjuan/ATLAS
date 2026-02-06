@@ -49,7 +49,7 @@ class HomeAssistantConfig(BaseSettings):
     url: str = Field(default="http://homeassistant.local:8123", description="Home Assistant URL")
     token: Optional[str] = Field(default=None, description="Long-lived access token")
     entity_filter: list[str] = Field(
-        default=["light.", "switch.", "sensor."],
+        default=["light.", "switch.", "sensor.", "media_player."],
         description="Entity prefixes to auto-discover",
     )
 
@@ -65,18 +65,6 @@ class HomeAssistantConfig(BaseSettings):
     state_cache_ttl: int = Field(
         default=300,
         description="Seconds to cache entity state before considering stale",
-    )
-
-
-class RokuConfig(BaseSettings):
-    """Roku device configuration."""
-
-    model_config = SettingsConfigDict(env_prefix="ATLAS_ROKU_")
-
-    enabled: bool = Field(default=False, description="Enable Roku backend")
-    devices: list[dict] = Field(
-        default=[],
-        description="List of Roku devices [{host: str, name: str}]",
     )
 
 
@@ -950,7 +938,6 @@ class Settings(BaseSettings):
     orchestration: OrchestrationConfig = Field(default_factory=OrchestrationConfig)
     mqtt: MQTTConfig = Field(default_factory=MQTTConfig)
     homeassistant: HomeAssistantConfig = Field(default_factory=HomeAssistantConfig)
-    roku: RokuConfig = Field(default_factory=RokuConfig)
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     voice: VoiceClientConfig = Field(default_factory=VoiceClientConfig)

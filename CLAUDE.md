@@ -51,8 +51,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Current Capabilities (Implemented)
 - ✅ Voice-activated device control ("Hey Atlas, turn off the TV")
 - ✅ Natural language intent parsing
-- ✅ Home Assistant integration (WebSocket real-time state)
-- ✅ Direct Roku TV control
+- ✅ Home Assistant integration (WebSocket real-time state, media players)
 - ✅ LLM for conversations and reasoning
 - ✅ VLM for vision queries
 - ✅ STT/TTS for voice interface

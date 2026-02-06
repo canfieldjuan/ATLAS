@@ -156,15 +156,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Failed to initialize Home Assistant: %s", e)
 
-    # Initialize Roku devices if enabled
-    try:
-        from .capabilities.roku import init_roku
-        roku_devices = await init_roku()
-        if roku_devices:
-            logger.info("Registered Roku devices: %s", roku_devices)
-    except Exception as e:
-        logger.error("Failed to initialize Roku: %s", e)
-
     # Initialize device discovery service
     if settings.discovery.enabled:
         try:
@@ -346,13 +337,6 @@ async def lifespan(app: FastAPI):
         await shutdown_homeassistant()
     except Exception as e:
         logger.error("Error shutting down Home Assistant: %s", e)
-
-    # Disconnect Roku devices
-    try:
-        from .capabilities.roku import shutdown_roku
-        await shutdown_roku()
-    except Exception as e:
-        logger.error("Error shutting down Roku: %s", e)
 
     # Shutdown communications service
     if comms_service:

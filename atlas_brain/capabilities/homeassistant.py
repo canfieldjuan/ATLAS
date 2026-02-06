@@ -17,6 +17,7 @@ from .backends.homeassistant_ws import (
     shutdown_ws_client,
 )
 from .devices.lights import HomeAssistantLight
+from .devices.media import HomeAssistantMediaPlayer
 from .devices.switches import HomeAssistantSwitch
 from .registry import capability_registry
 from .state_cache import get_state_cache
@@ -167,6 +168,12 @@ async def init_homeassistant() -> list[str]:
                 capability_registry.register(device)
                 registered.append(entity_id)
                 logger.info("Registered HA input_boolean as switch: %s (%s)", entity_id, name)
+
+            elif entity_id.startswith("media_player."):
+                device = HomeAssistantMediaPlayer(entity_id, name, _ha_backend)
+                capability_registry.register(device)
+                registered.append(entity_id)
+                logger.info("Registered HA media_player: %s (%s)", entity_id, name)
 
         except Exception as e:
             logger.warning("Failed to register %s: %s", entity_id, e)

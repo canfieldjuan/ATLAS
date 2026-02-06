@@ -15,6 +15,7 @@ from .protocols import (
     CapabilityState,
     CapabilityType,
     LightState,
+    MediaPlayerState,
     SensorState,
     SwitchState,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "SwitchState",
     "SensorState",
     "CameraState",
+    "MediaPlayerState",
     # Registry
     "CapabilityRegistry",
     "capability_registry",

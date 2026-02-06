@@ -106,7 +106,7 @@ DEFAULT_ROOMS: list[RoomConfig] = [
         ha_area="living_room",
         lights=["living_room_light"],
         switches=[],
-        media_players=["roku.192_168_1_2"],
+        media_players=["media_player.living_room_tv"],
     ),
     RoomConfig(
         id="kitchen",

@@ -1,7 +1,7 @@
 """
 Display tools for Atlas Brain.
 
-Tools to display camera feeds and content on monitors and Roku TV.
+Tools to display camera feeds and content on monitors.
 """
 
 import asyncio
@@ -19,7 +19,6 @@ logger = logging.getLogger("atlas.tools.display")
 MONITORS = {
     "left": {"name": "DP-2", "position": "0x0", "index": 0},
     "right": {"name": "HDMI-A-1-0", "position": "1920x0", "index": 1},
-    "roku": {"name": "roku_tv", "type": "roku", "ip": "192.168.1.2"},
 }
 
 
@@ -30,7 +29,7 @@ def get_video_processing_url() -> str:
 
 
 class ShowCameraFeedTool:
-    """Display a camera feed on a monitor or Roku TV."""
+    """Display a camera feed on a monitor."""
 
     @property
     def name(self) -> str:
@@ -38,7 +37,7 @@ class ShowCameraFeedTool:
 
     @property
     def description(self) -> str:
-        return "Display a camera feed on a monitor (left, right) or Roku TV. Use annotated=true for face/gait recognition overlays."
+        return "Display a camera feed on a monitor (left or right). Use annotated=true for face/gait recognition overlays."
 
     @property
     def parameters(self) -> list[ToolParameter]:
@@ -52,7 +51,7 @@ class ShowCameraFeedTool:
             ToolParameter(
                 name="display",
                 param_type="string",
-                description="Display target: left, right, or roku",
+                description="Display target: 'left' or 'right'",
                 required=True,
             ),
             ToolParameter(
@@ -106,14 +105,12 @@ class ShowCameraFeedTool:
             # Use atlas_vision's raw stream
             stream_url = f"{base_url}/cameras/{camera_id}/stream"
 
-        if display == "roku":
-            return await self._show_on_roku(camera_id, stream_url)
-        elif display in ("left", "right"):
+        if display in ("left", "right"):
             return await self._show_on_monitor(camera_id, stream_url, display)
         else:
             return ToolResult(
                 success=False,
-                message=f"Unknown display: {display}. Use 'left', 'right', or 'roku'",
+                message=f"Unknown display: {display}. Use 'left' or 'right'",
             )
 
     async def _show_on_monitor(
@@ -166,27 +163,6 @@ class ShowCameraFeedTool:
         except Exception as e:
             logger.error("Failed to show camera on monitor: %s", e)
             return ToolResult(success=False, message=f"Failed to open viewer: {e}")
-
-    async def _show_on_roku(self, camera_id: str, stream_url: str) -> ToolResult:
-        """Show camera feed on Roku TV."""
-        # Roku can't directly display MJPEG streams
-        # Options:
-        # 1. Use screen mirroring
-        # 2. Use a Roku channel that supports IP cameras
-        # 3. Cast via DIAL protocol (limited)
-
-        # For now, return info about the limitation
-        return ToolResult(
-            success=False,
-            message="Roku TV cannot directly display MJPEG streams. "
-                    "Use 'left' or 'right' monitor, or set up screen mirroring.",
-            data={
-                "camera_id": camera_id,
-                "stream_url": stream_url,
-                "suggestion": "Open on a monitor and mirror to Roku, or use VLC casting",
-            },
-        )
-
 
 class CloseCameraFeedTool:
     """Close a camera feed display."""

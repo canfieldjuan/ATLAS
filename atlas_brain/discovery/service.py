@@ -185,28 +185,9 @@ class DiscoveryService:
             logger.debug("Device %s already registered", device.device_id)
             return True
 
-        # Only auto-register known device types
-        if device.device_type == "roku":
-            try:
-                from ..capabilities.backends.roku import RokuBackend
-                from ..capabilities.devices.media import RokuTV
-
-                backend = RokuBackend(device.host)
-                await backend.connect()
-
-                roku_device = RokuTV(device.device_id, device.name, backend)
-                capability_registry.register(roku_device)
-
-                logger.info("Auto-registered Roku: %s (%s)", device.device_id, device.name)
-                return True
-
-            except Exception as e:
-                logger.warning("Failed to auto-register Roku %s: %s", device.device_id, e)
-                return False
-
-        # Future: Add handlers for other device types
-        # elif device.device_type == "chromecast":
-        #     ...
+        # Auto-registration of discovered devices is handled by Home Assistant.
+        # Discovery still detects devices (e.g., Roku via SSDP) for informational
+        # purposes, but HA owns device lifecycle and control.
 
         logger.debug(
             "No auto-register handler for device type: %s (%s)",
