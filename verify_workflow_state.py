@@ -12,7 +12,7 @@ import sys
 # Set test environment
 os.environ.setdefault("ATLAS_DB_ENABLED", "true")
 os.environ.setdefault("ATLAS_DB_HOST", "localhost")
-os.environ.setdefault("ATLAS_DB_PORT", "5432")
+os.environ.setdefault("ATLAS_DB_PORT", "5433")
 os.environ.setdefault("ATLAS_DB_DATABASE", "atlas")
 os.environ.setdefault("ATLAS_DB_USER", "atlas")
 os.environ.setdefault("ATLAS_DB_PASSWORD", "atlas_dev_password")

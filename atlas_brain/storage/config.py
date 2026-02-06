@@ -28,7 +28,7 @@ class DatabaseConfig(BaseSettings):
         description="PostgreSQL host"
     )
     port: int = Field(
-        default=5432,
+        default=5433,
         description="PostgreSQL port"
     )
     database: str = Field(
