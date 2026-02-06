@@ -90,23 +90,17 @@ from .display import (
 )
 
 # Register tools on import
+# NOTE: Write/multi-turn workflow tools (reminder create, email, scheduling) are NOT
+# registered here - they route through LangGraph workflows. Read-only query tools
+# (calendar_tool, list_reminders_tool) ARE registered for fast-path execution.
 tool_registry.register(weather_tool)
 tool_registry.register(traffic_tool)
 tool_registry.register(location_tool)
 tool_registry.register(time_tool)
-tool_registry.register(calendar_tool)
-tool_registry.register(reminder_tool)
-tool_registry.register(list_reminders_tool)
-tool_registry.register(complete_reminder_tool)
+# Read-only workflow tools - safe for direct execution (no multi-turn state needed)
+tool_registry.register(calendar_tool)       # get_calendar - read-only query
+tool_registry.register(list_reminders_tool) # list_reminders - read-only query
 tool_registry.register(notify_tool)
-tool_registry.register(email_tool)
-tool_registry.register(estimate_email_tool)
-tool_registry.register(proposal_email_tool)
-tool_registry.register(check_availability_tool)
-tool_registry.register(book_appointment_tool)
-tool_registry.register(cancel_appointment_tool)
-tool_registry.register(reschedule_appointment_tool)
-tool_registry.register(lookup_customer_tool)
 tool_registry.register(lights_near_user)
 tool_registry.register(media_near_user)
 tool_registry.register(scene_near_user)
