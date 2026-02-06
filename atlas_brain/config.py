@@ -426,24 +426,6 @@ class IntentConfig(BaseSettings):
     )
 
 
-class ToolRouterConfig(BaseSettings):
-    """Tool router configuration for Gorilla-based routing."""
-
-    model_config = SettingsConfigDict(env_prefix="ATLAS_TOOL_ROUTER_", env_file=".env", extra="ignore")
-
-    enabled: bool = Field(default=True, description="Enable Gorilla tool router")
-    ollama_model: str = Field(
-        default="gorilla-functions",
-        description="Ollama model name for Gorilla"
-    )
-    ollama_url: str = Field(
-        default="http://localhost:11434",
-        description="Ollama API URL"
-    )
-    timeout: float = Field(default=30.0, description="Timeout for Gorilla requests")
-    temperature: float = Field(default=0.0, description="Temperature for tool routing")
-
-
 class AlertsConfig(BaseSettings):
     """Centralized alerts configuration."""
 
@@ -956,11 +938,6 @@ class Settings(BaseSettings):
         default=False, description="Load Omni (unified voice) on startup"
     )
 
-    # Startup behavior - Tool router (Gorilla for fast local tool routing)
-    load_tool_router_on_startup: bool = Field(
-        default=False, description="Load Gorilla tool router on startup"
-    )
-
     # Nested configs
     vlm: VLMConfig = Field(default_factory=VLMConfig)
     stt: STTConfig = Field(default_factory=STTConfig)
@@ -976,7 +953,6 @@ class Settings(BaseSettings):
     roku: RokuConfig = Field(default_factory=RokuConfig)
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
-    tool_router: ToolRouterConfig = Field(default_factory=ToolRouterConfig)
     voice: VoiceClientConfig = Field(default_factory=VoiceClientConfig)
     webcam: WebcamConfig = Field(default_factory=WebcamConfig)
     rtsp: RTSPConfig = Field(default_factory=RTSPConfig)

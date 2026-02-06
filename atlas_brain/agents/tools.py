@@ -94,23 +94,6 @@ class AtlasAgentTools:
             logger.warning("Intent parsing failed: %s", e)
             return None
 
-    def is_device_command(self, query: str) -> bool:
-        """
-        Quick check if query looks like a device command.
-
-        Uses keyword matching - faster than full parse.
-        """
-        query_lower = query.lower()
-
-        # Device action keywords
-        action_keywords = [
-            "turn on", "turn off", "switch on", "switch off",
-            "dim", "brighten", "set", "toggle",
-            "lights", "light", "lamp", "tv", "television",
-        ]
-
-        return any(kw in query_lower for kw in action_keywords)
-
     async def route_intent(self, query: str) -> "IntentRouteResult":
         """
         Fast intent routing using semantic embeddings.
