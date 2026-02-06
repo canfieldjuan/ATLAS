@@ -133,6 +133,10 @@ class AtlasAgentState(AgentState):
     # Active workflow continuation (multi-turn slot filling)
     active_workflow: Optional[dict]
 
+    # Workflow initiation (for routing to start_workflow node)
+    workflow_to_start: Optional[str]
+    workflow_type: Optional[str]
+
 
 class ReceptionistAgentState(AgentState):
     """
@@ -203,6 +207,7 @@ class BookingWorkflowState(TypedDict, total=False):
     current_step: str  # "parse", "lookup", "availability", "book", "complete"
     needs_info: list[str]  # Fields still needed from user
     awaiting_user_input: bool
+    collecting_field: Optional[str]  # Current field being collected (name, address, date, time)
 
     # Multi-turn continuation support
     is_continuation: bool  # True if resuming from saved state
