@@ -651,7 +651,7 @@ class VoicePipeline:
         self.max_conversation_turns = max_conversation_turns
         self.intent_gating_enabled = intent_gating_enabled
         self.intent_continuation_threshold = intent_continuation_threshold
-        self.intent_categories_continue = intent_categories_continue or ["conversation", "tool_use", "device_control"]
+        self.intent_categories_continue = intent_categories_continue or ["conversation", "tool_use", "device_command"]
         self.speaker_continuity_enabled = speaker_continuity_enabled
         self.speaker_continuity_threshold = speaker_continuity_threshold
 

@@ -770,7 +770,7 @@ class ModeManagerConfig(BaseSettings):
 
 
 class IntentRouterConfig(BaseSettings):
-    """Intent router configuration for fast query classification."""
+    """Intent router configuration for semantic + LLM fallback classification."""
 
     model_config = SettingsConfigDict(
         env_prefix="ATLAS_INTENT_ROUTER_",
@@ -779,19 +779,43 @@ class IntentRouterConfig(BaseSettings):
     )
 
     enabled: bool = Field(default=True, description="Enable intent router for fast classification")
-    model_id: str = Field(
-        default="joaobarroca/distilbert-base-uncased-finetuned-massive-intent-detection-english",
-        description="HuggingFace model ID for intent classification",
-    )
-    device: str | None = Field(
-        default=None,
-        description="Device for inference: 'cuda', 'cpu', or None for auto",
+    embedding_model: str = Field(
+        default="all-MiniLM-L6-v2",
+        description="Sentence-transformers model for semantic embeddings",
     )
     confidence_threshold: float = Field(
-        default=0.5,
+        default=0.50,
         ge=0.0,
         le=1.0,
-        description="Minimum confidence to trust classification result",
+        description="Minimum cosine similarity for semantic match",
+    )
+    llm_fallback_enabled: bool = Field(
+        default=True,
+        description="Use LLM when semantic confidence is too low",
+    )
+    llm_fallback_timeout: float = Field(
+        default=2.0,
+        description="Timeout in seconds for LLM fallback classification",
+    )
+    llm_fallback_temperature: float = Field(
+        default=0.0,
+        description="Temperature for LLM fallback (0.0 = deterministic)",
+    )
+    llm_fallback_max_tokens: int = Field(
+        default=64,
+        ge=16,
+        le=256,
+        description="Max tokens for LLM fallback classification response",
+    )
+    embedding_device: str = Field(
+        default="cpu",
+        description="Device for sentence-transformer embeddings (cpu or cuda)",
+    )
+    conversation_confidence_threshold: float = Field(
+        default=0.70,
+        ge=0.0,
+        le=1.0,
+        description="Min confidence to skip LLM parse for conversation queries",
     )
 
 
@@ -867,7 +891,7 @@ class VoiceFilterConfig(BaseSettings):
         description="Minimum intent confidence to continue conversation"
     )
     intent_categories_continue: list[str] = Field(
-        default=["conversation", "tool_use", "device_control"],
+        default=["conversation", "tool_use", "device_command"],
         description="Intent categories that allow conversation continuation"
     )
 

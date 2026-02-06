@@ -3,6 +3,7 @@ AtlasAgent LangGraph implementation.
 
 Main router agent that delegates to sub-agents or handles directly.
 Supports mode-based routing and conversation handling.
+Uses Command(goto=...) for single-hop routing after classification.
 """
 
 import asyncio
@@ -12,6 +13,7 @@ import time
 from typing import Any, Literal, Optional
 
 from langgraph.graph import END, StateGraph
+from langgraph.types import Command
 
 from .state import ActionResult, AtlasAgentState, Intent
 from .home import HomeAgentGraph
@@ -156,141 +158,201 @@ async def check_active_workflow(state: AtlasAgentState) -> AtlasAgentState:
     }
 
 
-async def classify_intent(state: AtlasAgentState) -> AtlasAgentState:
+async def classify_and_route(
+    state: AtlasAgentState,
+) -> Command[Literal[
+    "delegate_home", "retrieve_memory", "execute", "respond", "start_workflow"
+]]:
     """
-    Classify user input to determine action type.
+    Classify user input and route to the appropriate next node.
 
-    Uses fast intent routing (DistilBERT) if available.
+    Uses semantic intent router for single-hop classification.
+    Returns Command(goto=...) for LangGraph auto-routing.
     """
-    # Skip if mode switch already handled
+    # Mode switch already handled
     if state.get("action_type") == "mode_switch":
-        return state
+        return Command(
+            update={"classify_ms": 0.0},
+            goto="respond",
+        )
 
     start_time = time.perf_counter()
-    tools = get_agent_tools()
     input_text = state["input_text"]
 
     from ...config import settings
+    from ...services.intent_router import (
+        PARAMETERLESS_TOOLS,
+        ROUTE_TO_WORKFLOW,
+        route_query,
+    )
 
-    action_type = "conversation"
-    confidence = 0.5
-    tools_to_call: list[str] = []
-    delegate_to: Optional[str] = None
+    # Run semantic intent router
+    route_result = await route_query(input_text)
+    threshold = settings.intent_router.confidence_threshold
+    conv_threshold = settings.intent_router.conversation_confidence_threshold
 
-    if settings.intent_router.enabled:
-        route_result = await tools.route_intent(input_text)
-        threshold = settings.intent_router.confidence_threshold
-
-        # Fast path for high-confidence tool queries (parameterless only)
-        if (
-            route_result.action_category == "tool_use"
-            and route_result.confidence >= threshold
-            and route_result.fast_path_ok
-        ):
-            action_type = "tool_use"
-            confidence = route_result.confidence
-            tools_to_call = [route_result.tool_name] if route_result.tool_name else []
-            logger.info(
-                "Fast route: tool_use/%s (conf=%.2f)",
-                route_result.tool_name,
-                route_result.confidence,
-            )
-
-        # High-confidence conversation - handle directly
-        elif (
-            route_result.action_category == "conversation"
-            and route_result.confidence >= threshold
-        ):
-            action_type = "conversation"
-            confidence = route_result.confidence
-            logger.info("Fast route: conversation (conf=%.2f)", route_result.confidence)
-
-        # Device command - delegate to HomeAgent
-        elif (
-            route_result.action_category == "device_command"
-            and route_result.confidence >= threshold
-        ):
-            action_type = "device_command"
-            confidence = route_result.confidence
-            delegate_to = "home"
-            logger.info("Fast route: device_command -> HomeAgent")
-
-        # Parameterized tool - use LLM
-        elif (
-            route_result.action_category == "tool_use"
-            and route_result.confidence >= threshold
-            and route_result.tool_name
-        ):
-            action_type = "tool_use"
-            confidence = route_result.confidence
-            logger.info("LLM tool route: %s", route_result.tool_name)
+    action_category = route_result.action_category
+    confidence = route_result.confidence
+    route_name = route_result.raw_label
+    tool_name = route_result.tool_name
 
     classify_ms = (time.perf_counter() - start_time) * 1000
 
-    return {
-        **state,
-        "action_type": action_type,
-        "confidence": confidence,
-        "tools_to_call": tools_to_call,
-        "delegate_to": delegate_to,
-        "classify_ms": classify_ms,
-    }
+    # 1. Workflow routes (reminder, email, calendar_write, booking) → start_workflow
+    if route_name in ROUTE_TO_WORKFLOW and confidence >= threshold:
+        workflow_type = ROUTE_TO_WORKFLOW[route_name]
+        logger.info(
+            "Route -> start_workflow/%s (conf=%.2f, %.0fms)",
+            workflow_type, confidence, classify_ms,
+        )
+        return Command(
+            update={
+                "action_type": "workflow_start",
+                "workflow_to_start": workflow_type,
+                "confidence": confidence,
+                "classify_ms": classify_ms,
+            },
+            goto="start_workflow",
+        )
+
+    # 2. Device commands → delegate_home
+    if action_category == "device_command" and confidence >= threshold:
+        logger.info("Route -> delegate_home (conf=%.2f, %.0fms)", confidence, classify_ms)
+        return Command(
+            update={
+                "action_type": "device_command",
+                "confidence": confidence,
+                "delegate_to": "home",
+                "classify_ms": classify_ms,
+            },
+            goto="delegate_home",
+        )
+
+    # 3. Parameterless tool fast path → execute directly
+    if (
+        action_category == "tool_use"
+        and tool_name in PARAMETERLESS_TOOLS
+        and confidence >= threshold
+    ):
+        logger.info(
+            "Route -> execute/%s fast path (conf=%.2f, %.0fms)",
+            tool_name, confidence, classify_ms,
+        )
+        return Command(
+            update={
+                "action_type": "tool_use",
+                "confidence": confidence,
+                "tools_to_call": [tool_name] if tool_name else [],
+                "classify_ms": classify_ms,
+            },
+            goto="execute",
+        )
+
+    # 4. High-confidence conversation → retrieve_memory (skip parse)
+    if action_category == "conversation" and confidence >= conv_threshold:
+        logger.info(
+            "Route -> retrieve_memory/conversation (conf=%.2f, %.0fms)",
+            confidence, classify_ms,
+        )
+        return Command(
+            update={
+                "action_type": "conversation",
+                "confidence": confidence,
+                "classify_ms": classify_ms,
+            },
+            goto="retrieve_memory",
+        )
+
+    # 5. Low confidence / parameterized tool → retrieve_memory → parse
+    logger.info(
+        "Route -> retrieve_memory (low conf or param tool, cat=%s, conf=%.2f, %.0fms)",
+        action_category, confidence, classify_ms,
+    )
+    return Command(
+        update={
+            "action_type": action_category,
+            "confidence": confidence,
+            "classify_ms": classify_ms,
+        },
+        goto="retrieve_memory",
+    )
 
 
-async def retrieve_memory(state: AtlasAgentState) -> AtlasAgentState:
-    """Retrieve memory context for conversation queries."""
-    # Only retrieve for conversation or tool use needing LLM
+async def retrieve_memory(
+    state: AtlasAgentState,
+) -> Command[Literal["parse", "respond"]]:
+    """Retrieve memory context, then route to parse or respond."""
     action_type = state.get("action_type", "conversation")
+
+    # Only retrieve for conversation or tool use needing LLM
     if action_type not in ("conversation", "tool_use"):
-        return state
+        return Command(goto="parse")
 
     from ...config import settings
 
-    if not settings.memory.enabled or not settings.memory.retrieve_context:
-        return state
+    conv_threshold = settings.intent_router.conversation_confidence_threshold
 
-    start_time = time.perf_counter()
-    input_text = state["input_text"]
+    if settings.memory.enabled and settings.memory.retrieve_context:
+        start_time = time.perf_counter()
+        input_text = state["input_text"]
 
-    try:
-        from ...services.memory import get_memory_client
+        try:
+            from ...services.memory import get_memory_client
 
-        memory_client = get_memory_client()
-        if memory_client:
-            memory_context = await asyncio.wait_for(
-                memory_client.get_context_for_query(
-                    input_text,
-                    num_results=settings.memory.context_results,
-                ),
-                timeout=2.0,
-            )
+            memory_client = get_memory_client()
+            if memory_client:
+                memory_context = await asyncio.wait_for(
+                    memory_client.get_context_for_query(
+                        input_text,
+                        num_results=settings.memory.context_results,
+                    ),
+                    timeout=2.0,
+                )
 
-            memory_ms = (time.perf_counter() - start_time) * 1000
-            logger.debug(
-                "Retrieved memory context: %d chars in %.0fms",
-                len(memory_context) if memory_context else 0,
-                memory_ms,
-            )
+                memory_ms = (time.perf_counter() - start_time) * 1000
+                logger.debug(
+                    "Retrieved memory context: %d chars in %.0fms",
+                    len(memory_context) if memory_context else 0,
+                    memory_ms,
+                )
 
-            return {
-                **state,
-                "retrieved_context": memory_context,
-                "memory_ms": memory_ms,
-            }
+                # Conversation + high confidence → respond directly
+                if action_type == "conversation" and state.get("confidence", 0) >= conv_threshold:
+                    return Command(
+                        update={
+                            "retrieved_context": memory_context,
+                            "memory_ms": memory_ms,
+                        },
+                        goto="respond",
+                    )
 
-    except asyncio.TimeoutError:
-        logger.warning("Memory retrieval timed out")
-    except Exception as e:
-        logger.warning("Memory retrieval failed: %s", e)
+                return Command(
+                    update={
+                        "retrieved_context": memory_context,
+                        "memory_ms": memory_ms,
+                    },
+                    goto="parse",
+                )
 
-    return state
+        except asyncio.TimeoutError:
+            logger.warning("Memory retrieval timed out")
+        except Exception as e:
+            logger.warning("Memory retrieval failed: %s", e)
+
+    # Conversation + high confidence → respond directly (even without memory)
+    if action_type == "conversation" and state.get("confidence", 0) >= conv_threshold:
+        return Command(goto="respond")
+
+    return Command(goto="parse")
 
 
-async def parse_intent(state: AtlasAgentState) -> AtlasAgentState:
-    """Parse detailed intent from user input."""
+async def parse_intent(
+    state: AtlasAgentState,
+) -> Command[Literal["execute", "respond"]]:
+    """Parse detailed intent from user input, then route to execute or respond."""
     # Skip if delegating or no parsing needed
     if state.get("delegate_to") or state.get("action_type") == "mode_switch":
-        return state
+        return Command(goto="respond")
 
     start_time = time.perf_counter()
     tools = get_agent_tools()
@@ -343,12 +405,24 @@ async def parse_intent(state: AtlasAgentState) -> AtlasAgentState:
 
     think_ms = (time.perf_counter() - start_time) * 1000
 
-    return {
-        **state,
-        "intent": intent,
-        "action_type": action_type,
-        "think_ms": think_ms,
-    }
+    if action_type in ("device_command", "tool_use"):
+        return Command(
+            update={
+                "intent": intent,
+                "action_type": action_type,
+                "think_ms": think_ms,
+            },
+            goto="execute",
+        )
+
+    return Command(
+        update={
+            "intent": intent,
+            "action_type": action_type,
+            "think_ms": think_ms,
+        },
+        goto="respond",
+    )
 
 
 async def execute_action(state: AtlasAgentState) -> AtlasAgentState:
@@ -586,6 +660,55 @@ async def continue_workflow(state: AtlasAgentState) -> AtlasAgentState:
     }
 
 
+async def start_workflow(state: AtlasAgentState) -> AtlasAgentState:
+    """Start a new workflow based on detected intent."""
+    start_time = time.perf_counter()
+    workflow_type = state.get("workflow_to_start")
+    session_id = state.get("session_id")
+    input_text = state.get("input_text", "")
+
+    logger.info("Starting %s workflow for session %s", workflow_type, session_id)
+
+    if workflow_type == BOOKING_WORKFLOW_TYPE:
+        result = await run_booking_workflow(
+            input_text=input_text,
+            session_id=session_id,
+        )
+    elif workflow_type == REMINDER_WORKFLOW_TYPE:
+        result = await run_reminder_workflow(
+            input_text=input_text,
+            session_id=session_id,
+        )
+    elif workflow_type == EMAIL_WORKFLOW_TYPE:
+        result = await run_email_workflow(
+            input_text=input_text,
+            session_id=session_id,
+        )
+    elif workflow_type == CALENDAR_WORKFLOW_TYPE:
+        result = await run_calendar_workflow(
+            input_text=input_text,
+            session_id=session_id,
+        )
+    else:
+        logger.warning("Unknown workflow type to start: %s", workflow_type)
+        return {
+            **state,
+            "response": "I'm not sure how to help with that.",
+            "error": "unknown_workflow_type",
+        }
+
+    response = result.get("response", "")
+    total_ms = (time.perf_counter() - start_time) * 1000
+
+    return {
+        **state,
+        "response": response,
+        "action_type": "workflow_started",
+        "workflow_type": workflow_type,
+        "act_ms": total_ms,
+    }
+
+
 async def _generate_llm_response(
     state: AtlasAgentState,
     with_tools: bool = False,
@@ -672,59 +795,7 @@ async def _generate_llm_response(
     return f"I heard: {input_text}"
 
 
-# Routing functions
-
-
-def route_after_classify(
-    state: AtlasAgentState,
-) -> Literal["delegate_home", "retrieve_memory", "execute", "respond"]:
-    """Route based on classification result."""
-    action_type = state.get("action_type", "conversation")
-
-    # Mode switch already handled
-    if action_type == "mode_switch":
-        return "respond"
-
-    # Delegate device commands to HomeAgent
-    if state.get("delegate_to") == "home":
-        return "delegate_home"
-
-    # Conversation needs memory retrieval
-    if action_type == "conversation":
-        return "retrieve_memory"
-
-    # Tool use with fast path
-    if action_type == "tool_use" and state.get("tools_to_call"):
-        return "execute"
-
-    # Otherwise parse intent first
-    return "retrieve_memory"
-
-
-def route_after_memory(
-    state: AtlasAgentState,
-) -> Literal["parse", "respond"]:
-    """Route after memory retrieval."""
-    action_type = state.get("action_type", "conversation")
-
-    # Pure conversation goes straight to respond
-    if action_type == "conversation" and state.get("confidence", 0) >= 0.7:
-        return "respond"
-
-    # Otherwise parse intent
-    return "parse"
-
-
-def route_after_parse(
-    state: AtlasAgentState,
-) -> Literal["execute", "respond"]:
-    """Route after parsing intent."""
-    action_type = state.get("action_type", "conversation")
-
-    if action_type in ("device_command", "tool_use"):
-        return "execute"
-
-    return "respond"
+# Routing function (only for check_workflow, which doesn't use Command)
 
 
 def route_after_check_workflow(
@@ -753,7 +824,8 @@ def build_atlas_agent_graph() -> StateGraph:
     Build the AtlasAgent LangGraph.
 
     Flow:
-    preprocess -> check_workflow -> (continue | classify -> ...)
+    preprocess -> check_workflow -> (continue | classify_and_route -> ...)
+    classify, retrieve_memory, parse return Command(goto=...) for auto-routing.
     """
     graph = StateGraph(AtlasAgentState)
 
@@ -761,7 +833,8 @@ def build_atlas_agent_graph() -> StateGraph:
     graph.add_node("preprocess", preprocess_input)
     graph.add_node("check_workflow", check_active_workflow)
     graph.add_node("continue_workflow", continue_workflow)
-    graph.add_node("classify", classify_intent)
+    graph.add_node("start_workflow", start_workflow)
+    graph.add_node("classify", classify_and_route)
     graph.add_node("retrieve_memory", retrieve_memory)
     graph.add_node("parse", parse_intent)
     graph.add_node("execute", execute_action)
@@ -784,38 +857,11 @@ def build_atlas_agent_graph() -> StateGraph:
         },
     )
 
-    graph.add_conditional_edges(
-        "classify",
-        route_after_classify,
-        {
-            "delegate_home": "delegate_home",
-            "retrieve_memory": "retrieve_memory",
-            "execute": "execute",
-            "respond": "respond",
-        },
-    )
-
-    graph.add_conditional_edges(
-        "retrieve_memory",
-        route_after_memory,
-        {
-            "parse": "parse",
-            "respond": "respond",
-        },
-    )
-
-    graph.add_conditional_edges(
-        "parse",
-        route_after_parse,
-        {
-            "execute": "execute",
-            "respond": "respond",
-        },
-    )
-
+    # classify, retrieve_memory, parse return Command(goto=...) → auto-routed
     graph.add_edge("execute", "respond")
     graph.add_edge("delegate_home", END)
     graph.add_edge("continue_workflow", END)
+    graph.add_edge("start_workflow", END)
     graph.add_edge("respond", END)
 
     return graph

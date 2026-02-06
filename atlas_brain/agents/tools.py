@@ -113,7 +113,7 @@ class AtlasAgentTools:
 
     async def route_intent(self, query: str) -> "IntentRouteResult":
         """
-        Fast intent routing using DistilBERT classifier.
+        Fast intent routing using semantic embeddings.
 
         Classifies queries into: device_command, tool_use, or conversation.
         Falls back to conversation if router is disabled or on error.

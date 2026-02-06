@@ -28,7 +28,7 @@ class DebugLogger:
         debug.state("LISTENING")
         debug.transcript("Atlas turn off the TV", latency_ms=263)
         debug.intent("turn_off", "tv", confidence=0.95)
-        debug.tool("device_control", {"device": "tv", "action": "turn_off"}, "success")
+        debug.tool("device_command", {"device": "tv", "action": "turn_off"}, "success")
         debug.llm("Done, I've turned off the TV", latency_ms=412)
         debug.tts(duration_sec=1.2, latency_ms=89)
         debug.error("Connection failed", exc=e)

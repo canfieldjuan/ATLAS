@@ -12,6 +12,7 @@ import threading
 from typing import Any, Callable, Dict, Optional
 
 from ..agents.interface import get_agent, process_with_fallback
+from ..agents.graphs.workflow_state import get_workflow_state_manager
 from ..config import settings
 from .pipeline import (
     NemotronAsrHttpClient,
@@ -96,8 +97,21 @@ def _create_streaming_agent_runner():
         async def check_and_run():
             use_streaming = False
             route_result = None
+            has_active_workflow = False
 
-            if settings.intent_router.enabled:
+            # Check for active workflow - if present, must use agent path
+            session_id = context_dict.get("session_id")
+            if session_id:
+                manager = get_workflow_state_manager()
+                workflow = await manager.restore_workflow_state(session_id)
+                if workflow is not None:
+                    has_active_workflow = True
+                    logger.info(
+                        "Active workflow detected: %s, forcing agent path",
+                        workflow.workflow_type
+                    )
+
+            if settings.intent_router.enabled and not has_active_workflow:
                 route_result = await route_query(transcript)
                 _last_route_result["result"] = route_result
                 threshold = settings.intent_router.confidence_threshold
@@ -116,6 +130,11 @@ def _create_streaming_agent_runner():
                         route_result.tool_name or "none",
                         route_result.confidence
                     )
+            elif has_active_workflow:
+                # Still run intent router for gating, but don't use streaming
+                if settings.intent_router.enabled:
+                    route_result = await route_query(transcript)
+                    _last_route_result["result"] = route_result
 
             if use_streaming:
                 success = await _stream_llm_response(transcript, context_dict, on_sentence)
@@ -466,16 +485,16 @@ def create_voice_pipeline(event_loop: Optional[asyncio.AbstractEventLoop] = None
     if settings.intent_router.enabled and event_loop is not None:
         try:
             from ..services.intent_router import get_intent_router
-            logger.info("Preloading intent router model...")
+            logger.info("Preloading semantic intent router...")
             router = get_intent_router()
-            # Actually load the model (not just create the singleton)
+            # Actually load the model and compute centroids
             future = asyncio.run_coroutine_threadsafe(router.load(), event_loop)
             future.result(timeout=60.0)
-            logger.info("Intent router model preloaded successfully")
+            logger.info("Semantic intent router preloaded successfully")
         except Exception as e:
             logger.warning(
-                "Failed to preload intent router: %s. "
-                "Model will load on first query (may cause delay).",
+                "Failed to preload semantic intent router: %s. "
+                "Router will load on first query (may cause delay).",
                 e
             )
 

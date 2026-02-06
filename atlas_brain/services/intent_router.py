@@ -1,15 +1,18 @@
 """
 Intent Router for fast query classification.
 
-Uses a DistilBERT model fine-tuned on the MASSIVE dataset to quickly
-classify user queries into action categories (device, tool, conversation).
+Uses semantic embeddings (sentence-transformers) for fast cosine-similarity
+classification with optional LLM fallback for low-confidence queries.
 """
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass
 from typing import Optional
+
+import numpy as np
 
 from ..config import settings
 
@@ -21,7 +24,7 @@ class IntentRouteResult:
     """Result from intent routing."""
 
     action_category: str  # "device_command", "tool_use", "conversation"
-    raw_label: str  # Original model label (e.g., "iot_hue_lighton")
+    raw_label: str  # Route name (e.g., "reminder", "device_command")
     confidence: float
     route_time_ms: float = 0.0
     tool_name: Optional[str] = None  # Mapped tool name if applicable
@@ -39,228 +42,329 @@ PARAMETERLESS_TOOLS = {
 }
 
 
-# Map MASSIVE labels to our action categories and tool names
-LABEL_TO_CATEGORY = {
-    # Device commands (IoT)
-    "iot_hue_lighton": ("device_command", None),
-    "iot_hue_lightoff": ("device_command", None),
-    "iot_hue_lightdim": ("device_command", None),
-    "iot_hue_lightup": ("device_command", None),
-    "iot_hue_lightchange": ("device_command", None),
-    "iot_wemo_on": ("device_command", None),
-    "iot_wemo_off": ("device_command", None),
-    "iot_cleaning": ("device_command", None),
-    "iot_coffee": ("device_command", None),
-    # Audio/Volume (device commands)
-    "audio_volume_up": ("device_command", None),
-    "audio_volume_down": ("device_command", None),
-    "audio_volume_mute": ("device_command", None),
-    "audio_volume_other": ("device_command", None),
-    # Tool queries - time
-    "datetime_query": ("tool_use", "get_time"),
-    "datetime_convert": ("tool_use", "get_time"),
-    # Tool queries - weather
-    "weather_query": ("tool_use", "get_weather"),
-    # Tool queries - calendar/reminders
-    "calendar_query": ("tool_use", "get_calendar"),
-    "calendar_set": ("tool_use", "set_reminder"),
-    "calendar_remove": ("tool_use", "get_calendar"),
-    "alarm_set": ("tool_use", "set_reminder"),
-    "alarm_query": ("tool_use", "list_reminders"),
-    "alarm_remove": ("tool_use", "complete_reminder"),
-    # Tool queries - traffic
-    "transport_traffic": ("tool_use", "get_traffic"),
-    # Tool queries - lists (map to reminders)
-    "lists_createoradd": ("tool_use", "set_reminder"),
-    "lists_query": ("tool_use", "list_reminders"),
-    "lists_remove": ("tool_use", "complete_reminder"),
-    # Conversation/General
-    "general_greet": ("conversation", None),
-    "general_joke": ("conversation", None),
-    "general_quirky": ("conversation", None),
-    # QA queries (conversation - needs LLM)
-    "qa_factoid": ("conversation", None),
-    "qa_definition": ("conversation", None),
-    "qa_maths": ("conversation", None),
-    "qa_currency": ("conversation", None),
-    "qa_stock": ("conversation", None),
-    # Media (conversation for now - could be device later)
-    "play_music": ("device_command", None),
-    "play_radio": ("device_command", None),
-    "play_podcasts": ("device_command", None),
-    "play_audiobook": ("device_command", None),
-    "play_game": ("device_command", None),
-    "music_query": ("conversation", None),
-    "music_likeness": ("conversation", None),
-    "music_dislikeness": ("conversation", None),
-    "music_settings": ("conversation", None),
-    # News/Social (conversation)
-    "news_query": ("conversation", None),
-    "social_query": ("conversation", None),
-    "social_post": ("conversation", None),
-    # Email (tool_use for send, conversation for others)
-    "email_query": ("conversation", None),
-    "email_sendemail": ("tool_use", "send_email"),
-    "email_addcontact": ("conversation", None),
-    "email_querycontact": ("conversation", None),
-    # Recommendations (conversation)
-    "recommendation_events": ("conversation", None),
-    "recommendation_locations": ("conversation", None),
-    "recommendation_movies": ("conversation", None),
-    # Transport (conversation - no tool yet)
-    "transport_query": ("conversation", None),
-    "transport_taxi": ("conversation", None),
-    "transport_ticket": ("conversation", None),
-    # Food (conversation)
-    "takeaway_query": ("conversation", None),
-    "takeaway_order": ("conversation", None),
-    "cooking_query": ("conversation", None),
-    "cooking_recipe": ("conversation", None),
+# ── Route definitions: exemplar utterances per route ──
+
+ROUTE_DEFINITIONS: dict[str, list[str]] = {
+    "device_command": [
+        "turn on the living room lights", "turn off the kitchen light",
+        "dim the bedroom lamp to 50 percent", "switch off the TV",
+        "turn on the fan", "set the thermostat to 72", "toggle the porch light",
+        "turn the volume up", "mute the speakers", "play some music",
+        "set the lights to blue", "turn off all the lights",
+        "start the robot vacuum", "turn on the coffee maker",
+    ],
+    "reminder": [
+        "remind me to call the dentist tomorrow", "set a reminder for 3pm",
+        "set an alarm for 6 in the morning", "wake me up at 7am",
+        "don't let me forget to buy groceries", "add a reminder to pick up the kids",
+        "create an alarm for monday morning", "alert me at noon",
+        "remember to water the plants tonight",
+        "delete the reminder about groceries", "remove my alarm",
+        "complete the first reminder", "mark reminder done",
+        "delete the reminder", "cancel my alarm", "remove the reminder",
+    ],
+    "email": [
+        "send an email to John about the meeting", "draft an email to the client",
+        "compose an email about the project update", "email Sarah regarding the invoice",
+        "write an email to the team about Friday", "send a message to the contractor",
+    ],
+    "calendar_write": [
+        "add a meeting to my calendar for Thursday", "create a calendar event for Tuesday",
+        "schedule a meeting with the team on Friday", "put a dentist appointment on my calendar",
+        "create an event called team standup", "add lunch with Maria to my calendar",
+    ],
+    "booking": [
+        "book an appointment for next Monday", "schedule an appointment with the barber",
+        "I need to book an appointment", "set up an appointment for a haircut",
+        "make an appointment for next week", "I want to schedule a visit",
+    ],
+    "get_time": [
+        "what time is it", "what's the current time", "tell me the time",
+        "what's the date today", "what day is it",
+    ],
+    "get_weather": [
+        "what's the weather like", "how's the weather today", "is it going to rain",
+        "what's the temperature outside", "weather forecast for today",
+    ],
+    "get_calendar": [
+        "what's on my calendar today", "do I have any meetings today",
+        "show me my schedule", "what events do I have this week",
+        "am I free this afternoon", "any appointments today",
+    ],
+    "list_reminders": [
+        "show my reminders", "what reminders do I have", "list all my alarms",
+        "what are my active reminders", "do I have any reminders",
+    ],
+    "get_traffic": [
+        "how's the traffic", "what's the traffic like to work",
+        "how long is my commute", "traffic conditions to downtown",
+    ],
+    "conversation": [
+        "hello", "how are you", "tell me a joke", "what is the capital of France",
+        "explain quantum physics", "who wrote Romeo and Juliet",
+        "thank you", "goodbye", "what is the meaning of life",
+        "recommend a good movie", "what's two plus two", "how do I make pancakes",
+    ],
 }
 
+# Single-hop mapping: route name → (action_category, tool_name | None)
+ROUTE_TO_ACTION: dict[str, tuple[str, Optional[str]]] = {
+    "device_command": ("device_command", None),
+    "reminder":       ("tool_use", "set_reminder"),
+    "email":          ("tool_use", "send_email"),
+    "calendar_write": ("tool_use", "set_calendar_event"),
+    "booking":        ("tool_use", "book_appointment"),
+    "get_time":       ("tool_use", "get_time"),
+    "get_weather":    ("tool_use", "get_weather"),
+    "get_calendar":   ("tool_use", "get_calendar"),
+    "list_reminders": ("tool_use", "list_reminders"),
+    "get_traffic":    ("tool_use", "get_traffic"),
+    "conversation":   ("conversation", None),
+}
 
-class IntentRouter:
+# Routes that trigger multi-turn workflows
+ROUTE_TO_WORKFLOW: dict[str, str] = {
+    "reminder": "reminder",
+    "email": "email",
+    "calendar_write": "calendar",
+    "booking": "booking",
+}
+
+# Valid route names for LLM fallback validation
+_VALID_ROUTES = set(ROUTE_TO_ACTION.keys())
+
+
+class SemanticIntentRouter:
     """
-    Fast intent router using DistilBERT for query classification.
+    Hybrid semantic embedding + LLM fallback intent router.
 
-    Classifies queries into: device_command, tool_use, or conversation.
+    Fast path (~5-10ms): embed query, dot-product vs route centroids.
+    Slow path (~200-500ms): LLM classification when semantic confidence is low.
     """
 
     def __init__(self) -> None:
-        """Initialize router (model loaded lazily on first use)."""
-        self._classifier = None
         self._config = settings.intent_router
+        self._embedder = None
+        self._route_centroids: dict[str, np.ndarray] = {}
 
     @property
     def is_loaded(self) -> bool:
-        """Check if the model is loaded."""
-        return self._classifier is not None
-
-    def _get_device(self) -> int:
-        """Get device index for inference."""
-        if self._config.device == "cpu":
-            return -1
-        if self._config.device == "cuda":
-            return 0
-        # Auto-detect
-        try:
-            import torch
-            return 0 if torch.cuda.is_available() else -1
-        except ImportError:
-            return -1
+        return len(self._route_centroids) > 0
 
     async def load(self) -> None:
-        """Load the classification model."""
-        if self._classifier is not None:
-            logger.info("Intent router already loaded")
+        """Load embedding model and compute route centroids."""
+        if self._route_centroids:
+            logger.info("Semantic intent router already loaded")
             return
 
-        logger.info("Loading intent router model: %s", self._config.model_id)
+        from .embedding.sentence_transformer import SentenceTransformerEmbedding
+
+        logger.info("Loading semantic intent router (model=%s)", self._config.embedding_model)
         start = time.time()
 
+        self._embedder = SentenceTransformerEmbedding(
+            model_name=self._config.embedding_model,
+            device=self._config.embedding_device,
+        )
+
+        # Load in thread to avoid blocking event loop
         loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._embedder.load)
 
-        def _load_model():
-            from transformers import pipeline
-            return pipeline(
-                "text-classification",
-                model=self._config.model_id,
-                device=self._get_device(),
+        # Compute centroids for each route
+        for route_name, utterances in ROUTE_DEFINITIONS.items():
+            embeddings = await loop.run_in_executor(
+                None, self._embedder.embed_batch, utterances,
             )
+            # Centroid = mean of normalized vectors, re-normalized
+            centroid = embeddings.mean(axis=0)
+            centroid = centroid / np.linalg.norm(centroid)
+            self._route_centroids[route_name] = centroid
 
-        self._classifier = await loop.run_in_executor(None, _load_model)
         elapsed = time.time() - start
-        device_str = "cuda" if self._get_device() >= 0 else "cpu"
-        logger.info("Intent router loaded in %.2fs on %s", elapsed, device_str)
+        logger.info(
+            "Semantic intent router loaded in %.2fs (%d routes, dim=%d)",
+            elapsed, len(self._route_centroids), self._embedder.dimension,
+        )
 
     def unload(self) -> None:
-        """Unload the model to free memory."""
-        if self._classifier is not None:
-            del self._classifier
-            self._classifier = None
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except ImportError:
-                pass
-            logger.info("Intent router unloaded")
+        """Unload model and free memory."""
+        if self._embedder is not None:
+            self._embedder.unload()
+            self._embedder = None
+        self._route_centroids.clear()
+        logger.info("Semantic intent router unloaded")
 
     async def route(self, query: str) -> IntentRouteResult:
         """
-        Classify a query into an action category.
+        Classify a query into a route.
 
-        Args:
-            query: User query text
-
-        Returns:
-            IntentRouteResult with category, label, and confidence
+        1. Semantic classification (fast path)
+        2. If below threshold and LLM fallback enabled, try LLM
+        3. Otherwise fall back to conversation
         """
         if not self._config.enabled:
-            # Disabled - return conversation as fallback
             return IntentRouteResult(
                 action_category="conversation",
                 raw_label="disabled",
                 confidence=0.0,
             )
 
-        if self._classifier is None:
+        if not self._route_centroids:
             await self.load()
 
         start = time.time()
 
-        # Run classification in thread pool
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: self._classifier(query)
-        )
+        # Semantic classification
+        route_name, similarity = await self._semantic_classify(query)
 
-        route_time = (time.time() - start) * 1000
+        threshold = self._config.confidence_threshold
 
-        # Extract label and score
-        raw_label = result[0]["label"]
-        confidence = result[0]["score"]
-
-        # Map to our categories
-        category, tool_name = LABEL_TO_CATEGORY.get(
-            raw_label,
-            ("conversation", None),  # Default fallback
-        )
-
-        # If confidence is below threshold, fallback to conversation
-        if confidence < self._config.confidence_threshold:
-            logger.debug(
-                "Low confidence %.2f for '%s' -> %s, falling back to conversation",
-                confidence, query[:30], raw_label,
+        # If above threshold, use semantic result
+        if similarity >= threshold:
+            route_time = (time.time() - start) * 1000
+            action_category, tool_name = ROUTE_TO_ACTION.get(
+                route_name, ("conversation", None)
             )
-            category = "conversation"
-            tool_name = None
+            logger.info(
+                "Route: '%s' -> %s (semantic, conf=%.2f, %.0fms)",
+                query[:40], route_name, similarity, route_time,
+            )
+            return IntentRouteResult(
+                action_category=action_category,
+                raw_label=route_name,
+                confidence=similarity,
+                route_time_ms=route_time,
+                tool_name=tool_name,
+                fast_path_ok=tool_name in PARAMETERLESS_TOOLS if tool_name else False,
+            )
 
+        # LLM fallback
+        if self._config.llm_fallback_enabled:
+            llm_result = await self._llm_classify(query)
+            if llm_result is not None:
+                llm_route, llm_conf = llm_result
+                route_time = (time.time() - start) * 1000
+                action_category, tool_name = ROUTE_TO_ACTION.get(
+                    llm_route, ("conversation", None)
+                )
+                logger.info(
+                    "Route: '%s' -> %s (llm_fallback, conf=%.2f, %.0fms)",
+                    query[:40], llm_route, llm_conf, route_time,
+                )
+                return IntentRouteResult(
+                    action_category=action_category,
+                    raw_label=llm_route,
+                    confidence=llm_conf,
+                    route_time_ms=route_time,
+                    tool_name=tool_name,
+                    fast_path_ok=tool_name in PARAMETERLESS_TOOLS if tool_name else False,
+                )
+
+        # Fall back to conversation
+        route_time = (time.time() - start) * 1000
         logger.info(
-            "Route: '%s' -> %s/%s (conf=%.2f, %.0fms)",
-            query[:30], category, raw_label, confidence, route_time,
+            "Route: '%s' -> conversation (fallback, semantic_conf=%.2f, %.0fms)",
+            query[:40], similarity, route_time,
+        )
+        return IntentRouteResult(
+            action_category="conversation",
+            raw_label="conversation",
+            confidence=similarity,
+            route_time_ms=route_time,
         )
 
-        return IntentRouteResult(
-            action_category=category,
-            raw_label=raw_label,
-            confidence=confidence,
-            route_time_ms=route_time,
-            tool_name=tool_name,
-            fast_path_ok=tool_name in PARAMETERLESS_TOOLS if tool_name else False,
-        )
+    async def _semantic_classify(self, query: str) -> tuple[str, float]:
+        """Embed query and find best matching route centroid."""
+        loop = asyncio.get_event_loop()
+        query_vec = await loop.run_in_executor(None, self._embedder.embed, query)
+
+        best_route = "conversation"
+        best_sim = -1.0
+
+        for route_name, centroid in self._route_centroids.items():
+            # Dot product of normalized vectors = cosine similarity
+            sim = float(np.dot(query_vec, centroid))
+            if sim > best_sim:
+                best_sim = sim
+                best_route = route_name
+
+        return best_route, best_sim
+
+    async def _llm_classify(self, query: str) -> Optional[tuple[str, float]]:
+        """Use LLM to classify query when semantic confidence is low."""
+        try:
+            from . import llm_registry
+            from .protocols import Message
+
+            llm = llm_registry.get_active()
+            if llm is None:
+                return None
+
+            route_list = ", ".join(sorted(_VALID_ROUTES))
+            prompt = (
+                f"Classify this user query into exactly one route.\n"
+                f"Routes: {route_list}\n"
+                f'User query: "{query}"\n'
+                f'Respond with ONLY JSON: {{"route": "<name>", "confidence": <0.0-1.0>}}'
+            )
+
+            messages = [Message(role="user", content=prompt)]
+
+            result = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: llm.chat(
+                        messages=messages,
+                        max_tokens=self._config.llm_fallback_max_tokens,
+                        temperature=self._config.llm_fallback_temperature,
+                    ),
+                ),
+                timeout=self._config.llm_fallback_timeout,
+            )
+
+            response_text = result.get("response", "").strip()
+            # Extract JSON from response (handle possible markdown wrapping)
+            if "```" in response_text:
+                response_text = response_text.split("```")[1]
+                if response_text.startswith("json"):
+                    response_text = response_text[4:]
+            # Strip any <think> tags from reasoning models
+            if "<think>" in response_text:
+                think_end = response_text.rfind("</think>")
+                if think_end >= 0:
+                    response_text = response_text[think_end + 8:].strip()
+
+            parsed = json.loads(response_text)
+            route = parsed.get("route", "")
+            confidence = float(parsed.get("confidence", 0.5))
+
+            if route in _VALID_ROUTES:
+                return route, confidence
+
+            logger.warning("LLM returned invalid route: %s", route)
+            return None
+
+        except asyncio.TimeoutError:
+            logger.warning("LLM fallback timed out (%.1fs)", self._config.llm_fallback_timeout)
+            return None
+        except (json.JSONDecodeError, ValueError, KeyError) as e:
+            logger.warning("LLM fallback parse error: %s", e)
+            return None
+        except Exception as e:
+            logger.warning("LLM fallback failed: %s", e)
+            return None
 
 
 # Module-level singleton
-_router: Optional[IntentRouter] = None
+_router: Optional[SemanticIntentRouter] = None
 
 
-def get_intent_router() -> IntentRouter:
+def get_intent_router() -> SemanticIntentRouter:
     """Get or create the global intent router instance."""
     global _router
     if _router is None:
-        _router = IntentRouter()
+        _router = SemanticIntentRouter()
     return _router
 
 

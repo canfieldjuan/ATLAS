@@ -37,7 +37,7 @@ async def classify_intent(state: HomeAgentState) -> HomeAgentState:
     """
     Classify user input to determine action type.
 
-    Uses fast intent routing (DistilBERT) if available.
+    Uses fast intent routing (semantic embeddings) if available.
     """
     start_time = time.perf_counter()
     tools = get_agent_tools()

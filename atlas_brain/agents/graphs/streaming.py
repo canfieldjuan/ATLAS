@@ -226,7 +226,7 @@ class StreamingHomeAgent(StreamingAgentMixin):
             Response tokens
         """
         # First, classify the intent to determine if we need streaming
-        from ...services.intent_router import route_query
+        from ...services.intent_router import route_query, ROUTE_TO_WORKFLOW
         from ...config import settings
 
         if settings.intent_router.enabled:
@@ -244,6 +244,18 @@ class StreamingHomeAgent(StreamingAgentMixin):
 
             # Fast path tools also don't need streaming
             if route_result.action_category == "tool_use" and route_result.fast_path_ok:
+                result = await self._agent.run(
+                    input_text,
+                    session_id=session_id,
+                    **kwargs,
+                )
+                yield result.get("response_text", "")
+                return
+
+            # Workflow and parameterized tool routes need the agent graph
+            if route_result.raw_label in ROUTE_TO_WORKFLOW or (
+                route_result.action_category == "tool_use" and not route_result.fast_path_ok
+            ):
                 result = await self._agent.run(
                     input_text,
                     session_id=session_id,
@@ -306,7 +318,7 @@ class StreamingAtlasAgent(StreamingAgentMixin):
         Yields:
             Response tokens
         """
-        from ...services.intent_router import route_query
+        from ...services.intent_router import route_query, ROUTE_TO_WORKFLOW
         from ...config import settings
 
         if settings.intent_router.enabled:
@@ -325,6 +337,19 @@ class StreamingAtlasAgent(StreamingAgentMixin):
 
             # Fast path tools
             if route_result.action_category == "tool_use" and route_result.fast_path_ok:
+                result = await self._agent.run(
+                    input_text,
+                    session_id=session_id,
+                    speaker_id=speaker_id,
+                    **kwargs,
+                )
+                yield result.get("response_text", "")
+                return
+
+            # Workflow and parameterized tool routes need the agent graph
+            if route_result.raw_label in ROUTE_TO_WORKFLOW or (
+                route_result.action_category == "tool_use" and not route_result.fast_path_ok
+            ):
                 result = await self._agent.run(
                     input_text,
                     session_id=session_id,
