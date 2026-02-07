@@ -1,7 +1,7 @@
 """
 Sentence Transformer embedding service.
 
-Uses all-MiniLM-L6-v2 (384 dimensions) for fast, high-quality embeddings.
+Uses sentence-transformers models (default: all-MiniLM-L6-v2, 384 dimensions) for semantic embeddings.
 """
 
 import logging

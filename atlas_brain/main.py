@@ -287,6 +287,18 @@ async def lifespan(app: FastAPI):
     # Detection events are received via MQTT subscriber (vision/subscriber.py)
     # Configure atlas_vision with ATLAS_VISION_MQTT_ENABLED=true
 
+    # Initialize Fine-Tune Labs tracing client
+    try:
+        from .services.tracing import tracer
+        tracer.configure(
+            base_url=settings.ftl_tracing.base_url,
+            api_key=settings.ftl_tracing.api_key,
+            user_id=settings.ftl_tracing.user_id,
+            enabled=settings.ftl_tracing.enabled,
+        )
+    except Exception as e:
+        logger.error("Failed to initialize FTL tracing: %s", e)
+
     logger.info("Atlas Brain startup complete")
 
     yield  # Application runs here
@@ -377,3 +389,11 @@ app = FastAPI(
 
 # Include API routers with /api/v1 prefix
 app.include_router(api_router, prefix="/api/v1")
+
+# OpenAI-compatible endpoint at app root (HA expects /v1/chat/completions)
+from .api.openai_compat import router as openai_compat_router
+app.include_router(openai_compat_router)
+
+# Ollama-compatible endpoints at app root (HA expects /api/tags, /api/chat)
+from .api.ollama_compat import router as ollama_compat_router
+app.include_router(ollama_compat_router)

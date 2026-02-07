@@ -165,13 +165,14 @@ class MemoryClient:
         try:
             client = await self._get_client()
 
-            params = {
+            gid = group_id or self.config.group_id
+            payload = {
                 "query": query,
-                "group_ids": group_id or self.config.group_id,
-                "num_results": num_results,
+                "group_ids": [gid] if gid else None,
+                "max_facts": num_results,
             }
 
-            response = await client.get("/search", params=params)
+            response = await client.post("/search", json=payload)
             response.raise_for_status()
 
             data = response.json()

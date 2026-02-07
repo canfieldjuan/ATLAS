@@ -7,7 +7,7 @@ Configuration is loaded from environment variables with sensible defaults.
 from pathlib import Path
 from typing import Optional
 
-from pydantic import Field, field_validator
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -878,6 +878,21 @@ class VoiceFilterConfig(BaseSettings):
     )
 
 
+class OpenAICompatConfig(BaseModel):
+    """OpenAI-compatible endpoint configuration."""
+
+    api_key: str = ""  # If empty, no auth required
+
+
+class FTLTracingConfig(BaseModel):
+    """Fine-Tune Labs tracing configuration."""
+
+    enabled: bool = True
+    base_url: str = "http://localhost:3000"
+    api_key: str = ""  # wak_... key for FTL API
+    user_id: str = ""  # FTL user ID for trace ownership
+
+
 class AgentConfig(BaseSettings):
     """Agent system configuration."""
 
@@ -953,6 +968,8 @@ class Settings(BaseSettings):
     intent_router: IntentRouterConfig = Field(default_factory=IntentRouterConfig)
     voice_filter: VoiceFilterConfig = Field(default_factory=VoiceFilterConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
+    openai_compat: OpenAICompatConfig = Field(default_factory=OpenAICompatConfig)
+    ftl_tracing: FTLTracingConfig = Field(default_factory=FTLTracingConfig)
 
     # Presence tracking - imported from presence module
     @property

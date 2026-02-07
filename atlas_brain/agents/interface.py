@@ -52,6 +52,15 @@ class LangGraphAgentAdapter:
         """
         self._graph = graph
 
+    def _get_model_name(self) -> str:
+        """Get the active LLM model name for tracing."""
+        try:
+            from ..services import llm_registry
+            active = llm_registry.get_active()
+            return getattr(active, "model_name", "unknown") if active else "unknown"
+        except Exception:
+            return "unknown"
+
     async def process(
         self,
         input_text: str,
@@ -61,28 +70,67 @@ class LangGraphAgentAdapter:
         runtime_context: Optional[dict[str, Any]] = None,
     ) -> AgentResult:
         """Process input through LangGraph agent."""
-        result = await self._graph.run(
-            input_text=input_text,
+        from ..services.tracing import tracer
+
+        span = tracer.start_span(
+            span_name="agent.process",
+            operation_type="llm_call",
+            model_name=self._get_model_name(),
+            model_provider="ollama",
             session_id=session_id,
-            speaker_id=speaker_id,
-            input_type=input_type,
-            runtime_context=runtime_context or {},
+            metadata={"input_type": input_type, "speaker_id": speaker_id},
         )
 
-        # Convert dict result to AgentResult
-        timing = result.get("timing", {})
-        return AgentResult(
-            success=result.get("success", False),
-            response_text=result.get("response_text"),
-            action_type=result.get("action_type", "none"),
-            intent=result.get("intent"),
-            action_results=result.get("action_results", []),
-            error=result.get("error"),
-            total_ms=timing.get("total", 0),
-            think_ms=timing.get("think", 0) + timing.get("classify", 0),
-            act_ms=timing.get("act", 0),
-            llm_ms=timing.get("respond", 0),
-        )
+        try:
+            result = await self._graph.run(
+                input_text=input_text,
+                session_id=session_id,
+                speaker_id=speaker_id,
+                input_type=input_type,
+                runtime_context=runtime_context or {},
+            )
+
+            # Convert dict result to AgentResult
+            timing = result.get("timing", {})
+            agent_result = AgentResult(
+                success=result.get("success", False),
+                response_text=result.get("response_text"),
+                action_type=result.get("action_type", "none"),
+                intent=result.get("intent"),
+                action_results=result.get("action_results", []),
+                error=result.get("error"),
+                total_ms=timing.get("total", 0),
+                think_ms=timing.get("think", 0) + timing.get("classify", 0),
+                act_ms=timing.get("act", 0),
+                llm_ms=timing.get("respond", 0),
+            )
+
+            tracer.end_span(
+                span,
+                status="completed" if agent_result.success else "failed",
+                input_data={"user_message": input_text},
+                output_data={
+                    "response": (agent_result.response_text or "")[:5000],
+                    "action_type": agent_result.action_type,
+                },
+                error_message=agent_result.error,
+                metadata={
+                    "timing": timing,
+                    "intent": result.get("intent"),
+                },
+            )
+
+            return agent_result
+
+        except Exception as e:
+            tracer.end_span(
+                span,
+                status="failed",
+                input_data={"user_message": input_text},
+                error_message=str(e),
+                error_type=type(e).__name__,
+            )
+            raise
 
 
 # Agent factory singletons

@@ -99,6 +99,12 @@ ROUTE_DEFINITIONS: dict[str, list[str]] = {
         "how's the traffic", "what's the traffic like to work",
         "how long is my commute", "traffic conditions to downtown",
     ],
+    "get_location": [
+        "where am I", "where are we", "where are we located",
+        "what is my location", "what's my current location",
+        "where am I right now", "my location", "GPS location",
+        "what's my position", "where is this place",
+    ],
     "conversation": [
         "hello", "how are you", "tell me a joke", "what is the capital of France",
         "explain quantum physics", "who wrote Romeo and Juliet",
@@ -119,6 +125,7 @@ ROUTE_TO_ACTION: dict[str, tuple[str, Optional[str]]] = {
     "get_calendar":   ("tool_use", "get_calendar"),
     "list_reminders": ("tool_use", "list_reminders"),
     "get_traffic":    ("tool_use", "get_traffic"),
+    "get_location":   ("tool_use", "get_location"),
     "conversation":   ("conversation", None),
 }
 

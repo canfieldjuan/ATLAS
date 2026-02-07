@@ -92,6 +92,13 @@ class LocationTool:
                     message="No location data available. Check Companion app settings.",
                 )
 
+            lat = location_data.get("latitude")
+            lon = location_data.get("longitude")
+            if lat is not None and lon is not None:
+                address = await self._reverse_geocode(lat, lon)
+                if address:
+                    location_data["address"] = address
+
             return ToolResult(
                 success=True,
                 data=location_data,
@@ -111,6 +118,51 @@ class LocationTool:
                 error="EXECUTION_ERROR",
                 message=str(e),
             )
+
+    async def _reverse_geocode(self, lat: float, lon: float) -> str | None:
+        """Reverse geocode via HA zones first, then Nominatim as fallback."""
+        # Try HA zones — check if coordinates fall within a known zone
+        try:
+            client = await self._ensure_client()
+            url = f"{self._ha_config.url}/api/states"
+            headers = {
+                "Authorization": f"Bearer {self._ha_config.token}",
+                "Content-Type": "application/json",
+            }
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            for entity in resp.json():
+                if not entity.get("entity_id", "").startswith("zone."):
+                    continue
+                attrs = entity.get("attributes", {})
+                zlat = attrs.get("latitude")
+                zlon = attrs.get("longitude")
+                radius = attrs.get("radius", 100)
+                if zlat is None or zlon is None:
+                    continue
+                # Simple distance check (approximate meters)
+                dlat = (lat - zlat) * 111320
+                dlon = (lon - zlon) * 111320 * 0.75  # rough cos correction
+                dist = (dlat**2 + dlon**2) ** 0.5
+                if dist <= radius:
+                    return attrs.get("friendly_name", entity.get("entity_id"))
+        except Exception as e:
+            logger.debug("HA zone lookup failed: %s", e)
+
+        # Fallback: Nominatim (external, may be slow/unavailable)
+        try:
+            client = await self._ensure_client()
+            resp = await client.get(
+                "https://nominatim.openstreetmap.org/reverse",
+                params={"lat": lat, "lon": lon, "format": "json", "zoom": 16},
+                headers={"User-Agent": "AtlasBrain/1.0"},
+                timeout=3.0,
+            )
+            resp.raise_for_status()
+            return resp.json().get("display_name")
+        except Exception as e:
+            logger.debug("Nominatim reverse geocode failed: %s", e)
+            return None
 
     async def _fetch_entity_location(self, entity_id: str) -> dict[str, Any] | None:
         """Fetch location from a specific entity."""
@@ -181,17 +233,25 @@ class LocationTool:
 
     def _format_message(self, data: dict[str, Any]) -> str:
         """Format location data as human-readable message."""
-        lat = data.get("latitude")
-        lon = data.get("longitude")
         name = data.get("friendly_name", "Device")
         state = data.get("state", "unknown")
+        address = data.get("address")
         accuracy = data.get("gps_accuracy")
 
-        msg = f"{name} location: {lat}, {lon}"
-        if state and state not in ("unknown", "not_home"):
-            msg = f"{name} is at {state}. Coordinates: {lat}, {lon}"
-        elif state == "not_home":
-            msg = f"{name} is away from home. Coordinates: {lat}, {lon}"
+        # HA zone name (e.g. "Office", "home") is the best human-readable info
+        has_zone = state and state not in ("unknown", "not_home", "unavailable")
+
+        if has_zone and address and address.lower() != state.lower():
+            msg = f"{name} is at {state} ({address})"
+        elif has_zone:
+            msg = f"{name} is at {state}"
+        elif address:
+            prefix = "away from home, near" if state == "not_home" else "near"
+            msg = f"{name} is {prefix} {address}"
+        else:
+            lat = data.get("latitude")
+            lon = data.get("longitude")
+            msg = f"{name} is at coordinates {lat}, {lon}"
 
         if accuracy:
             msg += f" (accuracy: {accuracy}m)"
