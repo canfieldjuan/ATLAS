@@ -11,14 +11,16 @@ import asyncio
 import json
 import logging
 import time
+from datetime import datetime
 from typing import Any, Optional
+from uuid import uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 logger = logging.getLogger("atlas.api.edge.websocket")
 
-router = APIRouter(prefix="/api/v1/ws/edge", tags=["edge"])
+router = APIRouter(prefix="/ws/edge", tags=["edge"])
 
 
 class EdgeConnection:
@@ -122,6 +124,14 @@ async def edge_websocket(
             elif msg_type == "health":
                 # Health check response
                 await connection.send({"type": "health_ack", "timestamp": time.time()})
+
+            elif msg_type == "vision":
+                # Handle vision detections from edge node
+                await _handle_vision_event(connection, message)
+
+            elif msg_type == "transcript":
+                # Handle speech transcript from edge node
+                await _handle_transcript(connection, message)
 
             else:
                 await connection.send_error(f"Unknown message type: {msg_type}")
@@ -231,6 +241,131 @@ async def _handle_streaming_query(
 
     except Exception as e:
         logger.exception("Streaming query failed: %s", e)
+        await connection.send_error(str(e))
+
+
+async def _handle_vision_event(
+    connection: EdgeConnection,
+    message: dict[str, Any],
+) -> None:
+    """Handle vision detections from an edge node."""
+    detections = message.get("detections", [])
+    node_id = message.get("node_id", connection.location_id)
+    frame_shape = message.get("frame_shape", [480, 640])
+    ts = message.get("ts", time.time())
+    frame_h, frame_w = frame_shape[0], frame_shape[1]
+
+    logger.debug(
+        "Vision event from %s: %d detections",
+        connection.location_id,
+        len(detections),
+    )
+
+    for det in detections:
+        try:
+            from ...vision.models import BoundingBox, EventType, VisionEvent
+            from ...storage.models import VisionEventRecord
+            from ...storage.repositories import get_vision_event_repo
+            from ...alerts import VisionAlertEvent, get_alert_manager
+
+            bbox_raw = det.get("bbox", [0, 0, 0, 0])
+            # Normalize pixel coords to 0-1 range
+            bbox = BoundingBox(
+                x1=bbox_raw[0] / frame_w,
+                y1=bbox_raw[1] / frame_h,
+                x2=bbox_raw[2] / frame_w,
+                y2=bbox_raw[3] / frame_h,
+            )
+
+            event_id = f"{node_id}-{uuid4().hex[:8]}"
+            event = VisionEvent(
+                event_id=event_id,
+                event_type=EventType.TRACK_UPDATE,
+                track_id=0,
+                class_name=det.get("label", "unknown"),
+                source_id=f"{node_id}/camera",
+                node_id=node_id,
+                timestamp=datetime.fromtimestamp(ts),
+                bbox=bbox,
+                metadata={"confidence": det.get("confidence", 0)},
+            )
+
+            # Persist to DB
+            record = VisionEventRecord(
+                id=uuid4(),
+                event_id=event.event_id,
+                event_type=event.event_type.value,
+                track_id=event.track_id,
+                class_name=event.class_name,
+                source_id=event.source_id,
+                node_id=event.node_id,
+                bbox_x1=bbox.x1,
+                bbox_y1=bbox.y1,
+                bbox_x2=bbox.x2,
+                bbox_y2=bbox.y2,
+                event_timestamp=event.timestamp,
+                received_at=datetime.utcnow(),
+                metadata=event.metadata,
+            )
+            repo = get_vision_event_repo()
+            await repo.save_event(record)
+
+            # Process alerts
+            try:
+                alert_event = VisionAlertEvent.from_vision_event(event)
+                manager = get_alert_manager()
+                await manager.process_event(alert_event)
+            except Exception as e:
+                logger.warning("Alert processing failed: %s", e)
+
+        except Exception as e:
+            logger.warning("Failed to process detection: %s", e)
+
+    await connection.send({"type": "vision_ack", "count": len(detections)})
+
+
+async def _handle_transcript(
+    connection: EdgeConnection,
+    message: dict[str, Any],
+) -> None:
+    """Handle speech transcript from an edge node."""
+    text = message.get("text", "").strip()
+    node_id = message.get("node_id", connection.location_id)
+
+    if not text:
+        return
+
+    logger.info(
+        "Transcript from %s: '%s'",
+        connection.location_id,
+        text[:80],
+    )
+
+    try:
+        from ...agents.graphs import get_atlas_agent_langgraph
+
+        session_id = f"edge-{node_id}"
+        agent = get_atlas_agent_langgraph(session_id=session_id)
+        result = await agent.run(
+            input_text=text,
+            session_id=session_id,
+            speaker_id=node_id,
+            runtime_context={"source": "edge_stt", "node_id": node_id},
+        )
+
+        await connection.send({
+            "type": "response",
+            "success": result.get("success", False),
+            "response": result.get("response_text", ""),
+            "action_type": result.get("action_type", "conversation"),
+            "metadata": {
+                "timing": result.get("timing", {}),
+                "node_id": node_id,
+            },
+        })
+
+    except Exception as e:
+        logger.exception("Transcript processing failed: %s", e)
         await connection.send_error(str(e))
 
 
