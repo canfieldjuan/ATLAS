@@ -178,6 +178,13 @@ async def init_homeassistant() -> list[str]:
         except Exception as e:
             logger.warning("Failed to register %s: %s", entity_id, e)
 
+    # Invalidate device resolver index so it rebuilds with new devices
+    try:
+        from .device_resolver import get_device_resolver
+        get_device_resolver().invalidate()
+    except Exception:
+        pass
+
     logger.info("Registered %d Home Assistant devices", len(registered))
     return registered
 

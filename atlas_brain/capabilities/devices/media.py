@@ -19,7 +19,7 @@ class HomeAssistantMediaPlayer:
 
     SUPPORTED_ACTIONS = [
         "turn_on", "turn_off", "toggle",
-        "volume_up", "volume_down", "mute",
+        "volume_up", "volume_down", "mute", "unmute",
         "play", "pause", "stop",
         "select_source", "get_state",
     ]
@@ -76,6 +76,19 @@ class HomeAssistantMediaPlayer:
 
     async def execute_action(self, action: str, params: dict[str, Any]) -> ActionResult:
         """Execute an action on the media player via Home Assistant."""
+        # Check entity availability before sending commands
+        try:
+            raw = await self._backend.get_state(self._entity_id)
+            entity_state = raw.get("state", "unknown")
+            if entity_state == "unavailable":
+                return ActionResult(
+                    success=False,
+                    message=f"{self._name} is unavailable (device offline or unreachable)",
+                    error="DEVICE_UNAVAILABLE",
+                )
+        except Exception:
+            pass  # Proceed anyway if state check fails
+
         base_payload = {"entity_id": self._entity_id}
 
         if action == "turn_on":
@@ -116,6 +129,13 @@ class HomeAssistantMediaPlayer:
             )
             state_str = "muted" if is_muted else "unmuted"
             return ActionResult(success=True, message=f"{self._name} {state_str}")
+
+        elif action == "unmute":
+            await self._backend.send_command(
+                f"{self._domain}/volume_mute",
+                {**base_payload, "is_volume_muted": False},
+            )
+            return ActionResult(success=True, message=f"{self._name} unmuted")
 
         elif action == "play":
             await self._backend.send_command(

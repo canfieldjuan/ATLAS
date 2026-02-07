@@ -106,10 +106,18 @@ ROUTE_DEFINITIONS: dict[str, list[str]] = {
         "what's my position", "where is this place",
     ],
     "conversation": [
-        "hello", "how are you", "tell me a joke", "what is the capital of France",
+        "hello", "hey there", "how are you", "how's it going",
+        "tell me a joke", "what is the capital of France",
         "explain quantum physics", "who wrote Romeo and Juliet",
-        "thank you", "goodbye", "what is the meaning of life",
-        "recommend a good movie", "what's two plus two", "how do I make pancakes",
+        "thank you", "thanks I appreciate it", "goodbye", "see you later",
+        "what is the meaning of life", "recommend a good movie",
+        "what's two plus two", "how do I make pancakes",
+        "sure", "okay", "alright", "sounds good", "got it",
+        "oh my god that's crazy", "no way are you serious",
+        "yeah I was just talking about that", "I don't know what happened",
+        "that's hilarious", "you won't believe what happened today",
+        "hey atlas", "hey", "good morning", "good night",
+        "never mind", "forget about it", "what do you think",
     ],
 }
 
@@ -201,6 +209,10 @@ class SemanticIntentRouter:
             self._embedder = None
         self._route_centroids.clear()
         logger.info("Semantic intent router unloaded")
+
+    def get_embedder(self):
+        """Get the loaded embedding model for shared use by other components."""
+        return self._embedder
 
     async def route(self, query: str) -> IntentRouteResult:
         """

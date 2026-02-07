@@ -789,6 +789,26 @@ class IntentRouterConfig(BaseSettings):
     )
 
 
+class DeviceResolverConfig(BaseSettings):
+    """Device resolver for embedding-based device name matching."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_DEVICE_RESOLVER_",
+        env_file=".env",
+        extra="ignore",
+    )
+
+    enabled: bool = Field(default=True, description="Enable embedding-based device resolver")
+    confidence_threshold: float = Field(
+        default=0.45, ge=0.0, le=1.0,
+        description="Min cosine similarity for device match",
+    )
+    ambiguity_gap: float = Field(
+        default=0.05, ge=0.0, le=1.0,
+        description="Min score gap between top-2 matches to avoid ambiguity",
+    )
+
+
 class VoiceFilterConfig(BaseSettings):
     """Multi-layer voice filtering configuration for conversation mode.
 
@@ -966,6 +986,7 @@ class Settings(BaseSettings):
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     modes: ModeManagerConfig = Field(default_factory=ModeManagerConfig)
     intent_router: IntentRouterConfig = Field(default_factory=IntentRouterConfig)
+    device_resolver: DeviceResolverConfig = Field(default_factory=DeviceResolverConfig)
     voice_filter: VoiceFilterConfig = Field(default_factory=VoiceFilterConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     openai_compat: OpenAICompatConfig = Field(default_factory=OpenAICompatConfig)

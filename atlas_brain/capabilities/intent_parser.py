@@ -200,6 +200,11 @@ class IntentParser:
         self._device_cache_time = 0.0
         self._tools_cache = None
         self._tools_cache_time = 0.0
+        try:
+            from .device_resolver import get_device_resolver
+            get_device_resolver().invalidate()
+        except Exception:
+            pass
 
     async def parse(self, query: str) -> Optional[Intent]:
         """
@@ -230,6 +235,23 @@ class IntentParser:
             logger.debug("Query too short, likely garbage: '%s'", query)
             return None
 
+        # Fast path: embedding-based device resolution
+        from ..config import settings
+        if settings.device_resolver.enabled:
+            try:
+                from .device_resolver import get_device_resolver
+                resolver = get_device_resolver()
+                result = await resolver.resolve(query)
+                if result is not None:
+                    logger.info(
+                        "Fast device resolve: %s -> %s (%.0fms)",
+                        query[:40], result.device_name, result.resolve_time_ms,
+                    )
+                    return result.intent
+            except Exception as e:
+                logger.warning("Device resolver failed, falling through to LLM: %s", e)
+
+        # Slow path: LLM-based parsing
         return await self._parse_with_llm(query)
 
     def _strip_wake_word(self, query: str) -> str:
