@@ -401,6 +401,7 @@ def create_voice_pipeline(event_loop: Optional[asyncio.AbstractEventLoop] = None
     logger.info("  wakeword_model_paths=%s", cfg.wakeword_model_paths)
     logger.info("  asr_url=%s", cfg.asr_url)
     logger.info("  asr_streaming_enabled=%s, asr_ws_url=%s", cfg.asr_streaming_enabled, cfg.asr_ws_url)
+    logger.info("  tts_backend=%s", settings.tts.default_model)
     logger.info("  piper_binary=%s", cfg.piper_binary)
     logger.info("  piper_model=%s", cfg.piper_model)
     logger.info("  vad_aggressiveness=%d", cfg.vad_aggressiveness)
@@ -423,7 +424,7 @@ def create_voice_pipeline(event_loop: Optional[asyncio.AbstractEventLoop] = None
     if not cfg.wakeword_model_paths:
         logger.warning("No wake word models configured")
 
-    if not cfg.piper_binary or not cfg.piper_model:
+    if settings.tts.default_model != "kokoro" and (not cfg.piper_binary or not cfg.piper_model):
         logger.warning("Piper TTS not fully configured")
 
     # Create ASR client (streaming or HTTP based on config)
@@ -452,15 +453,43 @@ def create_voice_pipeline(event_loop: Optional[asyncio.AbstractEventLoop] = None
             timeout=cfg.asr_timeout,
         )
 
-    tts = PiperTTS(
-        binary_path=cfg.piper_binary,
-        model_path=cfg.piper_model,
-        speaker=cfg.piper_speaker,
-        length_scale=cfg.piper_length_scale,
-        noise_scale=cfg.piper_noise_scale,
-        noise_w=cfg.piper_noise_w,
-        sample_rate=cfg.piper_sample_rate,
-    )
+    # Create TTS engine based on config
+    tts_cfg = settings.tts
+    if tts_cfg.default_model == "kokoro":
+        try:
+            from .tts_kokoro import KokoroTTS
+            tts = KokoroTTS(
+                model_dir=tts_cfg.kokoro_model_dir,
+                voice=tts_cfg.voice,
+                speed=tts_cfg.speed,
+                lang=tts_cfg.kokoro_lang,
+                model_file=tts_cfg.kokoro_model_file,
+                voices_file=tts_cfg.kokoro_voices_file,
+            )
+            logger.info("Using Kokoro TTS (voice=%s, speed=%.2f, lang=%s)",
+                        tts_cfg.voice, tts_cfg.speed, tts_cfg.kokoro_lang)
+        except Exception as e:
+            logger.warning("Kokoro TTS init failed (%s), falling back to Piper", e)
+            tts = PiperTTS(
+                binary_path=cfg.piper_binary,
+                model_path=cfg.piper_model,
+                speaker=cfg.piper_speaker,
+                length_scale=cfg.piper_length_scale,
+                noise_scale=cfg.piper_noise_scale,
+                noise_w=cfg.piper_noise_w,
+                sample_rate=cfg.piper_sample_rate,
+            )
+    else:
+        tts = PiperTTS(
+            binary_path=cfg.piper_binary,
+            model_path=cfg.piper_model,
+            speaker=cfg.piper_speaker,
+            length_scale=cfg.piper_length_scale,
+            noise_scale=cfg.piper_noise_scale,
+            noise_w=cfg.piper_noise_w,
+            sample_rate=cfg.piper_sample_rate,
+        )
+        logger.info("Using Piper TTS")
 
     agent_runner = _create_agent_runner()
     streaming_agent_runner = _create_streaming_agent_runner()

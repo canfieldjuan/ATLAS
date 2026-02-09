@@ -38,6 +38,7 @@ dateparser>=1.2.0
 # Orchestration / Voice pipeline
 webrtcvad
 piper-tts
+kokoro-onnx>=0.5.1
 
 # Optional: For GGUF model support
 # llama-cpp-python

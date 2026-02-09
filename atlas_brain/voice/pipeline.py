@@ -41,7 +41,7 @@ except ImportError:
 from .audio_capture import AudioCapture
 from .command_executor import CommandExecutor
 from .frame_processor import FrameProcessor
-from .playback import PlaybackController
+from .playback import PlaybackController, SpeechEngine
 from .segmenter import CommandSegmenter
 
 logger = logging.getLogger("atlas.voice.pipeline")
@@ -554,7 +554,7 @@ class VoicePipeline:
         wakeword_model_paths: List[str],
         wake_threshold: float,
         asr_client: NemotronAsrHttpClient,
-        tts: PiperTTS,
+        tts: SpeechEngine,
         agent_runner: Callable[[str, Dict[str, Any]], str],
         streaming_agent_runner: Optional[Callable[[str, Dict[str, Any], Callable[[str], None]], None]] = None,
         streaming_llm_enabled: bool = False,
