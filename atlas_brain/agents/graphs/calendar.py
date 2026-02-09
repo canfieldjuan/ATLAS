@@ -26,8 +26,10 @@ logger = logging.getLogger("atlas.agents.graphs.calendar")
 # Workflow type constant for multi-turn support
 CALENDAR_WORKFLOW_TYPE = "calendar"
 
-# Environment flag for using real tools vs mocks
-USE_REAL_TOOLS = os.environ.get("USE_REAL_TOOLS", "false").lower() == "true"
+# Toggle between mock and real tools (configured via ATLAS_WORKFLOW_USE_REAL_TOOLS)
+from ...config import settings as _settings
+USE_REAL_TOOLS = _settings.workflows.use_real_tools
+logger.info("Calendar workflow tools: %s", "real" if USE_REAL_TOOLS else "mock")
 
 
 # =============================================================================

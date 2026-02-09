@@ -25,6 +25,8 @@ from .booking import run_booking_workflow, BOOKING_WORKFLOW_TYPE
 from .reminder import run_reminder_workflow, REMINDER_WORKFLOW_TYPE
 from .email import run_email_workflow, EMAIL_WORKFLOW_TYPE
 from .calendar import run_calendar_workflow, CALENDAR_WORKFLOW_TYPE
+from .security import run_security_workflow, SECURITY_WORKFLOW_TYPE
+from .presence import run_presence_workflow, PRESENCE_WORKFLOW_TYPE
 
 logger = logging.getLogger("atlas.agents.graphs.atlas")
 
@@ -350,8 +352,8 @@ async def parse_intent(
     state: AtlasAgentState,
 ) -> Command[Literal["execute", "respond"]]:
     """Parse detailed intent from user input, then route to execute or respond."""
-    # Skip if delegating or no parsing needed
-    if state.get("delegate_to") or state.get("action_type") == "mode_switch":
+    # Skip if delegating, mode switch, or pure conversation (no intent to parse)
+    if state.get("delegate_to") or state.get("action_type") in ("mode_switch", "conversation"):
         return Command(goto="respond")
 
     start_time = time.perf_counter()
@@ -651,6 +653,37 @@ async def continue_workflow(state: AtlasAgentState) -> AtlasAgentState:
             "act_ms": total_ms,
         }
 
+    if workflow_type == SECURITY_WORKFLOW_TYPE:
+        result = await run_security_workflow(
+            input_text=input_text,
+            session_id=session_id,
+        )
+        response = result.get("response", "")
+        total_ms = (time.perf_counter() - start_time) * 1000
+
+        return {
+            **state,
+            "response": response,
+            "action_type": "tool_use",
+            "act_ms": total_ms,
+        }
+
+    if workflow_type == PRESENCE_WORKFLOW_TYPE:
+        result = await run_presence_workflow(
+            input_text=input_text,
+            session_id=session_id,
+            user_id=state.get("speaker_id"),
+        )
+        response = result.get("response", "")
+        total_ms = (time.perf_counter() - start_time) * 1000
+
+        return {
+            **state,
+            "response": response,
+            "action_type": "tool_use",
+            "act_ms": total_ms,
+        }
+
     # Unknown workflow type - should not happen
     logger.warning("Unknown workflow type: %s", workflow_type)
     return {
@@ -688,6 +721,17 @@ async def start_workflow(state: AtlasAgentState) -> AtlasAgentState:
         result = await run_calendar_workflow(
             input_text=input_text,
             session_id=session_id,
+        )
+    elif workflow_type == SECURITY_WORKFLOW_TYPE:
+        result = await run_security_workflow(
+            input_text=input_text,
+            session_id=session_id,
+        )
+    elif workflow_type == PRESENCE_WORKFLOW_TYPE:
+        result = await run_presence_workflow(
+            input_text=input_text,
+            session_id=session_id,
+            user_id=state.get("speaker_id"),
         )
     else:
         logger.warning("Unknown workflow type to start: %s", workflow_type)

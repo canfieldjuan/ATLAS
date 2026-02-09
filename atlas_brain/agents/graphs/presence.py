@@ -23,14 +23,18 @@ from .state import PresenceWorkflowState
 
 logger = logging.getLogger("atlas.agents.graphs.presence")
 
+# Workflow type identifier for routing and state persistence
+PRESENCE_WORKFLOW_TYPE = "presence"
+
 
 # =============================================================================
 # Tool Wrappers
 # =============================================================================
 
 def _use_real_tools() -> bool:
-    """Check if we should use real tools."""
-    return os.environ.get("USE_REAL_TOOLS", "false").lower() == "true"
+    """Check if we should use real tools (configured via ATLAS_WORKFLOW_USE_REAL_TOOLS)."""
+    from ...config import settings
+    return settings.workflows.use_real_tools
 
 
 async def tool_get_presence_context(user_id: str = "primary") -> dict[str, Any]:

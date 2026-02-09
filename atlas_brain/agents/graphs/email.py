@@ -38,8 +38,9 @@ EMAIL_WORKFLOW_TYPE = "email"
 # =============================================================================
 
 def _use_real_tools() -> bool:
-    """Check if we should use real tools."""
-    return os.environ.get("USE_REAL_TOOLS", "false").lower() == "true"
+    """Check if we should use real tools (configured via ATLAS_WORKFLOW_USE_REAL_TOOLS)."""
+    from ...config import settings
+    return settings.workflows.use_real_tools
 
 
 async def tool_send_email(

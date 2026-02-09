@@ -30,8 +30,10 @@ logger = logging.getLogger("atlas.agents.graphs.booking")
 # Workflow type identifier for state persistence
 BOOKING_WORKFLOW_TYPE = "booking"
 
-# Toggle between mock and real tools
-USE_REAL_TOOLS = os.environ.get("USE_REAL_TOOLS", "false").lower() == "true"
+# Toggle between mock and real tools (configured via ATLAS_WORKFLOW_USE_REAL_TOOLS)
+from ...config import settings as _settings
+USE_REAL_TOOLS = _settings.workflows.use_real_tools
+logger.info("Booking workflow tools: %s", "real" if USE_REAL_TOOLS else "mock")
 
 # Sequential field collection order
 BOOKING_FIELDS_ORDER = ["name", "address", "date", "time"]

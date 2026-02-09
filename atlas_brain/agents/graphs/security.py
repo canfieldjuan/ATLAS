@@ -22,14 +22,18 @@ from .state import SecurityWorkflowState
 
 logger = logging.getLogger("atlas.agents.graphs.security")
 
+# Workflow type identifier for routing and state persistence
+SECURITY_WORKFLOW_TYPE = "security"
+
 
 # =============================================================================
 # Tool Wrappers (Real vs Mock based on USE_REAL_TOOLS env var)
 # =============================================================================
 
 def _use_real_tools() -> bool:
-    """Check if we should use real tools."""
-    return os.environ.get("USE_REAL_TOOLS", "false").lower() == "true"
+    """Check if we should use real tools (configured via ATLAS_WORKFLOW_USE_REAL_TOOLS)."""
+    from ...config import settings
+    return settings.workflows.use_real_tools
 
 
 async def tool_list_cameras() -> dict[str, Any]:

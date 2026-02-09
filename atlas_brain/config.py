@@ -133,6 +133,10 @@ class TTSConfig(BaseSettings):
     voice: str = Field(default="en_US-ryan-medium", description="Voice model")
     speed: float = Field(default=1.0, description="Speech speed (1.0 = normal)")
     device: str | None = Field(default=None, description="Device for TTS: 'cuda', 'cpu', or None for auto")
+    kokoro_model_dir: str = Field(default="models/kokoro", description="Directory containing Kokoro model files")
+    kokoro_model_file: str = Field(default="kokoro-v1.0.onnx", description="Kokoro ONNX model filename")
+    kokoro_voices_file: str = Field(default="voices-v1.0.bin", description="Kokoro voices binary filename")
+    kokoro_lang: str = Field(default="en-us", description="Kokoro language code (en-us, en-gb, ja, zh, es, fr, hi, it, pt-br)")
 
 
 class OmniConfig(BaseSettings):
@@ -924,6 +928,21 @@ class AgentConfig(BaseSettings):
     )
 
 
+class WorkflowConfig(BaseSettings):
+    """Workflow tool backend configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_WORKFLOW_",
+        env_file=".env",
+        extra="ignore",
+    )
+
+    use_real_tools: bool = Field(
+        default=True,
+        description="Use real tool backends in workflows (false = mock responses)",
+    )
+
+
 class Settings(BaseSettings):
     """Application-wide settings."""
 
@@ -989,6 +1008,7 @@ class Settings(BaseSettings):
     device_resolver: DeviceResolverConfig = Field(default_factory=DeviceResolverConfig)
     voice_filter: VoiceFilterConfig = Field(default_factory=VoiceFilterConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
+    workflows: WorkflowConfig = Field(default_factory=WorkflowConfig)
     openai_compat: OpenAICompatConfig = Field(default_factory=OpenAICompatConfig)
     ftl_tracing: FTLTracingConfig = Field(default_factory=FTLTracingConfig)
 
