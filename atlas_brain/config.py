@@ -968,6 +968,12 @@ class WorkflowConfig(BaseSettings):
         default=True,
         description="Use real tool backends in workflows (false = mock responses)",
     )
+    timeout_minutes: int = Field(
+        default=3,
+        ge=1,
+        le=60,
+        description="Minutes before an inactive workflow expires and is cleared",
+    )
 
 
 class Settings(BaseSettings):

@@ -305,5 +305,8 @@ def get_workflow_state_manager() -> WorkflowStateManager:
     """Get the global workflow state manager."""
     global _workflow_state_manager
     if _workflow_state_manager is None:
-        _workflow_state_manager = WorkflowStateManager()
+        from ...config import settings
+        _workflow_state_manager = WorkflowStateManager(
+            timeout_minutes=settings.workflows.timeout_minutes,
+        )
     return _workflow_state_manager

@@ -51,6 +51,12 @@ _CANCEL_PATTERNS = [
     re.compile(r"^(?:never\s?mind|cancel|stop|forget\s+it|quit)$", re.IGNORECASE),
     re.compile(r"^(?:I\s+)?(?:don'?t\s+)?(?:want\s+to\s+)?cancel", re.IGNORECASE),
     re.compile(r"^stop\s+(?:that|this|booking|scheduling)", re.IGNORECASE),
+    # Casual rejections / dismissals
+    re.compile(r"^no[,.]?\s*(?:I'?m\s+)?(?:good|fine|thanks|thank\s+you|okay|ok|all\s+set|all\s+good)", re.IGNORECASE),
+    re.compile(r"^(?:nah|nope|not?\s+(?:now|today|right\s+now|interested|anymore))", re.IGNORECASE),
+    re.compile(r"^(?:that'?s\s+)?(?:all|enough|it|okay|ok|fine)[\s,.!]*(?:thanks|thank\s+you)?$", re.IGNORECASE),
+    re.compile(r"^(?:I'?m\s+)?(?:done|finished|good\s+for\s+now|all\s+set)", re.IGNORECASE),
+    re.compile(r"^(?:don'?t|do\s+not)\s+(?:worry|bother|need)", re.IGNORECASE),
 ]
 
 
