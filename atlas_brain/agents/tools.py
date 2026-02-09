@@ -200,6 +200,25 @@ class AtlasAgentTools:
 
     # Built-in tools
 
+    async def _enrich_location(self, tool_name: str, params: dict[str, Any]) -> dict[str, Any]:
+        """Inject user's real-time location from HA for location-dependent tools."""
+        if tool_name not in ("get_weather", "get_traffic"):
+            return params
+        if params.get("latitude") and params.get("longitude"):
+            return params  # Already has coordinates
+        try:
+            loc_result = await self.execute_tool("get_location", {})
+            if loc_result["success"] and loc_result.get("data"):
+                lat = loc_result["data"].get("latitude")
+                lon = loc_result["data"].get("longitude")
+                if lat and lon:
+                    params["latitude"] = lat
+                    params["longitude"] = lon
+                    logger.info("Location resolved from HA: %.4f, %.4f", lat, lon)
+        except Exception as e:
+            logger.warning("Location enrichment failed: %s", e)
+        return params
+
     async def execute_tool(
         self,
         tool_name: str,
@@ -217,7 +236,8 @@ class AtlasAgentTools:
         """
         try:
             registry = self._get_tool_registry()
-            result = await registry.execute(tool_name, params or {})
+            resolved_params = await self._enrich_location(tool_name, params or {})
+            result = await registry.execute(tool_name, resolved_params)
 
             return {
                 "success": result.success,
@@ -254,17 +274,7 @@ class AtlasAgentTools:
         # Resolve alias via registry
         registry = self._get_tool_registry()
         tool_name = registry.resolve_alias(target_name) or target_name
-        params = parameters or {}
-
-        # Weather and traffic need location
-        if tool_name in ("get_weather", "get_traffic"):
-            try:
-                loc_result = await self.execute_tool("get_location", {})
-                if loc_result["success"] and loc_result.get("data"):
-                    params["latitude"] = loc_result["data"].get("latitude")
-                    params["longitude"] = loc_result["data"].get("longitude")
-            except Exception as e:
-                logger.warning("Location fetch failed: %s", e)
+        params = await self._enrich_location(tool_name, parameters or {})
 
         # Map intent parameter names to tool parameter names for booking
         if tool_name == "book_appointment":

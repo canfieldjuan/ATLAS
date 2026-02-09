@@ -101,8 +101,8 @@ class TrafficTool:
                 message="TomTom API key not configured",
             )
 
-        lat = params.get("latitude")
-        lon = params.get("longitude")
+        lat = params.get("latitude", self._config.weather_default_lat)
+        lon = params.get("longitude", self._config.weather_default_lon)
         dest_lat = params.get("destination_lat")
         dest_lon = params.get("destination_lon")
 
@@ -123,7 +123,7 @@ class TrafficTool:
                 return ToolResult(
                     success=False,
                     error="MISSING_COORDINATES",
-                    message="Latitude and longitude required",
+                    message="No location available for traffic lookup",
                 )
 
             return ToolResult(

@@ -139,7 +139,7 @@ class FTLTracingClient:
             "operation_type": ctx.operation_type,
             "start_time": ctx.start_iso,
             "end_time": end_iso,
-            "duration_ms": round(duration_ms, 2),
+            "duration_ms": int(round(duration_ms)),
             "status": "failed" if error_message else status,
             "model_name": ctx.model_name,
             "model_provider": ctx.model_provider,
@@ -165,7 +165,7 @@ class FTLTracingClient:
             payload["error_type"] = error_type or "unknown"
 
         if output_tokens and duration_ms > 0:
-            payload["tokens_per_second"] = round(output_tokens / (duration_ms / 1000), 2)
+            payload["tokens_per_second"] = int(round(output_tokens / (duration_ms / 1000)))
 
         # Fire and forget — never block the caller
         try:
