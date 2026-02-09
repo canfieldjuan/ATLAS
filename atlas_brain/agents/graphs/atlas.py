@@ -790,12 +790,9 @@ async def _generate_llm_response(
         except Exception as e:
             logger.debug("Could not fetch conversation history: %s", e)
 
-    # Build system prompt
-    system_parts = [
-        "You are Atlas, a capable personal assistant.",
-        "You can control smart home devices, answer questions, and help with various tasks.",
-        "Be conversational, helpful, and concise. Keep responses to 1-3 sentences.",
-    ]
+    # Build system prompt from centralized persona config
+    from ...config import settings as _settings
+    system_parts = [_settings.persona.system_prompt]
 
     # Add tool context if available
     if with_tools:

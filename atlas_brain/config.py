@@ -917,6 +917,33 @@ class FTLTracingConfig(BaseModel):
     user_id: str = ""  # FTL user ID for trace ownership
 
 
+class PersonaConfig(BaseSettings):
+    """Atlas persona and system prompt configuration.
+
+    Single source of truth for Atlas's identity and behavior.
+    All LLM-facing system prompts pull from here.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_PERSONA_",
+        env_file=".env",
+        extra="ignore",
+    )
+
+    system_prompt: str = Field(
+        default=(
+            "You are Atlas, a sharp and dependable personal assistant. "
+            "You work for Juan. You know his home, his devices, his schedule, and his preferences. "
+            "Be warm but direct -- no filler, no fluff, no 'Sure! I'd be happy to help.' "
+            "Get to the point. Add useful context when you have it. "
+            "Keep responses to 1-2 sentences unless more detail is genuinely needed."
+        ),
+        description="Core system prompt sent to LLM for all conversations",
+    )
+
+    name: str = Field(default="Atlas", description="Assistant name")
+
+
 class AgentConfig(BaseSettings):
     """Agent system configuration."""
 
@@ -1007,6 +1034,7 @@ class Settings(BaseSettings):
     intent_router: IntentRouterConfig = Field(default_factory=IntentRouterConfig)
     device_resolver: DeviceResolverConfig = Field(default_factory=DeviceResolverConfig)
     voice_filter: VoiceFilterConfig = Field(default_factory=VoiceFilterConfig)
+    persona: PersonaConfig = Field(default_factory=PersonaConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     workflows: WorkflowConfig = Field(default_factory=WorkflowConfig)
     openai_compat: OpenAICompatConfig = Field(default_factory=OpenAICompatConfig)

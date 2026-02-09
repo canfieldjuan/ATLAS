@@ -217,7 +217,7 @@ async def _stream_llm_response(
         return False
 
     buffer = SentenceBuffer()
-    messages = [Message(role="system", content=_PREFILL_SYSTEM_PROMPT)]
+    messages = [Message(role="system", content=_get_system_prompt())]
 
     # Try to get conversation history for context
     session_id = context_dict.get("session_id")
@@ -326,12 +326,9 @@ async def _run_agent_fallback(
         logger.error("Agent fallback failed: %s", e)
 
 
-# Static system prompt for prefill (matches AtlasAgent._generate_llm_response)
-_PREFILL_SYSTEM_PROMPT = (
-    "You are Atlas, a capable personal assistant. "
-    "You can control smart home devices, answer questions, have conversations, and help with various tasks. "
-    "Be conversational, helpful, and concise. Keep responses to 1-3 sentences unless more detail is needed."
-)
+def _get_system_prompt() -> str:
+    """Get system prompt from centralized persona config."""
+    return settings.persona.system_prompt
 
 
 def _create_prefill_runner():
@@ -359,8 +356,8 @@ def _create_prefill_runner():
             logger.warning("LLM does not support prefill_async")
             return
 
-        messages = [Message(role="system", content=_PREFILL_SYSTEM_PROMPT)]
-        logger.info("Prefill sending system prompt (%d chars)", len(_PREFILL_SYSTEM_PROMPT))
+        messages = [Message(role="system", content=_get_system_prompt())]
+        logger.info("Prefill sending system prompt (%d chars)", len(_get_system_prompt()))
 
         try:
             future = asyncio.run_coroutine_threadsafe(

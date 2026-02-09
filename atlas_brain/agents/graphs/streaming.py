@@ -362,11 +362,8 @@ class StreamingAtlasAgent(StreamingAgentMixin):
         # For conversation, stream the LLM response
         from ...services.protocols import Message
 
-        system_parts = [
-            "You are Atlas, a capable personal assistant.",
-            "You can control smart home devices, answer questions, and help with tasks.",
-            "Be conversational, helpful, and concise.",
-        ]
+        from ...config import settings as _settings
+        system_parts = [_settings.persona.system_prompt]
 
         if speaker_id and speaker_id != "unknown":
             system_parts.append(f"The speaker is {speaker_id}.")
