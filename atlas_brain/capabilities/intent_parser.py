@@ -69,6 +69,13 @@ def _normalize_spoken_numbers(text: str) -> str:
 
 # Compact prompt template for fast intent extraction
 # NOTE: {tools} is populated dynamically from ToolRegistry
+# NOTE: Booking, reminder, email, calendar, security, presence queries are
+# routed to dedicated workflows BEFORE reaching this parser. Parameterless
+# tools (time, weather, traffic, location, calendar read, list reminders)
+# execute directly via fast path. This prompt only handles:
+# - Device commands that bypass the device resolver (pronouns, ambiguous)
+# - Parameterized tool calls (notification, camera feed)
+# - Low-confidence fallthrough from the semantic router
 UNIFIED_INTENT_PROMPT = """Parse intent. Output JSON only.
 DEVICES: {devices}
 TOOLS: {tools}
@@ -76,18 +83,10 @@ ACTIONS: turn_on,turn_off,toggle,set_brightness,query,conversation
 Format: {{"action":"X","target_type":"Y","target_name":"Z","parameters":{{}},"confidence":0.95}}
 "turn on kitchen light"->{{"action":"turn_on","target_type":"light","target_name":"kitchen","parameters":{{}},"confidence":0.95}}
 "turn it on"->{{"action":"turn_on","target_type":"device","target_name":null,"parameters":{{}},"confidence":0.95}}
-"turn it back on"->{{"action":"turn_on","target_type":"device","target_name":null,"parameters":{{}},"confidence":0.95}}
 "turn them off"->{{"action":"turn_off","target_type":"device","target_name":null,"parameters":{{}},"confidence":0.95}}
-"what time"->{{"action":"query","target_type":"tool","target_name":"time","parameters":{{}},"confidence":0.95}}
 "dim to 50%"->{{"action":"set_brightness","target_type":"light","target_name":null,"parameters":{{"brightness":50}},"confidence":0.95}}
-"what's on my calendar"->{{"action":"query","target_type":"tool","target_name":"calendar","parameters":{{}},"confidence":0.95}}
-"remind me to call mom at 5pm"->{{"action":"query","target_type":"tool","target_name":"reminder","parameters":{{"message":"call mom","when":"at 5pm"}},"confidence":0.95}}
-"list my reminders"->{{"action":"query","target_type":"tool","target_name":"reminders","parameters":{{}},"confidence":0.95}}
-"book appointment for tomorrow"->{{"action":"query","target_type":"tool","target_name":"appointment","parameters":{{"when":"tomorrow"}},"confidence":0.95}}
-"book appointment for John Smith 555-1234 tomorrow 10am"->{{"action":"query","target_type":"tool","target_name":"appointment","parameters":{{"name":"John Smith","phone":"555-1234","when":"tomorrow 10am"}},"confidence":0.95}}
-"schedule estimate for Jane Doe at 123 Main St, phone 555-5678, Monday 2pm"->{{"action":"query","target_type":"tool","target_name":"appointment","parameters":{{"name":"Jane Doe","address":"123 Main St","phone":"555-5678","when":"Monday 2pm"}},"confidence":0.95}}
-"book cleaning for Bob Johnson 555-9999 next Tuesday morning"->{{"action":"query","target_type":"tool","target_name":"appointment","parameters":{{"name":"Bob Johnson","phone":"555-9999","when":"next Tuesday morning"}},"confidence":0.95}}
-"check availability"->{{"action":"query","target_type":"tool","target_name":"availability","parameters":{{}},"confidence":0.95}}
+"send a notification saying dinner is ready"->{{"action":"query","target_type":"tool","target_name":"notification","parameters":{{"message":"dinner is ready"}},"confidence":0.95}}
+"show the front door camera on the left monitor"->{{"action":"query","target_type":"tool","target_name":"show camera","parameters":{{"camera_name":"front door","display":"left"}},"confidence":0.95}}
 "hello"->{{"action":"conversation","target_type":null,"target_name":null,"parameters":{{}},"confidence":0.9}}
 User: {query}
 JSON:"""

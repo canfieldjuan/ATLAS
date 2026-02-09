@@ -39,6 +39,7 @@ PARAMETERLESS_TOOLS = {
     "list_reminders",
     "get_traffic",
     "get_location",
+    "where_am_i",
 }
 
 
@@ -52,6 +53,7 @@ ROUTE_DEFINITIONS: dict[str, list[str]] = {
         "turn the volume up", "mute the speakers", "play some music",
         "set the lights to blue", "turn off all the lights",
         "start the robot vacuum", "turn on the coffee maker",
+        "turn on the camera", "turn off the camera",
     ],
     "reminder": [
         "remind me to call the dentist tomorrow", "set a reminder for 3pm",
@@ -100,10 +102,56 @@ ROUTE_DEFINITIONS: dict[str, list[str]] = {
         "how long is my commute", "traffic conditions to downtown",
     ],
     "get_location": [
-        "where am I", "where are we", "where are we located",
-        "what is my location", "what's my current location",
-        "where am I right now", "my location", "GPS location",
-        "what's my position", "where is this place",
+        "what is my GPS location", "what are my coordinates",
+        "what city am I in", "what is my address",
+        "track my phone location", "find my phone",
+        "what is my geo location", "show my location on a map",
+    ],
+    "where_am_i": [
+        "where am I", "what room am I in", "which room is this",
+        "what room am I in right now", "what space am I in",
+        "which room does the system think I am in",
+        "detect my room",
+    ],
+    "notification": [
+        "send me a notification", "send a push notification to my phone",
+        "send a notification saying the laundry is done",
+        "push a notification to my phone about the groceries",
+        "notify my phone that dinner is ready",
+        "send an alert to my phone saying I need to leave",
+    ],
+    "show_camera": [
+        "show me the camera feed on the left monitor",
+        "pull up the camera feed on screen",
+        "display the front door camera on the right monitor",
+        "show the office webcam on the left display",
+        "put the backyard camera on screen",
+        "close the camera viewer", "hide the camera viewer window",
+        "close all camera viewer windows",
+    ],
+    "security": [
+        "list my cameras", "show me all the cameras",
+        "how many cameras do I have", "which cameras are online",
+        "check the front door camera status", "is the driveway camera online",
+        "start recording on the driveway camera",
+        "stop recording on the backyard camera",
+        "what are the cameras seeing right now",
+        "is anybody at the front door camera",
+        "check if someone is on the security camera",
+        "any motion on the cameras", "check for motion activity",
+        "show me the security zones", "list all security zones",
+        "arm the home security", "disarm the home security",
+        "activate the security system", "deactivate the security system",
+    ],
+    "presence": [
+        "set it to movie mode", "movie time", "cinema mode",
+        "make it cozy in here", "set a cozy atmosphere",
+        "switch to relax mode", "relax mode",
+        "bright mode", "dim mode", "focus mode",
+        "set the scene to focus", "set the mood",
+        "dim the lights in here", "brighten it up in here",
+        "set the room to movie lighting",
+        "turn off everything near me",
     ],
     "conversation": [
         "hello", "hey there", "how are you", "how's it going",
@@ -134,6 +182,11 @@ ROUTE_TO_ACTION: dict[str, tuple[str, Optional[str]]] = {
     "list_reminders": ("tool_use", "list_reminders"),
     "get_traffic":    ("tool_use", "get_traffic"),
     "get_location":   ("tool_use", "get_location"),
+    "where_am_i":    ("tool_use", "where_am_i"),
+    "notification":  ("tool_use", "send_notification"),
+    "show_camera":   ("tool_use", "show_camera_feed"),
+    "security":      ("tool_use", None),
+    "presence":      ("tool_use", None),
     "conversation":   ("conversation", None),
 }
 
@@ -143,6 +196,8 @@ ROUTE_TO_WORKFLOW: dict[str, str] = {
     "email": "email",
     "calendar_write": "calendar",
     "booking": "booking",
+    "security": "security",
+    "presence": "presence",
 }
 
 # Valid route names for LLM fallback validation
