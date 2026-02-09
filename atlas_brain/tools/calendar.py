@@ -19,6 +19,11 @@ from .base import ToolParameter, ToolResult
 
 logger = logging.getLogger("atlas.tools.calendar")
 
+
+class CalendarAuthError(Exception):
+    """Raised when Google OAuth refresh token is invalid or revoked."""
+
+
 # Google Calendar API endpoints
 CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -154,11 +159,11 @@ class CalendarTool:
             await self._client.aclose()
             self._client = None
 
-    async def _refresh_token(self) -> str:
+    async def _refresh_token(self, force: bool = False) -> str:
         """Refresh OAuth2 access token using refresh token."""
         async with self._refresh_lock:
-            # Double-check after acquiring lock
-            if self._access_token and time.time() < self._token_expires - 60:
+            # Double-check after acquiring lock (skip if forced)
+            if not force and self._access_token and time.time() < self._token_expires - 60:
                 return self._access_token
 
             client = await self._ensure_client()
@@ -171,6 +176,16 @@ class CalendarTool:
             }
 
             response = await client.post(TOKEN_URL, data=data)
+            if response.status_code == 400 or response.status_code == 401:
+                logger.critical(
+                    "Calendar refresh token is INVALID (HTTP %d). "
+                    "Re-run: python scripts/setup_google_calendar.py",
+                    response.status_code,
+                )
+                raise CalendarAuthError(
+                    f"Refresh token rejected (HTTP {response.status_code}). "
+                    "Token may be expired or revoked."
+                )
             response.raise_for_status()
             token_data = response.json()
 
@@ -179,14 +194,27 @@ class CalendarTool:
             expires_in = token_data.get("expires_in", 3600)
             self._token_expires = time.time() + expires_in
 
+            # Google may rotate the refresh token -- persist it
+            new_refresh = token_data.get("refresh_token")
+            if new_refresh and new_refresh != self._config.calendar_refresh_token:
+                logger.warning(
+                    "Google rotated refresh token -- update .env with new value"
+                )
+                self._config.calendar_refresh_token = new_refresh
+
             logger.debug("Refreshed Google Calendar access token")
             return self._access_token
 
-    async def _get_auth_header(self) -> dict[str, str]:
+    async def _get_auth_header(self, force_refresh: bool = False) -> dict[str, str]:
         """Get authorization header, refreshing token if needed."""
-        if not self._access_token or time.time() >= self._token_expires - 60:
-            await self._refresh_token()
+        if force_refresh or not self._access_token or time.time() >= self._token_expires - 60:
+            await self._refresh_token(force=force_refresh)
         return {"Authorization": f"Bearer {self._access_token}"}
+
+    def _invalidate_access_token(self) -> None:
+        """Mark current access token as expired so next call refreshes."""
+        self._access_token = None
+        self._token_expires = 0.0
 
     async def _get_calendar_list(self) -> list[CalendarInfo]:
         """Get list of calendars, using cache if valid."""
@@ -291,6 +319,12 @@ class CalendarTool:
                 message=self._format_message(events, hours_ahead),
             )
 
+        except CalendarAuthError as e:
+            return ToolResult(
+                success=False,
+                error="AUTH_ERROR",
+                message="Calendar authentication failed. Refresh token needs renewal.",
+            )
         except httpx.HTTPStatusError as e:
             logger.error("Calendar API HTTP error: %s", e)
             # Try to use stale cache on error
@@ -342,7 +376,7 @@ class CalendarTool:
 
         for cal in calendars_to_query:
             try:
-                params = {
+                query_params = {
                     "timeMin": now.isoformat(),
                     "timeMax": time_max.isoformat(),
                     "maxResults": 25,
@@ -351,7 +385,14 @@ class CalendarTool:
                 }
 
                 url = f"{CALENDAR_API_BASE}/calendars/{cal.id}/events"
-                response = await client.get(url, headers=headers, params=params)
+                response = await client.get(url, headers=headers, params=query_params)
+
+                # Retry once on 401 with fresh token
+                if response.status_code == 401:
+                    logger.warning("Calendar API 401 -- forcing token refresh")
+                    self._invalidate_access_token()
+                    headers = await self._get_auth_header(force_refresh=True)
+                    response = await client.get(url, headers=headers, params=query_params)
 
                 if response.status_code == 200:
                     data = response.json()
@@ -359,6 +400,8 @@ class CalendarTool:
                         event = self._parse_event(item, calendar_name=cal.name)
                         if event:
                             all_events.append(event)
+            except CalendarAuthError:
+                raise  # Propagate auth errors
             except Exception as e:
                 logger.debug("Failed to fetch calendar %s: %s", cal.id, e)
 
@@ -521,6 +564,15 @@ class CalendarTool:
 
             url = f"{CALENDAR_API_BASE}/calendars/{cal_id}/events"
             response = await client.post(url, headers=headers, json=event_body)
+
+            # Retry once on 401 with fresh token
+            if response.status_code == 401:
+                logger.warning("Calendar create 401 -- forcing token refresh")
+                self._invalidate_access_token()
+                headers = await self._get_auth_header(force_refresh=True)
+                headers["Content-Type"] = "application/json"
+                response = await client.post(url, headers=headers, json=event_body)
+
             response.raise_for_status()
 
             created = response.json()
@@ -543,6 +595,12 @@ class CalendarTool:
                 message=f"Created event: {summary}",
             )
 
+        except CalendarAuthError as e:
+            return ToolResult(
+                success=False,
+                error="AUTH_ERROR",
+                message="Calendar authentication failed. Refresh token needs renewal.",
+            )
         except httpx.HTTPStatusError as e:
             logger.error("Calendar create event HTTP error: %s", e)
             return ToolResult(
@@ -558,6 +616,25 @@ class CalendarTool:
                 message=str(e),
             )
 
+    async def verify_credentials(self) -> bool:
+        """Verify refresh token is valid. Call on startup."""
+        if not self._config.calendar_enabled:
+            return True
+        if not self._config.calendar_refresh_token:
+            logger.warning("Calendar enabled but no refresh token configured")
+            return False
+
+        try:
+            await self._refresh_token(force=True)
+            logger.info("Calendar OAuth credentials verified")
+            return True
+        except CalendarAuthError:
+            # Already logged as CRITICAL in _refresh_token
+            return False
+        except Exception as e:
+            logger.error("Calendar credential check failed: %s", e)
+            return False
+
     async def prefetch(self) -> None:
         """Pre-fetch events to warm the cache. Call on startup."""
         if not self._config.calendar_enabled:
@@ -568,6 +645,8 @@ class CalendarTool:
         try:
             await self._fetch_events(hours_ahead=168, max_results=50)  # 7 days
             logger.info("Calendar cache warmed")
+        except CalendarAuthError:
+            pass  # Already logged as CRITICAL
         except Exception as e:
             logger.warning("Calendar prefetch failed: %s", e)
 

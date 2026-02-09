@@ -271,6 +271,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Failed to initialize communications service: %s", e)
 
+    # Verify calendar credentials on startup
+    if settings.tools.calendar_enabled:
+        try:
+            from .tools.calendar import calendar_tool
+            if await calendar_tool.verify_credentials():
+                await calendar_tool.prefetch()
+            else:
+                logger.warning("Calendar running in degraded mode -- credentials invalid")
+        except Exception as e:
+            logger.error("Calendar startup check failed: %s", e)
+
     # Start voice pipeline if enabled
     if settings.voice.enabled:
         try:
