@@ -77,6 +77,9 @@ class EdgeVoicePipeline:
         self._dispatcher = None
         self._escalation = None
         self._vad = None
+        self._skill_router = None
+        self._skills_initialized = False
+        self._skills_prefer_local = True
 
         # Callbacks
         self._on_wake_word: Optional[Callable[[], None]] = None
@@ -129,10 +132,24 @@ class EdgeVoicePipeline:
         if self._escalation is None:
             self._escalation = await get_escalation()
 
+        if not self._skills_initialized:
+            from ..config import settings as edge_settings
+            if edge_settings.skills.enabled:
+                from ..skills import get_skill_router
+                self._skill_router = get_skill_router()
+            self._skills_prefer_local = edge_settings.skills.prefer_local
+            self._skills_initialized = True
+
         if self._enable_vad and self._vad is None:
             import webrtcvad
 
             self._vad = webrtcvad.Vad(1)  # Aggressiveness 1
+
+    async def _try_skill(self, query: str):
+        """Try matching a query against the skill router. Returns None if skills disabled."""
+        if self._skill_router is None:
+            return None
+        return await self._skill_router.execute(query)
 
     async def process_audio(
         self,
@@ -206,16 +223,35 @@ class EdgeVoicePipeline:
                 result.success = action_result.success
 
             else:
-                # Couldn't parse, escalate
+                # Try skills before escalating
+                skill_result = await self._try_skill(transcript)
+                if skill_result and skill_result.success:
+                    result.response_text = skill_result.response_text
+                    result.action_type = skill_result.action_type
+                    result.handled_locally = True
+                    result.success = True
+                else:
+                    result = await self._escalate_to_brain(
+                        transcript, session_id, speaker_id, result
+                    )
+
+        else:
+            # Try skills as fast path before brain round-trip
+            if self._skills_prefer_local:
+                skill_result = await self._try_skill(transcript)
+                if skill_result and skill_result.success:
+                    result.response_text = skill_result.response_text
+                    result.action_type = skill_result.action_type
+                    result.handled_locally = True
+                    result.success = True
+                else:
+                    result = await self._escalate_to_brain(
+                        transcript, session_id, speaker_id, result
+                    )
+            else:
                 result = await self._escalate_to_brain(
                     transcript, session_id, speaker_id, result
                 )
-
-        else:
-            # Escalate to brain
-            result = await self._escalate_to_brain(
-                transcript, session_id, speaker_id, result
-            )
 
         result.action_ms = (time.perf_counter() - action_start) * 1000
 
@@ -263,6 +299,14 @@ class EdgeVoicePipeline:
         result.success = escalation_result.success
 
         if escalation_result.was_offline:
+            # Try skills before falling back to static message
+            skill_result = await self._try_skill(query)
+            if skill_result and skill_result.success:
+                result.response_text = skill_result.response_text
+                result.action_type = skill_result.action_type
+                result.handled_locally = True
+                result.success = True
+                return result
             logger.warning("Brain offline, using fallback response")
 
         return result
@@ -325,13 +369,34 @@ class EdgeVoicePipeline:
                 result.handled_locally = True
                 result.success = action_result.success
             else:
+                # Try skills before escalating
+                skill_result = await self._try_skill(text)
+                if skill_result and skill_result.success:
+                    result.response_text = skill_result.response_text
+                    result.action_type = skill_result.action_type
+                    result.handled_locally = True
+                    result.success = True
+                else:
+                    result = await self._escalate_to_brain(
+                        text, session_id, speaker_id, result
+                    )
+        else:
+            # Try skills as fast path before brain round-trip
+            if self._skills_prefer_local:
+                skill_result = await self._try_skill(text)
+                if skill_result and skill_result.success:
+                    result.response_text = skill_result.response_text
+                    result.action_type = skill_result.action_type
+                    result.handled_locally = True
+                    result.success = True
+                else:
+                    result = await self._escalate_to_brain(
+                        text, session_id, speaker_id, result
+                    )
+            else:
                 result = await self._escalate_to_brain(
                     text, session_id, speaker_id, result
                 )
-        else:
-            result = await self._escalate_to_brain(
-                text, session_id, speaker_id, result
-            )
 
         result.action_ms = (time.perf_counter() - action_start) * 1000
 

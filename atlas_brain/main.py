@@ -5,10 +5,12 @@ The main FastAPI application entry point.
 """
 
 # Load .env file FIRST, before any other imports
+# .env.local overrides .env for machine-specific settings (API keys, ports, etc.)
 from pathlib import Path
 from dotenv import load_dotenv
-_env_path = Path(__file__).parent.parent / ".env"
-load_dotenv(_env_path, override=True)
+_env_root = Path(__file__).parent.parent
+load_dotenv(_env_root / ".env", override=True)
+load_dotenv(_env_root / ".env.local", override=True)
 
 import asyncio
 import logging

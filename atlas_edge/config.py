@@ -137,6 +137,20 @@ class VADConfig(BaseSettings):
     )
 
 
+class SkillsConfig(BaseSettings):
+    """Edge offline skills configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_EDGE_SKILLS_")
+
+    enabled: bool = Field(default=True, description="Enable local skill system")
+    timezone: str = Field(default="America/Chicago", description="Timezone for time skill")
+    max_timers: int = Field(default=10, description="Maximum concurrent timers")
+    prefer_local: bool = Field(
+        default=True,
+        description="Prefer local skills over brain escalation",
+    )
+
+
 class WakeWordConfig(BaseSettings):
     """Wake word detection configuration."""
 
@@ -182,6 +196,7 @@ class EdgeConfig(BaseSettings):
     intent: IntentConfig = Field(default_factory=IntentConfig)
     vad: VADConfig = Field(default_factory=VADConfig)
     wakeword: WakeWordConfig = Field(default_factory=WakeWordConfig)
+    skills: SkillsConfig = Field(default_factory=SkillsConfig)
 
 
 # Global settings instance

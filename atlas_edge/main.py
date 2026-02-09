@@ -15,10 +15,12 @@ from pathlib import Path
 from typing import Optional
 
 # Load environment variables
+# .env.local overrides .env for machine-specific settings (API keys, ports, etc.)
 from dotenv import load_dotenv
 
-_env_path = Path(__file__).parent.parent / ".env"
-load_dotenv(_env_path, override=True)
+_env_root = Path(__file__).parent.parent
+load_dotenv(_env_root / ".env", override=True)
+load_dotenv(_env_root / ".env.local", override=True)
 
 from .config import settings
 
@@ -104,6 +106,10 @@ class EdgeApplication:
         """Clean up all components."""
         logger.info("Atlas Edge shutting down...")
         self._running = False
+
+        # Clean up skills (cancel active timers, etc.)
+        from .skills import shutdown_skills
+        shutdown_skills()
 
         # Disconnect from brain
         if self._brain_connection:

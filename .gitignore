@@ -12,6 +12,7 @@ pip-wheel-metadata/
 
 # Environment
 .env
+.env.local
 
 # IDEs
 .idea/

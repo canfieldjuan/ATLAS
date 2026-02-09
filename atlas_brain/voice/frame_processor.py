@@ -7,6 +7,7 @@ Supports optional streaming ASR for reduced latency.
 
 import logging
 import threading
+import time
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import numpy as np
@@ -408,9 +409,11 @@ class FrameProcessor:
                 if self._streaming_active and self.streaming_asr_client is not None:
                     # Streaming mode: get final transcript directly
                     try:
-                        logger.info("Finalizing streaming ASR...")
+                        t0 = time.perf_counter()
                         transcript = self.streaming_asr_client.finalize()
-                        self.streaming_asr_client.disconnect()
+                        finalize_ms = (time.perf_counter() - t0) * 1000
+                        logger.info("ASR finalize: %.0fms", finalize_ms)
+                        self.streaming_asr_client.reset()
                         self._streaming_active = False
                         last_partial = self._last_partial
                         self._last_partial = ""  # Reset partial tracking
