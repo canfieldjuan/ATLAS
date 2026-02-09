@@ -1,0 +1,12 @@
+ATLAS Distributed System - Nodes
+
+
+Node #1 orange pi 5 plus
+location - 5th Street
+purpose - security
+
+From office PC you can always reach the Pi at: ssh canfieldjuan@100.95.224.113
+or by Tailscale hostname: ssh canfieldjuan@orangepi-atlas 
+  
+These work regardless of what LAN the Pi is on — Tailscale handles NAT traversal automatically. 
+The only requirements are that both machines have Tailscale running and connected.

@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic>=1.10,<3
+torch
+torchaudio
+nemo_toolkit[asr] @ git+https://github.com/NVIDIA/NeMo.git@main#egg=nemo_toolkit[asr]

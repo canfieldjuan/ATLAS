@@ -1,0 +1,23 @@
+services:
+  wyze-bridge:
+    container_name: wyze-bridge
+    image: mrlt8/wyze-bridge:latest
+    restart: unless-stopped
+    ports:
+      - 5000:5000   # Web UI
+      - 8554:8554   # RTSP streams
+      - 8888:8888   # HLS streams
+    env_file:
+      - .env
+    environment:
+      # Wyze credentials
+      - WYZE_EMAIL=${WYZE_EMAIL}
+      - WYZE_PASSWORD=${WYZE_PASSWORD}
+      # API credentials (required for 2FA accounts)
+      - API_ID=${WYZE_API_ID}
+      - API_KEY=${WYZE_API_KEY}
+      # Stream settings
+      - QUALITY=HD
+      - ENABLE_AUDIO=false
+      - RTSP_READTIMEOUT=30s
+      - CONNECT_TIMEOUT=60
