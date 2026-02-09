@@ -105,14 +105,31 @@ class LangGraphAgentAdapter:
                 llm_ms=timing.get("respond", 0),
             )
 
+            # Extract LLM metadata from result
+            llm_meta = result.get("llm_meta", {})
+            input_tokens = llm_meta.get("input_tokens", 0)
+            output_tokens = llm_meta.get("output_tokens", 0)
+
+            # Build rich input_data
+            input_data = {"user_message": input_text}
+            if llm_meta.get("system_prompt"):
+                input_data["system_prompt"] = llm_meta["system_prompt"][:3000]
+            if llm_meta.get("history_count"):
+                input_data["history_turns"] = llm_meta["history_count"]
+
+            # Build rich output_data
+            output_data = {
+                "response": (agent_result.response_text or "")[:5000],
+                "action_type": agent_result.action_type,
+            }
+
             tracer.end_span(
                 span,
                 status="completed" if agent_result.success else "failed",
-                input_data={"user_message": input_text},
-                output_data={
-                    "response": (agent_result.response_text or "")[:5000],
-                    "action_type": agent_result.action_type,
-                },
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                input_data=input_data,
+                output_data=output_data,
                 error_message=agent_result.error,
                 metadata={
                     "timing": timing,

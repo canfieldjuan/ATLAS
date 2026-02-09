@@ -525,6 +525,7 @@ async def generate_response(state: AtlasAgentState) -> AtlasAgentState:
     input_text = state.get("input_text", "")
 
     response = ""
+    llm_out: dict[str, Any] | None = None
 
     # Error case
     if action_result and action_result.error:
@@ -548,22 +549,30 @@ async def generate_response(state: AtlasAgentState) -> AtlasAgentState:
 
         if not response:
             # Fall back to LLM with tool context
-            response = await _generate_llm_response(state, with_tools=True)
+            llm_out = await _generate_llm_response(state, with_tools=True)
+            response = llm_out["response"]
 
     # Conversation
     elif action_type == "conversation":
-        response = await _generate_llm_response(state)
+        llm_out = await _generate_llm_response(state)
+        response = llm_out["response"]
 
     else:
         response = f"I heard: {input_text}"
 
     respond_ms = (time.perf_counter() - start_time) * 1000
 
-    return {
+    result = {
         **state,
         "response": response,
         "respond_ms": respond_ms,
     }
+    if llm_out:
+        result["llm_input_tokens"] = llm_out.get("input_tokens", 0)
+        result["llm_output_tokens"] = llm_out.get("output_tokens", 0)
+        result["llm_system_prompt"] = llm_out.get("system_prompt")
+        result["llm_history_count"] = llm_out.get("history_count", 0)
+    return result
 
 
 async def delegate_to_home(state: AtlasAgentState) -> AtlasAgentState:
@@ -762,15 +771,17 @@ async def start_workflow(state: AtlasAgentState) -> AtlasAgentState:
 async def _generate_llm_response(
     state: AtlasAgentState,
     with_tools: bool = False,
-) -> str:
-    """Generate response using LLM."""
+) -> dict[str, Any]:
+    """Generate response using LLM. Returns dict with response + metadata."""
     from ...services import llm_registry
     from ...services.protocols import Message
     from ...storage.database import get_db_pool
 
     llm = llm_registry.get_active()
     if llm is None:
-        return f"I heard: {state.get('input_text', '')}"
+        return {"response": f"I heard: {state.get('input_text', '')}",
+                "input_tokens": 0, "output_tokens": 0,
+                "system_prompt": None, "history_count": 0}
 
     input_text = state.get("input_text", "")
     retrieved_context = state.get("retrieved_context")
@@ -835,11 +846,19 @@ async def _generate_llm_response(
             )
         response = llm_result.get("response", "").strip()
         if response:
-            return response
+            return {
+                "response": response,
+                "input_tokens": llm_result.get("prompt_eval_count", 0),
+                "output_tokens": llm_result.get("eval_count", 0),
+                "system_prompt": system_msg,
+                "history_count": len(history_messages),
+            }
     except Exception as e:
         logger.warning("LLM response generation failed: %s", e)
 
-    return f"I heard: {input_text}"
+    return {"response": f"I heard: {input_text}",
+            "input_tokens": 0, "output_tokens": 0,
+            "system_prompt": None, "history_count": 0}
 
 
 # Routing function (only for check_workflow, which doesn't use Command)
@@ -1009,6 +1028,12 @@ class AtlasAgentGraph:
                 "think": final_state.get("think_ms", 0),
                 "act": final_state.get("act_ms", 0),
                 "respond": final_state.get("respond_ms", 0),
+            },
+            "llm_meta": {
+                "input_tokens": final_state.get("llm_input_tokens", 0),
+                "output_tokens": final_state.get("llm_output_tokens", 0),
+                "system_prompt": final_state.get("llm_system_prompt"),
+                "history_count": final_state.get("llm_history_count", 0),
             },
         }
 

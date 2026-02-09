@@ -162,6 +162,12 @@ class OllamaLLM(BaseModelService):
                 return {
                     "response": response_text,
                     "message": {"role": "assistant", "content": response_text},
+                    "prompt_eval_count": prompt_eval_count,
+                    "eval_count": eval_count,
+                    "done_reason": done_reason,
+                    "prompt_eval_duration_ms": prompt_eval_duration,
+                    "eval_duration_ms": eval_duration,
+                    "total_duration_ms": total_duration,
                 }
             except httpx.HTTPError as e:
                 logger.error("Ollama chat error: %s", e)
@@ -169,7 +175,8 @@ class OllamaLLM(BaseModelService):
                     continue
                 raise
 
-        return {"response": "", "message": {"role": "assistant", "content": ""}}
+        return {"response": "", "message": {"role": "assistant", "content": ""},
+                "prompt_eval_count": 0, "eval_count": 0}
 
     def chat_with_tools(
         self,
