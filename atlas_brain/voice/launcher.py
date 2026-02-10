@@ -56,6 +56,7 @@ def _create_agent_runner():
                 _event_loop,
             )
             result = future.result(timeout=settings.voice.agent_timeout)
+            _signal_workflow_state(result)
             response = result.response_text or ""
             logger.info("Agent runner response: %s", response[:100] if response else "(empty)")
             return response
@@ -301,6 +302,17 @@ async def _persist_streaming_turns(
         logger.warning("Failed to persist streaming turns: %s", e)
 
 
+def _signal_workflow_state(result) -> None:
+    """Adjust voice pipeline segmenter thresholds based on workflow state."""
+    if _voice_pipeline is None:
+        return
+    awaiting = result.metadata.get("awaiting_user_input", False)
+    if awaiting:
+        _voice_pipeline.set_workflow_active()
+    else:
+        _voice_pipeline.clear_workflow_active()
+
+
 async def _run_agent_fallback(
     transcript: str,
     context_dict: Dict[str, Any],
@@ -320,6 +332,7 @@ async def _run_agent_fallback(
             input_type="voice",
             runtime_context={"node_id": node_id, "speaker_uuid": speaker_id},
         )
+        _signal_workflow_state(result)
         if result.response_text:
             on_sentence(result.response_text)
     except Exception as e:
@@ -609,6 +622,10 @@ def create_voice_pipeline(event_loop: Optional[asyncio.AbstractEventLoop] = None
         intent_categories_continue=filter_cfg.intent_categories_continue,
         speaker_continuity_enabled=filter_cfg.speaker_continuity_enabled,
         speaker_continuity_threshold=filter_cfg.speaker_continuity_threshold,
+        # Workflow-aware segmentation thresholds
+        workflow_silence_ms=cfg.workflow_silence_ms,
+        workflow_hangover_ms=cfg.workflow_hangover_ms,
+        workflow_max_command_seconds=cfg.workflow_max_command_seconds,
     )
 
     return pipeline

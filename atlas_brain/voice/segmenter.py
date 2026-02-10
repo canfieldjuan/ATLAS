@@ -38,6 +38,25 @@ class CommandSegmenter:
 
         self.reset()
 
+    def update_thresholds(
+        self,
+        silence_ms: int | None = None,
+        hangover_ms: int | None = None,
+        max_command_seconds: int | None = None,
+    ) -> None:
+        """Update segmenter thresholds at runtime (e.g. for workflow mode)."""
+        frame_ms = 1000 * self.block_size / self.sample_rate
+        if silence_ms is not None:
+            self.silence_limit_frames = max(1, int(silence_ms / frame_ms))
+        if hangover_ms is not None:
+            self.hangover_frames = max(0, int(hangover_ms / frame_ms))
+        if max_command_seconds is not None:
+            self.max_frames = int((self.sample_rate * max_command_seconds) / self.block_size)
+        logger.info(
+            "Thresholds updated: silence=%d frames, hangover=%d frames, max=%d frames",
+            self.silence_limit_frames, self.hangover_frames, self.max_frames,
+        )
+
     def reset(self):
         """Reset the segmenter state."""
         self.frames: List[bytes] = []

@@ -15,6 +15,7 @@ Set USE_REAL_TOOLS=true to use actual Google Calendar integration.
 
 import logging
 import os
+import re
 import time
 from typing import Any, Literal, Optional
 
@@ -37,6 +38,14 @@ logger.info("Booking workflow tools: %s", "real" if USE_REAL_TOOLS else "mock")
 
 # Sequential field collection order
 BOOKING_FIELDS_ORDER = ["name", "address", "date", "time"]
+
+# Map field names to BookingWorkflowState keys
+FIELD_STATE_MAP = {
+    "name": "customer_name",
+    "address": "customer_address",
+    "date": "requested_date",
+    "time": "requested_time",
+}
 
 # Field-specific extraction prompts
 FIELD_PROMPTS = {
@@ -90,6 +99,76 @@ async def extract_field_with_llm(
     except Exception as e:
         logger.error("LLM extraction failed for %s: %s", field_name, e)
         return None
+
+
+async def extract_all_fields_with_llm(
+    user_input: str,
+    missing_fields: list[str],
+) -> dict[str, str]:
+    """
+    Extract ALL missing fields from user input in a single LLM call.
+
+    Args:
+        user_input: The user's response text
+        missing_fields: List of field names to extract (name, address, date, time)
+
+    Returns:
+        Dict mapping field names to extracted values
+    """
+    llm = llm_registry.get_active()
+    if llm is None or not missing_fields:
+        return {}
+
+    field_descriptions = {
+        "name": "customer name",
+        "address": "street address",
+        "date": "date (convert to YYYY-MM-DD format)",
+        "time": "time (convert to HH:MM AM/PM format)",
+    }
+    fields_list = "\n".join(
+        f"- {f}: {field_descriptions.get(f, f)}" for f in missing_fields
+    )
+
+    prompt = (
+        f"Extract the following fields from the user input. "
+        f"For each field found, reply with one line in the format 'field: value'. "
+        f"Only include fields that are clearly present. Do NOT guess.\n\n"
+        f"Fields to extract:\n{fields_list}\n\n"
+        f"Reply with ONLY the extracted lines, nothing else. "
+        f"If no fields are found, reply NONE."
+    )
+
+    messages = [
+        Message(role="system", content=prompt),
+        Message(role="user", content=user_input),
+    ]
+
+    try:
+        result = llm.chat(messages=messages, max_tokens=100, temperature=0.1)
+        raw = result.get("response", "").strip()
+
+        # Strip <think>...</think> tags (Qwen3 models)
+        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+
+        if raw.upper() == "NONE" or not raw:
+            return {}
+
+        extracted = {}
+        for line in raw.splitlines():
+            line = line.strip()
+            if ":" in line:
+                key, _, value = line.partition(":")
+                key = key.strip().lower()
+                value = value.strip()
+                if key in missing_fields and value and value.upper() != "NONE":
+                    extracted[key] = value
+
+        logger.info("Greedy extraction: %s from %d missing fields", extracted, len(missing_fields))
+        return extracted
+
+    except Exception as e:
+        logger.error("Greedy LLM extraction failed: %s", e)
+        return {}
 
 
 # =============================================================================
@@ -319,39 +398,43 @@ async def check_continuation(state: BookingWorkflowState) -> BookingWorkflowStat
 
 async def merge_continuation_input(state: BookingWorkflowState) -> BookingWorkflowState:
     """
-    Merge new user input with restored partial state using LLM extraction.
+    Merge new user input with restored partial state using greedy LLM extraction.
 
-    Uses the collecting_field from saved state to know which field to extract.
+    Extracts ALL missing fields from a single user utterance, not just the
+    one we were collecting. E.g. "My name is John and I live at 123 Main St"
+    fills both name AND address in one turn.
     """
     start_time = time.perf_counter()
     input_text = state.get("input_text", "")
     collecting_field = state.get("collecting_field")
     restored_step = state.get("restored_from_step", "")
 
-    # Map collecting_field to state field names
-    field_mapping = {
-        "name": "customer_name",
-        "address": "customer_address",
-        "date": "requested_date",
-        "time": "requested_time",
-    }
+    # Compute all missing fields
+    missing_fields = [
+        f for f in BOOKING_FIELDS_ORDER
+        if not state.get(FIELD_STATE_MAP[f])
+    ]
 
-    # If we know which field we're collecting, use LLM to extract it
-    if collecting_field and collecting_field in field_mapping:
-        extracted_value = await extract_field_with_llm(collecting_field, input_text)
-        if extracted_value:
-            state_field = field_mapping[collecting_field]
-            state = {**state, state_field: extracted_value}
-            logger.info("Extracted %s=%s from user input", state_field, extracted_value)
-        else:
-            # LLM couldn't extract - assume the whole input is the value
-            state_field = field_mapping[collecting_field]
-            state = {**state, state_field: input_text.strip()}
-            logger.info("Using raw input for %s=%s", state_field, input_text.strip())
+    if missing_fields:
+        # Greedy extraction: try to get ALL missing fields at once
+        extracted = await extract_all_fields_with_llm(input_text, missing_fields)
 
-    # Handle legacy restored_step values for backward compatibility
+        if extracted:
+            for field_name, value in extracted.items():
+                state_field = FIELD_STATE_MAP[field_name]
+                state = {**state, state_field: value}
+                logger.info("Greedy extracted %s=%s", state_field, value)
+
+        # If collecting_field was set but greedy found nothing for it,
+        # fall back to using raw input for that field
+        if collecting_field and collecting_field in FIELD_STATE_MAP:
+            state_field = FIELD_STATE_MAP[collecting_field]
+            if not state.get(state_field):
+                state = {**state, state_field: input_text.strip()}
+                logger.info("Fallback raw input for %s=%s", state_field, input_text.strip())
+
+    # Handle legacy suggest_alternatives step
     elif restored_step == "suggest_alternatives":
-        # User is responding to alternative time slots
         extracted_date = await extract_field_with_llm("date", input_text)
         extracted_time = await extract_field_with_llm("time", input_text)
         if extracted_date:
@@ -378,7 +461,6 @@ async def parse_request(state: BookingWorkflowState) -> BookingWorkflowState:
     This node uses regex patterns to extract structured data.
     In production, this would call the LLM with a structured output prompt.
     """
-    import re
     from datetime import datetime, timedelta
 
     start_time = time.perf_counter()
@@ -706,33 +788,107 @@ async def confirm_booking(state: BookingWorkflowState) -> BookingWorkflowState:
     }
 
 
+async def generate_natural_prompt(
+    state: BookingWorkflowState,
+    still_missing: list[str],
+) -> str:
+    """
+    Generate a natural, conversational prompt for remaining fields.
+
+    Args:
+        state: Current workflow state (has collected fields)
+        still_missing: List of field names still needed
+
+    Returns:
+        Natural language prompt string
+    """
+    llm = llm_registry.get_active()
+    if llm is None:
+        # Fallback to simple template
+        return _simple_missing_prompt(state, still_missing)
+
+    # Build context of what's collected
+    collected = {}
+    field_labels = {
+        "name": "name",
+        "address": "address",
+        "date": "preferred date",
+        "time": "preferred time",
+    }
+
+    for f in BOOKING_FIELDS_ORDER:
+        val = state.get(FIELD_STATE_MAP[f])
+        if val:
+            collected[field_labels[f]] = val
+
+    missing_labels = [field_labels[f] for f in still_missing]
+
+    collected_str = ", ".join(f"{k}: {v}" for k, v in collected.items()) if collected else "nothing yet"
+    missing_str = " and ".join(missing_labels)
+
+    prompt = (
+        "You are a friendly scheduling assistant. "
+        "The user is booking an appointment. "
+        f"So far you have collected: {collected_str}. "
+        f"You still need: {missing_str}. "
+        "Write a brief, warm, conversational response (1-2 sentences) "
+        "acknowledging what you have and asking for the remaining info. "
+        "Be natural, not robotic. Do not use bullet points or lists."
+    )
+
+    messages = [
+        Message(role="system", content=prompt),
+        Message(role="user", content="Generate the prompt."),
+    ]
+
+    try:
+        result = llm.chat(messages=messages, max_tokens=80, temperature=0.7)
+        raw = result.get("response", "").strip()
+        # Strip <think>...</think> tags (Qwen3 models)
+        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+        if raw:
+            return raw
+    except Exception as e:
+        logger.warning("Natural prompt generation failed: %s", e)
+
+    return _simple_missing_prompt(state, still_missing)
+
+
+def _simple_missing_prompt(state: BookingWorkflowState, still_missing: list[str]) -> str:
+    """Fallback simple template when LLM is unavailable."""
+    if "name" in still_missing:
+        return "Sure, I can help you book an appointment. Can I get your name?"
+    if "address" in still_missing:
+        name = state.get("customer_name", "")
+        return f"Got it, {name}. And what's the address for the appointment?"
+    if "date" in still_missing:
+        return "Perfect. What day works for you?"
+    if "time" in still_missing:
+        return "And what time would you prefer?"
+    return "Great, I have everything. Let me check availability."
+
+
 async def handle_missing_info(state: BookingWorkflowState) -> BookingWorkflowState:
     """
     Generate response asking for missing information sequentially.
 
     Asks for fields in order: name -> address -> date -> time
+    Uses LLM for natural conversational prompts instead of hardcoded templates.
     Saves workflow state with collecting_field for LLM extraction on next turn.
     """
     start_time = time.perf_counter()
 
-    # Determine which field to collect next
-    collecting_field = None
-    response = ""
+    # Compute fields still missing (in order)
+    still_missing = [
+        f for f in BOOKING_FIELDS_ORDER
+        if not state.get(FIELD_STATE_MAP[f])
+    ]
 
-    # Check fields in order: name, address, date, time
-    if not state.get("customer_name"):
-        collecting_field = "name"
-        response = "Sure, I can help you book an appointment. Can I get your name?"
-    elif not state.get("customer_address"):
-        collecting_field = "address"
-        customer_name = state.get("customer_name", "")
-        response = f"Got it, {customer_name}. And what's the address for the appointment?"
-    elif not state.get("requested_date"):
-        collecting_field = "date"
-        response = "Perfect. What day works for you?"
-    elif not state.get("requested_time"):
-        collecting_field = "time"
-        response = "And what time would you prefer?"
+    # First missing field is the one we're collecting
+    collecting_field = still_missing[0] if still_missing else None
+
+    if still_missing:
+        response = await generate_natural_prompt(state, still_missing)
     else:
         response = "Great, I have everything. Let me check availability."
 

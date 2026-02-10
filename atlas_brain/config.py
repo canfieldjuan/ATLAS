@@ -563,6 +563,11 @@ class VoiceClientConfig(BaseSettings):
     max_command_seconds: int = Field(default=5, description="Maximum command duration")
     min_command_ms: int = Field(default=1500, description="Minimum recording time before silence can finalize (grace period)")
 
+    # Workflow-aware segmentation (wider patience when awaiting user input)
+    workflow_silence_ms: int = Field(default=1500, description="Silence duration during active workflow")
+    workflow_hangover_ms: int = Field(default=500, description="Hangover time during active workflow")
+    workflow_max_command_seconds: int = Field(default=15, description="Max command duration during active workflow")
+
     # Interrupt settings
     stop_hotkey: bool = Field(default=True, description="Enable 's' hotkey to stop TTS")
     allow_wake_barge_in: bool = Field(default=False, description="Allow wake word to interrupt TTS")

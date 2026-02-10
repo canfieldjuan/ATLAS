@@ -143,6 +143,9 @@ class AtlasAgentState(AgentState):
     workflow_to_start: Optional[str]
     workflow_type: Optional[str]
 
+    # Workflow signals back to voice pipeline
+    awaiting_user_input: bool
+
 
 class ReceptionistAgentState(AgentState):
     """

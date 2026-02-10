@@ -103,6 +103,9 @@ class LangGraphAgentAdapter:
                 think_ms=timing.get("think", 0) + timing.get("classify", 0),
                 act_ms=timing.get("act", 0),
                 llm_ms=timing.get("respond", 0),
+                metadata={
+                    "awaiting_user_input": result.get("awaiting_user_input", False),
+                },
             )
 
             # Extract LLM metadata from result

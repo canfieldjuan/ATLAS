@@ -606,6 +606,10 @@ class VoicePipeline:
         intent_categories_continue: Optional[List[str]] = None,
         speaker_continuity_enabled: bool = False,
         speaker_continuity_threshold: float = 0.7,
+        # Workflow-aware segmentation thresholds
+        workflow_silence_ms: int = 1500,
+        workflow_hangover_ms: int = 500,
+        workflow_max_command_seconds: int = 15,
     ):
         self.sample_rate = sample_rate
         self.event_loop = event_loop
@@ -641,6 +645,15 @@ class VoicePipeline:
             max_command_seconds=max_command_seconds,
             min_command_ms=min_command_ms,
         )
+
+        # Workflow-aware segmentation
+        self._workflow_active = False
+        self._workflow_silence_ms = workflow_silence_ms
+        self._workflow_hangover_ms = workflow_hangover_ms
+        self._workflow_max_command_seconds = workflow_max_command_seconds
+        self._orig_silence_ms = silence_ms
+        self._orig_hangover_ms = hangover_ms
+        self._orig_max_command_seconds = max_command_seconds
 
         # Voice filter settings
         self.vad_backend = vad_backend
@@ -1090,3 +1103,27 @@ class VoicePipeline:
                 ctx["speaker_id"] = str(self._last_speaker_match.user_id)
             ctx["speaker_confidence"] = self._last_speaker_match.confidence
         return ctx
+
+    def set_workflow_active(self) -> None:
+        """Widen segmenter thresholds for workflow mode (user needs more time)."""
+        if self._workflow_active:
+            return
+        self._workflow_active = True
+        self.segmenter.update_thresholds(
+            silence_ms=self._workflow_silence_ms,
+            hangover_ms=self._workflow_hangover_ms,
+            max_command_seconds=self._workflow_max_command_seconds,
+        )
+        logger.info("Workflow mode activated: wider silence thresholds")
+
+    def clear_workflow_active(self) -> None:
+        """Restore original segmenter thresholds after workflow ends."""
+        if not self._workflow_active:
+            return
+        self._workflow_active = False
+        self.segmenter.update_thresholds(
+            silence_ms=self._orig_silence_ms,
+            hangover_ms=self._orig_hangover_ms,
+            max_command_seconds=self._orig_max_command_seconds,
+        )
+        logger.info("Workflow mode deactivated: normal silence thresholds")

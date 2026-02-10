@@ -621,6 +621,7 @@ async def continue_workflow(state: AtlasAgentState) -> AtlasAgentState:
             "response": response,
             "action_type": "tool_use",
             "act_ms": total_ms,
+            "awaiting_user_input": result.get("awaiting_user_input", False),
         }
 
     if workflow_type == REMINDER_WORKFLOW_TYPE:
@@ -636,6 +637,7 @@ async def continue_workflow(state: AtlasAgentState) -> AtlasAgentState:
             "response": response,
             "action_type": "tool_use",
             "act_ms": total_ms,
+            "awaiting_user_input": result.get("awaiting_user_input", False),
         }
 
     if workflow_type == EMAIL_WORKFLOW_TYPE:
@@ -651,6 +653,7 @@ async def continue_workflow(state: AtlasAgentState) -> AtlasAgentState:
             "response": response,
             "action_type": "tool_use",
             "act_ms": total_ms,
+            "awaiting_user_input": result.get("awaiting_user_input", False),
         }
 
     if workflow_type == CALENDAR_WORKFLOW_TYPE:
@@ -666,6 +669,7 @@ async def continue_workflow(state: AtlasAgentState) -> AtlasAgentState:
             "response": response,
             "action_type": "tool_use",
             "act_ms": total_ms,
+            "awaiting_user_input": result.get("awaiting_user_input", False),
         }
 
     if workflow_type == SECURITY_WORKFLOW_TYPE:
@@ -681,6 +685,7 @@ async def continue_workflow(state: AtlasAgentState) -> AtlasAgentState:
             "response": response,
             "action_type": "tool_use",
             "act_ms": total_ms,
+            "awaiting_user_input": result.get("awaiting_user_input", False),
         }
 
     if workflow_type == PRESENCE_WORKFLOW_TYPE:
@@ -697,6 +702,7 @@ async def continue_workflow(state: AtlasAgentState) -> AtlasAgentState:
             "response": response,
             "action_type": "tool_use",
             "act_ms": total_ms,
+            "awaiting_user_input": result.get("awaiting_user_input", False),
         }
 
     # Unknown workflow type - should not happen
@@ -765,6 +771,7 @@ async def start_workflow(state: AtlasAgentState) -> AtlasAgentState:
         "action_type": "workflow_started",
         "workflow_type": workflow_type,
         "act_ms": total_ms,
+        "awaiting_user_input": result.get("awaiting_user_input", False),
     }
 
 
@@ -1021,6 +1028,7 @@ class AtlasAgentGraph:
             "action_type": final_state.get("action_type", "none"),
             "intent": final_state.get("intent"),
             "error": final_state.get("error"),
+            "awaiting_user_input": final_state.get("awaiting_user_input", False),
             "timing": {
                 "total": total_ms,
                 "classify": final_state.get("classify_ms", 0),
