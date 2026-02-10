@@ -603,6 +603,13 @@ class FrameProcessor:
             except Exception as e:
                 logger.warning("Error in conversation timeout callback: %s", e)
 
+    def set_conversation_timeout(self, timeout_ms: int) -> None:
+        """Dynamically update conversation timeout. Restarts timer if active."""
+        self.conversation_timeout_ms = timeout_ms
+        if self._conversation_timer is not None:
+            self._start_conversation_timer()
+        logger.info("Conversation timeout updated to %dms", timeout_ms)
+
     def pause_conversation_mode(self) -> None:
         """Pause conversation mode timer during TTS playback. Called by pipeline."""
         self._cancel_conversation_timer()

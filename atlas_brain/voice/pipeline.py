@@ -606,10 +606,11 @@ class VoicePipeline:
         intent_categories_continue: Optional[List[str]] = None,
         speaker_continuity_enabled: bool = False,
         speaker_continuity_threshold: float = 0.7,
-        # Workflow-aware segmentation thresholds
+        # Workflow-aware thresholds
         workflow_silence_ms: int = 1500,
         workflow_hangover_ms: int = 500,
         workflow_max_command_seconds: int = 15,
+        workflow_conversation_timeout_ms: int = 30000,
     ):
         self.sample_rate = sample_rate
         self.event_loop = event_loop
@@ -646,11 +647,12 @@ class VoicePipeline:
             min_command_ms=min_command_ms,
         )
 
-        # Workflow-aware segmentation
+        # Workflow-aware thresholds
         self._workflow_active = False
         self._workflow_silence_ms = workflow_silence_ms
         self._workflow_hangover_ms = workflow_hangover_ms
         self._workflow_max_command_seconds = workflow_max_command_seconds
+        self._workflow_conversation_timeout_ms = workflow_conversation_timeout_ms
         self._orig_silence_ms = silence_ms
         self._orig_hangover_ms = hangover_ms
         self._orig_max_command_seconds = max_command_seconds
@@ -1105,7 +1107,7 @@ class VoicePipeline:
         return ctx
 
     def set_workflow_active(self) -> None:
-        """Widen segmenter thresholds for workflow mode (user needs more time)."""
+        """Widen segmenter thresholds and conversation timeout for workflow mode."""
         if self._workflow_active:
             return
         self._workflow_active = True
@@ -1114,10 +1116,12 @@ class VoicePipeline:
             hangover_ms=self._workflow_hangover_ms,
             max_command_seconds=self._workflow_max_command_seconds,
         )
-        logger.info("Workflow mode activated: wider silence thresholds")
+        self.frame_processor.set_conversation_timeout(self._workflow_conversation_timeout_ms)
+        logger.info("Workflow mode activated: wider thresholds, conversation timeout=%dms",
+                     self._workflow_conversation_timeout_ms)
 
     def clear_workflow_active(self) -> None:
-        """Restore original segmenter thresholds after workflow ends."""
+        """Restore original segmenter thresholds and conversation timeout."""
         if not self._workflow_active:
             return
         self._workflow_active = False
@@ -1126,4 +1130,5 @@ class VoicePipeline:
             hangover_ms=self._orig_hangover_ms,
             max_command_seconds=self._orig_max_command_seconds,
         )
-        logger.info("Workflow mode deactivated: normal silence thresholds")
+        self.frame_processor.set_conversation_timeout(self.conversation_timeout_ms)
+        logger.info("Workflow mode deactivated: normal thresholds")

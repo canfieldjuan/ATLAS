@@ -612,6 +612,7 @@ async def continue_workflow(state: AtlasAgentState) -> AtlasAgentState:
         result = await run_booking_workflow(
             input_text=input_text,
             session_id=session_id,
+            speaker_id=state.get("speaker_id"),
         )
         response = result.get("response", "")
         total_ms = (time.perf_counter() - start_time) * 1000
@@ -727,6 +728,7 @@ async def start_workflow(state: AtlasAgentState) -> AtlasAgentState:
         result = await run_booking_workflow(
             input_text=input_text,
             session_id=session_id,
+            speaker_id=state.get("speaker_id"),
         )
     elif workflow_type == REMINDER_WORKFLOW_TYPE:
         result = await run_reminder_workflow(

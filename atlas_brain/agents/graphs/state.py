@@ -189,6 +189,7 @@ class BookingWorkflowState(TypedDict, total=False):
     # Input
     input_text: str
     session_id: Optional[str]
+    speaker_id: Optional[str]  # Business owner / operator (not the customer)
 
     # Parsed from input (LLM extracts)
     customer_name: Optional[str]

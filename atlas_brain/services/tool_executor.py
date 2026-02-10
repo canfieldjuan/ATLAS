@@ -79,6 +79,7 @@ async def execute_with_tools(
     max_tokens: int = 256,
     temperature: float = 0.7,
     target_tool: str | None = None,
+    tools_override: list[dict] | None = None,
 ) -> dict[str, Any]:
     """
     Execute LLM query with tool calling loop.
@@ -89,6 +90,7 @@ async def execute_with_tools(
         max_tokens: Max tokens for LLM response
         temperature: LLM temperature
         target_tool: If provided, only include this specific tool (improves reliability)
+        tools_override: Pre-built tool schemas to use instead of registry lookup
 
     Returns:
         Dict with response, tools_executed, and tool_results
@@ -103,9 +105,11 @@ async def execute_with_tools(
             "tool_results": {},
         }
 
-    # If a specific target tool was identified, use only that tool
-    # This dramatically improves reliability (100% vs ~33% with multiple tools)
-    if target_tool:
+    # If caller provided pre-built tool schemas, use them directly
+    if tools_override is not None:
+        tools = tools_override
+        logger.info("Tool executor: using %d override tools", len(tools))
+    elif target_tool:
         # Use registry to resolve alias to actual tool name
         tool_name = tool_registry.resolve_alias(target_tool)
 
@@ -129,7 +133,7 @@ async def execute_with_tools(
             logger.warning("Target tool '%s' not found, falling back to priority tools", tool_name)
             target_tool = None  # Fall through to priority tools
 
-    if not target_tool:
+    if tools_override is None and not target_tool:
         # Use registry to get priority tool schemas
         tools = tool_registry.get_tool_schemas_filtered(PRIORITY_TOOL_NAMES)
         if not tools:

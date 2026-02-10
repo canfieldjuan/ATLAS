@@ -37,22 +37,22 @@ async def run_tests():
     manager = get_workflow_state_manager()
     all_passed = True
 
-    # Test 1: New booking request saves state when missing info
-    print("Test 1: New request saves state when missing name...", end=" ")
+    # Test 1: New booking request saves state and awaits input
+    print("Test 1: New request saves state and awaits input...", end=" ")
     try:
         session = await repo.create_session(terminal_id="test-booking-1")
         result = await run_booking_workflow(
             input_text="I want to schedule an appointment",
             session_id=str(session.id),
         )
-        assert result.get("awaiting_user_input") is True
-        assert "name" in result.get("response", "").lower()
+        assert result.get("awaiting_user_input") is True, "Should await user input"
+        assert result.get("response"), "Should have a response"
 
         # Verify state was saved
         saved = await manager.restore_workflow_state(str(session.id))
         assert saved is not None, "State should be saved"
         assert saved.workflow_type == "booking"
-        assert saved.current_step == "awaiting_info"
+        assert saved.current_step == "conversation"
 
         await manager.clear_workflow_state(str(session.id))
         await repo.close_session(session.id)
@@ -64,8 +64,8 @@ async def run_tests():
         print(f"ERROR: {e}")
         all_passed = False
 
-    # Test 2: Continuation restores state and merges input
-    print("Test 2: Continuation restores and merges input...", end=" ")
+    # Test 2: Continuation restores context and responds
+    print("Test 2: Continuation restores context and responds...", end=" ")
     try:
         session = await repo.create_session(terminal_id="test-booking-2")
         session_id = str(session.id)
@@ -79,14 +79,12 @@ async def run_tests():
 
         # Turn 2: Provide name
         result2 = await run_booking_workflow(
-            input_text="My name is John Smith",
+            input_text="It's for John Smith",
             session_id=session_id,
         )
 
-        # Should either ask for more info or proceed
-        assert result2.get("response") is not None
-        # Check that name was captured
-        assert result2.get("customer_name") == "John Smith" or "date" in result2.get("response", "").lower()
+        # LLM should respond (either ask for more info or proceed)
+        assert result2.get("response") is not None, "Should have a response"
 
         await manager.clear_workflow_state(session_id)
         await repo.close_session(session.id)
@@ -98,8 +96,8 @@ async def run_tests():
         print(f"ERROR: {e}")
         all_passed = False
 
-    # Test 3: Full multi-turn flow
-    print("Test 3: Full multi-turn flow...", end=" ")
+    # Test 3: Multi-turn flow preserves conversation context
+    print("Test 3: Multi-turn flow preserves context...", end=" ")
     try:
         session = await repo.create_session(terminal_id="test-booking-3")
         session_id = str(session.id)
@@ -110,12 +108,19 @@ async def run_tests():
 
         # Turn 2: Provide name
         r2 = await run_booking_workflow("John Smith", session_id=session_id)
+        assert r2.get("response"), "Should respond after name"
 
-        # Turn 3: Provide phone
+        # Turn 3: Provide more info
         r3 = await run_booking_workflow("555-123-4567", session_id=session_id)
+        assert r3.get("response"), "Should respond after phone"
 
-        # Should have captured phone
-        assert r3.get("customer_phone") is not None or "date" in r3.get("response", "").lower()
+        # Verify context grows with each turn
+        saved = await manager.restore_workflow_state(session_id)
+        if saved:
+            assert len(saved.conversation_context) >= 4, (
+                f"Should have at least 4 context turns (3 user + responses), "
+                f"got {len(saved.conversation_context)}"
+            )
 
         await manager.clear_workflow_state(session_id)
         await repo.close_session(session.id)
@@ -134,14 +139,14 @@ async def run_tests():
         from datetime import datetime, timedelta, timezone
 
         # Create expired state
-        old_time = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        old_time = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat()
         expired = ActiveWorkflowState(
             workflow_type="booking",
-            current_step="awaiting_info",
+            current_step="conversation",
             started_at=old_time,
-            partial_state={"customer_name": "Old Data"},
+            partial_state={"speaker_id": "test"},
         )
-        assert expired.is_expired(5) is True
+        assert expired.is_expired(10) is True
         print("PASSED")
     except AssertionError as e:
         print(f"FAILED: {e}")
@@ -150,20 +155,20 @@ async def run_tests():
         print(f"ERROR: {e}")
         all_passed = False
 
-    # Test 5: Complete booking clears state
-    print("Test 5: Complete booking clears state...", end=" ")
+    # Test 5: Booking completion clears state
+    print("Test 5: Booking completion clears state...", end=" ")
     try:
         session = await repo.create_session(terminal_id="test-booking-5")
         session_id = str(session.id)
 
-        # Run full booking with all info
+        # Run booking with all info — LLM may complete in one turn
         result = await run_booking_workflow(
             input_text="Book appointment for John Smith phone 555-1234 tomorrow at 2pm",
             session_id=session_id,
         )
 
-        # If booking completed, state should be cleared
-        if result.get("booking_confirmed"):
+        # If booking completed (awaiting_user_input=False), state should be cleared
+        if not result.get("awaiting_user_input", True):
             saved = await manager.restore_workflow_state(session_id)
             assert saved is None, "State should be cleared after completion"
 

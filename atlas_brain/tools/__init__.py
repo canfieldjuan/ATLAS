@@ -124,6 +124,10 @@ tool_registry.register(disarm_zone_tool)
 # Display tools
 tool_registry.register(show_camera_feed_tool)
 tool_registry.register(close_camera_feed_tool)
+# Scheduling tools - available for LLM tool calling in booking conversations
+tool_registry.register(check_availability_tool)
+tool_registry.register(book_appointment_tool)
+tool_registry.register(lookup_customer_tool)
 
 __all__ = [
     "Tool",

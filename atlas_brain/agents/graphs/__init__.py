@@ -28,9 +28,8 @@ from .streaming import (
     stream_to_tts,
 )
 from .booking import (
-    build_booking_graph,
-    compile_booking_graph,
     run_booking_workflow,
+    BOOKING_WORKFLOW_TYPE,
 )
 from .reminder import (
     build_reminder_graph,
@@ -88,9 +87,8 @@ __all__ = [
     "get_streaming_atlas_agent",
     "stream_to_tts",
     # Booking workflow
-    "build_booking_graph",
-    "compile_booking_graph",
     "run_booking_workflow",
+    "BOOKING_WORKFLOW_TYPE",
     # Reminder workflow
     "build_reminder_graph",
     "compile_reminder_graph",

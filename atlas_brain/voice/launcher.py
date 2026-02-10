@@ -622,10 +622,11 @@ def create_voice_pipeline(event_loop: Optional[asyncio.AbstractEventLoop] = None
         intent_categories_continue=filter_cfg.intent_categories_continue,
         speaker_continuity_enabled=filter_cfg.speaker_continuity_enabled,
         speaker_continuity_threshold=filter_cfg.speaker_continuity_threshold,
-        # Workflow-aware segmentation thresholds
+        # Workflow-aware thresholds
         workflow_silence_ms=cfg.workflow_silence_ms,
         workflow_hangover_ms=cfg.workflow_hangover_ms,
         workflow_max_command_seconds=cfg.workflow_max_command_seconds,
+        workflow_conversation_timeout_ms=cfg.workflow_conversation_timeout_ms,
     )
 
     return pipeline

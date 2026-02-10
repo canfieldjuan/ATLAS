@@ -567,6 +567,7 @@ class VoiceClientConfig(BaseSettings):
     workflow_silence_ms: int = Field(default=1500, description="Silence duration during active workflow")
     workflow_hangover_ms: int = Field(default=500, description="Hangover time during active workflow")
     workflow_max_command_seconds: int = Field(default=15, description="Max command duration during active workflow")
+    workflow_conversation_timeout_ms: int = Field(default=120000, description="Conversation timeout during active workflow (how long to wait for user to start speaking)")
 
     # Interrupt settings
     stop_hotkey: bool = Field(default=True, description="Enable 's' hotkey to stop TTS")
@@ -974,7 +975,7 @@ class WorkflowConfig(BaseSettings):
         description="Use real tool backends in workflows (false = mock responses)",
     )
     timeout_minutes: int = Field(
-        default=3,
+        default=10,
         ge=1,
         le=60,
         description="Minutes before an inactive workflow expires and is cleared",
