@@ -51,3 +51,21 @@ test_sam3.py
 
 # Experimental directories (not ready for production)
 sam3/
+
+# Extra virtualenvs
+.venv-*/
+
+# Environment backups
+.env.backup
+
+# Server output
+nohup.out
+
+# Stray pip artifacts
+=*
+
+# Test audio recordings
+*.wav
+
+# YOLO model weights
+yolov8*.pt
