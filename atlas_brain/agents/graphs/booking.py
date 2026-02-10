@@ -48,12 +48,17 @@ FIELD_STATE_MAP = {
 }
 
 # Field-specific extraction prompts
-FIELD_PROMPTS = {
-    "name": "Extract the customer name from the user input. Reply with ONLY the name, nothing else. If no name found, reply NONE.",
-    "address": "Extract the address from the user input. Reply with ONLY the address, nothing else. If no address found, reply NONE.",
-    "date": "Extract the date from the user input. Convert to YYYY-MM-DD format. Reply with ONLY the date, nothing else. If no date found, reply NONE.",
-    "time": "Extract the time from the user input. Convert to HH:MM AM/PM format. Reply with ONLY the time, nothing else. If no time found, reply NONE.",
-}
+def _get_field_prompts() -> dict[str, str]:
+    """Build field prompts with today's date for relative date resolution."""
+    from datetime import date
+    today = date.today()
+    today_str = today.strftime("%A, %Y-%m-%d")  # e.g. "Monday, 2026-02-09"
+    return {
+        "name": "Extract the customer name from the user input. Reply with ONLY the name, nothing else. If no name found, reply NONE.",
+        "address": "Extract the address from the user input. Reply with ONLY the address, nothing else. If no address found, reply NONE.",
+        "date": f"Extract the date from the user input. Today is {today_str}. Convert relative dates like 'Thursday', 'tomorrow', 'next week' to YYYY-MM-DD format. Reply with ONLY the date in YYYY-MM-DD format, nothing else. If no date found, reply NONE.",
+        "time": "Extract the time from the user input. Convert to HH:MM AM/PM format. Reply with ONLY the time, nothing else. If no time found, reply NONE.",
+    }
 
 
 async def extract_field_with_llm(
@@ -75,7 +80,7 @@ async def extract_field_with_llm(
         logger.warning("LLM not available for field extraction")
         return None
 
-    prompt = FIELD_PROMPTS.get(field_name)
+    prompt = _get_field_prompts().get(field_name)
     if not prompt:
         logger.warning("No prompt defined for field: %s", field_name)
         return None
@@ -88,6 +93,9 @@ async def extract_field_with_llm(
     try:
         result = llm.chat(messages=messages, max_tokens=50, temperature=0.1)
         response = result.get("response", "").strip()
+
+        # Strip <think>...</think> tags (Qwen3 models)
+        response = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
 
         if response.upper() == "NONE" or not response:
             logger.debug("LLM extraction for %s returned NONE", field_name)
@@ -119,10 +127,13 @@ async def extract_all_fields_with_llm(
     if llm is None or not missing_fields:
         return {}
 
+    from datetime import date
+    today = date.today()
+    today_str = today.strftime("%A, %Y-%m-%d")
     field_descriptions = {
         "name": "customer name",
         "address": "street address",
-        "date": "date (convert to YYYY-MM-DD format)",
+        "date": f"date (today is {today_str}; convert relative dates like 'Thursday', 'tomorrow' to YYYY-MM-DD format)",
         "time": "time (convert to HH:MM AM/PM format)",
     }
     fields_list = "\n".join(
@@ -433,14 +444,17 @@ async def merge_continuation_input(state: BookingWorkflowState) -> BookingWorkfl
                 state = {**state, state_field: input_text.strip()}
                 logger.info("Fallback raw input for %s=%s", state_field, input_text.strip())
 
-    # Handle legacy suggest_alternatives step
-    elif restored_step == "suggest_alternatives":
-        extracted_date = await extract_field_with_llm("date", input_text)
-        extracted_time = await extract_field_with_llm("time", input_text)
-        if extracted_date:
-            state = {**state, "requested_date": extracted_date}
-        if extracted_time:
-            state = {**state, "requested_time": extracted_time}
+    # Handle suggest_alternatives: user is providing new date/time to replace rejected ones
+    if restored_step == "suggest_alternatives":
+        # Clear old rejected values BEFORE extraction so failed extraction
+        # doesn't silently re-use the already-rejected date/time
+        state = {**state, "requested_date": None, "requested_time": None}
+        extracted = await extract_all_fields_with_llm(input_text, ["date", "time"])
+        if extracted:
+            for field_name, value in extracted.items():
+                state_field = FIELD_STATE_MAP[field_name]
+                state = {**state, state_field: value}
+                logger.info("Suggest-alt extracted %s=%s", state_field, value)
 
     elapsed_ms = (time.perf_counter() - start_time) * 1000
     step_timings = state.get("step_timings", {})
@@ -681,6 +695,7 @@ async def suggest_alternatives(state: BookingWorkflowState) -> BookingWorkflowSt
                 "customer_phone": state.get("customer_phone"),
                 "customer_id": state.get("customer_id"),
                 "customer_email": state.get("customer_email"),
+                "customer_address": state.get("customer_address"),
                 "requested_date": state.get("requested_date"),
                 "requested_time": state.get("requested_time"),
                 "service_type": state.get("service_type"),
@@ -953,6 +968,7 @@ async def handle_customer_not_found(state: BookingWorkflowState) -> BookingWorkf
             partial_state={
                 "customer_name": state.get("customer_name"),
                 "customer_phone": state.get("customer_phone"),
+                "customer_address": state.get("customer_address"),
                 "requested_date": state.get("requested_date"),
                 "requested_time": state.get("requested_time"),
                 "service_type": state.get("service_type"),
