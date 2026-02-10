@@ -16,6 +16,7 @@ from .vision import router as vision_router
 from .video import router as video_router
 from .recognition import router as recognition_router
 from .speaker import router as speaker_router
+from .identity import router as identity_router
 from .edge import router as edge_router
 
 # Main router that aggregates all sub-routers
@@ -33,4 +34,5 @@ router.include_router(vision_router)
 router.include_router(video_router)
 router.include_router(recognition_router)
 router.include_router(speaker_router)
+router.include_router(identity_router)
 router.include_router(edge_router)

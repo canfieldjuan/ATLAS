@@ -17,6 +17,7 @@ from .unified_alerts import UnifiedAlertRepository, get_unified_alert_repo
 from .vector import VectorRepository, get_vector_repository
 from .vision import VisionEventRepository, get_vision_event_repo
 from .speaker import SpeakerRepository, get_speaker_repo
+from .identity import IdentityRepository, get_identity_repo
 
 __all__ = [
     "AppointmentRepository",
@@ -41,4 +42,6 @@ __all__ = [
     "get_vision_event_repo",
     "SpeakerRepository",
     "get_speaker_repo",
+    "IdentityRepository",
+    "get_identity_repo",
 ]

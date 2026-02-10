@@ -133,6 +133,18 @@ async def edge_websocket(
                 # Handle speech transcript from edge node
                 await _handle_transcript(connection, message)
 
+            elif msg_type == "identity_sync_request":
+                # Handle identity sync from edge node
+                await _handle_identity_sync_request(connection, message)
+
+            elif msg_type == "identity_register":
+                # Handle new identity registration from edge node
+                await _handle_identity_register(connection, message)
+
+            elif msg_type == "security":
+                # Handle security events from edge node
+                await _handle_security_event(connection, message)
+
             else:
                 await connection.send_error(f"Unknown message type: {msg_type}")
 
@@ -367,6 +379,168 @@ async def _handle_transcript(
     except Exception as e:
         logger.exception("Transcript processing failed: %s", e)
         await connection.send_error(str(e))
+
+
+async def _handle_identity_sync_request(
+    connection: EdgeConnection,
+    message: dict[str, Any],
+) -> None:
+    """Handle identity sync request from an edge node.
+
+    Edge sends its manifest of {modality: [names]}.
+    We diff against the master DB and respond with missing embeddings + deletions.
+    """
+    edge_manifest = message.get("current", {})
+    node_id = message.get("node_id", connection.location_id)
+
+    logger.info(
+        "Identity sync request from %s: %s",
+        node_id,
+        {mod: len(names) for mod, names in edge_manifest.items()},
+    )
+
+    try:
+        from ...storage.repositories.identity import get_identity_repo
+
+        repo = get_identity_repo()
+        to_send, to_delete = await repo.diff_manifest(edge_manifest)
+
+        await connection.send({
+            "type": "identity_sync",
+            "identities": to_send,
+            "delete": to_delete,
+        })
+
+        sent_count = sum(len(v) for v in to_send.values())
+        del_count = sum(len(v) for v in to_delete.values())
+        logger.info(
+            "Identity sync response to %s: %d to send, %d to delete",
+            node_id, sent_count, del_count,
+        )
+
+    except Exception as e:
+        logger.exception("Identity sync failed for %s: %s", node_id, e)
+        await connection.send_error(f"Identity sync failed: {e}")
+
+
+async def _handle_identity_register(
+    connection: EdgeConnection,
+    message: dict[str, Any],
+) -> None:
+    """Handle a new identity registration from an edge node.
+
+    Saves to master DB, then broadcasts to all OTHER connected edges.
+    """
+    import numpy as np
+
+    name = message.get("name")
+    modality = message.get("modality")
+    embedding_list = message.get("embedding")
+    node_id = message.get("node_id", connection.location_id)
+
+    if not name or not modality or embedding_list is None:
+        await connection.send_error("identity_register: missing name, modality, or embedding")
+        return
+
+    if modality not in ("face", "gait", "speaker"):
+        await connection.send_error(f"identity_register: invalid modality '{modality}'")
+        return
+
+    logger.info(
+        "Identity register from %s: %s/%s (dim=%d)",
+        node_id, modality, name, len(embedding_list),
+    )
+
+    try:
+        from ...storage.repositories.identity import get_identity_repo
+
+        repo = get_identity_repo()
+        embedding = np.array(embedding_list, dtype=np.float32)
+        await repo.upsert(name, modality, embedding, source_node=node_id)
+
+        # Broadcast to all OTHER connected edges
+        update_msg = {
+            "type": "identity_update",
+            "name": name,
+            "modality": modality,
+            "embedding": embedding_list,
+            "source_node": node_id,
+        }
+        for loc_id, conn in _connections.items():
+            if loc_id != connection.location_id:
+                try:
+                    await conn.send(update_msg)
+                    logger.debug("Broadcast identity_update %s/%s to %s", modality, name, loc_id)
+                except Exception as e:
+                    logger.warning("Failed to broadcast to %s: %s", loc_id, e)
+
+    except Exception as e:
+        logger.exception("Identity register failed: %s", e)
+        await connection.send_error(f"Identity register failed: {e}")
+
+
+async def _handle_security_event(
+    connection: EdgeConnection,
+    message: dict[str, Any],
+) -> None:
+    """Handle security events from an edge node.
+
+    Event types: motion_detected, person_entered, person_left, unknown_face
+    """
+    event = message.get("event", "unknown")
+    node_id = message.get("node_id", connection.location_id)
+    ts = message.get("ts", time.time())
+
+    logger.info(
+        "Security event from %s: %s",
+        node_id,
+        event,
+    )
+
+    try:
+        from ...storage.repositories.unified_alerts import get_unified_alert_repo
+
+        repo = get_unified_alert_repo()
+
+        # Build human-readable message
+        if event == "person_entered":
+            name = message.get("name", "unknown")
+            is_known = message.get("is_known", False)
+            confidence = message.get("combined_confidence", 0)
+            if is_known:
+                msg = f"{name} entered (confidence: {confidence:.1%})"
+            else:
+                msg = "Unknown person entered"
+        elif event == "person_left":
+            name = message.get("name", "unknown")
+            duration = message.get("duration", 0)
+            msg = f"{name} left after {duration:.0f}s"
+        elif event == "motion_detected":
+            confidence = message.get("confidence", 0)
+            msg = f"Motion detected (level: {confidence:.1%})"
+        elif event == "unknown_face":
+            name = message.get("name", "unknown")
+            msg = f"Unknown face auto-enrolled as {name}"
+        else:
+            msg = f"Security event: {event}"
+
+        # Strip fields already used for top-level params
+        metadata = {k: v for k, v in message.items()
+                    if k not in ("type", "event", "node_id", "ts")}
+
+        await repo.save_alert(
+            rule_name=f"edge_security_{event}",
+            event_type="security",
+            message=msg,
+            source_id=f"{node_id}/security",
+            event_data=metadata,
+            metadata={"node_id": node_id, "timestamp": ts},
+        )
+
+    except Exception as e:
+        logger.warning("Failed to store security event: %s", e)
+
+    await connection.send({"type": "security_ack", "event": event})
 
 
 # HTTP endpoint for edge device status
