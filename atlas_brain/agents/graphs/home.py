@@ -339,6 +339,7 @@ async def generate_response(state: HomeAgentState) -> HomeAgentState:
     input_text = state.get("input_text", "")
 
     response = ""
+    llm_out: dict[str, Any] | None = None
 
     # Error case
     if action_result and action_result.error:
@@ -369,7 +370,8 @@ async def generate_response(state: HomeAgentState) -> HomeAgentState:
 
         if not response and needs_llm:
             # Fall back to LLM tool calling
-            response = await _generate_llm_response_with_tools(state)
+            llm_out = await _generate_llm_response_with_tools(state)
+            response = llm_out["response"]
 
         if not response:
             response = "I couldn't process that request."
@@ -377,7 +379,8 @@ async def generate_response(state: HomeAgentState) -> HomeAgentState:
     # Conversation fallback
     elif action_type == "conversation":
         if needs_llm:
-            response = await _generate_llm_response(state)
+            llm_out = await _generate_llm_response(state)
+            response = llm_out["response"]
         else:
             response = f"I heard: {input_text}"
 
@@ -386,26 +389,35 @@ async def generate_response(state: HomeAgentState) -> HomeAgentState:
 
     respond_ms = (time.perf_counter() - start_time) * 1000
 
-    return {
+    result = {
         **state,
         "response": response,
         "respond_ms": respond_ms,
     }
+    if llm_out:
+        result["llm_input_tokens"] = llm_out.get("input_tokens", 0)
+        result["llm_output_tokens"] = llm_out.get("output_tokens", 0)
+        result["llm_system_prompt"] = llm_out.get("system_prompt")
+        result["llm_history_count"] = llm_out.get("history_count", 0)
+    return result
 
 
-async def _generate_llm_response(state: HomeAgentState) -> str:
-    """Generate response using LLM for conversation."""
+async def _generate_llm_response(state: HomeAgentState) -> dict[str, Any]:
+    """Generate response using LLM for conversation. Returns dict with response + metadata."""
     from ...services import llm_registry
     from ...services.protocols import Message
 
     llm = llm_registry.get_active()
     if llm is None:
-        return f"I heard: {state.get('input_text', '')}"
+        return {"response": f"I heard: {state.get('input_text', '')}",
+                "input_tokens": 0, "output_tokens": 0,
+                "system_prompt": None, "history_count": 0}
 
     input_text = state.get("input_text", "")
+    system_msg = "You are a helpful home assistant."
 
     messages = [
-        Message(role="system", content="You are a helpful home assistant."),
+        Message(role="system", content=system_msg),
         Message(role="user", content=input_text),
     ]
 
@@ -417,18 +429,27 @@ async def _generate_llm_response(state: HomeAgentState) -> str:
             temperature=0.7,
         )
 
-    return result.get("response", "").strip() or f"I heard: {input_text}"
+    response = result.get("response", "").strip() or f"I heard: {input_text}"
+    return {
+        "response": response,
+        "input_tokens": result.get("prompt_eval_count", 0),
+        "output_tokens": result.get("eval_count", 0),
+        "system_prompt": system_msg,
+        "history_count": 0,
+    }
 
 
-async def _generate_llm_response_with_tools(state: HomeAgentState) -> str:
-    """Generate response using LLM tool calling loop."""
+async def _generate_llm_response_with_tools(state: HomeAgentState) -> dict[str, Any]:
+    """Generate response using LLM tool calling loop. Returns dict with response + metadata."""
     from ...services import llm_registry
     from ...services.protocols import Message
     from ...services.tool_executor import execute_with_tools
 
     llm = llm_registry.get_active()
     if llm is None:
-        return f"I heard: {state.get('input_text', '')}"
+        return {"response": f"I heard: {state.get('input_text', '')}",
+                "input_tokens": 0, "output_tokens": 0,
+                "system_prompt": None, "history_count": 0}
 
     input_text = state.get("input_text", "")
     intent = state.get("intent")
@@ -459,7 +480,13 @@ async def _generate_llm_response_with_tools(state: HomeAgentState) -> str:
     tools_executed = result.get("tools_executed", [])
     logger.info("Tool LLM result: tools=%s, response='%s'", tools_executed, response)
 
-    return response if response else "I couldn't process that request."
+    return {
+        "response": response if response else "I couldn't process that request.",
+        "input_tokens": 0,  # execute_with_tools doesn't expose token counts
+        "output_tokens": 0,
+        "system_prompt": system_msg,
+        "history_count": 0,
+    }
 
 
 # Routing function
@@ -655,6 +682,12 @@ class HomeAgentGraph:
                 "think": final_state.get("think_ms", 0),
                 "act": final_state.get("act_ms", 0),
                 "respond": final_state.get("respond_ms", 0),
+            },
+            "llm_meta": {
+                "input_tokens": final_state.get("llm_input_tokens", 0),
+                "output_tokens": final_state.get("llm_output_tokens", 0),
+                "system_prompt": final_state.get("llm_system_prompt"),
+                "history_count": final_state.get("llm_history_count", 0),
             },
         }
 

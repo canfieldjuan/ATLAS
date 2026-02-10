@@ -89,6 +89,12 @@ class AgentState(TypedDict, total=False):
     respond_ms: float
     total_ms: float
 
+    # LLM metadata (for FTL tracing)
+    llm_input_tokens: int
+    llm_output_tokens: int
+    llm_system_prompt: Optional[str]
+    llm_history_count: int
+
 
 class HomeAgentState(AgentState):
     """
@@ -136,12 +142,6 @@ class AtlasAgentState(AgentState):
     # Workflow initiation (for routing to start_workflow node)
     workflow_to_start: Optional[str]
     workflow_type: Optional[str]
-
-    # LLM metadata (for FTL tracing)
-    llm_input_tokens: int
-    llm_output_tokens: int
-    llm_system_prompt: Optional[str]
-    llm_history_count: int
 
 
 class ReceptionistAgentState(AgentState):

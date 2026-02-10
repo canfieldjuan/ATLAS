@@ -248,7 +248,15 @@ async def generate_response(state: ReceptionistAgentState) -> ReceptionistAgentS
         response = llm_result.get("response", "").strip()
         if response:
             respond_ms = (time.perf_counter() - start_time) * 1000
-            return {**state, "response": response, "respond_ms": respond_ms}
+            return {
+                **state,
+                "response": response,
+                "respond_ms": respond_ms,
+                "llm_input_tokens": llm_result.get("prompt_eval_count", 0),
+                "llm_output_tokens": llm_result.get("eval_count", 0),
+                "llm_system_prompt": system_prompt,
+                "llm_history_count": 0,
+            }
     except Exception as e:
         logger.warning("LLM response failed: %s", e)
 
@@ -647,6 +655,12 @@ class ReceptionistAgentGraph:
                 "classify": final_state.get("classify_ms", 0),
                 "act": final_state.get("act_ms", 0),
                 "respond": final_state.get("respond_ms", 0),
+            },
+            "llm_meta": {
+                "input_tokens": final_state.get("llm_input_tokens", 0),
+                "output_tokens": final_state.get("llm_output_tokens", 0),
+                "system_prompt": final_state.get("llm_system_prompt"),
+                "history_count": final_state.get("llm_history_count", 0),
             },
         }
 
