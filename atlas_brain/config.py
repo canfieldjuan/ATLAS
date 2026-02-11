@@ -982,6 +982,29 @@ class WorkflowConfig(BaseSettings):
     )
 
 
+class EdgeConfig(BaseSettings):
+    """Edge device WebSocket protocol configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_EDGE_",
+        env_file=".env",
+        extra="ignore",
+    )
+
+    max_concurrent_llm: int = Field(
+        default=2, ge=1, le=10,
+        description="Max concurrent LLM requests per edge connection",
+    )
+    token_batch_interval_ms: int = Field(
+        default=50, ge=10, le=500,
+        description="Token batching flush interval in milliseconds",
+    )
+    token_batch_max_size: int = Field(
+        default=10, ge=1, le=100,
+        description="Max tokens to buffer before flushing",
+    )
+
+
 class Settings(BaseSettings):
     """Application-wide settings."""
 
@@ -1049,6 +1072,7 @@ class Settings(BaseSettings):
     persona: PersonaConfig = Field(default_factory=PersonaConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     workflows: WorkflowConfig = Field(default_factory=WorkflowConfig)
+    edge: EdgeConfig = Field(default_factory=EdgeConfig)
     openai_compat: OpenAICompatConfig = Field(default_factory=OpenAICompatConfig)
     ftl_tracing: FTLTracingConfig = Field(default_factory=FTLTracingConfig)
 

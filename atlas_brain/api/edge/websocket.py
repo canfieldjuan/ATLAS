@@ -15,8 +15,18 @@ from datetime import datetime
 from typing import Any, Optional
 from uuid import uuid4
 
+import numpy as np
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
+
+from ...agents.graphs import get_atlas_agent_langgraph, get_streaming_atlas_agent
+from ...alerts import VisionAlertEvent, get_alert_manager
+from ...config import settings
+from ...storage.models import VisionEventRecord
+from ...storage.repositories import get_vision_event_repo
+from ...storage.repositories.identity import get_identity_repo
+from ...storage.repositories.unified_alerts import get_unified_alert_repo
+from ...vision.models import BoundingBox, EventType, VisionEvent
 
 logger = logging.getLogger("atlas.api.edge.websocket")
 
@@ -36,11 +46,20 @@ class EdgeConnection:
         self.connected_at = time.time()
         self.last_message = time.time()
         self.message_count = 0
+        self._pending_tasks: set[asyncio.Task] = set()
+        self._llm_semaphore = asyncio.Semaphore(settings.edge.max_concurrent_llm)
+        self._send_lock = asyncio.Lock()
 
     async def send(self, message: dict[str, Any]) -> None:
-        """Send message to edge device."""
-        await self.websocket.send_json(message)
-        self.last_message = time.time()
+        """Send message to edge device.
+
+        Protected by a lock to prevent concurrent Starlette WebSocket
+        state-machine violations when multiple background tasks send
+        responses simultaneously.
+        """
+        async with self._send_lock:
+            await self.websocket.send_json(message)
+            self.last_message = time.time()
 
     async def send_token(self, token: str) -> None:
         """Send streaming token."""
@@ -53,6 +72,79 @@ class EdgeConnection:
     async def send_error(self, error: str) -> None:
         """Send error message."""
         await self.send({"type": "error", "error": error})
+
+    def _spawn_task(self, coro, *, name: str | None = None) -> asyncio.Task:
+        """Spawn a background task tracked for cleanup on disconnect."""
+        task = asyncio.create_task(coro, name=name)
+        self._pending_tasks.add(task)
+        task.add_done_callback(self._pending_tasks.discard)
+        return task
+
+    async def cancel_pending(self) -> None:
+        """Cancel all pending tasks (called on disconnect)."""
+        tasks = list(self._pending_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._pending_tasks.clear()
+
+
+class TokenBatcher:
+    """Batches streaming tokens and flushes every interval or when buffer is full.
+
+    Reduces WebSocket frame overhead from ~100 frames/sec (per-token) to
+    ~20 frames/sec (batched) while adding at most 50ms latency.
+    """
+
+    def __init__(self, connection: EdgeConnection, interval_ms: int = 50, max_size: int = 10):
+        self._connection = connection
+        self._interval = interval_ms / 1000.0
+        self._max_size = max_size
+        self._buffer: list[str] = []
+        self._flush_task: asyncio.Task | None = None
+
+    async def add(self, token: str) -> None:
+        """Add a token to the buffer, flushing if full."""
+        self._buffer.append(token)
+        if len(self._buffer) >= self._max_size:
+            await self._flush()
+        elif self._flush_task is None or self._flush_task.done():
+            self._flush_task = asyncio.create_task(self._timed_flush())
+
+    async def _timed_flush(self) -> None:
+        """Flush after the configured interval."""
+        await asyncio.sleep(self._interval)
+        await self._flush()
+
+    async def _flush(self) -> None:
+        """Send buffered tokens as a single message."""
+        if not self._buffer:
+            return
+        # Swap buffer so new tokens arriving during send go to a fresh list
+        tokens = self._buffer
+        self._buffer = []
+        if self._flush_task and not self._flush_task.done():
+            self._flush_task.cancel()
+            self._flush_task = None
+        try:
+            await self._connection.send({"type": "tokens", "tokens": tokens})
+        except Exception:
+            # Restore unsent tokens (prepend before any new ones added during send)
+            tokens.extend(self._buffer)
+            self._buffer = tokens
+            raise
+
+    async def close(self) -> None:
+        """Flush remaining tokens and cancel any pending timer."""
+        if self._flush_task and not self._flush_task.done():
+            self._flush_task.cancel()
+            try:
+                await self._flush_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._flush_task = None
+        await self._flush()
 
 
 # Track connected edge devices
@@ -89,7 +181,8 @@ async def edge_websocket(
 
     Message Types (to edge):
     - response: Query response
-    - token: Streaming token
+    - token: Single streaming token (legacy)
+    - tokens: Batched streaming tokens
     - complete: Stream complete
     - error: Error message
     """
@@ -114,24 +207,33 @@ async def edge_websocket(
             msg_type = message.get("type", "")
 
             if msg_type == "query":
-                # Handle query escalation
-                await _handle_query(connection, message)
+                # LLM-bound: fire-and-forget task
+                connection._spawn_task(
+                    _guarded_handle_query(connection, message),
+                    name=f"query-{connection.location_id}",
+                )
 
             elif msg_type == "query_stream":
-                # Handle streaming query
-                await _handle_streaming_query(connection, message)
+                # LLM-bound: fire-and-forget task
+                connection._spawn_task(
+                    _guarded_handle_streaming_query(connection, message),
+                    name=f"stream-{connection.location_id}",
+                )
 
             elif msg_type == "health":
-                # Health check response
+                # Fast I/O: stay inline
                 await connection.send({"type": "health_ack", "timestamp": time.time()})
 
             elif msg_type == "vision":
-                # Handle vision detections from edge node
+                # Fast I/O: stay inline
                 await _handle_vision_event(connection, message)
 
             elif msg_type == "transcript":
-                # Handle speech transcript from edge node
-                await _handle_transcript(connection, message)
+                # LLM-bound: fire-and-forget task
+                connection._spawn_task(
+                    _guarded_handle_transcript(connection, message),
+                    name=f"transcript-{connection.location_id}",
+                )
 
             elif msg_type == "identity_sync_request":
                 # Handle identity sync from edge node
@@ -155,9 +257,55 @@ async def edge_websocket(
         logger.exception("Edge WebSocket error for %s: %s", location_id, e)
 
     finally:
-        # Clean up connection
+        # Cancel any pending LLM tasks before removing connection
+        await connection.cancel_pending()
         if location_id in _connections:
             del _connections[location_id]
+
+
+async def _guarded_handle_query(connection: EdgeConnection, message: dict[str, Any]) -> None:
+    """Semaphore-guarded wrapper for _handle_query (runs as background task)."""
+    try:
+        async with connection._llm_semaphore:
+            await _handle_query(connection, message)
+    except asyncio.CancelledError:
+        logger.debug("Query task cancelled for %s", connection.location_id)
+    except Exception as e:
+        logger.exception("Background query failed: %s", e)
+        try:
+            await connection.send_error(str(e))
+        except Exception:
+            pass
+
+
+async def _guarded_handle_streaming_query(connection: EdgeConnection, message: dict[str, Any]) -> None:
+    """Semaphore-guarded wrapper for _handle_streaming_query (runs as background task)."""
+    try:
+        async with connection._llm_semaphore:
+            await _handle_streaming_query(connection, message)
+    except asyncio.CancelledError:
+        logger.debug("Streaming query task cancelled for %s", connection.location_id)
+    except Exception as e:
+        logger.exception("Background streaming query failed: %s", e)
+        try:
+            await connection.send_error(str(e))
+        except Exception:
+            pass
+
+
+async def _guarded_handle_transcript(connection: EdgeConnection, message: dict[str, Any]) -> None:
+    """Semaphore-guarded wrapper for _handle_transcript (runs as background task)."""
+    try:
+        async with connection._llm_semaphore:
+            await _handle_transcript(connection, message)
+    except asyncio.CancelledError:
+        logger.debug("Transcript task cancelled for %s", connection.location_id)
+    except Exception as e:
+        logger.exception("Background transcript failed: %s", e)
+        try:
+            await connection.send_error(str(e))
+        except Exception:
+            pass
 
 
 async def _handle_query(
@@ -182,8 +330,6 @@ async def _handle_query(
 
     try:
         # Use the AtlasAgent graph for processing
-        from ...agents.graphs import get_atlas_agent_langgraph
-
         agent = get_atlas_agent_langgraph(session_id=session_id)
         result = await agent.run(
             input_text=query,
@@ -229,13 +375,16 @@ async def _handle_streaming_query(
         query[:50],
     )
 
+    batcher = TokenBatcher(
+        connection,
+        interval_ms=settings.edge.token_batch_interval_ms,
+        max_size=settings.edge.token_batch_max_size,
+    )
     try:
         # Use streaming agent
-        from ...agents.graphs import get_streaming_atlas_agent
-
         agent = get_streaming_atlas_agent(session_id=session_id)
 
-        # Stream tokens to edge device
+        # Stream tokens to edge device via batcher
         full_response = []
         async for token in agent.stream(
             input_text=query,
@@ -243,7 +392,9 @@ async def _handle_streaming_query(
             speaker_id=speaker_id,
         ):
             full_response.append(token)
-            await connection.send_token(token)
+            await batcher.add(token)
+
+        await batcher.close()
 
         # Send completion
         await connection.send_complete({
@@ -252,6 +403,11 @@ async def _handle_streaming_query(
         })
 
     except Exception as e:
+        # Clean up batcher to cancel any pending _timed_flush task
+        try:
+            await batcher.close()
+        except Exception:
+            pass
         logger.exception("Streaming query failed: %s", e)
         await connection.send_error(str(e))
 
@@ -273,13 +429,11 @@ async def _handle_vision_event(
         len(detections),
     )
 
+    # Phase 1: Build records (no I/O)
+    records: list[VisionEventRecord] = []
+    events: list[VisionEvent] = []
     for det in detections:
         try:
-            from ...vision.models import BoundingBox, EventType, VisionEvent
-            from ...storage.models import VisionEventRecord
-            from ...storage.repositories import get_vision_event_repo
-            from ...alerts import VisionAlertEvent, get_alert_manager
-
             bbox_raw = det.get("bbox", [0, 0, 0, 0])
             # Normalize pixel coords to 0-1 range
             bbox = BoundingBox(
@@ -301,8 +455,8 @@ async def _handle_vision_event(
                 bbox=bbox,
                 metadata={"confidence": det.get("confidence", 0)},
             )
+            events.append(event)
 
-            # Persist to DB
             record = VisionEventRecord(
                 id=uuid4(),
                 event_id=event.event_id,
@@ -319,19 +473,29 @@ async def _handle_vision_event(
                 received_at=datetime.utcnow(),
                 metadata=event.metadata,
             )
-            repo = get_vision_event_repo()
-            await repo.save_event(record)
-
-            # Process alerts
-            try:
-                alert_event = VisionAlertEvent.from_vision_event(event)
-                manager = get_alert_manager()
-                await manager.process_event(alert_event)
-            except Exception as e:
-                logger.warning("Alert processing failed: %s", e)
-
+            records.append(record)
         except Exception as e:
-            logger.warning("Failed to process detection: %s", e)
+            logger.warning("Failed to build detection: %s", e)
+
+    # Phase 2: Batch DB save (single transaction)
+    if records:
+        try:
+            repo = get_vision_event_repo()
+            await repo.save_events_batch(records)
+        except Exception as e:
+            logger.warning("Batch vision save failed: %s", e)
+
+    # Phase 3: Concurrent alert processing
+    if events:
+        try:
+            manager = get_alert_manager()
+            coros = [
+                manager.process_event(VisionAlertEvent.from_vision_event(e))
+                for e in events
+            ]
+            await asyncio.gather(*coros, return_exceptions=True)
+        except Exception as e:
+            logger.warning("Alert processing failed: %s", e)
 
     await connection.send({"type": "vision_ack", "count": len(detections)})
 
@@ -354,8 +518,6 @@ async def _handle_transcript(
     )
 
     try:
-        from ...agents.graphs import get_atlas_agent_langgraph
-
         session_id = f"edge-{node_id}"
         agent = get_atlas_agent_langgraph(session_id=session_id)
         result = await agent.run(
@@ -400,8 +562,6 @@ async def _handle_identity_sync_request(
     )
 
     try:
-        from ...storage.repositories.identity import get_identity_repo
-
         repo = get_identity_repo()
         to_send, to_delete = await repo.diff_manifest(edge_manifest)
 
@@ -431,8 +591,6 @@ async def _handle_identity_register(
 
     Saves to master DB, then broadcasts to all OTHER connected edges.
     """
-    import numpy as np
-
     name = message.get("name")
     modality = message.get("modality")
     embedding_list = message.get("embedding")
@@ -452,8 +610,6 @@ async def _handle_identity_register(
     )
 
     try:
-        from ...storage.repositories.identity import get_identity_repo
-
         repo = get_identity_repo()
         embedding = np.array(embedding_list, dtype=np.float32)
         await repo.upsert(name, modality, embedding, source_node=node_id)
@@ -498,8 +654,6 @@ async def _handle_security_event(
     )
 
     try:
-        from ...storage.repositories.unified_alerts import get_unified_alert_repo
-
         repo = get_unified_alert_repo()
 
         # Build human-readable message

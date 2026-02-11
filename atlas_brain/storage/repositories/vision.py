@@ -84,6 +84,53 @@ class VisionEventRepository:
             logger.error("Failed to save vision event %s: %s", event.event_id, e)
             raise
 
+    async def save_events_batch(self, events: list[VisionEventRecord]) -> int:
+        """
+        Save multiple vision events in a single transaction.
+
+        Uses a prepared statement within one transaction for single connection
+        acquisition + single commit + statement reuse.
+
+        Args:
+            events: List of events to save
+
+        Returns:
+            Number of events submitted (duplicates silently skipped via ON CONFLICT)
+        """
+        if not events:
+            return 0
+
+        pool = get_db_pool()
+
+        if not pool.is_initialized:
+            logger.debug("Database not initialized, skipping batch event save")
+            return 0
+
+        try:
+            async with pool.transaction() as conn:
+                stmt = await conn.prepare("""
+                    INSERT INTO vision_events (
+                        id, event_id, event_type, track_id, class_name,
+                        source_id, node_id, bbox_x1, bbox_y1, bbox_x2, bbox_y2,
+                        event_timestamp, received_at, metadata
+                    )
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb)
+                    ON CONFLICT (node_id, event_id) DO NOTHING
+                """)
+                for event in events:
+                    await stmt.fetchrow(
+                        event.id, event.event_id, event.event_type,
+                        event.track_id, event.class_name, event.source_id,
+                        event.node_id, event.bbox_x1, event.bbox_y1,
+                        event.bbox_x2, event.bbox_y2, event.event_timestamp,
+                        event.received_at, json.dumps(event.metadata),
+                    )
+            logger.debug("Batch saved %d vision events", len(events))
+            return len(events)
+        except Exception as e:
+            logger.error("Batch save failed for %d events: %s", len(events), e)
+            raise
+
     async def get_recent_events(
         self,
         limit: int = 100,
