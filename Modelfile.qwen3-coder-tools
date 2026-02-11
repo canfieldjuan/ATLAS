@@ -23,8 +23,8 @@ You have access to the following functions:
 {{- range $name, $prop := .Function.Parameters.Properties }}
 <parameter>
 <name>{{ $name }}</name>
-<type>{{ $prop.type }}</type>
-<description>{{ $prop.description }}</description>
+<type>{{ $prop.Type }}</type>
+<description>{{ $prop.Description }}</description>
 </parameter>
 {{- end }}
 </parameters>
