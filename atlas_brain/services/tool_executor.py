@@ -43,7 +43,8 @@ PARAM_PATTERN = re.compile(
 
 
 def _strip_tool_xml(text: str) -> str:
-    """Remove tool call XML artifacts from a response before returning to user."""
+    """Remove tool call XML artifacts and LLM thinking tags from a response."""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     text = re.sub(r"</?tool_call>", "", text)
     text = TEXT_TOOL_PATTERN.sub("", text)
     return text.strip()
@@ -176,7 +177,7 @@ async def execute_with_tools(
 
         if not tool_calls:
             # If LLM returned empty but we have tool results, use tool result as response
-            final_response = last_response
+            final_response = _strip_tool_xml(last_response)
             if not final_response and tool_results:
                 # Use the last tool's result as the response
                 final_response = list(tool_results.values())[-1]

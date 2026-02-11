@@ -13,8 +13,8 @@ from uuid import UUID
 
 logger = logging.getLogger("atlas.agents.graphs.workflow_state")
 
-# Default timeout for workflow state (minutes)
-DEFAULT_WORKFLOW_TIMEOUT_MINUTES = 5
+# Default timeout for workflow state (minutes) — matches WorkflowConfig.timeout_minutes
+DEFAULT_WORKFLOW_TIMEOUT_MINUTES = 10
 
 
 @dataclass

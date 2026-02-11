@@ -90,9 +90,10 @@ from .display import (
 )
 
 # Register tools on import
-# NOTE: Write/multi-turn workflow tools (reminder create, email, scheduling) are NOT
-# registered here - they route through LangGraph workflows. Read-only query tools
-# (calendar_tool, list_reminders_tool) ARE registered for fast-path execution.
+# NOTE: Read-only tools are registered for fast-path execution. Scheduling, reminder,
+# and calendar tools are also registered for LLM tool calling in their workflows.
+# Email tools (send_email, send_estimate_email, send_proposal_email) are NOT registered
+# — they route through the LangGraph email workflow directly.
 tool_registry.register(weather_tool)
 tool_registry.register(traffic_tool)
 tool_registry.register(location_tool)

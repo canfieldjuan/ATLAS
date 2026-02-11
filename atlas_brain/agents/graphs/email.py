@@ -1443,6 +1443,7 @@ async def run_email_workflow(
         "draft_to": result.get("draft_to"),
         "draft_template": result.get("draft_template"),
         "awaiting_confirmation": result.get("awaiting_confirmation", False),
+        "awaiting_user_input": result.get("awaiting_confirmation", False) or result.get("needs_clarification", False),
         # Send results
         "email_sent": result.get("email_sent", False),
         "resend_message_id": result.get("resend_message_id"),

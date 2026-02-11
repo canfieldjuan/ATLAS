@@ -679,7 +679,7 @@ class CreateCalendarEventTool:
             ),
             ToolParameter(
                 name="duration_minutes",
-                param_type="integer",
+                param_type="int",
                 description="Event duration in minutes (default: 60)",
                 required=False,
                 default=60,
