@@ -108,7 +108,7 @@ async def execute_with_tools(
         logger.warning("LLM does not support tool calling, using regular chat")
         result = llm.chat(messages=messages, max_tokens=max_tokens, temperature=temperature)
         return {
-            "response": result.get("response", ""),
+            "response": _strip_tool_xml(result.get("response", "")),
             "tools_executed": [],
             "tool_results": {},
         }

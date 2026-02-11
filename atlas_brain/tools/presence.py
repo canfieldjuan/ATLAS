@@ -41,7 +41,7 @@ class LightsNearUserTool:
         ),
         ToolParameter(
             name="brightness",
-            param_type="integer",
+            param_type="int",
             description="Brightness level 0-100 (optional, only for 'on' action)",
             required=False,
         ),
