@@ -105,14 +105,17 @@ async def run_booking_workflow(
     response = result.get("response", "")
     tools_executed = result.get("tools_executed", [])
 
-    # Strip <think> tags from Qwen3
-    response = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
+    # Strip <think> tags from Qwen3 and stray <tool_call> XML wrappers
+    response = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL)
+    response = re.sub(r"</?tool_call>", "", response)
+    response = re.sub(r"<function=\w+>.*?</function>", "", response, flags=re.DOTALL)
+    response = response.strip()
 
     # Determine if workflow is complete
     booking_done = "book_appointment" in tools_executed
 
-    if booking_done or not response:
-        # Workflow complete -- clear state
+    if booking_done:
+        # Booking confirmed -- clear state
         if session_id:
             await manager.clear_workflow_state(session_id)
         return {
@@ -120,6 +123,10 @@ async def run_booking_workflow(
             "awaiting_user_input": False,
             "total_ms": (time.perf_counter() - start_time) * 1000,
         }
+
+    if not response:
+        # LLM returned empty without booking -- keep workflow alive
+        response = "Sorry, could you repeat that?"
 
     # Workflow continues -- save conversation context for next turn
     if session_id:

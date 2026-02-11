@@ -42,6 +42,13 @@ PARAM_PATTERN = re.compile(
 )
 
 
+def _strip_tool_xml(text: str) -> str:
+    """Remove tool call XML artifacts from a response before returning to user."""
+    text = re.sub(r"</?tool_call>", "", text)
+    text = TEXT_TOOL_PATTERN.sub("", text)
+    return text.strip()
+
+
 def parse_text_tool_calls(content: str) -> list[dict]:
     """Parse text-based tool calls from LLM response."""
     tool_calls = []
@@ -230,10 +237,9 @@ async def execute_with_tools(
                 tool_result.message[:50] if tool_result.message else "",
             )
 
-    # Max iterations reached
+    # Max iterations reached -- strip any leftover tool XML from response
     logger.warning("Max tool iterations (%d) reached", MAX_TOOL_ITERATIONS)
-    # Fallback to tool result if LLM response is empty
-    final_response = last_response
+    final_response = _strip_tool_xml(last_response)
     if not final_response and tool_results:
         final_response = list(tool_results.values())[-1]
         logger.info("Using tool result as fallback response: %s", final_response)

@@ -11,7 +11,7 @@ from .weather import WeatherTool, weather_tool
 from .traffic import TrafficTool, traffic_tool
 from .location import LocationTool, location_tool
 from .time import TimeTool, time_tool
-from .calendar import CalendarTool, calendar_tool
+from .calendar import CalendarTool, calendar_tool, CreateCalendarEventTool, create_calendar_event_tool
 from .reminder import (
     ReminderTool,
     reminder_tool,
@@ -128,6 +128,11 @@ tool_registry.register(close_camera_feed_tool)
 tool_registry.register(check_availability_tool)
 tool_registry.register(book_appointment_tool)
 tool_registry.register(lookup_customer_tool)
+# Reminder tools - available for LLM tool calling in reminder conversations
+tool_registry.register(reminder_tool)
+tool_registry.register(complete_reminder_tool)
+# Calendar tools - create event for LLM tool calling in calendar conversations
+tool_registry.register(create_calendar_event_tool)
 
 __all__ = [
     "Tool",
@@ -145,6 +150,8 @@ __all__ = [
     "time_tool",
     "CalendarTool",
     "calendar_tool",
+    "CreateCalendarEventTool",
+    "create_calendar_event_tool",
     "ReminderTool",
     "reminder_tool",
     "ListRemindersTool",

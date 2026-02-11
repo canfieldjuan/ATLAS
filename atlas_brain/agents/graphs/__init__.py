@@ -32,9 +32,8 @@ from .booking import (
     BOOKING_WORKFLOW_TYPE,
 )
 from .reminder import (
-    build_reminder_graph,
-    compile_reminder_graph,
     run_reminder_workflow,
+    REMINDER_WORKFLOW_TYPE,
 )
 from .security import (
     build_security_graph,
@@ -53,9 +52,8 @@ from .email import (
     send_email_confirmed,
 )
 from .calendar import (
-    build_calendar_graph,
-    compile_calendar_graph,
     run_calendar_workflow,
+    CALENDAR_WORKFLOW_TYPE,
 )
 from .workflow_state import (
     ActiveWorkflowState,
@@ -90,9 +88,8 @@ __all__ = [
     "run_booking_workflow",
     "BOOKING_WORKFLOW_TYPE",
     # Reminder workflow
-    "build_reminder_graph",
-    "compile_reminder_graph",
     "run_reminder_workflow",
+    "REMINDER_WORKFLOW_TYPE",
     # Security workflow
     "build_security_graph",
     "compile_security_graph",
@@ -110,9 +107,8 @@ __all__ = [
     "send_email_confirmed",
     # Calendar workflow
     "CalendarWorkflowState",
-    "build_calendar_graph",
-    "compile_calendar_graph",
     "run_calendar_workflow",
+    "CALENDAR_WORKFLOW_TYPE",
     # Workflow state manager
     "ActiveWorkflowState",
     "WorkflowStateManager",

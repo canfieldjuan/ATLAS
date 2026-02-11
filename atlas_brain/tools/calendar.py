@@ -651,5 +651,92 @@ class CalendarTool:
             logger.warning("Calendar prefetch failed: %s", e)
 
 
-# Module-level instance
+class CreateCalendarEventTool:
+    """Tool for creating calendar events via natural language."""
+
+    @property
+    def name(self) -> str:
+        return "create_calendar_event"
+
+    @property
+    def description(self) -> str:
+        return "Create a new calendar event. Use when user says 'add a meeting', 'schedule an event', 'put on my calendar'."
+
+    @property
+    def parameters(self) -> list[ToolParameter]:
+        return [
+            ToolParameter(
+                name="summary",
+                param_type="string",
+                description="Event title (e.g., 'Team meeting', 'Lunch with Sarah')",
+                required=True,
+            ),
+            ToolParameter(
+                name="start_time",
+                param_type="string",
+                description="When the event starts (e.g., 'tomorrow at 3pm', 'next Tuesday 10am')",
+                required=True,
+            ),
+            ToolParameter(
+                name="duration_minutes",
+                param_type="integer",
+                description="Event duration in minutes (default: 60)",
+                required=False,
+                default=60,
+            ),
+            ToolParameter(
+                name="location",
+                param_type="string",
+                description="Event location",
+                required=False,
+            ),
+        ]
+
+    @property
+    def aliases(self) -> list[str]:
+        return ["create event", "add event", "new event", "schedule event"]
+
+    @property
+    def category(self) -> str:
+        return "utility"
+
+    async def execute(self, params: dict[str, Any]) -> ToolResult:
+        """Create a calendar event from natural language parameters."""
+        import dateparser as dp
+
+        summary = params.get("summary", "").strip()
+        start_text = params.get("start_time", "").strip()
+        duration = int(params.get("duration_minutes", 60))
+        location = params.get("location")
+
+        if not summary:
+            return ToolResult(
+                success=False, error="MISSING_SUMMARY",
+                message="What should the event be called?",
+            )
+        if not start_text:
+            return ToolResult(
+                success=False, error="MISSING_TIME",
+                message="When should the event be?",
+            )
+
+        start = dp.parse(start_text, settings={
+            "PREFER_DATES_FROM": "future",
+            "RETURN_AS_TIMEZONE_AWARE": True,
+            "TIMEZONE": settings.reminder.default_timezone,
+        })
+        if not start:
+            return ToolResult(
+                success=False, error="INVALID_TIME",
+                message=f"I couldn't understand '{start_text}'. Try 'tomorrow at 3pm'.",
+            )
+
+        end = start + timedelta(minutes=duration)
+        return await calendar_tool.create_event(
+            summary=summary, start=start, end=end, location=location,
+        )
+
+
+# Module-level instances
 calendar_tool = CalendarTool()
+create_calendar_event_tool = CreateCalendarEventTool()
