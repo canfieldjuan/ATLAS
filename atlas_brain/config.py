@@ -398,6 +398,14 @@ class ToolsConfig(BaseSettings):
     calendar_id: str = Field(default="primary", description="Calendar ID to query")
     calendar_cache_ttl: float = Field(default=300.0, description="Cache TTL in seconds")
 
+    # Gmail digest
+    gmail_enabled: bool = Field(default=False, description="Enable Gmail digest")
+    gmail_client_id: str | None = Field(default=None, description="Google OAuth client ID for Gmail")
+    gmail_client_secret: str | None = Field(default=None, description="Google OAuth client secret for Gmail")
+    gmail_refresh_token: str | None = Field(default=None, description="Gmail OAuth refresh token")
+    gmail_max_results: int = Field(default=20, ge=1, le=50, description="Max emails per digest")
+    gmail_query: str = Field(default="is:unread newer_than:1d", description="Gmail search query")
+
 
 class IntentConfig(BaseSettings):
     """Intent parsing configuration."""
@@ -1005,6 +1013,26 @@ class EdgeConfig(BaseSettings):
     )
 
 
+class AutonomousConfig(BaseSettings):
+    """Autonomous task scheduler configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_AUTONOMOUS_",
+        env_file=".env",
+        extra="ignore",
+    )
+
+    enabled: bool = Field(default=False, description="Enable autonomous task scheduler")
+    default_agent_type: str = Field(default="atlas", description="Default agent type for headless tasks")
+    default_session_prefix: str = Field(default="autonomous", description="Session ID prefix for task runs")
+    max_concurrent_tasks: int = Field(default=2, ge=1, le=10, description="Max concurrent task executions")
+    task_timeout_seconds: int = Field(default=120, ge=10, le=600, description="Default task timeout")
+    task_history_retention_days: int = Field(default=30, ge=1, le=365, description="Execution history retention")
+    hooks_enabled: bool = Field(default=True, description="Enable alert-driven hook processing")
+    hook_cooldown_seconds: int = Field(default=30, ge=0, le=300, description="Min seconds between duplicate hook executions")
+    default_timezone: str = Field(default="America/Chicago", description="Default timezone for scheduled tasks")
+
+
 class Settings(BaseSettings):
     """Application-wide settings."""
 
@@ -1073,6 +1101,7 @@ class Settings(BaseSettings):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     workflows: WorkflowConfig = Field(default_factory=WorkflowConfig)
     edge: EdgeConfig = Field(default_factory=EdgeConfig)
+    autonomous: AutonomousConfig = Field(default_factory=AutonomousConfig)
     openai_compat: OpenAICompatConfig = Field(default_factory=OpenAICompatConfig)
     ftl_tracing: FTLTracingConfig = Field(default_factory=FTLTracingConfig)
 
