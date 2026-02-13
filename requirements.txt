@@ -50,3 +50,6 @@ rich>=13.0.0
 # LangGraph for agent orchestration
 langgraph>=0.2.0
 langchain-core>=0.3.0
+
+# Autonomous task scheduling
+apscheduler>=3.10,<4.0

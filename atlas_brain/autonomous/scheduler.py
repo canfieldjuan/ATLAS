@@ -1,0 +1,383 @@
+"""
+Task scheduler for autonomous agent execution.
+
+Uses APScheduler as the timing engine with PostgreSQL as the
+source of truth for task definitions and execution history.
+"""
+
+import asyncio
+import logging
+import time
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
+from apscheduler.triggers.interval import IntervalTrigger
+
+from ..storage.models import ScheduledTask
+from .config import autonomous_config
+
+logger = logging.getLogger("atlas.autonomous.scheduler")
+
+
+class TaskScheduler:
+    """
+    Wraps APScheduler AsyncIOScheduler for autonomous task execution.
+
+    APScheduler handles timing; PostgreSQL is the source of truth
+    for task definitions and execution history.
+    """
+
+    def __init__(self):
+        self._scheduler: Optional[AsyncIOScheduler] = None
+        self._semaphore: Optional[asyncio.Semaphore] = None
+        self._background_tasks: set[asyncio.Task] = set()
+        self._running = False
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
+    @property
+    def scheduled_count(self) -> int:
+        """Derive count from APScheduler's actual job list."""
+        if self._scheduler and self._running:
+            return len(self._scheduler.get_jobs())
+        return 0
+
+    async def start(self) -> None:
+        """Create the scheduler, start it, and load tasks from DB."""
+        if self._running:
+            logger.warning("Scheduler already running")
+            return
+
+        self._semaphore = asyncio.Semaphore(autonomous_config.max_concurrent_tasks)
+
+        self._scheduler = AsyncIOScheduler(
+            job_defaults={
+                "coalesce": True,
+                "max_instances": 1,
+                "misfire_grace_time": 300,
+            }
+        )
+
+        self._scheduler.start()
+        self._running = True
+
+        await self._load_tasks_from_db()
+
+        # Mark orphaned running executions from previous crashes
+        await self._cleanup_orphaned_executions()
+
+        logger.info("TaskScheduler started with %d tasks", self.scheduled_count)
+
+    async def stop(self) -> None:
+        """Shutdown the scheduler gracefully."""
+        if self._scheduler and self._running:
+            # Use wait=False to avoid blocking the async event loop.
+            # In-flight tasks are already wrapped in asyncio.wait_for()
+            # with their own timeouts, so they'll complete or timeout
+            # on their own.
+            self._scheduler.shutdown(wait=False)
+            self._running = False
+            logger.info("TaskScheduler stopped")
+
+    async def _load_tasks_from_db(self) -> None:
+        """Load enabled tasks from the database and register them."""
+        try:
+            from ..storage.repositories.scheduled_task import get_scheduled_task_repo
+
+            repo = get_scheduled_task_repo()
+            tasks = await repo.get_enabled()
+
+            for task in tasks:
+                try:
+                    self._register_task(task)
+                except Exception as e:
+                    logger.error("Failed to register task '%s': %s", task.name, e)
+
+        except Exception as e:
+            logger.error("Failed to load tasks from DB: %s", e)
+
+    async def _cleanup_orphaned_executions(self) -> None:
+        """Mark executions stuck in 'running' status as failed (from prior crashes)."""
+        try:
+            from ..storage.database import get_db_pool
+
+            pool = get_db_pool()
+            if not pool.is_initialized:
+                return
+
+            result = await pool.execute(
+                """
+                UPDATE task_executions
+                SET status = 'failed',
+                    completed_at = $1,
+                    error = 'Server restarted while task was running'
+                WHERE status = 'running'
+                """,
+                datetime.now(timezone.utc),
+            )
+
+            # Parse count from "UPDATE N"
+            count = 0
+            if result:
+                try:
+                    count = int(result.split()[-1])
+                except (ValueError, IndexError):
+                    pass
+
+            if count > 0:
+                logger.warning("Marked %d orphaned task executions as failed", count)
+
+        except Exception as e:
+            logger.error("Failed to cleanup orphaned executions: %s", e)
+
+    def _register_task(self, task: ScheduledTask) -> None:
+        """Register a task with APScheduler."""
+        trigger = self._build_trigger(task)
+        if trigger is None:
+            logger.warning(
+                "Could not build trigger for task '%s' (schedule_type=%s)",
+                task.name, task.schedule_type,
+            )
+            return
+
+        self._scheduler.add_job(
+            self._execute_task,
+            trigger=trigger,
+            id=str(task.id),
+            name=task.name,
+            replace_existing=True,
+            args=[task.id],
+        )
+        logger.info("Registered task '%s' (%s)", task.name, task.schedule_type)
+
+    def unregister_task(self, task_id: str) -> None:
+        """Remove a task from APScheduler."""
+        if self._scheduler:
+            try:
+                self._scheduler.remove_job(task_id)
+                logger.info("Unregistered task %s", task_id)
+            except Exception:
+                logger.debug("Task %s not found in scheduler", task_id)
+
+    def _build_trigger(self, task: ScheduledTask):
+        """Build an APScheduler trigger from task schedule config."""
+        default_tz = autonomous_config.default_timezone
+        if task.schedule_type == "cron" and task.cron_expression:
+            return CronTrigger.from_crontab(
+                task.cron_expression,
+                timezone=task.timezone or default_tz,
+            )
+        elif task.schedule_type == "interval" and task.interval_seconds:
+            return IntervalTrigger(seconds=task.interval_seconds)
+        elif task.schedule_type == "once" and task.run_at:
+            return DateTrigger(
+                run_date=task.run_at,
+                timezone=task.timezone or default_tz,
+            )
+        return None
+
+    async def _execute_task(self, task_id, retry_count: int = 0) -> None:
+        """Execute a scheduled task with concurrency control and error handling."""
+        from ..storage.repositories.scheduled_task import get_scheduled_task_repo
+        from .runner import get_headless_runner
+
+        repo = get_scheduled_task_repo()
+
+        async with self._semaphore:
+            task = await repo.get_by_id(task_id)
+            if not task or not task.enabled:
+                logger.debug("Skipping disabled/missing task %s", task_id)
+                return
+
+            exec_id = await repo.record_execution(task_id, retry_count=retry_count)
+            start_time = time.monotonic()
+            now = datetime.now(timezone.utc)
+
+            logger.info("Executing task '%s' (exec_id=%s, retry=%d)", task.name, exec_id, retry_count)
+
+            try:
+                timeout = task.timeout_seconds or autonomous_config.task_timeout_seconds
+                runner = get_headless_runner()
+                result = await asyncio.wait_for(
+                    runner.run(task),
+                    timeout=timeout,
+                )
+
+                duration_ms = int((time.monotonic() - start_time) * 1000)
+                status = "completed" if result.success else "failed"
+
+                await repo.complete_execution(
+                    exec_id, status,
+                    result_text=result.response_text,
+                    duration_ms=duration_ms,
+                    error=result.error,
+                )
+
+                next_run = self._get_next_run_time(task)
+                await repo.update_last_run(task_id, now, next_run)
+
+                logger.info(
+                    "Task '%s' %s in %dms",
+                    task.name, status, duration_ms,
+                )
+
+                if status == "failed":
+                    self._maybe_schedule_retry(task, retry_count)
+
+            except asyncio.TimeoutError:
+                duration_ms = int((time.monotonic() - start_time) * 1000)
+                await repo.complete_execution(
+                    exec_id, "timeout",
+                    duration_ms=duration_ms,
+                    error=f"Task timed out after {task.timeout_seconds}s",
+                )
+                next_run = self._get_next_run_time(task)
+                await repo.update_last_run(task_id, now, next_run)
+                logger.warning("Task '%s' timed out after %ds", task.name, task.timeout_seconds)
+                # No retry on timeout — stuck tasks stay stuck
+
+            except Exception as e:
+                duration_ms = int((time.monotonic() - start_time) * 1000)
+                await repo.complete_execution(
+                    exec_id, "failed",
+                    duration_ms=duration_ms,
+                    error=str(e),
+                )
+                next_run = self._get_next_run_time(task)
+                await repo.update_last_run(task_id, now, next_run)
+                logger.error("Task '%s' failed: %s", task.name, e)
+                self._maybe_schedule_retry(task, retry_count)
+
+    def _maybe_schedule_retry(self, task: ScheduledTask, current_retry_count: int) -> None:
+        """Schedule a retry if the task has retries remaining."""
+        if not self._scheduler or not self._running:
+            return
+
+        next_retry = current_retry_count + 1
+        if task.max_retries <= 0 or next_retry > task.max_retries:
+            return
+
+        delay = task.retry_delay_seconds or 60
+        run_date = datetime.now(timezone.utc) + timedelta(seconds=delay)
+        job_id = f"{task.id}_retry_{next_retry}"
+
+        self._scheduler.add_job(
+            self._execute_task,
+            trigger=DateTrigger(run_date=run_date),
+            id=job_id,
+            name=f"{task.name}_retry_{next_retry}",
+            replace_existing=True,
+            args=[task.id, next_retry],
+        )
+        logger.info(
+            "Scheduled retry %d/%d for task '%s' in %ds (job_id=%s)",
+            next_retry, task.max_retries, task.name, delay, job_id,
+        )
+
+    def _get_next_run_time(self, task: ScheduledTask) -> Optional[datetime]:
+        """Get next run time from APScheduler job."""
+        if not self._scheduler:
+            return None
+        try:
+            job = self._scheduler.get_job(str(task.id))
+            if job and job.next_run_time:
+                return job.next_run_time
+        except Exception:
+            pass
+        return None
+
+    async def register_and_schedule(self, task: ScheduledTask) -> None:
+        """Register a new task (called when task is created via API)."""
+        if self._running and task.enabled:
+            self._register_task(task)
+
+    async def run_now(self, task: ScheduledTask) -> dict:
+        """Execute a task immediately (manual trigger). Returns immediately with execution ID."""
+        from ..storage.repositories.scheduled_task import get_scheduled_task_repo
+
+        repo = get_scheduled_task_repo()
+        exec_id = await repo.record_execution(task.id, metadata={"trigger": "manual"})
+
+        bg_task = asyncio.create_task(
+            self._run_task_background(task, exec_id),
+            name=f"manual_{task.name}",
+        )
+        self._background_tasks.add(bg_task)
+        bg_task.add_done_callback(self._background_tasks.discard)
+
+        return {
+            "execution_id": str(exec_id),
+            "status": "running",
+            "message": "Task started. Poll GET /{task_id}/executions for status.",
+        }
+
+    async def _run_task_background(self, task: ScheduledTask, exec_id) -> None:
+        """Background execution for manual run_now triggers."""
+        from ..storage.repositories.scheduled_task import get_scheduled_task_repo
+        from .runner import get_headless_runner
+
+        repo = get_scheduled_task_repo()
+        start_time = time.monotonic()
+        now = datetime.now(timezone.utc)
+
+        try:
+            async with self._semaphore:
+                timeout = task.timeout_seconds or autonomous_config.task_timeout_seconds
+                runner = get_headless_runner()
+                result = await asyncio.wait_for(
+                    runner.run(task),
+                    timeout=timeout,
+                )
+
+                duration_ms = int((time.monotonic() - start_time) * 1000)
+                status = "completed" if result.success else "failed"
+
+                await repo.complete_execution(
+                    exec_id, status,
+                    result_text=result.response_text,
+                    duration_ms=duration_ms,
+                    error=result.error,
+                )
+                await repo.update_last_run(task.id, now, self._get_next_run_time(task))
+
+                logger.info("Manual task '%s' %s in %dms", task.name, status, duration_ms)
+
+                if status == "failed":
+                    self._maybe_schedule_retry(task, 0)
+
+        except asyncio.TimeoutError:
+            duration_ms = int((time.monotonic() - start_time) * 1000)
+            await repo.complete_execution(
+                exec_id, "timeout",
+                duration_ms=duration_ms,
+                error=f"Task timed out after {task.timeout_seconds}s",
+            )
+            await repo.update_last_run(task.id, now, self._get_next_run_time(task))
+            logger.warning("Manual task '%s' timed out after %ds", task.name, task.timeout_seconds)
+
+        except Exception as e:
+            duration_ms = int((time.monotonic() - start_time) * 1000)
+            await repo.complete_execution(
+                exec_id, "failed",
+                duration_ms=duration_ms,
+                error=str(e),
+            )
+            await repo.update_last_run(task.id, now, self._get_next_run_time(task))
+            logger.error("Manual task '%s' failed: %s", task.name, e)
+            self._maybe_schedule_retry(task, 0)
+
+
+_task_scheduler: Optional[TaskScheduler] = None
+
+
+def get_task_scheduler() -> TaskScheduler:
+    """Get the global task scheduler."""
+    global _task_scheduler
+    if _task_scheduler is None:
+        _task_scheduler = TaskScheduler()
+    return _task_scheduler

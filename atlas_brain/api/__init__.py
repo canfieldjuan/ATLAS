@@ -18,6 +18,7 @@ from .recognition import router as recognition_router
 from .speaker import router as speaker_router
 from .identity import router as identity_router
 from .edge import router as edge_router
+from .autonomous import router as autonomous_router
 
 # Main router that aggregates all sub-routers
 router = APIRouter()
@@ -36,3 +37,4 @@ router.include_router(recognition_router)
 router.include_router(speaker_router)
 router.include_router(identity_router)
 router.include_router(edge_router)
+router.include_router(autonomous_router)

@@ -6,6 +6,7 @@ Provides unified alert handling for events from multiple sources:
 - Audio events (YAMNet)
 - Home Assistant state changes
 - Security events (Kafka)
+- Presence transitions
 """
 
 from .delivery import (
@@ -19,6 +20,7 @@ from .events import (
     AlertEvent,
     AudioAlertEvent,
     HAStateAlertEvent,
+    PresenceAlertEvent,
     ReminderAlertEvent,
     SecurityAlertEvent,
     VisionAlertEvent,
@@ -44,6 +46,7 @@ __all__ = [
     "HAStateAlertEvent",
     "ReminderAlertEvent",
     "SecurityAlertEvent",
+    "PresenceAlertEvent",
     # Rules
     "AlertRule",
     "create_vision_rule",

@@ -117,6 +117,27 @@ class AlertManager:
             priority=20,  # High priority
         ))
 
+        # Presence transition rules — hook tasks can bind to these
+        self.add_rule(AlertRule(
+            name="presence_arrival",
+            event_types=["presence"],
+            source_pattern="*",
+            conditions={"transition": "arrival"},
+            message_template="Someone arrived home.",
+            cooldown_seconds=300,
+            priority=5,
+        ))
+
+        self.add_rule(AlertRule(
+            name="presence_departure",
+            event_types=["presence"],
+            source_pattern="*",
+            conditions={"transition": "departure"},
+            message_template="House appears empty.",
+            cooldown_seconds=300,
+            priority=5,
+        ))
+
     def add_rule(self, rule: AlertRule) -> None:
         """Add or update an alert rule."""
         self._rules[rule.name] = rule

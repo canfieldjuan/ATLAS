@@ -1032,6 +1032,17 @@ class AutonomousConfig(BaseSettings):
     hook_cooldown_seconds: int = Field(default=30, ge=0, le=300, description="Min seconds between duplicate hook executions")
     default_timezone: str = Field(default="America/Chicago", description="Default timezone for scheduled tasks")
 
+    # Event queue (Phase 3)
+    event_queue_enabled: bool = Field(default=True, description="Enable event queue for debounced hook dispatch")
+    event_queue_debounce_seconds: float = Field(default=5.0, ge=0.5, le=60.0, description="Debounce window before flushing queued events")
+    event_queue_max_batch_size: int = Field(default=50, ge=1, le=500, description="Max events per batch flush")
+    event_queue_max_age_seconds: float = Field(default=30.0, ge=1.0, le=300.0, description="Max time to hold events before forced flush")
+
+    # Presence tracking (Phase 3)
+    presence_enabled: bool = Field(default=True, description="Enable presence/occupancy state tracking")
+    presence_empty_delay_seconds: int = Field(default=300, ge=30, le=1800, description="Seconds after last person_left before declaring empty")
+    presence_arrival_cooldown_seconds: int = Field(default=300, ge=60, le=3600, description="Cooldown between arrival transition fires")
+
 
 class Settings(BaseSettings):
     """Application-wide settings."""

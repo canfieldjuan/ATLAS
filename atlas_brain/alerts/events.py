@@ -210,3 +210,52 @@ class SecurityAlertEvent:
             confidence=event.get("confidence", 0.0),
             metadata=event,
         )
+
+
+@dataclass
+class PresenceAlertEvent:
+    """Presence state transition event for alert processing."""
+
+    source_id: str
+    timestamp: datetime
+    transition: str  # "arrival", "departure"
+    occupancy_state: str  # "empty", "occupied", "identified"
+    event_type: str = "presence"
+    person_name: Optional[str] = None
+    occupants: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def get_field(self, name: str, default: Any = None) -> Any:
+        """Get event-specific field for rule matching."""
+        field_map = {
+            "transition": self.transition,
+            "occupancy_state": self.occupancy_state,
+            "person_name": self.person_name,
+            "occupants": self.occupants,
+        }
+        return field_map.get(name, self.metadata.get(name, default))
+
+    @classmethod
+    def from_presence_state(
+        cls,
+        transition: str,
+        state_value: str,
+        occupants: list[str],
+        person: Optional[str] = None,
+        source_id: str = "presence_tracker",
+    ) -> "PresenceAlertEvent":
+        """Create from PresenceTracker transition data."""
+        return cls(
+            source_id=source_id,
+            timestamp=datetime.utcnow(),
+            transition=transition,
+            occupancy_state=state_value,
+            person_name=person,
+            occupants=list(occupants),
+            metadata={
+                "transition": transition,
+                "occupancy_state": state_value,
+                "occupants": occupants,
+                "person_name": person,
+            },
+        )

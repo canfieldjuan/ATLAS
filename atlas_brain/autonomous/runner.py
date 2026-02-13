@@ -148,8 +148,9 @@ class HeadlessRunner:
         return await run_nightly_sync(purge_days=purge_days)
 
     async def _run_cleanup_executions(self, task: ScheduledTask) -> dict:
-        """Builtin: Clean up old task execution records."""
+        """Builtin: Clean up old task execution records and phase 3 tables."""
         from ..storage.repositories.scheduled_task import get_scheduled_task_repo
+        from ..storage.database import get_db_pool
 
         retention_days = (task.metadata or {}).get(
             "retention_days",
@@ -157,7 +158,38 @@ class HeadlessRunner:
         )
         repo = get_scheduled_task_repo()
         count = await repo.cleanup_old_executions(older_than_days=retention_days)
-        return {"cleaned_up": count, "retention_days": retention_days}
+
+        result = {"cleaned_up": count, "retention_days": retention_days}
+
+        # Clean up presence_events and resolved proactive_actions
+        pool = get_db_pool()
+        if pool.is_initialized:
+            try:
+                presence_result = await pool.execute(
+                    """
+                    DELETE FROM presence_events
+                    WHERE created_at < CURRENT_TIMESTAMP - make_interval(days => $1)
+                    """,
+                    retention_days,
+                )
+                result["presence_events_cleaned"] = presence_result
+            except Exception as e:
+                logger.warning("Presence events cleanup failed: %s", e)
+
+            try:
+                actions_result = await pool.execute(
+                    """
+                    DELETE FROM proactive_actions
+                    WHERE status IN ('done', 'dismissed')
+                      AND resolved_at < CURRENT_TIMESTAMP - make_interval(days => $1)
+                    """,
+                    retention_days,
+                )
+                result["proactive_actions_cleaned"] = actions_result
+            except Exception as e:
+                logger.warning("Proactive actions cleanup failed: %s", e)
+
+        return result
 
 
 _headless_runner: Optional[HeadlessRunner] = None

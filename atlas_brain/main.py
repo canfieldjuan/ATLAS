@@ -235,6 +235,20 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to initialize reminder service: %s", e)
 
+    # Initialize autonomous scheduler
+    autonomous_scheduler = None
+    if settings.autonomous.enabled:
+        try:
+            from .autonomous import init_autonomous
+            autonomous_scheduler = await init_autonomous()
+            logger.info(
+                "Autonomous scheduler initialized with %d tasks",
+                autonomous_scheduler.scheduled_count,
+            )
+        except Exception as e:
+            logger.error("Failed to initialize autonomous scheduler: %s", e)
+
+
     # Start vision event subscriber if MQTT is enabled
     vision_subscriber = None
     if settings.mqtt.enabled:
@@ -346,6 +360,15 @@ async def lifespan(app: FastAPI):
             logger.info("Discovery service shutdown complete")
         except Exception as e:
             logger.error("Error shutting down discovery service: %s", e)
+
+    # Shutdown autonomous scheduler
+    if autonomous_scheduler:
+        try:
+            from .autonomous import shutdown_autonomous
+            await shutdown_autonomous()
+            logger.info("Autonomous scheduler shutdown complete")
+        except Exception as e:
+            logger.error("Error shutting down autonomous scheduler: %s", e)
 
     # Shutdown reminder service
     if reminder_service:

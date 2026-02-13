@@ -503,3 +503,134 @@ class Reminder:
             "source": self.source,
             "metadata": self.metadata,
         }
+
+
+@dataclass
+class ScheduledTask:
+    """A scheduled task for autonomous execution."""
+
+    id: UUID
+    name: str
+    task_type: str  # "agent_prompt", "builtin", "hook"
+    schedule_type: str  # "cron", "interval", "once"
+    description: Optional[str] = None
+    prompt: Optional[str] = None
+    agent_type: str = "atlas"
+    cron_expression: Optional[str] = None
+    interval_seconds: Optional[int] = None
+    run_at: Optional[datetime] = None
+    timezone: str = "America/Chicago"
+    enabled: bool = True
+    max_retries: int = 0
+    retry_delay_seconds: int = 60
+    timeout_seconds: int = 120
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
+    last_run_at: Optional[datetime] = None
+    next_run_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": str(self.id),
+            "name": self.name,
+            "description": self.description,
+            "task_type": self.task_type,
+            "prompt": self.prompt,
+            "agent_type": self.agent_type,
+            "schedule_type": self.schedule_type,
+            "cron_expression": self.cron_expression,
+            "interval_seconds": self.interval_seconds,
+            "run_at": self.run_at.isoformat() if self.run_at else None,
+            "timezone": self.timezone,
+            "enabled": self.enabled,
+            "max_retries": self.max_retries,
+            "retry_delay_seconds": self.retry_delay_seconds,
+            "timeout_seconds": self.timeout_seconds,
+            "metadata": self.metadata,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+            "last_run_at": self.last_run_at.isoformat() if self.last_run_at else None,
+            "next_run_at": self.next_run_at.isoformat() if self.next_run_at else None,
+        }
+
+
+@dataclass
+class TaskExecution:
+    """A record of a scheduled task execution."""
+
+    id: UUID
+    task_id: UUID
+    status: str = "running"  # "running", "completed", "failed", "timeout"
+    started_at: datetime = field(default_factory=datetime.utcnow)
+    completed_at: Optional[datetime] = None
+    duration_ms: Optional[int] = None
+    result_text: Optional[str] = None
+    error: Optional[str] = None
+    retry_count: int = 0
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": str(self.id),
+            "task_id": str(self.task_id),
+            "status": self.status,
+            "started_at": self.started_at.isoformat(),
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "duration_ms": self.duration_ms,
+            "result_text": self.result_text,
+            "error": self.error,
+            "retry_count": self.retry_count,
+            "metadata": self.metadata,
+        }
+
+
+@dataclass
+class PresenceEvent:
+    """A presence state transition event."""
+
+    id: UUID
+    transition: str  # "arrival", "departure"
+    occupancy_state: str  # "empty", "occupied", "identified"
+    occupants: list[str] = field(default_factory=list)
+    person_name: Optional[str] = None
+    source_id: str = "system"
+    created_at: datetime = field(default_factory=datetime.utcnow)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": str(self.id),
+            "transition": self.transition,
+            "occupancy_state": self.occupancy_state,
+            "occupants": self.occupants,
+            "person_name": self.person_name,
+            "source_id": self.source_id,
+            "created_at": self.created_at.isoformat(),
+        }
+
+
+@dataclass
+class ProactiveAction:
+    """An actionable item extracted from user conversations."""
+
+    id: UUID
+    action_text: str
+    action_text_hash: str
+    action_type: str = "task"  # task, reminder, scheduled_task
+    source_time: Optional[datetime] = None
+    session_id: Optional[UUID] = None
+    status: str = "pending"  # pending, done, dismissed
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    resolved_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": str(self.id),
+            "action_text": self.action_text,
+            "action_type": self.action_type,
+            "source_time": self.source_time.isoformat() if self.source_time else None,
+            "session_id": str(self.session_id) if self.session_id else None,
+            "status": self.status,
+            "created_at": self.created_at.isoformat(),
+            "resolved_at": self.resolved_at.isoformat() if self.resolved_at else None,
+        }

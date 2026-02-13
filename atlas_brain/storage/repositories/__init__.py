@@ -18,6 +18,7 @@ from .vector import VectorRepository, get_vector_repository
 from .vision import VisionEventRepository, get_vision_event_repo
 from .speaker import SpeakerRepository, get_speaker_repo
 from .identity import IdentityRepository, get_identity_repo
+from .scheduled_task import ScheduledTaskRepository, get_scheduled_task_repo
 
 __all__ = [
     "AppointmentRepository",
@@ -44,4 +45,6 @@ __all__ = [
     "get_speaker_repo",
     "IdentityRepository",
     "get_identity_repo",
+    "ScheduledTaskRepository",
+    "get_scheduled_task_repo",
 ]

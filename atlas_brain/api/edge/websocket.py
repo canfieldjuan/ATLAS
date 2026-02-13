@@ -694,6 +694,17 @@ async def _handle_security_event(
     except Exception as e:
         logger.warning("Failed to store security event: %s", e)
 
+    # Feed presence tracker (person_entered / person_left)
+    if event in ("person_entered", "person_left"):
+        try:
+            if settings.autonomous.presence_enabled:
+                from ...autonomous.presence import get_presence_tracker
+
+                tracker = get_presence_tracker()
+                await tracker.on_security_event(event, message)
+        except Exception as e:
+            logger.warning("Presence tracker update failed: %s", e)
+
     await connection.send({"type": "security_ack", "event": event})
 
 

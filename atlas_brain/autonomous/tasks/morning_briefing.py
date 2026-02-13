@@ -6,6 +6,7 @@ Composes a daily briefing by directly calling existing tools/services:
 - Current weather
 - Overnight security summary
 - Device health check
+- Pending proactive actions
 """
 
 import logging
@@ -76,6 +77,9 @@ async def run(task: ScheduledTask) -> dict:
         logger.warning("Device health failed: %s", e)
         result["device_health"] = {"error": str(e)}
 
+    # 5. Pending proactive actions
+    result["actions"] = await _get_pending_actions()
+
     # Build summary
     result["summary"] = _build_summary(result, security_hours)
 
@@ -133,6 +137,37 @@ async def _get_weather() -> dict:
         return {"error": str(e)}
 
 
+async def _get_pending_actions() -> dict:
+    """Fetch pending proactive actions from DB."""
+    try:
+        from ...storage.database import get_db_pool
+
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return {"count": 0, "items": []}
+
+        rows = await pool.fetch(
+            """
+            SELECT action_text, action_type, created_at
+            FROM proactive_actions
+            WHERE status = 'pending'
+            ORDER BY created_at DESC
+            LIMIT 5
+            """,
+        )
+
+        return {
+            "count": len(rows),
+            "items": [
+                {"text": r["action_text"], "type": r["action_type"]}
+                for r in rows
+            ],
+        }
+    except Exception as e:
+        logger.warning("Pending actions fetch failed: %s", e)
+        return {"count": 0, "items": [], "error": str(e)}
+
+
 def _build_summary(result: dict, security_hours: int) -> str:
     """Build a human-readable morning briefing summary."""
     parts = ["Good morning."]
@@ -178,5 +213,11 @@ def _build_summary(result: dict, security_hours: int) -> str:
             parts.append(f"{issues} device issue(s) detected.")
         else:
             parts.append("All devices healthy.")
+
+    # Pending actions
+    actions = result.get("actions", {})
+    if actions.get("count", 0) > 0:
+        items = [a["text"] for a in actions["items"][:3]]
+        parts.append(f"Pending: {', '.join(items)}.")
 
     return " ".join(parts)
