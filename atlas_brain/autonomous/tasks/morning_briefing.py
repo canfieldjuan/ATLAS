@@ -9,7 +9,9 @@ Composes a daily briefing by directly calling existing tools/services:
 """
 
 import logging
+from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 from ...config import settings
 from ...storage.models import ScheduledTask
@@ -17,6 +19,12 @@ from . import security_summary as security_mod
 from . import device_health as device_mod
 
 logger = logging.getLogger("atlas.autonomous.tasks.morning_briefing")
+
+
+@dataclass
+class _SubTaskStub:
+    """Minimal stand-in for ScheduledTask when calling sub-task handlers internally."""
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 async def run(task: ScheduledTask) -> dict:
@@ -40,11 +48,11 @@ async def run(task: ScheduledTask) -> dict:
     # 2. Weather
     result["weather"] = await _get_weather()
 
-    # 3. Overnight security summary (reuse security_summary task)
-    security_task = ScheduledTask.__new__(ScheduledTask)
-    security_task.metadata = {"hours": security_hours}
+    # 3. Overnight security summary (reuse security_summary handler)
     try:
-        security_result = await security_mod.run(security_task)
+        security_result = await security_mod.run(
+            _SubTaskStub(metadata={"hours": security_hours})
+        )
         result["security"] = {
             "alerts_overnight": security_result.get("alerts", {}).get("total", 0),
             "unacked": security_result.get("alerts", {}).get("unacknowledged", 0),
@@ -54,11 +62,11 @@ async def run(task: ScheduledTask) -> dict:
         logger.warning("Security summary failed: %s", e)
         result["security"] = {"error": str(e)}
 
-    # 4. Device health (reuse device_health task)
-    health_task = ScheduledTask.__new__(ScheduledTask)
-    health_task.metadata = {}
+    # 4. Device health (reuse device_health handler)
     try:
-        health_result = await device_mod.run(health_task)
+        health_result = await device_mod.run(
+            _SubTaskStub(metadata={})
+        )
         result["device_health"] = {
             "issues_count": len(health_result.get("issues", [])),
             "total": health_result.get("total_entities", 0),
@@ -145,7 +153,7 @@ def _build_summary(result: dict, security_hours: int) -> str:
         temp = wx["temp"]
         unit = wx.get("unit", "F")
         condition = wx.get("condition", "")
-        parts.append(f"Currently {temp}\u00b0{unit} and {condition.lower()}.")
+        parts.append(f"Currently {temp} {unit} and {condition.lower()}.")
 
     # Security
     sec = result.get("security", {})

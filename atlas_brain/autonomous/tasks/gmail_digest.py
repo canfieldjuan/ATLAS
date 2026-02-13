@@ -28,26 +28,30 @@ class GmailClient:
         self._access_token: str | None = None
         self._token_expires: float = 0.0
         self._client: httpx.AsyncClient | None = None
-        self._refresh_lock = asyncio.Lock()
+        self._lock = asyncio.Lock()
 
     async def _ensure_client(self) -> httpx.AsyncClient:
-        if self._client is None:
-            self._client = httpx.AsyncClient(timeout=15.0)
-        return self._client
+        async with self._lock:
+            if self._client is None:
+                self._client = httpx.AsyncClient(timeout=15.0)
+            return self._client
 
     async def close(self) -> None:
-        if self._client:
-            await self._client.aclose()
-            self._client = None
+        async with self._lock:
+            if self._client:
+                await self._client.aclose()
+                self._client = None
 
     async def _refresh_token(self) -> str:
         """Refresh OAuth2 access token using the Gmail refresh token."""
-        async with self._refresh_lock:
+        async with self._lock:
             if self._access_token and time.time() < self._token_expires - 60:
                 return self._access_token
 
             cfg = settings.tools
-            client = await self._ensure_client()
+            if self._client is None:
+                self._client = httpx.AsyncClient(timeout=15.0)
+            client = self._client
 
             data = {
                 "client_id": cfg.gmail_client_id,
@@ -127,13 +131,15 @@ class GmailClient:
 
 # Module-level client (reused across invocations)
 _gmail_client: GmailClient | None = None
+_gmail_client_lock = asyncio.Lock()
 
 
-def _get_gmail_client() -> GmailClient:
+async def _get_gmail_client() -> GmailClient:
     global _gmail_client
-    if _gmail_client is None:
-        _gmail_client = GmailClient()
-    return _gmail_client
+    async with _gmail_client_lock:
+        if _gmail_client is None:
+            _gmail_client = GmailClient()
+        return _gmail_client
 
 
 async def run(task: ScheduledTask) -> dict:
@@ -166,7 +172,7 @@ async def run(task: ScheduledTask) -> dict:
     query = metadata.get("query", cfg.gmail_query)
     max_results = metadata.get("max_results", cfg.gmail_max_results)
 
-    client = _get_gmail_client()
+    client = await _get_gmail_client()
 
     try:
         messages = await client.list_messages(query=query, max_results=max_results)
@@ -176,7 +182,7 @@ async def run(task: ScheduledTask) -> dict:
             "query": query,
             "total_unread": 0,
             "emails": [],
-            "summary": f"Gmail API error: {e}",
+            "summary": f"Gmail API error: {type(e).__name__}",
         }
 
     total = len(messages)

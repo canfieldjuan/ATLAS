@@ -25,12 +25,13 @@ Then add to your .env or environment:
 
 import http.server
 import json
+import html
 import urllib.parse
 import webbrowser
 from urllib.request import Request, urlopen
 
 
-# OAuth configuration — read-only Gmail access
+# OAuth configuration -- read-only Gmail access
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 REDIRECT_URI = "http://localhost:8085"
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -92,7 +93,7 @@ class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
                 </html>
             """)
         else:
-            error = params.get("error", ["Unknown error"])[0]
+            error = html.escape(params.get("error", ["Unknown error"])[0])
             self.send_response(400)
             self.send_header("Content-Type", "text/html")
             self.end_headers()

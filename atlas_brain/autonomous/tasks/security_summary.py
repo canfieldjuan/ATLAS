@@ -14,7 +14,7 @@ from ...storage.models import ScheduledTask
 logger = logging.getLogger("atlas.autonomous.tasks.security_summary")
 
 
-async def run(task: ScheduledTask) -> dict:
+async def run(task) -> dict:
     """
     Aggregate vision events and alerts for the last N hours.
 
@@ -23,7 +23,8 @@ async def run(task: ScheduledTask) -> dict:
     """
     metadata = task.metadata or {}
     hours = metadata.get("hours", 24)
-    since = datetime.utcnow() - timedelta(hours=hours)
+    # DB uses timestamp without time zone stored as UTC -- pass naive UTC
+    since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=hours)
 
     pool = get_db_pool()
 
@@ -101,7 +102,7 @@ async def run(task: ScheduledTask) -> dict:
 
     # Top source
     if by_source:
-        top_source = max(by_source, key=by_source.get)
+        top_source = max(by_source, key=lambda k: by_source[k])
         summary_parts.append(f"Top source: {top_source} ({by_source[top_source]} events).")
 
     result = {
