@@ -26,6 +26,7 @@ from ...storage.models import VisionEventRecord
 from ...storage.repositories import get_vision_event_repo
 from ...storage.repositories.identity import get_identity_repo
 from ...storage.repositories.unified_alerts import get_unified_alert_repo
+from ...storage.database import get_db_pool
 from ...vision.models import BoundingBox, EventType, VisionEvent
 
 logger = logging.getLogger("atlas.api.edge.websocket")
@@ -246,6 +247,10 @@ async def edge_websocket(
             elif msg_type == "security":
                 # Handle security events from edge node
                 await _handle_security_event(connection, message)
+
+            elif msg_type == "recognition":
+                # Handle recognition events from edge node (speaker, face, gait)
+                await _handle_recognition_event(connection, message)
 
             else:
                 await connection.send_error(f"Unknown message type: {msg_type}")
@@ -563,19 +568,21 @@ async def _handle_identity_sync_request(
 
     try:
         repo = get_identity_repo()
-        to_send, to_delete = await repo.diff_manifest(edge_manifest)
+        to_send, to_delete, need_from_edge = await repo.diff_manifest(edge_manifest)
 
         await connection.send({
             "type": "identity_sync",
             "identities": to_send,
             "delete": to_delete,
+            "need_from_edge": need_from_edge,
         })
 
         sent_count = sum(len(v) for v in to_send.values())
         del_count = sum(len(v) for v in to_delete.values())
+        need_count = sum(len(v) for v in need_from_edge.values())
         logger.info(
-            "Identity sync response to %s: %d to send, %d to delete",
-            node_id, sent_count, del_count,
+            "Identity sync response to %s: %d to send, %d to delete, %d needed from edge",
+            node_id, sent_count, del_count, need_count,
         )
 
     except Exception as e:
@@ -707,6 +714,67 @@ async def _handle_security_event(
 
     await connection.send({"type": "security_ack", "event": event})
 
+
+
+
+async def _handle_recognition_event(
+    connection: EdgeConnection,
+    message: dict[str, Any],
+) -> None:
+    """Handle recognition events from an edge node.
+
+    Recognition types: speaker, face, gait, face+gait
+    Stores to recognition_events table.
+    """
+    person_name = message.get("person_name", "unknown")
+    recognition_type = message.get("recognition_type", "unknown")
+    confidence = message.get("confidence", 0.0)
+    camera_source = message.get("camera_source", "cam1")
+    node_id = message.get("node_id", connection.location_id)
+    ts = message.get("ts", time.time())
+
+    logger.info(
+        "Recognition event from %s: %s identified as %s (%.3f)",
+        node_id, recognition_type, person_name, confidence,
+    )
+
+    try:
+        pool = get_db_pool()
+
+        if pool.is_initialized:
+            # Look up person_id by name (optional FK)
+            person_id = await pool.fetchval(
+                "SELECT id FROM persons WHERE name = $1 LIMIT 1",
+                person_name,
+            )
+
+            metadata = {
+                "node_id": node_id,
+                "timestamp": ts,
+            }
+            # Include extra fields from edge message
+            for k in ("track_id", "gait_confidence", "face_confidence", "combined_confidence"):
+                if k in message:
+                    metadata[k] = message[k]
+
+            await pool.execute(
+                """
+                INSERT INTO recognition_events
+                    (person_id, recognition_type, confidence, camera_source, matched, metadata)
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+                """,
+                person_id,
+                recognition_type,
+                confidence,
+                camera_source,
+                person_id is not None,
+                json.dumps(metadata),
+            )
+
+    except Exception as e:
+        logger.warning("Failed to store recognition event: %s", e)
+
+    await connection.send({"type": "recognition_ack", "person_name": person_name})
 
 # HTTP endpoint for edge device status
 

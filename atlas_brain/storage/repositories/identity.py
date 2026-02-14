@@ -161,21 +161,24 @@ class IdentityRepository:
 
     async def diff_manifest(
         self, edge_manifest: dict[str, list[str]]
-    ) -> tuple[dict[str, dict[str, list]], dict[str, list[str]]]:
+    ) -> tuple[dict[str, dict[str, list]], dict[str, list[str]], dict[str, list[str]]]:
         """Compare an edge manifest against the master DB.
 
         Args:
             edge_manifest: {modality: [names]} from the edge node
 
         Returns:
-            (to_send, to_delete) where:
+            (to_send, to_delete, need_from_edge) where:
             - to_send = {modality: {name: embedding_list}} -- embeddings the edge is missing
             - to_delete = {modality: [names]} -- always empty (deletions are push-only
               via explicit identity_delete messages to avoid wiping edge data when
               Brain DB is empty or freshly migrated)
+            - need_from_edge = {modality: [names]} -- identities the edge has
+              that Brain is missing (edge should push these)
         """
         to_send: dict[str, dict[str, list]] = {}
         to_delete: dict[str, list[str]] = {}
+        need_from_edge: dict[str, list[str]] = {}
 
         for mod in VALID_MODALITIES:
             edge_names = set(edge_manifest.get(mod, []))
@@ -195,7 +198,12 @@ class IdentityRepository:
             # explicit identity_delete messages (from REST API or admin).
             # This prevents wiping edge data when Brain DB is empty/new.
 
-        return to_send, to_delete
+            # Edge has these but Brain doesn't -- ask edge to push them
+            edge_only = edge_names - brain_names
+            if edge_only:
+                need_from_edge[mod] = sorted(edge_only)
+
+        return to_send, to_delete, need_from_edge
 
 
 # Global instance
