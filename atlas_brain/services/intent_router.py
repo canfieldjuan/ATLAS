@@ -80,6 +80,16 @@ ROUTE_DEFINITIONS: dict[str, list[str]] = {
         "I need to book an appointment", "set up an appointment for a haircut",
         "make an appointment for next week", "I want to schedule a visit",
     ],
+    "cancel_booking": [
+        "cancel my appointment", "I need to cancel my booking",
+        "cancel the appointment for Thursday", "I want to cancel",
+        "remove my appointment", "cancel the booking",
+    ],
+    "reschedule_booking": [
+        "reschedule my appointment", "move my appointment to Friday",
+        "change my booking to next week", "I need to reschedule",
+        "can we move the appointment", "reschedule the booking",
+    ],
     "get_time": [
         "what time is it", "what's the current time", "tell me the time",
         "what's the date today", "what day is it",
@@ -174,8 +184,10 @@ ROUTE_TO_ACTION: dict[str, tuple[str, Optional[str]]] = {
     "device_command": ("device_command", None),
     "reminder":       ("tool_use", "set_reminder"),
     "email":          ("tool_use", "send_email"),
-    "calendar_write": ("tool_use", "set_calendar_event"),
-    "booking":        ("tool_use", "book_appointment"),
+    "calendar_write": ("tool_use", "create_calendar_event"),
+    "booking":            ("tool_use", "book_appointment"),
+    "cancel_booking":     ("tool_use", "cancel_appointment"),
+    "reschedule_booking": ("tool_use", "reschedule_appointment"),
     "get_time":       ("tool_use", "get_time"),
     "get_weather":    ("tool_use", "get_weather"),
     "get_calendar":   ("tool_use", "get_calendar"),
@@ -196,6 +208,8 @@ ROUTE_TO_WORKFLOW: dict[str, str] = {
     "email": "email",
     "calendar_write": "calendar",
     "booking": "booking",
+    "cancel_booking": "booking",
+    "reschedule_booking": "booking",
     "security": "security",
     "presence": "presence",
 }

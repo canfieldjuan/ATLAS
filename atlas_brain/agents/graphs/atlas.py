@@ -140,13 +140,26 @@ async def check_active_workflow(state: AtlasAgentState) -> AtlasAgentState:
     # Check for cancel intent
     input_text = state.get("input_text", "")
     if _is_cancel_intent(input_text):
-        await manager.clear_workflow_state(session_id)
-        logger.info("User cancelled active workflow for session %s", session_id)
-        return {
-            **state,
-            "action_type": "workflow_cancelled",
-            "response": "Okay, I've cancelled that.",
-        }
+        # In booking workflow, "cancel my appointment" is an appointment
+        # cancellation request, not a workflow abort -- let LLM handle it
+        _appt_keywords = ("appointment", "booking", "reservation")
+        input_lower = input_text.lower()
+        is_appt_cancel = (
+            workflow.workflow_type == "booking"
+            and any(kw in input_lower for kw in _appt_keywords)
+        )
+        if not is_appt_cancel:
+            await manager.clear_workflow_state(session_id)
+            logger.info("User cancelled active workflow for session %s", session_id)
+            return {
+                **state,
+                "action_type": "workflow_cancelled",
+                "response": "Okay, I've cancelled that.",
+            }
+        logger.info(
+            "Appointment cancel in booking workflow, passing to LLM: %s",
+            session_id,
+        )
 
     # Active workflow found - mark for continuation
     logger.info(

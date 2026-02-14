@@ -726,14 +726,7 @@ class RescheduleAppointmentTool:
             new_end = new_start + timedelta(minutes=duration)
             new_slot = _get_time_slot_class()(start=new_start, end=new_end)
 
-            # Cancel old calendar event
-            if old_calendar_id and context.scheduling.calendar_id:
-                try:
-                    await _get_scheduling_service().cancel_appointment(context, old_calendar_id)
-                except Exception as e:
-                    logger.warning("Failed to cancel old calendar event: %s", e)
-
-            # Book new slot
+            # Book new slot FIRST (before cancelling old, for rollback safety)
             new_appointment = await _get_scheduling_service().book_appointment(
                 context=context,
                 slot=new_slot,
@@ -751,6 +744,18 @@ class RescheduleAppointmentTool:
                     error="RESCHEDULE_FAILED",
                     message="Could not book the new time slot. It may not be available.",
                 )
+
+            # Cancel old calendar event only after new booking succeeded
+            if old_calendar_id and context.scheduling.calendar_id:
+                try:
+                    await _get_scheduling_service().cancel_appointment(
+                        context, old_calendar_id
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "New booking created but failed to cancel old event %s: %s",
+                        old_calendar_id, e,
+                    )
 
             # Update database record
             from uuid import UUID

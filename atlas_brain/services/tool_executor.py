@@ -26,6 +26,7 @@ PRIORITY_TOOL_NAMES = [
     "get_time", "get_weather", "get_calendar", "get_location",
     "set_reminder", "list_reminders", "send_notification",
     "send_email", "check_availability", "book_appointment",
+    "cancel_appointment", "reschedule_appointment",
 ]
 
 # Pattern to match text-based tool calls

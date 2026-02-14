@@ -129,6 +129,8 @@ tool_registry.register(close_camera_feed_tool)
 tool_registry.register(check_availability_tool)
 tool_registry.register(book_appointment_tool)
 tool_registry.register(lookup_customer_tool)
+tool_registry.register(cancel_appointment_tool)
+tool_registry.register(reschedule_appointment_tool)
 # Reminder tools - available for LLM tool calling in reminder conversations
 tool_registry.register(reminder_tool)
 tool_registry.register(complete_reminder_tool)

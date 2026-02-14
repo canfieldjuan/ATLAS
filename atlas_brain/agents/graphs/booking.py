@@ -40,9 +40,9 @@ def _build_booking_system_prompt(speaker_id: Optional[str] = None) -> str:
         f"The business owner is booking appointments for CUSTOMERS (not themselves).\n\n"
         f"Your workflow:\n"
         f"1. If you have the customer's name or phone, use lookup_customer to find them\n"
-        f"2. Use check_availability to see open slots (pass dates like 'Thursday', 'next week')\n"
-        f"3. Present available times naturally and let the owner pick\n"
-        f"4. When you have all info, use book_appointment to finalize\n\n"
+        f"2. For booking: use check_availability to find open slots, then book_appointment\n"
+        f"3. For cancellation: use lookup_customer to find the appointment, then cancel_appointment\n"
+        f"4. For rescheduling: use lookup_customer, then reschedule_appointment with new date/time\n\n"
         f"Required for booking: customer_name, customer_phone, date, time.\n"
         f"Optional: customer_email, address, service_type.\n\n"
         f"Be conversational and brief. This is a voice interface -- keep responses "
@@ -90,7 +90,10 @@ async def run_booking_workflow(
     messages.append(Message(role="user", content=input_text))
 
     # Get scheduling tool schemas
-    tool_names = ["lookup_customer", "check_availability", "book_appointment"]
+    tool_names = [
+        "lookup_customer", "check_availability", "book_appointment",
+        "cancel_appointment", "reschedule_appointment",
+    ]
     tools = tool_registry.get_tool_schemas_filtered(tool_names)
 
     # Run LLM with tools (handles tool-call loop internally)
@@ -111,11 +114,12 @@ async def run_booking_workflow(
     response = re.sub(r"<function=\w+>.*?</function>", "", response, flags=re.DOTALL)
     response = response.strip()
 
-    # Determine if workflow is complete
-    booking_done = "book_appointment" in tools_executed
+    # Determine if workflow is complete (booking, cancellation, or reschedule)
+    _terminal_tools = ("book_appointment", "cancel_appointment", "reschedule_appointment")
+    booking_done = any(t in tools_executed for t in _terminal_tools)
 
     if booking_done:
-        # Booking confirmed -- clear state
+        # Scheduling action completed -- clear state
         if session_id:
             await manager.clear_workflow_state(session_id)
         return {
