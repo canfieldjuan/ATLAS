@@ -89,6 +89,7 @@ class UnifiedAlertRepository:
         rule_name: Optional[str] = None,
         source_id: Optional[str] = None,
         since: Optional[datetime] = None,
+        node_id: Optional[str] = None,
     ) -> list[Alert]:
         """Get recent alerts with optional filters."""
         pool = get_db_pool()
@@ -121,6 +122,11 @@ class UnifiedAlertRepository:
         if since:
             conditions.append(f"triggered_at >= ${param_idx}")
             params.append(since)
+            param_idx += 1
+
+        if node_id:
+            conditions.append(f"metadata->>'node_id' = ${param_idx}")
+            params.append(node_id)
             param_idx += 1
 
         where_clause = ""

@@ -33,6 +33,7 @@ async def get_alerts(
     since_minutes: Optional[int] = Query(
         default=None, ge=1, le=10080, description="Alerts from last N minutes"
     ),
+    node_id: Optional[str] = Query(default=None, description="Filter by edge node ID"),
 ):
     """
     Get unified alert history from all event sources.
@@ -53,6 +54,7 @@ async def get_alerts(
         rule_name=rule_name,
         source_id=source_id,
         since=since,
+        node_id=node_id,
     )
 
     return {
