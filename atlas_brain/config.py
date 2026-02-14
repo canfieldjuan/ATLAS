@@ -748,6 +748,133 @@ class SecurityConfig(BaseSettings):
         },
         description="Camera name aliases to camera IDs"
     )
+    
+    network_monitor_enabled: bool = Field(
+        default=False, 
+        description="Enable network security monitoring"
+    )
+    wireless_interface: str = Field(
+        default="wlan0mon",
+        description="WiFi interface for monitor mode"
+    )
+    wireless_channels: list[int] = Field(
+        default=[1, 6, 11],
+        description="WiFi channels to monitor"
+    )
+    channel_hop_interval: float = Field(
+        default=2.0,
+        ge=0.5,
+        le=10.0,
+        description="Seconds between channel hops"
+    )
+    known_ap_bssids: list[str] = Field(
+        default=[],
+        description="List of legitimate AP BSSIDs"
+    )
+    known_ssids: list[str] = Field(
+        default=[],
+        description="List of legitimate SSIDs"
+    )
+    deauth_threshold: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="Deauth frames per 10s to trigger alert"
+    )
+    alert_voice_enabled: bool = Field(
+        default=True,
+        description="Enable voice alerts for security threats"
+    )
+    pcap_enabled: bool = Field(
+        default=True,
+        description="Enable packet capture for evidence"
+    )
+    pcap_directory: str = Field(
+        default="/var/log/atlas/security/pcap",
+        description="Directory for pcap files"
+    )
+    pcap_max_size_mb: int = Field(
+        default=1000,
+        ge=100,
+        le=10000,
+        description="Max pcap storage in MB"
+    )
+    
+    network_ids_enabled: bool = Field(
+        default=False,
+        description="Enable network intrusion detection"
+    )
+    network_interface: str = Field(
+        default="eth0",
+        description="Network interface to monitor"
+    )
+    packet_buffer_size: int = Field(
+        default=10000,
+        ge=1000,
+        le=100000,
+        description="Packet buffer size"
+    )
+    protocols_to_monitor: list[str] = Field(
+        default=["TCP", "UDP", "ICMP", "ARP"],
+        description="Protocols to monitor"
+    )
+    port_scan_threshold: int = Field(
+        default=20,
+        ge=5,
+        le=200,
+        description="Unique ports to trigger port scan alert"
+    )
+    port_scan_window: int = Field(
+        default=60,
+        ge=10,
+        le=600,
+        description="Time window for port scan detection seconds"
+    )
+    whitelist_ips: list[str] = Field(
+        default=[],
+        description="IPs to whitelist from port scan detection"
+    )
+    arp_monitor_enabled: bool = Field(
+        default=True,
+        description="Enable ARP poisoning detection"
+    )
+    arp_change_threshold: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="ARP changes to trigger alert"
+    )
+    known_gateways: list[str] = Field(
+        default=[],
+        description="Legitimate gateway IP addresses"
+    )
+    static_arp_entries: dict[str, str] = Field(
+        default={},
+        description="Trusted IP to MAC mappings"
+    )
+    traffic_analysis_enabled: bool = Field(
+        default=True,
+        description="Enable traffic anomaly detection"
+    )
+    baseline_period_hours: int = Field(
+        default=24,
+        ge=1,
+        le=168,
+        description="Hours to establish traffic baseline"
+    )
+    anomaly_threshold_sigma: float = Field(
+        default=3.0,
+        ge=1.0,
+        le=5.0,
+        description="Standard deviations for anomaly alert"
+    )
+    bandwidth_spike_multiplier: float = Field(
+        default=3.0,
+        ge=2.0,
+        le=10.0,
+        description="Multiplier for bandwidth spike detection"
+    )
+
 
 
 class ModeManagerConfig(BaseSettings):
@@ -1055,6 +1182,20 @@ class AutonomousConfig(BaseSettings):
 
     # Auto-disable (Phase 4)
     auto_disable_after_failures: int = Field(default=5, ge=0, le=50, description="Disable task after N consecutive failures (0=never)")
+
+    # LLM synthesis for builtin task results (Phase 5)
+    synthesis_enabled: bool = Field(
+        default=True,
+        description="Enable LLM synthesis of builtin task results when synthesis_skill is set in task metadata",
+    )
+    synthesis_max_tokens: int = Field(
+        default=1024, ge=64, le=4096,
+        description="Max tokens for LLM synthesis responses",
+    )
+    synthesis_temperature: float = Field(
+        default=0.4, ge=0.0, le=1.0,
+        description="LLM temperature for synthesis (lower = more deterministic)",
+    )
 
 
 class Settings(BaseSettings):

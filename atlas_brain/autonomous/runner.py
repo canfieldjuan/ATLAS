@@ -5,6 +5,7 @@ Wraps process_with_fallback() to run agent prompts and
 builtin tasks without a voice/WebSocket frontend.
 """
 
+import json
 import logging
 import re
 from datetime import datetime, timezone
@@ -121,6 +122,20 @@ class HeadlessRunner:
 
         try:
             result = await handler(task)
+
+            # Post-processing: LLM synthesis via skill
+            skill_name = (task.metadata or {}).get("synthesis_skill")
+            if skill_name and isinstance(result, dict):
+                synthesized = await self._synthesize_with_skill(
+                    result, skill_name, task.name,
+                )
+                if synthesized:
+                    return AgentResult(
+                        success=True,
+                        response_text=synthesized,
+                        metadata={"raw_result": result, "synthesis_skill": skill_name},
+                    )
+
             return AgentResult(
                 success=True,
                 response_text=str(result) if result else "Builtin task completed.",
@@ -132,6 +147,73 @@ class HeadlessRunner:
                 error=str(e),
                 response_text=f"Builtin task failed: {e}",
             )
+
+    async def _synthesize_with_skill(
+        self,
+        raw_result: dict,
+        skill_name: str,
+        task_name: str,
+    ) -> Optional[str]:
+        """
+        Synthesize a raw builtin result into natural language using a skill.
+
+        Returns the synthesized text, or None if synthesis is unavailable/fails.
+        """
+        if not autonomous_config.synthesis_enabled:
+            return None
+
+        # Lazy imports (same pattern as email.py:763-766)
+        from ..skills import get_skill_registry
+        from ..services import llm_registry
+        from ..services.protocols import Message
+        from ..orchestration import cuda_lock
+
+        skill = get_skill_registry().get(skill_name)
+        if skill is None:
+            logger.warning(
+                "Synthesis skill '%s' not found for task '%s'",
+                skill_name, task_name,
+            )
+            return None
+
+        llm = llm_registry.get_active()
+        if llm is None:
+            logger.warning("No active LLM for synthesis of task '%s'", task_name)
+            return None
+
+        messages = [
+            Message(role="system", content=skill.content),
+            Message(
+                role="user",
+                content=json.dumps(raw_result, indent=2, default=str),
+            ),
+        ]
+
+        try:
+            async with cuda_lock:
+                result = llm.chat(
+                    messages=messages,
+                    max_tokens=autonomous_config.synthesis_max_tokens,
+                    temperature=autonomous_config.synthesis_temperature,
+                )
+
+            text = result.get("response", "").strip()
+            if not text:
+                logger.warning("LLM returned empty synthesis for task '%s'", task_name)
+                return None
+
+            # Strip <think> tags (Qwen3 models)
+            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+            logger.info(
+                "Synthesized task '%s' with skill '%s' (%d chars)",
+                task_name, skill_name, len(text),
+            )
+            return text
+
+        except Exception:
+            logger.exception("Synthesis failed for task '%s'", task_name)
+            return None
 
     def _build_session_id(self, task: ScheduledTask) -> str:
         """Build a deterministic session ID for a task."""
