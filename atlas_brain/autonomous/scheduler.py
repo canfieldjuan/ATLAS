@@ -228,6 +228,7 @@ class TaskScheduler:
 
                 if status == "failed":
                     self._maybe_schedule_retry(task, retry_count)
+                    await self._check_consecutive_failures(task.id)
 
             except asyncio.TimeoutError:
                 duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -239,7 +240,7 @@ class TaskScheduler:
                 next_run = self._get_next_run_time(task)
                 await repo.update_last_run(task_id, now, next_run)
                 logger.warning("Task '%s' timed out after %ds", task.name, task.timeout_seconds)
-                # No retry on timeout — stuck tasks stay stuck
+                await self._check_consecutive_failures(task.id)
 
             except Exception as e:
                 duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -252,6 +253,45 @@ class TaskScheduler:
                 await repo.update_last_run(task_id, now, next_run)
                 logger.error("Task '%s' failed: %s", task.name, e)
                 self._maybe_schedule_retry(task, retry_count)
+                await self._check_consecutive_failures(task.id)
+
+    async def _check_consecutive_failures(self, task_id) -> None:
+        """Auto-disable a task after N consecutive primary-run failures."""
+        threshold = autonomous_config.auto_disable_after_failures
+        if threshold <= 0:
+            return
+
+        from ..storage.repositories.scheduled_task import get_scheduled_task_repo
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return
+
+        try:
+            rows = await pool.fetch(
+                """
+                SELECT status FROM task_executions
+                WHERE task_id = $1 AND retry_count = 0
+                ORDER BY started_at DESC
+                LIMIT $2
+                """,
+                task_id, threshold,
+            )
+
+            if len(rows) < threshold:
+                return
+
+            if all(r["status"] in ("failed", "timeout") for r in rows):
+                repo = get_scheduled_task_repo()
+                await repo.update(task_id, enabled=False)
+                self.unregister_task(str(task_id))
+                logger.warning(
+                    "Auto-disabled task %s after %d consecutive failures",
+                    task_id, threshold,
+                )
+        except Exception as e:
+            logger.error("Failed to check consecutive failures for %s: %s", task_id, e)
 
     def _maybe_schedule_retry(self, task: ScheduledTask, current_retry_count: int) -> None:
         """Schedule a retry if the task has retries remaining."""
@@ -349,6 +389,7 @@ class TaskScheduler:
 
                 if status == "failed":
                     self._maybe_schedule_retry(task, 0)
+                    await self._check_consecutive_failures(task.id)
 
         except asyncio.TimeoutError:
             duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -359,6 +400,7 @@ class TaskScheduler:
             )
             await repo.update_last_run(task.id, now, self._get_next_run_time(task))
             logger.warning("Manual task '%s' timed out after %ds", task.name, task.timeout_seconds)
+            await self._check_consecutive_failures(task.id)
 
         except Exception as e:
             duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -370,6 +412,7 @@ class TaskScheduler:
             await repo.update_last_run(task.id, now, self._get_next_run_time(task))
             logger.error("Manual task '%s' failed: %s", task.name, e)
             self._maybe_schedule_retry(task, 0)
+            await self._check_consecutive_failures(task.id)
 
 
 _task_scheduler: Optional[TaskScheduler] = None
