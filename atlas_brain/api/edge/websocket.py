@@ -660,30 +660,30 @@ async def _handle_security_event(
         event,
     )
 
+    # Build human-readable message (always, even if DB save fails)
+    if event == "person_entered":
+        name = message.get("name", "unknown")
+        is_known = message.get("is_known", False)
+        confidence = message.get("combined_confidence", 0)
+        if is_known:
+            msg = f"{name} entered (confidence: {confidence:.1%})"
+        else:
+            msg = "Unknown person entered"
+    elif event == "person_left":
+        name = message.get("name", "unknown")
+        duration = message.get("duration", 0)
+        msg = f"{name} left after {duration:.0f}s"
+    elif event == "motion_detected":
+        confidence = message.get("confidence", 0)
+        msg = f"Motion detected (level: {confidence:.1%})"
+    elif event == "unknown_face":
+        name = message.get("name", "unknown")
+        msg = f"Unknown face auto-enrolled as {name}"
+    else:
+        msg = f"Security event: {event}"
+
     try:
         repo = get_unified_alert_repo()
-
-        # Build human-readable message
-        if event == "person_entered":
-            name = message.get("name", "unknown")
-            is_known = message.get("is_known", False)
-            confidence = message.get("combined_confidence", 0)
-            if is_known:
-                msg = f"{name} entered (confidence: {confidence:.1%})"
-            else:
-                msg = "Unknown person entered"
-        elif event == "person_left":
-            name = message.get("name", "unknown")
-            duration = message.get("duration", 0)
-            msg = f"{name} left after {duration:.0f}s"
-        elif event == "motion_detected":
-            confidence = message.get("confidence", 0)
-            msg = f"Motion detected (level: {confidence:.1%})"
-        elif event == "unknown_face":
-            name = message.get("name", "unknown")
-            msg = f"Unknown face auto-enrolled as {name}"
-        else:
-            msg = f"Security event: {event}"
 
         # Strip fields already used for top-level params
         metadata = {k: v for k, v in message.items()
@@ -712,7 +712,46 @@ async def _handle_security_event(
         except Exception as e:
             logger.warning("Presence tracker update failed: %s", e)
 
-    await connection.send({"type": "security_ack", "event": event})
+    # Escalation evaluation
+    escalation_result = None
+    evaluator = None
+    if settings.escalation.enabled:
+        try:
+            from ...escalation import get_escalation_evaluator
+
+            evaluator = get_escalation_evaluator()
+            escalation_result = await evaluator.evaluate(event, message, node_id)
+        except Exception as e:
+            logger.warning("Escalation evaluation failed: %s", e)
+
+    # Build enhanced security_ack
+    ack: dict[str, Any] = {"type": "security_ack", "event": event}
+    if settings.escalation.narration_hint_enabled:
+        try:
+            from ...autonomous.presence import get_presence_tracker
+
+            tracker = get_presence_tracker()
+            ack["narration"] = {
+                "classify": "suppressed" if (escalation_result and escalation_result.should_escalate) else "routine",
+                "hint": msg,
+                "occupancy_state": tracker.state.state.value,
+                "occupants": list(tracker.state.occupants.keys()),
+            }
+        except Exception:
+            ack["narration"] = {
+                "classify": "routine",
+                "hint": msg,
+                "occupancy_state": "unknown",
+                "occupants": [],
+            }
+    await connection.send(ack)
+
+    # Async escalation (non-blocking)
+    if escalation_result and escalation_result.should_escalate and evaluator is not None:
+        asyncio.create_task(
+            evaluator.synthesize_and_send(escalation_result, connection),
+            name=f"escalation-{node_id}",
+        )
 
 
 

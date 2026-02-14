@@ -874,6 +874,34 @@ class SecurityConfig(BaseSettings):
         le=10.0,
         description="Multiplier for bandwidth spike detection"
     )
+    asset_tracking_enabled: bool = Field(
+        default=False,
+        description="Enable security asset tracking"
+    )
+    drone_tracking_enabled: bool = Field(
+        default=True,
+        description="Enable drone asset tracking"
+    )
+    vehicle_tracking_enabled: bool = Field(
+        default=True,
+        description="Enable vehicle asset tracking"
+    )
+    sensor_tracking_enabled: bool = Field(
+        default=True,
+        description="Enable sensor asset tracking"
+    )
+    asset_stale_after_seconds: int = Field(
+        default=300,
+        ge=30,
+        le=86400,
+        description="Seconds before unseen assets become stale"
+    )
+    asset_max_tracked: int = Field(
+        default=500,
+        ge=50,
+        le=50000,
+        description="Maximum tracked assets per asset type"
+    )
 
 
 
@@ -1198,6 +1226,22 @@ class AutonomousConfig(BaseSettings):
     )
 
 
+class EscalationConfig(BaseSettings):
+    """Edge-local narration + brain-side escalation configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_ESCALATION_", env_file=".env", extra="ignore")
+
+    enabled: bool = Field(default=True, description="Enable escalation evaluation for security events")
+    unknown_empty_enabled: bool = Field(default=True, description="Escalate unknown face when house is empty")
+    rapid_unknowns_threshold: int = Field(default=3, ge=2, le=10, description="Unknown face count to trigger rapid-unknowns escalation")
+    rapid_unknowns_window_seconds: int = Field(default=60, ge=10, le=300, description="Sliding window for rapid unknown face detection")
+    synthesis_skill: str = Field(default="security/escalation_narration", description="Skill for LLM escalation synthesis")
+    synthesis_max_tokens: int = Field(default=128, ge=32, le=512, description="Max tokens for escalation narration (keep short for TTS)")
+    synthesis_temperature: float = Field(default=0.3, ge=0.0, le=1.0, description="LLM temperature for escalation")
+    narration_hint_enabled: bool = Field(default=True, description="Include narration hints in security_ack")
+    broadcast_occupancy: bool = Field(default=True, description="Broadcast occupancy state changes to edge nodes")
+
+
 class Settings(BaseSettings):
     """Application-wide settings."""
 
@@ -1267,6 +1311,7 @@ class Settings(BaseSettings):
     workflows: WorkflowConfig = Field(default_factory=WorkflowConfig)
     edge: EdgeConfig = Field(default_factory=EdgeConfig)
     autonomous: AutonomousConfig = Field(default_factory=AutonomousConfig)
+    escalation: EscalationConfig = Field(default_factory=EscalationConfig)
     openai_compat: OpenAICompatConfig = Field(default_factory=OpenAICompatConfig)
     ftl_tracing: FTLTracingConfig = Field(default_factory=FTLTracingConfig)
 

@@ -23,6 +23,7 @@ logger = logging.getLogger("atlas.autonomous")
 _hook_callback_ref = None
 _event_queue = None
 _presence_callback_ref = None
+_broadcast_callback_ref = None
 
 
 async def init_autonomous() -> TaskScheduler:
@@ -31,7 +32,7 @@ async def init_autonomous() -> TaskScheduler:
 
     Returns the TaskScheduler instance.
     """
-    global _hook_callback_ref, _event_queue, _presence_callback_ref
+    global _hook_callback_ref, _event_queue, _presence_callback_ref, _broadcast_callback_ref
 
     # Start the task scheduler
     scheduler = get_task_scheduler()
@@ -90,8 +91,9 @@ async def init_autonomous() -> TaskScheduler:
     # Initialize presence tracker if enabled
     if autonomous_config.presence_enabled:
         try:
-            from .presence import get_presence_tracker, PresenceConfig
+            from .presence import get_presence_tracker, PresenceConfig, OccupancyState
             from ..alerts import get_alert_manager, PresenceAlertEvent
+            from ..config import settings
 
             tracker = get_presence_tracker()
             tracker._config = PresenceConfig(
@@ -106,13 +108,86 @@ async def init_autonomous() -> TaskScheduler:
                 evt = PresenceAlertEvent.from_presence_state(
                     transition=transition,
                     state_value=state.state.value,
-                    occupants=state.occupants,
+                    occupants=list(state.occupants.keys()),
                     person=person,
                 )
                 await alert_mgr.process_event(evt)
 
             tracker.register_callback(_presence_to_alert)
             _presence_callback_ref = _presence_to_alert
+
+            # Broadcast occupancy state changes to edge nodes
+            if settings.escalation.broadcast_occupancy:
+                async def _broadcast_occupancy(transition, state, person):
+                    """Broadcast occupancy state to all connected edge nodes."""
+                    try:
+                        from ..api.edge.websocket import get_all_connections
+                    except Exception:
+                        return
+                    broadcast = {
+                        "type": "occupancy_update",
+                        "state": state.state.value,
+                        "occupants": list(state.occupants.keys()),
+                        "changed_at": state.changed_at.isoformat() if state.changed_at else None,
+                        "transition": transition,
+                        "person": person,
+                    }
+                    for conn in get_all_connections().values():
+                        try:
+                            await conn.send(broadcast)
+                        except Exception:
+                            pass
+
+                tracker.register_callback(_broadcast_occupancy)
+                _broadcast_callback_ref = _broadcast_occupancy
+                logger.info("Occupancy broadcast callback registered")
+
+            # Recover state from last DB row on startup
+            try:
+                from ..storage.database import get_db_pool
+                from datetime import datetime as _dt
+                import json as _json
+
+                _pool = get_db_pool()
+                if _pool.is_initialized:
+                    _row = await _pool.fetchrow(
+                        """
+                        SELECT transition, occupancy_state, occupants,
+                               arrival_times, unknown_count, created_at
+                        FROM presence_events
+                        ORDER BY created_at DESC LIMIT 1
+                        """
+                    )
+                    if _row and _row["transition"] == "arrival":
+                        # Restore occupants with arrival timestamps
+                        _at = _row["arrival_times"]  # JSONB -> dict or None
+                        if _at and isinstance(_at, str):
+                            _at = _json.loads(_at)  # handle double-encoded rows
+                        if _at and isinstance(_at, dict):
+                            tracker._state.occupants = {
+                                n: _dt.fromisoformat(t) for n, t in _at.items()
+                            }
+                        elif _row["occupants"]:
+                            # Pre-migration rows: use created_at as fallback
+                            _ts = _row["created_at"]
+                            tracker._state.occupants = {
+                                n: _ts for n in _row["occupants"]
+                            }
+                        # Restore occupancy state and unknown count
+                        tracker._state.state = OccupancyState(_row["occupancy_state"])
+                        tracker._state.changed_at = _row["created_at"]
+                        tracker._state.last_activity = _row["created_at"]
+                        tracker._unknown_count = _row["unknown_count"] or 0
+                        logger.info(
+                            "Presence state recovered: %s, occupants=%s",
+                            tracker._state.state.value,
+                            list(tracker._state.occupants.keys()),
+                        )
+                    else:
+                        logger.info("Presence state: starting EMPTY (last=%s)",
+                                    _row["transition"] if _row else "none")
+            except Exception as _e:
+                logger.warning("Could not recover presence state: %s", _e)
 
             logger.info("Presence tracker initialized (empty_delay=%ds)",
                         autonomous_config.presence_empty_delay_seconds)
@@ -124,9 +199,9 @@ async def init_autonomous() -> TaskScheduler:
 
 async def shutdown_autonomous() -> None:
     """Shutdown the autonomous scheduler and unregister hooks."""
-    global _hook_callback_ref, _event_queue, _presence_callback_ref
+    global _hook_callback_ref, _event_queue, _presence_callback_ref, _broadcast_callback_ref
 
-    # 1. Unregister hook callback FIRST — stop new events from entering queue
+    # 1. Unregister hook callback FIRST -- stop new events from entering queue
     if _hook_callback_ref is not None:
         try:
             from ..alerts import get_alert_manager
@@ -140,7 +215,7 @@ async def shutdown_autonomous() -> None:
             logger.warning("Could not unregister hook callback: %s", e)
         _hook_callback_ref = None
 
-    # 2. Shutdown event queue — flush any remaining batched events
+    # 2. Shutdown event queue -- flush any remaining batched events
     if _event_queue is not None:
         try:
             await _event_queue.shutdown()
@@ -159,6 +234,7 @@ async def shutdown_autonomous() -> None:
         except Exception as e:
             logger.warning("Presence tracker shutdown error: %s", e)
         _presence_callback_ref = None
+        _broadcast_callback_ref = None
 
     # 4. Stop the scheduler
     scheduler = get_task_scheduler()
