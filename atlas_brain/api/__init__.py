@@ -19,6 +19,8 @@ from .speaker import router as speaker_router
 from .identity import router as identity_router
 from .edge import router as edge_router
 from .autonomous import router as autonomous_router
+from .presence import router as presence_router
+from .proactive_actions import router as proactive_actions_router
 
 # Main router that aggregates all sub-routers
 router = APIRouter()
@@ -38,3 +40,5 @@ router.include_router(speaker_router)
 router.include_router(identity_router)
 router.include_router(edge_router)
 router.include_router(autonomous_router)
+router.include_router(presence_router)
+router.include_router(proactive_actions_router)
