@@ -542,7 +542,7 @@ def create_voice_pipeline(event_loop: Optional[asyncio.AbstractEventLoop] = None
         from ..agents.tools import get_agent_tools
         logger.info("Preloading agent tools...")
         tools = get_agent_tools()
-        logger.info("Agent tools preloaded: %d tools registered", len(tools.get_tool_list()))
+        logger.info("Agent tools preloaded: %d tools registered", len(tools.list_tools()))
     except Exception as e:
         logger.warning("Failed to preload agent tools: %s", e)
 
