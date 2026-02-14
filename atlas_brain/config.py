@@ -73,7 +73,7 @@ class LLMConfig(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="ATLAS_LLM_")
 
-    # Backend selection: "llama-cpp", "transformers-flash", "ollama", or "together"
+    # Backend selection: "llama-cpp", "transformers-flash", "ollama", "together", "cloud", or "hybrid"
     default_model: str = Field(default="llama-cpp", description="Default LLM backend")
 
     # llama-cpp settings (GGUF models)
@@ -390,6 +390,12 @@ class ToolsConfig(BaseSettings):
     traffic_enabled: bool = Field(default=False, description="Enable traffic tool")
     traffic_api_key: str | None = Field(default=None, description="TomTom API key")
 
+    # Google OAuth token file (shared by Calendar + Gmail)
+    google_token_file: str = Field(
+        default="data/google_tokens.json",
+        description="Path to persistent Google OAuth token file",
+    )
+
     # Calendar tool (Google Calendar)
     calendar_enabled: bool = Field(default=False, description="Enable calendar tool")
     calendar_client_id: str | None = Field(default=None, description="Google OAuth client ID")
@@ -441,11 +447,15 @@ class AlertsConfig(BaseSettings):
 
 
 class EmailConfig(BaseSettings):
-    """Email tool configuration (Resend API)."""
+    """Email tool configuration (Resend API + Gmail)."""
 
     model_config = SettingsConfigDict(env_prefix="ATLAS_EMAIL_", env_file=".env", extra="ignore")
 
     enabled: bool = Field(default=False, description="Enable email tool")
+    gmail_send_enabled: bool = Field(
+        default=True,
+        description="Prefer Gmail API for sending (falls back to Resend if unavailable)",
+    )
     api_key: str | None = Field(default=None, description="Resend API key")
     default_from: str | None = Field(default=None, description="Default sender email address")
     timeout: int = Field(default=10, description="API timeout in seconds")
@@ -1042,6 +1052,9 @@ class AutonomousConfig(BaseSettings):
     presence_enabled: bool = Field(default=True, description="Enable presence/occupancy state tracking")
     presence_empty_delay_seconds: int = Field(default=300, ge=30, le=1800, description="Seconds after last person_left before declaring empty")
     presence_arrival_cooldown_seconds: int = Field(default=300, ge=60, le=3600, description="Cooldown between arrival transition fires")
+
+    # Auto-disable (Phase 4)
+    auto_disable_after_failures: int = Field(default=5, ge=0, le=50, description="Disable task after N consecutive failures (0=never)")
 
 
 class Settings(BaseSettings):

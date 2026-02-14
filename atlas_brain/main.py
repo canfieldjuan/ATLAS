@@ -104,6 +104,37 @@ async def lifespan(app: FastAPI):
                 if settings.llm.together_api_key:
                     kwargs["api_key"] = settings.llm.together_api_key
                 logger.info("Together AI model: %s", settings.llm.together_model)
+            elif backend == "cloud":
+                # Cloud backend (Groq primary + Together fallback)
+                kwargs = {
+                    "groq_model": settings.llm.groq_model,
+                    "together_model": settings.llm.together_model,
+                }
+                if settings.llm.groq_api_key:
+                    kwargs["groq_api_key"] = settings.llm.groq_api_key
+                if settings.llm.together_api_key:
+                    kwargs["together_api_key"] = settings.llm.together_api_key
+                logger.info("Cloud LLM: Groq (%s) + Together (%s)",
+                           settings.llm.groq_model, settings.llm.together_model)
+            elif backend == "hybrid":
+                # Hybrid: local (Ollama) for chat/streaming, cloud for tool calling
+                kwargs = {
+                    "local_kwargs": {
+                        "model": settings.llm.ollama_model,
+                        "base_url": settings.llm.ollama_url,
+                    },
+                    "cloud_kwargs": {
+                        "groq_model": settings.llm.groq_model,
+                        "together_model": settings.llm.together_model,
+                    },
+                }
+                # Pass cloud API keys if configured
+                if settings.llm.groq_api_key:
+                    kwargs["cloud_kwargs"]["groq_api_key"] = settings.llm.groq_api_key
+                if settings.llm.together_api_key:
+                    kwargs["cloud_kwargs"]["together_api_key"] = settings.llm.together_api_key
+                logger.info("Hybrid LLM: local=%s (%s), cloud=Groq+Together",
+                           settings.llm.ollama_model, settings.llm.ollama_url)
             else:
                 # llama-cpp (GGUF models)
                 kwargs = {}
