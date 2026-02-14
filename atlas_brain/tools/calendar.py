@@ -15,6 +15,7 @@ from typing import Any, Optional
 import httpx
 
 from ..config import settings
+from ..services.google_oauth import get_google_token_store
 from .base import ToolParameter, ToolResult
 
 logger = logging.getLogger("atlas.tools.calendar")
@@ -166,20 +167,29 @@ class CalendarTool:
             if not force and self._access_token and time.time() < self._token_expires - 60:
                 return self._access_token
 
+            # Load credentials from token store (file first, .env fallback)
+            store = get_google_token_store()
+            creds = store.get_credentials("calendar")
+            if not creds:
+                raise CalendarAuthError(
+                    "Calendar OAuth not configured. "
+                    "Run: python scripts/setup_google_oauth.py"
+                )
+
             client = await self._ensure_client()
 
             data = {
-                "client_id": self._config.calendar_client_id,
-                "client_secret": self._config.calendar_client_secret,
-                "refresh_token": self._config.calendar_refresh_token,
+                "client_id": creds.client_id,
+                "client_secret": creds.client_secret,
+                "refresh_token": creds.refresh_token,
                 "grant_type": "refresh_token",
             }
 
             response = await client.post(TOKEN_URL, data=data)
-            if response.status_code == 400 or response.status_code == 401:
+            if response.status_code in (400, 401):
                 logger.critical(
                     "Calendar refresh token is INVALID (HTTP %d). "
-                    "Re-run: python scripts/setup_google_calendar.py",
+                    "Re-run: python scripts/setup_google_oauth.py",
                     response.status_code,
                 )
                 raise CalendarAuthError(
@@ -190,17 +200,13 @@ class CalendarTool:
             token_data = response.json()
 
             self._access_token = token_data["access_token"]
-            # Token typically valid for 1 hour
             expires_in = token_data.get("expires_in", 3600)
             self._token_expires = time.time() + expires_in
 
-            # Google may rotate the refresh token -- persist it
+            # Auto-persist rotated refresh token
             new_refresh = token_data.get("refresh_token")
-            if new_refresh and new_refresh != self._config.calendar_refresh_token:
-                logger.warning(
-                    "Google rotated refresh token -- update .env with new value"
-                )
-                self._config.calendar_refresh_token = new_refresh
+            if new_refresh and new_refresh != creds.refresh_token:
+                store.persist_refresh_token("calendar", new_refresh)
 
             logger.debug("Refreshed Google Calendar access token")
             return self._access_token

@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 
 from ...config import settings
+from ...services.google_oauth import get_google_token_store
 from ...storage.models import ScheduledTask
 
 logger = logging.getLogger("atlas.autonomous.tasks.gmail_digest")
@@ -48,15 +49,23 @@ class GmailClient:
             if self._access_token and time.time() < self._token_expires - 60:
                 return self._access_token
 
-            cfg = settings.tools
+            # Load credentials from token store (file first, .env fallback)
+            store = get_google_token_store()
+            creds = store.get_credentials("gmail")
+            if not creds:
+                raise RuntimeError(
+                    "Gmail OAuth not configured. "
+                    "Run: python scripts/setup_google_oauth.py"
+                )
+
             if self._client is None:
                 self._client = httpx.AsyncClient(timeout=15.0)
             client = self._client
 
             data = {
-                "client_id": cfg.gmail_client_id,
-                "client_secret": cfg.gmail_client_secret,
-                "refresh_token": cfg.gmail_refresh_token,
+                "client_id": creds.client_id,
+                "client_secret": creds.client_secret,
+                "refresh_token": creds.refresh_token,
                 "grant_type": "refresh_token",
             }
 
@@ -64,7 +73,7 @@ class GmailClient:
             if response.status_code in (400, 401):
                 logger.error(
                     "Gmail refresh token rejected (HTTP %d). "
-                    "Re-run: python scripts/setup_google_gmail.py",
+                    "Re-run: python scripts/setup_google_oauth.py",
                     response.status_code,
                 )
                 raise RuntimeError(
@@ -76,6 +85,11 @@ class GmailClient:
             self._access_token = token_data["access_token"]
             expires_in = token_data.get("expires_in", 3600)
             self._token_expires = time.time() + expires_in
+
+            # Auto-persist rotated refresh token
+            new_refresh = token_data.get("refresh_token")
+            if new_refresh and new_refresh != creds.refresh_token:
+                store.persist_refresh_token("gmail", new_refresh)
 
             logger.debug("Refreshed Gmail access token")
             return self._access_token
@@ -160,12 +174,13 @@ async def run(task: ScheduledTask) -> dict:
             "summary": "Gmail digest is disabled. Set ATLAS_TOOLS_GMAIL_ENABLED=true.",
         }
 
-    if not cfg.gmail_refresh_token:
+    store = get_google_token_store()
+    if not store.get_credentials("gmail"):
         return {
             "query": "",
             "total_unread": 0,
             "emails": [],
-            "summary": "Gmail not configured. Run: python scripts/setup_google_gmail.py",
+            "summary": "Gmail not configured. Run: python scripts/setup_google_oauth.py",
         }
 
     metadata = task.metadata or {}

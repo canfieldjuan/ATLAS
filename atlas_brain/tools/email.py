@@ -1,8 +1,8 @@
 """
-Email tool for sending emails via Resend API.
+Email tool for sending emails via Resend API or Gmail.
 
-Allows Atlas to send emails on behalf of the user.
-Ported from web-ui intelligent_email tool.
+Prefers Gmail when configured (gmail_send_enabled + OAuth token).
+Falls back to Resend API otherwise.
 """
 
 import base64
@@ -317,8 +317,32 @@ class EmailTool:
                     logger.warning("Skipping invalid attachment: %s", att)
 
         if loaded_attachments:
-            payload["attachments"] = loaded_attachments
             logger.info("Adding %d attachment(s) to email", len(loaded_attachments))
+
+        # Try Gmail first when configured
+        if self._config.gmail_send_enabled:
+            gmail_result = await self._try_gmail_send(
+                to_list, subject, body, from_email, params, loaded_attachments,
+            )
+            if gmail_result is not None:
+                return gmail_result
+
+        # Fall back to Resend API
+        payload: dict[str, Any] = {
+            "from": from_email,
+            "to": to_list,
+            "subject": subject,
+            "text": body,
+        }
+
+        if params.get("cc"):
+            payload["cc"] = [e.strip() for e in params["cc"].split(",")]
+        if params.get("bcc"):
+            payload["bcc"] = [e.strip() for e in params["bcc"].split(",")]
+        if params.get("reply_to"):
+            payload["reply_to"] = params["reply_to"]
+        if loaded_attachments:
+            payload["attachments"] = loaded_attachments
 
         try:
             result = await self._send_email(payload)
@@ -326,6 +350,7 @@ class EmailTool:
                 "message_id": result.get("id"),
                 "to": to_list,
                 "subject": subject,
+                "transport": "resend",
             }
             if loaded_attachments:
                 response_data["attachments"] = [a["filename"] for a in loaded_attachments]
@@ -374,8 +399,61 @@ class EmailTool:
         response.raise_for_status()
 
         result = response.json()
-        logger.info("Email sent successfully: %s", result.get("id"))
+        logger.info("Email sent successfully via Resend: %s", result.get("id"))
         return result
+
+    async def _try_gmail_send(
+        self,
+        to_list: list[str],
+        subject: str,
+        body: str,
+        from_email: str | None,
+        params: dict[str, Any],
+        attachments: list[dict[str, Any]],
+    ) -> ToolResult | None:
+        """Attempt to send via Gmail. Returns None to fall back to Resend."""
+        try:
+            from ..services.google_oauth import get_google_token_store
+            from .gmail import get_gmail_transport
+
+            store = get_google_token_store()
+            if not store.get_credentials("gmail"):
+                logger.debug("Gmail not configured, falling back to Resend")
+                return None
+
+            transport = get_gmail_transport()
+            cc = [e.strip() for e in params["cc"].split(",")] if params.get("cc") else None
+            bcc = [e.strip() for e in params["bcc"].split(",")] if params.get("bcc") else None
+
+            result = await transport.send(
+                to=to_list,
+                subject=subject,
+                body=body,
+                from_email=from_email,
+                cc=cc,
+                bcc=bcc,
+                reply_to=params.get("reply_to"),
+                attachments=attachments or None,
+                html=params.get("html"),
+            )
+
+            response_data = {
+                "message_id": result.get("id"),
+                "to": to_list,
+                "subject": subject,
+                "transport": "gmail",
+            }
+            if attachments:
+                response_data["attachments"] = [a["filename"] for a in attachments]
+
+            return ToolResult(
+                success=True,
+                data=response_data,
+                message=f"Email sent to {', '.join(to_list)}",
+            )
+        except Exception as e:
+            logger.warning("Gmail send failed, falling back to Resend: %s", e)
+            return None
 
 
 # Module-level instance

@@ -60,6 +60,15 @@ async def health():
     except Exception as e:
         presence_status["error"] = str(e)
 
+    # Get Google OAuth token status
+    google_oauth_status = {}
+    try:
+        from ..services.google_oauth import get_google_token_store
+        store = get_google_token_store()
+        google_oauth_status = store.get_status()
+    except Exception as e:
+        google_oauth_status = {"error": str(e)}
+
     return {
         "status": "ok",
         "services": {
@@ -70,5 +79,6 @@ async def health():
             },
             "webcam": webcam_status,
             "presence": presence_status,
+            "google_oauth": google_oauth_status,
         },
     }
