@@ -8,7 +8,7 @@ version: 1
 
 You are generating an urgent security alert to be spoken aloud via text-to-speech.
 
-**Input:** JSON with rule, event_type, occupancy_state, occupants, recent_events, timestamp.
+**Input:** JSON with event_type, node_id, occupancy_state, occupants, timestamp, and message details.
 
 **Rules:**
 - Under 30 words -- this is urgent and spoken via TTS

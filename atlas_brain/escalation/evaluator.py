@@ -5,12 +5,14 @@ Classifies events as routine or escalation-worthy using rule-based logic
 (no LLM). For escalations, synthesizes a TTS-ready alert via LLM + skill.
 """
 
+import asyncio
 import json
 import logging
 import re
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any, Optional
 
 logger = logging.getLogger("atlas.escalation")
@@ -40,7 +42,8 @@ class EscalationEvaluator:
     """
 
     def __init__(self) -> None:
-        self._unknown_timestamps: deque[float] = deque()
+        # maxlen caps memory under adversarial rapid-fire events
+        self._unknown_timestamps: deque[float] = deque(maxlen=50)
 
     async def evaluate(
         self,
@@ -137,10 +140,9 @@ class EscalationEvaluator:
         """
         LLM synthesis + send escalation_alert to edge.
 
-        Called as a background task (asyncio.create_task).
+        Called as a tracked background task via connection._spawn_task().
         """
         from ..config import settings
-        from ..autonomous.presence import get_presence_tracker
 
         config = settings.escalation
         text: Optional[str] = None
@@ -173,14 +175,27 @@ class EscalationEvaluator:
                         ),
                     ]
 
-                    async with cuda_lock:
-                        llm_result = llm.chat(
+                    # Prefer async chat (API backends) -- no cuda_lock needed,
+                    # avoids blocking behind other LLM calls. Fall back to
+                    # sync chat + cuda_lock for local GPU backends.
+                    if hasattr(llm, "chat_async"):
+                        raw = await llm.chat_async(
                             messages=messages,
                             max_tokens=config.synthesis_max_tokens,
                             temperature=config.synthesis_temperature,
                         )
-
-                    text = llm_result.get("response", "").strip()
+                        text = raw.strip() if isinstance(raw, str) else raw.get("response", "").strip()
+                    else:
+                        async with cuda_lock:
+                            llm_result = await asyncio.to_thread(
+                                partial(
+                                    llm.chat,
+                                    messages=messages,
+                                    max_tokens=config.synthesis_max_tokens,
+                                    temperature=config.synthesis_temperature,
+                                )
+                            )
+                        text = llm_result.get("response", "").strip()
                     # Strip <think> tags (Qwen3 models)
                     if text:
                         text = re.sub(
@@ -196,6 +211,8 @@ class EscalationEvaluator:
 
         # Get current occupancy for the alert payload
         try:
+            from ..autonomous.presence import get_presence_tracker
+
             tracker = get_presence_tracker()
             occupancy_context = {
                 "state": tracker.state.state.value,

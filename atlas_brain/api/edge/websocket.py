@@ -659,7 +659,6 @@ async def _handle_security_event(
         node_id,
         event,
     )
-
     # Build human-readable message (always, even if DB save fails)
     if event == "person_entered":
         name = message.get("name", "unknown")
@@ -721,6 +720,13 @@ async def _handle_security_event(
 
             evaluator = get_escalation_evaluator()
             escalation_result = await evaluator.evaluate(event, message, node_id)
+            if escalation_result.should_escalate:
+                logger.warning(
+                    "Escalation triggered: event=%s rule=%s priority=%s",
+                    event,
+                    escalation_result.rule_name,
+                    escalation_result.priority,
+                )
         except Exception as e:
             logger.warning("Escalation evaluation failed: %s", e)
 
@@ -744,11 +750,14 @@ async def _handle_security_event(
                 "occupancy_state": "unknown",
                 "occupants": [],
             }
-    await connection.send(ack)
+    try:
+        await connection.send(ack)
+    except Exception as e:
+        logger.warning("Failed to send security_ack to %s: %s", node_id, e)
 
-    # Async escalation (non-blocking)
+    # Async escalation (non-blocking, tracked for cleanup on disconnect)
     if escalation_result and escalation_result.should_escalate and evaluator is not None:
-        asyncio.create_task(
+        connection._spawn_task(
             evaluator.synthesize_and_send(escalation_result, connection),
             name=f"escalation-{node_id}",
         )
