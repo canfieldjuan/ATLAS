@@ -28,6 +28,7 @@ class OllamaLLM(BaseModelService):
         self,
         model: str = "qwen3-coder:30b",
         base_url: str = "http://localhost:11434",
+        think: bool = False,
         **kwargs: Any,
     ) -> None:
         """
@@ -36,14 +37,27 @@ class OllamaLLM(BaseModelService):
         Args:
             model: Ollama model name (e.g., "qwen3-coder:30b", "hermes3:8b")
             base_url: Ollama API base URL
+            think: Enable thinking/reasoning mode (cloud models may require this)
             **kwargs: Additional options
         """
         super().__init__(name="ollama", model_id=model)
         self.model = model
         self.base_url = base_url.rstrip("/")
+        self._think = think
         self._client: httpx.AsyncClient | None = None
         self._sync_client: httpx.Client | None = None
         self._loaded = False
+
+    def _extract_content(self, data: dict[str, Any]) -> str:
+        """Extract response text from Ollama response, falling back to thinking field."""
+        msg = data.get("message", {})
+        content = msg.get("content", "").strip()
+        if content:
+            return content
+        # Some cloud models (e.g. minimax-m2) put everything in thinking
+        if self._think:
+            return msg.get("thinking", "").strip()
+        return ""
 
     @property
     def model_info(self) -> ModelInfo:
@@ -118,7 +132,7 @@ class OllamaLLM(BaseModelService):
             "model": self.model,
             "messages": ollama_messages,
             "stream": False,
-            "think": False,  # Disable <think> blocks — simple tasks don't need reasoning
+            "think": self._think,
             "keep_alive": "30m",  # Keep model in VRAM
             "options": {
                 "num_predict": max_tokens,
@@ -135,7 +149,7 @@ class OllamaLLM(BaseModelService):
                 )
                 response.raise_for_status()
                 data = response.json()
-                response_text = data.get("message", {}).get("content", "").strip()
+                response_text = self._extract_content(data)
                 done_reason = data.get("done_reason", "unknown")
 
                 # Log timing details to understand cache behavior
@@ -214,7 +228,7 @@ class OllamaLLM(BaseModelService):
             "model": self.model,
             "messages": ollama_messages,
             "stream": False,
-            "think": False,  # Disable <think> blocks — simple tasks don't need reasoning
+            "think": self._think,
             "keep_alive": "30m",  # Keep model in VRAM
             "options": {
                 "num_predict": max_tokens,
@@ -303,7 +317,7 @@ class OllamaLLM(BaseModelService):
             "model": self.model,
             "messages": ollama_messages,
             "stream": False,
-            "think": False,  # Disable <think> blocks — simple tasks don't need reasoning
+            "think": self._think,
             "keep_alive": "30m",  # Keep model in VRAM
             "options": {
                 "num_predict": max_tokens,
@@ -318,7 +332,7 @@ class OllamaLLM(BaseModelService):
             )
             response.raise_for_status()
             data = response.json()
-            return data.get("message", {}).get("content", "")
+            return self._extract_content(data)
         except httpx.HTTPError as e:
             logger.error("Ollama chat error: %s", e)
             raise
@@ -357,7 +371,7 @@ class OllamaLLM(BaseModelService):
             "model": self.model,
             "messages": ollama_messages,
             "stream": True,
-            "think": False,  # Disable <think> blocks — simple tasks don't need reasoning
+            "think": self._think,
             "keep_alive": "30m",
             "options": {
                 "num_predict": max_tokens,

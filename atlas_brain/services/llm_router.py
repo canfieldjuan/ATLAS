@@ -27,15 +27,16 @@ CLOUD_WORKFLOWS = frozenset({"booking", "email"})
 
 
 def init_cloud_llm(
-    model: str = "glm-5:cloud",
+    model: str = "minimax-m2:cloud",
     base_url: str = "http://localhost:11434",
+    think: bool = True,
 ) -> Optional[LLMService]:
     """Initialize the cloud LLM singleton via Ollama. Called from main.py lifespan."""
     global _cloud_llm
     from .llm.ollama import OllamaLLM
 
     try:
-        _cloud_llm = OllamaLLM(model=model, base_url=base_url)
+        _cloud_llm = OllamaLLM(model=model, base_url=base_url, think=think)
         _cloud_llm.load()
         logger.info("Cloud LLM initialized: %s via %s", model, base_url)
         return _cloud_llm
