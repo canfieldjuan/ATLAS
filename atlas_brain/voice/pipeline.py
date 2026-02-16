@@ -152,13 +152,27 @@ class NemotronAsrStreamingClient:
 
         with self._lock:
             if self._connected and self._ws:
-                return True
+                try:
+                    if self._ws.socket.fileno() == -1:
+                        raise ConnectionError("Socket closed")
+                    return True
+                except Exception as e:
+                    logger.info("ASR WebSocket stale (%s), reconnecting", e)
+                    try:
+                        self._ws.close()
+                    except Exception:
+                        pass
+                    self._ws = None
+                    self._connected = False
+                    # Fall through to reconnect
 
             try:
                 self._ws = ws_connect(
                     self.url,
                     open_timeout=self.timeout,
                     close_timeout=5,
+                    ping_interval=20,
+                    ping_timeout=20,
                 )
                 self._connected = True
                 self._last_partial = ""
@@ -213,6 +227,13 @@ class NemotronAsrStreamingClient:
         except Exception as e:
             logger.warning("Error sending audio to streaming ASR: %s", e)
             self._connected = False
+            try:
+                self._ws.close()
+            except Exception:
+                pass
+            self._ws = None
+            # Reconnect so subsequent send_audio() calls don't all fail
+            self.connect()
             return None
 
     def finalize(self) -> Optional[str]:
@@ -405,6 +426,64 @@ class PiperTTS:
         self.stop_event = threading.Event()
         self.current_stream: Optional[sd.OutputStream] = None
         self._current_process: Optional[subprocess.Popen] = None
+        self._warm_process: Optional[subprocess.Popen] = None
+        self._warm_lock = threading.Lock()
+
+    def _build_piper_cmd(self) -> list:
+        """Build the Piper command line arguments."""
+        cmd = [
+            self.binary_path,
+            "--model",
+            self.model_path,
+            "--output-raw",
+            "--length_scale",
+            str(self.length_scale),
+            "--noise_scale",
+            str(self.noise_scale),
+            "--noise_w",
+            str(self.noise_w),
+        ]
+        if self.speaker is not None:
+            cmd.extend(["--speaker", str(self.speaker)])
+        return cmd
+
+    def _spawn_process(self) -> subprocess.Popen:
+        """Spawn a new Piper subprocess."""
+        return subprocess.Popen(
+            self._build_piper_cmd(),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def warm_up(self):
+        """Pre-spawn a Piper process so the next speak() call is fast.
+
+        Thread-safe; no-op if a warm process is already alive.
+        """
+        with self._warm_lock:
+            if self._warm_process is not None and self._warm_process.poll() is None:
+                return  # Already warm and alive
+            try:
+                self._warm_process = self._spawn_process()
+                logger.info("Piper warm process spawned (PID %d)", self._warm_process.pid)
+            except Exception as e:
+                logger.warning("Failed to spawn warm Piper process: %s", e)
+                self._warm_process = None
+
+    def _take_warm_process(self) -> Optional[subprocess.Popen]:
+        """Atomically take the warm process if it's still alive."""
+        with self._warm_lock:
+            proc = self._warm_process
+            if proc is not None:
+                if proc.poll() is None:
+                    self._warm_process = None
+                    logger.info("Using warm Piper process (PID %d)", proc.pid)
+                    return proc
+                else:
+                    logger.debug("Warm process already exited, discarding")
+                    self._warm_process = None
+        return None
 
     def speak(self, text: str):
         """Speak the given text using Piper TTS with streaming."""
@@ -424,28 +503,8 @@ class PiperTTS:
 
     def _speak_streaming(self, text: str):
         """Stream audio directly from Piper stdout."""
-        cmd = [
-            self.binary_path,
-            "--model",
-            self.model_path,
-            "--output-raw",
-            "--length_scale",
-            str(self.length_scale),
-            "--noise_scale",
-            str(self.noise_scale),
-            "--noise_w",
-            str(self.noise_w),
-        ]
-        if self.speaker is not None:
-            cmd.extend(["--speaker", str(self.speaker)])
-
         start_time = time.perf_counter()
-        process = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
+        process = self._take_warm_process() or self._spawn_process()
         self._current_process = process
 
         try:
@@ -494,6 +553,9 @@ class PiperTTS:
                 logger.warning("Piper process timed out, killing")
                 process.kill()
                 process.wait(timeout=1.0)
+
+        # Pre-spawn next warm process for subsequent calls
+        threading.Thread(target=self.warm_up, daemon=True, name="piper-warmup").start()
 
     def _speak_batch(self, text: str):
         """Fallback: synthesize to file then play (original method)."""
@@ -556,6 +618,15 @@ class PiperTTS:
             sd.stop()
         except Exception as e:
             logger.debug("sd.stop() failed: %s", e)
+        # Clean up warm process
+        with self._warm_lock:
+            if self._warm_process is not None:
+                try:
+                    self._warm_process.terminate()
+                    self._warm_process.wait(timeout=1.0)
+                except Exception:
+                    pass
+                self._warm_process = None
 
 
 class VoicePipeline:
@@ -592,6 +663,7 @@ class VoicePipeline:
         command_workers: int = 2,
         audio_gain: float = 1.0,
         prefill_runner: Optional[Callable[[], None]] = None,
+        prefill_cache_ttl: float = 60.0,
         debug_logging: bool = False,
         log_interval_frames: int = 160,
         conversation_mode_enabled: bool = False,
@@ -661,6 +733,8 @@ class VoicePipeline:
         self.streaming_llm_enabled = streaming_llm_enabled
         self.prefill_runner = prefill_runner
         self._prefill_in_progress = False
+        self._last_llm_call_time: float = 0.0
+        self._prefill_cache_ttl = prefill_cache_ttl
         # Session ID stored as string for context passing, converted to UUID for database ops
         self.session_id = str(uuid.uuid4())
         self.node_id = node_id
@@ -973,6 +1047,7 @@ class VoicePipeline:
 
         context = self._build_context()
         reply = self.agent_runner(transcript, context)
+        self._last_llm_call_time = time.monotonic()
 
         if not self._is_current_gen(gen):
             logger.info("Stale command gen=%d, discarding reply", gen)
@@ -1021,6 +1096,7 @@ class VoicePipeline:
 
         context = self._build_context()
         reply = self.agent_runner(transcript, context)
+        self._last_llm_call_time = time.monotonic()
 
         if not self._is_current_gen(gen):
             logger.info("Stale command gen=%d, discarding reply", gen)
@@ -1084,6 +1160,7 @@ class VoicePipeline:
             reply = self.agent_runner(transcript, context)
             if reply:
                 on_sentence(reply)
+        self._last_llm_call_time = time.monotonic()
 
         if gen and not self._is_current_gen(gen):
             logger.info("Stale streaming command gen=%d, discarding", gen)
@@ -1187,6 +1264,11 @@ class VoicePipeline:
         """
         if self.prefill_runner is None:
             logger.debug("No prefill_runner configured")
+            return
+        # Skip if KV cache is still warm from a recent LLM call
+        elapsed = time.monotonic() - self._last_llm_call_time
+        if self._last_llm_call_time > 0 and elapsed < self._prefill_cache_ttl:
+            logger.info("Skipping prefill, KV cache warm (%.1fs ago)", elapsed)
             return
         # Guard against concurrent prefills
         if self._prefill_in_progress:

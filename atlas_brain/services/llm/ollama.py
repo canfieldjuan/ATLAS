@@ -118,6 +118,7 @@ class OllamaLLM(BaseModelService):
             "model": self.model,
             "messages": ollama_messages,
             "stream": False,
+            "think": False,  # Disable <think> blocks — simple tasks don't need reasoning
             "keep_alive": "30m",  # Keep model in VRAM
             "options": {
                 "num_predict": max_tokens,
@@ -213,6 +214,7 @@ class OllamaLLM(BaseModelService):
             "model": self.model,
             "messages": ollama_messages,
             "stream": False,
+            "think": False,  # Disable <think> blocks — simple tasks don't need reasoning
             "keep_alive": "30m",  # Keep model in VRAM
             "options": {
                 "num_predict": max_tokens,
@@ -301,6 +303,7 @@ class OllamaLLM(BaseModelService):
             "model": self.model,
             "messages": ollama_messages,
             "stream": False,
+            "think": False,  # Disable <think> blocks — simple tasks don't need reasoning
             "keep_alive": "30m",  # Keep model in VRAM
             "options": {
                 "num_predict": max_tokens,
@@ -354,6 +357,7 @@ class OllamaLLM(BaseModelService):
             "model": self.model,
             "messages": ollama_messages,
             "stream": True,
+            "think": False,  # Disable <think> blocks — simple tasks don't need reasoning
             "keep_alive": "30m",
             "options": {
                 "num_predict": max_tokens,

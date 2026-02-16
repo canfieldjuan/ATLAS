@@ -628,6 +628,10 @@ class VoiceClientConfig(BaseSettings):
         default=10.0,
         description="Timeout in seconds for LLM prefill on wake word"
     )
+    prefill_cache_ttl: float = Field(
+        default=60.0,
+        description="Seconds after last LLM call during which prefill is skipped (KV cache still warm)"
+    )
     speaker_id_timeout: float = Field(
         default=5.0,
         description="Timeout in seconds for speaker identification"

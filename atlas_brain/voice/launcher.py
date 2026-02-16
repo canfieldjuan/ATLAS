@@ -587,6 +587,7 @@ def create_voice_pipeline(event_loop: Optional[asyncio.AbstractEventLoop] = None
                 noise_w=cfg.piper_noise_w,
                 sample_rate=cfg.piper_sample_rate,
             )
+            tts.warm_up()
     else:
         tts = PiperTTS(
             binary_path=cfg.piper_binary,
@@ -598,6 +599,7 @@ def create_voice_pipeline(event_loop: Optional[asyncio.AbstractEventLoop] = None
             sample_rate=cfg.piper_sample_rate,
         )
         logger.info("Using Piper TTS")
+        tts.warm_up()
 
     agent_runner = _create_agent_runner()
     streaming_agent_runner = _create_streaming_agent_runner()
@@ -694,6 +696,7 @@ def create_voice_pipeline(event_loop: Optional[asyncio.AbstractEventLoop] = None
         command_workers=cfg.command_workers,
         audio_gain=cfg.audio_gain,
         prefill_runner=prefill_runner,
+        prefill_cache_ttl=cfg.prefill_cache_ttl,
         debug_logging=cfg.debug_logging,
         log_interval_frames=cfg.log_interval_frames,
         conversation_mode_enabled=cfg.conversation_mode_enabled,
