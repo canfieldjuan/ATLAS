@@ -7,6 +7,7 @@ Implements the SpeechEngine protocol.
 """
 
 import logging
+import queue
 import threading
 import time
 
@@ -99,7 +100,12 @@ class OrpheusTTS:
         logger.info("OrpheusCpp engine loaded successfully")
 
     def speak(self, text: str):
-        """Synthesize and stream audio via sounddevice."""
+        """Synthesize and stream audio via sounddevice.
+
+        Uses a producer-consumer pattern: a background thread generates
+        audio chunks into a queue while the main thread plays them.
+        This prevents stutter when generation is slower than real-time.
+        """
         self.stop_event.clear()
         try:
             self._ensure_loaded()
@@ -109,7 +115,7 @@ class OrpheusTTS:
 
         start_time = time.perf_counter()
         sample_rate = 24000
-        first_chunk = True
+        audio_queue = queue.Queue(maxsize=64)
         options = {
             "voice_id": self.voice,
             "temperature": self.temperature,
@@ -117,10 +123,9 @@ class OrpheusTTS:
             "pre_buffer_size": self.pre_buffer_size,
         }
 
-        try:
-            stream = self._open_output_stream(sample_rate)
-            with stream:
-                self.current_stream = stream
+        def producer():
+            """Generate audio chunks into queue."""
+            try:
                 for sr, samples in self._engine.stream_tts_sync(
                     text, options=options,
                 ):
@@ -128,22 +133,56 @@ class OrpheusTTS:
                         break
                     if samples is None or len(samples) == 0:
                         continue
-                    if first_chunk:
-                        latency_ms = (time.perf_counter() - start_time) * 1000
-                        logger.info(
-                            "TTS first chunk latency: %.0fms", latency_ms,
-                        )
-                        first_chunk = False
-
-                    # Convert int16 to float32 for sounddevice
                     audio_f32 = samples.astype(np.float32) / 32768.0
                     audio_f32 = audio_f32.ravel()
+                    try:
+                        audio_queue.put(audio_f32, timeout=5.0)
+                    except queue.Full:
+                        break
+            except Exception as e:
+                if not self.stop_event.is_set():
+                    logger.error("Orpheus generation failed: %s", e)
+            finally:
+                audio_queue.put(None)  # sentinel
+
+        gen_thread = threading.Thread(
+            target=producer, daemon=True, name="orpheus-gen",
+        )
+        gen_thread.start()
+
+        self._play_from_queue(
+            audio_queue, sample_rate, start_time,
+        )
+        gen_thread.join(timeout=2.0)
+
+    def _play_from_queue(self, audio_queue, sample_rate, start_time):
+        """Consume audio chunks from queue and play via sounddevice."""
+        first_chunk = True
+        try:
+            stream = self._open_output_stream(sample_rate)
+            with stream:
+                self.current_stream = stream
+                while not self.stop_event.is_set():
+                    try:
+                        chunk = audio_queue.get(timeout=0.1)
+                    except queue.Empty:
+                        continue
+                    if chunk is None:
+                        break
+                    if first_chunk:
+                        latency_ms = (
+                            time.perf_counter() - start_time
+                        ) * 1000
+                        logger.info(
+                            "TTS first chunk latency: %.0fms",
+                            latency_ms,
+                        )
+                        first_chunk = False
                     chunk_size = 4800  # 200ms at 24kHz
-                    for i in range(0, len(audio_f32), chunk_size):
+                    for i in range(0, len(chunk), chunk_size):
                         if self.stop_event.is_set():
                             break
-                        stream.write(audio_f32[i:i + chunk_size])
-
+                        stream.write(chunk[i:i + chunk_size])
                 try:
                     stream.stop()
                 except Exception as e:
