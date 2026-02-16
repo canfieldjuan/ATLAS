@@ -9,12 +9,14 @@ Handles the tool calling loop:
 5. Call LLM again for final response
 """
 
+import asyncio
 import json
 import logging
 import re
 from typing import Any
 
 from ..tools import tool_registry
+from ..tools.base import ToolResult
 from .protocols import Message
 
 logger = logging.getLogger("atlas.services.tool_executor")
@@ -219,8 +221,21 @@ async def execute_with_tools(
 
             logger.info("Executing tool: %s with args: %s", tool_name, args)
 
-            # Execute tool
-            tool_result = await tool_registry.execute(tool_name, args)
+            # Execute tool with per-tool timeout
+            from ..config import settings
+            tool_timeout = settings.voice.tool_execution_timeout
+            try:
+                tool_result = await asyncio.wait_for(
+                    tool_registry.execute(tool_name, args),
+                    timeout=tool_timeout,
+                )
+            except asyncio.TimeoutError:
+                logger.error("Tool %s timed out after %.1fs", tool_name, tool_timeout)
+                tool_result = ToolResult(
+                    success=False,
+                    error="TOOL_TIMEOUT",
+                    message=f"Tool {tool_name} timed out after {tool_timeout:.0f}s",
+                )
             tool_results[tool_name] = tool_result.message
 
             # Add tool result to messages

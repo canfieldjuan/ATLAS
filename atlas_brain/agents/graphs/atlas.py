@@ -125,7 +125,12 @@ async def check_active_workflow(state: AtlasAgentState) -> AtlasAgentState:
     if workflow.is_expired():
         logger.info("Workflow expired for session %s, clearing", session_id)
         await manager.clear_workflow_state(session_id)
-        return state
+        from ...config import settings
+        return {
+            **state,
+            "action_type": "workflow_expired",
+            "response": settings.voice.error_workflow_expired,
+        }
 
     from ...modes.manager import get_mode_manager
     mode_manager = get_mode_manager()
@@ -881,8 +886,8 @@ def route_after_check_workflow(
     """Route after checking for active workflow."""
     action_type = state.get("action_type", "")
 
-    # Mode switch or workflow cancelled - go to respond
-    if action_type in ("mode_switch", "workflow_cancelled"):
+    # Mode switch, workflow cancelled, or workflow expired - go to respond
+    if action_type in ("mode_switch", "workflow_cancelled", "workflow_expired"):
         return "respond"
 
     # Active workflow found - continue it

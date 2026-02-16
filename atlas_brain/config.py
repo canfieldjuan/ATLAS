@@ -646,6 +646,16 @@ class VoiceClientConfig(BaseSettings):
         default="Something went wrong. Try again.",
         description="TTS phrase when agent processing fails"
     )
+    error_workflow_expired: str = Field(
+        default="That session timed out. Let's start over.",
+        description="TTS phrase when a multi-turn workflow expires due to inactivity"
+    )
+
+    # Tool execution
+    tool_execution_timeout: float = Field(
+        default=15.0,
+        description="Timeout in seconds for individual tool execution"
+    )
 
     # Debug logging
     debug_logging: bool = Field(
