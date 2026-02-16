@@ -14,6 +14,7 @@ import io
 import json
 import logging
 import os
+import queue
 import random
 import subprocess
 import tempfile
@@ -1059,7 +1060,7 @@ class VoicePipeline:
         thread.start()
 
         if not result_event.wait(timeout=self._filler_delay):
-            # Agent is slow — speak filler while waiting
+            # Agent is slow -- speak filler while waiting
             filler = random.choice(self._filler_phrases)
             logger.info("Agent slow (>%dms), speaking filler: %s",
                         int(self._filler_delay * 1000), filler)
@@ -1173,10 +1174,12 @@ class VoicePipeline:
     def _handle_streaming_llm_command(self, transcript: str, gen: int = 0):
         """Handle command with streaming LLM to TTS.
 
-        LLM response is streamed and sentences are collected, then spoken
-        together as one utterance. This provides better TTS prosody than
-        speaking sentences individually. Sentences are logged as they arrive
-        for debugging visibility.
+        Sentences are played as soon as they arrive from the LLM stream
+        via a queue-based playback thread, so the user hears the first
+        sentence immediately instead of waiting for the full response.
+
+        If streaming fails and falls back to the regular agent, the
+        fallback response is collected and spoken as a single utterance.
         """
         if not transcript:
             logger.warning("Empty transcript for streaming LLM")
@@ -1186,85 +1189,111 @@ class VoicePipeline:
         logger.info("Streaming LLM command: %s", transcript)
         context = self._build_context()
 
-        # Thread-safe collector: on_sentence is called from the async event
-        # loop thread while the worker thread reads after future.result().
-        # The lock makes the cross-thread access explicitly safe.
-        _sentence_lock = threading.Lock()
-        sentences: List[str] = []
-
-        # Filler timer — speaks a filler phrase if no sentence arrives in time
+        sentence_queue: queue.Queue = queue.Queue()
+        # Tracks whether streaming was reset (None sentinel from runner)
+        # and we switched to collecting fallback output in a list.
+        use_queue = [True]
+        fallback_sentences: List[str] = []
+        is_error = [False]
+        sentence_count = [0]
         filler_timer = None
 
         def on_sentence(sentence):
-            """Callback for each complete sentence from LLM.
-
-            A None sentinel clears accumulated sentences (used when
-            streaming fails and the fallback agent will produce a
-            complete replacement response).
-            """
             nonlocal filler_timer
-            # Cancel filler on first real sentence
+            # Cancel filler on first real content
             if filler_timer is not None:
                 filler_timer.cancel()
                 filler_timer = None
-            with _sentence_lock:
-                if sentence is None:
-                    sentences.clear()
-                    return
-                sentences.append(sentence)
-                count = len(sentences)
-            log_text = sentence[:80] if len(sentence) > 80 else sentence
-            logger.info("Streaming LLM sentence %d: %s", count, log_text)
 
-        # Start filler timer before agent call
+            if sentence is None:
+                # Streaming failed, switching to fallback agent.
+                # Stop queue-based playback; fallback output goes to list.
+                use_queue[0] = False
+                self.playback.stop()
+                return
+
+            if isinstance(sentence, ErrorPhrase):
+                is_error[0] = True
+
+            sentence_count[0] += 1
+            log_text = sentence[:80] if len(sentence) > 80 else sentence
+            logger.info("Streaming LLM sentence %d: %s",
+                        sentence_count[0], log_text)
+
+            if use_queue[0]:
+                sentence_queue.put(sentence)
+            else:
+                fallback_sentences.append(sentence)
+
+        # Dynamic on_done: use error callback if only an ErrorPhrase came through
+        def _on_done():
+            if is_error[0]:
+                self._on_error_playback_done()
+            else:
+                self._on_playback_done()
+
+        # Start queue-based playback thread before the agent call
+        self.playback.speak_streamed(
+            sentence_queue,
+            on_start=self._on_playback_start,
+            on_done=_on_done,
+        )
+
+        # Filler: push to the queue so it plays naturally in sequence
         if self._filler_enabled:
-            def _speak_filler():
-                filler = random.choice(self._filler_phrases)
-                logger.info("Streaming LLM slow (>%dms), speaking filler: %s",
-                            int(self._filler_delay * 1000), filler)
-                self.playback.speak(filler, on_start=self._on_playback_start)
-            filler_timer = threading.Timer(self._filler_delay, _speak_filler)
+            def _push_filler():
+                if use_queue[0] and sentence_count[0] == 0:
+                    filler = random.choice(self._filler_phrases)
+                    logger.info("Streaming LLM slow (>%dms), queueing filler: %s",
+                                int(self._filler_delay * 1000), filler)
+                    sentence_queue.put(filler)
+            filler_timer = threading.Timer(self._filler_delay, _push_filler)
             filler_timer.daemon = True
             filler_timer.start()
 
+        # Run the agent (blocks until all sentences are emitted)
         if self.streaming_agent_runner:
             self.streaming_agent_runner(transcript, context, on_sentence)
         else:
-            # Fallback to non-streaming
             reply = self.agent_runner(transcript, context)
             if reply:
                 on_sentence(reply)
 
-        # Clean up timer if still pending
+        # Clean up filler timer
         if filler_timer is not None:
             filler_timer.cancel()
         self._last_llm_call_time = time.monotonic()
 
+        # Stale command check -- kill playback if superseded
         if gen and not self._is_current_gen(gen):
             logger.info("Stale streaming command gen=%d, discarding", gen)
+            self.playback.stop()
             return
 
-        # Snapshot the collected sentences under the lock
-        with _sentence_lock:
-            collected = list(sentences)
-
-        # Speak all sentences together for better prosody
-        if collected:
-            full_reply = " ".join(collected)
-            # If the only sentence is an error phrase, use _speak_error (no conversation mode)
-            if len(collected) == 1 and self._is_error_phrase(collected[0]):
-                self._speak_error(collected[0])
-                return
-            logger.info("Speaking reply (%d sentences): %s",
-                       len(collected), full_reply[:100] if len(full_reply) > 100 else full_reply)
-            self.playback.speak(
-                full_reply,
-                on_start=self._on_playback_start,
-                on_done=self._on_playback_done,
-            )
+        if use_queue[0]:
+            # Normal path: signal playback thread to finish
+            if sentence_count[0] == 0:
+                # No sentences at all -- stop playback, speak error
+                self.playback.stop()
+                self._speak_error(self.error_agent_failed)
+            else:
+                sentence_queue.put(None)  # Sentinel for clean completion
         else:
-            logger.warning("No sentences generated from streaming LLM")
-            self._speak_error(self.error_agent_failed)
+            # Fallback path: streaming was reset, speak fallback as one blob
+            if fallback_sentences:
+                full_reply = " ".join(fallback_sentences)
+                if len(fallback_sentences) == 1 and self._is_error_phrase(fallback_sentences[0]):
+                    self._speak_error(fallback_sentences[0])
+                else:
+                    logger.info("Speaking fallback reply: %s",
+                                full_reply[:100] if len(full_reply) > 100 else full_reply)
+                    self.playback.speak(
+                        full_reply,
+                        on_start=self._on_playback_start,
+                        on_done=self._on_playback_done,
+                    )
+            else:
+                self._speak_error(self.error_agent_failed)
 
     def _on_playback_start(self):
         """Called when TTS playback starts."""

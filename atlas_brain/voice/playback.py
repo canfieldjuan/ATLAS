@@ -4,6 +4,7 @@ Playback controller for voice pipeline.
 Manages TTS playback in a background thread with stop support.
 """
 
+import queue
 import threading
 from typing import Callable, Optional, Protocol
 
@@ -28,6 +29,7 @@ class PlaybackController:
         self._thread: Optional[threading.Thread] = None
         self.speaking = threading.Event()
         self._lock = threading.Lock()
+        self._stream_stop = threading.Event()
 
     def speak(
         self,
@@ -65,6 +67,54 @@ class PlaybackController:
             self._thread = thread
             thread.start()
 
+    def speak_streamed(
+        self,
+        sentence_queue: queue.Queue,
+        on_start: Optional[Callable[[], None]] = None,
+        on_done: Optional[Callable[[], None]] = None,
+    ):
+        """Play sentences from a queue as they arrive.
+
+        Pulls sentences from the queue and speaks them sequentially.
+        A None sentinel in the queue signals normal completion.
+        on_start fires before the first sentence, on_done fires
+        after the sentinel (but NOT if stopped externally via stop()).
+
+        Args:
+            sentence_queue: Queue of sentence strings (None = end)
+            on_start: Callback before first sentence plays
+            on_done: Callback after all sentences finish
+        """
+        def runner():
+            self.speaking.set()
+            first = True
+            try:
+                while not self._stream_stop.is_set():
+                    try:
+                        sentence = sentence_queue.get(timeout=0.1)
+                    except queue.Empty:
+                        continue
+                    if sentence is None:
+                        break
+                    if first:
+                        if on_start:
+                            on_start()
+                        first = False
+                    self.engine.speak(sentence)
+            finally:
+                # Only fire on_done for normal completion, not forced stop
+                if on_done and not self._stream_stop.is_set():
+                    on_done()
+                self.speaking.clear()
+
+        with self._lock:
+            self._stop_locked()
+            self._stream_stop.clear()
+            thread = threading.Thread(target=runner, daemon=True,
+                                      name="playback-stream")
+            self._thread = thread
+            thread.start()
+
     def stop(self):
         """Stop current playback."""
         with self._lock:
@@ -72,6 +122,7 @@ class PlaybackController:
 
     def _stop_locked(self):
         """Internal stop without lock."""
+        self._stream_stop.set()
         self.engine.stop()
         thread = self._thread
         self._thread = None
