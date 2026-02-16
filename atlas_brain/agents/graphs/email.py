@@ -35,6 +35,10 @@ logger = logging.getLogger("atlas.agents.graphs.email")
 # Workflow type constant for multi-turn support
 EMAIL_WORKFLOW_TYPE = "email"
 
+# Module-level LLM override for skill draft generation.
+# Set by run_email_workflow() before graph invocation, cleared after.
+_llm_override: object | None = None
+
 
 # =============================================================================
 # Tool Wrappers
@@ -762,8 +766,8 @@ async def _generate_skill_draft(state: EmailWorkflowState) -> tuple[str, str] | 
         logger.warning("Skill '%s' not found, falling back to passthrough", skill_name)
         return None
 
-    # Get LLM
-    llm = llm_registry.get_active()
+    # Get LLM: prefer module-level override (cloud) then local registry
+    llm = _llm_override or llm_registry.get_active()
     if llm is None:
         logger.warning("No active LLM, falling back to passthrough")
         return None
@@ -1526,6 +1530,8 @@ async def run_email_workflow(
     # Follow-up reminder
     create_follow_up: bool | None = None,
     follow_up_days: int | None = None,
+    # LLM override (from llm_router)
+    llm: object | None = None,
 ) -> dict[str, Any]:
     """
     Run the email workflow with the given input.
@@ -1604,7 +1610,13 @@ async def run_email_workflow(
     if follow_up_days is not None:
         initial_state["follow_up_days"] = follow_up_days
 
-    result = await compiled.ainvoke(initial_state)
+    # Set module-level LLM override for _generate_skill_draft
+    global _llm_override
+    _llm_override = llm
+    try:
+        result = await compiled.ainvoke(initial_state)
+    finally:
+        _llm_override = None
 
     return {
         "intent": result.get("intent"),

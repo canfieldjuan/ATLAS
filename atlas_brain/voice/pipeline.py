@@ -14,6 +14,7 @@ import io
 import json
 import logging
 import os
+import random
 import subprocess
 import tempfile
 import threading
@@ -664,6 +665,9 @@ class VoicePipeline:
         audio_gain: float = 1.0,
         prefill_runner: Optional[Callable[[], None]] = None,
         prefill_cache_ttl: float = 60.0,
+        filler_enabled: bool = True,
+        filler_delay_ms: int = 800,
+        filler_phrases: Optional[List[str]] = None,
         debug_logging: bool = False,
         log_interval_frames: int = 160,
         conversation_mode_enabled: bool = False,
@@ -735,6 +739,18 @@ class VoicePipeline:
         self._prefill_in_progress = False
         self._last_llm_call_time: float = 0.0
         self._prefill_cache_ttl = prefill_cache_ttl
+        self._filler_enabled = filler_enabled
+        self._filler_delay = filler_delay_ms / 1000.0
+        self._filler_phrases = filler_phrases or [
+            "Please hold.",
+            "I'll get right on that, big guy.",
+            "Yes sir.",
+            "Be right back.",
+            "Alright super chief.",
+            "Here's what I got.",
+            "Let me check on that.",
+            "Just a sec.",
+        ]
         # Session ID stored as string for context passing, converted to UUID for database ops
         self.session_id = str(uuid.uuid4())
         self.node_id = node_id
@@ -1017,6 +1033,45 @@ class VoicePipeline:
         except Exception:
             logger.error("TTS error phrase failed", exc_info=True)
 
+    def _run_agent_with_filler(self, transcript: str, context: dict) -> str:
+        """Run agent_runner, speaking a filler phrase if it's slow.
+
+        If the agent doesn't return within _filler_delay seconds,
+        a random filler phrase is spoken via TTS. When the agent
+        finishes, the caller's subsequent playback.speak() will
+        naturally replace the filler.
+        """
+        if not self._filler_enabled:
+            return self.agent_runner(transcript, context)
+
+        result_event = threading.Event()
+        result_holder = [None]
+        exception_holder = [None]
+
+        def agent_work():
+            try:
+                result_holder[0] = self.agent_runner(transcript, context)
+            except Exception as e:
+                exception_holder[0] = e
+            result_event.set()
+
+        thread = threading.Thread(target=agent_work, daemon=True, name="agent-work")
+        thread.start()
+
+        if not result_event.wait(timeout=self._filler_delay):
+            # Agent is slow — speak filler while waiting
+            filler = random.choice(self._filler_phrases)
+            logger.info("Agent slow (>%dms), speaking filler: %s",
+                        int(self._filler_delay * 1000), filler)
+            self.playback.speak(filler, on_start=self._on_playback_start)
+            result_event.wait()
+
+        thread.join(timeout=2.0)
+
+        if exception_holder[0] is not None:
+            raise exception_holder[0]
+        return result_holder[0]
+
     def _handle_command(self, pcm_bytes: bytes):
         """Handle a completed voice command."""
         gen = self._next_command_gen()
@@ -1046,7 +1101,7 @@ class VoicePipeline:
             return
 
         context = self._build_context()
-        reply = self.agent_runner(transcript, context)
+        reply = self._run_agent_with_filler(transcript, context)
         self._last_llm_call_time = time.monotonic()
 
         if not self._is_current_gen(gen):
@@ -1095,7 +1150,7 @@ class VoicePipeline:
             return
 
         context = self._build_context()
-        reply = self.agent_runner(transcript, context)
+        reply = self._run_agent_with_filler(transcript, context)
         self._last_llm_call_time = time.monotonic()
 
         if not self._is_current_gen(gen):
@@ -1137,6 +1192,9 @@ class VoicePipeline:
         _sentence_lock = threading.Lock()
         sentences: List[str] = []
 
+        # Filler timer — speaks a filler phrase if no sentence arrives in time
+        filler_timer = None
+
         def on_sentence(sentence):
             """Callback for each complete sentence from LLM.
 
@@ -1144,6 +1202,11 @@ class VoicePipeline:
             streaming fails and the fallback agent will produce a
             complete replacement response).
             """
+            nonlocal filler_timer
+            # Cancel filler on first real sentence
+            if filler_timer is not None:
+                filler_timer.cancel()
+                filler_timer = None
             with _sentence_lock:
                 if sentence is None:
                     sentences.clear()
@@ -1153,6 +1216,17 @@ class VoicePipeline:
             log_text = sentence[:80] if len(sentence) > 80 else sentence
             logger.info("Streaming LLM sentence %d: %s", count, log_text)
 
+        # Start filler timer before agent call
+        if self._filler_enabled:
+            def _speak_filler():
+                filler = random.choice(self._filler_phrases)
+                logger.info("Streaming LLM slow (>%dms), speaking filler: %s",
+                            int(self._filler_delay * 1000), filler)
+                self.playback.speak(filler, on_start=self._on_playback_start)
+            filler_timer = threading.Timer(self._filler_delay, _speak_filler)
+            filler_timer.daemon = True
+            filler_timer.start()
+
         if self.streaming_agent_runner:
             self.streaming_agent_runner(transcript, context, on_sentence)
         else:
@@ -1160,6 +1234,10 @@ class VoicePipeline:
             reply = self.agent_runner(transcript, context)
             if reply:
                 on_sentence(reply)
+
+        # Clean up timer if still pending
+        if filler_timer is not None:
+            filler_timer.cancel()
         self._last_llm_call_time = time.monotonic()
 
         if gen and not self._is_current_gen(gen):

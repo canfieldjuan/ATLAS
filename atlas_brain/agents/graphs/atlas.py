@@ -615,6 +615,7 @@ async def delegate_to_home(state: AtlasAgentState) -> AtlasAgentState:
 async def continue_workflow(state: AtlasAgentState) -> AtlasAgentState:
     """Continue an active workflow with new user input."""
     from ...modes.manager import get_mode_manager
+    from ...services.llm_router import get_llm
 
     start_time = time.perf_counter()
     active_workflow = state.get("active_workflow", {})
@@ -629,6 +630,7 @@ async def continue_workflow(state: AtlasAgentState) -> AtlasAgentState:
             input_text=input_text,
             session_id=session_id,
             speaker_id=state.get("speaker_id"),
+            llm=get_llm("booking"),
         )
     elif workflow_type == REMINDER_WORKFLOW_TYPE:
         result = await run_reminder_workflow(
@@ -639,6 +641,7 @@ async def continue_workflow(state: AtlasAgentState) -> AtlasAgentState:
         result = await run_email_workflow(
             input_text=input_text,
             session_id=session_id,
+            llm=get_llm("email"),
         )
     elif workflow_type == CALENDAR_WORKFLOW_TYPE:
         result = await run_calendar_workflow(
@@ -685,6 +688,7 @@ async def continue_workflow(state: AtlasAgentState) -> AtlasAgentState:
 async def start_workflow(state: AtlasAgentState) -> AtlasAgentState:
     """Start a new workflow based on detected intent."""
     from ...modes.manager import get_mode_manager
+    from ...services.llm_router import get_llm
     mode_manager = get_mode_manager()
     mode_manager.set_workflow_active(True)
 
@@ -700,6 +704,7 @@ async def start_workflow(state: AtlasAgentState) -> AtlasAgentState:
             input_text=input_text,
             session_id=session_id,
             speaker_id=state.get("speaker_id"),
+            llm=get_llm("booking"),
         )
     elif workflow_type == REMINDER_WORKFLOW_TYPE:
         result = await run_reminder_workflow(
@@ -710,6 +715,7 @@ async def start_workflow(state: AtlasAgentState) -> AtlasAgentState:
         result = await run_email_workflow(
             input_text=input_text,
             session_id=session_id,
+            llm=get_llm("email"),
         )
     elif workflow_type == CALENDAR_WORKFLOW_TYPE:
         result = await run_calendar_workflow(

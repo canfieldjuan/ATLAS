@@ -123,6 +123,16 @@ class LLMConfig(BaseSettings):
         description="Groq API key (or set GROQ_API_KEY env var)"
     )
 
+    # Cloud LLM (Ollama cloud model, runs alongside local for business workflows)
+    cloud_enabled: bool = Field(
+        default=False,
+        description="Enable cloud LLM alongside local for business workflows (booking, email)",
+    )
+    cloud_ollama_model: str = Field(
+        default="glm-5:cloud",
+        description="Ollama cloud model for business workflows (e.g., glm-5:cloud)",
+    )
+
 
 class TTSConfig(BaseSettings):
     """TTS configuration."""
@@ -635,6 +645,29 @@ class VoiceClientConfig(BaseSettings):
     speaker_id_timeout: float = Field(
         default=5.0,
         description="Timeout in seconds for speaker identification"
+    )
+
+    # Filler phrases for slow responses
+    filler_enabled: bool = Field(
+        default=True,
+        description="Speak a filler phrase when agent processing exceeds filler_delay_ms"
+    )
+    filler_delay_ms: int = Field(
+        default=800,
+        description="Milliseconds to wait before speaking a filler phrase"
+    )
+    filler_phrases: list[str] = Field(
+        default=[
+            "Please hold.",
+            "I'll get right on that, big guy.",
+            "Yes sir.",
+            "Be right back.",
+            "Alright super chief.",
+            "Here's what I got.",
+            "Let me check on that.",
+            "Just a sec.",
+        ],
+        description="Phrases randomly chosen when agent processing is slow"
     )
 
     # Error recovery TTS phrases

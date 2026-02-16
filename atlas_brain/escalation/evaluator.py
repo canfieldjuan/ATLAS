@@ -151,6 +151,7 @@ class EscalationEvaluator:
             # Lazy imports (same pattern as runner._synthesize_with_skill)
             from ..skills import get_skill_registry
             from ..services import llm_registry
+            from ..services.llm_router import get_cloud_llm
             from ..services.protocols import Message
             from ..orchestration import cuda_lock
 
@@ -162,7 +163,8 @@ class EscalationEvaluator:
                 )
                 text = f"Security alert: {result.rule_name}"
             else:
-                llm = llm_registry.get_active()
+                # Prefer cloud LLM for escalation synthesis (better reasoning)
+                llm = get_cloud_llm() or llm_registry.get_active()
                 if llm is None:
                     logger.warning("No active LLM for escalation synthesis")
                     text = f"Security alert: {result.rule_name}"

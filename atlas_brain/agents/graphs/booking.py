@@ -54,6 +54,7 @@ async def run_booking_workflow(
     input_text: str,
     session_id: Optional[str] = None,
     speaker_id: Optional[str] = None,
+    llm: Optional[object] = None,
 ) -> dict:
     """
     Run booking as an LLM conversation with tools.
@@ -61,13 +62,17 @@ async def run_booking_workflow(
     The LLM drives the conversation. It decides what info to collect,
     when to check availability, and when to book. Conversation history
     persists across turns via WorkflowStateManager.
+
+    Args:
+        llm: Optional LLM instance (from llm_router). Falls back to local registry.
     """
     from ...services import llm_registry
     from ...services.tool_executor import execute_with_tools
     from ...tools import tool_registry
 
     start_time = time.perf_counter()
-    llm = llm_registry.get_active()
+    if llm is None:
+        llm = llm_registry.get_active()
 
     if llm is None:
         return {

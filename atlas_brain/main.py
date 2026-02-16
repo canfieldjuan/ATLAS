@@ -213,6 +213,14 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to load default LLM: %s", e)
 
+    # Initialize cloud LLM for business workflows (booking, email)
+    if settings.llm.cloud_enabled:
+        from .services.llm_router import init_cloud_llm
+        init_cloud_llm(
+            model=settings.llm.cloud_ollama_model,
+            base_url=settings.llm.ollama_url,
+        )
+
     # Note: Speaker ID loaded lazily via get_speaker_id_service() when voice
     # pipeline starts. No registry needed - single Resemblyzer implementation.
 
@@ -512,6 +520,10 @@ async def lifespan(app: FastAPI):
             logger.info("Database connection pool closed")
         except Exception as e:
             logger.error("Error closing database: %s", e)
+
+    # Unload cloud LLM singleton
+    from .services.llm_router import shutdown_cloud_llm
+    shutdown_cloud_llm()
 
     # Unload models to free resources
     vos_registry.deactivate()
