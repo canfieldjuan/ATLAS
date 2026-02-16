@@ -145,6 +145,36 @@ class TTSConfig(BaseSettings):
     device: str | None = Field(default=None, description="Device for TTS: 'cuda', 'cpu', or None for auto")
     kokoro_lang: str = Field(default="en-us", description="Kokoro language code (en-us, en-gb, ja, zh, es, fr, hi, it, pt-br)")
 
+    # Orpheus TTS settings (orpheus-cpp backend)
+    orpheus_voice: str = Field(
+        default="tara",
+        description="Orpheus voice ID (tara, leah, jess, leo, dan, mia, zac, zoe)",
+    )
+    orpheus_n_gpu_layers: int = Field(
+        default=-1,
+        description="GPU layers for Orpheus GGUF model (-1 = all, 0 = CPU only)",
+    )
+    orpheus_lang: str = Field(
+        default="en",
+        description="Orpheus language code (en, es, fr, de, it, hi, zh, ko)",
+    )
+    orpheus_temperature: float = Field(
+        default=0.6,
+        description="Orpheus sampling temperature (lower = more consistent)",
+    )
+    orpheus_top_p: float = Field(
+        default=0.8,
+        description="Orpheus nucleus sampling threshold",
+    )
+    orpheus_pre_buffer: float = Field(
+        default=0.5,
+        description="Seconds of audio to buffer before first playback chunk",
+    )
+    orpheus_n_ctx: int = Field(
+        default=8192,
+        description="Context window for Orpheus GGUF model (8192 is plenty for TTS)",
+    )
+
 
 class OmniConfig(BaseSettings):
     """Omni (unified speech-to-speech) configuration."""

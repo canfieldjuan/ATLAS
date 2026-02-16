@@ -487,6 +487,75 @@ def _create_prefill_runner():
     return runner
 
 
+def _create_orpheus_tts(tts_cfg, voice_cfg):
+    """Create Orpheus TTS engine with Kokoro fallback."""
+    try:
+        from .tts_orpheus import OrpheusTTS
+        tts = OrpheusTTS(
+            voice=tts_cfg.orpheus_voice,
+            n_gpu_layers=tts_cfg.orpheus_n_gpu_layers,
+            lang=tts_cfg.orpheus_lang,
+            temperature=tts_cfg.orpheus_temperature,
+            top_p=tts_cfg.orpheus_top_p,
+            pre_buffer_size=tts_cfg.orpheus_pre_buffer,
+            n_ctx=tts_cfg.orpheus_n_ctx,
+        )
+        logger.info(
+            "Using Orpheus TTS (voice=%s, gpu_layers=%d, lang=%s)",
+            tts_cfg.orpheus_voice, tts_cfg.orpheus_n_gpu_layers,
+            tts_cfg.orpheus_lang,
+        )
+        # Preload model to avoid first-command latency
+        try:
+            tts._ensure_loaded()
+            logger.info("Orpheus TTS model preloaded")
+        except Exception as preload_err:
+            logger.warning("Orpheus TTS preload failed: %s", preload_err)
+        return tts
+    except Exception as e:
+        logger.warning("Orpheus TTS init failed (%s), falling back to Kokoro", e)
+        return _create_kokoro_tts(tts_cfg, voice_cfg)
+
+
+def _create_kokoro_tts(tts_cfg, voice_cfg):
+    """Create Kokoro TTS engine with Piper fallback."""
+    try:
+        from .tts_kokoro import KokoroTTS
+        tts = KokoroTTS(
+            voice=tts_cfg.voice,
+            speed=tts_cfg.speed,
+            lang=tts_cfg.kokoro_lang,
+        )
+        logger.info(
+            "Using Kokoro TTS (voice=%s, speed=%.2f, lang=%s)",
+            tts_cfg.voice, tts_cfg.speed, tts_cfg.kokoro_lang,
+        )
+        try:
+            tts._ensure_loaded()
+            logger.info("Kokoro TTS model preloaded")
+        except Exception as preload_err:
+            logger.warning("Kokoro TTS preload failed: %s", preload_err)
+        return tts
+    except Exception as e:
+        logger.warning("Kokoro TTS init failed (%s), falling back to Piper", e)
+        return _create_piper_tts(voice_cfg)
+
+
+def _create_piper_tts(voice_cfg):
+    """Create Piper TTS engine."""
+    tts = PiperTTS(
+        binary_path=voice_cfg.piper_binary,
+        model_path=voice_cfg.piper_model,
+        speaker=voice_cfg.piper_speaker,
+        length_scale=voice_cfg.piper_length_scale,
+        noise_scale=voice_cfg.piper_noise_scale,
+        noise_w=voice_cfg.piper_noise_w,
+        sample_rate=voice_cfg.piper_sample_rate,
+    )
+    tts.warm_up()
+    return tts
+
+
 def create_voice_pipeline(event_loop: Optional[asyncio.AbstractEventLoop] = None) -> Optional[VoicePipeline]:
     """Create the voice pipeline from config."""
     cfg = settings.voice
@@ -560,46 +629,13 @@ def create_voice_pipeline(event_loop: Optional[asyncio.AbstractEventLoop] = None
 
     # Create TTS engine based on config
     tts_cfg = settings.tts
-    if tts_cfg.default_model == "kokoro":
-        try:
-            from .tts_kokoro import KokoroTTS
-            tts = KokoroTTS(
-                voice=tts_cfg.voice,
-                speed=tts_cfg.speed,
-                lang=tts_cfg.kokoro_lang,
-            )
-            logger.info("Using Kokoro TTS (voice=%s, speed=%.2f, lang=%s)",
-                        tts_cfg.voice, tts_cfg.speed, tts_cfg.kokoro_lang)
-            # Preload model to avoid first-command latency (~600ms)
-            try:
-                tts._ensure_loaded()
-                logger.info("Kokoro TTS model preloaded")
-            except Exception as preload_err:
-                logger.warning("Kokoro TTS preload failed: %s", preload_err)
-        except Exception as e:
-            logger.warning("Kokoro TTS init failed (%s), falling back to Piper", e)
-            tts = PiperTTS(
-                binary_path=cfg.piper_binary,
-                model_path=cfg.piper_model,
-                speaker=cfg.piper_speaker,
-                length_scale=cfg.piper_length_scale,
-                noise_scale=cfg.piper_noise_scale,
-                noise_w=cfg.piper_noise_w,
-                sample_rate=cfg.piper_sample_rate,
-            )
-            tts.warm_up()
+    if tts_cfg.default_model == "orpheus":
+        tts = _create_orpheus_tts(tts_cfg, cfg)
+    elif tts_cfg.default_model == "kokoro":
+        tts = _create_kokoro_tts(tts_cfg, cfg)
     else:
-        tts = PiperTTS(
-            binary_path=cfg.piper_binary,
-            model_path=cfg.piper_model,
-            speaker=cfg.piper_speaker,
-            length_scale=cfg.piper_length_scale,
-            noise_scale=cfg.piper_noise_scale,
-            noise_w=cfg.piper_noise_w,
-            sample_rate=cfg.piper_sample_rate,
-        )
+        tts = _create_piper_tts(cfg)
         logger.info("Using Piper TTS")
-        tts.warm_up()
 
     agent_runner = _create_agent_runner()
     streaming_agent_runner = _create_streaming_agent_runner()
