@@ -7,9 +7,6 @@ import {
   Cpu, Activity, Terminal, Wifi, VolumeX, Volume2, Send, X
 } from 'lucide-react';
 
-// Static random heights for status indicator animation
-const IDLE_WAVE_HEIGHTS = Array.from({ length: 16 }, () => 12 + Math.random() * 20);
-
 function App() {
   const { sendText, setPrivacy } = useAtlas();
   const {
@@ -115,9 +112,9 @@ function App() {
 
       {/* Layer 3: Orbital Rings */}
       <div className="fixed inset-0 pointer-events-none flex items-center justify-center">
-        <div className="absolute w-[120%] h-[120%] rounded-full border border-cyan-400/10 animate-[spin_60s_linear_infinite,float_8s_ease-in-out_infinite]" style={{ transform: 'rotateX(70deg)' }} />
-        <div className="absolute w-[100%] h-[100%] rounded-full border border-cyan-500/5 animate-[spin_45s_linear_infinite_reverse,float_10s_ease-in-out_infinite]" style={{ transform: 'rotateX(70deg) rotateY(20deg)' }} />
-        <div className="absolute w-[80%] h-[80%] rounded-full border-t border-cyan-400/8 animate-[spin_30s_linear_infinite,float_12s_ease-in-out_infinite]" style={{ transform: 'rotateX(70deg) rotateY(-20deg)' }} />
+        <div className="absolute w-[120%] h-[120%] rounded-full border border-cyan-400/10 animate-[spin_60s_linear_infinite]" style={{ transform: 'rotateX(70deg)' }} />
+        <div className="absolute w-[100%] h-[100%] rounded-full border border-cyan-500/5 animate-[spin_45s_linear_infinite_reverse]" style={{ transform: 'rotateX(70deg) rotateY(20deg)' }} />
+        <div className="absolute w-[80%] h-[80%] rounded-full border-t border-cyan-400/8 animate-[spin_30s_linear_infinite]" style={{ transform: 'rotateX(70deg) rotateY(-20deg)' }} />
       </div>
 
       {/* Layer 4: Floating Particles (Close) */}
@@ -189,14 +186,14 @@ function App() {
           <div className="flex flex-col items-end">
             <span className="text-cyan-600 uppercase text-[9px]">Network</span>
             <div className="flex gap-1 items-center">
-              <span className="text-base font-bold">{networkSpeed} Mb/s</span>
+              <span className="text-base font-bold tabular-nums">{networkSpeed} Mb/s</span>
               <Wifi size={12} />
             </div>
           </div>
           <div className="flex flex-col items-end">
             <span className="text-cyan-600 uppercase text-[9px]">System Load</span>
             <div className="flex gap-1 items-center">
-              <span className="text-base font-bold">{cpuLoad.toFixed(0)}%</span>
+              <span className="text-base font-bold tabular-nums w-[3ch] text-right inline-block">{cpuLoad.toFixed(0)}%</span>
               <Activity size={12} />
             </div>
           </div>
@@ -321,32 +318,14 @@ function App() {
             </div>
           )}
 
-          {/* Status Indicator */}
-          <div className="mt-8 flex flex-col items-center gap-4">
-            <div className="flex gap-1 h-8 items-center">
-              {[...Array(16)].map((_, i) => (
-                <div
-                  key={i}
-                  className={clsx(
-                    "w-1 bg-cyan-400 rounded-full transition-all duration-300",
-                    status === 'listening' ? "opacity-100 animate-bounce" : "opacity-20"
-                  )}
-                  style={{
-                    height: status === 'listening' ? `${IDLE_WAVE_HEIGHTS[i]}px` : '4px',
-                    animationDelay: `${i * 0.05}s`
-                  }}
-                />
-              ))}
-            </div>
-
-            <p className="text-cyan-600 text-[9px] font-mono tracking-wider uppercase">
-              {status === 'idle' && "Standing By"}
-              {status === 'listening' && 'Listening...'}
-              {status === 'processing' && "Processing..."}
-              {status === 'speaking' && "Speaking..."}
-              {status === 'reading' && "Reading..."}
-            </p>
-          </div>
+          {/* Status Text */}
+          <p className="mt-6 text-cyan-600 text-[9px] font-mono tracking-wider uppercase">
+            {status === 'idle' && "Standing By"}
+            {status === 'listening' && 'Listening...'}
+            {status === 'processing' && "Processing..."}
+            {status === 'speaking' && "Speaking..."}
+            {status === 'reading' && "Reading..."}
+          </p>
         </section>
 
         {/* Right Panel: Live Logs */}

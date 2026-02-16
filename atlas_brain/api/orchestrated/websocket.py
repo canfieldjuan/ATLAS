@@ -36,6 +36,25 @@ router = APIRouter(prefix="/ws/orchestrated", tags=["orchestrated"])
 _active_sessions: dict[str, "OrchestratedConnection"] = {}
 
 
+async def _broadcast(state: str, **kwargs) -> None:
+    """Broadcast a state message to all connected UI sessions."""
+    if not _active_sessions:
+        return
+    msg = {"state": state, **kwargs}
+    for conn in list(_active_sessions.values()):
+        try:
+            await conn.send(msg)
+        except Exception:
+            pass
+
+
+def broadcast_from_thread(loop: asyncio.AbstractEventLoop, state: str, **kwargs) -> None:
+    """Thread-safe broadcast called from the voice pipeline thread."""
+    if not _active_sessions:
+        return
+    asyncio.run_coroutine_threadsafe(_broadcast(state, **kwargs), loop)
+
+
 class OrchestratedConnection:
     """Represents a single orchestrated voice session."""
 

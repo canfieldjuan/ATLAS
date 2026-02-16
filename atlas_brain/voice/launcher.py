@@ -30,6 +30,17 @@ _voice_thread: Optional[threading.Thread] = None
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
+def _notify_ui(state: str, **kwargs) -> None:
+    """Broadcast voice pipeline state to connected UI WebSocket sessions."""
+    if _event_loop is None:
+        return
+    try:
+        from ..api.orchestrated.websocket import broadcast_from_thread
+        broadcast_from_thread(_event_loop, state, **kwargs)
+    except Exception:
+        pass
+
+
 def _create_agent_runner():
     """Create a sync wrapper for the async agent via unified interface."""
     agent = get_agent("atlas")
@@ -39,6 +50,9 @@ def _create_agent_runner():
         if _event_loop is None:
             logger.error("No event loop available for agent runner")
             return ""
+
+        _notify_ui("transcript", text=transcript)
+        _notify_ui("processing")
 
         session_id = context_dict.get("session_id")
         node_id = context_dict.get("node_id")
@@ -60,6 +74,8 @@ def _create_agent_runner():
             _signal_workflow_state(result)
             response = result.response_text or ""
             logger.info("Agent runner response: %s", response[:100] if response else "(empty)")
+            _notify_ui("response", text=response, audio_base64="")
+            _notify_ui("idle")
             return response
         except TimeoutError:
             logger.error("Agent runner timed out after %.1fs", settings.voice.agent_timeout)
@@ -97,6 +113,9 @@ def _create_streaming_agent_runner():
         if _event_loop is None:
             logger.error("No event loop for streaming agent")
             return
+
+        _notify_ui("transcript", text=transcript)
+        _notify_ui("processing")
 
         # Track sentences emitted so we can discard partial output on fallback
         _emitted = []
@@ -161,9 +180,9 @@ def _create_streaming_agent_runner():
                         )
                         on_sentence(None)  # sentinel: clear accumulated sentences
                         _emitted.clear()
-                    await _run_agent_fallback(transcript, context_dict, on_sentence)
+                    await _run_agent_fallback(transcript, context_dict, _tracked_on_sentence)
             else:
-                await _run_agent_fallback(transcript, context_dict, on_sentence)
+                await _run_agent_fallback(transcript, context_dict, _tracked_on_sentence)
 
             # Check intent gating after processing
             if route_result and settings.voice_filter.intent_gating_enabled:
@@ -178,6 +197,12 @@ def _create_streaming_agent_runner():
         except Exception as e:
             logger.error("Streaming agent runner failed: %s", e)
             on_sentence(ErrorPhrase(settings.voice.error_agent_failed))
+
+        # Broadcast full response to UI
+        if _emitted:
+            full_response = " ".join(s for s in _emitted if s)
+            _notify_ui("response", text=full_response, audio_base64="")
+            _notify_ui("idle")
 
     return runner
 
