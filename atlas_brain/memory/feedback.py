@@ -52,6 +52,22 @@ class FeedbackService:
 
     def __init__(self):
         self._enabled = db_settings.enabled
+        self._session_usage: dict[str, list[UUID]] = {}
+
+    def stash_session_usage(self, session_id: str, usage_ids: list[UUID]) -> None:
+        """Cache usage_ids from this turn's RAG retrieval for correction feedback."""
+        if not usage_ids:
+            return
+        self._session_usage[session_id] = usage_ids
+        # Evict oldest entries if cache grows too large
+        if len(self._session_usage) > 1000:
+            to_evict = list(self._session_usage.keys())[:500]
+            for k in to_evict:
+                self._session_usage.pop(k, None)
+
+    def pop_session_usage(self, session_id: str) -> list[UUID]:
+        """Pop usage_ids from the previous turn (consumes them)."""
+        return self._session_usage.pop(session_id, [])
 
     async def track_sources(
         self,

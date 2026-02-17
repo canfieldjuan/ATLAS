@@ -842,6 +842,16 @@ async def _generate_llm_response(
     )
     gather_context_ms = (time.perf_counter() - gather_started) * 1000
 
+    # Stash RAG usage_ids for correction feedback loop
+    if mem_ctx.feedback_context and mem_ctx.feedback_context.usage_ids and session_id:
+        try:
+            from ...memory.feedback import get_feedback_service
+            get_feedback_service().stash_session_usage(
+                session_id, mem_ctx.feedback_context.usage_ids,
+            )
+        except Exception:
+            pass
+
     rag_nodes_retrieved = 0
     if mem_ctx.rag_context_used and mem_ctx.rag_result and mem_ctx.rag_result.sources:
         rag_nodes_retrieved = len(mem_ctx.rag_result.sources)
@@ -1189,6 +1199,19 @@ class AtlasAgentGraph:
                 user_metadata = signal.to_metadata() or None
                 if signal.correction:
                     assistant_metadata = {"memory_quality": {"preceded_by_correction": True}}
+                    # Downvote RAG sources from the turn being corrected
+                    try:
+                        from ...memory.feedback import get_feedback_service
+                        fb = get_feedback_service()
+                        stale_ids = fb.pop_session_usage(session_id)
+                        if stale_ids:
+                            await fb.record_not_helpful(stale_ids, feedback_type="correction")
+                            logger.info(
+                                "Downvoted %d RAG sources on correction for session %s",
+                                len(stale_ids), session_id,
+                            )
+                    except Exception as e:
+                        logger.debug("Correction feedback failed: %s", e)
                     logger.info(
                         "Quality signal: correction=%s pattern=%s for session %s",
                         signal.correction, signal.correction_pattern, session_id,
