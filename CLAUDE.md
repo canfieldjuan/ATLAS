@@ -125,15 +125,20 @@ python asr_server.py --model nvidia/nemotron-speech-streaming-en-0.6b --port 808
 
 **Note:** The voice pipeline expects ASR at `http://127.0.0.1:8081`. Configure via `ATLAS_VOICE_ASR_URL` in `.env`.
 
-### LLM Model (Ollama)
+### LLM Models (Ollama)
 
-The main LLM runs via Ollama. Using `qwen3:14b` (~9GB) to fit alongside ASR on a single 24GB GPU.
+**Local LLM**: `qwen3:14b` (~10GB VRAM) -- conversation, reminders, calendar, intent classification.
+
+**Cloud LLM**: `minimax-m2.5:cloud` (Ollama cloud relay) -- business workflows (booking, email, security escalation). Routed via `llm_router.py`.
 
 ```bash
-# Pull the model (if not already done)
+# Pull local model
 ollama pull qwen3:14b
 
-# Test the model
+# Pull cloud model
+ollama pull minimax-m2.5:cloud
+
+# Test
 ollama run qwen3:14b "Hello"
 ```
 
@@ -301,6 +306,9 @@ ATLAS_VLM_DEFAULT_MODEL=moondream
 ATLAS_STT_WHISPER_MODEL_SIZE=small.en
 ATLAS_LOAD_VLM_ON_STARTUP=true
 ATLAS_LOAD_STT_ON_STARTUP=false
+ATLAS_LLM_OLLAMA_MODEL=qwen3:14b
+ATLAS_LLM_CLOUD_ENABLED=true
+ATLAS_LLM_CLOUD_OLLAMA_MODEL=minimax-m2.5:cloud
 
 # MQTT Backend (optional)
 ATLAS_MQTT_ENABLED=false

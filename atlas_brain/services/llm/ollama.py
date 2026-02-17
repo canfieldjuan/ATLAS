@@ -54,7 +54,7 @@ class OllamaLLM(BaseModelService):
         content = msg.get("content", "").strip()
         if content:
             return content
-        # Some cloud models (e.g. minimax-m2) put everything in thinking
+        # Some cloud models (e.g. minimax-m2.5) put everything in thinking
         if self._think:
             return msg.get("thinking", "").strip()
         return ""

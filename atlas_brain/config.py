@@ -129,8 +129,8 @@ class LLMConfig(BaseSettings):
         description="Enable cloud LLM alongside local for business workflows (booking, email)",
     )
     cloud_ollama_model: str = Field(
-        default="glm-5:cloud",
-        description="Ollama cloud model for business workflows (e.g., glm-5:cloud)",
+        default="minimax-m2.5:cloud",
+        description="Ollama cloud model for business workflows (e.g., minimax-m2.5:cloud)",
     )
 
 
