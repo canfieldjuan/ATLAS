@@ -129,14 +129,14 @@ python asr_server.py --model nvidia/nemotron-speech-streaming-en-0.6b --port 808
 
 **Local LLM**: `qwen3:14b` (~10GB VRAM) -- conversation, reminders, calendar, intent classification.
 
-**Cloud LLM**: `minimax-m2.5:cloud` (Ollama cloud relay) -- business workflows (booking, email, security escalation). Routed via `llm_router.py`.
+**Cloud LLM**: `minimax-m2:cloud` (Ollama cloud relay) -- business workflows (booking, email, security escalation). Routed via `llm_router.py`.
 
 ```bash
 # Pull local model
 ollama pull qwen3:14b
 
 # Pull cloud model
-ollama pull minimax-m2.5:cloud
+ollama pull minimax-m2:cloud
 
 # Test
 ollama run qwen3:14b "Hello"
@@ -308,7 +308,7 @@ ATLAS_LOAD_VLM_ON_STARTUP=true
 ATLAS_LOAD_STT_ON_STARTUP=false
 ATLAS_LLM_OLLAMA_MODEL=qwen3:14b
 ATLAS_LLM_CLOUD_ENABLED=true
-ATLAS_LLM_CLOUD_OLLAMA_MODEL=minimax-m2.5:cloud
+ATLAS_LLM_CLOUD_OLLAMA_MODEL=minimax-m2:cloud
 
 # MQTT Backend (optional)
 ATLAS_MQTT_ENABLED=false

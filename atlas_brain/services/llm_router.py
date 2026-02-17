@@ -5,7 +5,7 @@ Routes workflow types to the appropriate backend.
 
 Routing map:
     LOCAL  (Ollama qwen3:14b): conversation, reminder, calendar, intent
-    CLOUD  (Ollama cloud minimax-m2.5): booking, email, security escalation
+    CLOUD  (Ollama cloud minimax-m2): booking, email, security escalation
     NO LLM (unchanged): security workflow, presence workflow
 """
 
@@ -27,7 +27,7 @@ CLOUD_WORKFLOWS = frozenset({"booking", "email"})
 
 
 def init_cloud_llm(
-    model: str = "minimax-m2.5:cloud",
+    model: str = "minimax-m2:cloud",
     base_url: str = "http://localhost:11434",
     think: bool = True,
 ) -> Optional[LLMService]:
