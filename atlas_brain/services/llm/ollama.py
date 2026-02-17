@@ -26,7 +26,7 @@ class OllamaLLM(BaseModelService):
 
     def __init__(
         self,
-        model: str = "qwen3-coder:30b",
+        model: str = "qwen3:14b",
         base_url: str = "http://localhost:11434",
         think: bool = False,
         **kwargs: Any,
@@ -35,7 +35,7 @@ class OllamaLLM(BaseModelService):
         Initialize Ollama LLM.
 
         Args:
-            model: Ollama model name (e.g., "qwen3-coder:30b", "hermes3:8b")
+            model: Ollama model name (e.g., "qwen3:14b", "qwen3:8b")
             base_url: Ollama API base URL
             think: Enable thinking/reasoning mode (cloud models may require this)
             **kwargs: Additional options

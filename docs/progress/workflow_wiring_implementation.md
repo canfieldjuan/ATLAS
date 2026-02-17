@@ -330,7 +330,7 @@ If issues occur:
 - PostgreSQL storing conversation_turns (354 turns)
 - Graphiti/Neo4j running for memory
 - ASR server running on port 8081
-- LLM (qwen3-30b-a3b) loaded in Ollama
+- LLM (qwen3:14b) loaded in Ollama
 
 ---
 

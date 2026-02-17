@@ -127,14 +127,14 @@ python asr_server.py --model nvidia/nemotron-speech-streaming-en-0.6b --port 808
 
 ### LLM Model (Ollama)
 
-The main LLM runs via Ollama. Using `qwen3-30b-a3b-small` (17GB Q4_K_S quantization) to fit alongside ASR on a single 24GB GPU.
+The main LLM runs via Ollama. Using `qwen3:14b` (~9GB) to fit alongside ASR on a single 24GB GPU.
 
 ```bash
-# Pull/create the model (if not already done)
-ollama create qwen3-30b-a3b-small -f Modelfile.qwen3-30b-a3b-small
+# Pull the model (if not already done)
+ollama pull qwen3:14b
 
 # Test the model
-ollama run qwen3-30b-a3b-small "Hello"
+ollama run qwen3:14b "Hello"
 ```
 
 ### Docker (Production)
@@ -327,7 +327,7 @@ ATLAS_TOOLS_CALENDAR_REFRESH_TOKEN=your_refresh_token
 ## Environment Requirements
 
 - NVIDIA GPU with 24GB+ VRAM (RTX 3090/4090) - single GPU setup
-  - LLM (qwen3-30b-a3b-small): ~18GB VRAM
+  - LLM (qwen3:14b): ~10GB VRAM
   - ASR (Nemotron 0.6B): ~2GB VRAM
 - NVIDIA Container Toolkit installed on host (see `install_nvidia_toolkit.sh`)
 - Docker and Docker Compose

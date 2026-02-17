@@ -41,7 +41,7 @@ def hybrid():
     # Mock local backend
     local = MagicMock()
     local.model_info = MagicMock()
-    local.model_info.model_id = "qwen3:30b"
+    local.model_info.model_id = "qwen3:14b"
     local.chat.return_value = _mock_chat_result("local-response")
     local.chat_with_tools.return_value = _mock_tool_result("local-tool-response")
     local.chat_async = AsyncMock(return_value="local-async-response")
@@ -75,7 +75,7 @@ def hybrid_local_only():
 
     local = MagicMock()
     local.model_info = MagicMock()
-    local.model_info.model_id = "qwen3:30b"
+    local.model_info.model_id = "qwen3:14b"
     local.chat.return_value = _mock_chat_result("local-response")
     local.chat_with_tools.return_value = _mock_tool_result("local-tool-response")
     local.chat_async = AsyncMock(return_value="local-async-response")
@@ -341,12 +341,12 @@ class TestLoadUnload:
         MockCloud.return_value.load.return_value = None
 
         llm = HybridLLM(
-            local_kwargs={"model": "qwen3:30b", "base_url": "http://localhost:11434"},
+            local_kwargs={"model": "qwen3:14b", "base_url": "http://localhost:11434"},
             cloud_kwargs={"groq_model": "llama-70b"},
         )
         llm.load()
 
-        MockOllama.assert_called_once_with(model="qwen3:30b", base_url="http://localhost:11434")
+        MockOllama.assert_called_once_with(model="qwen3:14b", base_url="http://localhost:11434")
         MockCloud.assert_called_once_with(groq_model="llama-70b")
         assert llm.is_loaded is True
 

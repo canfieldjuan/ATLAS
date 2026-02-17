@@ -6,7 +6,7 @@ Non-blocking -- tracing failures never affect Atlas operation.
 Usage:
     from atlas_brain.services.tracing import tracer
 
-    ctx = tracer.start_span("agent.process", "llm_call", model_name="qwen3-30b")
+    ctx = tracer.start_span("agent.process", "llm_call", model_name="qwen3:14b")
     ...
     tracer.end_span(ctx, status="completed", output_tokens=150)
 """

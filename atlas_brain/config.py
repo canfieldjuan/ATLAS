@@ -82,7 +82,7 @@ class LLMConfig(BaseSettings):
     n_gpu_layers: int = Field(default=-1, description="GPU layers (-1 = all)")
 
     # ollama settings (Ollama API backend)
-    ollama_model: str = Field(default="qwen3-coder:30b", description="Ollama model name")
+    ollama_model: str = Field(default="qwen3:14b", description="Ollama model name")
     ollama_url: str = Field(default="http://localhost:11434", description="Ollama API URL")
 
     # transformers-flash settings (HuggingFace models)
