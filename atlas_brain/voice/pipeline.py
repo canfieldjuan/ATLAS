@@ -49,6 +49,17 @@ from .segmenter import CommandSegmenter
 logger = logging.getLogger("atlas.voice.pipeline")
 
 
+def _generate_tone(freq: int, duration_ms: int, sample_rate: int = 24000) -> np.ndarray:
+    """Generate a short sine wave tone with fade-in/out."""
+    t = np.linspace(0, duration_ms / 1000.0, int(sample_rate * duration_ms / 1000), endpoint=False)
+    tone = 0.3 * np.sin(2 * np.pi * freq * t).astype(np.float32)
+    fade = int(sample_rate * 0.01)
+    if fade > 0 and len(tone) > 2 * fade:
+        tone[:fade] *= np.linspace(0, 1, fade, dtype=np.float32)
+        tone[-fade:] *= np.linspace(1, 0, fade, dtype=np.float32)
+    return tone
+
+
 class ErrorPhrase(str):
     """Marker subclass so the pipeline can distinguish error recovery
     phrases from normal LLM replies without fragile string comparison."""
@@ -669,6 +680,8 @@ class VoicePipeline:
         filler_enabled: bool = True,
         filler_delay_ms: int = 800,
         filler_phrases: Optional[List[str]] = None,
+        filler_followup_delay_ms: int = 5000,
+        filler_followup_phrases: Optional[List[str]] = None,
         debug_logging: bool = False,
         log_interval_frames: int = 160,
         conversation_mode_enabled: bool = False,
@@ -708,11 +721,18 @@ class VoicePipeline:
         conversation_window_frames: int = 20,
         conversation_silence_ratio: float = 0.15,
         conversation_asr_holdoff_ms: int = 1000,
+        asr_quiet_limit: int = 10,
         # Workflow-aware thresholds
         workflow_silence_ms: int = 1500,
         workflow_hangover_ms: int = 500,
         workflow_max_command_seconds: int = 15,
         workflow_conversation_timeout_ms: int = 30000,
+        # Wake confirmation tone
+        wake_confirmation_enabled: bool = True,
+        wake_confirmation_freq: int = 880,
+        wake_confirmation_duration_ms: int = 80,
+        # Turn limit warning
+        conversation_turn_limit_phrase: str = "Say Hey Atlas to continue.",
     ):
         self.sample_rate = sample_rate
         self.event_loop = event_loop
@@ -752,6 +772,21 @@ class VoicePipeline:
             "Let me check on that.",
             "Just a sec.",
         ]
+        self._filler_followup_delay = filler_followup_delay_ms / 1000.0
+        self._filler_followup_phrases = filler_followup_phrases or [
+            "Still working on that.",
+            "Almost there.",
+            "Hang tight.",
+        ]
+        # Turn limit warning phrase
+        self._turn_limit_phrase = conversation_turn_limit_phrase
+
+        # Wake confirmation tone (pre-generated at init)
+        self._wake_tone = (
+            _generate_tone(wake_confirmation_freq, wake_confirmation_duration_ms)
+            if wake_confirmation_enabled else None
+        )
+
         # Session ID stored as string for context passing, converted to UUID for database ops
         self.session_id = str(uuid.uuid4())
         self.node_id = node_id
@@ -878,6 +913,7 @@ class VoicePipeline:
             conversation_silence_ratio=conversation_silence_ratio,
             conversation_asr_holdoff_ms=conversation_asr_holdoff_ms,
             wake_buffer_frames=wake_buffer_frames,
+            asr_quiet_limit=asr_quiet_limit,
         )
 
         self.capture = AudioCapture(
@@ -1038,9 +1074,10 @@ class VoicePipeline:
         """Run agent_runner, speaking a filler phrase if it's slow.
 
         If the agent doesn't return within _filler_delay seconds,
-        a random filler phrase is spoken via TTS. When the agent
-        finishes, the caller's subsequent playback.speak() will
-        naturally replace the filler.
+        a random filler phrase is spoken via TTS. If still waiting
+        after _filler_followup_delay, a second-tier filler is spoken.
+        When the agent finishes, the caller's subsequent playback.speak()
+        will naturally replace the filler.
         """
         if not self._filler_enabled:
             return self.agent_runner(transcript, context)
@@ -1065,7 +1102,14 @@ class VoicePipeline:
             logger.info("Agent slow (>%dms), speaking filler: %s",
                         int(self._filler_delay * 1000), filler)
             self.playback.speak(filler, on_start=self._on_playback_start)
-            result_event.wait()
+
+            # Wait for follow-up filler delay
+            if not result_event.wait(timeout=self._filler_followup_delay):
+                followup = random.choice(self._filler_followup_phrases)
+                logger.info("Agent still slow (>%dms), speaking follow-up filler: %s",
+                            int((self._filler_delay + self._filler_followup_delay) * 1000), followup)
+                self.playback.speak(followup, on_start=self._on_playback_start)
+                result_event.wait()
 
         thread.join(timeout=2.0)
 
@@ -1197,13 +1241,17 @@ class VoicePipeline:
         is_error = [False]
         sentence_count = [0]
         filler_timer = None
+        followup_filler_timer = None
 
         def on_sentence(sentence):
-            nonlocal filler_timer
-            # Cancel filler on first real content
+            nonlocal filler_timer, followup_filler_timer
+            # Cancel fillers on first real content
             if filler_timer is not None:
                 filler_timer.cancel()
                 filler_timer = None
+            if followup_filler_timer is not None:
+                followup_filler_timer.cancel()
+                followup_filler_timer = None
 
             if sentence is None:
                 # Streaming failed, switching to fallback agent.
@@ -1242,11 +1290,21 @@ class VoicePipeline:
         # Filler: push to the queue so it plays naturally in sequence
         if self._filler_enabled:
             def _push_filler():
+                nonlocal followup_filler_timer
                 if use_queue[0] and sentence_count[0] == 0:
                     filler = random.choice(self._filler_phrases)
                     logger.info("Streaming LLM slow (>%dms), queueing filler: %s",
                                 int(self._filler_delay * 1000), filler)
                     sentence_queue.put(filler)
+                    # Schedule follow-up filler
+                    def _push_followup():
+                        if use_queue[0] and sentence_count[0] == 0:
+                            followup = random.choice(self._filler_followup_phrases)
+                            logger.info("Streaming LLM still slow, queueing follow-up: %s", followup)
+                            sentence_queue.put(followup)
+                    followup_filler_timer = threading.Timer(self._filler_followup_delay, _push_followup)
+                    followup_filler_timer.daemon = True
+                    followup_filler_timer.start()
             filler_timer = threading.Timer(self._filler_delay, _push_filler)
             filler_timer.daemon = True
             filler_timer.start()
@@ -1259,9 +1317,11 @@ class VoicePipeline:
             if reply:
                 on_sentence(reply)
 
-        # Clean up filler timer
+        # Clean up filler timers
         if filler_timer is not None:
             filler_timer.cancel()
+        if followup_filler_timer is not None:
+            followup_filler_timer.cancel()
         self._last_llm_call_time = time.monotonic()
 
         # Stale command check -- kill playback if superseded
@@ -1314,8 +1374,17 @@ class VoicePipeline:
         if self.conversation_mode_enabled and self.turn_limit_enabled:
             limit_reached = self.frame_processor.increment_turn_count()
             if limit_reached:
-                # Turn limit reached - exit conversation mode instead of entering
-                self.frame_processor.exit_conversation_mode("turn_limit")
+                # Turn limit reached - speak warning phrase, then exit
+                if self._turn_limit_phrase:
+                    def _exit_after_phrase():
+                        self.frame_processor.exit_conversation_mode("turn_limit")
+                    self.playback.speak(
+                        self._turn_limit_phrase,
+                        on_start=self._on_playback_start,
+                        on_done=_exit_after_phrase,
+                    )
+                else:
+                    self.frame_processor.exit_conversation_mode("turn_limit")
                 return
 
         # Enter conversation mode if enabled (with delay to avoid echo detection)
@@ -1362,6 +1431,15 @@ class VoicePipeline:
         # Reset turn count
         self.frame_processor.reset_turn_count()
 
+    def _play_wake_confirmation(self):
+        """Play a short confirmation tone when wake word is detected."""
+        if self._wake_tone is None:
+            return
+        try:
+            sd.play(self._wake_tone, 24000, blocking=False)
+        except Exception as e:
+            logger.debug("Wake confirmation tone failed: %s", e)
+
     def _trigger_prefill(self):
         """Trigger LLM system prompt prefill in background.
 
@@ -1369,6 +1447,7 @@ class VoicePipeline:
         while ASR is still recording. This reduces time-to-first-token
         when the actual request is made.
         """
+        self._play_wake_confirmation()
         if self.prefill_runner is None:
             logger.debug("No prefill_runner configured")
             return

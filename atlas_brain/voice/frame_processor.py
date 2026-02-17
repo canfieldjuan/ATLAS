@@ -68,6 +68,7 @@ class FrameProcessor:
         conversation_silence_ratio: float = 0.15,
         conversation_asr_holdoff_ms: int = 1000,
         wake_buffer_frames: int = 5,
+        asr_quiet_limit: int = 10,
     ):
         self.wake_predict = wake_predict
         self.wake_threshold = wake_threshold
@@ -95,7 +96,7 @@ class FrameProcessor:
         # Stop feeding audio to ASR after this many frames with no new partial.
         # Prevents trailing silence from causing transcript oscillation.
         self._asr_quiet_frames = 0
-        self._asr_quiet_limit = 15  # ~1.2s at 80ms/frame
+        self._asr_quiet_limit = asr_quiet_limit
 
         # Conversation mode settings
         self.conversation_mode_enabled = conversation_mode_enabled

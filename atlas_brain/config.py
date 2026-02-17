@@ -552,6 +552,18 @@ class VoiceClientConfig(BaseSettings):
         description="Paths to OpenWakeWord model files"
     )
     wake_threshold: float = Field(default=0.25, description="Wake word detection threshold")
+    wake_confirmation_enabled: bool = Field(
+        default=True,
+        description="Play a short tone when wake word is detected"
+    )
+    wake_confirmation_freq: int = Field(
+        default=880,
+        description="Frequency in Hz for wake word confirmation tone"
+    )
+    wake_confirmation_duration_ms: int = Field(
+        default=80,
+        description="Duration in ms for wake word confirmation tone"
+    )
 
     # ASR settings (HTTP batch mode)
     asr_url: str | None = Field(default="http://localhost:8081", description="Nemotron ASR HTTP endpoint URL")
@@ -608,7 +620,11 @@ class VoiceClientConfig(BaseSettings):
     conversation_max_command_seconds: int = Field(default=120, description="Max recording in conversation mode")
     conversation_window_frames: int = Field(default=20, description="Sliding window size for speech ratio (0=disabled)")
     conversation_silence_ratio: float = Field(default=0.15, description="Speech ratio below which silence counter engages")
-    conversation_asr_holdoff_ms: int = Field(default=1000, description="Suppress finalization for N ms after last ASR partial")
+    conversation_asr_holdoff_ms: int = Field(default=500, description="Suppress finalization for N ms after last ASR partial")
+    asr_quiet_limit: int = Field(
+        default=10,
+        description="Max frames with no new ASR partial before stopping audio feed (~80ms/frame)"
+    )
 
     # Workflow-aware segmentation (wider patience when awaiting user input)
     workflow_silence_ms: int = Field(default=1500, description="Silence duration during active workflow")
@@ -653,7 +669,7 @@ class VoiceClientConfig(BaseSettings):
         description="Speak a filler phrase when agent processing exceeds filler_delay_ms"
     )
     filler_delay_ms: int = Field(
-        default=800,
+        default=500,
         description="Milliseconds to wait before speaking a filler phrase"
     )
     filler_phrases: list[str] = Field(
@@ -668,6 +684,15 @@ class VoiceClientConfig(BaseSettings):
             "Just a sec.",
         ],
         description="Phrases randomly chosen when agent processing is slow"
+    )
+
+    filler_followup_delay_ms: int = Field(
+        default=5000,
+        description="Milliseconds before speaking a follow-up filler phrase"
+    )
+    filler_followup_phrases: list[str] = Field(
+        default=["Still working on that.", "Almost there.", "Hang tight."],
+        description="Second-tier filler phrases for very slow agent responses"
     )
 
     # Error recovery TTS phrases
@@ -728,6 +753,10 @@ class VoiceClientConfig(BaseSettings):
     conversation_rms_threshold: float = Field(
         default=0.002,
         description="Minimum RMS energy to count as speech in conversation mode (lower than wake-word RMS to be more permissive)"
+    )
+    conversation_turn_limit_phrase: str = Field(
+        default="Say Hey Atlas to continue.",
+        description="Phrase spoken when conversation mode ends due to turn limit"
     )
     conversation_goodbye_phrases: list[str] = Field(
         default=["goodbye", "bye", "that's all", "thanks that's it", "nevermind"],

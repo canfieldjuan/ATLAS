@@ -708,6 +708,8 @@ def create_voice_pipeline(event_loop: Optional[asyncio.AbstractEventLoop] = None
         filler_enabled=cfg.filler_enabled,
         filler_delay_ms=cfg.filler_delay_ms,
         filler_phrases=cfg.filler_phrases,
+        filler_followup_delay_ms=cfg.filler_followup_delay_ms,
+        filler_followup_phrases=cfg.filler_followup_phrases,
         debug_logging=cfg.debug_logging,
         log_interval_frames=cfg.log_interval_frames,
         conversation_mode_enabled=cfg.conversation_mode_enabled,
@@ -747,11 +749,18 @@ def create_voice_pipeline(event_loop: Optional[asyncio.AbstractEventLoop] = None
         conversation_window_frames=cfg.conversation_window_frames,
         conversation_silence_ratio=cfg.conversation_silence_ratio,
         conversation_asr_holdoff_ms=cfg.conversation_asr_holdoff_ms,
+        asr_quiet_limit=cfg.asr_quiet_limit,
         # Workflow-aware thresholds
         workflow_silence_ms=cfg.workflow_silence_ms,
         workflow_hangover_ms=cfg.workflow_hangover_ms,
         workflow_max_command_seconds=cfg.workflow_max_command_seconds,
         workflow_conversation_timeout_ms=cfg.workflow_conversation_timeout_ms,
+        # Turn limit warning
+        conversation_turn_limit_phrase=cfg.conversation_turn_limit_phrase,
+        # Wake confirmation tone
+        wake_confirmation_enabled=cfg.wake_confirmation_enabled,
+        wake_confirmation_freq=cfg.wake_confirmation_freq,
+        wake_confirmation_duration_ms=cfg.wake_confirmation_duration_ms,
     )
 
     return pipeline
