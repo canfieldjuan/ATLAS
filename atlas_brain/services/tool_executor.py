@@ -84,6 +84,110 @@ def parse_text_tool_calls(content: str) -> list[dict]:
     return tool_calls
 
 
+def _to_int_or_none(value: Any) -> int | None:
+    """Coerce value to int when possible."""
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_float_or_none(value: Any) -> float | None:
+    """Coerce value to float when possible."""
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_llm_meta(result: dict[str, Any]) -> dict[str, Any]:
+    """Extract normalized LLM metadata from one model call result."""
+    provider_request_id = result.get("request_id") or result.get("id")
+    if not isinstance(provider_request_id, str) or not provider_request_id.strip():
+        provider_request_id = None
+    return {
+        "input_tokens": _to_int_or_none(result.get("prompt_eval_count")),
+        "output_tokens": _to_int_or_none(result.get("eval_count")),
+        "prompt_eval_duration_ms": _to_float_or_none(result.get("prompt_eval_duration_ms")),
+        "eval_duration_ms": _to_float_or_none(result.get("eval_duration_ms")),
+        "total_duration_ms": _to_float_or_none(result.get("total_duration_ms")),
+        "provider_request_id": provider_request_id,
+        "has_llm_response": True,
+    }
+
+
+def _merge_llm_meta(aggregate: dict[str, Any] | None, update: dict[str, Any]) -> dict[str, Any]:
+    """Merge one call's LLM metadata into an aggregate metadata dict."""
+    if aggregate is None:
+        aggregate = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "prompt_eval_duration_ms": 0.0,
+            "eval_duration_ms": 0.0,
+            "total_duration_ms": 0.0,
+            "provider_request_id": None,
+            "has_llm_response": False,
+        }
+
+    input_tokens = _to_int_or_none(update.get("input_tokens"))
+    if input_tokens is not None:
+        aggregate["input_tokens"] = int(aggregate["input_tokens"]) + input_tokens
+
+    output_tokens = _to_int_or_none(update.get("output_tokens"))
+    if output_tokens is not None:
+        aggregate["output_tokens"] = int(aggregate["output_tokens"]) + output_tokens
+
+    prompt_eval_ms = _to_float_or_none(update.get("prompt_eval_duration_ms"))
+    if prompt_eval_ms is not None:
+        aggregate["prompt_eval_duration_ms"] = float(aggregate["prompt_eval_duration_ms"]) + prompt_eval_ms
+
+    eval_ms = _to_float_or_none(update.get("eval_duration_ms"))
+    if eval_ms is not None:
+        aggregate["eval_duration_ms"] = float(aggregate["eval_duration_ms"]) + eval_ms
+
+    total_ms = _to_float_or_none(update.get("total_duration_ms"))
+    if total_ms is not None:
+        aggregate["total_duration_ms"] = float(aggregate["total_duration_ms"]) + total_ms
+
+    provider_request_id = update.get("provider_request_id")
+    if isinstance(provider_request_id, str) and provider_request_id.strip():
+        aggregate["provider_request_id"] = provider_request_id
+
+    aggregate["has_llm_response"] = bool(
+        aggregate.get("has_llm_response")
+        or update.get("has_llm_response")
+    )
+    return aggregate
+
+
+def _finalize_llm_meta(aggregate: dict[str, Any] | None) -> dict[str, Any]:
+    """Return stable llm_meta shape for callers."""
+    if aggregate is None:
+        return {
+            "input_tokens": None,
+            "output_tokens": None,
+            "prompt_eval_duration_ms": None,
+            "eval_duration_ms": None,
+            "total_duration_ms": None,
+            "provider_request_id": None,
+            "has_llm_response": False,
+        }
+
+    return {
+        "input_tokens": _to_int_or_none(aggregate.get("input_tokens")),
+        "output_tokens": _to_int_or_none(aggregate.get("output_tokens")),
+        "prompt_eval_duration_ms": _to_float_or_none(aggregate.get("prompt_eval_duration_ms")),
+        "eval_duration_ms": _to_float_or_none(aggregate.get("eval_duration_ms")),
+        "total_duration_ms": _to_float_or_none(aggregate.get("total_duration_ms")),
+        "provider_request_id": aggregate.get("provider_request_id"),
+        "has_llm_response": bool(aggregate.get("has_llm_response")),
+    }
+
+
 async def execute_with_tools(
     llm,
     messages: list[Message],
@@ -114,6 +218,7 @@ async def execute_with_tools(
             "response": _strip_tool_xml(result.get("response", "")),
             "tools_executed": [],
             "tool_results": {},
+            "llm_meta": _finalize_llm_meta(_merge_llm_meta(None, _extract_llm_meta(result))),
         }
 
     # If caller provided pre-built tool schemas, use them directly
@@ -156,6 +261,7 @@ async def execute_with_tools(
     current_messages = list(messages)
     tool_results = {}
     last_response = ""
+    llm_meta_aggregate: dict[str, Any] | None = None
 
     for iteration in range(MAX_TOOL_ITERATIONS):
         logger.info("Tool calling iteration %d", iteration + 1)
@@ -166,6 +272,7 @@ async def execute_with_tools(
             max_tokens=max_tokens,
             temperature=temperature,
         )
+        llm_meta_aggregate = _merge_llm_meta(llm_meta_aggregate, _extract_llm_meta(result))
 
         last_response = result.get("response", "")
         tool_calls = result.get("tool_calls", [])
@@ -194,6 +301,7 @@ async def execute_with_tools(
                 "response": final_response,
                 "tools_executed": list(tool_results.keys()),
                 "tool_results": tool_results,
+                "llm_meta": _finalize_llm_meta(llm_meta_aggregate),
             }
 
         logger.info("LLM requested %d tool call(s)", len(tool_calls))
@@ -268,4 +376,5 @@ async def execute_with_tools(
         "response": final_response,
         "tools_executed": list(tool_results.keys()),
         "tool_results": tool_results,
+        "llm_meta": _finalize_llm_meta(llm_meta_aggregate),
     }

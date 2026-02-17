@@ -487,19 +487,20 @@ async def _generate_llm_response_with_tools(state: HomeAgentState) -> dict[str, 
 
     response = result.get("response", "").strip()
     tools_executed = result.get("tools_executed", [])
+    llm_meta = result.get("llm_meta") or {}
     logger.info("Tool LLM result: tools=%s, response='%s'", tools_executed, response)
 
     return {
         "response": response if response else "I couldn't process that request.",
-        "input_tokens": None,  # execute_with_tools doesn't expose token counts
-        "output_tokens": None,
+        "input_tokens": llm_meta.get("input_tokens"),
+        "output_tokens": llm_meta.get("output_tokens"),
         "system_prompt": system_msg,
         "history_count": 0,
-        "prompt_eval_duration_ms": None,
-        "eval_duration_ms": None,
-        "total_duration_ms": None,
-        "provider_request_id": None,
-        "has_llm_response": True,
+        "prompt_eval_duration_ms": llm_meta.get("prompt_eval_duration_ms"),
+        "eval_duration_ms": llm_meta.get("eval_duration_ms"),
+        "total_duration_ms": llm_meta.get("total_duration_ms"),
+        "provider_request_id": llm_meta.get("provider_request_id"),
+        "has_llm_response": bool(llm_meta.get("has_llm_response")),
     }
 
 

@@ -687,6 +687,7 @@ async def continue_workflow(state: AtlasAgentState) -> AtlasAgentState:
     response = result.get("response", "")
     total_ms = (time.perf_counter() - start_time) * 1000
     awaiting = result.get("awaiting_user_input", False)
+    llm_meta = result.get("llm_meta") or {}
 
     if not awaiting:
         get_mode_manager().set_workflow_active(False)
@@ -697,6 +698,16 @@ async def continue_workflow(state: AtlasAgentState) -> AtlasAgentState:
         "action_type": "tool_use",
         "act_ms": total_ms,
         "awaiting_user_input": awaiting,
+        "tools_executed": result.get("tools_executed", []),
+        "llm_input_tokens": llm_meta.get("input_tokens"),
+        "llm_output_tokens": llm_meta.get("output_tokens"),
+        "llm_system_prompt": llm_meta.get("system_prompt"),
+        "llm_history_count": llm_meta.get("history_count", 0),
+        "llm_prompt_eval_duration_ms": llm_meta.get("prompt_eval_duration_ms"),
+        "llm_eval_duration_ms": llm_meta.get("eval_duration_ms"),
+        "llm_total_duration_ms": llm_meta.get("total_duration_ms"),
+        "llm_provider_request_id": llm_meta.get("provider_request_id"),
+        "llm_has_response": bool(llm_meta.get("has_llm_response")),
     }
 
 
@@ -759,6 +770,7 @@ async def start_workflow(state: AtlasAgentState) -> AtlasAgentState:
     response = result.get("response", "")
     total_ms = (time.perf_counter() - start_time) * 1000
     awaiting = result.get("awaiting_user_input", False)
+    llm_meta = result.get("llm_meta") or {}
 
     if not awaiting:
         mode_manager.set_workflow_active(False)
@@ -770,6 +782,16 @@ async def start_workflow(state: AtlasAgentState) -> AtlasAgentState:
         "workflow_type": workflow_type,
         "act_ms": total_ms,
         "awaiting_user_input": awaiting,
+        "tools_executed": result.get("tools_executed", []),
+        "llm_input_tokens": llm_meta.get("input_tokens"),
+        "llm_output_tokens": llm_meta.get("output_tokens"),
+        "llm_system_prompt": llm_meta.get("system_prompt"),
+        "llm_history_count": llm_meta.get("history_count", 0),
+        "llm_prompt_eval_duration_ms": llm_meta.get("prompt_eval_duration_ms"),
+        "llm_eval_duration_ms": llm_meta.get("eval_duration_ms"),
+        "llm_total_duration_ms": llm_meta.get("total_duration_ms"),
+        "llm_provider_request_id": llm_meta.get("provider_request_id"),
+        "llm_has_response": bool(llm_meta.get("has_llm_response")),
     }
 
 
@@ -812,7 +834,7 @@ async def _generate_llm_response(
     mem_ctx = await svc.gather_context(
         query=input_text,
         session_id=session_id,
-        user_id=None,
+        user_id=state.get("runtime_context", {}).get("speaker_uuid"),
         include_rag=not has_retrieved,
         include_history=True,
         include_physical=False,

@@ -183,6 +183,8 @@ class OllamaLLM(BaseModelService):
                     "prompt_eval_duration_ms": prompt_eval_duration,
                     "eval_duration_ms": eval_duration,
                     "total_duration_ms": total_duration,
+                    "request_id": data.get("request_id") or data.get("id"),
+                    "id": data.get("id") or data.get("request_id"),
                 }
             except httpx.HTTPError as e:
                 logger.error("Ollama chat error: %s", e)
@@ -269,15 +271,37 @@ class OllamaLLM(BaseModelService):
             logger.debug("Message keys: %s", list(msg.keys()))
             tool_calls = msg.get("tool_calls", [])
             raw_content = msg.get("content", "")
+            done_reason = data.get("done_reason", "unknown")
+            prompt_eval_count = data.get("prompt_eval_count", 0)
+            eval_count = data.get("eval_count", 0)
+            prompt_eval_duration = data.get("prompt_eval_duration", 0) / 1_000_000  # ns to ms
+            eval_duration = data.get("eval_duration", 0) / 1_000_000  # ns to ms
+            total_duration = data.get("total_duration", 0) / 1_000_000  # ns to ms
             logger.info("Ollama response: content_len=%d, tool_calls=%d, done_reason=%s",
-                       len(raw_content), len(tool_calls), data.get("done_reason", "unknown"))
+                       len(raw_content), len(tool_calls), done_reason)
             logger.info("Ollama raw content: '%s'", raw_content)
             if tool_calls:
                 logger.info("Tool calls received: %s", [tc.get("function", {}).get("name") for tc in tool_calls])
+            logger.info(
+                "Ollama tool chat: prompt_tokens=%d (%.1fms), gen_tokens=%d (%.1fms), total=%.1fms",
+                prompt_eval_count,
+                prompt_eval_duration,
+                eval_count,
+                eval_duration,
+                total_duration,
+            )
             return {
                 "response": msg.get("content", "").strip(),
                 "tool_calls": tool_calls,
                 "message": msg,
+                "prompt_eval_count": prompt_eval_count,
+                "eval_count": eval_count,
+                "done_reason": done_reason,
+                "prompt_eval_duration_ms": prompt_eval_duration,
+                "eval_duration_ms": eval_duration,
+                "total_duration_ms": total_duration,
+                "request_id": data.get("request_id") or data.get("id"),
+                "id": data.get("id") or data.get("request_id"),
             }
         except httpx.HTTPError as e:
             logger.error("Ollama chat_with_tools error: %s", e)

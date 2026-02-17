@@ -70,6 +70,15 @@ async def run_booking_workflow(
     from ...tools import tool_registry
 
     start_time = time.perf_counter()
+    empty_llm_meta = {
+        "input_tokens": None,
+        "output_tokens": None,
+        "prompt_eval_duration_ms": None,
+        "eval_duration_ms": None,
+        "total_duration_ms": None,
+        "provider_request_id": None,
+        "has_llm_response": False,
+    }
     if llm is None:
         llm = llm_registry.get_active()
 
@@ -77,6 +86,7 @@ async def run_booking_workflow(
         return {
             "response": "I can't process bookings right now.",
             "awaiting_user_input": False,
+            "llm_meta": empty_llm_meta,
         }
 
     # Build message history
@@ -128,10 +138,12 @@ async def run_booking_workflow(
             "response": "Sorry, something went wrong. Could you try again?",
             "awaiting_user_input": True,
             "total_ms": (time.perf_counter() - start_time) * 1000,
+            "llm_meta": empty_llm_meta,
         }
 
     response = result.get("response", "")
     tools_executed = result.get("tools_executed", [])
+    llm_meta = result.get("llm_meta") or empty_llm_meta
 
     # Determine if workflow is complete (booking, cancellation, or reschedule)
     _terminal_tools = ("book_appointment", "cancel_appointment", "reschedule_appointment")
@@ -145,6 +157,7 @@ async def run_booking_workflow(
             "response": response or "Booking complete.",
             "awaiting_user_input": False,
             "total_ms": (time.perf_counter() - start_time) * 1000,
+            "llm_meta": llm_meta,
         }
 
     if not response:
@@ -173,4 +186,5 @@ async def run_booking_workflow(
         "response": response,
         "awaiting_user_input": True,
         "total_ms": (time.perf_counter() - start_time) * 1000,
+        "llm_meta": llm_meta,
     }
