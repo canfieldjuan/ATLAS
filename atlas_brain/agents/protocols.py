@@ -360,6 +360,7 @@ class AgentMemory(Protocol):
         role: str,
         content: str,
         speaker_id: Optional[str] = None,
+        speaker_uuid: Optional[str] = None,
         intent: Optional[str] = None,
         turn_type: str = "conversation",
     ) -> None:

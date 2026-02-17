@@ -30,6 +30,7 @@ class ConversationRepository:
         role: str,
         content: str,
         speaker_id: Optional[str] = None,
+        speaker_uuid: Optional[UUID] = None,
         intent: Optional[str] = None,
         turn_type: str = "conversation",
         metadata: Optional[dict] = None,
@@ -42,6 +43,7 @@ class ConversationRepository:
             role: "user" or "assistant"
             content: The message content
             speaker_id: Identified speaker name (optional)
+            speaker_uuid: Speaker's users.id UUID (optional)
             intent: Parsed intent (optional)
             turn_type: "conversation" or "command" (for context filtering)
             metadata: Additional metadata (optional)
@@ -58,14 +60,16 @@ class ConversationRepository:
         await pool.execute(
             """
             INSERT INTO conversation_turns
-                (id, session_id, role, content, speaker_id, intent, turn_type, metadata)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+                (id, session_id, role, content, speaker_id, speaker_uuid,
+                 intent, turn_type, metadata)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
             """,
             turn_id,
             session_id,
             role,
             content,
             speaker_id,
+            speaker_uuid,
             intent,
             turn_type,
             metadata_json,
@@ -101,8 +105,8 @@ class ConversationRepository:
         if turn_type and before:
             rows = await pool.fetch(
                 """
-                SELECT id, session_id, role, content, speaker_id, intent,
-                       turn_type, created_at, metadata
+                SELECT id, session_id, role, content, speaker_id, speaker_uuid,
+                       intent, turn_type, created_at, metadata
                 FROM conversation_turns
                 WHERE session_id = $1 AND created_at < $2 AND turn_type = $3
                 ORDER BY created_at DESC
@@ -116,8 +120,8 @@ class ConversationRepository:
         elif turn_type:
             rows = await pool.fetch(
                 """
-                SELECT id, session_id, role, content, speaker_id, intent,
-                       turn_type, created_at, metadata
+                SELECT id, session_id, role, content, speaker_id, speaker_uuid,
+                       intent, turn_type, created_at, metadata
                 FROM conversation_turns
                 WHERE session_id = $1 AND turn_type = $2
                 ORDER BY created_at DESC
@@ -130,8 +134,8 @@ class ConversationRepository:
         elif before:
             rows = await pool.fetch(
                 """
-                SELECT id, session_id, role, content, speaker_id, intent,
-                       turn_type, created_at, metadata
+                SELECT id, session_id, role, content, speaker_id, speaker_uuid,
+                       intent, turn_type, created_at, metadata
                 FROM conversation_turns
                 WHERE session_id = $1 AND created_at < $2
                 ORDER BY created_at DESC
@@ -144,8 +148,8 @@ class ConversationRepository:
         else:
             rows = await pool.fetch(
                 """
-                SELECT id, session_id, role, content, speaker_id, intent,
-                       turn_type, created_at, metadata
+                SELECT id, session_id, role, content, speaker_id, speaker_uuid,
+                       intent, turn_type, created_at, metadata
                 FROM conversation_turns
                 WHERE session_id = $1
                 ORDER BY created_at DESC
@@ -163,6 +167,7 @@ class ConversationRepository:
                 role=row["role"],
                 content=row["content"],
                 speaker_id=row["speaker_id"],
+                speaker_uuid=row["speaker_uuid"],
                 intent=row["intent"],
                 turn_type=row["turn_type"] or "conversation",
                 created_at=row["created_at"],
@@ -205,7 +210,8 @@ class ConversationRepository:
             rows = await pool.fetch(
                 f"""
                 SELECT ct.id, ct.session_id, ct.role, ct.content, ct.speaker_id,
-                       ct.intent, ct.turn_type, ct.created_at, ct.metadata
+                       ct.speaker_uuid, ct.intent, ct.turn_type, ct.created_at,
+                       ct.metadata
                 FROM conversation_turns ct
                 JOIN sessions s ON ct.session_id = s.id
                 WHERE s.user_id = $1 {type_filter}
@@ -219,7 +225,8 @@ class ConversationRepository:
             rows = await pool.fetch(
                 f"""
                 SELECT ct.id, ct.session_id, ct.role, ct.content, ct.speaker_id,
-                       ct.intent, ct.turn_type, ct.created_at, ct.metadata
+                       ct.speaker_uuid, ct.intent, ct.turn_type, ct.created_at,
+                       ct.metadata
                 FROM conversation_turns ct
                 JOIN sessions s ON ct.session_id = s.id
                 WHERE s.user_id = $1 {active_filter} {type_filter}
@@ -237,6 +244,7 @@ class ConversationRepository:
                 role=row["role"],
                 content=row["content"],
                 speaker_id=row["speaker_id"],
+                speaker_uuid=row["speaker_uuid"],
                 intent=row["intent"],
                 turn_type=row["turn_type"] or "conversation",
                 created_at=row["created_at"],

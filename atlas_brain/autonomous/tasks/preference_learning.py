@@ -48,29 +48,29 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             "_skip_synthesis": "Preference learning skipped -- database not ready.",
         }
 
-    # Fetch user turns from the last N days grouped by speaker
+    # Fetch user turns from the last N days grouped by speaker_uuid
     rows = await pool.fetch(
         """
-        SELECT ct.speaker_id, ct.content
+        SELECT ct.speaker_uuid, ct.content
         FROM conversation_turns ct
         WHERE ct.role = 'user'
-          AND ct.speaker_id IS NOT NULL
+          AND ct.speaker_uuid IS NOT NULL
           AND ct.created_at >= NOW() - ($1 || ' days')::interval
-        ORDER BY ct.speaker_id, ct.created_at
+        ORDER BY ct.speaker_uuid, ct.created_at
         """,
         str(lookback_days),
     )
 
-    # Group by speaker_id
+    # Group by speaker_uuid
     speakers: dict[str, list[str]] = {}
     for row in rows:
-        sid = row["speaker_id"]
-        speakers.setdefault(sid, []).append(row["content"] or "")
+        uid = str(row["speaker_uuid"])
+        speakers.setdefault(uid, []).append(row["content"] or "")
 
     profile_repo = get_profile_repo()
     changes: list[dict[str, str]] = []
 
-    for speaker_id, messages in speakers.items():
+    for user_uuid_str, messages in speakers.items():
         if len(messages) < min_turns:
             continue
 
@@ -104,32 +104,25 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         if not new_style and not new_expertise:
             continue
 
-        # Look up the user UUID from the users table by speaker name
-        # (conversation_turns.speaker_id stores the display name, not a UUID)
         try:
-            user_uuid = await pool.fetchval(
-                "SELECT id FROM users WHERE name = $1 LIMIT 1",
-                speaker_id,
-            )
-            if not user_uuid:
-                logger.debug("No user record for speaker '%s', skipping", speaker_id)
-                continue
+            from uuid import UUID
+            user_uuid = UUID(user_uuid_str)
 
             await profile_repo.update_profile(
                 user_id=user_uuid,
                 response_style=new_style,
                 expertise_level=new_expertise,
             )
-            change = {"speaker_id": speaker_id}
+            change = {"speaker_uuid": user_uuid_str}
             if new_style:
                 change["response_style"] = new_style
             if new_expertise:
                 change["expertise_level"] = new_expertise
             changes.append(change)
             logger.info("Updated profile for %s: style=%s expertise=%s",
-                        speaker_id, new_style, new_expertise)
+                        user_uuid_str, new_style, new_expertise)
         except Exception as e:
-            logger.warning("Failed to update profile for %s: %s", speaker_id, e)
+            logger.warning("Failed to update profile for %s: %s", user_uuid_str, e)
 
     return {
         "users_analyzed": len(speakers),

@@ -1204,11 +1204,13 @@ class AtlasAgentGraph:
                 logger.debug("Quality detection skipped: %s", e)
 
             # Store user turn
+            runtime_ctx = state.get("runtime_context", {})
             await self._memory.add_turn(
                 session_id=session_id,
                 role="user",
                 content=input_text,
                 speaker_id=state.get("speaker_id"),
+                speaker_uuid=runtime_ctx.get("speaker_uuid"),
                 intent=intent_str,
                 turn_type=turn_type,
                 metadata=user_metadata,
@@ -1221,6 +1223,7 @@ class AtlasAgentGraph:
                     session_id=session_id,
                     role="assistant",
                     content=response,
+                    speaker_uuid=runtime_ctx.get("speaker_uuid"),
                     turn_type=turn_type,
                     metadata=assistant_metadata,
                 )

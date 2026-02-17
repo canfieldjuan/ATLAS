@@ -67,6 +67,7 @@ class ConversationTurn:
     content: str
     created_at: datetime = field(default_factory=datetime.utcnow)
     speaker_id: Optional[str] = None
+    speaker_uuid: Optional[UUID] = None
     intent: Optional[str] = None
     turn_type: str = "conversation"  # "conversation" or "command"
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -79,6 +80,7 @@ class ConversationTurn:
             "content": self.content,
             "created_at": self.created_at.isoformat(),
             "speaker_id": self.speaker_id,
+            "speaker_uuid": str(self.speaker_uuid) if self.speaker_uuid else None,
             "intent": self.intent,
             "turn_type": self.turn_type,
             "metadata": self.metadata,

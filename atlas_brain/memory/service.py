@@ -327,6 +327,7 @@ class MemoryService:
         user_content: str,
         assistant_content: str,
         speaker_id: Optional[str] = None,
+        speaker_uuid: Optional[str] = None,
         intent: Optional[str] = None,
         turn_type: str = "conversation",
         user_metadata: Optional[dict] = None,
@@ -339,7 +340,8 @@ class MemoryService:
             session_id: Session ID
             user_content: User's message
             assistant_content: Assistant's response
-            speaker_id: Optional speaker identifier
+            speaker_id: Optional speaker identifier (display name)
+            speaker_uuid: Optional speaker users.id UUID string
             intent: Optional detected intent
             turn_type: "conversation" or "command" (commands excluded from context)
             user_metadata: Optional metadata dict for the user turn
@@ -350,6 +352,7 @@ class MemoryService:
             await self._store_to_postgresql(
                 session_id, user_content, assistant_content,
                 speaker_id, intent, turn_type,
+                speaker_uuid=speaker_uuid,
                 user_metadata=user_metadata,
                 assistant_metadata=assistant_metadata,
             )
@@ -367,6 +370,7 @@ class MemoryService:
         speaker_id: Optional[str],
         intent: Optional[str],
         turn_type: str = "conversation",
+        speaker_uuid: Optional[str] = None,
         user_metadata: Optional[dict] = None,
         assistant_metadata: Optional[dict] = None,
     ) -> None:
@@ -378,6 +382,8 @@ class MemoryService:
         if not pool.is_initialized:
             return
 
+        uuid_val = UUID(speaker_uuid) if speaker_uuid else None
+
         try:
             conv_repo = get_conversation_repo()
             session_uuid = UUID(session_id)
@@ -388,6 +394,7 @@ class MemoryService:
                     role="user",
                     content=user_content,
                     speaker_id=speaker_id,
+                    speaker_uuid=uuid_val,
                     intent=intent,
                     turn_type=turn_type,
                     metadata=user_metadata,
@@ -398,6 +405,7 @@ class MemoryService:
                     session_id=session_uuid,
                     role="assistant",
                     content=assistant_content,
+                    speaker_uuid=uuid_val,
                     turn_type=turn_type,
                     metadata=assistant_metadata,
                 )

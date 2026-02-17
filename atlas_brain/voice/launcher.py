@@ -345,8 +345,10 @@ async def _stream_llm_response(
         # Persist conversation turns in background (don't block TTS)
         if sentence_count > 0 and session_id:
             full_response = " ".join(collected_sentences)
+            speaker_uuid = context_dict.get("speaker_id")  # actual UUID
             asyncio.ensure_future(_persist_streaming_turns(
                 session_id, transcript, full_response, speaker_name,
+                speaker_uuid=speaker_uuid,
             ))
 
         return sentence_count > 0
@@ -360,6 +362,7 @@ async def _persist_streaming_turns(
     user_text: str,
     assistant_text: str,
     speaker_name: Optional[str] = None,
+    speaker_uuid: Optional[str] = None,
 ) -> None:
     """Persist conversation turns from streaming LLM to database and GraphRAG."""
     from ..memory.service import get_memory_service
@@ -387,6 +390,7 @@ async def _persist_streaming_turns(
             user_content=user_text,
             assistant_content=assistant_text,
             speaker_id=speaker_name,
+            speaker_uuid=speaker_uuid,
             turn_type="conversation",
             user_metadata=user_metadata,
             assistant_metadata=assistant_metadata,

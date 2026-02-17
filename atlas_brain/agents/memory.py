@@ -121,6 +121,7 @@ class AtlasAgentMemory:
         role: str,
         content: str,
         speaker_id: Optional[str] = None,
+        speaker_uuid: Optional[str] = None,
         intent: Optional[str] = None,
         turn_type: str = "conversation",
         metadata: Optional[dict] = None,
@@ -133,6 +134,7 @@ class AtlasAgentMemory:
             role: "user" or "assistant"
             content: The message content
             speaker_id: Identified speaker name (optional)
+            speaker_uuid: Speaker's users.id UUID string (optional)
             intent: Parsed intent (optional)
             turn_type: "conversation" or "command"
             metadata: Additional metadata (optional)
@@ -150,6 +152,7 @@ class AtlasAgentMemory:
                 role=role,
                 content=content,
                 speaker_id=speaker_id,
+                speaker_uuid=UUID(speaker_uuid) if speaker_uuid else None,
                 intent=intent,
                 turn_type=turn_type,
                 metadata=metadata,
