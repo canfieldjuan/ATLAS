@@ -584,10 +584,20 @@ async def generate_response(state: AtlasAgentState) -> AtlasAgentState:
         **state,
         "response": response,
         "respond_ms": respond_ms,
-        "llm_input_tokens": llm_out.get("input_tokens", 0) if llm_out else 0,
-        "llm_output_tokens": llm_out.get("output_tokens", 0) if llm_out else 0,
+        "llm_input_tokens": llm_out.get("input_tokens") if llm_out else None,
+        "llm_output_tokens": llm_out.get("output_tokens") if llm_out else None,
         "llm_system_prompt": llm_out.get("system_prompt") if llm_out else None,
         "llm_history_count": llm_out.get("history_count", 0) if llm_out else 0,
+        "llm_prompt_eval_duration_ms": llm_out.get("prompt_eval_duration_ms") if llm_out else None,
+        "llm_eval_duration_ms": llm_out.get("eval_duration_ms") if llm_out else None,
+        "llm_total_duration_ms": llm_out.get("total_duration_ms") if llm_out else None,
+        "llm_provider_request_id": llm_out.get("provider_request_id") if llm_out else None,
+        "llm_has_response": bool(llm_out and llm_out.get("has_llm_response")),
+        "rag_graph_used": llm_out.get("rag_graph_used") if llm_out else False,
+        "rag_nodes_retrieved": llm_out.get("rag_nodes_retrieved") if llm_out else None,
+        "rag_chunks_used": llm_out.get("rag_chunks_used") if llm_out else None,
+        "context_tokens": llm_out.get("context_tokens") if llm_out else None,
+        "retrieval_latency_ms": llm_out.get("retrieval_latency_ms") if llm_out else None,
     }
     return result
 
@@ -775,8 +785,18 @@ async def _generate_llm_response(
     llm = llm_registry.get_active()
     if llm is None:
         return {"response": f"I heard: {state.get('input_text', '')}",
-                "input_tokens": 0, "output_tokens": 0,
-                "system_prompt": None, "history_count": 0}
+                "input_tokens": None, "output_tokens": None,
+                "system_prompt": None, "history_count": 0,
+                "prompt_eval_duration_ms": None,
+                "eval_duration_ms": None,
+                "total_duration_ms": None,
+                "provider_request_id": None,
+                "has_llm_response": False,
+                "rag_graph_used": False,
+                "rag_nodes_retrieved": None,
+                "rag_chunks_used": None,
+                "context_tokens": None,
+                "retrieval_latency_ms": None}
 
     input_text = state.get("input_text", "")
     retrieved_context = state.get("retrieved_context")
@@ -788,6 +808,7 @@ async def _generate_llm_response(
     # graphiti search call.
     has_retrieved = bool(retrieved_context)
     svc = get_memory_service()
+    gather_started = time.perf_counter()
     mem_ctx = await svc.gather_context(
         query=input_text,
         session_id=session_id,
@@ -797,6 +818,27 @@ async def _generate_llm_response(
         include_physical=False,
         max_history=6,
     )
+    gather_context_ms = (time.perf_counter() - gather_started) * 1000
+
+    rag_nodes_retrieved = 0
+    if mem_ctx.rag_context_used and mem_ctx.rag_result and mem_ctx.rag_result.sources:
+        rag_nodes_retrieved = len(mem_ctx.rag_result.sources)
+
+    context_tokens: Optional[int] = None
+    if isinstance(mem_ctx.token_usage, dict):
+        try:
+            rag_tokens = mem_ctx.token_usage.get("rag_context")
+            if rag_tokens is not None:
+                context_tokens = int(rag_tokens)
+        except (TypeError, ValueError):
+            context_tokens = None
+
+    retrieval_latency_ms: Optional[float] = None
+    memory_ms = state.get("memory_ms")
+    if isinstance(memory_ms, (int, float)) and memory_ms > 0:
+        retrieval_latency_ms = float(memory_ms)
+    elif rag_nodes_retrieved > 0:
+        retrieval_latency_ms = gather_context_ms
 
     # Build history messages from MemoryContext (already chronological order)
     history_messages: list[Message] = [
@@ -879,13 +921,33 @@ async def _generate_llm_response(
                 "output_tokens": llm_result.get("eval_count", 0),
                 "system_prompt": system_msg,
                 "history_count": len(history_messages),
+                "prompt_eval_duration_ms": llm_result.get("prompt_eval_duration_ms"),
+                "eval_duration_ms": llm_result.get("eval_duration_ms"),
+                "total_duration_ms": llm_result.get("total_duration_ms"),
+                "provider_request_id": llm_result.get("request_id") or llm_result.get("id"),
+                "has_llm_response": True,
+                "rag_graph_used": rag_nodes_retrieved > 0,
+                "rag_nodes_retrieved": rag_nodes_retrieved if rag_nodes_retrieved > 0 else None,
+                "rag_chunks_used": rag_nodes_retrieved if rag_nodes_retrieved > 0 else None,
+                "context_tokens": context_tokens,
+                "retrieval_latency_ms": retrieval_latency_ms,
             }
     except Exception as e:
         logger.warning("LLM response generation failed: %s", e)
 
     return {"response": f"I heard: {input_text}",
-            "input_tokens": 0, "output_tokens": 0,
-            "system_prompt": None, "history_count": 0}
+            "input_tokens": None, "output_tokens": None,
+            "system_prompt": None, "history_count": 0,
+            "prompt_eval_duration_ms": None,
+            "eval_duration_ms": None,
+            "total_duration_ms": None,
+            "provider_request_id": None,
+            "has_llm_response": False,
+            "rag_graph_used": rag_nodes_retrieved > 0,
+            "rag_nodes_retrieved": rag_nodes_retrieved if rag_nodes_retrieved > 0 else None,
+            "rag_chunks_used": rag_nodes_retrieved if rag_nodes_retrieved > 0 else None,
+            "context_tokens": context_tokens,
+            "retrieval_latency_ms": retrieval_latency_ms}
 
 
 # Routing function (only for check_workflow, which doesn't use Command)
@@ -1059,10 +1121,20 @@ class AtlasAgentGraph:
                 "respond": final_state.get("respond_ms", 0),
             },
             "llm_meta": {
-                "input_tokens": final_state.get("llm_input_tokens", 0),
-                "output_tokens": final_state.get("llm_output_tokens", 0),
+                "input_tokens": final_state.get("llm_input_tokens"),
+                "output_tokens": final_state.get("llm_output_tokens"),
                 "system_prompt": final_state.get("llm_system_prompt"),
                 "history_count": final_state.get("llm_history_count", 0),
+                "prompt_eval_duration_ms": final_state.get("llm_prompt_eval_duration_ms"),
+                "eval_duration_ms": final_state.get("llm_eval_duration_ms"),
+                "total_duration_ms": final_state.get("llm_total_duration_ms"),
+                "provider_request_id": final_state.get("llm_provider_request_id"),
+                "has_llm_response": final_state.get("llm_has_response", False),
+                "rag_graph_used": final_state.get("rag_graph_used", False),
+                "rag_nodes_retrieved": final_state.get("rag_nodes_retrieved"),
+                "rag_chunks_used": final_state.get("rag_chunks_used"),
+                "context_tokens": final_state.get("context_tokens"),
+                "retrieval_latency_ms": final_state.get("retrieval_latency_ms"),
             },
         }
 

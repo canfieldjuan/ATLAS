@@ -246,6 +246,11 @@ async def generate_response(state: ReceptionistAgentState) -> ReceptionistAgentS
                 "llm_output_tokens": llm_result.get("eval_count", 0),
                 "llm_system_prompt": system_prompt,
                 "llm_history_count": 0,
+                "llm_prompt_eval_duration_ms": llm_result.get("prompt_eval_duration_ms"),
+                "llm_eval_duration_ms": llm_result.get("eval_duration_ms"),
+                "llm_total_duration_ms": llm_result.get("total_duration_ms"),
+                "llm_provider_request_id": llm_result.get("request_id") or llm_result.get("id"),
+                "llm_has_response": True,
             }
     except Exception as e:
         logger.warning("LLM response failed: %s", e)
@@ -647,10 +652,15 @@ class ReceptionistAgentGraph:
                 "respond": final_state.get("respond_ms", 0),
             },
             "llm_meta": {
-                "input_tokens": final_state.get("llm_input_tokens", 0),
-                "output_tokens": final_state.get("llm_output_tokens", 0),
+                "input_tokens": final_state.get("llm_input_tokens"),
+                "output_tokens": final_state.get("llm_output_tokens"),
                 "system_prompt": final_state.get("llm_system_prompt"),
                 "history_count": final_state.get("llm_history_count", 0),
+                "prompt_eval_duration_ms": final_state.get("llm_prompt_eval_duration_ms"),
+                "eval_duration_ms": final_state.get("llm_eval_duration_ms"),
+                "total_duration_ms": final_state.get("llm_total_duration_ms"),
+                "provider_request_id": final_state.get("llm_provider_request_id"),
+                "has_llm_response": final_state.get("llm_has_response", False),
             },
         }
 

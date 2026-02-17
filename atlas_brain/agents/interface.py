@@ -11,6 +11,7 @@ from typing import Any, Optional, Protocol, runtime_checkable
 from .protocols import AgentResult
 
 logger = logging.getLogger("atlas.agents.interface")
+_SENSITIVE_HEADER_KEY_PARTS = ("authorization", "api-key", "token", "cookie", "secret", "password")
 
 
 @runtime_checkable
@@ -73,6 +74,8 @@ class LangGraphAgentAdapter:
         """Process input through LangGraph agent."""
         from ..services.tracing import tracer
 
+        runtime_ctx = runtime_context or {}
+
         span = tracer.start_span(
             span_name="agent.process",
             operation_type="llm_call",
@@ -88,7 +91,7 @@ class LangGraphAgentAdapter:
                 session_id=session_id,
                 speaker_id=speaker_id,
                 input_type=input_type,
-                runtime_context=runtime_context or {},
+                runtime_context=runtime_ctx,
             )
 
             # Convert dict result to AgentResult
@@ -110,9 +113,49 @@ class LangGraphAgentAdapter:
             )
 
             # Extract LLM metadata from result
-            llm_meta = result.get("llm_meta", {})
-            input_tokens = llm_meta.get("input_tokens", 0)
-            output_tokens = llm_meta.get("output_tokens", 0)
+            llm_meta = result.get("llm_meta", {}) or {}
+            has_llm_response = bool(llm_meta.get("has_llm_response"))
+            input_tokens = self._to_int_or_none(llm_meta.get("input_tokens"))
+            output_tokens = self._to_int_or_none(llm_meta.get("output_tokens"))
+            if not has_llm_response and (input_tokens or 0) == 0 and (output_tokens or 0) == 0:
+                input_tokens = None
+                output_tokens = None
+
+            ttft_ms = self._to_float_or_none(llm_meta.get("prompt_eval_duration_ms"))
+            inference_time_ms = self._to_float_or_none(llm_meta.get("eval_duration_ms"))
+            provider_total_ms = self._to_float_or_none(llm_meta.get("total_duration_ms"))
+
+            queue_time_ms: Optional[float] = None
+            if (
+                provider_total_ms is not None
+                and ttft_ms is not None
+                and inference_time_ms is not None
+            ):
+                provider_residual_ms = provider_total_ms - ttft_ms - inference_time_ms
+                if provider_residual_ms > 0:
+                    queue_time_ms = provider_residual_ms
+
+            context_tokens = self._to_int_or_none(llm_meta.get("context_tokens"))
+            retrieval_latency_ms = self._to_float_or_none(llm_meta.get("retrieval_latency_ms"))
+            if retrieval_latency_ms is None:
+                memory_phase_ms = self._safe_ms(timing.get("memory"))
+                retrieval_latency_ms = memory_phase_ms if memory_phase_ms > 0 else None
+
+            rag_nodes_retrieved = self._to_int_or_none(llm_meta.get("rag_nodes_retrieved"))
+            rag_chunks_used = self._to_int_or_none(llm_meta.get("rag_chunks_used"))
+            if rag_chunks_used is None:
+                rag_chunks_used = rag_nodes_retrieved
+
+            rag_graph_used = llm_meta.get("rag_graph_used")
+            if not isinstance(rag_graph_used, bool):
+                rag_graph_used = True if (rag_nodes_retrieved is not None and rag_nodes_retrieved > 0) else None
+
+            provider_request_id = llm_meta.get("provider_request_id")
+            if not isinstance(provider_request_id, str) or not provider_request_id.strip():
+                provider_request_id = None
+
+            api_endpoint = self._extract_api_endpoint(runtime_ctx)
+            request_headers_sanitized = self._extract_request_headers(runtime_ctx)
 
             # Build rich input_data
             input_data = {
@@ -140,6 +183,8 @@ class LangGraphAgentAdapter:
                 "timing": timing,
                 "action_type": agent_result.action_type,
             }
+            if llm_meta:
+                trace_meta["llm"] = llm_meta
             intent = result.get("intent")
             if intent:
                 trace_meta["intent"] = intent.action if hasattr(intent, "action") else str(intent)
@@ -166,6 +211,17 @@ class LangGraphAgentAdapter:
                 output_data=output_data,
                 error_message=agent_result.error,
                 metadata=trace_meta,
+                ttft_ms=ttft_ms,
+                inference_time_ms=inference_time_ms,
+                queue_time_ms=queue_time_ms,
+                context_tokens=context_tokens,
+                retrieval_latency_ms=retrieval_latency_ms,
+                rag_graph_used=rag_graph_used,
+                rag_nodes_retrieved=rag_nodes_retrieved,
+                rag_chunks_used=rag_chunks_used,
+                api_endpoint=api_endpoint,
+                request_headers_sanitized=request_headers_sanitized,
+                provider_request_id=provider_request_id,
             )
 
             return agent_result
@@ -188,6 +244,65 @@ class LangGraphAgentAdapter:
         except (TypeError, ValueError):
             return 0.0
         return ms if ms > 0 else 0.0
+
+    @staticmethod
+    def _to_int_or_none(value: Any) -> Optional[int]:
+        """Coerce value to int when available."""
+        try:
+            if value is None:
+                return None
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _to_float_or_none(value: Any) -> Optional[float]:
+        """Coerce value to float when available."""
+        try:
+            if value is None:
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _extract_api_endpoint(runtime_context: dict[str, Any]) -> Optional[str]:
+        """Extract request endpoint/path from runtime context."""
+        request_obj = runtime_context.get("request")
+        candidates = [
+            runtime_context.get("api_endpoint"),
+            runtime_context.get("endpoint"),
+            runtime_context.get("path"),
+            runtime_context.get("route"),
+            request_obj.get("url") if isinstance(request_obj, dict) else None,
+            request_obj.get("path") if isinstance(request_obj, dict) else None,
+        ]
+        for candidate in candidates:
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()[:500]
+        return None
+
+    @staticmethod
+    def _extract_request_headers(runtime_context: dict[str, Any]) -> Optional[dict[str, str]]:
+        """Sanitize inbound headers for observability without leaking secrets."""
+        headers = runtime_context.get("request_headers") or runtime_context.get("headers")
+        request_obj = runtime_context.get("request")
+        if headers is None and isinstance(request_obj, dict):
+            headers = request_obj.get("headers")
+        if not isinstance(headers, dict):
+            return None
+
+        sanitized: dict[str, str] = {}
+        for raw_key, raw_value in headers.items():
+            key = str(raw_key)
+            key_lower = key.lower()
+            if any(part in key_lower for part in _SENSITIVE_HEADER_KEY_PARTS):
+                sanitized[key] = "[redacted]"
+                continue
+            if raw_value is None:
+                continue
+            sanitized[key] = str(raw_value)[:256]
+        return sanitized or None
 
     def _emit_timing_child_spans(
         self,
@@ -239,11 +354,20 @@ class LangGraphAgentAdapter:
             if phase_key == "act" and tools_executed:
                 phase_metadata["tools_executed"] = tools_executed
 
-            phase_input_tokens = 0
-            phase_output_tokens = 0
+            phase_input_tokens: Optional[int] = None
+            phase_output_tokens: Optional[int] = None
             if phase_key == "respond":
-                phase_input_tokens = int(llm_meta.get("input_tokens", 0) or 0)
-                phase_output_tokens = int(llm_meta.get("output_tokens", 0) or 0)
+                phase_input_tokens = self._to_int_or_none(llm_meta.get("input_tokens"))
+                phase_output_tokens = self._to_int_or_none(llm_meta.get("output_tokens"))
+                prompt_eval_ms = self._to_float_or_none(llm_meta.get("prompt_eval_duration_ms"))
+                eval_ms = self._to_float_or_none(llm_meta.get("eval_duration_ms"))
+                total_ms = self._to_float_or_none(llm_meta.get("total_duration_ms"))
+                if prompt_eval_ms is not None:
+                    phase_metadata["ttft_ms"] = int(round(prompt_eval_ms))
+                if eval_ms is not None:
+                    phase_metadata["inference_time_ms"] = int(round(eval_ms))
+                if total_ms is not None:
+                    phase_metadata["provider_total_duration_ms"] = int(round(total_ms))
 
             tracer.emit_child_span(
                 parent=parent_span,

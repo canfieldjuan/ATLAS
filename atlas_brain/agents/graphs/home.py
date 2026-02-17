@@ -383,10 +383,15 @@ async def generate_response(state: HomeAgentState) -> HomeAgentState:
         **state,
         "response": response,
         "respond_ms": respond_ms,
-        "llm_input_tokens": llm_out.get("input_tokens", 0) if llm_out else 0,
-        "llm_output_tokens": llm_out.get("output_tokens", 0) if llm_out else 0,
+        "llm_input_tokens": llm_out.get("input_tokens") if llm_out else None,
+        "llm_output_tokens": llm_out.get("output_tokens") if llm_out else None,
         "llm_system_prompt": llm_out.get("system_prompt") if llm_out else None,
         "llm_history_count": llm_out.get("history_count", 0) if llm_out else 0,
+        "llm_prompt_eval_duration_ms": llm_out.get("prompt_eval_duration_ms") if llm_out else None,
+        "llm_eval_duration_ms": llm_out.get("eval_duration_ms") if llm_out else None,
+        "llm_total_duration_ms": llm_out.get("total_duration_ms") if llm_out else None,
+        "llm_provider_request_id": llm_out.get("provider_request_id") if llm_out else None,
+        "llm_has_response": bool(llm_out and llm_out.get("has_llm_response")),
     }
     return result
 
@@ -399,8 +404,13 @@ async def _generate_llm_response(state: HomeAgentState) -> dict[str, Any]:
     llm = llm_registry.get_active()
     if llm is None:
         return {"response": f"I heard: {state.get('input_text', '')}",
-                "input_tokens": 0, "output_tokens": 0,
-                "system_prompt": None, "history_count": 0}
+                "input_tokens": None, "output_tokens": None,
+                "system_prompt": None, "history_count": 0,
+                "prompt_eval_duration_ms": None,
+                "eval_duration_ms": None,
+                "total_duration_ms": None,
+                "provider_request_id": None,
+                "has_llm_response": False}
 
     input_text = state.get("input_text", "")
     system_msg = "You are a helpful home assistant."
@@ -425,6 +435,11 @@ async def _generate_llm_response(state: HomeAgentState) -> dict[str, Any]:
         "output_tokens": result.get("eval_count", 0),
         "system_prompt": system_msg,
         "history_count": 0,
+        "prompt_eval_duration_ms": result.get("prompt_eval_duration_ms"),
+        "eval_duration_ms": result.get("eval_duration_ms"),
+        "total_duration_ms": result.get("total_duration_ms"),
+        "provider_request_id": result.get("request_id") or result.get("id"),
+        "has_llm_response": True,
     }
 
 
@@ -437,8 +452,13 @@ async def _generate_llm_response_with_tools(state: HomeAgentState) -> dict[str, 
     llm = llm_registry.get_active()
     if llm is None:
         return {"response": f"I heard: {state.get('input_text', '')}",
-                "input_tokens": 0, "output_tokens": 0,
-                "system_prompt": None, "history_count": 0}
+                "input_tokens": None, "output_tokens": None,
+                "system_prompt": None, "history_count": 0,
+                "prompt_eval_duration_ms": None,
+                "eval_duration_ms": None,
+                "total_duration_ms": None,
+                "provider_request_id": None,
+                "has_llm_response": False}
 
     input_text = state.get("input_text", "")
     intent = state.get("intent")
@@ -471,10 +491,15 @@ async def _generate_llm_response_with_tools(state: HomeAgentState) -> dict[str, 
 
     return {
         "response": response if response else "I couldn't process that request.",
-        "input_tokens": 0,  # execute_with_tools doesn't expose token counts
-        "output_tokens": 0,
+        "input_tokens": None,  # execute_with_tools doesn't expose token counts
+        "output_tokens": None,
         "system_prompt": system_msg,
         "history_count": 0,
+        "prompt_eval_duration_ms": None,
+        "eval_duration_ms": None,
+        "total_duration_ms": None,
+        "provider_request_id": None,
+        "has_llm_response": True,
     }
 
 
@@ -674,10 +699,15 @@ class HomeAgentGraph:
                 "respond": final_state.get("respond_ms", 0),
             },
             "llm_meta": {
-                "input_tokens": final_state.get("llm_input_tokens", 0),
-                "output_tokens": final_state.get("llm_output_tokens", 0),
+                "input_tokens": final_state.get("llm_input_tokens"),
+                "output_tokens": final_state.get("llm_output_tokens"),
                 "system_prompt": final_state.get("llm_system_prompt"),
                 "history_count": final_state.get("llm_history_count", 0),
+                "prompt_eval_duration_ms": final_state.get("llm_prompt_eval_duration_ms"),
+                "eval_duration_ms": final_state.get("llm_eval_duration_ms"),
+                "total_duration_ms": final_state.get("llm_total_duration_ms"),
+                "provider_request_id": final_state.get("llm_provider_request_id"),
+                "has_llm_response": final_state.get("llm_has_response", False),
             },
         }
 

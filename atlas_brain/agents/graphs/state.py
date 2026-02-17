@@ -90,10 +90,22 @@ class AgentState(TypedDict, total=False):
     total_ms: float
 
     # LLM metadata (for FTL tracing)
-    llm_input_tokens: int
-    llm_output_tokens: int
+    llm_input_tokens: Optional[int]
+    llm_output_tokens: Optional[int]
     llm_system_prompt: Optional[str]
     llm_history_count: int
+    llm_prompt_eval_duration_ms: Optional[float]
+    llm_eval_duration_ms: Optional[float]
+    llm_total_duration_ms: Optional[float]
+    llm_provider_request_id: Optional[str]
+    llm_has_response: bool
+
+    # RAG metrics (for tracing)
+    rag_graph_used: bool
+    rag_nodes_retrieved: Optional[int]
+    rag_chunks_used: Optional[int]
+    context_tokens: Optional[int]
+    retrieval_latency_ms: Optional[float]
 
 
 class HomeAgentState(AgentState):

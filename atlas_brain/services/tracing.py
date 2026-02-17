@@ -117,13 +117,24 @@ class FTLTracingClient:
         self,
         ctx: SpanContext,
         status: str = "completed",
-        input_tokens: int = 0,
-        output_tokens: int = 0,
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
         input_data: Optional[dict] = None,
         output_data: Optional[dict] = None,
         error_message: Optional[str] = None,
         error_type: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
+        ttft_ms: Optional[float] = None,
+        inference_time_ms: Optional[float] = None,
+        queue_time_ms: Optional[float] = None,
+        context_tokens: Optional[int] = None,
+        retrieval_latency_ms: Optional[float] = None,
+        rag_graph_used: Optional[bool] = None,
+        rag_nodes_retrieved: Optional[int] = None,
+        rag_chunks_used: Optional[int] = None,
+        api_endpoint: Optional[str] = None,
+        request_headers_sanitized: Optional[dict[str, Any]] = None,
+        provider_request_id: Optional[str] = None,
     ) -> None:
         """End a span and fire-and-forget the trace payload."""
         if not self._enabled:
@@ -145,9 +156,6 @@ class FTLTracingClient:
             "model_name": ctx.model_name,
             "model_provider": ctx.model_provider,
             "session_tag": ctx.session_id,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "total_tokens": input_tokens + output_tokens,
             "metadata": {**ctx.metadata, **(metadata or {})},
         }
 
@@ -161,11 +169,42 @@ class FTLTracingClient:
             payload["input_data"] = _truncate(input_data, 50_000)
         if output_data:
             payload["output_data"] = _truncate(output_data, 10_000)
+
+        if input_tokens is not None:
+            payload["input_tokens"] = int(input_tokens)
+        if output_tokens is not None:
+            payload["output_tokens"] = int(output_tokens)
+        if input_tokens is not None or output_tokens is not None:
+            payload["total_tokens"] = int(input_tokens or 0) + int(output_tokens or 0)
+
+        if ttft_ms is not None:
+            payload["ttft_ms"] = int(round(ttft_ms))
+        if inference_time_ms is not None:
+            payload["inference_time_ms"] = int(round(inference_time_ms))
+        if queue_time_ms is not None:
+            payload["queue_time_ms"] = int(round(queue_time_ms))
+        if context_tokens is not None:
+            payload["context_tokens"] = int(context_tokens)
+        if retrieval_latency_ms is not None:
+            payload["retrieval_latency_ms"] = int(round(retrieval_latency_ms))
+        if rag_graph_used is not None:
+            payload["rag_graph_used"] = rag_graph_used
+        if rag_nodes_retrieved is not None:
+            payload["rag_nodes_retrieved"] = int(rag_nodes_retrieved)
+        if rag_chunks_used is not None:
+            payload["rag_chunks_used"] = int(rag_chunks_used)
+        if api_endpoint:
+            payload["api_endpoint"] = api_endpoint
+        if request_headers_sanitized:
+            payload["request_headers_sanitized"] = request_headers_sanitized
+        if provider_request_id:
+            payload["provider_request_id"] = provider_request_id
+
         if error_message:
             payload["error_message"] = error_message
             payload["error_type"] = error_type or "unknown"
 
-        if output_tokens and duration_ms > 0:
+        if output_tokens is not None and output_tokens > 0 and duration_ms > 0:
             payload["tokens_per_second"] = int(round(output_tokens / (duration_ms / 1000)))
 
         self._dispatch(payload)
@@ -179,8 +218,8 @@ class FTLTracingClient:
         end_iso: str,
         duration_ms: float,
         status: str = "completed",
-        input_tokens: int = 0,
-        output_tokens: int = 0,
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
         input_data: Optional[dict] = None,
         output_data: Optional[dict] = None,
         error_message: Optional[str] = None,
@@ -208,9 +247,6 @@ class FTLTracingClient:
             "model_name": parent.model_name,
             "model_provider": parent.model_provider,
             "session_tag": parent.session_id,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "total_tokens": input_tokens + output_tokens,
             "metadata": {**(metadata or {})},
         }
 
@@ -221,11 +257,17 @@ class FTLTracingClient:
             payload["input_data"] = _truncate(input_data, 50_000)
         if output_data:
             payload["output_data"] = _truncate(output_data, 10_000)
+        if input_tokens is not None:
+            payload["input_tokens"] = int(input_tokens)
+        if output_tokens is not None:
+            payload["output_tokens"] = int(output_tokens)
+        if input_tokens is not None or output_tokens is not None:
+            payload["total_tokens"] = int(input_tokens or 0) + int(output_tokens or 0)
         if error_message:
             payload["error_message"] = error_message
             payload["error_type"] = error_type or "unknown"
 
-        if output_tokens and duration_val > 0:
+        if output_tokens is not None and output_tokens > 0 and duration_val > 0:
             payload["tokens_per_second"] = int(round(output_tokens / (duration_val / 1000)))
 
         self._dispatch(payload)
