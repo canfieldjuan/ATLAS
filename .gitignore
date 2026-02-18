@@ -72,3 +72,16 @@ yolov8*.pt
 
 # Third-party clones (CosyVoice, etc.)
 third_party/
+
+# Generated docs (HTML output)
+docs/*.html
+docs/css/
+
+# Vite build cache
+atlas-ui/.vite/
+
+# Progress logs (session artifacts)
+PROGRESS_*.md
+
+# Pip freeze backups
+requirements.freeze.bak

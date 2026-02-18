@@ -220,6 +220,8 @@ ROUTE_TO_ACTION: dict[str, tuple[str, Optional[str]]] = {
     "who_is_here":   ("tool_use", "who_is_here"),
     "notification":  ("tool_use", "send_notification"),
     "show_camera":   ("tool_use", "show_camera_feed"),
+    "security":      ("device_command", None),
+    "presence":      ("device_command", None),
     "conversation":   ("conversation", None),
 }
 
