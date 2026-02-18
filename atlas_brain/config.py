@@ -1069,6 +1069,14 @@ class IntentRouterConfig(BaseSettings):
         le=256,
         description="Max tokens for LLM fallback classification response",
     )
+    llm_fallback_model: str = Field(
+        default="qwen3:1.7b",
+        description="Ollama model for LLM fallback classification (lighter than main model)",
+    )
+    llm_fallback_log: str = Field(
+        default="data/intent_fallback.jsonl",
+        description="JSONL log path for queries that trigger LLM fallback (for fine-tuning data)",
+    )
     embedding_device: str = Field(
         default="cpu",
         description="Device for sentence-transformer embeddings (cpu or cuda)",

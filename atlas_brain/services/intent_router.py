@@ -10,6 +10,8 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -249,6 +251,11 @@ class SemanticIntentRouter:
         self._config = settings.intent_router
         self._embedder = None
         self._route_centroids: dict[str, np.ndarray] = {}
+        self._fallback_llm = None  # Dedicated lightweight model for classification
+        self._fallback_log_path: Optional[Path] = None
+        if self._config.llm_fallback_log:
+            self._fallback_log_path = Path(self._config.llm_fallback_log)
+            self._fallback_log_path.parent.mkdir(parents=True, exist_ok=True)
 
     @property
     def is_loaded(self) -> bool:
@@ -328,6 +335,9 @@ class SemanticIntentRouter:
         if self._embedder is not None:
             self._embedder.unload()
             self._embedder = None
+        if self._fallback_llm is not None:
+            self._fallback_llm.unload()
+            self._fallback_llm = None
         self._route_centroids.clear()
         logger.info("Semantic intent router unloaded")
 
@@ -415,6 +425,10 @@ class SemanticIntentRouter:
                     "Route: '%s' -> %s (llm_fallback, conf=%.2f, %.0fms)",
                     query[:40], llm_route, llm_conf, route_time,
                 )
+                self._log_fallback(
+                    query, route_name, similarity,
+                    llm_route, llm_conf, llm_route, route_time,
+                )
                 return IntentRouteResult(
                     action_category=action_category,
                     raw_label=llm_route,
@@ -422,6 +436,13 @@ class SemanticIntentRouter:
                     route_time_ms=route_time,
                     tool_name=tool_name,
                     fast_path_ok=tool_name in PARAMETERLESS_TOOLS if tool_name else False,
+                )
+            else:
+                # LLM fallback failed (timeout/parse error) — log anyway
+                route_time = (time.time() - start) * 1000
+                self._log_fallback(
+                    query, route_name, similarity,
+                    None, None, "conversation", route_time,
                 )
 
         # Fall back to conversation
@@ -454,13 +475,60 @@ class SemanticIntentRouter:
 
         return best_route, best_sim
 
+    def _log_fallback(
+        self,
+        query: str,
+        semantic_route: str,
+        semantic_conf: float,
+        llm_route: Optional[str],
+        llm_conf: Optional[float],
+        final_route: str,
+        route_time_ms: float,
+    ) -> None:
+        """Append a JSONL entry for queries that triggered LLM fallback."""
+        if not self._fallback_log_path:
+            return
+        try:
+            entry = {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "query": query,
+                "semantic_route": semantic_route,
+                "semantic_conf": round(semantic_conf, 4),
+                "llm_route": llm_route,
+                "llm_conf": round(llm_conf, 4) if llm_conf is not None else None,
+                "final_route": final_route,
+                "route_time_ms": round(route_time_ms, 1),
+            }
+            with open(self._fallback_log_path, "a") as f:
+                f.write(json.dumps(entry) + "\n")
+        except Exception:
+            logger.debug("Failed to write fallback log entry", exc_info=True)
+
+    def _get_fallback_llm(self):
+        """Get or create the dedicated lightweight LLM for classification."""
+        if self._fallback_llm is not None:
+            return self._fallback_llm
+
+        model_name = self._config.llm_fallback_model
+        if not model_name:
+            # No dedicated model configured — use the main LLM
+            from . import llm_registry
+            return llm_registry.get_active()
+
+        from .llm.ollama import OllamaLLM
+
+        base_url = settings.llm.ollama_url
+        logger.info("Initializing dedicated fallback classifier: %s @ %s", model_name, base_url)
+        self._fallback_llm = OllamaLLM(model=model_name, base_url=base_url)
+        self._fallback_llm.load()
+        return self._fallback_llm
+
     async def _llm_classify(self, query: str) -> Optional[tuple[str, float]]:
         """Use LLM to classify query when semantic confidence is low."""
         try:
-            from . import llm_registry
             from .protocols import Message
 
-            llm = llm_registry.get_active()
+            llm = self._get_fallback_llm()
             if llm is None:
                 return None
 
