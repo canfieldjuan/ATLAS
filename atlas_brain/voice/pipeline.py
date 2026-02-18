@@ -734,7 +734,7 @@ class VoicePipeline:
         # Turn limit warning
         conversation_turn_limit_phrase: str = "Say Hey Atlas to continue.",
         # Early preparation during conversation silence
-        early_preparation_runner: Optional[Callable[[str], None]] = None,
+        early_preparation_runner: Optional[Callable[[str, Optional[str]], None]] = None,
         conversation_early_silence_ms: int = 600,
     ):
         self.sample_rate = sample_rate
