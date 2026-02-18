@@ -372,10 +372,26 @@ async def _stream_llm_response(
                 speaker_uuid=speaker_uuid,
                 prev_usage_ids=prev_usage_ids,
             ))
+            return True
 
-        return sentence_count > 0
+        # Streaming produced no output — re-stash prev_usage_ids so the
+        # fallback agent's pre-pop can find them for correction feedback.
+        if prev_usage_ids and session_id:
+            try:
+                from ..memory.feedback import get_feedback_service
+                get_feedback_service().stash_session_usage(session_id, prev_usage_ids)
+            except Exception:
+                pass
+        return False
     except Exception as e:
         logger.error("Streaming LLM error: %s", e)
+        # Re-stash prev_usage_ids so fallback agent can use them
+        if prev_usage_ids and session_id:
+            try:
+                from ..memory.feedback import get_feedback_service
+                get_feedback_service().stash_session_usage(session_id, prev_usage_ids)
+            except Exception:
+                pass
         return False
 
 
