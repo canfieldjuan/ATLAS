@@ -41,10 +41,10 @@ class NightlyMemorySync:
         self._memory_client = None
 
     def _get_memory_client(self):
-        """Lazy load memory client."""
+        """Lazy load RAG client."""
         if self._memory_client is None:
-            from ..services.memory import get_memory_client
-            self._memory_client = get_memory_client()
+            from ..memory.rag_client import get_rag_client
+            self._memory_client = get_rag_client()
         return self._memory_client
 
     async def run(self, target_date: Optional[datetime] = None) -> dict:

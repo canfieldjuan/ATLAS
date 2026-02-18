@@ -6,6 +6,7 @@ Provides async HTTP client for the GraphRAG service.
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
@@ -60,9 +61,11 @@ class RAGClient:
         self,
         base_url: Optional[str] = None,
         timeout: Optional[float] = None,
+        reranker: str = "cross_encoder",
     ):
         self._base_url = base_url or settings.memory.base_url
         self._timeout = timeout or settings.memory.timeout
+        self._reranker = reranker
         self._client: Optional[httpx.AsyncClient] = None
 
     async def _get_client(self) -> httpx.AsyncClient:
@@ -123,7 +126,7 @@ class RAGClient:
                 "group_ids": group_ids,
                 "max_facts": max_facts,
                 "search_methods": ["cosine_similarity"],
-                "reranker": "cross_encoder",
+                "reranker": self._reranker,
             }
 
             resp = await client.post("/search", json=payload)
@@ -250,6 +253,112 @@ class RAGClient:
         except Exception as e:
             logger.error("RAG add_messages error: %s", e)
             return False
+
+    async def send_messages(
+        self,
+        messages: list[dict],
+        group_id: str | None = None,
+    ) -> dict:
+        """
+        Send a batch of conversation messages for GraphRAG extraction.
+
+        Like add_messages() but returns the full response dict (for nightly sync).
+
+        Args:
+            messages: List of message dicts with keys:
+                content, role_type ("user"|"assistant"), role (optional), timestamp (ISO8601)
+            group_id: Optional group ID (defaults to config group_id)
+
+        Returns:
+            Response dict from Graphiti, or empty dict on failure
+        """
+        try:
+            client = await self._get_client()
+
+            payload = {
+                "group_id": group_id or settings.memory.group_id,
+                "messages": messages,
+            }
+
+            resp = await client.post(
+                "/messages",
+                json=payload,
+                timeout=300.0,  # batch extraction can be slow
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        except Exception as e:
+            logger.error("RAG send_messages error: %s", e)
+            return {}
+
+    async def add_conversation_turn(
+        self,
+        role: str,
+        content: str,
+        session_id: str,
+        speaker_name: Optional[str] = None,
+        timestamp: Optional[datetime] = None,
+    ) -> bool:
+        """
+        Store a single conversation turn via /messages.
+
+        Args:
+            role: "user" or "assistant"
+            content: The message content
+            session_id: Session identifier
+            speaker_name: Optional speaker name
+            timestamp: Optional timestamp (defaults to now)
+
+        Returns:
+            True if accepted, False otherwise
+        """
+        ts = timestamp or datetime.now(timezone.utc)
+        source = "atlas-voice-%s" % role
+        if speaker_name:
+            source = "%s:%s" % (source, speaker_name)
+
+        message = {
+            "content": content,
+            "role_type": role,
+            "role": speaker_name,
+            "source_description": source,
+            "timestamp": ts.isoformat() + "Z",
+        }
+        return await self.add_messages(
+            messages=[message],
+            group_id=settings.memory.group_id,
+        )
+
+    async def add_fact(
+        self,
+        fact: str,
+        source: str = "atlas-learned",
+        timestamp: Optional[datetime] = None,
+    ) -> bool:
+        """
+        Store a learned fact via /messages.
+
+        Args:
+            fact: The fact to store
+            source: Source description
+            timestamp: Optional timestamp
+
+        Returns:
+            True if accepted, False otherwise
+        """
+        ts = timestamp or datetime.now(timezone.utc)
+        message = {
+            "content": fact,
+            "role_type": "system",
+            "role": None,
+            "source_description": source,
+            "timestamp": ts.isoformat() + "Z",
+        }
+        return await self.add_messages(
+            messages=[message],
+            group_id=settings.memory.group_id,
+        )
 
 
 # Global client instance

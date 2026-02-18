@@ -83,6 +83,7 @@ class MemoryService:
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
         include_rag: bool = True,
+        pre_fetched_sources: list | None = None,
         include_history: bool = True,
         include_physical: bool = True,
         max_history: int = 10,
@@ -96,6 +97,10 @@ class MemoryService:
             session_id: Current session ID
             user_id: Current user ID
             include_rag: Include RAG context from knowledge graph
+            pre_fetched_sources: Pre-fetched SearchSource objects from retrieve_memory.
+                When not None (even if empty list), skips RAG search and uses these
+                sources directly. Source tracking still runs. None means no
+                pre-fetch occurred and include_rag controls RAG behavior.
             include_history: Include conversation history
             include_physical: Include physical context
             max_history: Maximum conversation turns to include
@@ -141,7 +146,27 @@ class MemoryService:
                 logger.warning("Failed to get physical context: %s", e)
 
         # Get RAG context from GraphRAG
-        if include_rag and settings.memory.enabled:
+        if pre_fetched_sources is not None:
+            # Use pre-fetched sources (from retrieve_memory node) -- still track them
+            try:
+                rag_result = EnhancedPromptResult(
+                    prompt=query,
+                    context_used=bool(pre_fetched_sources),
+                    sources=pre_fetched_sources,
+                )
+                context.rag_result = rag_result
+                context.rag_context_used = rag_result.context_used
+
+                if rag_result.sources:
+                    context.feedback_context = await self._feedback_service.track_sources(
+                        session_id=session_id,
+                        query=query,
+                        sources=rag_result.sources,
+                    )
+            except Exception as e:
+                logger.warning("Failed to process pre-fetched RAG sources: %s", e)
+
+        elif include_rag and settings.memory.enabled:
             try:
                 rag_result = await self._rag_client.enhance_prompt(
                     query=query,

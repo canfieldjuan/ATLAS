@@ -31,7 +31,6 @@ from . import llm  # noqa: F401
 
 # New services
 from .embedding import SentenceTransformerEmbedding
-from .memory import MemoryClient, get_memory_client
 from .reminders import ReminderService, get_reminder_service
 
 __all__ = [
@@ -51,10 +50,8 @@ __all__ = [
     "register_vlm",
     "register_llm",
     "register_vos",
-    # Embedding and Memory
+    # Embedding
     "SentenceTransformerEmbedding",
-    "MemoryClient",
-    "get_memory_client",
     # Reminders
     "ReminderService",
     "get_reminder_service",

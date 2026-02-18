@@ -307,7 +307,7 @@ async def classify_and_route(
 async def retrieve_memory(
     state: AtlasAgentState,
 ) -> Command[Literal["parse", "respond"]]:
-    """Retrieve memory context, then route to parse or respond."""
+    """Retrieve structured memory sources, then route to parse or respond."""
     action_type = state.get("action_type", "conversation")
 
     # Only retrieve for conversation or tool use needing LLM
@@ -323,42 +323,58 @@ async def retrieve_memory(
         input_text = state["input_text"]
 
         try:
-            from ...services.memory import get_memory_client
+            # Query classification: skip RAG for device commands, greetings, etc.
+            from ...memory.query_classifier import get_query_classifier
 
-            memory_client = get_memory_client()
-            if memory_client:
-                memory_context = await asyncio.wait_for(
-                    memory_client.get_context_for_query(
-                        input_text,
-                        num_results=settings.memory.context_results,
-                    ),
-                    timeout=settings.memory.context_timeout,
-                )
+            classifier = get_query_classifier()
+            classification = classifier.classify(input_text)
 
-                memory_ms = (time.perf_counter() - start_time) * 1000
+            if not classification.use_rag:
                 logger.debug(
-                    "Retrieved memory context: %d chars in %.0fms",
-                    len(memory_context) if memory_context else 0,
-                    memory_ms,
+                    "Skipping RAG (category=%s): %s",
+                    classification.category,
+                    input_text[:50],
                 )
-
-                # Conversation + high confidence -> respond directly
+                memory_ms = (time.perf_counter() - start_time) * 1000
+                # Set empty list explicitly so gather_context knows
+                # "we searched and found nothing" vs "we didn't search"
+                update = {
+                    "retrieved_sources": [],
+                    "memory_ms": memory_ms,
+                }
                 if action_type == "conversation" and state.get("confidence", 0) >= conv_threshold:
-                    return Command(
-                        update={
-                            "retrieved_context": memory_context,
-                            "memory_ms": memory_ms,
-                        },
-                        goto="respond",
-                    )
+                    return Command(update=update, goto="respond")
+                return Command(update=update, goto="parse")
 
-                return Command(
-                    update={
-                        "retrieved_context": memory_context,
-                        "memory_ms": memory_ms,
-                    },
-                    goto="parse",
-                )
+            # Search graphiti for structured sources
+            from ...memory.rag_client import get_rag_client
+
+            client = get_rag_client()
+            search_result = await asyncio.wait_for(
+                client.search(
+                    input_text,
+                    max_facts=settings.memory.context_results,
+                ),
+                timeout=settings.memory.context_timeout,
+            )
+
+            memory_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                "Retrieved %d memory sources in %.0fms",
+                len(search_result.facts),
+                memory_ms,
+            )
+
+            update = {
+                "retrieved_sources": search_result.facts,
+                "memory_ms": memory_ms,
+            }
+
+            # Conversation + high confidence -> respond directly
+            if action_type == "conversation" and state.get("confidence", 0) >= conv_threshold:
+                return Command(update=update, goto="respond")
+
+            return Command(update=update, goto="parse")
 
         except asyncio.TimeoutError:
             logger.warning("Memory retrieval timed out")
@@ -821,24 +837,22 @@ async def _generate_llm_response(
                 "retrieval_latency_ms": None}
 
     input_text = state.get("input_text", "")
-    retrieved_context = state.get("retrieved_context")
+    retrieved_sources = state.get("retrieved_sources")
     speaker_id = state.get("speaker_id")
     session_id = state.get("session_id")
 
     # Gather unified context via MemoryService (history + profile + token budget).
-    # Skip RAG here if retrieve_memory already fetched it to avoid a duplicate
-    # graphiti search call.
-    # NOTE: When RAG is skipped (has_retrieved=True), no source tracking occurs
-    # and correction feedback is unavailable for this turn. The voice streaming
-    # path (launcher.py) always uses include_rag=True and is unaffected.
-    has_retrieved = bool(retrieved_context)
+    # Pass pre-fetched sources from retrieve_memory so gather_context can
+    # track them for feedback without re-searching graphiti.
+    # When retrieved_sources is None (voice path), gather_context does its own RAG.
     svc = get_memory_service()
     gather_started = time.perf_counter()
     mem_ctx = await svc.gather_context(
         query=input_text,
         session_id=session_id,
         user_id=state.get("runtime_context", {}).get("speaker_uuid"),
-        include_rag=not has_retrieved,
+        include_rag=True,
+        pre_fetched_sources=retrieved_sources,
         include_history=True,
         include_physical=False,
         max_history=6,
@@ -930,15 +944,10 @@ async def _generate_llm_response(
         system_parts.append(f"The speaker is {speaker_id}.")
 
     # Add RAG context from GraphRAG knowledge graph
-    # gather_context(include_rag=True) handles retrieval with token budgeting
-    # and feedback tracking, so skip the separate retrieved_context to avoid
-    # duplicate facts in the prompt.
     if mem_ctx.rag_context_used and mem_ctx.rag_result and mem_ctx.rag_result.sources:
         rag_facts = [s.fact for s in mem_ctx.rag_result.sources if s.fact]
         if rag_facts:
             system_parts.append("\nRelevant memory:\n" + "\n".join(f"- {f}" for f in rag_facts))
-    elif retrieved_context:
-        system_parts.append(f"\n{retrieved_context}")
 
     system_msg = " ".join(system_parts)
     messages = [Message(role="system", content=system_msg)]

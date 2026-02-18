@@ -1,21 +1,7 @@
 """
-Memory service for Atlas Brain.
+Memory service package (legacy).
 
-Connects to atlas-memory (graphiti-wrapper) for long-term knowledge storage.
+MemoryClient has been unified into atlas_brain.memory.rag_client.RAGClient.
 """
 
-from .client import (
-    MemoryClient,
-    get_memory_client,
-    SearchResult,
-    EnhancedSearchResult,
-    EpisodeResult,
-)
-
-__all__ = [
-    "MemoryClient",
-    "get_memory_client",
-    "SearchResult",
-    "EnhancedSearchResult",
-    "EpisodeResult",
-]
+__all__: list[str] = []
