@@ -58,6 +58,12 @@ def _make_raw_pipeline(**overrides):
     p.model = MagicMock()
     p.frame_processor = MagicMock()
     p._build_context = MagicMock(return_value={})
+    p._filler_enabled = False
+    p._filler_delay = 2.0
+    p._filler_phrases = ["One moment..."]
+    p._filler_followup_delay = 3.0
+    p._filler_followup_phrases = ["Still working on it..."]
+    p._last_llm_call_time = 0.0
 
     for k, v in overrides.items():
         setattr(p, k, v)
@@ -274,7 +280,7 @@ class TestErrorPhraseRouting:
         assert kw["on_done"] is p._on_playback_done
 
     def test_streaming_llm_single_error_phrase(self):
-        """Single ErrorPhrase sentence uses _speak_error."""
+        """Single ErrorPhrase sentence routes on_done to _on_error_playback_done."""
         def mock_runner(transcript, context, on_sentence):
             on_sentence(ErrorPhrase("Something broke."))
 
@@ -283,8 +289,13 @@ class TestErrorPhraseRouting:
             streaming_agent_runner=mock_runner,
         )
         p._handle_streaming_llm_command("hello")
-        kw = p.playback.speak.call_args.kwargs
-        assert kw["on_done"] is not None and kw["on_done"].__func__ is VoicePipeline._on_error_playback_done  # bound method check
+        # ErrorPhrase goes through speak_streamed (queue-based), not speak
+        kw = p.playback.speak_streamed.call_args.kwargs
+        on_done = kw["on_done"]
+        # The dynamic on_done closure should call _on_error_playback_done
+        # when is_error[0] is True (set by the ErrorPhrase sentence)
+        on_done()
+        p.model.reset.assert_called()
 
     def test_plain_string_matching_error_text_not_intercepted(self):
         """A normal LLM reply that happens to match error text goes through
@@ -457,9 +468,20 @@ class TestThreadSafeSentences:
 
     def test_concurrent_appends(self):
         """Multiple threads writing to on_sentence should not lose data."""
+        import queue as _queue
+
         p = _make_raw_pipeline(streaming_llm_enabled=True)
 
-        results = []
+        # Capture the queue passed to speak_streamed
+        captured_queue = [None]
+        original_speak_streamed = p.playback.speak_streamed
+
+        def capture_speak_streamed(q, **kw):
+            captured_queue[0] = q
+            original_speak_streamed(q, **kw)
+
+        p.playback.speak_streamed = capture_speak_streamed
+
         barrier = threading.Barrier(4)
 
         def mock_runner(transcript, context, on_sentence):
@@ -477,6 +499,14 @@ class TestThreadSafeSentences:
 
         p.streaming_agent_runner = mock_runner
         p._handle_streaming_llm_command("hello")
-        spoken = p.playback.speak.call_args[0][0]
-        parts = spoken.split(" ")
-        assert len(parts) == 4
+
+        # Drain the queue to verify all 4 sentences + sentinel
+        q = captured_queue[0]
+        assert q is not None
+        items = []
+        while not q.empty():
+            items.append(q.get_nowait())
+        # Should have 4 sentences + None sentinel
+        sentences = [s for s in items if s is not None]
+        assert len(sentences) == 4
+        assert set(sentences) == {"s0", "s1", "s2", "s3"}

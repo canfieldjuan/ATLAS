@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """
 Benchmark cold start latency for Qwen3 235B on Fireworks.ai vs Together.ai
+
+Requires env vars: FIREWORKS_API_KEY, TOGETHER_API_KEY
 """
-import time
 import os
+import time
+
+import pytest
 from openai import OpenAI
 
-# API Keys
-FIREWORKS_API_KEY = "fw_KZtBLJ5EvtmYFBBTFAkHVs"
-TOGETHER_API_KEY = "tgp_v1_9cu0FpqTEg9m_oWqicDu0ZYyNmEyTOfESCfmHFk5WnQ"
+# API Keys from environment
+FIREWORKS_API_KEY = os.environ.get("FIREWORKS_API_KEY", "")
+TOGETHER_API_KEY = os.environ.get("TOGETHER_API_KEY", "")
 
 # Model to test
 MODEL_NAME = "accounts/fireworks/models/gpt-oss-120b"  # Fireworks format
@@ -20,8 +24,10 @@ TEST_PROMPT = "Explain the concept of recursion with a simple example."
 
 def test_fireworks_cold_start():
     """Test Fireworks.ai cold start latency"""
+    if not FIREWORKS_API_KEY:
+        pytest.skip("FIREWORKS_API_KEY not set")
     print("\n" + "="*60)
-    print("🔥 TESTING FIREWORKS.AI")
+    print("TESTING FIREWORKS.AI")
     print("="*60)
     
     client = OpenAI(
@@ -75,12 +81,10 @@ def test_fireworks_cold_start():
 def test_together_cold_start():
     """Test Together.ai cold start latency"""
     if not TOGETHER_API_KEY:
-        print("\n⚠️  TOGETHER_API_KEY not set. Skipping Together.ai test.")
-        print("   Set it via: export TOGETHER_API_KEY=your_key")
-        return []
-    
+        pytest.skip("TOGETHER_API_KEY not set")
+
     print("\n" + "="*60)
-    print("🤝 TESTING TOGETHER.AI")
+    print("TESTING TOGETHER.AI")
     print("="*60)
     
     client = OpenAI(
