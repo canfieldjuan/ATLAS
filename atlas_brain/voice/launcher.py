@@ -262,6 +262,16 @@ def _check_intent_gating(route_result) -> None:
     if not settings.voice_filter.intent_gating_enabled:
         return
 
+    # In conversation mode, let natural exit mechanisms handle termination
+    # (silence timeout, turn limit) rather than gating on intent confidence.
+    if (_voice_pipeline is not None
+            and _voice_pipeline.frame_processor.state == "conversing"):
+        logger.debug(
+            "Intent gating: skipping in conversation mode (category=%s, conf=%.2f)",
+            route_result.action_category, route_result.confidence
+        )
+        return
+
     filter_cfg = settings.voice_filter
     confidence = route_result.confidence
     category = route_result.action_category
