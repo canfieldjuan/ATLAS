@@ -10,3 +10,8 @@ or by Tailscale hostname: ssh canfieldjuan@orangepi-atlas
   
 These work regardless of what LAN the Pi is on — Tailscale handles NAT traversal automatically. 
 The only requirements are that both machines have Tailscale running and connected.
+
+SSH CHANGE LOG (2026-02-18):
+- No change to SSH access commands.
+- Security hardening affected dashboard/API/WebRTC auth, not shell access.
+- Reference: docs/NODE_SSH_ACCESS.md

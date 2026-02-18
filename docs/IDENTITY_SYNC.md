@@ -141,6 +141,9 @@ ssh canfieldjuan@100.95.224.113 "journalctl -u atlas-node -n 20 --no-pager"
 # (0 because the Brain DB is empty initially)
 ```
 
+SSH access requirements and fallback commands are documented in:
+`docs/NODE_SSH_ACCESS.md`
+
 ### Seed Brain DB from Pi's existing .npy files
 After sync is running, register a face on the Pi:
 ```bash
