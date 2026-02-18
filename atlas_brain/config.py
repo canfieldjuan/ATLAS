@@ -83,7 +83,7 @@ class LLMConfig(BaseSettings):
 
     # ollama settings (Ollama API backend)
     ollama_model: str = Field(default="qwen3:14b", description="Ollama model name")
-    ollama_url: str = Field(default="http://localhost:11434", description="Ollama API URL")
+    ollama_url: str = Field(default="http://localhost:11434", description="Ollama API URL (override: ATLAS_LLM__OLLAMA_URL)")
 
     # transformers-flash settings (HuggingFace models)
     hf_model_id: str = Field(
@@ -345,7 +345,7 @@ class MemoryConfig(BaseSettings):
     enabled: bool = Field(default=True, description="Enable memory service")
     base_url: str = Field(
         default="http://localhost:8001",
-        description="URL of the atlas-memory (graphiti-wrapper) service",
+        description="URL of the atlas-memory (graphiti-wrapper) service (override: ATLAS_MEMORY__BASE_URL)",
     )
     group_id: str = Field(
         default="atlas-conversations",
@@ -453,7 +453,7 @@ class AlertsConfig(BaseSettings):
     tts_enabled: bool = Field(default=True, description="Enable TTS announcements for alerts")
     persist_alerts: bool = Field(default=True, description="Persist alerts to database")
     ntfy_enabled: bool = Field(default=False, description="Enable ntfy push notifications")
-    ntfy_url: str = Field(default="http://localhost:8090", description="ntfy server URL")
+    ntfy_url: str = Field(default="http://localhost:8090", description="ntfy server URL (override: ATLAS_ALERTS__NTFY_URL)")
     ntfy_topic: str = Field(default="atlas-alerts", description="ntfy topic for alerts")
 
 
@@ -566,7 +566,7 @@ class VoiceClientConfig(BaseSettings):
     )
 
     # ASR settings (HTTP batch mode)
-    asr_url: str | None = Field(default="http://localhost:8081", description="Nemotron ASR HTTP endpoint URL")
+    asr_url: str | None = Field(default="http://localhost:8081", description="Nemotron ASR HTTP endpoint URL (override: ATLAS_VOICE__ASR_URL)")
     asr_api_key: str | None = Field(default=None, description="ASR API key if required")
     asr_timeout: int = Field(default=30, description="ASR request timeout in seconds")
     asr_model: str = Field(
@@ -844,7 +844,7 @@ class SecurityConfig(BaseSettings):
     enabled: bool = Field(default=True, description="Enable security tools")
     video_processing_url: str = Field(
         default="http://localhost:5002",
-        description="Video processing API URL"
+        description="Video processing API URL (override: ATLAS_SECURITY__VIDEO_PROCESSING_URL)",
     )
     timeout: float = Field(default=10.0, description="API request timeout in seconds")
     camera_aliases: dict[str, str] = Field(

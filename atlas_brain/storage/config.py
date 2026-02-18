@@ -25,7 +25,7 @@ class DatabaseConfig(BaseSettings):
     )
     host: str = Field(
         default="localhost",
-        description="PostgreSQL host"
+        description="PostgreSQL host (override: ATLAS_DB_HOST)",
     )
     port: int = Field(
         default=5433,
