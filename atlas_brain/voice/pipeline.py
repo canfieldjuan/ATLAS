@@ -804,6 +804,15 @@ class VoicePipeline:
             max_command_seconds=max_command_seconds,
             min_command_ms=min_command_ms,
             min_speech_frames=min_speech_frames,
+            # Match speech_threshold to the Silero VAD threshold so the
+            # segmenter agrees with the VAD on what counts as speech.
+            speech_threshold=silero_threshold,
+            # Enable sliding window + ASR holdoff for wake-word mode too,
+            # so silence detection works naturally instead of relying on a
+            # hard time cap.
+            window_frames=10,
+            silence_ratio=0.15,
+            asr_holdoff_ms=500,
         )
 
         # Conversation-mode recording thresholds

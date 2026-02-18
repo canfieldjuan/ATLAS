@@ -604,9 +604,9 @@ class VoiceClientConfig(BaseSettings):
 
     # VAD and segmentation settings
     vad_aggressiveness: int = Field(default=2, description="WebRTC VAD aggressiveness (0-3)")
-    silence_ms: int = Field(default=500, description="Silence duration to end utterance")
-    hangover_ms: int = Field(default=300, description="Hangover time before finalizing")
-    max_command_seconds: int = Field(default=5, description="Maximum command duration")
+    silence_ms: int = Field(default=700, description="Silence duration to end utterance")
+    hangover_ms: int = Field(default=400, description="Hangover time before finalizing")
+    max_command_seconds: int = Field(default=30, description="Safety-valve max recording duration (silence detection ends utterances naturally)")
     min_command_ms: int = Field(default=1500, description="Minimum recording time before silence can finalize (grace period)")
     min_speech_frames: int = Field(default=3, description="Minimum VAD speech frames required before silence can finalize")
     wake_buffer_frames: int = Field(default=5, description="Pre-roll buffer size in frames for wake word mode (captures audio before wake word)")

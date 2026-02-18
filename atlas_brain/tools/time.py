@@ -59,6 +59,17 @@ class TimeTool:
             # Use %-I to avoid leading zero (TTS reads "04" as "zero four")
             time_str = now.strftime("%-I:%M %p")
 
+            # TTS-friendly spoken time (e.g. "6 o'clock" not "6:00")
+            hour = now.hour % 12 or 12
+            minute = now.minute
+            period = "AM" if now.hour < 12 else "PM"
+            if minute == 0:
+                spoken_time = f"{hour} o'clock {period}"
+            elif minute < 10:
+                spoken_time = f"{hour} oh {minute} {period}"
+            else:
+                spoken_time = f"{hour} {minute} {period}"
+
             data = {
                 "time": time_str,
                 "time_24h": now.strftime("%H:%M"),
@@ -68,7 +79,7 @@ class TimeTool:
                 "iso": now.isoformat(),
             }
 
-            message = f"It is {time_str} on {data['day_of_week']}, {data['date']}."
+            message = f"It is {spoken_time}."
 
             return ToolResult(
                 success=True,

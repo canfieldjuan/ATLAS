@@ -159,9 +159,10 @@ class CommandSegmenter:
 
     def _should_finalize(self) -> bool:
         """Check if we should finalize the recording."""
-        # Safety cap: always finalize at 2x max_frames to prevent
-        # truly runaway recordings. Overrides all other gates.
-        if len(self.frames) >= self.max_frames * 2:
+        # Safety cap: finalize at max_frames to prevent runaway recordings.
+        # With generous max_command_seconds (30s+), this is a last resort;
+        # silence detection should finalize naturally well before this.
+        if len(self.frames) >= self.max_frames:
             logger.warning(
                 "Hard safety cap reached (%d frames), force finalizing",
                 len(self.frames),

@@ -95,8 +95,9 @@ ROUTE_DEFINITIONS: dict[str, list[str]] = {
         "can we move the appointment", "reschedule the booking",
     ],
     "get_time": [
-        "what time is it", "what's the current time", "tell me the time",
-        "what's the date today", "what day is it",
+        "what time is it", "what's the current time right now",
+        "tell me the time right now", "what's today's date",
+        "what day of the week is it",
     ],
     "get_weather": [
         "what's the weather like", "how's the weather today", "is it going to rain",
@@ -187,6 +188,14 @@ ROUTE_DEFINITIONS: dict[str, list[str]] = {
         "that's hilarious", "you won't believe what happened today",
         "hey atlas", "hey", "good morning", "good night",
         "never mind", "forget about it", "what do you think",
+        "what time do I usually wake up", "when do we normally get home",
+        "what's my typical morning routine", "when does she usually leave",
+        "what time do the kids usually go to bed",
+        "what are my usual habits", "do I have a routine",
+        "what time do we usually eat dinner",
+        "when do I normally go to sleep", "what's my schedule like",
+        "what time does he usually get here",
+        "when do they typically arrive",
     ],
 }
 
@@ -351,6 +360,26 @@ class SemanticIntentRouter:
 
         threshold = self._config.confidence_threshold
 
+        # Guard: habitual/routine queries that mention time should go to
+        # conversation, not get_time, even if the embedding model scores
+        # get_time higher (the phrase "what time" has strong affinity).
+        if route_name == "get_time" and similarity < 0.70:
+            _q = query.lower()
+            _habit_words = ("usually", "normally", "typically", "routine",
+                            "habit", "pattern", "schedule")
+            if any(w in _q for w in _habit_words):
+                route_time = (time.time() - start) * 1000
+                logger.info(
+                    "Route: '%s' -> conversation (habit guard, was %s conf=%.2f, %.0fms)",
+                    query[:40], route_name, similarity, route_time,
+                )
+                return IntentRouteResult(
+                    action_category="conversation",
+                    raw_label="conversation",
+                    confidence=similarity,
+                    route_time_ms=route_time,
+                )
+
         # If above threshold, use semantic result
         if similarity >= threshold:
             route_time = (time.time() - start) * 1000
@@ -370,8 +399,11 @@ class SemanticIntentRouter:
                 fast_path_ok=tool_name in PARAMETERLESS_TOOLS if tool_name else False,
             )
 
-        # LLM fallback
-        if self._config.llm_fallback_enabled:
+        # LLM fallback — skip for very short queries (1-2 words) where the
+        # LLM won't have enough context to do better than conversation default,
+        # and the 2s timeout wastes latency competing with prefill on the GPU.
+        word_count = len(query.split())
+        if self._config.llm_fallback_enabled and word_count >= 3:
             llm_result = await self._llm_classify(query)
             if llm_result is not None:
                 llm_route, llm_conf = llm_result
