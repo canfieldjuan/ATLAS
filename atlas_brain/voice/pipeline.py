@@ -173,8 +173,8 @@ class NemotronAsrStreamingClient:
                     logger.info("ASR WebSocket stale (%s), reconnecting", e)
                     try:
                         self._ws.close()
-                    except Exception:
-                        pass
+                    except Exception as close_err:
+                        logger.debug("Stale WS close failed: %s", close_err)
                     self._ws = None
                     self._connected = False
                     # Fall through to reconnect
@@ -242,8 +242,8 @@ class NemotronAsrStreamingClient:
             self._connected = False
             try:
                 self._ws.close()
-            except Exception:
-                pass
+            except Exception as close_err:
+                logger.debug("WS close after send error: %s", close_err)
             self._ws = None
             # Reconnect so subsequent send_audio() calls don't all fail
             self.connect()
@@ -637,8 +637,8 @@ class PiperTTS:
                 try:
                     self._warm_process.terminate()
                     self._warm_process.wait(timeout=1.0)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Warm Piper cleanup failed: %s", e)
                 self._warm_process = None
 
 

@@ -43,8 +43,8 @@ def _notify_ui(state: str, **kwargs) -> None:
     try:
         from ..api.orchestrated.websocket import broadcast_from_thread
         broadcast_from_thread(_event_loop, state, **kwargs)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("UI broadcast failed: %s", e)
 
 
 def _create_agent_runner():
@@ -320,8 +320,8 @@ async def _stream_llm_response(
         try:
             from ..memory.feedback import get_feedback_service
             prev_usage_ids = get_feedback_service().pop_session_usage(session_id)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Pop session usage failed: %s", e)
 
     svc = get_memory_service()
     if cached_mem_ctx is not None:
@@ -345,8 +345,8 @@ async def _stream_llm_response(
             get_feedback_service().stash_session_usage(
                 session_id, mem_ctx.feedback_context.usage_ids,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Stash session usage failed: %s", e)
 
     # Build system prompt with physical awareness context
     prompt_parts = [_get_system_prompt()]
@@ -355,8 +355,8 @@ async def _stream_llm_response(
         awareness = get_context().build_context_string()
         if awareness:
             prompt_parts.append(f"\nCurrent awareness:\n{awareness}")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Physical context unavailable: %s", e)
 
     # Append learned temporal patterns (routines)
     try:
@@ -364,8 +364,8 @@ async def _stream_llm_response(
         temporal = await get_temporal_context()
         if temporal:
             prompt_parts.append(temporal)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Temporal context unavailable: %s", e)
 
     # Add user profile from MemoryService context
     if mem_ctx.user_name:
@@ -434,8 +434,8 @@ async def _stream_llm_response(
             try:
                 from ..memory.feedback import get_feedback_service
                 get_feedback_service().stash_session_usage(session_id, prev_usage_ids)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Re-stash usage_ids failed: %s", e)
         return False
     except Exception as e:
         logger.error("Streaming LLM error: %s", e)
@@ -444,8 +444,8 @@ async def _stream_llm_response(
             try:
                 from ..memory.feedback import get_feedback_service
                 get_feedback_service().stash_session_usage(session_id, prev_usage_ids)
-            except Exception:
-                pass
+            except Exception as e2:
+                logger.debug("Re-stash usage_ids failed: %s", e2)
         return False
 
 
