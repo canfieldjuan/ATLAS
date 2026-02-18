@@ -38,14 +38,14 @@ class NightlyMemorySync:
         from ..config import settings
 
         self.purge_days = purge_days if purge_days is not None else settings.memory.purge_days
-        self._memory_client = None
+        self._rag_client = None
 
-    def _get_memory_client(self):
+    def _get_rag_client(self):
         """Lazy load RAG client."""
-        if self._memory_client is None:
+        if self._rag_client is None:
             from ..memory.rag_client import get_rag_client
-            self._memory_client = get_rag_client()
-        return self._memory_client
+            self._rag_client = get_rag_client()
+        return self._rag_client
 
     async def run(self, target_date: Optional[datetime] = None) -> dict:
         """
@@ -74,7 +74,7 @@ class NightlyMemorySync:
             logger.info("Found %d sessions with un-synced turns", len(sessions_turns))
 
             # 2. Process each session
-            memory_client = self._get_memory_client()
+            rag_client = self._get_rag_client()
 
             for session_id, conversation_turns in sessions_turns.items():
                 try:
@@ -109,7 +109,7 @@ class NightlyMemorySync:
                         messages.append(msg)
 
                     # Send batch to Graphiti
-                    result = await memory_client.send_messages(
+                    result = await rag_client.send_messages(
                         messages=messages,
                     )
 
