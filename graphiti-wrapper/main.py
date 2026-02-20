@@ -1295,11 +1295,16 @@ async def get_entity_edges(
             num_results=50,  # Get more results for entity-specific queries
         )
 
-        # Filter edges that contain the entity name
-        filtered_edges = [
-            edge for edge in edges
-            if entity_name.lower() in edge.name.lower()
-        ]
+        # Filter edges that mention the entity in fact text or node names
+        entity_lower = entity_name.lower()
+        filtered_edges = []
+        for edge in edges:
+            if entity_lower in edge.fact.lower():
+                filtered_edges.append(edge)
+            elif hasattr(edge, 'source_node') and edge.source_node and entity_lower in edge.source_node.name.lower():
+                filtered_edges.append(edge)
+            elif hasattr(edge, 'target_node') and edge.target_node and entity_lower in edge.target_node.name.lower():
+                filtered_edges.append(edge)
 
         logger.info(f"Entity edges for {entity_name}: Found {len(filtered_edges)} edges")
 
