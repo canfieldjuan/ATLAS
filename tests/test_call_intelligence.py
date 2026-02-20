@@ -1,14 +1,12 @@
 """
 Tests for post-call transcription and data extraction pipeline.
 
-Covers: audio conversion, ASR transcription, LLM extraction,
-notification, config guards, error handling, and repository ops.
+Covers: recording download, ASR transcription, LLM extraction,
+notification, config guards, error handling, and JSON parsing.
 """
 
 import asyncio
-import audioop
 import json
-import struct
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -16,12 +14,12 @@ import httpx
 import pytest
 
 from atlas_brain.comms.call_intelligence import (
-    _build_transcript,
-    _convert_audio_to_wav,
+    _download_recording,
     _extract_call_data,
     _find_matching_brace,
     _notify_call_summary,
     _parse_extraction,
+    _transcribe_audio,
     process_call_recording,
 )
 
@@ -30,12 +28,7 @@ from atlas_brain.comms.call_intelligence import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_mulaw_chunks(duration_seconds: float = 2.0, num_chunks: int = 10) -> list[bytes]:
-    """Generate synthetic mulaw audio chunks (silence)."""
-    total_bytes = int(8000 * duration_seconds)
-    chunk_size = total_bytes // num_chunks
-    # mulaw silence is 0xFF
-    return [b"\xff" * chunk_size for _ in range(num_chunks)]
+RECORDING_URL = "https://test.signalwire.com/api/recordings/rec-123"
 
 
 def _make_business_context():
@@ -49,48 +42,94 @@ def _make_business_context():
     return ctx
 
 
+def _mock_httpx_client(response=None, side_effect=None):
+    """Create a mock httpx.AsyncClient context manager."""
+    mock_client = AsyncMock()
+    if side_effect:
+        mock_client.get.side_effect = side_effect
+        mock_client.post.side_effect = side_effect
+    else:
+        mock_client.get.return_value = response
+        mock_client.post.return_value = response
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    return mock_client
+
+
 # ---------------------------------------------------------------------------
-# Audio Conversion
+# Recording Download
 # ---------------------------------------------------------------------------
 
-class TestAudioConversion:
-    def test_valid_wav_output(self):
-        chunks = _make_mulaw_chunks(duration_seconds=1.0)
-        wav = _convert_audio_to_wav(chunks)
+class TestDownloadRecording:
+    @pytest.mark.asyncio
+    async def test_downloads_with_auth(self):
+        mock_resp = MagicMock()
+        mock_resp.content = b"fake-wav-data"
+        mock_resp.raise_for_status = MagicMock()
+        mock_client = _mock_httpx_client(response=mock_resp)
 
-        # Check RIFF header
-        assert wav[:4] == b"RIFF"
-        assert wav[8:12] == b"WAVE"
-        assert wav[12:16] == b"fmt "
+        mock_comms = MagicMock()
+        mock_comms.signalwire_project_id = "proj-123"
+        mock_comms.signalwire_api_token = "token-456"
 
-        # Parse WAV header
-        fmt_size = struct.unpack_from("<I", wav, 16)[0]
-        assert fmt_size == 16
-        audio_fmt = struct.unpack_from("<H", wav, 20)[0]
-        assert audio_fmt == 1  # PCM
-        channels = struct.unpack_from("<H", wav, 22)[0]
-        assert channels == 1
-        sample_rate = struct.unpack_from("<I", wav, 24)[0]
-        assert sample_rate == 16000
-        bits = struct.unpack_from("<H", wav, 34)[0]
-        assert bits == 16
+        with patch("atlas_brain.comms.call_intelligence.httpx.AsyncClient", return_value=mock_client), \
+             patch("atlas_brain.comms.call_intelligence.comms_settings", mock_comms, create=True), \
+             patch.dict("sys.modules", {"atlas_brain.comms": MagicMock(comms_settings=mock_comms)}):
+            result = await _download_recording(RECORDING_URL)
 
-    def test_resamples_to_16khz(self):
-        chunks = _make_mulaw_chunks(duration_seconds=1.0)
-        wav = _convert_audio_to_wav(chunks)
+        assert result == b"fake-wav-data"
+        call_args = mock_client.get.call_args
+        assert call_args.args[0].endswith(".wav")
+        assert call_args.kwargs.get("auth") is not None
 
-        # Data chunk starts at byte 44
-        data_size = struct.unpack_from("<I", wav, 40)[0]
-        # 1 second at 16kHz, 16-bit, mono ~ 32000 bytes (ratecv may be off by a few)
-        assert abs(data_size - 32000) < 100
+    @pytest.mark.asyncio
+    async def test_appends_wav_extension(self):
+        mock_resp = MagicMock()
+        mock_resp.content = b"wav-data"
+        mock_resp.raise_for_status = MagicMock()
+        mock_client = _mock_httpx_client(response=mock_resp)
 
-    def test_empty_audio_raises(self):
-        with pytest.raises(ValueError, match="No audio data"):
-            _convert_audio_to_wav([])
+        mock_comms = MagicMock()
+        mock_comms.signalwire_project_id = ""
+        mock_comms.signalwire_api_token = ""
 
-    def test_empty_bytes_raises(self):
-        with pytest.raises(ValueError, match="No audio data"):
-            _convert_audio_to_wav([b""])
+        with patch("atlas_brain.comms.call_intelligence.httpx.AsyncClient", return_value=mock_client), \
+             patch.dict("sys.modules", {"atlas_brain.comms": MagicMock(comms_settings=mock_comms)}):
+            await _download_recording("https://example.com/recording/123")
+
+        url_called = mock_client.get.call_args.args[0]
+        assert url_called == "https://example.com/recording/123.wav"
+
+    @pytest.mark.asyncio
+    async def test_skips_wav_if_already_present(self):
+        mock_resp = MagicMock()
+        mock_resp.content = b"wav-data"
+        mock_resp.raise_for_status = MagicMock()
+        mock_client = _mock_httpx_client(response=mock_resp)
+
+        mock_comms = MagicMock()
+        mock_comms.signalwire_project_id = ""
+        mock_comms.signalwire_api_token = ""
+
+        with patch("atlas_brain.comms.call_intelligence.httpx.AsyncClient", return_value=mock_client), \
+             patch.dict("sys.modules", {"atlas_brain.comms": MagicMock(comms_settings=mock_comms)}):
+            await _download_recording("https://example.com/recording/123.wav")
+
+        url_called = mock_client.get.call_args.args[0]
+        assert url_called == "https://example.com/recording/123.wav"
+
+    @pytest.mark.asyncio
+    async def test_download_failure_raises(self):
+        mock_client = _mock_httpx_client(side_effect=httpx.ConnectError("refused"))
+
+        mock_comms = MagicMock()
+        mock_comms.signalwire_project_id = ""
+        mock_comms.signalwire_api_token = ""
+
+        with patch("atlas_brain.comms.call_intelligence.httpx.AsyncClient", return_value=mock_client), \
+             patch.dict("sys.modules", {"atlas_brain.comms": MagicMock(comms_settings=mock_comms)}):
+            with pytest.raises(httpx.ConnectError):
+                await _download_recording(RECORDING_URL)
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +165,6 @@ class TestParseExtraction:
 
     def test_think_tags_stripped_before_parse(self):
         """Extraction handles text after think tag stripping."""
-        # _extract_call_data strips think tags, _parse_extraction gets clean text
         text = '{"customer_name": "Bob", "intent": "booking", "notes": ""}'
         summary, data, actions = _parse_extraction(text, "fallback")
         assert data["customer_name"] == "Bob"
@@ -150,87 +188,42 @@ class TestFindMatchingBrace:
 
 
 # ---------------------------------------------------------------------------
-# Transcript Building
-# ---------------------------------------------------------------------------
-
-class TestBuildTranscript:
-    def test_both_sides(self):
-        result = _build_transcript("Hello, I need help", "Sure, how can I help?")
-        assert "[Caller]:" in result
-        assert "[AI Receptionist]:" in result
-        assert "Hello, I need help" in result
-        assert "Sure, how can I help?" in result
-
-    def test_caller_only(self):
-        result = _build_transcript("Hello, I need help", None)
-        assert result == "Hello, I need help"
-        assert "[AI Receptionist]" not in result
-
-    def test_ai_only(self):
-        result = _build_transcript(None, "Welcome to the business")
-        assert "[AI Receptionist]:" in result
-
-    def test_both_none(self):
-        assert _build_transcript(None, None) is None
-
-    def test_both_empty(self):
-        assert _build_transcript("", "") is None
-
-
-# ---------------------------------------------------------------------------
 # Transcription (mocked)
 # ---------------------------------------------------------------------------
 
 class TestTranscription:
     @pytest.mark.asyncio
     async def test_successful_transcription(self):
-        from atlas_brain.comms.call_intelligence import _transcribe_wav
-
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"text": "Hello, I need an estimate."}
         mock_resp.raise_for_status = MagicMock()
-
-        mock_client = AsyncMock()
-        mock_client.post.return_value = mock_resp
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client = _mock_httpx_client(response=mock_resp)
 
         with patch("atlas_brain.comms.call_intelligence.httpx.AsyncClient", return_value=mock_client):
-            result = await _transcribe_wav(b"fake-wav-data")
+            result = await _transcribe_audio(b"fake-wav-data")
 
         assert result == "Hello, I need an estimate."
         mock_client.post.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_empty_transcript_returns_none(self):
-        from atlas_brain.comms.call_intelligence import _transcribe_wav
-
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"text": "   "}
         mock_resp.raise_for_status = MagicMock()
-
-        mock_client = AsyncMock()
-        mock_client.post.return_value = mock_resp
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client = _mock_httpx_client(response=mock_resp)
 
         with patch("atlas_brain.comms.call_intelligence.httpx.AsyncClient", return_value=mock_client):
-            result = await _transcribe_wav(b"fake-wav-data")
+            result = await _transcribe_audio(b"fake-wav-data")
 
         assert result is None
 
     @pytest.mark.asyncio
     async def test_asr_timeout_raises(self):
-        from atlas_brain.comms.call_intelligence import _transcribe_wav
-
-        mock_client = AsyncMock()
-        mock_client.post.side_effect = httpx.TimeoutException("timeout")
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client = _mock_httpx_client(side_effect=httpx.TimeoutException("timeout"))
 
         with patch("atlas_brain.comms.call_intelligence.httpx.AsyncClient", return_value=mock_client):
             with pytest.raises(httpx.TimeoutException):
-                await _transcribe_wav(b"fake-wav-data")
+                await _transcribe_audio(b"fake-wav-data")
 
 
 # ---------------------------------------------------------------------------
@@ -307,11 +300,7 @@ class TestNotification:
 
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
-
-        mock_client = AsyncMock()
-        mock_client.post.return_value = mock_resp
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client = _mock_httpx_client(response=mock_resp)
 
         with patch("atlas_brain.comms.call_intelligence.settings") as mock_settings, \
              patch("atlas_brain.comms.call_intelligence.httpx.AsyncClient", return_value=mock_client):
@@ -350,6 +339,45 @@ class TestNotification:
 
         repo.mark_notified.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_skips_when_ntfy_disabled(self):
+        repo = AsyncMock()
+
+        with patch("atlas_brain.comms.call_intelligence.settings") as mock_settings:
+            mock_settings.call_intelligence.notify_enabled = True
+            mock_settings.alerts.ntfy_enabled = False
+
+            await _notify_call_summary(
+                repo, uuid4(), "call-123",
+                "+1234", 60, "summary", {}, [], None,
+            )
+
+        repo.mark_notified.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_formats_duration(self):
+        repo = AsyncMock()
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_client = _mock_httpx_client(response=mock_resp)
+
+        with patch("atlas_brain.comms.call_intelligence.settings") as mock_settings, \
+             patch("atlas_brain.comms.call_intelligence.httpx.AsyncClient", return_value=mock_client):
+            mock_settings.call_intelligence.notify_enabled = True
+            mock_settings.alerts.ntfy_enabled = True
+            mock_settings.alerts.ntfy_url = "https://ntfy.example.com"
+            mock_settings.alerts.ntfy_topic = "test"
+
+            await _notify_call_summary(
+                repo, uuid4(), "call-123",
+                "+1234", 185,
+                "summary", {}, [], None,
+            )
+
+        body = mock_client.post.call_args.kwargs.get("content", "")
+        assert "3m 5s" in body
+
 
 # ---------------------------------------------------------------------------
 # Full Pipeline (mocked)
@@ -362,9 +390,9 @@ class TestPipeline:
             mock_settings.call_intelligence.enabled = False
 
             await process_call_recording(
-                "call-123", _make_mulaw_chunks(), "+1234", "+5678", "ctx", 30,
+                "call-123", RECORDING_URL, "+1234", "+5678", "ctx", 30,
             )
-            # Should return without doing anything
+            # Should return without creating any DB records
 
     @pytest.mark.asyncio
     async def test_short_call_skipped(self):
@@ -373,20 +401,27 @@ class TestPipeline:
             mock_settings.call_intelligence.min_duration_seconds = 10
 
             await process_call_recording(
-                "call-123", _make_mulaw_chunks(), "+1234", "+5678", "ctx", 5,
+                "call-123", RECORDING_URL, "+1234", "+5678", "ctx", 5,
             )
-            # Should return without doing anything (duration < min)
+            # Should return without creating any DB records (duration < min)
 
     @pytest.mark.asyncio
     async def test_end_to_end_success(self):
         mock_repo = AsyncMock()
         mock_repo.create.return_value = {"id": uuid4(), "call_sid": "call-123"}
 
+        # Download response
+        download_resp = MagicMock()
+        download_resp.content = b"fake-wav-audio"
+        download_resp.raise_for_status = MagicMock()
+
+        # ASR response
         asr_resp = MagicMock()
         asr_resp.json.return_value = {"text": "Hi, I need a cleaning estimate."}
         asr_resp.raise_for_status = MagicMock()
 
         mock_client = AsyncMock()
+        mock_client.get.return_value = download_resp
         mock_client.post.return_value = asr_resp
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -404,11 +439,16 @@ class TestPipeline:
         mock_llm = MagicMock()
         mock_llm.chat.return_value = llm_response
 
+        mock_comms = MagicMock()
+        mock_comms.signalwire_project_id = "proj"
+        mock_comms.signalwire_api_token = "tok"
+
         with patch("atlas_brain.comms.call_intelligence.settings") as mock_settings, \
              patch("atlas_brain.comms.call_intelligence.get_call_transcript_repo", return_value=mock_repo), \
              patch("atlas_brain.comms.call_intelligence.httpx.AsyncClient", return_value=mock_client), \
              patch("atlas_brain.services.llm_registry.get_active", return_value=mock_llm), \
-             patch("atlas_brain.comms.call_intelligence.get_skill_registry") as mock_skills:
+             patch("atlas_brain.comms.call_intelligence.get_skill_registry") as mock_skills, \
+             patch.dict("sys.modules", {"atlas_brain.comms": MagicMock(comms_settings=mock_comms)}):
             mock_settings.call_intelligence.enabled = True
             mock_settings.call_intelligence.min_duration_seconds = 5
             mock_settings.call_intelligence.asr_url = "http://localhost:8081/v1/asr"
@@ -420,35 +460,36 @@ class TestPipeline:
             mock_skills.return_value.get.return_value = None
 
             await process_call_recording(
-                "call-123", _make_mulaw_chunks(2.0), "+1234", "+5678", "ctx", 30,
+                "call-123", RECORDING_URL, "+1234", "+5678", "ctx", 30,
             )
 
         mock_repo.create.assert_awaited_once()
         mock_repo.update_transcript.assert_awaited_once()
         mock_repo.update_extraction.assert_awaited_once()
-        # Status should have been updated through the pipeline
+        # Status: transcribing, extracting, ready
         assert mock_repo.update_status.await_count >= 2
 
     @pytest.mark.asyncio
-    async def test_asr_failure_stops_gracefully(self):
+    async def test_download_failure_stops_gracefully(self):
         mock_repo = AsyncMock()
         mock_repo.create.return_value = {"id": uuid4(), "call_sid": "call-123"}
 
-        mock_client = AsyncMock()
-        mock_client.post.side_effect = httpx.ConnectError("Connection refused")
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client = _mock_httpx_client(side_effect=httpx.ConnectError("refused"))
+
+        mock_comms = MagicMock()
+        mock_comms.signalwire_project_id = ""
+        mock_comms.signalwire_api_token = ""
 
         with patch("atlas_brain.comms.call_intelligence.settings") as mock_settings, \
              patch("atlas_brain.comms.call_intelligence.get_call_transcript_repo", return_value=mock_repo), \
-             patch("atlas_brain.comms.call_intelligence.httpx.AsyncClient", return_value=mock_client):
+             patch("atlas_brain.comms.call_intelligence.httpx.AsyncClient", return_value=mock_client), \
+             patch.dict("sys.modules", {"atlas_brain.comms": MagicMock(comms_settings=mock_comms)}):
             mock_settings.call_intelligence.enabled = True
             mock_settings.call_intelligence.min_duration_seconds = 5
-            mock_settings.call_intelligence.asr_url = "http://localhost:8081/v1/asr"
             mock_settings.call_intelligence.asr_timeout = 60
 
             await process_call_recording(
-                "call-123", _make_mulaw_chunks(2.0), "+1234", "+5678", "ctx", 30,
+                "call-123", RECORDING_URL, "+1234", "+5678", "ctx", 30,
             )
 
         # Should have set error status
@@ -457,7 +498,47 @@ class TestPipeline:
             for c in mock_repo.update_status.await_args_list
         ]
         assert "error" in status_calls
-        # Should NOT have called extraction
+        # Should NOT have called transcription or extraction
+        mock_repo.update_transcript.assert_not_awaited()
+        mock_repo.update_extraction.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_asr_failure_stops_gracefully(self):
+        mock_repo = AsyncMock()
+        mock_repo.create.return_value = {"id": uuid4(), "call_sid": "call-123"}
+
+        # Download succeeds, ASR fails
+        download_resp = MagicMock()
+        download_resp.content = b"wav-data"
+        download_resp.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.get.return_value = download_resp
+        mock_client.post.side_effect = httpx.ConnectError("ASR down")
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        mock_comms = MagicMock()
+        mock_comms.signalwire_project_id = ""
+        mock_comms.signalwire_api_token = ""
+
+        with patch("atlas_brain.comms.call_intelligence.settings") as mock_settings, \
+             patch("atlas_brain.comms.call_intelligence.get_call_transcript_repo", return_value=mock_repo), \
+             patch("atlas_brain.comms.call_intelligence.httpx.AsyncClient", return_value=mock_client), \
+             patch.dict("sys.modules", {"atlas_brain.comms": MagicMock(comms_settings=mock_comms)}):
+            mock_settings.call_intelligence.enabled = True
+            mock_settings.call_intelligence.min_duration_seconds = 5
+            mock_settings.call_intelligence.asr_timeout = 60
+
+            await process_call_recording(
+                "call-123", RECORDING_URL, "+1234", "+5678", "ctx", 30,
+            )
+
+        status_calls = [
+            c.args[1] if len(c.args) > 1 else c.kwargs.get("status")
+            for c in mock_repo.update_status.await_args_list
+        ]
+        assert "error" in status_calls
         mock_repo.update_extraction.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -465,18 +546,30 @@ class TestPipeline:
         mock_repo = AsyncMock()
         mock_repo.create.return_value = {"id": uuid4(), "call_sid": "call-123"}
 
+        # Download succeeds
+        download_resp = MagicMock()
+        download_resp.content = b"wav-data"
+        download_resp.raise_for_status = MagicMock()
+
+        # ASR returns empty
         asr_resp = MagicMock()
         asr_resp.json.return_value = {"text": ""}
         asr_resp.raise_for_status = MagicMock()
 
         mock_client = AsyncMock()
+        mock_client.get.return_value = download_resp
         mock_client.post.return_value = asr_resp
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
+        mock_comms = MagicMock()
+        mock_comms.signalwire_project_id = ""
+        mock_comms.signalwire_api_token = ""
+
         with patch("atlas_brain.comms.call_intelligence.settings") as mock_settings, \
              patch("atlas_brain.comms.call_intelligence.get_call_transcript_repo", return_value=mock_repo), \
-             patch("atlas_brain.comms.call_intelligence.httpx.AsyncClient", return_value=mock_client):
+             patch("atlas_brain.comms.call_intelligence.httpx.AsyncClient", return_value=mock_client), \
+             patch.dict("sys.modules", {"atlas_brain.comms": MagicMock(comms_settings=mock_comms)}):
             mock_settings.call_intelligence.enabled = True
             mock_settings.call_intelligence.min_duration_seconds = 5
             mock_settings.call_intelligence.asr_url = "http://localhost:8081/v1/asr"
@@ -485,16 +578,33 @@ class TestPipeline:
             mock_settings.alerts.ntfy_enabled = False
 
             await process_call_recording(
-                "call-123", _make_mulaw_chunks(2.0), "+1234", "+5678", "ctx", 30,
+                "call-123", RECORDING_URL, "+1234", "+5678", "ctx", 30,
             )
 
         mock_repo.update_transcript.assert_awaited_once()
-        # Should have stored "No speech detected" summary
+        # "No speech detected" stored
         extraction_call = mock_repo.update_extraction.call_args
         assert extraction_call.kwargs.get("summary") == "No speech detected"
-        # Status should be "ready", not "error"
+        # Status should be "ready"
         status_calls = [
             c.args[1] if len(c.args) > 1 else c.kwargs.get("status")
             for c in mock_repo.update_status.call_args_list
         ]
         assert "ready" in status_calls
+
+    @pytest.mark.asyncio
+    async def test_db_create_failure_returns_early(self):
+        mock_repo = AsyncMock()
+        mock_repo.create.side_effect = Exception("DB down")
+
+        with patch("atlas_brain.comms.call_intelligence.settings") as mock_settings, \
+             patch("atlas_brain.comms.call_intelligence.get_call_transcript_repo", return_value=mock_repo):
+            mock_settings.call_intelligence.enabled = True
+            mock_settings.call_intelligence.min_duration_seconds = 5
+
+            # Should not raise
+            await process_call_recording(
+                "call-123", RECORDING_URL, "+1234", "+5678", "ctx", 30,
+            )
+
+        mock_repo.update_status.assert_not_awaited()

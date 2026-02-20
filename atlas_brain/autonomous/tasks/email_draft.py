@@ -210,7 +210,7 @@ async def _send_draft_notification(
     preview = draft_body[:300] + ("..." if len(draft_body) > 300 else "")
     sender_name = original_from.split("<")[0].strip().strip('"') or original_from
 
-    message = f"Draft reply to {sender_name}\n\n{preview}"
+    message = f"From: {sender_name}\nSubject: {draft_subject}\n\n{preview}"
 
     # ntfy Actions header: semicolon-separated action definitions
     actions = (

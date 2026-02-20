@@ -39,6 +39,7 @@ LOW PRIORITY
 - No markdown formatting (no **, no ###, no bullet nesting)
 - Use the `category` from each email as the [tag] — do not invent new ones
 - Group by the `priority` field: action_required → ACTION REQUIRED, fyi → FYI, low_priority → LOW PRIORITY
+- ALWAYS use the full structured format with overview line + section headers, even for 1-2 emails
 - Collapse multiple emails from same sender (e.g., "Cash App (5) -- 3 purchases totaling $63.28, borrow payment due tomorrow, Green status renewed")
 - Extract key details from body_text: amounts, dates, confirmation numbers, addresses
 - Keep under 300 words total

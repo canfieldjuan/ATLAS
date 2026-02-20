@@ -127,7 +127,8 @@ class NotifyTool:
             )
 
     async def _send_notification(
-        self, message: str, title: str, priority: str
+        self, message: str, title: str, priority: str,
+        tags: str | None = None,
     ) -> None:
         """Send notification to ntfy server."""
         client = await self._ensure_client()
@@ -138,6 +139,8 @@ class NotifyTool:
             "Title": title,
             "Priority": priority,
         }
+        if tags:
+            headers["Tags"] = tags
 
         response = await client.post(url, content=message, headers=headers)
         response.raise_for_status()

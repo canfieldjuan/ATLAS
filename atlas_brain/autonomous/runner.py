@@ -194,6 +194,7 @@ class HeadlessRunner:
             (task.metadata or {}).get("notify_priority")
             or autonomous_config.notify_priority
         )
+        tags = (task.metadata or {}).get("notify_tags")
 
         try:
             from ..tools.notify import notify_tool
@@ -202,6 +203,7 @@ class HeadlessRunner:
                 message=text,
                 title=title,
                 priority=priority,
+                tags=tags,
             )
             logger.info("Sent notification for task '%s'", task.name)
         except Exception:

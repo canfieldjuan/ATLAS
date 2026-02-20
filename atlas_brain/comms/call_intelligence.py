@@ -1,8 +1,8 @@
 """
 Post-call transcription and data extraction pipeline.
 
-After a call ends, processes accumulated audio chunks:
-1. Convert mulaw 8kHz -> PCM 16kHz WAV
+After a call ends and SignalWire produces a recording:
+1. Download recording WAV from SignalWire
 2. Transcribe via local ASR server (Nemotron)
 3. Extract structured data via LLM (qwen3:14b)
 4. Store results in call_transcripts table
@@ -10,11 +10,9 @@ After a call ends, processes accumulated audio chunks:
 """
 
 import asyncio
-import audioop
 import json
 import logging
 import re
-import struct
 from typing import Optional
 from uuid import UUID
 
@@ -29,19 +27,19 @@ logger = logging.getLogger("atlas.comms.call_intelligence")
 
 async def process_call_recording(
     call_sid: str,
-    audio_chunks: list[bytes],
+    recording_url: str,
     from_number: str,
     to_number: str,
     context_id: str,
     duration_seconds: int,
-    ai_audio_chunks: list[bytes] | None = None,
     business_context=None,
 ) -> None:
     """
     Process a completed call recording through the intelligence pipeline.
 
-    audio_chunks: caller's raw mulaw audio from SignalWire media events
-    ai_audio_chunks: AI receptionist's mulaw audio from send_audio callback
+    Triggered by SignalWire's recording-status webhook after a call ends.
+    Downloads the recording, transcribes it, extracts structured data,
+    stores everything in the DB, and sends a notification.
 
     Each step is wrapped in try/except to fail-open -- partial results
     are better than no results.
@@ -75,53 +73,34 @@ async def process_call_recording(
         logger.warning("Call intelligence: failed to create record for %s: %s", call_sid, e)
         return
 
-    # Step 2: Convert caller audio to WAV
+    # Step 2: Download recording from SignalWire
     try:
         await repo.update_status(transcript_id, "transcribing")
-        caller_wav = _convert_audio_to_wav(audio_chunks)
+        audio_bytes = await _download_recording(recording_url)
     except Exception as e:
-        logger.warning("Call intelligence: audio conversion failed for %s: %s", call_sid, e)
-        await _safe_update_status(repo, transcript_id, "error", f"Audio conversion: {e}")
+        logger.warning("Call intelligence: download failed for %s: %s", call_sid, e)
+        await _safe_update_status(repo, transcript_id, "error", f"Download: {e}")
         return
 
-    # Step 2b: Convert AI audio to WAV (best-effort, don't block on failure)
-    ai_wav = None
-    if ai_audio_chunks:
-        try:
-            ai_wav = _convert_audio_to_wav(ai_audio_chunks)
-        except Exception as e:
-            logger.debug("Call intelligence: AI audio conversion failed for %s: %s", call_sid, e)
-
-    # Step 3: Transcribe caller audio
+    # Step 3: Transcribe
     try:
-        caller_transcript = await _transcribe_wav(caller_wav)
+        transcript = await _transcribe_audio(audio_bytes)
+        if not transcript:
+            logger.info("Call intelligence: empty transcript for %s", call_sid)
+            await repo.update_transcript(transcript_id, "")
+            await repo.update_extraction(
+                transcript_id,
+                summary="No speech detected",
+                extracted_data={},
+                proposed_actions=[],
+            )
+            await repo.update_status(transcript_id, "ready")
+            return
+        await repo.update_transcript(transcript_id, transcript)
     except Exception as e:
         logger.warning("Call intelligence: transcription failed for %s: %s", call_sid, e)
         await _safe_update_status(repo, transcript_id, "error", f"Transcription: {e}")
         return
-
-    # Step 3b: Transcribe AI audio (best-effort)
-    ai_transcript = None
-    if ai_wav:
-        try:
-            ai_transcript = await _transcribe_wav(ai_wav)
-        except Exception as e:
-            logger.debug("Call intelligence: AI transcription failed for %s: %s", call_sid, e)
-
-    # Build combined transcript
-    transcript = _build_transcript(caller_transcript, ai_transcript)
-    if not transcript:
-        logger.info("Call intelligence: empty transcript for %s", call_sid)
-        await repo.update_transcript(transcript_id, "")
-        await repo.update_extraction(
-            transcript_id,
-            summary="No speech detected",
-            extracted_data={},
-            proposed_actions=[],
-        )
-        await repo.update_status(transcript_id, "ready")
-        return
-    await repo.update_transcript(transcript_id, transcript)
 
     # Step 4: LLM extraction
     try:
@@ -148,71 +127,44 @@ async def process_call_recording(
         logger.warning("Call intelligence: notification failed for %s: %s", call_sid, e)
 
 
-def _convert_audio_to_wav(audio_chunks: list[bytes]) -> bytes:
-    """Convert mulaw 8kHz audio chunks to a 16kHz 16-bit mono WAV."""
-    raw_mulaw = b"".join(audio_chunks)
-    if not raw_mulaw:
-        raise ValueError("No audio data")
+async def _download_recording(recording_url: str) -> bytes:
+    """Download a call recording from SignalWire.
 
-    # mulaw -> PCM 16-bit at 8kHz
-    pcm_8k = audioop.ulaw2lin(raw_mulaw, 2)
-
-    # Resample 8kHz -> 16kHz
-    pcm_16k, _ = audioop.ratecv(pcm_8k, 2, 1, 8000, 16000, None)
-
-    # Build WAV file
-    data_size = len(pcm_16k)
-    sample_rate = 16000
-    bits_per_sample = 16
-    channels = 1
-    byte_rate = sample_rate * channels * bits_per_sample // 8
-    block_align = channels * bits_per_sample // 8
-
-    header = struct.pack(
-        "<4sI4s4sIHHIIHH4sI",
-        b"RIFF",
-        36 + data_size,
-        b"WAVE",
-        b"fmt ",
-        16,             # fmt chunk size
-        1,              # PCM format
-        channels,
-        sample_rate,
-        byte_rate,
-        block_align,
-        bits_per_sample,
-        b"data",
-        data_size,
-    )
-    return header + pcm_16k
-
-
-def _build_transcript(
-    caller_transcript: Optional[str],
-    ai_transcript: Optional[str],
-) -> Optional[str]:
-    """Combine caller and AI transcripts into a labeled conversation.
-
-    Note: Each side is transcribed as a single block, so turn-by-turn
-    ordering is lost. The LLM extraction prompt handles this gracefully.
+    SignalWire recording URLs require HTTP Basic auth with
+    project_id and api_token. Appends .wav to get WAV format.
     """
-    if not caller_transcript and not ai_transcript:
-        return None
-    if not ai_transcript:
-        return caller_transcript
-    if not caller_transcript:
-        return f"[AI Receptionist]: {ai_transcript}"
-    return f"[Caller]: {caller_transcript}\n\n[AI Receptionist]: {ai_transcript}"
+    from ..comms import comms_settings
+
+    # Ensure we request WAV format
+    url = recording_url
+    if not url.endswith(".wav"):
+        url = url.rstrip("/") + ".wav"
+
+    auth = None
+    if comms_settings.signalwire_project_id and comms_settings.signalwire_api_token:
+        auth = httpx.BasicAuth(
+            comms_settings.signalwire_project_id,
+            comms_settings.signalwire_api_token,
+        )
+
+    cfg = settings.call_intelligence
+    async with httpx.AsyncClient(timeout=cfg.asr_timeout, follow_redirects=True) as client:
+        resp = await client.get(url, auth=auth)
+        resp.raise_for_status()
+        return resp.content
 
 
-async def _transcribe_wav(wav_bytes: bytes) -> Optional[str]:
-    """Send WAV to the local ASR server and return transcript text."""
+async def _transcribe_audio(audio_bytes: bytes) -> Optional[str]:
+    """Send audio to the local ASR server and return transcript text.
+
+    The ASR server (Nemotron) accepts WAV files directly.
+    """
     cfg = settings.call_intelligence
 
     async with httpx.AsyncClient(timeout=cfg.asr_timeout) as client:
         resp = await client.post(
             cfg.asr_url,
-            files={"file": ("call.wav", wav_bytes, "audio/wav")},
+            files={"file": ("call.wav", audio_bytes, "audio/wav")},
         )
         resp.raise_for_status()
         result = resp.json()
@@ -290,7 +242,6 @@ async def _extract_call_data(
 
 def _parse_extraction(text: str, transcript: str) -> tuple[str, dict, list]:
     """Parse LLM output into (summary, extracted_data, proposed_actions)."""
-    # Try splitting into two JSON blocks (data + actions)
     extracted_data = {}
     proposed_actions = []
 

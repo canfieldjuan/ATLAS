@@ -535,6 +535,11 @@ class EmailDraftConfig(BaseSettings):
         default="http://localhost:8001",
         description="Atlas API URL for ntfy action buttons",
     )
+    schedule_interval_seconds: int = Field(
+        default=1800,
+        ge=300,
+        description="How often (seconds) the email draft task runs (default 30 min)",
+    )
     triage_enabled: bool = Field(
         default=True,
         description="Use LLM to classify ambiguous emails as replyable/not",

@@ -71,6 +71,9 @@ class TaskScheduler:
         # Seed default builtin tasks if they do not exist yet
         await self._ensure_default_tasks()
 
+        # Sync configurable intervals from settings to DB
+        await self._sync_configurable_intervals()
+
         # Mark orphaned running executions from previous crashes
         await self._cleanup_orphaned_executions()
 
@@ -207,6 +210,7 @@ class TaskScheduler:
             "metadata": {
                 "builtin_handler": "gmail_digest",
                 "synthesis_skill": "digest/email_triage",
+                "notify_tags": "email,inbox",
             },
         },
         {
@@ -214,7 +218,7 @@ class TaskScheduler:
             "description": "Generate reply drafts for action-required emails",
             "task_type": "builtin",
             "schedule_type": "interval",
-            "interval_seconds": 1800,
+            "interval_seconds": None,  # resolved from settings.email_draft.schedule_interval_seconds
             "timeout_seconds": 120,
             "metadata": {"builtin_handler": "email_draft"},
         },
@@ -324,11 +328,20 @@ class TaskScheduler:
         are immediately registered with APScheduler.
         """
         try:
+            from ..config import settings
             from ..storage.repositories.scheduled_task import get_scheduled_task_repo
 
             repo = get_scheduled_task_repo()
 
+            # Resolve configurable intervals at runtime
+            _interval_overrides = {
+                "email_draft": settings.email_draft.schedule_interval_seconds,
+            }
+
             for task_def in self._DEFAULT_TASKS:
+                # Apply runtime interval override if the definition left it as None
+                if task_def.get("interval_seconds") is None and task_def["name"] in _interval_overrides:
+                    task_def = {**task_def, "interval_seconds": _interval_overrides[task_def["name"]]}
                 existing = await repo.get_by_name(task_def["name"])
                 if existing is not None:
                     continue
@@ -356,6 +369,37 @@ class TaskScheduler:
 
         except Exception as e:
             logger.warning("Failed to seed default tasks: %s", e)
+
+    async def _sync_configurable_intervals(self) -> None:
+        """Update DB task intervals that differ from current config values.
+
+        Allows env-var tuning (e.g. ATLAS_EMAIL_DRAFT_SCHEDULE_INTERVAL_SECONDS)
+        to take effect on restart without manual DB edits.
+        """
+        try:
+            from ..config import settings
+            from ..storage.repositories.scheduled_task import get_scheduled_task_repo
+
+            repo = get_scheduled_task_repo()
+            overrides = {
+                "email_draft": settings.email_draft.schedule_interval_seconds,
+            }
+
+            for task_name, desired_interval in overrides.items():
+                task = await repo.get_by_name(task_name)
+                if task is None or task.interval_seconds == desired_interval:
+                    continue
+
+                old = task.interval_seconds
+                updated = await repo.update(task.id, interval_seconds=desired_interval)
+                if updated:
+                    self._register_task(updated)
+                    logger.info(
+                        "Updated '%s' interval: %ss -> %ss (from config)",
+                        task_name, old, desired_interval,
+                    )
+        except Exception as e:
+            logger.warning("Failed to sync configurable intervals: %s", e)
 
     def _register_task(self, task: ScheduledTask) -> None:
         """Register a task with APScheduler."""
