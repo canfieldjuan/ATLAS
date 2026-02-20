@@ -69,13 +69,13 @@ class TestSkillLoading:
         assert "email" in skill.tags
         assert "triage" in skill.tags
         assert "autonomous" in skill.tags
-        assert skill.version == 1
+        assert skill.version == 3
 
     def test_email_triage_skill_has_content(self):
         registry = get_skill_registry()
         skill = registry.get("digest/email_triage")
         assert len(skill.content) > 100
-        assert "Action Required" in skill.content
+        assert "ACTION REQUIRED" in skill.content
 
 
 # ---------------------------------------------------------------------------

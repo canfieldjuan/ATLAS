@@ -192,7 +192,9 @@ class RAGClient:
             data = resp.json()
 
             facts = []
-            for edge in data.get("edges", [])[:max_edges]:
+            all_edges = data.get("edges", [])
+            active_edges = [e for e in all_edges if not e.get("expired_at")]
+            for edge in active_edges[:max_edges]:
                 facts.append(SearchSource(
                     uuid=edge.get("uuid", ""),
                     name=edge.get("name", ""),
