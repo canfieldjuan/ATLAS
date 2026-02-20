@@ -175,6 +175,8 @@ async def _send_action_email_notifications(emails: list[dict[str, Any]]) -> None
     """Send individual ntfy notifications for action-required emails with [Draft Reply] buttons."""
     if not settings.alerts.ntfy_enabled:
         return
+    if not settings.email_draft.enabled:
+        return
 
     api_url = settings.email_draft.atlas_api_url.rstrip("/")
     ntfy_url = f"{settings.alerts.ntfy_url.rstrip('/')}/{settings.alerts.ntfy_topic}"

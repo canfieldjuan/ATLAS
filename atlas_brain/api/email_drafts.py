@@ -472,7 +472,7 @@ async def redraft(draft_id: UUID):
         "attempt_number": new_attempt,
         "previous_draft_rejected": (parent["draft_body"] or "")[:500],
         "redraft_guidance": (
-            "The user rejected the previous draft. Write a substantially different reply — "
+            "The user rejected the previous draft. Write a substantially different reply -- "
             "different opening, different tone or formality level, different proposed action."
         ),
     }, indent=2)
@@ -559,7 +559,7 @@ async def redraft(draft_id: UUID):
 
 @router.post("/{draft_id}/skip")
 async def skip_draft(draft_id: UUID):
-    """Acknowledge 'don't redraft' — clears the ntfy notification."""
+    """Acknowledge 'don't redraft' -- clears the ntfy notification."""
     logger.info("Draft %s skipped (no redraft)", draft_id)
     return {"draft_id": str(draft_id), "status": "skipped"}
 
