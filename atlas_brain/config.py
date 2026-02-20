@@ -535,6 +535,18 @@ class EmailDraftConfig(BaseSettings):
         default="http://localhost:8001",
         description="Atlas API URL for ntfy action buttons",
     )
+    triage_enabled: bool = Field(
+        default=True,
+        description="Use LLM to classify ambiguous emails as replyable/not",
+    )
+    triage_model: str = Field(
+        default="claude-haiku-4-5-20251001",
+        description="Anthropic model for replyable triage (cheap/fast)",
+    )
+    triage_max_tokens: int = Field(
+        default=32,
+        description="Max tokens for triage response (yes/no answer)",
+    )
 
 
 class ReminderConfig(BaseSettings):

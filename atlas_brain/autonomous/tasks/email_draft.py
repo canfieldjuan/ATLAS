@@ -19,25 +19,6 @@ from ...storage.models import ScheduledTask
 logger = logging.getLogger("atlas.autonomous.tasks.email_draft")
 
 
-# Senders that should never get auto-drafted replies (automated/no-reply)
-_SKIP_SENDER_PATTERNS = (
-    "noreply@", "no-reply@", "donotreply@", "do-not-reply@",
-    "mailer-daemon@", "postmaster@",
-    "notifications@", "notification@",
-    "alerts@", "alert@",
-    "cash@square.com", "venmo@venmo.com",
-    "service@paypal.com",
-)
-
-
-def _is_auto_sender(sender: str) -> bool:
-    """Check if the sender is an automated/no-reply address."""
-    email_part = sender.lower()
-    if "<" in email_part:
-        email_part = email_part.split("<")[1].split(">")[0]
-    return any(pattern in email_part for pattern in _SKIP_SENDER_PATTERNS)
-
-
 async def _get_draftable_emails() -> list[dict[str, Any]]:
     """Find action_required emails from the last 48h with no existing draft."""
     pool = get_db_pool()
@@ -48,20 +29,105 @@ async def _get_draftable_emails() -> list[dict[str, Any]]:
 
     rows = await pool.fetch(
         """
-        SELECT pe.gmail_message_id, pe.sender, pe.subject, pe.category, pe.priority
+        SELECT pe.gmail_message_id, pe.sender, pe.subject, pe.category, pe.priority, pe.replyable
         FROM processed_emails pe
         LEFT JOIN email_drafts ed ON pe.gmail_message_id = ed.gmail_message_id
             AND ed.status IN ('pending', 'approved', 'sent')
         WHERE pe.priority = ANY($1::text[])
           AND pe.processed_at > CURRENT_TIMESTAMP - INTERVAL '48 hours'
+          AND pe.replyable IS NOT FALSE
           AND ed.id IS NULL
         ORDER BY pe.processed_at DESC
         """,
         priorities,
     )
 
-    # Filter out automated/no-reply senders
-    return [dict(r) for r in rows if not _is_auto_sender(r["sender"])]
+    return [dict(r) for r in rows]
+
+
+async def _triage_ambiguous_emails(
+    ambiguous: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Use LLM triage to classify ambiguous emails as replyable or not.
+
+    For each email where replyable IS NULL, calls the triage LLM (Haiku)
+    for a cheap yes/no classification, then caches the result in the DB.
+
+    Returns the subset of emails that are replyable.
+    """
+    if not ambiguous:
+        return []
+
+    llm = get_llm("email_triage")
+    if llm is None:
+        # No triage LLM -- default to replyable (draft anyway, user can reject)
+        logger.warning("Triage LLM not available; defaulting %d ambiguous emails to replyable", len(ambiguous))
+        return ambiguous
+
+    from ...skills import get_skill_registry
+
+    skill = get_skill_registry().get("digest/email_replyable")
+    system_prompt = skill.content if skill else "Answer YES or NO: does this email expect a human reply?"
+
+    # Fetch full messages for body snippets
+    from .gmail_digest import _get_gmail_client
+
+    gmail = await _get_gmail_client()
+    pool = get_db_pool()
+    replyable_emails: list[dict[str, Any]] = []
+
+    logger.info("Triage: %d ambiguous emails to classify", len(ambiguous))
+
+    for email_row in ambiguous:
+        msg_id = email_row["gmail_message_id"]
+
+        # Get body snippet (first 200 chars)
+        body_snippet = ""
+        try:
+            full_msg = await gmail.get_message_full(msg_id)
+            body_snippet = (full_msg.get("body_text") or "")[:200]
+        except Exception as e:
+            logger.warning("Triage: failed to fetch body for %s: %s", msg_id, e)
+
+        user_input = json.dumps({
+            "sender": email_row.get("sender", ""),
+            "subject": email_row.get("subject", ""),
+            "body_snippet": body_snippet,
+        })
+
+        try:
+            result = llm.chat(
+                messages=[
+                    Message(role="system", content=system_prompt),
+                    Message(role="user", content=user_input),
+                ],
+                max_tokens=settings.email_draft.triage_max_tokens,
+                temperature=0.0,
+            )
+            answer = (result.get("response") or "").strip().upper()
+            is_replyable = answer.startswith("YES")
+        except Exception as e:
+            logger.warning("Triage LLM failed for %s: %s; defaulting to replyable", msg_id, e)
+            is_replyable = True
+
+        logger.info("Triage result for %s: %s", msg_id, "YES" if is_replyable else "NO")
+
+        # Cache result in DB
+        if pool.is_initialized:
+            try:
+                await pool.execute(
+                    "UPDATE processed_emails SET replyable = $1 WHERE gmail_message_id = $2",
+                    is_replyable,
+                    msg_id,
+                )
+                logger.debug("Updated replyable for %s", msg_id)
+            except Exception as e:
+                logger.warning("Failed to cache triage result for %s: %s", msg_id, e)
+
+        if is_replyable:
+            replyable_emails.append(email_row)
+
+    return replyable_emails
 
 
 async def _insert_draft(draft: dict[str, Any]) -> str:
@@ -189,16 +255,32 @@ async def run(task: ScheduledTask) -> dict:
             "_skip_synthesis": "Draft LLM not available.",
         }
 
-    # Find emails that need drafts
-    draftable = await _get_draftable_emails()
-    if not draftable:
+    # Find emails that need drafts (replyable=True or NULL)
+    candidates = await _get_draftable_emails()
+    if not candidates:
         return {
             "drafts_generated": 0,
             "drafts": [],
             "_skip_synthesis": "No action-required emails need drafting.",
         }
 
-    logger.info("Found %d emails to draft replies for", len(draftable))
+    # Split into confirmed replyable and ambiguous (needs triage)
+    confirmed = [e for e in candidates if e.get("replyable") is True]
+    ambiguous = [e for e in candidates if e.get("replyable") is None]
+
+    # Triage ambiguous emails via LLM
+    triaged = await _triage_ambiguous_emails(ambiguous)
+    draftable = confirmed + triaged
+
+    if not draftable:
+        return {
+            "drafts_generated": 0,
+            "drafts": [],
+            "_skip_synthesis": "No replyable emails found after triage.",
+        }
+
+    logger.info("Found %d emails to draft replies for (%d confirmed, %d triaged)",
+                len(draftable), len(confirmed), len(triaged))
 
     # Load the draft skill prompt
     from ...skills import get_skill_registry

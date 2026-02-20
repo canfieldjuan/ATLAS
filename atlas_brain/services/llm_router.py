@@ -4,9 +4,11 @@ Holds a cloud LLM singleton alongside the local LLM in llm_registry.
 Routes workflow types to the appropriate backend.
 
 Routing map:
-    LOCAL  (Ollama qwen3:14b): conversation, reminder, calendar, intent
-    CLOUD  (Ollama cloud minimax-m2): booking, email, security escalation
-    NO LLM (unchanged): security workflow, presence workflow
+    LOCAL   (Ollama qwen3:14b): conversation, reminder, calendar, intent
+    CLOUD   (Ollama cloud minimax-m2): booking, email, security escalation
+    DRAFT   (Anthropic Sonnet): email_draft
+    TRIAGE  (Anthropic Haiku): email_triage
+    NO LLM  (unchanged): security workflow, presence workflow
 """
 
 from __future__ import annotations
@@ -25,11 +27,17 @@ _cloud_llm: Optional[LLMService] = None
 # Draft LLM singleton -- Anthropic for email draft generation
 _draft_llm: Optional[LLMService] = None
 
+# Triage LLM singleton -- Anthropic Haiku for cheap email replyable classification
+_triage_llm: Optional[LLMService] = None
+
 # Workflows that require cloud reasoning
 CLOUD_WORKFLOWS = frozenset({"booking", "email"})
 
 # Workflows that use the draft LLM (Anthropic)
 DRAFT_WORKFLOWS = frozenset({"email_draft"})
+
+# Workflows that use the triage LLM (Anthropic Haiku)
+TRIAGE_WORKFLOWS = frozenset({"email_triage"})
 
 
 def init_cloud_llm(
@@ -97,6 +105,38 @@ def get_draft_llm() -> Optional[LLMService]:
     return _draft_llm
 
 
+def init_triage_llm(
+    model: str = "claude-haiku-4-5-20251001",
+    api_key: str | None = None,
+) -> Optional[LLMService]:
+    """Initialize the triage LLM singleton (Anthropic Haiku). Called from main.py lifespan."""
+    global _triage_llm
+    from .llm.anthropic import AnthropicLLM
+
+    try:
+        _triage_llm = AnthropicLLM(model=model, api_key=api_key)
+        _triage_llm.load()
+        logger.info("Triage LLM initialized: %s (Anthropic)", model)
+        return _triage_llm
+    except Exception as e:
+        logger.error("Failed to initialize triage LLM: %s", e)
+        return None
+
+
+def shutdown_triage_llm() -> None:
+    """Unload the triage LLM. Called from main.py shutdown."""
+    global _triage_llm
+    if _triage_llm:
+        _triage_llm.unload()
+        _triage_llm = None
+        logger.info("Triage LLM shut down")
+
+
+def get_triage_llm() -> Optional[LLMService]:
+    """Get the triage LLM instance (or None if not loaded)."""
+    return _triage_llm
+
+
 def get_llm(workflow_type: Optional[str] = None) -> Optional[LLMService]:
     """Get the right LLM for a workflow type.
 
@@ -104,6 +144,9 @@ def get_llm(workflow_type: Optional[str] = None) -> Optional[LLMService]:
     Falls back to local if cloud is unavailable.
     """
     from . import llm_registry
+
+    if workflow_type and workflow_type in TRIAGE_WORKFLOWS and _triage_llm:
+        return _triage_llm
 
     if workflow_type and workflow_type in DRAFT_WORKFLOWS and _draft_llm:
         return _draft_llm

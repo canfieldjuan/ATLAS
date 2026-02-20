@@ -150,8 +150,8 @@ async def _record_processed_emails(emails: list[dict[str, Any]]) -> None:
         async with pool.transaction() as conn:
             await conn.executemany(
                 """
-                INSERT INTO processed_emails (gmail_message_id, sender, subject, category, priority)
-                VALUES ($1, $2, $3, $4, $5)
+                INSERT INTO processed_emails (gmail_message_id, sender, subject, category, priority, replyable)
+                VALUES ($1, $2, $3, $4, $5, $6)
                 ON CONFLICT (gmail_message_id) DO NOTHING
                 """,
                 [
@@ -161,6 +161,7 @@ async def _record_processed_emails(emails: list[dict[str, Any]]) -> None:
                         e.get("subject", ""),
                         e.get("category"),
                         e.get("priority"),
+                        e.get("replyable"),
                     )
                     for e in emails
                 ],

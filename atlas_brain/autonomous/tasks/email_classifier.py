@@ -29,6 +29,7 @@ class EmailClassification:
     priority: str
     confidence: float
     reason: str
+    replyable: bool | None  # None = ambiguous, needs LLM triage
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +146,16 @@ class EmailRuleClassifier:
       6. Fallback -> "other"
     """
 
+    # Sender patterns that indicate automated/no-reply addresses
+    _NOREPLY_LOCAL_PATTERNS = (
+        "noreply", "no-reply", "donotreply", "do-not-reply",
+        "mailer-daemon", "postmaster",
+    )
+    _NOREPLY_PREFIX_PATTERNS = (
+        "notifications@", "notification@", "alerts@", "alert@",
+        "news@", "info@", "updates@", "marketing@",
+    )
+
     def __init__(self, domain_map_file: Optional[str] = None) -> None:
         self._domain_map = dict(_DEFAULT_DOMAIN_MAP)
 
@@ -212,6 +223,45 @@ class EmailRuleClassifier:
         return "fyi"
 
     # ------------------------------------------------------------------
+    # Replyable assignment
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_noreply_sender(sender: str) -> bool:
+        """Check if the sender address matches known no-reply patterns."""
+        email_part = sender.lower()
+        if "<" in email_part:
+            email_part = email_part.split("<")[1].split(">")[0]
+        local = email_part.split("@")[0] if "@" in email_part else email_part
+        if local in EmailRuleClassifier._NOREPLY_LOCAL_PATTERNS:
+            return True
+        return any(email_part.startswith(p) for p in EmailRuleClassifier._NOREPLY_PREFIX_PATTERNS)
+
+    @staticmethod
+    def _assign_replyable(
+        category: str,
+        priority: str,
+        has_unsubscribe: bool,
+        sender: str,
+    ) -> bool | None:
+        """Determine if an email expects a human reply.
+
+        Returns:
+            False  - definitively not replyable (bulk, automated, noreply)
+            True   - definitively replyable (personal + action_required)
+            None   - ambiguous, needs LLM triage
+        """
+        if has_unsubscribe:
+            return False
+        if EmailRuleClassifier._is_noreply_sender(sender):
+            return False
+        if category in ("automated", "promotion", "newsletter", "social", "shopping"):
+            return False
+        if category == "personal" and priority == "action_required":
+            return True
+        return None
+
+    # ------------------------------------------------------------------
     # Single email classification
     # ------------------------------------------------------------------
 
@@ -226,83 +276,76 @@ class EmailRuleClassifier:
         sender: str = email.get("from", "")
         subject: str = email.get("subject", "")
 
+        cat: str | None = None
+        pri: str | None = None
+        conf: float = 0.50
+        reason: str = ""
+
         # --- Layer 1: Gmail category labels ---
         for label in label_ids:
             if label in _GMAIL_LABEL_MAP:
-                cat, conf = _GMAIL_LABEL_MAP[label]
-                # Promotions/Social are high-confidence terminal matches
-                if conf >= 0.90:
+                _cat, _conf = _GMAIL_LABEL_MAP[label]
+                if _conf >= 0.90:
+                    cat, conf = _cat, _conf
                     pri = self._assign_priority(cat, subject, has_unsubscribe, label_ids)
-                    return EmailClassification(
-                        category=cat,
-                        priority=pri,
-                        confidence=conf,
-                        reason=f"Gmail label {label}",
-                    )
+                    reason = f"Gmail label {label}"
+                    break
 
         # --- Layer 2: Unsubscribe header ---
-        if has_unsubscribe:
-            # Default to newsletter, but domain rules can override below
+        if cat is None and has_unsubscribe:
             domain = _extract_domain(sender)
             domain_cat = _lookup_domain(domain, self._domain_map)
             if domain_cat:
-                # e.g. cashapp.com with unsubscribe -> still "financial"
-                pri = self._assign_priority(domain_cat, subject, has_unsubscribe, label_ids)
-                return EmailClassification(
-                    category=domain_cat,
-                    priority=pri,
-                    confidence=0.90,
-                    reason=f"Unsubscribe + domain {domain} -> {domain_cat}",
-                )
-            pri = self._assign_priority("newsletter", subject, has_unsubscribe, label_ids)
-            return EmailClassification(
-                category="newsletter",
-                priority=pri,
-                confidence=0.90,
-                reason="List-Unsubscribe header present",
-            )
+                cat, conf = domain_cat, 0.90
+                pri = self._assign_priority(cat, subject, has_unsubscribe, label_ids)
+                reason = f"Unsubscribe + domain {domain} -> {cat}"
+            else:
+                cat, conf = "newsletter", 0.90
+                pri = self._assign_priority(cat, subject, has_unsubscribe, label_ids)
+                reason = "List-Unsubscribe header present"
 
         # --- Layer 3: Sender domain ---
-        domain = _extract_domain(sender)
-        domain_cat = _lookup_domain(domain, self._domain_map)
-        if domain_cat:
-            pri = self._assign_priority(domain_cat, subject, has_unsubscribe, label_ids)
-            return EmailClassification(
-                category=domain_cat,
-                priority=pri,
-                confidence=0.85,
-                reason=f"Sender domain {domain}",
-            )
+        if cat is None:
+            domain = _extract_domain(sender)
+            domain_cat = _lookup_domain(domain, self._domain_map)
+            if domain_cat:
+                cat, conf = domain_cat, 0.85
+                pri = self._assign_priority(cat, subject, has_unsubscribe, label_ids)
+                reason = f"Sender domain {domain}"
 
         # --- Layer 4: Subject keyword patterns ---
-        for pattern, cat, pri_override in self._subject_patterns:
-            if pattern.search(subject):
-                pri = pri_override or self._assign_priority(cat, subject, has_unsubscribe, label_ids)
-                return EmailClassification(
-                    category=cat,
-                    priority=pri,
-                    confidence=0.75,
-                    reason=f"Subject keyword match: {pattern.pattern[:40]}",
-                )
+        if cat is None:
+            for pattern, _cat, pri_override in self._subject_patterns:
+                if pattern.search(subject):
+                    cat, conf = _cat, 0.75
+                    pri = pri_override or self._assign_priority(cat, subject, has_unsubscribe, label_ids)
+                    reason = f"Subject keyword match: {pattern.pattern[:40]}"
+                    break
 
         # --- Layer 5: Default by remaining Gmail labels ---
-        for label in label_ids:
-            if label in _GMAIL_LABEL_MAP:
-                cat, conf = _GMAIL_LABEL_MAP[label]
-                pri = self._assign_priority(cat, subject, has_unsubscribe, label_ids)
-                return EmailClassification(
-                    category=cat,
-                    priority=pri,
-                    confidence=conf,
-                    reason=f"Fallback Gmail label {label}",
-                )
+        if cat is None:
+            for label in label_ids:
+                if label in _GMAIL_LABEL_MAP:
+                    _cat, _conf = _GMAIL_LABEL_MAP[label]
+                    cat, conf = _cat, _conf
+                    pri = self._assign_priority(cat, subject, has_unsubscribe, label_ids)
+                    reason = f"Fallback Gmail label {label}"
+                    break
 
         # --- Layer 6: Fallback ---
+        if cat is None:
+            cat, pri, conf = "other", "fyi", 0.50
+            reason = "No classification signals matched"
+
+        # --- Replyable determination ---
+        replyable = self._assign_replyable(cat, pri, has_unsubscribe, sender)
+
         return EmailClassification(
-            category="other",
-            priority="fyi",
-            confidence=0.50,
-            reason="No classification signals matched",
+            category=cat,
+            priority=pri,
+            confidence=conf,
+            reason=reason,
+            replyable=replyable,
         )
 
     # ------------------------------------------------------------------
@@ -319,6 +362,7 @@ class EmailRuleClassifier:
             result = self.classify(email)
             email["category"] = result.category
             email["priority"] = result.priority
+            email["replyable"] = result.replyable
             email["_classify_confidence"] = result.confidence
             email["_classify_reason"] = result.reason
 

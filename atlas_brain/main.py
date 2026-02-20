@@ -229,6 +229,14 @@ async def lifespan(app: FastAPI):
             api_key=settings.llm.anthropic_api_key,
         )
 
+    # Initialize triage LLM for email replyable classification (Anthropic Haiku)
+    if settings.email_draft.enabled and settings.email_draft.triage_enabled:
+        from .services.llm_router import init_triage_llm
+        init_triage_llm(
+            model=settings.email_draft.triage_model,
+            api_key=settings.llm.anthropic_api_key,
+        )
+
     # Note: Speaker ID loaded lazily via get_speaker_id_service() when voice
     # pipeline starts. No registry needed - single Resemblyzer implementation.
 
@@ -528,6 +536,10 @@ async def lifespan(app: FastAPI):
             logger.info("Database connection pool closed")
         except Exception as e:
             logger.error("Error closing database: %s", e)
+
+    # Unload triage LLM singleton (Anthropic Haiku)
+    from .services.llm_router import shutdown_triage_llm
+    shutdown_triage_llm()
 
     # Unload draft LLM singleton (Anthropic)
     from .services.llm_router import shutdown_draft_llm
