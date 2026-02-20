@@ -346,6 +346,8 @@ async def _stream_llm_response(
         try:
             from ..memory.rag_client import get_rag_client
             client = get_rag_client()
+            if entity_name:
+                logger.info("Voice entity detected: %r -- running parallel search + traversal", entity_name)
             result = await client.search_with_traversal(
                 query=transcript,
                 entity_name=entity_name,
@@ -654,6 +656,8 @@ def _create_early_prep_runner():
             try:
                 from ..memory.rag_client import get_rag_client
                 _entity = getattr(route_result, "entity_name", None)
+                if _entity:
+                    logger.info("Early prep entity detected: %r -- running parallel search + traversal", _entity)
                 result = await get_rag_client().search_with_traversal(
                     query=partial_transcript,
                     entity_name=_entity,

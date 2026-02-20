@@ -264,7 +264,10 @@ class RAGClient:
                     merged.append(fact)
                     seen.add(fact.uuid)
 
-            logger.debug(
+            # Sort by confidence so token trimmer keeps best facts
+            merged.sort(key=lambda f: f.confidence, reverse=True)
+
+            logger.info(
                 "search_with_traversal: %d search + %d traversal = %d merged",
                 len(search_res.facts), len(traversal_res.facts), len(merged),
             )
