@@ -16,6 +16,7 @@ import httpx
 import pytest
 
 from atlas_brain.comms.call_intelligence import (
+    _build_transcript,
     _convert_audio_to_wav,
     _extract_call_data,
     _find_matching_brace,
@@ -146,6 +147,34 @@ class TestFindMatchingBrace:
 
     def test_negative_start(self):
         assert _find_matching_brace("{}", -1) == -1
+
+
+# ---------------------------------------------------------------------------
+# Transcript Building
+# ---------------------------------------------------------------------------
+
+class TestBuildTranscript:
+    def test_both_sides(self):
+        result = _build_transcript("Hello, I need help", "Sure, how can I help?")
+        assert "[Caller]:" in result
+        assert "[AI Receptionist]:" in result
+        assert "Hello, I need help" in result
+        assert "Sure, how can I help?" in result
+
+    def test_caller_only(self):
+        result = _build_transcript("Hello, I need help", None)
+        assert result == "Hello, I need help"
+        assert "[AI Receptionist]" not in result
+
+    def test_ai_only(self):
+        result = _build_transcript(None, "Welcome to the business")
+        assert "[AI Receptionist]:" in result
+
+    def test_both_none(self):
+        assert _build_transcript(None, None) is None
+
+    def test_both_empty(self):
+        assert _build_transcript("", "") is None
 
 
 # ---------------------------------------------------------------------------

@@ -34,10 +34,14 @@ async def process_call_recording(
     to_number: str,
     context_id: str,
     duration_seconds: int,
+    ai_audio_chunks: list[bytes] | None = None,
     business_context=None,
 ) -> None:
     """
     Process a completed call recording through the intelligence pipeline.
+
+    audio_chunks: caller's raw mulaw audio from SignalWire media events
+    ai_audio_chunks: AI receptionist's mulaw audio from send_audio callback
 
     Each step is wrapped in try/except to fail-open -- partial results
     are better than no results.
@@ -71,34 +75,53 @@ async def process_call_recording(
         logger.warning("Call intelligence: failed to create record for %s: %s", call_sid, e)
         return
 
-    # Step 2: Convert audio to WAV
+    # Step 2: Convert caller audio to WAV
     try:
         await repo.update_status(transcript_id, "transcribing")
-        wav_bytes = _convert_audio_to_wav(audio_chunks)
+        caller_wav = _convert_audio_to_wav(audio_chunks)
     except Exception as e:
         logger.warning("Call intelligence: audio conversion failed for %s: %s", call_sid, e)
         await _safe_update_status(repo, transcript_id, "error", f"Audio conversion: {e}")
         return
 
-    # Step 3: Transcribe
+    # Step 2b: Convert AI audio to WAV (best-effort, don't block on failure)
+    ai_wav = None
+    if ai_audio_chunks:
+        try:
+            ai_wav = _convert_audio_to_wav(ai_audio_chunks)
+        except Exception as e:
+            logger.debug("Call intelligence: AI audio conversion failed for %s: %s", call_sid, e)
+
+    # Step 3: Transcribe caller audio
     try:
-        transcript = await _transcribe_wav(wav_bytes)
-        if not transcript:
-            logger.info("Call intelligence: empty transcript for %s", call_sid)
-            await repo.update_transcript(transcript_id, "")
-            await repo.update_extraction(
-                transcript_id,
-                summary="No speech detected",
-                extracted_data={},
-                proposed_actions=[],
-            )
-            await repo.update_status(transcript_id, "ready")
-            return
-        await repo.update_transcript(transcript_id, transcript)
+        caller_transcript = await _transcribe_wav(caller_wav)
     except Exception as e:
         logger.warning("Call intelligence: transcription failed for %s: %s", call_sid, e)
         await _safe_update_status(repo, transcript_id, "error", f"Transcription: {e}")
         return
+
+    # Step 3b: Transcribe AI audio (best-effort)
+    ai_transcript = None
+    if ai_wav:
+        try:
+            ai_transcript = await _transcribe_wav(ai_wav)
+        except Exception as e:
+            logger.debug("Call intelligence: AI transcription failed for %s: %s", call_sid, e)
+
+    # Build combined transcript
+    transcript = _build_transcript(caller_transcript, ai_transcript)
+    if not transcript:
+        logger.info("Call intelligence: empty transcript for %s", call_sid)
+        await repo.update_transcript(transcript_id, "")
+        await repo.update_extraction(
+            transcript_id,
+            summary="No speech detected",
+            extracted_data={},
+            proposed_actions=[],
+        )
+        await repo.update_status(transcript_id, "ready")
+        return
+    await repo.update_transcript(transcript_id, transcript)
 
     # Step 4: LLM extraction
     try:
@@ -162,6 +185,20 @@ def _convert_audio_to_wav(audio_chunks: list[bytes]) -> bytes:
         data_size,
     )
     return header + pcm_16k
+
+
+def _build_transcript(
+    caller_transcript: Optional[str],
+    ai_transcript: Optional[str],
+) -> Optional[str]:
+    """Combine caller and AI transcripts into a labeled conversation."""
+    if not caller_transcript and not ai_transcript:
+        return None
+    if not ai_transcript:
+        return caller_transcript
+    if not caller_transcript:
+        return f"[AI Receptionist]: {ai_transcript}"
+    return f"[Caller]: {caller_transcript}\n\n[AI Receptionist]: {ai_transcript}"
 
 
 async def _transcribe_wav(wav_bytes: bytes) -> Optional[str]:

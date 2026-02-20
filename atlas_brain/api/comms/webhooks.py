@@ -634,7 +634,8 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
 
     stream_sid = None
     processor = None
-    audio_chunks: list[bytes] = []
+    caller_audio_chunks: list[bytes] = []
+    ai_audio_chunks: list[bytes] = []
     from_number = ""
     to_number = ""
     context = None
@@ -676,6 +677,11 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
                 stream_sid,
                 len(audio_b64),
             )
+            # Capture AI audio for post-call transcription
+            try:
+                ai_audio_chunks.append(base64.b64decode(audio_b64))
+            except Exception:
+                pass
             if stream_sid:
                 await websocket.send_json({
                     "event": "media",
@@ -785,11 +791,11 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
                     logger.info("PersonaPlex greeting sent from buffer")
 
             elif event == "media":
-                # Audio data from caller -- PersonaPlex sends responses via callback
+                # Caller audio from SignalWire; AI audio captured in send_audio()
                 payload = data.get("media", {}).get("payload")
                 if payload:
                     try:
-                        audio_chunks.append(base64.b64decode(payload))
+                        caller_audio_chunks.append(base64.b64decode(payload))
                     except Exception:
                         pass  # Skip malformed chunk
                     if processor:
@@ -804,9 +810,10 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
     except Exception as e:
         logger.error("Audio stream error for call %s: %s", call_sid, e)
     finally:
-        if audio_chunks:
+        if caller_audio_chunks:
             _spawn_call_processing(
-                call_sid, audio_chunks, from_number, to_number,
+                call_sid, caller_audio_chunks, ai_audio_chunks,
+                from_number, to_number,
                 context.id if context else "unknown",
                 context,
             )
@@ -815,22 +822,28 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
         logger.info("Audio stream ended for call %s", call_sid)
 
 
-def _spawn_call_processing(call_sid, audio_chunks, from_number, to_number, context_id, business_context=None):
+def _spawn_call_processing(
+    call_sid, caller_chunks, ai_chunks, from_number, to_number, context_id, business_context=None,
+):
     """Spawn background task to process call recording."""
     # Rough duration estimate: mulaw is 8000 bytes/sec
-    total_bytes = sum(len(c) for c in audio_chunks)
+    total_bytes = sum(len(c) for c in caller_chunks)
     duration = total_bytes // 8000
     asyncio.create_task(_run_call_processing(
-        call_sid, audio_chunks, from_number, to_number, context_id, duration, business_context,
+        call_sid, caller_chunks, ai_chunks,
+        from_number, to_number, context_id, duration, business_context,
     ))
 
 
-async def _run_call_processing(call_sid, chunks, from_num, to_num, ctx_id, dur, biz_ctx):
+async def _run_call_processing(
+    call_sid, caller_chunks, ai_chunks, from_num, to_num, ctx_id, dur, biz_ctx,
+):
     """Run call intelligence pipeline in background."""
     try:
         from ...comms.call_intelligence import process_call_recording
         await process_call_recording(
-            call_sid, chunks, from_num, to_num, ctx_id, dur,
+            call_sid, caller_chunks, from_num, to_num, ctx_id, dur,
+            ai_audio_chunks=ai_chunks,
             business_context=biz_ctx,
         )
     except Exception as e:
