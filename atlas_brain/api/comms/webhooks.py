@@ -779,6 +779,11 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
                             call_sid,
                         )
                         for audio_chunk in buffered_audio:
+                            # Capture for post-call transcription
+                            try:
+                                ai_audio_chunks.append(base64.b64decode(audio_chunk))
+                            except Exception:
+                                pass
                             await websocket.send_json({
                                 "event": "media",
                                 "streamSid": stream_sid,

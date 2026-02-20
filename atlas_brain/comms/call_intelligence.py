@@ -191,7 +191,11 @@ def _build_transcript(
     caller_transcript: Optional[str],
     ai_transcript: Optional[str],
 ) -> Optional[str]:
-    """Combine caller and AI transcripts into a labeled conversation."""
+    """Combine caller and AI transcripts into a labeled conversation.
+
+    Note: Each side is transcribed as a single block, so turn-by-turn
+    ordering is lost. The LLM extraction prompt handles this gracefully.
+    """
     if not caller_transcript and not ai_transcript:
         return None
     if not ai_transcript:
