@@ -173,13 +173,24 @@ class SignalWireProvider(TelephonyProvider):
             webhook_url = f"{comms_settings.webhook_base_url}/api/v1/comms/voice/outbound"
             status_url = f"{comms_settings.webhook_base_url}/api/v1/comms/voice/status"
 
-            sw_call = self._client.calls.create(
-                to=to_number,
-                from_=from_number,
-                url=webhook_url,
-                status_callback=status_url,
-                status_callback_event=["initiated", "ringing", "answered", "completed"],
-            )
+            create_kwargs = {
+                "to": to_number,
+                "from_": from_number,
+                "url": webhook_url,
+                "status_callback": status_url,
+                "status_callback_event": ["initiated", "ringing", "answered", "completed"],
+            }
+
+            if comms_settings.record_calls:
+                recording_url = (
+                    f"{comms_settings.webhook_base_url}"
+                    "/api/v1/comms/voice/recording-status"
+                )
+                create_kwargs["record"] = True
+                create_kwargs["recording_status_callback"] = recording_url
+                create_kwargs["recording_status_callback_event"] = "completed"
+
+            sw_call = self._client.calls.create(**create_kwargs)
 
             call.provider_call_id = sw_call.sid
             self._calls[sw_call.sid] = call

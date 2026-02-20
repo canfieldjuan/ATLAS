@@ -222,9 +222,21 @@ async def handle_inbound_call(request: Request):
 
             # Return LaML - connect directly to Atlas for unified voice
             # Greeting will be played via Atlas TTS (Kokoro) when stream starts
+            recording_attrs = ""
+            if comms_settings.record_calls:
+                cb_url = (
+                    f"{comms_settings.webhook_base_url}"
+                    "/api/v1/comms/voice/recording-status"
+                )
+                recording_attrs = (
+                    f' record="record-from-answer-dual"'
+                    f' recordingStatusCallback="{cb_url}"'
+                    f' recordingStatusCallbackEvent="completed"'
+                )
+
             return laml_response(f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Connect>
+    <Connect{recording_attrs}>
         <Stream url="{stream_url}" />
     </Connect>
 </Response>""")
@@ -242,28 +254,47 @@ async def handle_inbound_call(request: Request):
         logger.info("SWML tap stream URL: %s", stream_url)
 
         # Return SWML with tap for bidirectional WebSocket
-        return swml_response({
+        swml_sections = {
             "main": [
                 {"answer": {}},
-                {
-                    "play": {
-                        "url": f"say:{context.greeting}",
-                        "say_voice": "en-US-Neural2-F"
-                    }
-                },
-                {
-                    "tap": {
-                        "uri": stream_url,
-                        "direction": "both"
-                    }
-                },
-                {
-                    "play": {
-                        "url": "silence:300",
-                    }
-                }
             ]
-        })
+        }
+
+        # Enable call recording if configured
+        if comms_settings.record_calls:
+            cb_url = (
+                f"{comms_settings.webhook_base_url}"
+                "/api/v1/comms/voice/recording-status"
+            )
+            swml_sections["main"].append({
+                "record_call": {
+                    "format": "wav",
+                    "stereo": True,
+                    "status_callback": cb_url,
+                }
+            })
+
+        swml_sections["main"].extend([
+            {
+                "play": {
+                    "url": f"say:{context.greeting}",
+                    "say_voice": "en-US-Neural2-F"
+                }
+            },
+            {
+                "tap": {
+                    "uri": stream_url,
+                    "direction": "both"
+                }
+            },
+            {
+                "play": {
+                    "url": "silence:300",
+                }
+            }
+        ])
+
+        return swml_response(swml_sections)
 
     except Exception as e:
         logger.error("Error handling inbound call: %s", e)
