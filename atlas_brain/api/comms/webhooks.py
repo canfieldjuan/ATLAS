@@ -635,6 +635,9 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
     stream_sid = None
     processor = None
     audio_chunks: list[bytes] = []
+    from_number = ""
+    to_number = ""
+    context = None
 
     try:
         provider = get_provider()
@@ -642,7 +645,6 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
 
         # Get context - try from call first, then default to first context
         context_router = get_context_router()
-        context = None
 
         if call and call.context_id:
             context = context_router.get_context(call.context_id)
@@ -786,7 +788,10 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
                 # Audio data from caller -- PersonaPlex sends responses via callback
                 payload = data.get("media", {}).get("payload")
                 if payload:
-                    audio_chunks.append(base64.b64decode(payload))
+                    try:
+                        audio_chunks.append(base64.b64decode(payload))
+                    except Exception:
+                        pass  # Skip malformed chunk
                     if processor:
                         await processor.process_audio_chunk(payload)
 

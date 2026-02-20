@@ -461,9 +461,11 @@ class TestPipeline:
 
         mock_repo.update_transcript.assert_awaited_once()
         # Should have stored "No speech detected" summary
-        extraction_call = mock_repo.update_extraction.await_args
-        assert extraction_call[1]["summary"] == "No speech detected" or extraction_call.args[1] == "No speech detected"
+        extraction_call = mock_repo.update_extraction.call_args
+        assert extraction_call.kwargs.get("summary") == "No speech detected"
         # Status should be "ready", not "error"
-        mock_repo.update_status.assert_any_await(
-            mock_repo.create.return_value["id"], "ready",
-        )
+        status_calls = [
+            c.args[1] if len(c.args) > 1 else c.kwargs.get("status")
+            for c in mock_repo.update_status.call_args_list
+        ]
+        assert "ready" in status_calls

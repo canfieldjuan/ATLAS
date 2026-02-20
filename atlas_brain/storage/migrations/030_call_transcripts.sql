@@ -29,3 +29,4 @@ CREATE TABLE IF NOT EXISTS call_transcripts (
 CREATE INDEX IF NOT EXISTS idx_call_transcripts_call_sid ON call_transcripts(call_sid);
 CREATE INDEX IF NOT EXISTS idx_call_transcripts_status ON call_transcripts(status);
 CREATE INDEX IF NOT EXISTS idx_call_transcripts_created ON call_transcripts(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_call_transcripts_context ON call_transcripts(business_context_id, created_at DESC);

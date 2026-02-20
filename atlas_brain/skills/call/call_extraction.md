@@ -1,5 +1,5 @@
 ---
-name: call_extraction
+name: call/call_extraction
 domain: call
 description: Extract structured data from a business call transcript
 tags: [call, extraction, transcription]

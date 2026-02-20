@@ -174,8 +174,8 @@ async def _transcribe_wav(wav_bytes: bytes) -> Optional[str]:
             files={"file": ("call.wav", wav_bytes, "audio/wav")},
         )
         resp.raise_for_status()
+        result = resp.json()
 
-    result = resp.json()
     text = result.get("text", "").strip()
     return text if text else None
 
@@ -205,7 +205,7 @@ async def _extract_call_data(
     business_context_str = "\n".join(ctx_parts) if ctx_parts else "General business"
 
     # Load skill prompt
-    skill = get_skill_registry().get("call_extraction")
+    skill = get_skill_registry().get("call/call_extraction")
     if skill:
         system_prompt = skill.content.replace("{business_context}", business_context_str)
     else:
@@ -224,7 +224,7 @@ async def _extract_call_data(
         Message(role="user", content=transcript),
     ]
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     result = await asyncio.wait_for(
         loop.run_in_executor(
             None,
@@ -338,6 +338,8 @@ async def _notify_call_summary(
     if not settings.call_intelligence.notify_enabled:
         return
     if not settings.alerts.ntfy_enabled:
+        return
+    if not settings.alerts.ntfy_url or not settings.alerts.ntfy_topic:
         return
 
     ntfy_url = f"{settings.alerts.ntfy_url.rstrip('/')}/{settings.alerts.ntfy_topic}"
