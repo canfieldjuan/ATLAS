@@ -297,13 +297,21 @@ class DiscoveryService:
 
     async def get_discovered_devices(self) -> list[DiscoveredDevice]:
         """Get all discovered devices from database."""
-        repo = get_device_repo()
-        return await repo.get_all_devices()
+        try:
+            repo = get_device_repo()
+            return await repo.get_all_devices()
+        except Exception as e:
+            logger.warning("Failed to get discovered devices: %s", e)
+            return []
 
     async def get_active_devices(self) -> list[DiscoveredDevice]:
         """Get all active (reachable) devices from database."""
-        repo = get_device_repo()
-        return await repo.get_active_devices()
+        try:
+            repo = get_device_repo()
+            return await repo.get_active_devices()
+        except Exception as e:
+            logger.warning("Failed to get active devices: %s", e)
+            return []
 
 
 # Global service instance

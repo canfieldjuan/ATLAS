@@ -107,7 +107,14 @@ class ModeManager:
         - Already in HOME (default) mode
         - Workflow is active
         """
-        # Get default mode from config
+        try:
+            return self._check_timeout_inner()
+        except Exception as e:
+            logger.warning("Mode timeout check failed: %s", e)
+            return False
+
+    def _check_timeout_inner(self) -> bool:
+        """Inner timeout logic, separated for clean error boundary."""
         try:
             default_mode = ModeType(settings.modes.default_mode)
         except ValueError:

@@ -4,6 +4,7 @@ Alert delivery mechanisms.
 Provides callbacks for delivering alerts via TTS, logging, and other channels.
 """
 
+import asyncio
 import logging
 from typing import Any, Optional
 
@@ -100,40 +101,55 @@ class NtfyDelivery:
         message: str,
         rule: AlertRule,
         event: AlertEvent,
+        _max_retries: int = 2,
     ) -> None:
-        """Deliver alert via ntfy."""
+        """Deliver alert via ntfy with retry on transient failure."""
         try:
             import httpx
-
-            # Map rule priority to ntfy priority (1-5, 5=max)
-            priority = "default"
-            if rule.priority >= 15:
-                priority = "urgent"
-            elif rule.priority >= 10:
-                priority = "high"
-            elif rule.priority <= 3:
-                priority = "low"
-
-            headers = {
-                "Title": f"Atlas: {rule.name}",
-                "Priority": priority,
-                "Tags": event.event_type,
-            }
-
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    self._url,
-                    content=message,
-                    headers=headers,
-                    timeout=10.0,
-                )
-                response.raise_for_status()
-                logger.info("ntfy notification sent for [%s]", rule.name)
-
         except ImportError:
             logger.warning("httpx not installed, ntfy delivery unavailable")
-        except Exception as e:
-            logger.warning("ntfy delivery failed: %s", e)
+            return
+
+        # Map rule priority to ntfy priority (1-5, 5=max)
+        priority = "default"
+        if rule.priority >= 15:
+            priority = "urgent"
+        elif rule.priority >= 10:
+            priority = "high"
+        elif rule.priority <= 3:
+            priority = "low"
+
+        headers = {
+            "Title": f"Atlas: {rule.name}",
+            "Priority": priority,
+            "Tags": event.event_type,
+        }
+
+        last_err = None
+        for attempt in range(_max_retries + 1):
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        self._url,
+                        content=message,
+                        headers=headers,
+                        timeout=10.0,
+                    )
+                    response.raise_for_status()
+                    logger.info("ntfy notification sent for [%s]", rule.name)
+                    return
+            except Exception as e:
+                last_err = e
+                if attempt < _max_retries:
+                    delay = 1.0 * (attempt + 1)
+                    logger.debug(
+                        "ntfy attempt %d failed, retrying in %.0fs: %s",
+                        attempt + 1, delay, e,
+                    )
+                    await asyncio.sleep(delay)
+
+        logger.warning("ntfy delivery failed after %d attempts: %s",
+                       _max_retries + 1, last_err)
 
 
 class WebhookDelivery:
@@ -155,34 +171,49 @@ class WebhookDelivery:
         message: str,
         rule: AlertRule,
         event: AlertEvent,
+        _max_retries: int = 2,
     ) -> None:
-        """Deliver alert via webhook."""
+        """Deliver alert via webhook with retry on transient failure."""
         try:
             import httpx
-
-            payload = {
-                "rule_name": rule.name,
-                "event_type": event.event_type,
-                "message": message,
-                "source_id": event.source_id,
-                "timestamp": event.timestamp.isoformat(),
-                "priority": rule.priority,
-            }
-
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    self._webhook_url,
-                    json=payload,
-                    headers=self._headers,
-                    timeout=10.0,
-                )
-                response.raise_for_status()
-                logger.debug("Webhook delivered for alert [%s]", rule.name)
-
         except ImportError:
             logger.warning("httpx not installed, webhook delivery unavailable")
-        except Exception as e:
-            logger.warning("Webhook delivery failed: %s", e)
+            return
+
+        payload = {
+            "rule_name": rule.name,
+            "event_type": event.event_type,
+            "message": message,
+            "source_id": event.source_id,
+            "timestamp": event.timestamp.isoformat(),
+            "priority": rule.priority,
+        }
+
+        last_err = None
+        for attempt in range(_max_retries + 1):
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        self._webhook_url,
+                        json=payload,
+                        headers=self._headers,
+                        timeout=10.0,
+                    )
+                    response.raise_for_status()
+                    logger.debug("Webhook delivered for alert [%s]", rule.name)
+                    return
+            except Exception as e:
+                last_err = e
+                if attempt < _max_retries:
+                    delay = 1.0 * (attempt + 1)
+                    logger.debug(
+                        "Webhook attempt %d failed, retrying in %.0fs: %s",
+                        attempt + 1, delay, e,
+                    )
+                    await asyncio.sleep(delay)
+
+        logger.warning("Webhook delivery failed after %d attempts: %s",
+                       _max_retries + 1, last_err)
 
 
 def setup_default_callbacks(manager: Any) -> None:
