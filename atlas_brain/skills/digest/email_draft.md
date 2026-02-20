@@ -55,3 +55,11 @@ The `---` separator is required between subject and body.
 - If the email requests payment or financial action, acknowledge the amount/deadline and confirm it will be handled by when
 - If the email is a service notification requiring action, state what action will be taken and by when
 - If the email contains forms, attachments, or documents to complete, confirm which ones and when they'll be submitted
+
+## Redraft Handling
+
+If the input JSON contains `"redraft": true`:
+- The user rejected the previous draft. Write a SUBSTANTIALLY different reply.
+- `previous_draft_rejected` shows what was rejected (truncated). Do NOT reuse its phrasing or structure.
+- Try a different angle: different opening, different level of formality, different proposed action.
+- `attempt_number` shows how many attempts. Higher = be more creative with approach.

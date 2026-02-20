@@ -246,6 +246,13 @@ async def run(task: ScheduledTask) -> dict:
             "_skip_synthesis": "Email draft generation is disabled.",
         }
 
+    if not cfg.auto_draft_enabled:
+        return {
+            "drafts_generated": 0,
+            "drafts": [],
+            "_skip_synthesis": "Auto-draft disabled (user-initiated mode via ntfy).",
+        }
+
     # Get the draft LLM
     llm = get_llm("email_draft")
     if llm is None:

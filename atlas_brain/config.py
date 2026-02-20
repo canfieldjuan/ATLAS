@@ -521,6 +521,10 @@ class EmailDraftConfig(BaseSettings):
     )
 
     enabled: bool = Field(default=False, description="Enable email draft generation")
+    auto_draft_enabled: bool = Field(
+        default=False,
+        description="Enable automatic scheduled draft generation (False = user-initiated via ntfy)",
+    )
     model_provider: str = Field(default="anthropic", description="LLM provider for drafting")
     model_name: str = Field(default="claude-sonnet-4-5-20250929", description="Model name for drafting")
     max_tokens: int = Field(default=1024, description="Max tokens for draft generation")

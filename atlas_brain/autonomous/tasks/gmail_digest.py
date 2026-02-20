@@ -171,6 +171,50 @@ async def _record_processed_emails(emails: list[dict[str, Any]]) -> None:
         logger.warning("Failed to record processed emails: %s", e)
 
 
+async def _send_action_email_notifications(emails: list[dict[str, Any]]) -> None:
+    """Send individual ntfy notifications for action-required emails with [Draft Reply] buttons."""
+    if not settings.alerts.ntfy_enabled:
+        return
+
+    api_url = settings.email_draft.atlas_api_url.rstrip("/")
+    ntfy_url = f"{settings.alerts.ntfy_url.rstrip('/')}/{settings.alerts.ntfy_topic}"
+
+    for e in emails:
+        gmail_msg_id = e.get("id", "")
+        if not gmail_msg_id:
+            continue
+
+        sender = e.get("from", "unknown")
+        subject = e.get("subject", "(no subject)")
+        body_snippet = (e.get("body_text") or e.get("snippet") or "")[:200]
+        if len(body_snippet) == 200:
+            body_snippet += "..."
+
+        sender_name = sender.split("<")[0].strip().strip('"') or sender
+
+        message = f"From: {sender_name}\nSubject: {subject}\n\n{body_snippet}"
+
+        actions = (
+            f"http, Draft Reply, {api_url}/api/v1/email/drafts/generate/{gmail_msg_id}, method=POST, clear=true; "
+            f"view, View Email, https://mail.google.com/mail/u/0/#inbox/{gmail_msg_id}"
+        )
+
+        headers = {
+            "Title": f"Action Required: {subject[:60]}",
+            "Priority": "high",
+            "Tags": "email,warning",
+            "Actions": actions,
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(ntfy_url, content=message, headers=headers)
+                resp.raise_for_status()
+            logger.info("Action email notification sent for %s: %s", gmail_msg_id, subject[:40])
+        except Exception as exc:
+            logger.warning("Failed to send action email notification for %s: %s", gmail_msg_id, exc)
+
+
 # ---------------------------------------------------------------------------
 # Gmail API client
 # ---------------------------------------------------------------------------
@@ -472,6 +516,15 @@ async def run(task: ScheduledTask) -> dict:
     # --- Record processed IDs before synthesis (crash-safe) ---
     await _record_processed_emails(emails)
 
+    # --- Send individual ntfy notifications for action-required replyable emails ---
+    action_emails = [
+        e for e in emails
+        if e.get("priority") == "action_required"
+        and e.get("replyable") is not False
+    ]
+    if action_emails:
+        await _send_action_email_notifications(action_emails)
+
     # --- Build result for LLM synthesis ---
     # Slim down each email to only what the LLM needs for summarization.
     # Classification is already done; the LLM just summarizes.
@@ -482,12 +535,14 @@ async def run(task: ScheduledTask) -> dict:
         if len(body) > SYNTHESIS_BODY_LIMIT:
             body = body[:SYNTHESIS_BODY_LIMIT] + "..."
         emails_for_llm.append({
+            "gmail_message_id": e.get("id", ""),
             "from": e.get("from", ""),
             "subject": e.get("subject", ""),
             "date": e.get("date", ""),
             "body_text": body,
             "category": e.get("category", "other"),
             "priority": e.get("priority", "fyi"),
+            "replyable": e.get("replyable"),
         })
 
     # Build summary
