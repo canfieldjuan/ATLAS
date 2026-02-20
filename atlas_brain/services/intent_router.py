@@ -31,6 +31,7 @@ class IntentRouteResult:
     route_time_ms: float = 0.0
     tool_name: Optional[str] = None  # Mapped tool name if applicable
     fast_path_ok: bool = False  # True if tool can execute without params
+    entity_name: Optional[str] = None  # Extracted entity for graph traversal
 
 
 # Tools that can execute without parameters (fast path OK)
@@ -418,14 +419,14 @@ class SemanticIntentRouter:
         if self._config.llm_fallback_enabled and word_count >= 3:
             llm_result = await self._llm_classify(query)
             if llm_result is not None:
-                llm_route, llm_conf = llm_result
+                llm_route, llm_conf, llm_entity = llm_result
                 route_time = (time.time() - start) * 1000
                 action_category, tool_name = ROUTE_TO_ACTION.get(
                     llm_route, ("conversation", None)
                 )
                 logger.info(
-                    "Route: '%s' -> %s (llm_fallback, conf=%.2f, %.0fms)",
-                    query[:40], llm_route, llm_conf, route_time,
+                    "Route: '%s' -> %s (llm_fallback, conf=%.2f, %.0fms, entity=%s)",
+                    query[:40], llm_route, llm_conf, route_time, llm_entity,
                 )
                 self._log_fallback(
                     query, route_name, similarity,
@@ -438,6 +439,7 @@ class SemanticIntentRouter:
                     route_time_ms=route_time,
                     tool_name=tool_name,
                     fast_path_ok=tool_name in PARAMETERLESS_TOOLS if tool_name else False,
+                    entity_name=llm_entity,
                 )
             else:
                 # LLM fallback failed (timeout/parse error) — log anyway
@@ -525,7 +527,7 @@ class SemanticIntentRouter:
         self._fallback_llm.load()
         return self._fallback_llm
 
-    async def _llm_classify(self, query: str) -> Optional[tuple[str, float]]:
+    async def _llm_classify(self, query: str) -> Optional[tuple[str, float, Optional[str]]]:
         """Use LLM to classify query when semantic confidence is low."""
         try:
             from .protocols import Message
@@ -555,7 +557,8 @@ class SemanticIntentRouter:
                 "- conversation: general chat, personal questions, opinions, "
                 "knowledge recall, or anything not matching above\n"
                 f'User query: "{query}"\n'
-                'Respond with ONLY JSON: {"route": "<name>", "confidence": <0.0-1.0>}'
+                'Respond with ONLY JSON: {"route": "<name>", "confidence": <0.0-1.0>, '
+                '"entity": "<main subject name or null>"}'
             )
 
             messages = [Message(role="user", content=prompt)]
@@ -587,9 +590,12 @@ class SemanticIntentRouter:
             parsed = json.loads(response_text)
             route = parsed.get("route", "")
             confidence = float(parsed.get("confidence", 0.5))
+            entity = parsed.get("entity") or None
+            if isinstance(entity, str):
+                entity = entity.strip() if entity.strip() else None
 
             if route in _VALID_ROUTES:
-                return route, confidence
+                return route, confidence, entity
 
             logger.warning("LLM returned invalid route: %s", route)
             return None

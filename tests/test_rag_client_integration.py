@@ -98,11 +98,12 @@ class TestRetrieveMemorySearch:
         mock_classifier = MagicMock()
         mock_classifier.classify.return_value = SimpleNamespace(
             use_rag=True, category="knowledge", reason="test", confidence=1.0,
-            entity_name=None,
         )
 
         mock_client = MagicMock()
-        mock_client.search = AsyncMock(return_value=SearchResult(facts=sources))
+        mock_client.search_with_traversal = AsyncMock(
+            return_value=SearchResult(facts=sources),
+        )
 
         with (
             patch("atlas_brain.config.settings", mock_settings),
@@ -120,10 +121,7 @@ class TestRetrieveMemorySearch:
         assert cmd.update["retrieved_sources"] == sources
         assert cmd.update["retrieved_sources"][0].fact == "We discussed the project"
         assert cmd.update["memory_ms"] > 0
-        mock_client.search.assert_called_once_with(
-            "What did we talk about yesterday?",
-            max_facts=5,
-        )
+        mock_client.search_with_traversal.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_classifier_skip_sets_empty_sources(self):

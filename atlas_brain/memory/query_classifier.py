@@ -23,7 +23,6 @@ class ClassificationResult:
     category: str
     reason: str
     confidence: float = 1.0
-    entity_name: Optional[str] = None
 
 
 class QueryClassifier:
@@ -64,29 +63,11 @@ class QueryClassifier:
         r"\b(compare|difference\s+between)\b",
     ]
 
-    # Entity-focused query patterns - extract entity name for graph traversal
-    ENTITY_QUERY_PATTERNS = [
-        re.compile(r"(?:what do you know about|tell me about|who is|what is)\s+(.+?)(?:\?|$)", re.I),
-        re.compile(r"(?:what can you tell me about|do you know anything about)\s+(.+?)(?:\?|$)", re.I),
-        re.compile(r"(?:information on|details about|facts about)\s+(.+?)(?:\?|$)", re.I),
-    ]
-
     def __init__(self):
         # Compile patterns for efficiency
         self._device_re = [re.compile(p, re.IGNORECASE) for p in self.DEVICE_PATTERNS]
         self._simple_re = [re.compile(p, re.IGNORECASE) for p in self.SIMPLE_PATTERNS]
         self._knowledge_re = [re.compile(p, re.IGNORECASE) for p in self.KNOWLEDGE_PATTERNS]
-
-    def _extract_entity_name(self, query: str) -> Optional[str]:
-        """Extract entity name from entity-focused queries."""
-        for pattern in self.ENTITY_QUERY_PATTERNS:
-            m = pattern.search(query)
-            if m:
-                name = m.group(1).strip("? .!,")
-                # Strip leading articles
-                name = re.sub(r'^(?:the|a|an)(?:\s+|$)', '', name, flags=re.IGNORECASE)
-                return name.strip().title() if name.strip() else None
-        return None
 
     def classify(self, query: str) -> ClassificationResult:
         """
@@ -132,7 +113,6 @@ class QueryClassifier:
                     use_rag=True,
                     category="knowledge",
                     reason="Knowledge or memory query detected",
-                    entity_name=self._extract_entity_name(query),
                 )
 
         # Default: use RAG for longer queries, skip for short ones
@@ -151,7 +131,6 @@ class QueryClassifier:
             category="general",
             reason="General query, using RAG",
             confidence=0.6,
-            entity_name=self._extract_entity_name(query),
         )
 
 

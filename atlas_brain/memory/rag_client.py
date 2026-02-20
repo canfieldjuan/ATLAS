@@ -4,6 +4,7 @@ RAG Client for graphiti-wrapper integration.
 Provides async HTTP client for the GraphRAG service.
 """
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -208,6 +209,68 @@ class RAGClient:
         except Exception as e:
             logger.warning("Entity edge retrieval failed: %s", e)
             return SearchResult()
+
+    async def search_with_traversal(
+        self,
+        query: str,
+        entity_name: Optional[str] = None,
+        max_facts: int = 5,
+        timeout: Optional[float] = None,
+    ) -> SearchResult:
+        """Search with optional parallel entity edge traversal.
+
+        When entity_name is provided, runs vector search and graph
+        traversal concurrently via asyncio.gather, then merges and
+        deduplicates results by UUID.
+
+        Args:
+            query: Search query text
+            entity_name: Extracted entity for graph traversal (or None)
+            max_facts: Max facts for vector search
+            timeout: Per-coroutine timeout in seconds (defaults to config)
+
+        Returns:
+            SearchResult with merged facts
+        """
+        if not settings.memory.enabled:
+            return SearchResult()
+
+        t = timeout or settings.memory.context_timeout
+
+        if entity_name:
+            search_coro = asyncio.wait_for(
+                self.search(query, max_facts=max_facts), timeout=t,
+            )
+            traversal_coro = asyncio.wait_for(
+                self.get_entity_edges(entity_name), timeout=t,
+            )
+            search_res, traversal_res = await asyncio.gather(
+                search_coro, traversal_coro, return_exceptions=True,
+            )
+
+            if isinstance(search_res, Exception):
+                logger.warning("Search failed in parallel: %s", search_res)
+                search_res = SearchResult()
+            if isinstance(traversal_res, Exception):
+                logger.warning("Traversal failed in parallel: %s", traversal_res)
+                traversal_res = SearchResult()
+
+            seen = {f.uuid for f in search_res.facts if f.uuid}
+            merged = list(search_res.facts)
+            for fact in traversal_res.facts:
+                if fact.uuid and fact.uuid not in seen:
+                    merged.append(fact)
+                    seen.add(fact.uuid)
+
+            logger.debug(
+                "search_with_traversal: %d search + %d traversal = %d merged",
+                len(search_res.facts), len(traversal_res.facts), len(merged),
+            )
+            return SearchResult(facts=merged)
+
+        return await asyncio.wait_for(
+            self.search(query, max_facts=max_facts), timeout=t,
+        )
 
     async def enhance_prompt(
         self,

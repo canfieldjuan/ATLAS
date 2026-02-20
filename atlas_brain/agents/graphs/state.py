@@ -140,6 +140,7 @@ class AtlasAgentState(AgentState):
     # Memory/context retrieval (structured sources from retrieve_memory node)
     retrieved_sources: list  # SearchSource objects from retrieve_memory
     memory_ms: float
+    entity_name: Optional[str]  # Extracted entity for graph traversal
 
     # Sub-agent delegation
     delegate_to: Optional[str]  # "home", "receptionist", None

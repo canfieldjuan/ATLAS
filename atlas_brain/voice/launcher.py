@@ -207,9 +207,11 @@ def _create_streaming_agent_runner():
                     _last_route_result["result"] = route_result
 
             if use_streaming:
+                _entity = getattr(route_result, "entity_name", None) if route_result else None
                 success = await _stream_llm_response(
                     transcript, context_dict, _tracked_on_sentence,
                     cached_mem_ctx=cached_prep.get("mem_ctx") if cached_prep else None,
+                    entity_name=_entity,
                 )
                 if not success:
                     # Discard partial sentences before running fallback agent
@@ -303,6 +305,7 @@ async def _stream_llm_response(
     context_dict: Dict[str, Any],
     on_sentence: Callable[[str], None],
     cached_mem_ctx: Optional[Any] = None,
+    entity_name: Optional[str] = None,
 ) -> bool:
     """Stream LLM response for conversation queries.
 
@@ -338,11 +341,26 @@ async def _stream_llm_response(
         mem_ctx = cached_mem_ctx
         logger.info("Using cached context from early prep")
     else:
+        # Run entity-aware search (parallel vector + graph traversal)
+        pre_fetched = None
+        try:
+            from ..memory.rag_client import get_rag_client
+            client = get_rag_client()
+            result = await client.search_with_traversal(
+                query=transcript,
+                entity_name=entity_name,
+                max_facts=settings.memory.context_results,
+            )
+            pre_fetched = result.facts
+        except Exception as e:
+            logger.warning("Voice entity search failed: %s", e)
+
         mem_ctx = await svc.gather_context(
             query=transcript,
             session_id=session_id,
             user_id=context_dict.get("speaker_id"),
             include_rag=True,
+            pre_fetched_sources=pre_fetched,
             include_history=True,
             include_physical=False,
             max_history=6,
@@ -631,12 +649,27 @@ def _create_early_prep_runner():
                              route_result.action_category)
                 return  # Not conversation, don't bother caching
 
+            # Entity-aware search (parallel vector + graph traversal)
+            pre_fetched = None
+            try:
+                from ..memory.rag_client import get_rag_client
+                _entity = getattr(route_result, "entity_name", None)
+                result = await get_rag_client().search_with_traversal(
+                    query=partial_transcript,
+                    entity_name=_entity,
+                    max_facts=settings.memory.context_results,
+                )
+                pre_fetched = result.facts
+            except Exception as e:
+                logger.warning("Early prep entity search failed: %s", e)
+
             # Gather context using partial transcript
             svc = get_memory_service()
             mem_ctx = await svc.gather_context(
                 query=partial_transcript,
                 session_id=session_id,
                 include_rag=True,
+                pre_fetched_sources=pre_fetched,
                 include_history=True,
                 include_physical=False,
                 max_history=6,

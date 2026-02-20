@@ -180,7 +180,7 @@ class TestLLMFallback:
         with patch.object(
             loaded_router, "_llm_classify", new_callable=AsyncMock
         ) as mock_llm:
-            mock_llm.return_value = ("device_command", 0.85)
+            mock_llm.return_value = ("device_command", 0.85, None)
 
             # Temporarily enable LLM fallback
             original_enabled = loaded_router._config.llm_fallback_enabled
