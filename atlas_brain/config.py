@@ -430,6 +430,10 @@ class ToolsConfig(BaseSettings):
         default=90, ge=7, le=365,
         description="Days to keep processed email records before cleanup",
     )
+    gmail_domain_map_file: str = Field(
+        default="data/email_domains.json",
+        description="Optional JSON file mapping sender domains to email categories (overrides built-in defaults)",
+    )
 
 
 class IntentConfig(BaseSettings):

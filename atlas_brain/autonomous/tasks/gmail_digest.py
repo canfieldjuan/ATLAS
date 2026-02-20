@@ -150,12 +150,18 @@ async def _record_processed_emails(emails: list[dict[str, Any]]) -> None:
         async with pool.transaction() as conn:
             await conn.executemany(
                 """
-                INSERT INTO processed_emails (gmail_message_id, sender, subject)
-                VALUES ($1, $2, $3)
+                INSERT INTO processed_emails (gmail_message_id, sender, subject, category, priority)
+                VALUES ($1, $2, $3, $4, $5)
                 ON CONFLICT (gmail_message_id) DO NOTHING
                 """,
                 [
-                    (e["id"], e.get("from", ""), e.get("subject", ""))
+                    (
+                        e["id"],
+                        e.get("from", ""),
+                        e.get("subject", ""),
+                        e.get("category"),
+                        e.get("priority"),
+                    )
                     for e in emails
                 ],
             )
@@ -455,13 +461,18 @@ async def run(task: ScheduledTask) -> dict:
             else:
                 emails.append(r)
 
+    # --- Classify emails (rule-based, no LLM) ---
+    from .email_classifier import get_email_classifier
+
+    classifier = get_email_classifier()
+    emails = classifier.classify_batch(emails)
+
     # --- Record processed IDs before synthesis (crash-safe) ---
     await _record_processed_emails(emails)
 
     # --- Build result for LLM synthesis ---
-    # Slim down each email to only what the LLM needs for classification.
-    # Full body_text is stored in the email dict; we truncate for synthesis
-    # to keep the total payload under ~8K chars (avoids LLM hallucination).
+    # Slim down each email to only what the LLM needs for summarization.
+    # Classification is already done; the LLM just summarizes.
     SYNTHESIS_BODY_LIMIT = 500
     emails_for_llm = []
     for e in emails:
@@ -473,8 +484,8 @@ async def run(task: ScheduledTask) -> dict:
             "subject": e.get("subject", ""),
             "date": e.get("date", ""),
             "body_text": body,
-            "has_unsubscribe": e.get("has_unsubscribe", False),
-            "label_ids": e.get("label_ids", []),
+            "category": e.get("category", "other"),
+            "priority": e.get("priority", "fyi"),
         })
 
     # Build summary
