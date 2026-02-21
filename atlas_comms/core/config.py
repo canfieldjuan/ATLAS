@@ -178,6 +178,8 @@ class CommsConfig(BaseSettings):
     signalwire_project_id: str = Field(default="", description="SignalWire Project ID")
     signalwire_api_token: str = Field(default="", description="SignalWire API Token")
     signalwire_space: str = Field(default="", description="SignalWire Space Name")
+    signalwire_account_sid: str = Field(default="", description="SignalWire Account SID (UUID) for recording download auth")
+    signalwire_recording_token: str = Field(default="", description="SignalWire token for recording download Basic Auth")
 
     # Webhook settings
     webhook_base_url: str = Field(

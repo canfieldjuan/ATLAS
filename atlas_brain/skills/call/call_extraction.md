@@ -28,11 +28,12 @@ Respond with ONLY a JSON object (no markdown fences, no extra text):
     "customer_name": "Name if mentioned, or null",
     "customer_phone": "Phone number if mentioned, or null",
     "customer_email": "Email if mentioned, or null",
-    "intent": "One of: estimate_request, booking, reschedule, cancel, inquiry, complaint, follow_up, other",
+    "intent": "One of: estimate_request, booking, reschedule, cancel, inquiry, complaint, follow_up, personal_call, wrong_number, spam, other",
     "services_mentioned": ["list of services discussed"],
     "address": "Address if mentioned, or null",
     "preferred_date": "Date preference if mentioned, or null",
     "preferred_time": "Time preference if mentioned, or null",
+    "frequency": "One of: one_time, weekly, biweekly, monthly, or null if not mentioned",
     "urgency": "One of: low, normal, high, urgent",
     "follow_up_needed": true or false,
     "notes": "Brief summary of key details not captured above"
@@ -55,5 +56,7 @@ Action types: book_estimate, send_email, schedule_callback, create_appointment, 
 - If the caller did not mention their name, set customer_name to null
 - For services_mentioned, use the business's actual service names where possible
 - Set urgency based on caller's tone and timeline: "ASAP" or "emergency" = urgent, "this week" = high, default = normal
+- If the call contains no business discussion (personal conversation, catching up, no service mentioned), set intent to "personal_call" and follow_up_needed to false
+- If the caller clearly reached the wrong number or seems confused about who they called, set intent to "wrong_number"
 - If no follow-up action is clear, set follow_up_needed to false and proposed_actions to [{"type": "none", "label": "No action needed", "reason": "Informational call only"}]
 - Output the extracted data JSON first, then a blank line, then the proposed actions JSON array

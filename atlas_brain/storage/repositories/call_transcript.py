@@ -143,6 +143,29 @@ class CallTranscriptRepository:
         except Exception as e:
             raise DatabaseOperationError("update status", e)
 
+    async def save_draft(self, transcript_id: UUID, draft_type: str, content: str) -> None:
+        """Merge a draft ('email' or 'sms') into the drafts JSONB column."""
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            raise DatabaseUnavailableError("save draft")
+
+        try:
+            await pool.execute(
+                """
+                UPDATE call_transcripts
+                SET drafts = COALESCE(drafts, '{}'::jsonb)
+                          || jsonb_build_object($2::text, $3::text)
+                WHERE id = $1
+                """,
+                transcript_id,
+                draft_type,
+                content,
+            )
+        except DatabaseUnavailableError:
+            raise
+        except Exception as e:
+            raise DatabaseOperationError("save draft", e)
+
     async def mark_notified(self, transcript_id: UUID) -> None:
         """Mark transcript as notified."""
         pool = get_db_pool()
@@ -234,9 +257,11 @@ class CallTranscriptRepository:
         """Convert a database row to a dict."""
         result = dict(row)
         # asyncpg returns JSONB as Python dicts/lists; guard None for defaults
-        for key in ("extracted_data", "proposed_actions"):
+        for key in ("extracted_data", "drafts"):
             if result.get(key) is None:
-                result[key] = {} if key == "extracted_data" else []
+                result[key] = {}
+        if result.get("proposed_actions") is None:
+            result["proposed_actions"] = []
         return result
 
 

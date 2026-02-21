@@ -12,12 +12,11 @@ import re
 import time
 from typing import Optional
 
-from fastapi import APIRouter, Form, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Form, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response, JSONResponse
 
-from ...comms import comms_settings
+from ...comms import comms_settings, get_comms_service
 from ...comms.context import get_context_router
-from ...comms.providers import get_provider
 
 logger = logging.getLogger("atlas.api.comms.webhooks")
 
@@ -189,7 +188,7 @@ async def handle_inbound_call(request: Request):
 
     # During business hours - greet and start AI conversation
     try:
-        provider = get_provider()
+        provider = get_comms_service().provider
 
         # Track the call
         call = await provider.handle_incoming_call(
@@ -210,19 +209,27 @@ async def handle_inbound_call(request: Request):
                     call_id,
                     comms_settings.forward_to_number,
                 )
-                # If recording is enabled, start it via REST API once the call
-                # is answered (status callback) rather than as a <Dial> attribute,
-                # which has inconsistent support across SignalWire LaML versions.
-                status_cb = ""
+                # Build <Dial> attributes
+                recording_url = (
+                    f"{comms_settings.webhook_base_url}"
+                    "/api/v1/comms/voice/recording-status"
+                )
+                dial_attrs = 'timeout="30" answerOnBridge="true"'
                 if comms_settings.record_calls:
-                    status_cb = (
-                        f' action="{comms_settings.webhook_base_url}'
-                        f'/api/v1/comms/voice/dial-status"'
+                    dial_attrs += (
+                        ' record="record-from-answer"'
+                        f' recordingStatusCallback="{recording_url}"'
+                        ' recordingStatusCallbackEvent="completed"'
                     )
+                whisper_url = (
+                    f"{comms_settings.webhook_base_url}"
+                    f"/api/v1/comms/voice/whisper"
+                    f"?from={from_number}&context={context.name}"
+                )
                 return laml_response(f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Dial timeout="30" answerOnBridge="true"{status_cb}>
-        {comms_settings.forward_to_number}
+    <Dial {dial_attrs}>
+        <Number url="{whisper_url}">{comms_settings.forward_to_number}</Number>
     </Dial>
 </Response>""")
 
@@ -492,7 +499,7 @@ async def handle_outbound_call(
     logger.info("Outbound call connected: %s to %s", CallSid, To)
 
     try:
-        provider = get_provider()
+        provider = get_comms_service().provider
         call = await provider.get_call(CallSid)
 
         if call and call.context_id:
@@ -550,7 +557,7 @@ async def handle_dial_status(
                 f"{comms_settings.webhook_base_url}"
                 "/api/v1/comms/voice/recording-status"
             )
-            provider = get_provider()
+            provider = get_comms_service().provider
             await provider.start_recording(
                 call_sid=CallSid,
                 recording_status_callback=cb_url,
@@ -577,12 +584,42 @@ async def handle_call_status(
     logger.info("Call %s status: %s (duration: %s)", CallSid, CallStatus, Duration)
 
     try:
-        provider = get_provider()
+        provider = get_comms_service().provider
         await provider.handle_call_status(CallSid, CallStatus)
     except Exception as e:
         logger.error("Error handling call status: %s", e)
 
     return Response(status_code=204)
+
+
+@router.api_route("/whisper", methods=["GET", "POST"])
+async def call_whisper(
+    request: Request,
+    from_: str = Query("", alias="from"),
+    context: str = Query(""),
+):
+    """
+    Whisper endpoint played to the answering party (you) before the call bridges.
+
+    SignalWire fetches this URL when you pick up the forwarded call.
+    The caller hears nothing until you press a key or the whisper finishes.
+    """
+    # Format caller number for speech: +16185551234 -> 618-555-1234
+    spoken_number = from_
+    if from_.startswith("+1") and len(from_) == 12:
+        digits = from_[2:]
+        spoken_number = f"{digits[:3]}-{digits[3:6]}-{digits[6:]}"
+    elif from_.startswith("+") and len(from_) > 1:
+        spoken_number = from_[1:]
+
+    biz_name = context or "Business"
+
+    laml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Joanna">{biz_name} call from {spoken_number}.</Say>
+    <Gather numDigits="1" timeout="5" />
+</Response>"""
+    return Response(content=laml, media_type="application/xml")
 
 
 @router.post("/voicemail")
@@ -734,7 +771,7 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
     context = None
 
     try:
-        provider = get_provider()
+        provider = get_comms_service().provider
         call = await provider.get_call(call_sid)
 
         # Get context - try from call first, then default to first context
@@ -911,7 +948,7 @@ async def _run_recording_processing(
 ):
     """Run call intelligence pipeline on a SignalWire recording."""
     try:
-        provider = get_provider()
+        provider = get_comms_service().provider
         call = await provider.get_call(call_sid)
         from_number = call.from_number if call else ""
         to_number = call.to_number if call else ""
@@ -1016,7 +1053,7 @@ async def handle_inbound_sms(
             media_urls.append(str(url))
 
     try:
-        provider = get_provider()
+        provider = get_comms_service().provider
         message = await provider.handle_incoming_sms(
             message_sid=MessageSid,
             from_number=From,

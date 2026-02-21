@@ -141,11 +141,12 @@ async def _download_recording(recording_url: str) -> bytes:
         url = url.rstrip("/") + ".wav"
 
     auth = None
-    if comms_settings.signalwire_project_id and comms_settings.signalwire_api_token:
-        auth = httpx.BasicAuth(
-            comms_settings.signalwire_project_id,
-            comms_settings.signalwire_api_token,
-        )
+    # Recording download requires the account UUID SID, not the PT-format project ID.
+    # Use signalwire_account_sid + signalwire_recording_token if set, otherwise fall back.
+    account_sid = comms_settings.signalwire_account_sid or comms_settings.signalwire_project_id
+    recording_token = comms_settings.signalwire_recording_token or comms_settings.signalwire_api_token
+    if account_sid and recording_token:
+        auth = httpx.BasicAuth(account_sid, recording_token)
 
     cfg = settings.call_intelligence
     async with httpx.AsyncClient(timeout=cfg.asr_timeout, follow_redirects=True) as client:
@@ -178,10 +179,12 @@ async def _extract_call_data(
     business_context=None,
 ) -> tuple[str, dict, list]:
     """Use LLM to extract structured data from the transcript."""
-    from ..services import llm_registry
     from ..services.protocols import Message
+    from ..services.llm_router import get_triage_llm
+    from ..services import llm_registry
 
-    llm = llm_registry.get_active()
+    # Prefer Haiku (no local VRAM, always available) over local qwen3
+    llm = get_triage_llm() or llm_registry.get_active()
     if not llm:
         logger.warning("No active LLM for call extraction")
         return transcript[:200], {}, []
@@ -334,7 +337,10 @@ async def _notify_call_summary(
     if not settings.alerts.ntfy_url or not settings.alerts.ntfy_topic:
         return
 
+    from ..comms import comms_settings as _comms_cfg
+
     ntfy_url = f"{settings.alerts.ntfy_url.rstrip('/')}/{settings.alerts.ntfy_topic}"
+    api_url = _comms_cfg.webhook_base_url.rstrip("/")
 
     # Format duration
     mins, secs = divmod(duration_seconds, 60)
@@ -387,10 +393,30 @@ async def _notify_call_summary(
 
     message = "\n".join(lines)
 
+    # Build ntfy action buttons from proposed_actions
+    action_parts = []
+    for action in proposed_actions:
+        atype = action.get("type", "none")
+        if atype in ("book_estimate", "create_appointment", "book_appointment"):
+            action_parts.append(
+                f"http, Book Appointment, {api_url}/api/v1/comms/call-actions/{transcript_id}/book, "
+                f"method=POST, clear=true"
+            )
+        elif atype in ("send_sms", "send_followup", "schedule_callback"):
+            action_parts.append(
+                f"http, Send SMS, {api_url}/api/v1/comms/call-actions/{transcript_id}/sms, "
+                f"method=POST, clear=true"
+            )
+    action_parts.append(
+        f"view, View Transcript, {api_url}/api/v1/comms/call-actions/{transcript_id}/view"
+    )
+    actions_header = "; ".join(action_parts)
+
     headers = {
         "Title": f"{biz_name}: Call Summary",
         "Priority": "default",
         "Tags": "phone,call",
+        "Actions": actions_header,
     }
 
     try:
