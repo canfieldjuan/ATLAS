@@ -210,20 +210,18 @@ async def handle_inbound_call(request: Request):
                     call_id,
                     comms_settings.forward_to_number,
                 )
-                recording_attrs = ""
+                # If recording is enabled, start it via REST API once the call
+                # is answered (status callback) rather than as a <Dial> attribute,
+                # which has inconsistent support across SignalWire LaML versions.
+                status_cb = ""
                 if comms_settings.record_calls:
-                    cb_url = (
-                        f"{comms_settings.webhook_base_url}"
-                        "/api/v1/comms/voice/recording-status"
-                    )
-                    recording_attrs = (
-                        f' record="record-from-answer-dual"'
-                        f' recordingStatusCallback="{cb_url}"'
-                        f' recordingStatusCallbackEvent="completed"'
+                    status_cb = (
+                        f' action="{comms_settings.webhook_base_url}'
+                        f'/api/v1/comms/voice/dial-status"'
                     )
                 return laml_response(f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Dial{recording_attrs} timeout="30" answerOnBridge="true">
+    <Dial timeout="30" answerOnBridge="true"{status_cb}>
         {comms_settings.forward_to_number}
     </Dial>
 </Response>""")
@@ -524,6 +522,44 @@ async def handle_outbound_call(
     <Say>I'm sorry, I'm having trouble. Goodbye.</Say>
     <Hangup />
 </Response>""")
+
+
+@router.post("/dial-status")
+async def handle_dial_status(
+    request: Request,
+    CallSid: str = Form(...),
+    DialCallStatus: str = Form(...),
+    DialCallSid: Optional[str] = Form(None),
+    DialCallDuration: Optional[str] = Form(None),
+):
+    """
+    Action callback fired by SignalWire when a <Dial> leg completes.
+
+    When call forwarding is used with record_calls=True, this starts a
+    recording on the call via the REST API (more reliable than <Dial record=...>).
+    Fires the call intelligence pipeline once the recording is ready.
+    """
+    logger.info(
+        "Dial status for %s: %s (leg=%s, duration=%s)",
+        CallSid, DialCallStatus, DialCallSid, DialCallDuration,
+    )
+
+    if DialCallStatus == "completed" and comms_settings.record_calls:
+        try:
+            cb_url = (
+                f"{comms_settings.webhook_base_url}"
+                "/api/v1/comms/voice/recording-status"
+            )
+            provider = get_provider()
+            await provider.start_recording(
+                call_sid=CallSid,
+                recording_status_callback=cb_url,
+            )
+            logger.info("Started REST recording for call %s", CallSid)
+        except Exception as e:
+            logger.warning("Failed to start recording for %s: %s", CallSid, e)
+
+    return Response(status_code=204)
 
 
 @router.post("/status")

@@ -209,6 +209,23 @@ class SignalWireProvider(TelephonyProvider):
             call.state = CallState.FAILED
             raise
 
+    async def start_recording(
+        self,
+        call_sid: str,
+        recording_status_callback: str = "",
+    ) -> None:
+        """Start recording an active call via the REST API."""
+        if not self._client:
+            raise RuntimeError("Provider not connected")
+
+        kwargs = {}
+        if recording_status_callback:
+            kwargs["recording_status_callback"] = recording_status_callback
+            kwargs["recording_status_callback_event"] = "completed"
+
+        self._client.calls(call_sid).recordings.create(**kwargs)
+        logger.info("Started recording for call %s", call_sid)
+
     async def hangup(self, call: Call) -> bool:
         """End an active call."""
         if not self._client:
