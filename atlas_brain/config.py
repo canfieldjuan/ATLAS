@@ -403,7 +403,7 @@ class MemoryConfig(BaseSettings):
         description="Enable daily email-to-graph extraction job",
     )
     email_graph_model: str = Field(
-        default="qwen3:14b",
+        default="qwen3:32b",
         description="Ollama model for email fact extraction",
     )
     email_graph_group_id: str = Field(

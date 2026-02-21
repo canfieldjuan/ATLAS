@@ -23,9 +23,17 @@ You will receive JSON with these fields:
 
 ## Output
 
-Respond with **1-4 concise factual sentences** summarizing ONLY information worth remembering long-term.
+**Line 1**: `SENTIMENT: <label>` where label is one of: `positive`, `neutral`, `negative`, `urgent`
+
+**Lines 2+**: 1-4 concise factual sentences summarizing ONLY information worth remembering long-term.
 
 If the email has NO graph-worthy content, respond with exactly: `SKIP`
+
+### Sentiment labels
+- `positive` — good news, approvals, confirmations, offers
+- `neutral` — routine informational, receipts, scheduling
+- `negative` — complaints, disputes, rejections, warnings, overdue notices
+- `urgent` — deadlines imminent, legal/financial consequences, immediate action required
 
 ## What IS graph-worthy
 
@@ -50,7 +58,8 @@ If the email has NO graph-worthy content, respond with exactly: `SKIP`
 
 ## Rules
 
-- Write in third person, past tense or present tense as appropriate
+- Always start with `SENTIMENT: <label>` on its own line (even if the rest is SKIP)
+- Write facts in third person, past tense or present tense as appropriate
 - Include the sender's name in at least one sentence
 - Reference specific numbers, dates, and names -- never be vague
 - Do NOT editorialize or add interpretation

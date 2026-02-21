@@ -117,6 +117,38 @@ class EmailGraphSync:
             gmail_message_ids,
         )
 
+    _VALID_SENTIMENTS = {"positive", "neutral", "negative", "urgent"}
+
+    def _parse_extraction(self, text: str) -> tuple[Optional[str], Optional[str]]:
+        """Parse LLM output into (sentiment, facts).
+
+        Expected format:
+            SENTIMENT: negative
+            Tia Jackson from Red Cross...
+
+        Returns (sentiment, facts) where either may be None.
+        SKIP in the facts position means no graph-worthy content.
+        """
+        lines = text.strip().splitlines()
+        sentiment = None
+        fact_lines = []
+
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.upper().startswith("SENTIMENT:"):
+                label = stripped.split(":", 1)[1].strip().lower()
+                if label in self._VALID_SENTIMENTS:
+                    sentiment = label
+            else:
+                fact_lines.append(stripped)
+
+        facts = " ".join(l for l in fact_lines if l).strip()
+
+        if not facts or facts.upper() == "SKIP":
+            return sentiment, None
+
+        return sentiment, facts
+
     async def _extract_facts(
         self,
         sender: str,
@@ -124,10 +156,10 @@ class EmailGraphSync:
         body_snippet: str,
         category: str,
         received_at: str,
-    ) -> Optional[str]:
-        """Run qwen3:32b to extract graph-worthy facts from an email.
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Run LLM to extract graph-worthy facts and sentiment from an email.
 
-        Returns the extracted text, or None if the email should be skipped.
+        Returns (sentiment, facts). facts is None if the email should be skipped.
         """
         llm = self._get_llm()
         system_prompt = self._get_skill_prompt()
@@ -147,17 +179,14 @@ class EmailGraphSync:
                 Message(role="system", content=system_prompt),
                 Message(role="user", content=user_input),
             ],
-            max_tokens=300,
+            max_tokens=350,
             temperature=0.1,
         )
 
         # Strip <think> tags (Qwen3 quirk with /no_think)
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
-        if not text or text.upper() == "SKIP":
-            return None
-
-        return text
+        return self._parse_extraction(text)
 
     async def run(self) -> dict:
         """Run the email graph sync job."""
@@ -224,9 +253,9 @@ class EmailGraphSync:
             if hasattr(received_at, "isoformat"):
                 received_at = received_at.isoformat()
 
-            # Stage 1: qwen3:32b extracts graph-worthy facts
+            # Stage 1: extract graph-worthy facts + sentiment
             try:
-                extracted = await self._extract_facts(
+                sentiment, extracted = await self._extract_facts(
                     sender=sender,
                     subject=subject,
                     body_snippet=body_text,
@@ -244,7 +273,15 @@ class EmailGraphSync:
                 skipped_ids.append(msg_id)
                 continue
 
-            logger.info("Extracted facts for %s: %s", msg_id, extracted[:100])
+            logger.info(
+                "Extracted facts for %s [sentiment=%s]: %s",
+                msg_id, sentiment or "unknown", extracted[:100],
+            )
+
+            # Append sentiment to facts so Graphiti indexes it with the entities
+            content = extracted
+            if sentiment:
+                content = f"{extracted} The email sentiment is {sentiment}."
 
             # Build Graphiti message
             ts = email_row.get("processed_at")
@@ -254,10 +291,10 @@ class EmailGraphSync:
                 timestamp = datetime.now(timezone.utc).isoformat()
 
             messages_for_graphiti.append({
-                "content": extracted,
+                "content": content,
                 "role_type": "system",
                 "role": "email_digest",
-                "source_description": f"email from {sender}: {subject}",
+                "source_description": f"email from {sender}: {subject} [sentiment:{sentiment or 'unknown'}]",
                 "timestamp": timestamp,
             })
             graphiti_ids.append(msg_id)
