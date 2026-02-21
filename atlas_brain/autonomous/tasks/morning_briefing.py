@@ -190,7 +190,7 @@ async def _get_pending_drafts() -> dict:
             """
             SELECT id, original_from, draft_subject, created_at
             FROM email_drafts
-            WHERE status = 'pending_approval'
+            WHERE status = 'pending'
               AND parent_draft_id IS NULL
             ORDER BY created_at DESC
             LIMIT 5

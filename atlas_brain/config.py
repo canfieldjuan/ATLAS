@@ -403,8 +403,8 @@ class MemoryConfig(BaseSettings):
         description="Enable daily email-to-graph extraction job",
     )
     email_graph_model: str = Field(
-        default="qwen3:32b",
-        description="Ollama model for email fact extraction",
+        default="qwen3:14b",
+        description="Ollama model for Stage 1 email fact extraction (Atlas-side). Graphiti Stage 2 uses qwen3:32b nightly via graphiti-wrapper.",
     )
     email_graph_group_id: str = Field(
         default="",

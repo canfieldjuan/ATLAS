@@ -125,30 +125,40 @@ class FreeModeManager:
         return True
 
     def _speaker_ok(self) -> bool:
-        """Check whether a known speaker has been seen recently enough."""
-        match = self.pipeline._last_speaker_match
-        if match is not None and match.matched and match.confidence >= self.config.min_speaker_confidence:
-            # Fresh confirmed match — update heartbeat
-            self._last_known_speaker_time = time.monotonic()
-            return True
+        """Check whether a known speaker has been seen recently enough.
 
-        # No current match — check if within expiry window
-        if self._last_known_speaker_time == 0.0:
-            # Never had a known speaker
-            logger.debug("Free mode: no known speaker yet")
-            return False
+        The heartbeat (_last_known_speaker_time) is updated ONLY by
+        notify_speaker_confirmed(), which is called each time the pipeline
+        runs speaker ID on a completed command. Reading _last_speaker_match
+        here is only used to bootstrap on the very first evaluation cycle
+        when notify_speaker_confirmed() hasn't fired yet.
+        """
+        now = time.monotonic()
 
-        elapsed = time.monotonic() - self._last_known_speaker_time
-        if elapsed > self.config.speaker_id_expiry_s:
+        if self._last_known_speaker_time > 0.0:
+            # Primary path: check heartbeat age
+            elapsed = now - self._last_known_speaker_time
+            if elapsed <= self.config.speaker_id_expiry_s:
+                logger.debug("Free mode: speaker heartbeat OK (%.0fs ago)", elapsed)
+                return True
             logger.debug(
-                "Free mode: speaker absent for %.0fs (expiry=%.0fs)",
+                "Free mode: speaker heartbeat expired (%.0fs > %.0fs expiry)",
                 elapsed, self.config.speaker_id_expiry_s,
             )
             return False
 
-        # Within expiry window — allow briefly (speaker just didn't speak recently)
-        logger.debug("Free mode: speaker within expiry window (%.0fs elapsed)", elapsed)
-        return True
+        # Bootstrap path: no heartbeat yet — check if there's a current positive match
+        match = self.pipeline._last_speaker_match
+        if (match is not None
+                and match.matched
+                and match.confidence >= self.config.min_speaker_confidence):
+            # Bootstrap the heartbeat from the existing match
+            self._last_known_speaker_time = now
+            logger.debug("Free mode: bootstrapped speaker heartbeat from existing match")
+            return True
+
+        logger.debug("Free mode: no known speaker yet (no heartbeat, no current match)")
+        return False
 
     def _ambient_ok(self) -> bool:
         """Check whether ambient noise is below threshold."""
