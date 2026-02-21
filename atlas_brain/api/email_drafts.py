@@ -25,7 +25,7 @@ _REDRAFT_REASONS: dict[str, str] = {
     ),
     "be_shorter": (
         "The user found the draft too long. "
-        "Write a much shorter reply — aim for half the length or less. "
+        "Write a much shorter reply -- aim for half the length or less. "
         "Keep only the single most important point and a clear next step."
     ),
     "wrong_info": (
@@ -35,7 +35,7 @@ _REDRAFT_REASONS: dict[str, str] = {
     ),
 }
 _REDRAFT_GUIDANCE_DEFAULT = (
-    "The user rejected the previous draft. Write a substantially different reply — "
+    "The user rejected the previous draft. Write a substantially different reply -- "
     "different opening, different tone or formality level, different proposed action."
 )
 
