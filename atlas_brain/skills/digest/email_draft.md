@@ -21,6 +21,13 @@ You will receive JSON with these fields:
 - `user_name`: the user's name for sign-off
 - `user_timezone`: the user's timezone
 
+**Redraft-only fields** (present when `redraft: true`):
+- `redraft`: boolean, true when generating a replacement for a rejected draft
+- `redraft_guidance`: reason-specific instruction for what to change
+- `attempt_number`: which attempt this is (2 = first redraft, 3 = second, etc.)
+- `previous_draft_rejected`: first 500 characters of the rejected draft
+- `graph_context`: (optional) list of verified facts from memory about the sender
+
 ## Output Format
 
 Respond with EXACTLY this structure (no markdown, no extra text):
