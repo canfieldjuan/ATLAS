@@ -397,6 +397,28 @@ class MemoryConfig(BaseSettings):
         description="Skip facts with embedding similarity > this threshold (deduplication)",
     )
 
+    # Email graph sync settings - extract facts from emails for knowledge graph
+    email_graph_sync_enabled: bool = Field(
+        default=True,
+        description="Enable daily email-to-graph extraction job",
+    )
+    email_graph_model: str = Field(
+        default="qwen3:14b",
+        description="Ollama model for email fact extraction",
+    )
+    email_graph_group_id: str = Field(
+        default="",
+        description="Group ID for email graph data (empty = use default group_id)",
+    )
+    email_graph_priorities: list[str] = Field(
+        default=["action_required"],
+        description="Email priorities to sync to graph",
+    )
+    email_graph_max_per_run: int = Field(
+        default=20,
+        description="Max emails to process per sync run",
+    )
+
 
 class ToolsConfig(BaseSettings):
     """Configuration for Atlas tools (weather, traffic, etc.)."""

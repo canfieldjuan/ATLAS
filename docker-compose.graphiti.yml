@@ -2,9 +2,12 @@
 # Neo4j + Graphiti Wrapper (100% local, no cloud APIs)
 #
 # Usage:
-#   docker compose -f docker-compose.graphiti.yml up -d neo4j
-#   # Wait for healthy, then: python init_neo4j.py
-#   docker compose -f docker-compose.graphiti.yml up -d graphiti-wrapper
+#   docker compose -f docker-compose.graphiti.yml up -d
+#
+# Both containers restart automatically on reboot (restart: unless-stopped).
+# Pinned project name keeps the network name stable regardless of working dir.
+
+name: atlas-memory
 
 services:
   neo4j:

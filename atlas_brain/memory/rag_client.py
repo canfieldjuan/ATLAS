@@ -407,7 +407,7 @@ class RAGClient:
             resp = await client.post(
                 "/messages",
                 json=payload,
-                timeout=300.0,  # batch extraction can be slow
+                timeout=1200.0,  # batch extraction: ~10 LLM calls per message, can take 10+ min
             )
             resp.raise_for_status()
             return resp.json()

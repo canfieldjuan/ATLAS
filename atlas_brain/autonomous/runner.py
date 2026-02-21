@@ -36,6 +36,7 @@ class HeadlessRunner:
         """Register default builtin task handlers."""
         self._builtin_handlers["nightly_memory_sync"] = self._run_nightly_sync
         self._builtin_handlers["cleanup_old_executions"] = self._run_cleanup_executions
+        self._builtin_handlers["email_graph_sync"] = self._run_email_graph_sync
         # Phase 2 builtin tasks
         from .tasks import register_builtin_tasks
         register_builtin_tasks(self)
@@ -298,6 +299,12 @@ class HeadlessRunner:
 
         purge_days = (task.metadata or {}).get("purge_days")
         return await run_nightly_sync(purge_days=purge_days)
+
+    async def _run_email_graph_sync(self, task: ScheduledTask) -> dict:
+        """Builtin: Run email-to-graph extraction sync."""
+        from ..jobs.email_graph_sync import run_email_graph_sync
+
+        return await run_email_graph_sync()
 
     async def _run_cleanup_executions(self, task: ScheduledTask) -> dict:
         """Builtin: Clean up old task execution records and phase 3 tables."""

@@ -153,6 +153,15 @@ class TaskScheduler:
             "metadata": {"builtin_handler": "nightly_memory_sync"},
         },
         {
+            "name": "email_graph_sync",
+            "description": "Daily extraction of graph-worthy facts from emails to knowledge graph",
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": "0 6 * * *",
+            "timeout_seconds": 600,
+            "metadata": {"builtin_handler": "email_graph_sync"},
+        },
+        {
             "name": "cleanup_old_executions",
             "description": "Purge old task execution records, presence events, and resolved proactive actions",
             "task_type": "builtin",

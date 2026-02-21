@@ -41,7 +41,9 @@ class OllamaLLMClient(LLMClient):
 
     async def _ensure_client(self):
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=120.0)
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
+            )
 
     async def close(self):
         if self._client:
