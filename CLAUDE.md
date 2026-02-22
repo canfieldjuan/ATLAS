@@ -345,9 +345,10 @@ ATLAS_DIRECTUS_SECRET=change-me-in-production   # used by Directus container
 # MCP Servers (Claude Desktop / Cursor integration)
 # Default transport is stdio. Set ATLAS_MCP_TRANSPORT=sse to expose as HTTP.
 ATLAS_MCP_TRANSPORT=stdio
-ATLAS_MCP_CRM_PORT=8056    # CRM MCP server (SSE mode only)
-ATLAS_MCP_EMAIL_PORT=8057  # Email MCP server (SSE mode only)
-ATLAS_MCP_TWILIO_PORT=8058 # Twilio MCP server (SSE mode only)
+ATLAS_MCP_CRM_PORT=8056      # CRM MCP server (SSE mode only)
+ATLAS_MCP_EMAIL_PORT=8057    # Email MCP server (SSE mode only)
+ATLAS_MCP_TWILIO_PORT=8058   # Twilio MCP server (SSE mode only)
+ATLAS_MCP_CALENDAR_PORT=8059 # Calendar MCP server (SSE mode only)
 
 # IMAP — provider-agnostic email reading (works with Gmail, Outlook, any IMAP server)
 # Leave blank to fall back to Gmail API reading
@@ -452,6 +453,43 @@ ATLAS_COMMS_RECORD_CALLS=true          # enable recording globally
 ATLAS_COMMS_WEBHOOK_BASE_URL=https://your-domain.com
 ```
 
+### Calendar MCP Server (8 tools)
+```bash
+# stdio mode (Claude Desktop / Cursor)
+python -m atlas_brain.mcp.calendar_server
+
+# SSE HTTP mode (port 8059)
+python -m atlas_brain.mcp.calendar_server --sse
+```
+
+Tools: `list_calendars`, `list_events`, `get_event`, `create_event`,
+`update_event`, `delete_event`, `find_free_slots`, `sync_appointment`
+
+**Provider-agnostic** — swap providers without touching the MCP layer:
+- **Google Calendar** (default): set `ATLAS_TOOLS_CALENDAR_ENABLED=true` + run `scripts/setup_google_oauth.py`
+- **CalDAV**: set `ATLAS_TOOLS_CALDAV_URL` + credentials (works with Nextcloud, Apple Calendar, Fastmail, Proton Calendar, SOGo, Baikal, Radicale)
+
+**Does Directus have a calendar?** No — Directus is the CRM/data layer only.
+It displays date fields in a calendar UI but does not manage calendar events.
+The `appointments` table in PostgreSQL is the schedule; `appointments.calendar_event_id`
+links each booking to a calendar event.  Use `sync_appointment` to keep them in sync.
+
+```bash
+# Google Calendar (OAuth2)
+ATLAS_TOOLS_CALENDAR_ENABLED=true
+ATLAS_TOOLS_CALENDAR_CLIENT_ID=your_client_id
+ATLAS_TOOLS_CALENDAR_CLIENT_SECRET=your_client_secret
+ATLAS_TOOLS_CALENDAR_REFRESH_TOKEN=your_refresh_token  # written by setup_google_oauth.py
+
+# CalDAV (alternative — overrides Google Calendar when set)
+ATLAS_TOOLS_CALDAV_URL=https://nextcloud.example.com/remote.php/dav
+ATLAS_TOOLS_CALDAV_USERNAME=your_username
+ATLAS_TOOLS_CALDAV_PASSWORD=your_password
+ATLAS_TOOLS_CALDAV_CALENDAR_URL=   # optional; auto-discovered via PROPFIND if blank
+
+ATLAS_MCP_CALENDAR_PORT=8059  # Calendar MCP server (SSE mode only)
+```
+
 ### Claude Desktop config (`~/.claude/claude_desktop_config.json`)
 ```json
 {
@@ -469,6 +507,11 @@ ATLAS_COMMS_WEBHOOK_BASE_URL=https://your-domain.com
     "atlas-twilio": {
       "command": "python",
       "args": ["-m", "atlas_brain.mcp.twilio_server"],
+      "cwd": "/path/to/ATLAS"
+    },
+    "atlas-calendar": {
+      "command": "python",
+      "args": ["-m", "atlas_brain.mcp.calendar_server"],
       "cwd": "/path/to/ATLAS"
     }
   }

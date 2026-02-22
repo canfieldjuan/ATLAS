@@ -893,3 +893,363 @@ class TestTwilioMCPTools:
         raw = await send_sms(to="+16185551234", body="Hello!", from_number=None)
         data = json.loads(raw)
         assert data["success"] is False
+
+
+# ===========================================================================
+# Calendar provider tests
+# ===========================================================================
+
+class TestICalHelpers:
+    """Tests for the minimal iCal parsing / building helpers."""
+
+    def test_parse_ical_events_basic(self):
+        from atlas_brain.services.calendar_provider import _parse_ical_events
+
+        ical = (
+            "BEGIN:VCALENDAR\r\n"
+            "VERSION:2.0\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:abc123\r\n"
+            "SUMMARY:Team meeting\r\n"
+            "DTSTART:20250310T090000Z\r\n"
+            "DTEND:20250310T100000Z\r\n"
+            "LOCATION:Conference room\r\n"
+            "END:VEVENT\r\n"
+            "END:VCALENDAR\r\n"
+        )
+        events = _parse_ical_events(ical, calendar_id="https://cal.example.com/calendar/")
+        assert len(events) == 1
+        ev = events[0]
+        assert ev.uid == "abc123"
+        assert ev.summary == "Team meeting"
+        assert ev.location == "Conference room"
+        assert not ev.all_day
+
+    def test_parse_ical_events_all_day(self):
+        from atlas_brain.services.calendar_provider import _parse_ical_events
+
+        ical = (
+            "BEGIN:VCALENDAR\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:allday1\r\n"
+            "SUMMARY:Company holiday\r\n"
+            "DTSTART;VALUE=DATE:20250401\r\n"
+            "DTEND;VALUE=DATE:20250401\r\n"
+            "END:VEVENT\r\n"
+            "END:VCALENDAR\r\n"
+        )
+        events = _parse_ical_events(ical)
+        assert len(events) == 1
+        assert events[0].all_day is True
+
+    def test_parse_ical_events_skips_cancelled(self):
+        from atlas_brain.services.calendar_provider import _parse_ical_events
+
+        ical = (
+            "BEGIN:VCALENDAR\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:cancelled1\r\n"
+            "SUMMARY:Cancelled meeting\r\n"
+            "STATUS:CANCELLED\r\n"
+            "DTSTART:20250310T090000Z\r\n"
+            "DTEND:20250310T100000Z\r\n"
+            "END:VEVENT\r\n"
+            "END:VCALENDAR\r\n"
+        )
+        events = _parse_ical_events(ical)
+        assert events == []
+
+    def test_build_ical_event_roundtrip(self):
+        from datetime import timezone
+
+        from atlas_brain.services.calendar_provider import (
+            CalendarEvent,
+            _build_ical_event,
+            _parse_ical_events,
+        )
+
+        ev = CalendarEvent(
+            uid="roundtrip-uid",
+            summary="Roundtrip test",
+            start=datetime(2025, 4, 15, 10, 0, tzinfo=timezone.utc),
+            end=datetime(2025, 4, 15, 11, 0, tzinfo=timezone.utc),
+            location="123 Main St",
+            description="Test notes",
+        )
+        ical_str = _build_ical_event(ev)
+        assert "BEGIN:VEVENT" in ical_str
+        assert "UID:roundtrip-uid" in ical_str
+        assert "SUMMARY:Roundtrip test" in ical_str
+
+        parsed = _parse_ical_events(ical_str)
+        assert len(parsed) == 1
+        assert parsed[0].uid == "roundtrip-uid"
+        assert parsed[0].summary == "Roundtrip test"
+        assert parsed[0].location == "123 Main St"
+
+    def test_ical_escape_unescape(self):
+        from atlas_brain.services.calendar_provider import _ical_escape, _ical_unescape
+
+        original = "Line1\nLine2, with comma; and semicolon"
+        escaped = _ical_escape(original)
+        assert "\n" not in escaped
+        assert _ical_unescape(escaped) == original
+
+    def test_ical_unescape_no_double_unescape(self):
+        """\\n in source (escaped backslash + n) must NOT become a newline."""
+        from atlas_brain.services.calendar_provider import _ical_unescape
+
+        # \\n in iCal text → literal backslash + letter n  (NOT a newline)
+        assert _ical_unescape("C:\\\\nfolder") == "C:\\nfolder"
+        # Plain \n in iCal text → newline
+        assert _ical_unescape("Hello\\nWorld") == "Hello\nWorld"
+
+
+@pytest.mark.asyncio
+class TestCalendarMCPTools:
+    """Tests for the Calendar MCP server tools (provider is mocked)."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_provider(self, monkeypatch):
+        """Reset the module-level provider singleton before each test."""
+        import atlas_brain.services.calendar_provider as cp
+
+        monkeypatch.setattr(cp, "_provider_instance", None)
+
+    def _make_event(self, uid="evt1", summary="Cleaning – Smith"):
+        from atlas_brain.services.calendar_provider import CalendarEvent
+
+        return CalendarEvent(
+            uid=uid,
+            summary=summary,
+            start=datetime(2025, 3, 10, 9, 0, tzinfo=timezone.utc),
+            end=datetime(2025, 3, 10, 11, 0, tzinfo=timezone.utc),
+            calendar_id="primary",
+            location="123 Main St",
+        )
+
+    async def test_list_calendars(self, monkeypatch):
+        from atlas_brain.services.calendar_provider import CalendarInfo
+        import atlas_brain.mcp.calendar_server as cs
+
+        mock_provider = AsyncMock()
+        mock_provider.list_calendars.return_value = [
+            CalendarInfo(id="primary", name="My Calendar", primary=True),
+        ]
+        monkeypatch.setattr(cs, "_provider", lambda: mock_provider)
+
+        raw = await cs.list_calendars()
+        data = json.loads(raw)
+        assert len(data) == 1
+        assert data[0]["id"] == "primary"
+        assert data[0]["primary"] is True
+
+    async def test_list_events(self, monkeypatch):
+        import atlas_brain.mcp.calendar_server as cs
+
+        mock_provider = AsyncMock()
+        mock_provider.list_events.return_value = [self._make_event()]
+        monkeypatch.setattr(cs, "_provider", lambda: mock_provider)
+
+        raw = await cs.list_events(
+            start="2025-03-10T00:00:00Z",
+            end="2025-03-10T23:59:59Z",
+        )
+        data = json.loads(raw)
+        assert len(data) == 1
+        assert data[0]["summary"] == "Cleaning – Smith"
+
+    async def test_get_event_found(self, monkeypatch):
+        import atlas_brain.mcp.calendar_server as cs
+
+        mock_provider = AsyncMock()
+        mock_provider.get_event.return_value = self._make_event()
+        monkeypatch.setattr(cs, "_provider", lambda: mock_provider)
+
+        raw = await cs.get_event(event_id="evt1")
+        data = json.loads(raw)
+        assert data["id"] == "evt1"
+
+    async def test_get_event_not_found(self, monkeypatch):
+        import atlas_brain.mcp.calendar_server as cs
+
+        mock_provider = AsyncMock()
+        mock_provider.get_event.return_value = None
+        monkeypatch.setattr(cs, "_provider", lambda: mock_provider)
+
+        raw = await cs.get_event(event_id="missing")
+        data = json.loads(raw)
+        assert "error" in data
+
+    async def test_create_event(self, monkeypatch):
+        import atlas_brain.mcp.calendar_server as cs
+
+        created_event = self._make_event(uid="new-evt")
+        mock_provider = AsyncMock()
+        mock_provider.create_event.return_value = created_event
+        monkeypatch.setattr(cs, "_provider", lambda: mock_provider)
+
+        raw = await cs.create_event(
+            summary="Cleaning – Smith",
+            start="2025-03-10T09:00:00Z",
+            end="2025-03-10T11:00:00Z",
+            location="123 Main St",
+        )
+        data = json.loads(raw)
+        assert data["status"] == "created"
+        assert data["id"] == "new-evt"
+
+    async def test_update_event(self, monkeypatch):
+        import atlas_brain.mcp.calendar_server as cs
+
+        existing = self._make_event()
+        updated = self._make_event(summary="Cleaning – Johnson")
+        mock_provider = AsyncMock()
+        mock_provider.get_event.return_value = existing
+        mock_provider.update_event.return_value = updated
+        monkeypatch.setattr(cs, "_provider", lambda: mock_provider)
+
+        raw = await cs.update_event(event_id="evt1", summary="Cleaning – Johnson")
+        data = json.loads(raw)
+        assert data["status"] == "updated"
+
+    async def test_update_event_not_found(self, monkeypatch):
+        import atlas_brain.mcp.calendar_server as cs
+
+        mock_provider = AsyncMock()
+        mock_provider.get_event.return_value = None
+        monkeypatch.setattr(cs, "_provider", lambda: mock_provider)
+
+        raw = await cs.update_event(event_id="missing", summary="X")
+        data = json.loads(raw)
+        assert "error" in data
+
+    async def test_delete_event(self, monkeypatch):
+        import atlas_brain.mcp.calendar_server as cs
+
+        mock_provider = AsyncMock()
+        mock_provider.delete_event.return_value = True
+        monkeypatch.setattr(cs, "_provider", lambda: mock_provider)
+
+        raw = await cs.delete_event(event_id="evt1")
+        data = json.loads(raw)
+        assert data["deleted"] is True
+
+    async def test_find_free_slots_no_events(self, monkeypatch):
+        import atlas_brain.mcp.calendar_server as cs
+
+        mock_provider = AsyncMock()
+        mock_provider.list_events.return_value = []
+        monkeypatch.setattr(cs, "_provider", lambda: mock_provider)
+
+        raw = await cs.find_free_slots(
+            start="2025-03-10T00:00:00Z",
+            end="2025-03-10T23:59:59Z",
+            duration_minutes=60,
+            start_hour=8,
+            end_hour=18,
+        )
+        data = json.loads(raw)
+        # 8am–6pm = 10 hours → 10 one-hour slots
+        assert data["total_found"] == 10
+        assert len(data["free_slots"]) == 10
+
+    async def test_find_free_slots_with_busy_block(self, monkeypatch):
+        from atlas_brain.services.calendar_provider import CalendarEvent
+        import atlas_brain.mcp.calendar_server as cs
+
+        busy_event = CalendarEvent(
+            uid="busy1",
+            summary="Existing appointment",
+            start=datetime(2025, 3, 10, 9, 0, tzinfo=timezone.utc),
+            end=datetime(2025, 3, 10, 11, 0, tzinfo=timezone.utc),
+            calendar_id="primary",
+        )
+        mock_provider = AsyncMock()
+        mock_provider.list_events.return_value = [busy_event]
+        monkeypatch.setattr(cs, "_provider", lambda: mock_provider)
+
+        raw = await cs.find_free_slots(
+            start="2025-03-10T00:00:00Z",
+            end="2025-03-10T23:59:59Z",
+            duration_minutes=60,
+            start_hour=8,
+            end_hour=18,
+        )
+        data = json.loads(raw)
+        # 10 total minus 2 blocked (9–10, 10–11) = 8
+        assert data["total_found"] == 8
+
+    async def test_find_free_slots_error(self, monkeypatch):
+        import atlas_brain.mcp.calendar_server as cs
+
+        mock_provider = AsyncMock()
+        mock_provider.list_events.side_effect = RuntimeError("API failure")
+        monkeypatch.setattr(cs, "_provider", lambda: mock_provider)
+
+        raw = await cs.find_free_slots(
+            start="2025-03-10T00:00:00Z",
+            end="2025-03-10T23:59:59Z",
+        )
+        data = json.loads(raw)
+        assert "error" in data
+
+
+@pytest.mark.asyncio
+class TestCalendarProviderFactory:
+    """Tests for get_calendar_provider factory selection logic."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_singleton(self, monkeypatch):
+        import atlas_brain.services.calendar_provider as cp
+
+        monkeypatch.setattr(cp, "_provider_instance", None)
+
+    def test_returns_caldav_when_caldav_url_set(self, monkeypatch):
+        import atlas_brain.services.calendar_provider as cp
+        from unittest.mock import MagicMock
+
+        mock_cfg = MagicMock()
+        mock_cfg.caldav_url = "https://nextcloud.example.com/remote.php/dav"
+        mock_cfg.calendar_enabled = False
+        monkeypatch.setattr(cp.settings, "tools", mock_cfg)
+
+        provider = cp.get_calendar_provider()
+        assert isinstance(provider, cp.CalDAVCalendarProvider)
+
+    def test_returns_google_when_enabled(self, monkeypatch):
+        import atlas_brain.services.calendar_provider as cp
+        from unittest.mock import MagicMock
+
+        mock_cfg = MagicMock()
+        mock_cfg.caldav_url = None
+        mock_cfg.calendar_enabled = True
+        monkeypatch.setattr(cp.settings, "tools", mock_cfg)
+
+        provider = cp.get_calendar_provider()
+        assert isinstance(provider, cp.GoogleCalendarProvider)
+
+    def test_raises_when_nothing_configured(self, monkeypatch):
+        import atlas_brain.services.calendar_provider as cp
+        from unittest.mock import MagicMock
+
+        mock_cfg = MagicMock()
+        mock_cfg.caldav_url = None
+        mock_cfg.calendar_enabled = False
+        monkeypatch.setattr(cp.settings, "tools", mock_cfg)
+
+        with pytest.raises(RuntimeError, match="No calendar provider configured"):
+            cp.get_calendar_provider()
+
+    def test_singleton_returns_same_instance(self, monkeypatch):
+        import atlas_brain.services.calendar_provider as cp
+        from unittest.mock import MagicMock
+
+        mock_cfg = MagicMock()
+        mock_cfg.caldav_url = None
+        mock_cfg.calendar_enabled = True
+        monkeypatch.setattr(cp.settings, "tools", mock_cfg)
+
+        p1 = cp.get_calendar_provider()
+        p2 = cp.get_calendar_provider()
+        assert p1 is p2

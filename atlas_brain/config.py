@@ -457,6 +457,19 @@ class ToolsConfig(BaseSettings):
     calendar_id: str = Field(default="primary", description="Calendar ID to query")
     calendar_cache_ttl: float = Field(default=300.0, description="Cache TTL in seconds")
 
+    # CalDAV calendar (provider-agnostic alternative to Google Calendar)
+    # Works with Nextcloud, Apple Calendar, Fastmail, Proton Calendar, SOGo, Baikal, etc.
+    caldav_url: str | None = Field(
+        default=None,
+        description="CalDAV server URL (e.g. https://nextcloud.example.com/remote.php/dav)",
+    )
+    caldav_username: str | None = Field(default=None, description="CalDAV username")
+    caldav_password: str | None = Field(default=None, description="CalDAV password or app password")
+    caldav_calendar_url: str | None = Field(
+        default=None,
+        description="Specific calendar collection URL (auto-discovered via PROPFIND if not set)",
+    )
+
     # Gmail digest
     gmail_enabled: bool = Field(default=False, description="Enable Gmail digest")
     gmail_client_id: str | None = Field(default=None, description="Google OAuth client ID for Gmail")
@@ -1755,11 +1768,14 @@ class MCPConfig(BaseSettings):
 
     crm_enabled: bool = Field(default=True, description="Enable CRM MCP server")
     email_enabled: bool = Field(default=True, description="Enable Email MCP server")
+    calendar_enabled: bool = Field(default=True, description="Enable Calendar MCP server")
+    twilio_enabled: bool = Field(default=True, description="Enable Twilio MCP server")
     transport: str = Field(default="stdio", description="MCP transport: stdio or sse")
     host: str = Field(default="0.0.0.0", description="Bind host for SSE transport")
     crm_port: int = Field(default=8056, description="Port for CRM MCP server (SSE transport)")
     email_port: int = Field(default=8057, description="Port for Email MCP server (SSE transport)")
     twilio_port: int = Field(default=8058, description="Port for Twilio MCP server (SSE transport)")
+    calendar_port: int = Field(default=8059, description="Port for Calendar MCP server (SSE transport)")
 
 
 class Settings(BaseSettings):
