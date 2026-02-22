@@ -19,6 +19,7 @@ Tools:
     log_interaction         — record a customer touch-point
     get_interactions        — retrieve interaction history
     get_contact_appointments — fetch appointments linked to a contact
+    get_customer_context     — unified view: contact + interactions + calls + emails
 
 Run:
     python -m atlas_brain.mcp.crm_server          # stdio (Claude Desktop / Cursor)
@@ -343,6 +344,78 @@ async def get_contact_appointments(contact_id: str) -> str:
     except Exception as exc:
         logger.exception("get_contact_appointments error")
         return json.dumps({"error": str(exc), "appointments": []})
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_customer_context
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def get_customer_context(
+    contact_id: Optional[str] = None,
+    phone: Optional[str] = None,
+    email: Optional[str] = None,
+    max_interactions: int = 10,
+    max_calls: int = 10,
+    max_appointments: int = 10,
+    max_emails: int = 10,
+) -> str:
+    """
+    Get the full unified customer context — everything Atlas knows about a customer.
+
+    Provide at least one of contact_id, phone, or email.  The service resolves the
+    contact record first, then fetches all linked data in parallel (fail-open per source).
+
+    Returns:
+        contact            CRM record (name, phone, email, tags, …)
+        interactions       logged touch-points (calls, emails, notes) — most recent first
+        appointments       past and upcoming appointments linked to this contact
+        call_transcripts   linked call records with extracted data and proposed actions
+        sent_emails        outbound emails addressed to this contact
+        inbox_emails       inbound emails from this contact (populated after J5 lands)
+    """
+    if not any([contact_id, phone, email]):
+        return json.dumps(
+            {"error": "Provide at least one of: contact_id, phone, or email", "found": False}
+        )
+
+    try:
+        from ..services.customer_context import get_customer_context_service
+
+        svc = get_customer_context_service()
+        kwargs = {
+            "max_interactions": max_interactions,
+            "max_calls": max_calls,
+            "max_appointments": max_appointments,
+            "max_emails": max_emails,
+        }
+
+        if contact_id:
+            ctx = await svc.get_context(contact_id, **kwargs)
+        elif phone:
+            ctx = await svc.get_context_by_phone(phone, **kwargs)
+        else:
+            ctx = await svc.get_context_by_email(email, **kwargs)
+
+        if ctx.is_empty:
+            return json.dumps({"found": False, "context": None})
+
+        result: dict = {
+            "found": True,
+            "contact": ctx.contact,
+            "interactions": ctx.interactions,
+            "appointments": ctx.appointments,
+            "call_transcripts": ctx.call_transcripts,
+            "sent_emails": ctx.sent_emails,
+        }
+        # inbox_emails present after J5 lands
+        if hasattr(ctx, "inbox_emails"):
+            result["inbox_emails"] = ctx.inbox_emails
+
+        return json.dumps(result, default=str)
+    except Exception as exc:
+        logger.exception("get_customer_context error")
+        return json.dumps({"error": str(exc), "found": False})
 
 
 # ---------------------------------------------------------------------------
