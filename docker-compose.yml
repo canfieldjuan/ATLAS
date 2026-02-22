@@ -18,6 +18,39 @@ services:
       timeout: 5s
       retries: 5
 
+  # Directus CRM — single source of truth for customer/contact data.
+  # Shares the atlas_postgres instance; manages the `contacts` and
+  # `contact_interactions` collections created by migration 035.
+  directus:
+    image: directus/directus:11
+    container_name: atlas_directus
+    restart: unless-stopped
+    ports:
+      - "8055:8055"
+    volumes:
+      - atlas_directus_uploads:/directus/uploads
+      - atlas_directus_extensions:/directus/extensions
+    environment:
+      # Security: replace SECRET in .env.local for production
+      SECRET: "${ATLAS_DIRECTUS_SECRET:-change-me-in-production}"
+      ADMIN_EMAIL: "${ATLAS_DIRECTUS_ADMIN_EMAIL:-admin@atlas.local}"
+      ADMIN_PASSWORD: "${ATLAS_DIRECTUS_ADMIN_PASSWORD:-atlas_admin_password}"
+      # Connect to the existing Atlas Postgres instance
+      DB_CLIENT: pg
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_DATABASE: atlas
+      DB_USER: atlas
+      DB_PASSWORD: atlas_dev_password
+      DB_SSL: "false"
+      # Disable Directus telemetry
+      TELEMETRY: "false"
+      # Allow public read access to be turned off (API-key only)
+      PUBLIC_URL: "http://localhost:8055"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   brain:
     build: .
     ports:
@@ -34,6 +67,17 @@ services:
       ATLAS_DB_DATABASE: atlas
       ATLAS_DB_USER: atlas
       ATLAS_DB_PASSWORD: atlas_dev_password
+      # Directus CRM
+      # Step 1: Start the stack with ATLAS_DIRECTUS_ENABLED=false (default).
+      # Step 2: Run `python scripts/setup_directus.py` to create an API token.
+      # Step 3: The script writes ATLAS_DIRECTUS_TOKEN to .env.local automatically.
+      # Step 4: Set ATLAS_DIRECTUS_ENABLED=true (or uncomment below) and restart brain.
+      ATLAS_DIRECTUS_ENABLED: "${ATLAS_DIRECTUS_ENABLED:-false}"
+      ATLAS_DIRECTUS_URL: "http://directus:8055"
+      ATLAS_DIRECTUS_ADMIN_EMAIL: "${ATLAS_DIRECTUS_ADMIN_EMAIL:-admin@atlas.local}"
+      ATLAS_DIRECTUS_ADMIN_PASSWORD: "${ATLAS_DIRECTUS_ADMIN_PASSWORD:-atlas_admin_password}"
+      # Set by scripts/setup_directus.py → .env.local; empty = DatabaseCRMProvider fallback
+      ATLAS_DIRECTUS_TOKEN: "${ATLAS_DIRECTUS_TOKEN:-}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -50,3 +94,6 @@ services:
 
 volumes:
   atlas_postgres_data:
+  atlas_directus_uploads:
+  atlas_directus_extensions:
+
