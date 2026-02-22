@@ -295,14 +295,35 @@ def _extract_digest_params(query: str) -> dict:
     return {"digest_type": "morning_briefing"}
 
 
+def _extract_detection_params(query: str) -> dict:
+    """Infer location from keywords in a detection query."""
+    q = query.lower()
+    _LOCATIONS = [
+        "front door", "back door", "side door", "garage door",
+        "driveway", "backyard", "back yard", "front yard",
+        "garage", "porch", "patio", "deck",
+        "living room", "kitchen", "bedroom", "office",
+        "hallway", "basement", "attic",
+    ]
+    for loc in _LOCATIONS:
+        if loc in q:
+            return {"location": loc}
+    if "outside" in q:
+        return {"location": "outside"}
+    return {}
+
+
 def _extract_temporal_params(query: str, route_name: str) -> dict:
     """Extract route-specific params from the query text.
 
     Weather/traffic: days_ahead for forecast queries.
     Digest: digest_type keyword inference (security, device, email).
+    Detection: location keyword extraction.
     """
     if route_name == "digest":
         return _extract_digest_params(query)
+    if route_name == "detection_query":
+        return _extract_detection_params(query)
     if route_name not in ("get_weather", "get_traffic"):
         return {}
     q = query.lower()
@@ -505,14 +526,16 @@ class SemanticIntentRouter:
                 "Route: '%s' -> %s (semantic, conf=%.2f, %.0fms)",
                 query[:40], route_name, similarity, route_time,
             )
+            tool_params = _extract_temporal_params(query, route_name)
+            fast_ok = (tool_name in PARAMETERLESS_TOOLS if tool_name else False) or bool(tool_params)
             return IntentRouteResult(
                 action_category=action_category,
                 raw_label=route_name,
                 confidence=similarity,
                 route_time_ms=route_time,
                 tool_name=tool_name,
-                fast_path_ok=tool_name in PARAMETERLESS_TOOLS if tool_name else False,
-                tool_params=_extract_temporal_params(query, route_name),
+                fast_path_ok=fast_ok,
+                tool_params=tool_params,
             )
 
         # LLM fallback -- skip for very short queries (1-2 words) where the
@@ -535,15 +558,17 @@ class SemanticIntentRouter:
                     query, route_name, similarity,
                     llm_route, llm_conf, llm_route, route_time,
                 )
+                tool_params = _extract_temporal_params(query, llm_route)
+                fast_ok = (tool_name in PARAMETERLESS_TOOLS if tool_name else False) or bool(tool_params)
                 return IntentRouteResult(
                     action_category=action_category,
                     raw_label=llm_route,
                     confidence=llm_conf,
                     route_time_ms=route_time,
                     tool_name=tool_name,
-                    fast_path_ok=tool_name in PARAMETERLESS_TOOLS if tool_name else False,
+                    fast_path_ok=fast_ok,
                     entity_name=llm_entity,
-                    tool_params=_extract_temporal_params(query, llm_route),
+                    tool_params=tool_params,
                 )
             else:
                 # LLM fallback failed (timeout/parse error) -- log anyway
