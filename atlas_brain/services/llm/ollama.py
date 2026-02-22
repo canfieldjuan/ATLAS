@@ -366,6 +366,7 @@ class OllamaLLM(BaseModelService):
         messages: list[Message],
         max_tokens: int = 256,
         temperature: float = 0.7,
+        stats: Optional[dict] = None,
         **kwargs: Any,
     ) -> AsyncIterator[str]:
         """
@@ -375,6 +376,9 @@ class OllamaLLM(BaseModelService):
             messages: List of Message objects
             max_tokens: Maximum tokens to generate
             temperature: Sampling temperature
+            stats: Optional dict populated with token counts and timing from
+                   the final Ollama chunk (input_tokens, output_tokens,
+                   prompt_eval_duration_ms, eval_duration_ms, total_duration_ms).
 
         Yields:
             Token strings as they are generated
@@ -418,6 +422,12 @@ class OllamaLLM(BaseModelService):
                     if content:
                         yield content
                     if data.get("done", False):
+                        if stats is not None:
+                            stats["input_tokens"] = data.get("prompt_eval_count") or None
+                            stats["output_tokens"] = data.get("eval_count") or None
+                            stats["prompt_eval_duration_ms"] = (data.get("prompt_eval_duration") or 0) / 1_000_000
+                            stats["eval_duration_ms"] = (data.get("eval_duration") or 0) / 1_000_000
+                            stats["total_duration_ms"] = (data.get("total_duration") or 0) / 1_000_000
                         break
         except httpx.HTTPError as e:
             logger.error("Ollama streaming chat error: %s", e)

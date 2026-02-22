@@ -330,6 +330,19 @@ async def _stream_llm_response(
     session_id = context_dict.get("session_id")
     speaker_name = context_dict.get("speaker_name")
 
+    # FTL trace span — covers entire streaming turn (all turns, not just first)
+    from ..services.tracing import tracer as _tracer
+    _stream_span = _tracer.start_span(
+        span_name="agent.process",
+        operation_type="llm_call",
+        model_name=getattr(llm, "model", None),
+        model_provider="ollama",
+        session_id=session_id,
+        metadata={"input_type": "voice", "speaker_id": speaker_name, "action_type": "conversation"},
+    )
+    _stream_stats: dict = {}
+    _span_start = _time.perf_counter()
+
     # Pre-pop previous turn's stashed RAG usage_ids before gather_context
     # can overwrite the stash with this turn's sources.
     prev_usage_ids: list = []
@@ -475,7 +488,7 @@ async def _stream_llm_response(
     collected_sentences = []
     max_tokens = settings.voice.streaming_max_tokens
     try:
-        async for token in llm.chat_stream_async(messages, max_tokens=max_tokens):
+        async for token in llm.chat_stream_async(messages, max_tokens=max_tokens, stats=_stream_stats):
             sentence = buffer.add_token(token)
             if sentence:
                 sentence_count += 1
@@ -493,6 +506,29 @@ async def _stream_llm_response(
         if sentence_count > 0 and session_id:
             full_response = " ".join(collected_sentences)
             speaker_uuid = context_dict.get("speaker_id")  # actual UUID
+            _respond_ms = (_time.perf_counter() - _span_start) * 1000
+            _tracer.end_span(
+                _stream_span,
+                status="completed",
+                input_tokens=_stream_stats.get("input_tokens"),
+                output_tokens=_stream_stats.get("output_tokens"),
+                input_data={"user_message": transcript, "input_type": "voice"},
+                output_data={"response": full_response[:500], "action_type": "conversation"},
+                ttft_ms=_stream_stats.get("prompt_eval_duration_ms"),
+                inference_time_ms=_stream_stats.get("eval_duration_ms"),
+                metadata={
+                    "timing": {"respond": round(_respond_ms, 1)},
+                    "action_type": "conversation",
+                    "speaker_id": speaker_name,
+                    "llm": {
+                        "has_llm_response": True,
+                        "input_tokens": _stream_stats.get("input_tokens"),
+                        "output_tokens": _stream_stats.get("output_tokens"),
+                        "eval_duration_ms": _stream_stats.get("eval_duration_ms"),
+                        "total_duration_ms": _stream_stats.get("total_duration_ms"),
+                    },
+                },
+            )
             asyncio.ensure_future(_persist_streaming_turns(
                 session_id, transcript, full_response, speaker_name,
                 speaker_uuid=speaker_uuid,
@@ -502,6 +538,7 @@ async def _stream_llm_response(
 
         # Streaming produced no output -- re-stash prev_usage_ids so the
         # fallback agent's pre-pop can find them for correction feedback.
+        _tracer.end_span(_stream_span, status="failed", error_message="streaming LLM produced no output")
         if prev_usage_ids and session_id:
             try:
                 from ..memory.feedback import get_feedback_service
@@ -511,6 +548,7 @@ async def _stream_llm_response(
         return False
     except Exception as e:
         logger.error("Streaming LLM error: %s", e)
+        _tracer.end_span(_stream_span, status="failed", error_message=str(e), error_type=type(e).__name__)
         # Re-stash prev_usage_ids so fallback agent can use them
         if prev_usage_ids and session_id:
             try:
