@@ -18,6 +18,7 @@ from atlas_brain.voice.entity_context import (
     EntityRef,
     collect_recent_entities,
     extract_location_from_text,
+    extract_topic_from_text,
     format_entity_context,
 )
 from atlas_brain.memory.service import MemoryContext, MemoryService, get_memory_service
@@ -55,6 +56,42 @@ class TestExtractLocationFromText:
         # Should stop at comma
         assert loc is not None
         assert "," not in loc
+
+
+class TestExtractTopicFromText:
+    """extract_topic_from_text: keyword-based topic extraction from transcripts."""
+
+    def test_weather_keyword(self):
+        assert extract_topic_from_text("what's the weather like today?") == "weather"
+
+    def test_weather_temperature(self):
+        assert extract_topic_from_text("what's the temperature outside?") == "weather"
+
+    def test_reminder_phrase(self):
+        assert extract_topic_from_text("remind me to call the doctor") == "reminder"
+
+    def test_calendar_keyword(self):
+        assert extract_topic_from_text("what's on my calendar tomorrow?") == "calendar"
+
+    def test_appointment_keyword(self):
+        assert extract_topic_from_text("do I have any appointments today?") == "calendar"
+
+    def test_traffic_keyword(self):
+        assert extract_topic_from_text("how's the traffic on the way to work?") == "traffic"
+
+    def test_no_match_returns_none(self):
+        assert extract_topic_from_text("tell me a joke") is None
+
+    def test_empty_string_returns_none(self):
+        assert extract_topic_from_text("") is None
+
+    def test_case_insensitive(self):
+        assert extract_topic_from_text("What's the WEATHER today?") == "weather"
+
+    def test_first_match_wins(self):
+        # "weather" is before "reminder" in _TOPIC_KEYWORDS, so weather wins
+        result = extract_topic_from_text("remind me to check the weather forecast")
+        assert result == "weather"
 
 
 class TestCollectRecentEntities:
@@ -435,6 +472,11 @@ class TestLauncherWiring:
         assert "extract_location_from_text" in src
         assert "user_text" in src
 
+    def test_topic_extracted_from_transcript(self):
+        src = self._persist_source()
+        assert "extract_topic_from_text" in src
+        assert "topic" in src
+
     def test_agent_path_injects_entity_context(self):
         import atlas_brain.agents.graphs.atlas as mod
         src = inspect.getsource(mod._generate_llm_response)
@@ -450,6 +492,7 @@ class TestEntityContextModule:
         import atlas_brain.voice.entity_context as mod
         assert hasattr(mod, "EntityRef")
         assert hasattr(mod, "extract_location_from_text")
+        assert hasattr(mod, "extract_topic_from_text")
         assert hasattr(mod, "collect_recent_entities")
         assert hasattr(mod, "format_entity_context")
 

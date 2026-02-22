@@ -34,6 +34,36 @@ def extract_location_from_text(text: str) -> Optional[str]:
     return None
 
 
+# Ordered list of (topic_name, trigger_keywords) for streaming transcript matching.
+# Keywords are matched case-insensitively as substrings. Order matters: first match wins.
+_TOPIC_KEYWORDS: list[tuple[str, list[str]]] = [
+    ("weather",   ["weather", "temperature", "forecast", "rain", "sunny", "cloudy", "snow", "humidity"]),
+    ("reminder",  ["remind me", "reminder", "don't forget", "remember to", "set a reminder"]),
+    ("calendar",  ["calendar", "schedule", "appointment", "meeting", "event", "on my schedule"]),
+    ("traffic",   ["traffic", "commute", "how long to drive", "road conditions"]),
+    ("email",     ["send an email", "send a message", "email to", "write to"]),
+    ("booking",   ["book a", "make a reservation", "reserve a"]),
+    ("time",      ["what time is it", "current time", "what's the time"]),
+    ("camera",    ["show the camera", "camera feed", "show me the feed"]),
+    ("location",  ["where am i", "what's my location", "current location"]),
+]
+
+
+def extract_topic_from_text(text: str) -> Optional[str]:
+    """
+    Extract a topic name from natural language using keyword matching.
+
+    Checks user transcript for known tool trigger phrases. Used in the streaming
+    path where no intent object is available. Returns the first matching topic name.
+    """
+    lower = text.lower()
+    for topic, keywords in _TOPIC_KEYWORDS:
+        for kw in keywords:
+            if kw in lower:
+                return topic
+    return None
+
+
 def collect_recent_entities(entity_dicts: list[dict], limit: int = 3) -> list[EntityRef]:
     """
     Collect deduplicated entities from a flat list of stored entity dicts.
