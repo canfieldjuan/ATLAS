@@ -26,7 +26,7 @@ class Intent(BaseModel):
     """
     Parsed intent from natural language.
 
-    The VLM extracts this structure from user queries like
+    Extracted from user queries like
     "turn on the living room lights" or "set thermostat to 72".
     """
     action: str  # e.g., "turn_on", "set_temperature"
@@ -42,8 +42,7 @@ class ActionDispatcher:
     """
     Dispatches actions to capabilities.
 
-    Handles both direct action requests and intent-based dispatch
-    from the VLM.
+    Handles both direct action requests and intent-based dispatch.
     """
 
     def __init__(self, registry: Optional[CapabilityRegistry] = None):

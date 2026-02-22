@@ -6,8 +6,10 @@ Provides endpoints for:
 - Sending SMS messages
 - Managing business contexts
 - Checking availability and scheduling
+- Recording reconciliation (missed webhooks)
 """
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Optional
@@ -405,3 +407,106 @@ async def cancel_appointment(
     except Exception as e:
         logger.error("Failed to cancel appointment: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/recordings/reconcile")
+async def reconcile_recordings(
+    limit: int = Query(default=50, ge=1, le=200, description="Max recordings to check"),
+):
+    """Check SignalWire for recent recordings missing from our DB.
+
+    Queries the provider's recording list, cross-references against
+    call_transcripts, and spawns the intelligence pipeline for any
+    recordings that were missed (e.g. webhook never arrived).
+    """
+    if not comms_settings.enabled:
+        raise HTTPException(status_code=503, detail="Communications not enabled")
+
+    try:
+        provider = get_provider()
+        if not provider.is_connected:
+            await provider.connect()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Provider unavailable: {e}")
+
+    # List recent recordings from SignalWire (Twilio-compatible API)
+    try:
+        client = getattr(provider, "_client", None)
+        if not client:
+            raise HTTPException(status_code=503, detail="No REST client available")
+        recordings = client.recordings.list(limit=limit)
+    except HTTPException:
+        raise
+    except Exception as e:
+        # SignalWire's Twilio-compatible SDK can throw JSON parse errors
+        # even when the REST API returned 200. This is a known issue.
+        if "Expecting value" in str(e):
+            logger.warning("SignalWire recordings.list() SDK parse error: %s", e)
+            return {
+                "checked": 0,
+                "already_processed": 0,
+                "missing": 0,
+                "spawned": 0,
+                "missing_recordings": [],
+                "note": "SignalWire SDK parse error -- recordings API may be unavailable",
+            }
+        logger.error("Failed to list recordings from provider: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to list recordings: {e}")
+
+    from ...storage.repositories.call_transcript import get_call_transcript_repo
+    repo = get_call_transcript_repo()
+
+    missing = []
+    already_have = 0
+    spawned = 0
+
+    for rec in recordings:
+        call_sid = getattr(rec, "call_sid", None)
+        if not call_sid:
+            continue
+
+        # Check if we already have this recording
+        try:
+            existing = await repo.get_by_call_sid(call_sid)
+            if existing:
+                already_have += 1
+                continue
+        except Exception:
+            continue  # DB issue, skip
+
+        duration = int(getattr(rec, "duration", 0) or 0)
+        recording_url = getattr(rec, "uri", "") or ""
+        # Build the actual media URL from the recording SID
+        rec_sid = getattr(rec, "sid", "")
+        if rec_sid and not recording_url.startswith("http"):
+            space = comms_settings.signalwire_space or ""
+            recording_url = (
+                f"https://{space}.signalwire.com"
+                f"/api/laml/2010-04-01/Accounts/"
+                f"{comms_settings.signalwire_project_id}/Recordings/{rec_sid}"
+            )
+
+        missing.append({
+            "call_sid": call_sid,
+            "recording_sid": rec_sid,
+            "duration": duration,
+            "recording_url": recording_url,
+        })
+
+        # Spawn processing
+        from .webhooks import _spawn_recording_processing
+        _spawn_recording_processing(call_sid, recording_url, duration)
+        spawned += 1
+
+    logger.info(
+        "Recording reconciliation: checked=%d already_have=%d missing=%d spawned=%d",
+        len(recordings), already_have, len(missing), spawned,
+    )
+
+    return {
+        "checked": len(recordings),
+        "already_processed": already_have,
+        "missing": len(missing),
+        "spawned": spawned,
+        "missing_recordings": missing,
+    }

@@ -4,16 +4,13 @@ This file tracks upcoming work. Progress, decisions, and retrospectives remain i
 
 ## Active Goals (Phase 3 – AI Model Integration)
 
-1. **Integrate moondream2 vision support**
-   - Wire `process_vision_query` to load/run the VLM using the same lifecycle as text queries.
-   - Provide end-to-end tests (manual `curl` is fine) that confirm an image + prompt round trip from API → service → model.
-2. **Stabilize inference**
+1. **Stabilize inference**
    - Capture timing/VRAM stats so we know current headroom.
    - Persist helpful debug logs to `logs/` for future troubleshooting.
 
 ## Near-Term Backlog
 
-- Replace the mocked STT response with a lightweight speech model and feed transcription results back through the VLM.
+- Improve STT pipeline with faster-whisper and feed transcription results back through the intent router.
 - Define response schemas for text/audio/vision requests so API consumers get consistent shape + metadata.
 - Add CI-friendly smoke tests (e.g., start FastAPI, hit `/ping`) to catch regressions quickly.
 

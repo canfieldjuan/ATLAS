@@ -92,7 +92,7 @@ SignalWire ───▶ webhooks.py ───▶ PersonaPlex - - - ▶ [LATENCY 
 │   services/tts/kokoro.py           ← Use pipecat/tts.py         │
 │   services/tool_router.py          ← Gorilla experimental       │
 │   pipecat/router.py                ← FunctionGemma legacy       │
-│   capabilities/intent_parser.py    ← Old VLM parsing            │
+│   capabilities/intent_parser.py    ← Old intent parsing         │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```

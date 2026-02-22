@@ -6,6 +6,7 @@ Provides:
 - GET /comms/calls/search -- search call transcripts by keyword, date, contact, intent
 """
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -153,6 +154,7 @@ async def search_calls(
     # Build lightweight result list (don't return full transcripts in search)
     items = []
     for r in results:
+        data = _ensure_dict(r.get("extracted_data"))
         items.append({
             "id": str(r.get("id", "")),
             "call_sid": r.get("call_sid", ""),
@@ -160,8 +162,8 @@ async def search_calls(
             "to_number": r.get("to_number", ""),
             "duration_seconds": r.get("duration_seconds"),
             "summary": r.get("summary", ""),
-            "intent": (r.get("extracted_data") or {}).get("intent", ""),
-            "customer_name": (r.get("extracted_data") or {}).get("customer_name", ""),
+            "intent": data.get("intent", ""),
+            "customer_name": data.get("customer_name", ""),
             "status": r.get("status", ""),
             "contact_id": str(r.get("contact_id", "")) if r.get("contact_id") else None,
             "created_at": _to_iso(r.get("created_at")),
@@ -176,6 +178,20 @@ async def search_calls(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _ensure_dict(val) -> dict:
+    """Coerce JSONB value to dict. asyncpg usually returns dicts but some
+    pool wrappers or edge cases may yield a JSON string."""
+    if isinstance(val, dict):
+        return val
+    if isinstance(val, str):
+        try:
+            parsed = json.loads(val)
+            return parsed if isinstance(parsed, dict) else {}
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    return {}
+
 
 def _to_iso(val) -> str:
     """Convert a datetime or string to ISO format string."""

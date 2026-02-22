@@ -362,12 +362,25 @@ class CallTranscriptRepository:
     def _row_to_dict(self, row) -> dict:
         """Convert a database row to a dict."""
         result = dict(row)
-        # asyncpg returns JSONB as Python dicts/lists; guard None for defaults
+        # asyncpg returns JSONB as Python dicts/lists, but some pool wrappers
+        # (e.g. pgbouncer, custom wrappers) may return JSON strings instead.
         for key in ("extracted_data", "drafts"):
-            if result.get(key) is None:
+            val = result.get(key)
+            if val is None:
                 result[key] = {}
-        if result.get("proposed_actions") is None:
+            elif isinstance(val, str):
+                try:
+                    result[key] = json.loads(val)
+                except (json.JSONDecodeError, TypeError):
+                    result[key] = {}
+        val = result.get("proposed_actions")
+        if val is None:
             result["proposed_actions"] = []
+        elif isinstance(val, str):
+            try:
+                result["proposed_actions"] = json.loads(val)
+            except (json.JSONDecodeError, TypeError):
+                result["proposed_actions"] = []
         return result
 
 

@@ -146,11 +146,12 @@ async def process_call_recording(
     # Step 6: Generate action plan (LLM + CustomerContext)
     action_plan = proposed_actions  # fallback to extraction-time actions
     try:
-        action_plan = await _generate_action_plan(
+        generated_plan = await _generate_action_plan(
             transcript_id, contact_id, summary,
             extracted_data, business_context,
         )
-        if action_plan:
+        if generated_plan:
+            action_plan = generated_plan
             await repo.update_extraction(
                 transcript_id, summary, extracted_data, action_plan,
             )
@@ -396,7 +397,7 @@ async def _generate_action_plan(
 
     # Skip planning for calls with no actionable intent
     intent = extracted_data.get("intent", "")
-    if intent in ("personal_call", "wrong_number", "spam", "inquiry", "other", ""):
+    if intent in ("personal_call", "wrong_number", "spam"):
         return []
 
     # Build customer context (if we have a contact)
@@ -433,7 +434,7 @@ async def _link_to_crm(
 
     pool = get_db_pool()
     if not pool.is_initialized:
-        logger.debug("CRM link skipped: DB pool not initialized")
+        logger.warning("CRM link skipped for call %s: DB pool not initialized", call_sid)
         return None
 
     phone = extracted_data.get("customer_phone") or from_number

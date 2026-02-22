@@ -42,7 +42,7 @@ Wake word detection uses OpenWakeWord when enabled by the client or local loop.
 
 **DEPRECATED - Do not modify:**
 - `services/tool_router.py` - Gorilla-based, experimental
-- `capabilities/intent_parser.py` - Old VLM-based parsing
+- `capabilities/intent_parser.py` - Old intent parsing (superseded by semantic intent router)
 
 ---
 

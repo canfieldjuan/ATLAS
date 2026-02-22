@@ -9,7 +9,7 @@
 **Decisions:**
 
 1.  **Initial Architecture (1.0):** Proposed a modular, multi-model system with separate components for Wake Word, STT, CV, NLU (LLM), and TTS.
-2.  **Refined Architecture (2.0):** Updated the design to use a central Vision-Language Model (VLM) to merge the NLU and CV components, simplifying the core logic while retaining a specialized audio pipeline.
+2.  **Refined Architecture (2.0):** Updated the design to use a central Vision-Language Model (VLM) to merge the NLU and CV components, simplifying the core logic while retaining a specialized audio pipeline. *(VLM/moondream was later deprecated and replaced by the semantic intent router.)*
 3.  **Final Architecture (3.0):** Evolved the concept into a client-server model. Atlas will be a centralized "Brain" running on a server with a GPU, exposing its services via an API. Other devices ("Terminals") will connect to this brain over the network. This is the guiding design principle.
 
 **Outcome:** The project will be developed as a centralized "intelligence platform" (The Atlas Brain) that serves multiple lightweight "terminals".
@@ -123,7 +123,7 @@
 
 **Actions:**
 
-1.  **Service Placeholders:** Created `atlas_brain/services/vlm.py` and `atlas_brain/services/stt.py` to house placeholder functions for future AI model logic.
+1.  **Service Placeholders:** Created `atlas_brain/services/stt.py` (and initially `vlm.py`, later removed) to house placeholder functions for future AI model logic.
 2.  **Refactoring:** Modified the API endpoints in `atlas_brain/api/query.py` to call their corresponding service functions instead of containing logic themselves.
 3.  **Verification:** Restarted the container and tested the `/api/v1/query/text` endpoint. The response from the placeholder service was returned successfully, confirming the refactoring was successful.
 
@@ -354,7 +354,7 @@ curl http://localhost:8000/api/v1/session/<session-uuid>/history
 
 Current request flow:
 ```
-Voice Input → STT → Intent Parser (VLM) → [Device Action OR LLM Response] → TTS
+Voice Input → STT → Intent Router (semantic) → [Device Action OR LLM Response] → TTS
                                               ↑
                                          STATIC MODEL
                                          (Hermes-8B)
@@ -362,7 +362,7 @@ Voice Input → STT → Intent Parser (VLM) → [Device Action OR LLM Response] 
 
 Planned intelligent routing:
 ```
-Voice Input → STT → Intent Parser (VLM) → [Device Action OR LLM Response] → TTS
+Voice Input → STT → Intent Router (semantic) → [Device Action OR LLM Response] → TTS
                                               ↑
                                     ┌─────────┴─────────┐
                                     │ Complexity Analyzer│
@@ -387,7 +387,7 @@ Voice Input → STT → Intent Parser (VLM) → [Device Action OR LLM Response] 
 - STT: faster-whisper (small.en) on CUDA ✅
 - TTS: piper (en_US-libritts-high) on CPU ✅
 - LLM: Ministral-3B on CUDA ✅ (should be Hermes-8B per .env)
-- VLM: moondream on CUDA ✅
+- VLM: moondream ~~(removed — deprecated, replaced by semantic intent router)~~
 
 **Technical Findings:**
 

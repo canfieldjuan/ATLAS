@@ -61,7 +61,7 @@
   ────────────────────────────────────────
   Module: services/
   Status: Active
-  Purpose: LLM backends (5), embedding, intent router, speaker ID, VLM, tool executor,
+  Purpose: LLM backends (5), embedding, intent router, speaker ID, tool executor,
     reminders, tracing
   ────────────────────────────────────────
   Module: storage/

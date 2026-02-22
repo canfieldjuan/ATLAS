@@ -85,22 +85,42 @@ def _fallback_outbound_caller_id() -> str:
     return ""
 
 
-# Track which calls already have recording started (avoid duplicates)
+# Track which calls already have recording started (avoid duplicates).
+# In-memory set for fast path; DB check via call_transcripts for restart resilience.
 _recording_started: set[str] = set()
+
+
+async def _is_recording_already_started(call_sid: str) -> bool:
+    """Check if recording was already started for this call.
+
+    Fast path: in-memory set (covers current process lifetime).
+    Slow path: DB lookup (covers restart scenarios where the set was lost).
+    """
+    if call_sid in _recording_started:
+        return True
+    try:
+        from ...storage.repositories.call_transcript import get_call_transcript_repo
+        existing = await get_call_transcript_repo().get_by_call_sid(call_sid)
+        if existing:
+            _recording_started.add(call_sid)  # cache for future checks
+            return True
+    except Exception:
+        pass  # DB unavailable -- rely on in-memory only
+    return False
 
 
 async def _start_recording_for_call(call_sid: str):
     """Start recording via REST API, retrying until the call is active.
 
     Tries at 2s, 5s, 10s after the webhook. The first success wins;
-    the /status handler may also start recording on in-progress — the
-    _recording_started set prevents duplicates.
+    the /status handler may also start recording on in-progress -- the
+    _recording_started set + DB check prevents duplicates.
     """
     for delay in (2, 5, 10):
-        if call_sid in _recording_started:
-            return  # Already started by /status handler
+        if await _is_recording_already_started(call_sid):
+            return
         await asyncio.sleep(delay)
-        if call_sid in _recording_started:
+        if await _is_recording_already_started(call_sid):
             return
         try:
             provider = get_comms_service().provider
@@ -884,7 +904,7 @@ async def handle_call_status(
     if CallStatus == "in-progress" and comms_settings.record_calls:
         if ParentCallSid:
             logger.debug("Skipping recording for child leg %s (parent=%s)", CallSid, ParentCallSid)
-        elif CallSid not in _recording_started:
+        elif not await _is_recording_already_started(CallSid):
             try:
                 provider = get_comms_service().provider
                 cb_url = (
@@ -1105,11 +1125,21 @@ async def handle_recording_status(request: Request):
         except Exception as e:
             logger.warning("Failed to update recording status: %s", e)
 
-        # Trigger call intelligence pipeline
+        # Trigger call intelligence pipeline (skip if already processed)
         duration = int(RecordingDuration or 0)
-        _spawn_recording_processing(
-            CallSid, RecordingUrl, duration,
-        )
+        already_processed = False
+        try:
+            from ...storage.repositories.call_transcript import get_call_transcript_repo
+            existing = await get_call_transcript_repo().get_by_call_sid(CallSid)
+            if existing:
+                already_processed = True
+                logger.info("Skipping duplicate recording webhook for %s (already in DB)", CallSid)
+        except Exception:
+            pass  # DB unavailable -- proceed with processing
+        if not already_processed:
+            _spawn_recording_processing(
+                CallSid, RecordingUrl, duration,
+            )
 
     return Response(status_code=204)
 

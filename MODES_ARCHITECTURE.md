@@ -82,7 +82,7 @@ Atlas moves from a monolithic "one model does everything" approach to a modular 
 
 ### 4. atlas-security (Priority: Medium)
 - **Purpose**: Camera monitoring, alerts, person recognition
-- **Model**: Specialized (VLM + small LLM)
+- **Model**: Specialized (object detection + small LLM)
 - **Tools**: camera feeds, person detection, alert rules, zone monitoring
 - **Complexity**: High - real-time processing, standalone operation
 
