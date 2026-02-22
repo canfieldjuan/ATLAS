@@ -415,10 +415,39 @@ async def _generate_llm_response(state: HomeAgentState) -> dict[str, Any]:
                 "has_llm_response": False}
 
     input_text = state.get("input_text", "")
+    session_id = state.get("session_id")
     system_msg = "You are a helpful home assistant."
+
+    # Fetch conversation history from PostgreSQL (lightweight, no RAG)
+    history_messages: list[Message] = []
+    if session_id:
+        try:
+            from ...storage.config import db_settings
+            if db_settings.enabled:
+                from ...memory.service import get_memory_service
+                mem_ctx = await get_memory_service().gather_context(
+                    query=input_text,
+                    session_id=session_id,
+                    include_rag=False,
+                    include_physical=False,
+                    include_history=True,
+                    max_history=4,
+                )
+                history_messages = [
+                    Message(role=h["role"], content=h["content"])
+                    for h in mem_ctx.conversation_history
+                ]
+                if history_messages:
+                    logger.debug(
+                        "Home agent: added %d history turns for session %s",
+                        len(history_messages), session_id,
+                    )
+        except Exception as e:
+            logger.debug("Home agent history fetch failed (non-fatal): %s", e)
 
     messages = [
         Message(role="system", content=system_msg),
+        *history_messages,
         Message(role="user", content=input_text),
     ]
 
@@ -436,7 +465,7 @@ async def _generate_llm_response(state: HomeAgentState) -> dict[str, Any]:
         "input_tokens": result.get("prompt_eval_count", 0),
         "output_tokens": result.get("eval_count", 0),
         "system_prompt": system_msg,
-        "history_count": 0,
+        "history_count": len(history_messages),
         "prompt_eval_duration_ms": result.get("prompt_eval_duration_ms"),
         "eval_duration_ms": result.get("eval_duration_ms"),
         "total_duration_ms": result.get("total_duration_ms"),
@@ -463,11 +492,40 @@ async def _generate_llm_response_with_tools(state: HomeAgentState) -> dict[str, 
                 "has_llm_response": False}
 
     input_text = state.get("input_text", "")
+    session_id = state.get("session_id")
     intent = state.get("intent")
+
+    # Fetch conversation history from PostgreSQL (lightweight, no RAG)
+    history_messages: list[Message] = []
+    if session_id:
+        try:
+            from ...storage.config import db_settings
+            if db_settings.enabled:
+                from ...memory.service import get_memory_service
+                mem_ctx = await get_memory_service().gather_context(
+                    query=input_text,
+                    session_id=session_id,
+                    include_rag=False,
+                    include_physical=False,
+                    include_history=True,
+                    max_history=4,
+                )
+                history_messages = [
+                    Message(role=h["role"], content=h["content"])
+                    for h in mem_ctx.conversation_history
+                ]
+                if history_messages:
+                    logger.debug(
+                        "Home agent tools: added %d history turns for session %s",
+                        len(history_messages), session_id,
+                    )
+        except Exception as e:
+            logger.debug("Home agent tools history fetch failed (non-fatal): %s", e)
 
     system_msg = "You are a helpful assistant. Use tools when needed."
     messages = [
         Message(role="system", content=system_msg),
+        *history_messages,
         Message(role="user", content=input_text),
     ]
 
@@ -497,7 +555,7 @@ async def _generate_llm_response_with_tools(state: HomeAgentState) -> dict[str, 
         "input_tokens": llm_meta.get("input_tokens"),
         "output_tokens": llm_meta.get("output_tokens"),
         "system_prompt": system_msg,
-        "history_count": 0,
+        "history_count": len(history_messages),
         "prompt_eval_duration_ms": llm_meta.get("prompt_eval_duration_ms"),
         "eval_duration_ms": llm_meta.get("eval_duration_ms"),
         "total_duration_ms": llm_meta.get("total_duration_ms"),

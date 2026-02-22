@@ -30,6 +30,7 @@ class SearchSource:
     invalid_at: Optional[str] = None
     created_at: Optional[str] = None
     expired_at: Optional[str] = None
+    source_type: str = "search"
 
 
 @dataclass
@@ -205,6 +206,7 @@ class RAGClient:
                     confidence=edge.get("score", 0.5),
                     created_at=edge.get("created_at"),
                     expired_at=edge.get("expired_at"),
+                    source_type="entity_edge",
                 ))
             return SearchResult(facts=facts)
 

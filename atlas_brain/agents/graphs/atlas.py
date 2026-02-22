@@ -367,13 +367,15 @@ async def retrieve_memory(
 
             client = get_rag_client()
             entity_name = state.get("entity_name")
+            max_facts = settings.memory.context_results
             if entity_name:
                 logger.info("Entity detected: %r -- running parallel search + traversal", entity_name)
+                max_facts = max(max_facts, 5)
 
             search_result = await client.search_with_traversal(
                 query=input_text,
                 entity_name=entity_name,
-                max_facts=settings.memory.context_results,
+                max_facts=max_facts,
             )
 
             memory_ms = (time.perf_counter() - start_time) * 1000
@@ -976,9 +978,22 @@ async def _generate_llm_response(
 
     # Add RAG context from GraphRAG knowledge graph
     if mem_ctx.rag_context_used and mem_ctx.rag_result and mem_ctx.rag_result.sources:
-        rag_facts = [s.fact for s in mem_ctx.rag_result.sources if s.fact]
-        if rag_facts:
-            system_parts.append("\nRelevant memory:\n" + "\n".join(f"- {f}" for f in rag_facts))
+        entity_facts = []
+        search_facts = []
+        for s in mem_ctx.rag_result.sources:
+            if not s.fact:
+                continue
+            if getattr(s, "source_type", "search") == "entity_edge":
+                entity_facts.append(s.fact)
+            else:
+                search_facts.append(s.fact)
+
+        entity_name = state.get("entity_name")
+        if entity_facts:
+            label = f"Known facts about {entity_name}" if entity_name else "Known facts"
+            system_parts.append(f"\n{label}:\n" + "\n".join(f"- {f}" for f in entity_facts))
+        if search_facts:
+            system_parts.append("\nRelated context:\n" + "\n".join(f"- {f}" for f in search_facts))
 
     # Inject entity context (recent turns + current room for disambiguation)
     try:
