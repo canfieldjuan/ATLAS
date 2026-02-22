@@ -1,7 +1,7 @@
 """
 Action dispatch framework for capabilities.
 
-Handles both direct action requests and intent-based dispatch from the VLM.
+Handles both direct action requests and intent-based dispatch from the LLM.
 """
 
 import logging

@@ -9,11 +9,11 @@ import logging
 from threading import Lock
 from typing import Any, Callable, Generic, Optional, Type, TypeVar
 
-from .protocols import LLMService, ModelInfo, VLMService, VOSService
+from .protocols import LLMService, ModelInfo
 
 logger = logging.getLogger("atlas.registry")
 
-T = TypeVar("T", VLMService, LLMService, VOSService)
+T = TypeVar("T", bound=LLMService)
 
 
 class ServiceRegistry(Generic[T]):
@@ -127,34 +127,13 @@ class ServiceRegistry(Generic[T]):
         return self._active_name == name
 
 
-# Global registries for VLM and LLM services
-vlm_registry: ServiceRegistry[VLMService] = ServiceRegistry("VLM")
+# Global registry for LLM services
 llm_registry: ServiceRegistry[LLMService] = ServiceRegistry("LLM")
-
-
-def register_vlm(name: str) -> Callable[[Type[VLMService]], Type[VLMService]]:
-    """Decorator to register a VLM implementation."""
-    def decorator(cls: Type[VLMService]) -> Type[VLMService]:
-        vlm_registry.register(name, cls)
-        return cls
-    return decorator
 
 
 def register_llm(name: str) -> Callable[[Type[LLMService]], Type[LLMService]]:
     """Decorator to register an LLM implementation."""
     def decorator(cls: Type[LLMService]) -> Type[LLMService]:
         llm_registry.register(name, cls)
-        return cls
-    return decorator
-
-
-# Global registry for VOS (Video Object Segmentation) services
-vos_registry: ServiceRegistry[VOSService] = ServiceRegistry("VOS")
-
-
-def register_vos(name: str) -> Callable[[Type[VOSService]], Type[VOSService]]:
-    """Decorator to register a VOS implementation."""
-    def decorator(cls: Type[VOSService]) -> Type[VOSService]:
-        vos_registry.register(name, cls)
         return cls
     return decorator

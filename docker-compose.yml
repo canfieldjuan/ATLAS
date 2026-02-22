@@ -18,6 +18,23 @@ services:
       timeout: 5s
       retries: 5
 
+  # NocoDB — browser UI over the existing atlas_postgres instance.
+  # Auto-discovers tables (contacts, contact_interactions, appointments, etc.).
+  # Admin UI: http://localhost:8080
+  nocodb:
+    image: nocodb/nocodb:latest
+    container_name: atlas_nocodb
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - atlas_nocodb_data:/usr/app/data
+    environment:
+      NC_DB: "pg://postgres:5432?u=atlas&p=atlas_dev_password&d=atlas"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   brain:
     build: .
     ports:
@@ -34,6 +51,7 @@ services:
       ATLAS_DB_DATABASE: atlas
       ATLAS_DB_USER: atlas
       ATLAS_DB_PASSWORD: atlas_dev_password
+      # NocoDB UI: http://localhost:8080 (no token needed — brain uses direct asyncpg)
     depends_on:
       postgres:
         condition: service_healthy
@@ -50,3 +68,5 @@ services:
 
 volumes:
   atlas_postgres_data:
+  atlas_nocodb_data:
+

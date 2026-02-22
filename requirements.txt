@@ -56,3 +56,6 @@ apscheduler>=3.10,<4.0
 
 # Email draft generation (Anthropic Claude)
 anthropic>=0.39.0
+
+# MCP (Model Context Protocol) — CRM and Email MCP servers
+mcp>=1.26.0

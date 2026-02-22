@@ -21,7 +21,7 @@ from fastapi import FastAPI
 
 from .api import router as api_router
 from .config import settings
-from .services import vlm_registry, llm_registry, vos_registry
+from .services import llm_registry
 from .storage import db_settings
 from .storage.database import init_database, close_database
 
@@ -118,14 +118,6 @@ async def lifespan(app: FastAPI):
             logger.error("Failed to initialize database: %s", e)
             # Continue without database - service can still function
             # but conversation persistence will be unavailable
-
-    # Load default VLM if configured
-    if settings.load_vlm_on_startup:
-        try:
-            logger.info("Loading default VLM: %s", settings.vlm.default_model)
-            vlm_registry.activate(settings.vlm.default_model)
-        except Exception as e:
-            logger.error("Failed to load default VLM: %s", e)
 
     # Note: STT/TTS registries not implemented - voice uses Piper TTS directly
     # via voice/pipeline.py. These can be added later if centralized
@@ -261,19 +253,6 @@ async def lifespan(app: FastAPI):
 
     # Note: Speaker ID loaded lazily via get_speaker_id_service() when voice
     # pipeline starts. No registry needed - single Resemblyzer implementation.
-
-    # Load VOS if enabled
-    if settings.load_vos_on_startup or settings.vos.enabled:
-        try:
-            logger.info("Loading VOS: %s", settings.vos.default_model)
-            vos_registry.activate(
-                settings.vos.default_model,
-                device=settings.vos.device,
-                dtype=settings.vos.dtype,
-            )
-            logger.info("VOS loaded successfully")
-        except Exception as e:
-            logger.error("Failed to load VOS: %s", e)
 
     # Note: Omni (speech-to-speech) not yet implemented as registry.
     # Future: Add omni_registry for Qwen2-Audio or similar models.
@@ -572,8 +551,6 @@ async def lifespan(app: FastAPI):
     shutdown_cloud_llm()
 
     # Unload models to free resources
-    vos_registry.deactivate()
-    vlm_registry.deactivate()
     llm_registry.deactivate()
 
     # Force garbage collection to clean up semaphores from NeMo/PyTorch

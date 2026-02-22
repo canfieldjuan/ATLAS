@@ -1,7 +1,7 @@
 """
 Protocol definitions for AI model services.
 
-These protocols define the interface that all VLM and LLM implementations must follow,
+These protocols define the interface that LLM implementations must follow,
 enabling runtime model swapping and consistent behavior across different backends.
 """
 
@@ -45,36 +45,6 @@ class InferenceMetrics:
             "memory_reserved_mb": self.memory_reserved_mb,
             "memory_total_mb": self.memory_total_mb,
         }
-
-
-@runtime_checkable
-class VLMService(Protocol):
-    """Protocol for Vision-Language Model services."""
-
-    @property
-    def model_info(self) -> ModelInfo:
-        """Return metadata about the current model."""
-        ...
-
-    def load(self) -> None:
-        """Load the model into memory."""
-        ...
-
-    def unload(self) -> None:
-        """Unload the model from memory to free resources."""
-        ...
-
-    def process_text(self, query: str) -> dict[str, Any]:
-        """Process a text-only query."""
-        ...
-
-    async def process_vision(
-        self,
-        image_bytes: bytes,
-        prompt: Optional[str] = None,
-    ) -> dict[str, Any]:
-        """Process an image with optional text prompt."""
-        ...
 
 
 @dataclass
@@ -143,59 +113,3 @@ class LLMService(Protocol):
         """
         ...
 
-
-@dataclass
-class SegmentationResult:
-    """Result from image/video segmentation."""
-
-    masks: Any  # numpy array [N, H, W]
-    scores: Any  # numpy array [N]
-    labels: list[str]
-    boxes: Any  # numpy array [N, 4] or None
-    image_shape: tuple[int, int]
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "masks": self.masks.tolist() if hasattr(self.masks, "tolist") else self.masks,
-            "scores": self.scores.tolist() if hasattr(self.scores, "tolist") else self.scores,
-            "labels": self.labels,
-            "boxes": self.boxes.tolist() if self.boxes is not None and hasattr(self.boxes, "tolist") else self.boxes,
-            "image_shape": self.image_shape,
-        }
-
-
-@runtime_checkable
-class VOSService(Protocol):
-    """Protocol for Video Object Segmentation services (SAM3, etc.)."""
-
-    @property
-    def model_info(self) -> ModelInfo:
-        """Return metadata about the current model."""
-        ...
-
-    def load(self) -> None:
-        """Load the model into memory."""
-        ...
-
-    def unload(self) -> None:
-        """Unload the model from memory to free resources."""
-        ...
-
-    async def segment_image(
-        self,
-        image: Any,
-        prompts: Optional[list[str]] = None,
-        point_prompts: Optional[list[tuple[int, int]]] = None,
-        box_prompts: Optional[list[tuple[int, int, int, int]]] = None,
-    ) -> dict[str, Any]:
-        """Segment objects in an image."""
-        ...
-
-    async def segment_video(
-        self,
-        video_path: str,
-        prompts: Optional[list[str]] = None,
-        frame_skip: int = 1,
-    ) -> list[dict[str, Any]]:
-        """Segment objects across video frames."""
-        ...

@@ -835,7 +835,17 @@ class LookupCustomerTool:
         return "scheduling"
 
     async def execute(self, params: dict[str, Any]) -> ToolResult:
-        """Look up customer and their appointments."""
+        """
+        Look up a customer.
+
+        Strategy (in order):
+          1. CRM contacts table — the single source of truth for customer data.
+          2. Appointment rows — fallback for legacy records not yet in the CRM.
+
+        When a match is found in the CRM the response includes full contact
+        details plus linked appointments.  When found only via appointment rows
+        the response matches the legacy format so callers behave identically.
+        """
         phone = params.get("phone")
         name = params.get("name")
         include_history = params.get("include_history", True)
@@ -847,6 +857,88 @@ class LookupCustomerTool:
                 message="Need either phone number or name to look up customer.",
             )
 
+        # ------------------------------------------------------------------
+        # Step 1: CRM lookup (contacts table via configured provider)
+        # ------------------------------------------------------------------
+        try:
+            from ..services.crm_provider import get_crm_provider
+
+            crm = get_crm_provider()
+            crm_results = await crm.search_contacts(
+                query=name,
+                phone=phone,
+                limit=5,
+            )
+            if crm_results:
+                contact = crm_results[0]
+                contact_id = str(contact.get("id", ""))
+                appointments = []
+                if contact_id:
+                    appointments = await crm.get_contact_appointments(contact_id)
+
+                # Build appointment summaries
+                context = _get_default_context()
+                tz_name = (
+                    context.hours.timezone
+                    if context
+                    else settings.reminder.default_timezone
+                )
+                now = datetime.now(ZoneInfo(tz_name))
+                upcoming, past = [], []
+                for appt in appointments:
+                    start_time = appt.get("start_time")
+                    appt_summary = {
+                        "id": str(appt.get("id", "")),
+                        "date": start_time.strftime("%A, %B %d") if start_time else "Unknown",
+                        "time": start_time.strftime("%I:%M %p") if start_time else "Unknown",
+                        "service": appt.get("service_type"),
+                        "status": appt.get("status"),
+                    }
+                    if start_time and start_time > now:
+                        upcoming.append(appt_summary)
+                    else:
+                        past.append(appt_summary)
+
+                customer_info = {
+                    "name": contact.get("full_name"),
+                    "phone": contact.get("phone"),
+                    "email": contact.get("email"),
+                    "address": contact.get("address"),
+                    "contact_id": contact_id,
+                    "source": "crm",
+                }
+
+                msg_parts = [f"Found customer: {customer_info['name']}"]
+                if customer_info.get("phone"):
+                    msg_parts.append(f"Phone: {customer_info['phone']}")
+                if upcoming:
+                    msg_parts.append(f"Has {len(upcoming)} upcoming appointment(s).")
+                    next_appt = upcoming[0]
+                    msg_parts.append(
+                        f"Next: {next_appt['service']} on {next_appt['date']} at {next_appt['time']}."
+                    )
+                if past and include_history:
+                    msg_parts.append(f"Has {len(past)} past appointment(s).")
+
+                return ToolResult(
+                    success=True,
+                    data={
+                        "found": True,
+                        "customer": customer_info,
+                        "contact": contact,
+                        "upcoming_appointments": upcoming,
+                        "past_appointments": past[:5],
+                        "total_appointments": len(appointments),
+                    },
+                    message=" ".join(msg_parts),
+                )
+        except Exception as crm_exc:
+            logger.debug("CRM lookup failed, falling back to appointment rows: %s", crm_exc)
+
+        # ------------------------------------------------------------------
+        # Step 2: Legacy fallback — scrape customer data from appointment rows
+        # (covers contacts not yet in the CRM)
+        # ------------------------------------------------------------------
         repo = get_appointment_repo()
 
         try:
@@ -884,6 +976,7 @@ class LookupCustomerTool:
                 "phone": latest.get("customer_phone"),
                 "email": latest.get("customer_email"),
                 "address": latest.get("customer_address"),
+                "source": "appointments",
             }
 
             # Separate upcoming vs past appointments

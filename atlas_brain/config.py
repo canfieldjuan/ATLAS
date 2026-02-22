@@ -11,15 +11,6 @@ from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class VLMConfig(BaseSettings):
-    """VLM-specific configuration."""
-
-    model_config = SettingsConfigDict(env_prefix="ATLAS_VLM_")
-
-    default_model: str = Field(default="moondream", description="Default VLM to load on startup")
-    moondream_cache: Path = Field(default=Path("models/moondream"), description="Cache path for moondream model")
-
-
 class STTConfig(BaseSettings):
     """STT-specific configuration."""
 
@@ -298,29 +289,6 @@ class RecognitionConfig(BaseSettings):
     )
 
 
-class VOSConfig(BaseSettings):
-    """VOS (Video Object Segmentation) configuration."""
-
-    model_config = SettingsConfigDict(
-        env_prefix="ATLAS_VOS_",
-        env_file=".env",
-        extra="ignore",
-    )
-
-    enabled: bool = Field(default=False, description="Enable VOS service")
-    default_model: str = Field(default="sam3", description="Default VOS model")
-    device: str = Field(default="cuda", description="Device for inference")
-    dtype: str = Field(default="float16", description="Model dtype")
-    bpe_path: Optional[str] = Field(
-        default=None,
-        description="Path to BPE vocab file (auto-detected if None)"
-    )
-    load_from_hf: bool = Field(
-        default=True,
-        description="Load model from HuggingFace"
-    )
-
-
 class OrchestrationConfig(BaseSettings):
     """Voice pipeline orchestration configuration."""
 
@@ -489,6 +457,19 @@ class ToolsConfig(BaseSettings):
     calendar_id: str = Field(default="primary", description="Calendar ID to query")
     calendar_cache_ttl: float = Field(default=300.0, description="Cache TTL in seconds")
 
+    # CalDAV calendar (provider-agnostic alternative to Google Calendar)
+    # Works with Nextcloud, Apple Calendar, Fastmail, Proton Calendar, SOGo, Baikal, etc.
+    caldav_url: str | None = Field(
+        default=None,
+        description="CalDAV server URL (e.g. https://nextcloud.example.com/remote.php/dav)",
+    )
+    caldav_username: str | None = Field(default=None, description="CalDAV username")
+    caldav_password: str | None = Field(default=None, description="CalDAV password or app password")
+    caldav_calendar_url: str | None = Field(
+        default=None,
+        description="Specific calendar collection URL (auto-discovered via PROPFIND if not set)",
+    )
+
     # Gmail digest
     gmail_enabled: bool = Field(default=False, description="Enable Gmail digest")
     gmail_client_id: str | None = Field(default=None, description="Google OAuth client ID for Gmail")
@@ -544,7 +525,7 @@ class AlertsConfig(BaseSettings):
 
 
 class EmailConfig(BaseSettings):
-    """Email tool configuration (Resend API + Gmail)."""
+    """Email tool configuration (Resend API + Gmail + IMAP)."""
 
     model_config = SettingsConfigDict(env_prefix="ATLAS_EMAIL_", env_file=".env", extra="ignore")
 
@@ -571,6 +552,14 @@ class EmailConfig(BaseSettings):
         default=10,
         description="Maximum attachment size in MB"
     )
+
+    # IMAP settings (provider-agnostic inbox reading)
+    imap_host: str = Field(default="", description="IMAP server host (e.g. imap.gmail.com, outlook.office365.com)")
+    imap_port: int = Field(default=993, description="IMAP server port (993=SSL, 143=STARTTLS)")
+    imap_username: str = Field(default="", description="IMAP username (usually your email address)")
+    imap_password: str = Field(default="", description="IMAP password or app-specific password")
+    imap_ssl: bool = Field(default=True, description="Use SSL/TLS for IMAP connection")
+    imap_mailbox: str = Field(default="INBOX", description="Default IMAP mailbox to read from")
 
 
 class EmailDraftConfig(BaseSettings):
@@ -1748,6 +1737,29 @@ class TemporalPatternConfig(BaseSettings):
     failure_cooldown: float = Field(default=60.0, ge=0.0, le=600.0, description="Seconds to suppress DB retries after failure")
 
 
+
+class MCPConfig(BaseSettings):
+    """MCP server configuration.
+
+    Both the CRM and Email MCP servers default to stdio transport (Claude
+    Desktop / Cursor compatible).  Set transport='sse' to expose them as HTTP
+    endpoints instead.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_MCP_", env_file=".env", extra="ignore")
+
+    crm_enabled: bool = Field(default=True, description="Enable CRM MCP server")
+    email_enabled: bool = Field(default=True, description="Enable Email MCP server")
+    calendar_enabled: bool = Field(default=True, description="Enable Calendar MCP server")
+    twilio_enabled: bool = Field(default=True, description="Enable Twilio MCP server")
+    transport: str = Field(default="stdio", description="MCP transport: stdio or sse")
+    host: str = Field(default="0.0.0.0", description="Bind host for SSE transport")
+    crm_port: int = Field(default=8056, description="Port for CRM MCP server (SSE transport)")
+    email_port: int = Field(default=8057, description="Port for Email MCP server (SSE transport)")
+    twilio_port: int = Field(default=8058, description="Port for Twilio MCP server (SSE transport)")
+    calendar_port: int = Field(default=8059, description="Port for Calendar MCP server (SSE transport)")
+
+
 class Settings(BaseSettings):
     """Application-wide settings."""
 
@@ -1765,7 +1777,6 @@ class Settings(BaseSettings):
     models_dir: Path = Field(default=Path("models"), description="Models cache directory")
 
     # Startup behavior
-    load_vlm_on_startup: bool = Field(default=True, description="Load VLM on startup")
     load_stt_on_startup: bool = Field(default=True, description="Load STT on startup")
     load_tts_on_startup: bool = Field(default=True, description="Load TTS on startup")
     load_llm_on_startup: bool = Field(default=True, description="Load LLM on startup")
@@ -1775,25 +1786,18 @@ class Settings(BaseSettings):
         default=False, description="Load speaker ID on startup"
     )
 
-    # Startup behavior - VOS
-    load_vos_on_startup: bool = Field(
-        default=False, description="Load VOS on startup"
-    )
-
     # Startup behavior - Omni (unified speech-to-speech)
     load_omni_on_startup: bool = Field(
         default=False, description="Load Omni (unified voice) on startup"
     )
 
     # Nested configs
-    vlm: VLMConfig = Field(default_factory=VLMConfig)
     stt: STTConfig = Field(default_factory=STTConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     tts: TTSConfig = Field(default_factory=TTSConfig)
     omni: OmniConfig = Field(default_factory=OmniConfig)
     speaker_id: SpeakerIDConfig = Field(default_factory=SpeakerIDConfig)
     recognition: RecognitionConfig = Field(default_factory=RecognitionConfig)
-    vos: VOSConfig = Field(default_factory=VOSConfig)
     orchestration: OrchestrationConfig = Field(default_factory=OrchestrationConfig)
     mqtt: MQTTConfig = Field(default_factory=MQTTConfig)
     homeassistant: HomeAssistantConfig = Field(default_factory=HomeAssistantConfig)
@@ -1826,6 +1830,7 @@ class Settings(BaseSettings):
     call_intelligence: CallIntelligenceConfig = Field(default_factory=CallIntelligenceConfig)
     openai_compat: OpenAICompatConfig = Field(default_factory=OpenAICompatConfig)
     ftl_tracing: FTLTracingConfig = Field(default_factory=FTLTracingConfig)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
 
     # Presence tracking - imported from presence module
     @property
