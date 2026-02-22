@@ -243,7 +243,8 @@ atlas_brain/
 
 atlas_brain/mcp/                 # MCP servers (Claude Desktop / Cursor compatible)
 ├── crm_server.py                # CRM MCP server  (9 tools, port 8056 SSE)
-└── email_server.py              # Email MCP server (8 tools, port 8057 SSE)
+├── email_server.py              # Email MCP server (8 tools, port 8057 SSE)
+└── twilio_server.py             # Twilio MCP server (10 tools, port 8058 SSE)
 ```
 
 ## Key Patterns
@@ -346,6 +347,16 @@ ATLAS_DIRECTUS_SECRET=change-me-in-production   # used by Directus container
 ATLAS_MCP_TRANSPORT=stdio
 ATLAS_MCP_CRM_PORT=8056    # CRM MCP server (SSE mode only)
 ATLAS_MCP_EMAIL_PORT=8057  # Email MCP server (SSE mode only)
+ATLAS_MCP_TWILIO_PORT=8058 # Twilio MCP server (SSE mode only)
+
+# IMAP — provider-agnostic email reading (works with Gmail, Outlook, any IMAP server)
+# Leave blank to fall back to Gmail API reading
+ATLAS_EMAIL_IMAP_HOST=imap.gmail.com
+ATLAS_EMAIL_IMAP_PORT=993
+ATLAS_EMAIL_IMAP_USERNAME=
+ATLAS_EMAIL_IMAP_PASSWORD=         # For Gmail: 16-char app password (myaccount.google.com/apppasswords)
+ATLAS_EMAIL_IMAP_SSL=true
+ATLAS_EMAIL_IMAP_MAILBOX=INBOX
 ```
 
 ## Directus CRM Setup
@@ -378,7 +389,7 @@ the same `contacts` table).
 
 ## MCP Servers
 
-Two provider-agnostic MCP servers expose the CRM and email to any MCP client
+Three provider-agnostic MCP servers expose the CRM, email, and telephony to any MCP client
 (Claude Desktop, Cursor, custom agents).
 
 ### CRM MCP Server (9 tools)
@@ -407,7 +418,39 @@ Tools: `send_email`, `send_estimate`, `send_proposal`, `list_inbox`,
 `get_message`, `search_inbox`, `get_thread`, `list_sent_history`
 
 **Sending**: Gmail preferred (OAuth2); falls back to Resend if Gmail is not configured.
-**Reading**: Gmail only (`list_inbox`, `search_inbox`, `get_thread`).
+**Reading**: IMAP (provider-agnostic) when configured; Gmail API fallback.
+
+IMAP works with any mail server — Gmail, Outlook, Yahoo, or custom:
+```bash
+ATLAS_EMAIL_IMAP_HOST=imap.gmail.com      # or outlook.office365.com, etc.
+ATLAS_EMAIL_IMAP_PORT=993
+ATLAS_EMAIL_IMAP_USERNAME=you@gmail.com
+ATLAS_EMAIL_IMAP_PASSWORD=your_app_password   # Google: 16-char app password
+ATLAS_EMAIL_IMAP_SSL=true
+```
+
+### Twilio MCP Server (10 tools)
+```bash
+# stdio mode (Claude Desktop / Cursor)
+python -m atlas_brain.mcp.twilio_server
+
+# SSE HTTP mode (port 8058)
+python -m atlas_brain.mcp.twilio_server --sse
+```
+
+Tools: `make_call`, `get_call`, `list_calls`, `hangup_call`,
+`start_recording`, `stop_recording`, `list_recordings`, `get_recording`,
+`send_sms`, `lookup_phone`
+
+**Outbound call recording**: Use `make_call(record=True)` to record from call creation.
+Use `start_recording(call_sid)` to begin recording on an already-active call.
+
+```bash
+ATLAS_COMMS_TWILIO_ACCOUNT_SID=ACxxxxxxxx…
+ATLAS_COMMS_TWILIO_AUTH_TOKEN=your_auth_token
+ATLAS_COMMS_RECORD_CALLS=true          # enable recording globally
+ATLAS_COMMS_WEBHOOK_BASE_URL=https://your-domain.com
+```
 
 ### Claude Desktop config (`~/.claude/claude_desktop_config.json`)
 ```json
@@ -421,6 +464,11 @@ Tools: `send_email`, `send_estimate`, `send_proposal`, `list_inbox`,
     "atlas-email": {
       "command": "python",
       "args": ["-m", "atlas_brain.mcp.email_server"],
+      "cwd": "/path/to/ATLAS"
+    },
+    "atlas-twilio": {
+      "command": "python",
+      "args": ["-m", "atlas_brain.mcp.twilio_server"],
       "cwd": "/path/to/ATLAS"
     }
   }

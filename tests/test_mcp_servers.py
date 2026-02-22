@@ -589,3 +589,307 @@ class TestLookupCustomerToolCRMFirst:
 
         assert result.success is False
         assert result.error == "MISSING_PARAMS"
+
+
+# ===========================================================================
+# IMAPEmailProvider — unit tests (no real IMAP server needed)
+# ===========================================================================
+
+class TestIMAPEmailProvider:
+    """Tests for the provider-agnostic IMAP reader."""
+
+    def _make_provider(self, host="imap.example.com", username="user@example.com", password="pass"):
+        from atlas_brain.services.email_provider import IMAPEmailProvider
+        p = IMAPEmailProvider()
+        p._host = host
+        p._username = username
+        p._password = password
+        p._ssl = True
+        p._mailbox = "INBOX"
+        p._loaded = True
+        return p
+
+    def test_is_configured_returns_true_when_all_set(self):
+        p = self._make_provider()
+        assert p.is_configured() is True
+
+    def test_is_configured_returns_false_when_no_host(self):
+        p = self._make_provider(host="")
+        assert p.is_configured() is False
+
+    def test_is_configured_returns_false_when_no_password(self):
+        p = self._make_provider(password="")
+        assert p.is_configured() is False
+
+    def test_imap_search_criteria_unread(self):
+        from atlas_brain.services.email_provider import _imap_search_criteria
+        assert _imap_search_criteria("is:unread") == "UNSEEN"
+
+    def test_imap_search_criteria_from(self):
+        from atlas_brain.services.email_provider import _imap_search_criteria
+        assert _imap_search_criteria("from:alice@example.com") == 'FROM "alice@example.com"'
+
+    def test_imap_search_criteria_subject(self):
+        from atlas_brain.services.email_provider import _imap_search_criteria
+        assert _imap_search_criteria("subject:invoice") == 'SUBJECT "invoice"'
+
+    def test_imap_search_criteria_combined(self):
+        from atlas_brain.services.email_provider import _imap_search_criteria
+        result = _imap_search_criteria("is:unread from:alice@example.com")
+        assert "UNSEEN" in result
+        assert 'FROM "alice@example.com"' in result
+
+    def test_imap_search_criteria_unknown_token_falls_back(self):
+        from atlas_brain.services.email_provider import _imap_search_criteria
+        # Unknown tokens silently dropped; empty criteria → ALL
+        assert _imap_search_criteria("label:work OR label:personal") == "ALL"
+
+    def test_imap_search_criteria_empty_returns_all(self):
+        from atlas_brain.services.email_provider import _imap_search_criteria
+        assert _imap_search_criteria("") == "ALL"
+
+    def test_decode_mime_words_plain(self):
+        from atlas_brain.services.email_provider import _decode_mime_words
+        assert _decode_mime_words("Hello World") == "Hello World"
+
+    def test_decode_mime_words_encoded(self):
+        from atlas_brain.services.email_provider import _decode_mime_words
+        # =?utf-8?q?Hello_World?=  → "Hello World"
+        encoded = "=?utf-8?q?Hello_World?="
+        assert "Hello" in _decode_mime_words(encoded)
+
+    async def test_list_messages_calls_executor(self):
+        """list_messages should invoke _list_messages_sync in an executor."""
+        p = self._make_provider()
+        stub = [{"id": "42", "subject": "Hi", "from": "alice@example.com"}]
+        p._list_messages_sync = MagicMock(return_value=stub)
+
+        result = await p.list_messages("is:unread", max_results=5)
+
+        p._list_messages_sync.assert_called_once_with("is:unread", 5)
+        assert result == stub
+
+    async def test_get_message_calls_executor(self):
+        p = self._make_provider()
+        stub = {"id": "42", "body_text": "Hello"}
+        p._get_message_sync = MagicMock(return_value=stub)
+
+        result = await p.get_message("42")
+
+        p._get_message_sync.assert_called_once_with("42")
+        assert result["body_text"] == "Hello"
+
+    async def test_send_raises_not_implemented(self):
+        p = self._make_provider()
+        with pytest.raises(NotImplementedError):
+            await p.send(to=["x@y.com"], subject="s", body="b")
+
+
+class TestCompositeProviderIMAPPreference:
+    """CompositeEmailProvider should prefer IMAP for reading when configured."""
+
+    async def test_reads_via_imap_when_configured(self):
+        from atlas_brain.services.email_provider import CompositeEmailProvider
+
+        provider = CompositeEmailProvider()
+        # Mark IMAP as configured
+        provider._imap.is_configured = MagicMock(return_value=True)
+        provider._imap.list_messages = AsyncMock(return_value=[{"id": "imap-1"}])
+        provider._gmail.list_messages = AsyncMock(return_value=[{"id": "gmail-1"}])
+
+        result = await provider.list_messages("is:unread")
+
+        provider._imap.list_messages.assert_called_once()
+        provider._gmail.list_messages.assert_not_called()
+        assert result[0]["id"] == "imap-1"
+
+    async def test_falls_back_to_gmail_when_imap_not_configured(self):
+        from atlas_brain.services.email_provider import CompositeEmailProvider
+
+        provider = CompositeEmailProvider()
+        provider._imap.is_configured = MagicMock(return_value=False)
+        provider._imap.list_messages = AsyncMock(return_value=[])
+        provider._gmail.list_messages = AsyncMock(return_value=[{"id": "gmail-1"}])
+
+        result = await provider.list_messages("is:unread")
+
+        provider._imap.list_messages.assert_not_called()
+        provider._gmail.list_messages.assert_called_once()
+        assert result[0]["id"] == "gmail-1"
+
+
+# ===========================================================================
+# Twilio MCP Server — unit tests
+# ===========================================================================
+
+@pytest.fixture(autouse=False)
+def _mock_twilio_client(monkeypatch):
+    """Patch _client() in twilio_server to return a MagicMock."""
+    from atlas_brain.mcp import twilio_server
+    mock = MagicMock()
+    monkeypatch.setattr(twilio_server, "_client", lambda: mock)
+    return mock
+
+
+@pytest.fixture(autouse=False)
+def _mock_comms_settings(monkeypatch):
+    from atlas_brain.mcp import twilio_server
+    cfg = MagicMock()
+    cfg.webhook_base_url = "https://atlas.example.com"
+    cfg.record_calls = False
+    cfg.forward_to_number = "+13095550001"
+    monkeypatch.setattr(twilio_server, "_comms_settings", lambda: cfg)
+    return cfg
+
+
+class TestTwilioMCPTools:
+    async def test_make_call_success(self, _mock_twilio_client, _mock_comms_settings):
+        from atlas_brain.mcp.twilio_server import make_call
+
+        fake_call = MagicMock()
+        fake_call.sid = "CA123"
+        fake_call.status = "queued"
+        _mock_twilio_client.calls.create.return_value = fake_call
+
+        raw = await make_call(to="+16185551234", record=True)
+        data = json.loads(raw)
+
+        assert data["success"] is True
+        assert data["call_sid"] == "CA123"
+        assert data["recording_enabled"] is True
+        # Verify record=True was passed
+        kwargs = _mock_twilio_client.calls.create.call_args.kwargs
+        assert kwargs.get("record") is True
+
+    async def test_make_call_missing_from_number(self, _mock_twilio_client, _mock_comms_settings):
+        from atlas_brain.mcp.twilio_server import make_call
+
+        _mock_comms_settings.forward_to_number = ""
+        raw = await make_call(to="+16185551234", from_number=None)
+        data = json.loads(raw)
+        assert data["success"] is False
+        assert "from_number" in data["error"]
+
+    async def test_make_call_twilio_error(self, _mock_twilio_client, _mock_comms_settings):
+        from atlas_brain.mcp.twilio_server import make_call
+
+        _mock_twilio_client.calls.create.side_effect = RuntimeError("invalid number")
+        raw = await make_call(to="+16185551234", from_number="+13095550001")
+        data = json.loads(raw)
+        assert data["success"] is False
+        assert "invalid number" in data["error"]
+
+    async def test_get_call_success(self, _mock_twilio_client):
+        from atlas_brain.mcp.twilio_server import get_call
+
+        fake_call = MagicMock()
+        fake_call.sid = "CA123"
+        fake_call.from_formatted = "+13095550001"
+        fake_call.to_formatted = "+16185551234"
+        fake_call.status = "completed"
+        fake_call.direction = "outbound-api"
+        fake_call.duration = "62"
+        fake_call.start_time = None
+        fake_call.end_time = None
+        fake_call.answered_by = None
+        _mock_twilio_client.calls.return_value.fetch.return_value = fake_call
+
+        raw = await get_call("CA123")
+        data = json.loads(raw)
+        assert data["success"] is True
+        assert data["call_sid"] == "CA123"
+        assert data["status"] == "completed"
+
+    async def test_list_calls_success(self, _mock_twilio_client):
+        from atlas_brain.mcp.twilio_server import list_calls
+
+        fake_call = MagicMock()
+        fake_call.sid = "CA001"
+        fake_call.from_formatted = "+1"
+        fake_call.to_formatted = "+2"
+        fake_call.status = "completed"
+        fake_call.direction = "outbound-api"
+        fake_call.duration = "30"
+        fake_call.start_time = None
+        _mock_twilio_client.calls.list.return_value = [fake_call]
+
+        raw = await list_calls(status="completed", limit=10)
+        data = json.loads(raw)
+        assert data["success"] is True
+        assert len(data["calls"]) == 1
+        assert data["calls"][0]["call_sid"] == "CA001"
+
+    async def test_hangup_call(self, _mock_twilio_client):
+        from atlas_brain.mcp.twilio_server import hangup_call
+
+        raw = await hangup_call("CA123")
+        data = json.loads(raw)
+        assert data["success"] is True
+        _mock_twilio_client.calls.return_value.update.assert_called_once_with(status="completed")
+
+    async def test_start_recording(self, _mock_twilio_client, _mock_comms_settings):
+        from atlas_brain.mcp.twilio_server import start_recording
+
+        fake_rec = MagicMock()
+        fake_rec.sid = "RE123"
+        fake_rec.status = "in-progress"
+        _mock_twilio_client.calls.return_value.recordings.create.return_value = fake_rec
+
+        raw = await start_recording("CA123")
+        data = json.loads(raw)
+        assert data["success"] is True
+        assert data["recording_sid"] == "RE123"
+        # Verify the recording-status callback URL was passed
+        kwargs = _mock_twilio_client.calls.return_value.recordings.create.call_args.kwargs
+        assert "recording-status" in kwargs.get("recording_status_callback", "")
+
+    async def test_stop_recording(self, _mock_twilio_client):
+        from atlas_brain.mcp.twilio_server import stop_recording
+
+        raw = await stop_recording("CA123", "RE123")
+        data = json.loads(raw)
+        assert data["success"] is True
+        _mock_twilio_client.calls.return_value.recordings.return_value.update.assert_called_once_with(
+            status="stopped"
+        )
+
+    async def test_list_recordings(self, _mock_twilio_client):
+        from atlas_brain.mcp.twilio_server import list_recordings
+
+        fake_rec = MagicMock()
+        fake_rec.sid = "RE001"
+        fake_rec.status = "completed"
+        fake_rec.duration = "45"
+        fake_rec.date_created = "2026-01-01"
+        fake_rec.uri = "/2010-04-01/Accounts/AC/Recordings/RE001.json"
+        _mock_twilio_client.recordings.list.return_value = [fake_rec]
+
+        raw = await list_recordings("CA123")
+        data = json.loads(raw)
+        assert data["success"] is True
+        assert len(data["recordings"]) == 1
+        assert data["recordings"][0]["recording_sid"] == "RE001"
+        assert ".mp3" in data["recordings"][0]["media_url"]
+
+    async def test_send_sms_success(self, _mock_twilio_client, _mock_comms_settings):
+        from atlas_brain.mcp.twilio_server import send_sms
+
+        fake_msg = MagicMock()
+        fake_msg.sid = "SM123"
+        fake_msg.status = "queued"
+        fake_msg.to = "+16185551234"
+        fake_msg.from_ = "+13095550001"
+        _mock_twilio_client.messages.create.return_value = fake_msg
+
+        raw = await send_sms(to="+16185551234", body="Hello!")
+        data = json.loads(raw)
+        assert data["success"] is True
+        assert data["message_sid"] == "SM123"
+
+    async def test_send_sms_missing_from(self, _mock_twilio_client, _mock_comms_settings):
+        from atlas_brain.mcp.twilio_server import send_sms
+
+        _mock_comms_settings.forward_to_number = ""
+        raw = await send_sms(to="+16185551234", body="Hello!", from_number=None)
+        data = json.loads(raw)
+        assert data["success"] is False

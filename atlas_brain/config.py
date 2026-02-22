@@ -512,7 +512,7 @@ class AlertsConfig(BaseSettings):
 
 
 class EmailConfig(BaseSettings):
-    """Email tool configuration (Resend API + Gmail)."""
+    """Email tool configuration (Resend API + Gmail + IMAP)."""
 
     model_config = SettingsConfigDict(env_prefix="ATLAS_EMAIL_", env_file=".env", extra="ignore")
 
@@ -539,6 +539,14 @@ class EmailConfig(BaseSettings):
         default=10,
         description="Maximum attachment size in MB"
     )
+
+    # IMAP settings (provider-agnostic inbox reading)
+    imap_host: str = Field(default="", description="IMAP server host (e.g. imap.gmail.com, outlook.office365.com)")
+    imap_port: int = Field(default=993, description="IMAP server port (993=SSL, 143=STARTTLS)")
+    imap_username: str = Field(default="", description="IMAP username (usually your email address)")
+    imap_password: str = Field(default="", description="IMAP password or app-specific password")
+    imap_ssl: bool = Field(default=True, description="Use SSL/TLS for IMAP connection")
+    imap_mailbox: str = Field(default="INBOX", description="Default IMAP mailbox to read from")
 
 
 class EmailDraftConfig(BaseSettings):
@@ -1751,6 +1759,7 @@ class MCPConfig(BaseSettings):
     host: str = Field(default="0.0.0.0", description="Bind host for SSE transport")
     crm_port: int = Field(default=8056, description="Port for CRM MCP server (SSE transport)")
     email_port: int = Field(default=8057, description="Port for Email MCP server (SSE transport)")
+    twilio_port: int = Field(default=8058, description="Port for Twilio MCP server (SSE transport)")
 
 
 class Settings(BaseSettings):

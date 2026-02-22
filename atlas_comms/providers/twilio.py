@@ -136,9 +136,16 @@ class TwilioProvider(TelephonyProvider):
         to_number: str,
         from_number: str,
         context_id: Optional[str] = None,
+        record: bool = False,
     ) -> Call:
         """
         Initiate an outbound call.
+
+        Args:
+            to_number: Destination E.164 number.
+            from_number: Caller ID (must be a verified Twilio number).
+            context_id: Optional business context.
+            record: Record this call. Also honoured when comms_settings.record_calls is True.
 
         The webhook_base_url must be configured to handle the call flow.
         """
@@ -157,14 +164,26 @@ class TwilioProvider(TelephonyProvider):
         try:
             # Make the call via Twilio
             webhook_url = f"{comms_settings.webhook_base_url}/api/v1/comms/voice/outbound"
+            status_url = f"{comms_settings.webhook_base_url}/api/v1/comms/voice/status"
 
-            twilio_call = self._client.calls.create(
-                to=to_number,
-                from_=from_number,
-                url=webhook_url,
-                status_callback=f"{comms_settings.webhook_base_url}/api/v1/comms/voice/status",
-                status_callback_event=["initiated", "ringing", "answered", "completed"],
-            )
+            create_kwargs = {
+                "to": to_number,
+                "from_": from_number,
+                "url": webhook_url,
+                "status_callback": status_url,
+                "status_callback_event": ["initiated", "ringing", "answered", "completed"],
+            }
+
+            if record or comms_settings.record_calls:
+                recording_url = (
+                    f"{comms_settings.webhook_base_url}"
+                    "/api/v1/comms/voice/recording-status"
+                )
+                create_kwargs["record"] = True
+                create_kwargs["recording_status_callback"] = recording_url
+                create_kwargs["recording_status_callback_event"] = "completed"
+
+            twilio_call = self._client.calls.create(**create_kwargs)
 
             call.provider_call_id = twilio_call.sid
             self._calls[twilio_call.sid] = call
@@ -201,6 +220,51 @@ class TwilioProvider(TelephonyProvider):
 
         except Exception as e:
             logger.error("Failed to hangup call: %s", e)
+            return False
+
+    async def start_recording(
+        self,
+        call_sid: str,
+        recording_status_callback: str = "",
+    ) -> None:
+        """
+        Start recording an active call via the Twilio REST API.
+
+        Use this to record calls that were not started with record=True,
+        or to add a mid-call recording after the call was answered.
+
+        Args:
+            call_sid: Twilio Call SID (e.g. CAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)
+            recording_status_callback: Webhook URL to receive recording status events.
+        """
+        if not self._client:
+            raise RuntimeError("Provider not connected")
+
+        kwargs: dict = {}
+        if recording_status_callback:
+            kwargs["recording_status_callback"] = recording_status_callback
+            kwargs["recording_status_callback_event"] = "completed"
+
+        self._client.calls(call_sid).recordings.create(**kwargs)
+        logger.info("Started recording for call %s", call_sid)
+
+    async def stop_recording(self, call_sid: str, recording_sid: str) -> bool:
+        """
+        Stop an in-progress recording.
+
+        Args:
+            call_sid: Twilio Call SID.
+            recording_sid: Recording SID returned by start_recording.
+        """
+        if not self._client:
+            return False
+
+        try:
+            self._client.calls(call_sid).recordings(recording_sid).update(status="stopped")
+            logger.info("Stopped recording %s on call %s", recording_sid, call_sid)
+            return True
+        except Exception as exc:
+            logger.error("Failed to stop recording %s: %s", recording_sid, exc)
             return False
 
     async def hold(self, call: Call) -> bool:
