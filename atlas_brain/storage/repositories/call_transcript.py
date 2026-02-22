@@ -295,6 +295,70 @@ class CallTranscriptRepository:
         except Exception as e:
             raise DatabaseOperationError("get recent", e)
 
+    async def search(
+        self,
+        keyword: Optional[str] = None,
+        contact_id: Optional[str] = None,
+        intent: Optional[str] = None,
+        from_date: Optional[datetime] = None,
+        to_date: Optional[datetime] = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Search call transcripts with filters.
+
+        Supports full-text search on transcript and summary fields,
+        plus structured filters on contact, intent, and date range.
+        """
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            raise DatabaseUnavailableError("search transcripts")
+
+        conditions: list[str] = []
+        params: list = []
+        idx = 1
+
+        if keyword:
+            conditions.append(
+                f"(transcript ILIKE ${idx} OR summary ILIKE ${idx})"
+            )
+            params.append(f"%{keyword}%")
+            idx += 1
+        if contact_id:
+            conditions.append(f"contact_id = ${idx}")
+            params.append(contact_id)
+            idx += 1
+        if intent:
+            conditions.append(f"extracted_data->>'intent' = ${idx}")
+            params.append(intent)
+            idx += 1
+        if from_date:
+            conditions.append(f"created_at >= ${idx}")
+            params.append(from_date)
+            idx += 1
+        if to_date:
+            conditions.append(f"created_at <= ${idx}")
+            params.append(to_date)
+            idx += 1
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        params.append(limit)
+
+        try:
+            rows = await pool.fetch(
+                f"""
+                SELECT * FROM call_transcripts
+                {where}
+                ORDER BY created_at DESC
+                LIMIT ${idx}
+                """,
+                *params,
+            )
+            return [self._row_to_dict(row) for row in rows]
+        except DatabaseUnavailableError:
+            raise
+        except Exception as e:
+            raise DatabaseOperationError("search transcripts", e)
+
     def _row_to_dict(self, row) -> dict:
         """Convert a database row to a dict."""
         result = dict(row)

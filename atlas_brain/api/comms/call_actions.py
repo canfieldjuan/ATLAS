@@ -646,7 +646,7 @@ async def _execute_plan_action(
         return await _exec_update_contact(record, params)
 
     elif action_type == "schedule_callback":
-        return f"Callback flagged: {params.get('time', 'TBD')}"
+        return await _exec_callback(record, extracted_data, params)
 
     else:
         return f"Unknown action type: {action_type}"
@@ -768,6 +768,56 @@ async def _exec_update_contact(record: dict, params: dict) -> str:
     from ...services.crm_provider import get_crm_provider
     await get_crm_provider().update_contact(str(contact_id), params)
     return f"Contact {contact_id} updated"
+
+
+async def _exec_callback(record: dict, extracted_data: dict, params: dict) -> str:
+    """Schedule a callback reminder via the reminder service."""
+    from ...services.reminders import get_reminder_service
+
+    customer = extracted_data.get("customer_name") or "Customer"
+    phone = extracted_data.get("customer_phone") or record.get("from_number", "")
+    reason = params.get("reason") or extracted_data.get("intent", "follow-up")
+    time_str = params.get("time") or params.get("when") or "tomorrow at 9am"
+
+    message = f"Call back {customer}"
+    if phone:
+        message += f" ({phone})"
+    message += f" -- {reason}"
+
+    # Parse the callback time
+    import dateparser
+    from datetime import datetime as _dt, timezone as _tz
+
+    parser_settings = {
+        "PREFER_DATES_FROM": "future",
+        "RETURN_AS_TIMEZONE_AWARE": True,
+        "TIMEZONE": settings.reminder.default_timezone,
+    }
+    due_at = dateparser.parse(time_str, settings=parser_settings)
+    if not due_at:
+        # Fallback: tomorrow 9 AM in configured timezone
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(settings.reminder.default_timezone)
+        now = _dt.now(tz)
+        due_at = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        if due_at <= now:
+            from datetime import timedelta
+            due_at += timedelta(days=1)
+
+    service = get_reminder_service()
+    reminder = await service.create_reminder(
+        message=message,
+        due_at=due_at,
+        source="call_plan",
+        metadata={
+            "transcript_id": str(record.get("id", "")),
+            "contact_id": str(record.get("contact_id", "")),
+            "phone": phone,
+        },
+    )
+    if not reminder:
+        raise Exception("Reminder service returned None (disabled or at limit)")
+    return f"Callback scheduled: {due_at.strftime('%Y-%m-%d %H:%M')} -- {message}"
 
 
 async def _notify_plan_executed(
