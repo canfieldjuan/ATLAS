@@ -205,6 +205,21 @@ class IMAPEmailProvider:
         self._mailbox = cfg.imap_mailbox or "INBOX"
         self._loaded = True
 
+        # Validate settings and log clear warnings rather than failing silently
+        if self._host:
+            if not (1 <= self._port <= 65535):
+                logger.warning(
+                    "IMAP: invalid port %d (must be 1-65535) — IMAP will fail",
+                    self._port,
+                )
+            if not self._username:
+                logger.warning("IMAP: host is set but ATLAS_EMAIL_IMAP_USERNAME is empty")
+            if not self._password:
+                logger.warning(
+                    "IMAP: host is set but ATLAS_EMAIL_IMAP_PASSWORD is empty "
+                    "(Gmail: use a 16-char app password from myaccount.google.com/apppasswords)"
+                )
+
     def is_configured(self) -> bool:
         self._load_config()
         return bool(self._host and self._username and self._password)
@@ -584,24 +599,42 @@ class CompositeEmailProvider:
     # -----------------------------------------------------------------------
 
     def _reader(self):
-        """Return the preferred read provider."""
+        """Return the preferred read provider (IMAP when configured; Gmail otherwise)."""
         if self._imap.is_configured():
             return self._imap
         return self._gmail
 
+    async def _read_with_fallback(self, method: str, *args, **kwargs) -> Any:
+        """
+        Call `method` on the preferred reader; fall back to Gmail if IMAP raises.
+
+        Prevents IMAP misconfiguration (bad password, wrong host, firewall) from
+        crashing the MCP server.  The fallback is logged at WARNING so it's visible.
+        """
+        reader = self._reader()
+        try:
+            return await getattr(reader, method)(*args, **kwargs)
+        except Exception as exc:
+            if reader is self._imap:
+                logger.warning(
+                    "IMAP %s failed (%s) — falling back to Gmail API", method, exc
+                )
+                return await getattr(self._gmail, method)(*args, **kwargs)
+            raise
+
     async def list_messages(
         self, query: str = "is:unread", max_results: int = 20
     ) -> list[dict[str, Any]]:
-        return await self._reader().list_messages(query=query, max_results=max_results)
+        return await self._read_with_fallback("list_messages", query=query, max_results=max_results)
 
     async def get_message(self, message_id: str) -> dict[str, Any]:
-        return await self._reader().get_message(message_id)
+        return await self._read_with_fallback("get_message", message_id)
 
     async def get_message_metadata(self, message_id: str) -> dict[str, Any]:
-        return await self._reader().get_message_metadata(message_id)
+        return await self._read_with_fallback("get_message_metadata", message_id)
 
     async def get_thread(self, thread_id: str) -> dict[str, Any]:
-        return await self._reader().get_thread(thread_id)
+        return await self._read_with_fallback("get_thread", thread_id)
 
 
 # ---------------------------------------------------------------------------

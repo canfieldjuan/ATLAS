@@ -423,6 +423,38 @@ class BookAppointmentTool:
                 logger.warning("DB save failed but calendar event created: %s", e)
                 db_id = None
 
+            # Link appointment to CRM contact (fire-and-forget — never blocks the booking)
+            contact_id_str: Optional[str] = None
+            if db_id:
+                try:
+                    from uuid import UUID as _UUID
+                    from ..services.crm_provider import get_crm_provider
+                    from ..storage.database import get_db_pool
+
+                    crm = get_crm_provider()
+                    contact = await crm.find_or_create_contact(
+                        full_name=customer_name,
+                        phone=customer_phone,
+                        email=customer_email,
+                        source="booking",
+                    )
+                    contact_id_str = str(contact.get("id", "")) if contact else None
+                    if contact_id_str:
+                        pool = get_db_pool()
+                        await pool.execute(
+                            "UPDATE appointments SET contact_id = $1 WHERE id = $2",
+                            _UUID(contact_id_str),
+                            _UUID(db_id),
+                        )
+                        logger.info(
+                            "Linked appointment %s to contact %s (%s)",
+                            db_id, contact_id_str, customer_name,
+                        )
+                except Exception as crm_exc:
+                    logger.warning(
+                        "CRM contact link failed (booking still confirmed): %s", crm_exc
+                    )
+
             # Send confirmation email if email provided
             email_sent = False
             if customer_email:
@@ -455,6 +487,7 @@ class BookAppointmentTool:
                     "start_time": start_time.isoformat(),
                     "end_time": end_time.isoformat(),
                     "service_type": service_type,
+                    "contact_id": contact_id_str,
                     "confirmation_email_sent": email_sent,
                 },
                 message=confirm_msg,
