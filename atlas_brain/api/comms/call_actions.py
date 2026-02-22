@@ -354,21 +354,59 @@ async def send_sms(transcript_id: UUID):
 
 @router.get("/{transcript_id}/view")
 async def view_transcript(transcript_id: UUID):
-    """Return the transcript and extracted data as plain text."""
+    """Return the transcript, extracted data, action plan, and customer context."""
     record = await _get_transcript_or_404(transcript_id)
     data = record.get("extracted_data") or {}
+
+    mins, secs = divmod(record.get("duration_seconds", 0), 60)
+    dur_str = f"{mins}m {secs}s" if mins else f"{secs}s"
 
     lines = [
         f"Call: {record.get('call_sid', '')}",
         f"From: {record.get('from_number', '')}",
-        f"Duration: {record.get('duration_seconds', 0)}s",
+        f"Duration: {dur_str}",
         f"Status: {record.get('status', '')}",
         "",
-        "--- EXTRACTED ---",
+        "--- EXTRACTED DATA ---",
     ]
     for k, v in data.items():
         if v not in (None, "", [], False):
             lines.append(f"{k}: {v}")
+
+    # Action plan
+    actions = record.get("proposed_actions") or []
+    actionable = [a for a in actions if (a.get("action") or a.get("type", "none")) != "none"]
+    if actionable:
+        lines += ["", "--- ACTION PLAN ---"]
+        for i, a in enumerate(actionable, 1):
+            atype = a.get("action") or a.get("type", "")
+            rationale = a.get("rationale") or a.get("label", "")
+            lines.append(f"{i}. {atype.replace('_', ' ').title()}: {rationale}")
+
+    # Customer context (if linked)
+    contact_id = record.get("contact_id")
+    if contact_id:
+        try:
+            from ...services.customer_context import get_customer_context_service
+            ctx = await get_customer_context_service().get_context(str(contact_id))
+            if not ctx.is_empty:
+                lines += ["", "--- CUSTOMER ---"]
+                c = ctx.contact
+                lines.append(f"Name: {c.get('full_name', 'Unknown')}")
+                if c.get("phone"):
+                    lines.append(f"Phone: {c['phone']}")
+                if c.get("email"):
+                    lines.append(f"Email: {c['email']}")
+                if c.get("contact_type"):
+                    lines.append(f"Type: {c['contact_type']}")
+                if ctx.appointments:
+                    lines.append(f"Appointments: {len(ctx.appointments)}")
+                if ctx.call_transcripts:
+                    lines.append(f"Past calls: {len(ctx.call_transcripts)}")
+                if ctx.interactions:
+                    lines.append(f"Interactions: {len(ctx.interactions)}")
+        except Exception:
+            pass  # fail-open
 
     lines += ["", "--- TRANSCRIPT ---", record.get("transcript") or "(none)"]
     return PlainTextResponse("\n".join(lines))

@@ -444,44 +444,17 @@ async def _link_to_crm(
         return None
 
     crm = get_crm_provider()
-
-    # Try to find an existing contact by phone first, then email
-    existing = None
-    if phone:
-        results = await crm.search_contacts(phone=phone)
-        if results:
-            existing = results[0]
-    if not existing and email:
-        results = await crm.search_contacts(email=email)
-        if results:
-            existing = results[0]
-
-    if existing:
-        contact_id = str(existing["id"])
-        # Update name if we learned it from this call and it was missing
-        if name and not existing.get("full_name"):
-            parts = name.split(None, 1)
-            await crm.update_contact(contact_id, {
-                "full_name": name,
-                "first_name": parts[0],
-                "last_name": parts[1] if len(parts) > 1 else None,
-            })
-    else:
-        # Create a new contact from call data
-        parts = name.split(None, 1) if name else []
-        contact = await crm.create_contact({
-            "full_name": name or phone or "Unknown Caller",
-            "first_name": parts[0] if parts else None,
-            "last_name": parts[1] if len(parts) > 1 else None,
-            "phone": phone,
-            "email": email,
-            "address": extracted_data.get("address"),
-            "business_context_id": context_id,
-            "contact_type": "customer",
-            "source": "phone_call",
-            "source_ref": str(transcript_id),
-        })
-        contact_id = str(contact["id"])
+    contact = await crm.find_or_create_contact(
+        full_name=name or phone or "Unknown Caller",
+        phone=phone,
+        email=email,
+        address=extracted_data.get("address"),
+        business_context_id=context_id,
+        contact_type="customer",
+        source="phone_call",
+        source_ref=str(transcript_id),
+    )
+    contact_id = str(contact["id"])
 
     # Link the call transcript to the contact
     await repo.link_contact(transcript_id, contact_id)
