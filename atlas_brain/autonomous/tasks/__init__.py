@@ -16,6 +16,7 @@ def register_builtin_tasks(runner) -> None:
     from .pattern_learning import run as pattern_learning_run
     from .anomaly_detection import run as anomaly_detection_run
     from .email_draft import run as email_draft_run
+    from .email_intake import run as email_intake_run
     from .model_swap import run_day as model_swap_day_run, run_night as model_swap_night_run
 
     runner.register_builtin("security_summary", security_summary_run)
@@ -31,5 +32,6 @@ def register_builtin_tasks(runner) -> None:
     runner.register_builtin("pattern_learning", pattern_learning_run)
     runner.register_builtin("anomaly_detection", anomaly_detection_run)
     runner.register_builtin("email_draft", email_draft_run)
+    runner.register_builtin("email_intake", email_intake_run)
     runner.register_builtin("model_swap_day", model_swap_day_run)
     runner.register_builtin("model_swap_night", model_swap_night_run)

@@ -347,15 +347,17 @@ async def generate_draft(gmail_message_id: str):
     if llm is None:
         raise HTTPException(503, "Draft LLM not available")
 
-    # Fetch full email from Gmail
-    from ..autonomous.tasks.gmail_digest import _get_gmail_client
+    # Fetch full email via IMAP
+    from ..services.email_provider import IMAPEmailProvider
 
-    gmail = await _get_gmail_client()
+    imap = IMAPEmailProvider()
     try:
-        full_msg = await gmail.get_message_full(gmail_message_id)
+        full_msg = await imap.get_message(gmail_message_id)
+        if full_msg.get("error"):
+            raise RuntimeError(full_msg["error"])
     except Exception as e:
-        logger.error("Failed to fetch message %s from Gmail: %s", gmail_message_id, e)
-        raise HTTPException(502, f"Failed to fetch email from Gmail: {e}")
+        logger.error("Failed to fetch message %s via IMAP: %s", gmail_message_id, e)
+        raise HTTPException(502, f"Failed to fetch email via IMAP: {e}")
 
     # Load skill prompt
     from ..skills import get_skill_registry
@@ -482,15 +484,17 @@ async def redraft(draft_id: UUID, reason: str | None = Query(default=None)):
     if llm is None:
         raise HTTPException(503, "Draft LLM not available")
 
-    # Re-fetch full email from Gmail
-    from ..autonomous.tasks.gmail_digest import _get_gmail_client
+    # Re-fetch full email via IMAP
+    from ..services.email_provider import IMAPEmailProvider
 
-    gmail = await _get_gmail_client()
+    imap = IMAPEmailProvider()
     try:
-        full_msg = await gmail.get_message_full(parent["gmail_message_id"])
+        full_msg = await imap.get_message(parent["gmail_message_id"])
+        if full_msg.get("error"):
+            raise RuntimeError(full_msg["error"])
     except Exception as e:
-        logger.error("Failed to fetch message %s from Gmail: %s", parent["gmail_message_id"], e)
-        raise HTTPException(502, f"Failed to fetch email from Gmail: {e}")
+        logger.error("Failed to fetch message %s via IMAP: %s", parent["gmail_message_id"], e)
+        raise HTTPException(502, f"Failed to fetch email via IMAP: {e}")
 
     # Load skill prompt
     from ..skills import get_skill_registry

@@ -138,6 +138,8 @@ def _parse_envelope(uid: str, raw_headers: bytes) -> dict[str, Any]:
         "references": msg.get("References", "").strip(),
         "thread_id": msg.get("X-GM-THRID", ""),  # Gmail IMAP extension
         "snippet": "",
+        "reply_to": _decode_mime_words(msg.get("Reply-To", "")),
+        "has_unsubscribe": msg.get("List-Unsubscribe") is not None,
     }
 
 

@@ -207,9 +207,15 @@ async def _send_action_email_notifications(emails: list[dict[str, Any]]) -> None
 
         message = f"From: {sender_name}\nSubject: {subject}\n\n{body_snippet}"
 
+        rfc_msg_id = e.get("message_id", "").strip("<>")
+        view_url = (
+            f"https://mail.google.com/mail/u/0/#search/rfc822msgid:{rfc_msg_id}"
+            if rfc_msg_id
+            else "https://mail.google.com/mail/u/0/#inbox"
+        )
         actions = (
             f"http, Draft Reply, {api_url}/api/v1/email/drafts/generate/{gmail_msg_id}, method=POST, clear=true; "
-            f"view, View Email, https://mail.google.com/mail/u/0/#inbox/{gmail_msg_id}"
+            f"view, View Email, {view_url}"
         )
 
         if is_lead:
@@ -568,9 +574,34 @@ async def _get_gmail_client() -> GmailClient:
         return _gmail_client
 
 
+async def _load_recent_processed_emails() -> list[dict[str, Any]]:
+    """Load emails processed in the last 24h from the DB (used when intake is active)."""
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        return []
+
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT gmail_message_id, sender, subject, category, priority,
+                   replyable, contact_id, action_plan, customer_context_summary
+            FROM processed_emails
+            WHERE processed_at > NOW() - INTERVAL '24 hours'
+            ORDER BY processed_at DESC
+            """,
+        )
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.warning("Failed to load recent processed emails: %s", e)
+        return []
+
+
 async def run(task: ScheduledTask) -> dict:
     """
     Fetch and summarize unread Gmail messages.
+
+    When email_intake is enabled, reads from processed_emails DB (last 24h)
+    instead of hitting the Gmail API (intake already polled throughout the day).
 
     Configurable via task.metadata:
         query (str): Gmail search query (default: from config)
@@ -578,40 +609,74 @@ async def run(task: ScheduledTask) -> dict:
     """
     cfg = settings.tools
 
-    if not cfg.gmail_enabled:
+    # --- Intake-aware path: build digest from DB instead of Gmail API ---
+    if settings.email_intake.enabled:
+        recent = await _load_recent_processed_emails()
+        if not recent:
+            return {
+                "query": "",
+                "total_unread": 0,
+                "emails": [],
+                "summary": "No emails processed in last 24h.",
+                "_skip_synthesis": "No emails processed in last 24h",
+            }
+
+        SYNTHESIS_BODY_LIMIT = 500
+        emails_for_llm = []
+        for r in recent:
+            emails_for_llm.append({
+                "gmail_message_id": r.get("gmail_message_id", ""),
+                "from": r.get("sender", ""),
+                "subject": r.get("subject", ""),
+                "date": "",
+                "body_text": "",
+                "category": r.get("category", "other"),
+                "priority": r.get("priority", "fyi"),
+                "replyable": r.get("replyable"),
+            })
+
+        action_count = sum(
+            1 for r in recent if r.get("priority") == "action_required"
+        )
+        summary = f"{len(recent)} emails in last 24h ({action_count} action required)."
+        logger.info("Gmail digest (from DB): %s", summary)
+
         return {
-            "query": "",
-            "total_unread": 0,
-            "emails": [],
-            "summary": "Gmail digest is disabled. Set ATLAS_TOOLS_GMAIL_ENABLED=true.",
-            "_skip_synthesis": "Gmail digest skipped -- not enabled.",
+            "query": "processed_emails (last 24h)",
+            "total_unread": len(recent),
+            "new_emails": len(recent),
+            "already_processed": 0,
+            "emails": emails_for_llm,
+            "graph_context": [],
+            "summary": summary,
         }
 
-    store = get_google_token_store()
-    if not store.get_credentials("gmail"):
+    # --- IMAP-based fetch path (fallback when intake is disabled) ---
+    from ...services.email_provider import IMAPEmailProvider
+
+    imap = IMAPEmailProvider()
+    if not imap.is_configured():
         return {
             "query": "",
             "total_unread": 0,
             "emails": [],
-            "summary": "Gmail not configured. Run: python scripts/setup_google_oauth.py",
-            "_skip_synthesis": "Gmail digest skipped -- not configured.",
+            "summary": "IMAP not configured. Set ATLAS_EMAIL_IMAP_HOST/USERNAME/PASSWORD.",
+            "_skip_synthesis": "Gmail digest skipped -- IMAP not configured.",
         }
 
     metadata = task.metadata or {}
     query = metadata.get("query", cfg.gmail_query)
     max_results = metadata.get("max_results", cfg.gmail_max_results)
 
-    client = await _get_gmail_client()
-
     try:
-        messages = await client.list_messages(query=query, max_results=max_results)
+        messages = await imap.list_messages(query=query, max_results=max_results)
     except Exception as e:
-        logger.error("Failed to list Gmail messages: %s", e)
+        logger.error("Failed to list IMAP messages: %s", e)
         return {
             "query": query,
             "total_unread": 0,
             "emails": [],
-            "summary": f"Gmail API error: {type(e).__name__}",
+            "summary": f"IMAP error: {type(e).__name__}",
         }
 
     total = len(messages)
@@ -620,7 +685,7 @@ async def run(task: ScheduledTask) -> dict:
             "query": query,
             "total_unread": 0,
             "emails": [],
-            "summary": f"No emails matching '{query}'.",
+            "summary": "No unread emails.",
             "_skip_synthesis": "No unread emails.",
         }
 
@@ -644,16 +709,22 @@ async def run(task: ScheduledTask) -> dict:
     )
 
     # --- Fetch full content for new messages (concurrently, batched) ---
+    max_body = cfg.gmail_body_max_chars
     emails: list[dict[str, Any]] = []
     batch_size = metadata.get("batch_size", settings.autonomous.gmail_digest_batch_size)
     for i in range(0, len(new_messages), batch_size):
         batch = new_messages[i : i + batch_size]
-        tasks = [client.get_message_full(m["id"]) for m in batch]
+        tasks = [imap.get_message(m["id"]) for m in batch]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for r in results:
             if isinstance(r, Exception):
                 logger.warning("Failed to fetch message: %s", r)
+            elif r.get("error"):
+                logger.warning("IMAP fetch error: %s", r["error"])
             else:
+                body = r.get("body_text", "")
+                if len(body) > max_body:
+                    r["body_text"] = body[:max_body] + "..."
                 emails.append(r)
 
     # --- Classify emails (rule-based, no LLM) ---

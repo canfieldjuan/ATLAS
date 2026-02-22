@@ -235,6 +235,15 @@ class TaskScheduler:
             "metadata": {"builtin_handler": "email_draft"},
         },
         {
+            "name": "email_intake",
+            "description": "Near-real-time email polling with CRM cross-reference",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": None,  # resolved from settings.email_intake.interval_seconds
+            "timeout_seconds": 120,
+            "metadata": {"builtin_handler": "email_intake"},
+        },
+        {
             "name": "security_summary",
             "description": "Periodic security event and alert aggregation",
             "task_type": "builtin",
@@ -368,6 +377,7 @@ class TaskScheduler:
             # Resolve configurable intervals at runtime
             _interval_overrides = {
                 "email_draft": settings.email_draft.schedule_interval_seconds,
+                "email_intake": settings.email_intake.interval_seconds,
             }
 
             for task_def in self._DEFAULT_TASKS:
@@ -442,6 +452,7 @@ class TaskScheduler:
             # Interval-based overrides
             interval_overrides = {
                 "email_draft": settings.email_draft.schedule_interval_seconds,
+                "email_intake": settings.email_intake.interval_seconds,
             }
 
             for task_name, desired_interval in interval_overrides.items():

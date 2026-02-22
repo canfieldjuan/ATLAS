@@ -607,6 +607,24 @@ class EmailDraftConfig(BaseSettings):
     )
 
 
+class EmailIntakeConfig(BaseSettings):
+    """Near-real-time email intake polling configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_EMAIL_INTAKE_", env_file=".env", extra="ignore",
+    )
+
+    enabled: bool = Field(default=False, description="Enable 10-min email polling")
+    interval_seconds: int = Field(default=600, ge=300, description="Poll interval in seconds")
+    crm_enabled: bool = Field(default=True, description="Cross-reference emails against CRM")
+    action_plan_enabled: bool = Field(
+        default=True, description="Generate LLM action plans for CRM matches"
+    )
+    max_action_plans_per_cycle: int = Field(
+        default=5, ge=1, le=20, description="Cap LLM calls per polling cycle"
+    )
+
+
 class ReminderConfig(BaseSettings):
     """Reminder system configuration."""
 
@@ -1761,6 +1779,7 @@ class MCPConfig(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="ATLAS_MCP_", env_file=".env", extra="ignore")
 
+    client_enabled: bool = Field(default=True, description="Enable Atlas as MCP client")
     crm_enabled: bool = Field(default=True, description="Enable CRM MCP server")
     email_enabled: bool = Field(default=True, description="Enable Email MCP server")
     calendar_enabled: bool = Field(default=True, description="Enable Calendar MCP server")
@@ -1840,6 +1859,7 @@ class Settings(BaseSettings):
     autonomous: AutonomousConfig = Field(default_factory=AutonomousConfig)
     escalation: EscalationConfig = Field(default_factory=EscalationConfig)
     email_draft: EmailDraftConfig = Field(default_factory=EmailDraftConfig)
+    email_intake: EmailIntakeConfig = Field(default_factory=EmailIntakeConfig)
     temporal: TemporalPatternConfig = Field(default_factory=TemporalPatternConfig)
     call_intelligence: CallIntelligenceConfig = Field(default_factory=CallIntelligenceConfig)
     openai_compat: OpenAICompatConfig = Field(default_factory=OpenAICompatConfig)
