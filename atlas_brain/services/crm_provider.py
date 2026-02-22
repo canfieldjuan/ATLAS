@@ -83,6 +83,9 @@ class DirectusCRMProvider:
 
     async def create_contact(self, data: dict[str, Any]) -> dict[str, Any]:
         client = await self._ensure_client()
+        # Normalize email to lowercase for consistent _eq filtering
+        if data.get("email"):
+            data = dict(data, email=data["email"].lower())
         resp = await client.post(
             "/items/contacts", json=data, headers=self._headers()
         )
@@ -143,6 +146,9 @@ class DirectusCRMProvider:
     ) -> Optional[dict[str, Any]]:
         client = await self._ensure_client()
         data = dict(data)
+        # Normalize email to lowercase if being updated
+        if data.get("email"):
+            data["email"] = data["email"].lower()
         data["updated_at"] = datetime.now(timezone.utc).isoformat()
         resp = await client.patch(
             f"/items/contacts/{contact_id}", json=data, headers=self._headers()
@@ -296,6 +302,9 @@ class DatabaseCRMProvider:
         contact_id = str(uuid4())
         now = datetime.now(timezone.utc)
         metadata_json = json.dumps(data.get("metadata", {}))
+        # Normalize email to lowercase for consistent searches
+        raw_email = data.get("email")
+        email = raw_email.lower() if raw_email else None
 
         row = await pool.fetchrow(
             """
@@ -312,7 +321,7 @@ class DatabaseCRMProvider:
             data.get("full_name", ""),
             data.get("first_name"),
             data.get("last_name"),
-            data.get("email"),
+            email,  # normalized lowercase
             data.get("phone"),
             data.get("address"),
             data.get("city"),

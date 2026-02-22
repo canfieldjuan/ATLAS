@@ -119,8 +119,8 @@ async def lifespan(app: FastAPI):
             # Continue without database - service can still function
             # but conversation persistence will be unavailable
 
-    # Load default VLM if configured
-    if settings.load_vlm_on_startup:
+    # Load default VLM if configured (no VLM implementations registered by default)
+    if settings.load_vlm_on_startup and settings.vlm.default_model:
         try:
             logger.info("Loading default VLM: %s", settings.vlm.default_model)
             vlm_registry.activate(settings.vlm.default_model)

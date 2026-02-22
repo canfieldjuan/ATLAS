@@ -72,6 +72,10 @@ services:
       ATLAS_DIRECTUS_URL: "http://directus:8055"
       ATLAS_DIRECTUS_ADMIN_EMAIL: "${ATLAS_DIRECTUS_ADMIN_EMAIL:-admin@atlas.local}"
       ATLAS_DIRECTUS_ADMIN_PASSWORD: "${ATLAS_DIRECTUS_ADMIN_PASSWORD:-atlas_admin_password}"
+      # ATLAS_DIRECTUS_TOKEN: <set after first Directus start>
+      # Generate via: Directus Admin UI → Settings → API Tokens → Create Token
+      # Then add to .env.local: ATLAS_DIRECTUS_TOKEN=your-token-here
+      # Until set, CRM falls back to direct PostgreSQL queries (DatabaseCRMProvider)
     depends_on:
       postgres:
         condition: service_healthy

@@ -341,6 +341,8 @@ if __name__ == "__main__":
     if transport == "sse":
         from ..config import settings
 
-        mcp.run(transport="sse", host=settings.mcp.host, port=settings.mcp.email_port)
+        mcp.settings.host = settings.mcp.host
+        mcp.settings.port = settings.mcp.email_port
+        mcp.run(transport="sse")
     else:
         mcp.run(transport="stdio")

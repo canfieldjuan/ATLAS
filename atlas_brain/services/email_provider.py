@@ -39,7 +39,7 @@ class GmailEmailProvider:
 
     async def is_available(self) -> bool:
         try:
-            from ..services.google_oauth import get_google_token_store
+            from .google_oauth import get_google_token_store
 
             return get_google_token_store().get_credentials("gmail") is not None
         except Exception:

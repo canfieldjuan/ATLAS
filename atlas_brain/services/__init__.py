@@ -4,7 +4,10 @@ AI model services for Atlas Brain.
 This module provides:
 - Protocol definitions for VLM and LLM services
 - Service registries for runtime model management
-- Concrete implementations (moondream, ollama, etc.)
+- Concrete implementations (ollama, etc.)
+
+Note: The moondream VLM implementation was removed as it is no longer in use.
+      Drop a new file in atlas_brain/services/vlm/ to register a future VLM.
 """
 
 from .protocols import (
