@@ -1246,7 +1246,7 @@ class EntityContextConfig(BaseSettings):
 
 
 class FreeModeConfig(BaseSettings):
-    """Free Conversation Mode — always-on listening when conditions are met.
+    """Free Conversation Mode - always-on listening when conditions are met.
 
     When enabled, Atlas stays in conversation mode continuously (no wake word
     needed) as long as a known speaker is active in the room. Exits automatically
