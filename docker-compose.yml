@@ -18,8 +18,9 @@ services:
       timeout: 5s
       retries: 5
 
-  # NocoDB — browser UI over the existing atlas_postgres instance.
-  # Auto-discovers tables (contacts, contact_interactions, appointments, etc.).
+  # NocoDB — browser UI over the CRM tables in Atlas's local Postgres (port 5433).
+  # NC_DB = Docker Postgres (nocodb_meta DB) for NocoDB's own metadata.
+  # CRM data source = local Postgres on 5433 via Docker bridge (172.17.0.1).
   # Admin UI: http://localhost:8090
   nocodb:
     image: nocodb/nocodb:latest
@@ -27,6 +28,8 @@ services:
     restart: unless-stopped
     ports:
       - "8090:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - atlas_nocodb_data:/usr/app/data
     environment:
