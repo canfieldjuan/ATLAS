@@ -602,6 +602,24 @@ class TestLauncherWiring:
         assert "format_entity_context" in src
         assert "system_parts" in src
 
+    def test_current_room_prepended_in_stream(self):
+        src = self._stream_source()
+        assert "current room" in src
+        assert "build_context_dict" in src
+
+    def test_current_room_prepended_in_agent(self):
+        import atlas_brain.agents.graphs.atlas as mod
+        src = inspect.getsource(mod._generate_llm_response)
+        assert "current room" in src
+        assert "build_context_dict" in src
+
+    def test_room_injected_even_without_recent_entities(self):
+        """Entity block fires when room is available even if recent_entities is empty."""
+        src = self._stream_source()
+        # The outer guard is now 'if entity_dicts:' not 'if mem_ctx.recent_entities:'
+        assert "if entity_dicts:" in src
+        assert "if mem_ctx.recent_entities:" not in src
+
 
 class TestEntityContextModule:
     """entity_context.py module is importable and has expected public API."""

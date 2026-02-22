@@ -964,16 +964,29 @@ async def _generate_llm_response(
         if rag_facts:
             system_parts.append("\nRelevant memory:\n" + "\n".join(f"- {f}" for f in rag_facts))
 
-    # Inject entity context from recent turns (devices, people, locations, topics)
-    if mem_ctx.recent_entities:
+    # Inject entity context (recent turns + current room for disambiguation)
+    try:
+        from ...voice.entity_context import collect_recent_entities, format_entity_context
+        entity_dicts = list(mem_ctx.recent_entities)
         try:
-            from ...voice.entity_context import collect_recent_entities, format_entity_context
-            refs = collect_recent_entities(mem_ctx.recent_entities)
+            from ...orchestration.context import get_context
+            _room = get_context().build_context_dict().get("location")
+            if _room:
+                entity_dicts.insert(0, {
+                    "type": "location",
+                    "name": _room,
+                    "action": "current room",
+                    "source": "context",
+                })
+        except Exception:
+            pass
+        if entity_dicts:
+            refs = collect_recent_entities(entity_dicts)
             entity_str = format_entity_context(refs)
             if entity_str:
                 system_parts.append(f"\n{entity_str}")
-        except Exception as e:
-            logger.debug("Entity context injection failed: %s", e)
+    except Exception as e:
+        logger.debug("Entity context injection failed: %s", e)
 
     system_msg = " ".join(system_parts)
     messages = [Message(role="system", content=system_msg)]
