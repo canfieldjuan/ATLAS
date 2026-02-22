@@ -423,12 +423,24 @@ class TestLauncherWiring:
 
     def test_person_entity_persisted(self):
         src = self._persist_source()
-        assert "person_entity" in src
         assert '"person"' in src
+        assert "speaker_name" in src
 
     def test_person_entity_uses_setdefault(self):
         src = self._persist_source()
         assert "setdefault" in src
+
+    def test_location_extracted_from_transcript(self):
+        src = self._persist_source()
+        assert "extract_location_from_text" in src
+        assert "user_text" in src
+
+    def test_agent_path_injects_entity_context(self):
+        import atlas_brain.agents.graphs.atlas as mod
+        src = inspect.getsource(mod._generate_llm_response)
+        assert "recent_entities" in src
+        assert "format_entity_context" in src
+        assert "system_parts" in src
 
 
 class TestEntityContextModule:

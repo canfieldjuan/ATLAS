@@ -533,12 +533,29 @@ async def _persist_streaming_turns(
     except Exception as e:
         logger.debug("Quality detection skipped in streaming: %s", e)
 
-    # Store entity context: person entity from speaker
+    # Store entity context for streaming turns (no intent object available)
+    # Extract location from transcript then response text; store person from speaker.
+    try:
+        from .entity_context import extract_location_from_text
+        for _text in (user_text, assistant_text):
+            if _text:
+                _loc = extract_location_from_text(_text)
+                if _loc:
+                    if assistant_metadata is None:
+                        assistant_metadata = {}
+                    assistant_metadata.setdefault("entities", []).append(
+                        {"type": "location", "name": _loc, "source": "text"}
+                    )
+                    break  # one location per turn is enough
+    except Exception:
+        pass
+
     if speaker_name:
-        person_entity = {"type": "person", "name": speaker_name, "source": "speaker"}
         if assistant_metadata is None:
             assistant_metadata = {}
-        assistant_metadata.setdefault("entities", []).append(person_entity)
+        assistant_metadata.setdefault("entities", []).append(
+            {"type": "person", "name": speaker_name, "source": "speaker"}
+        )
 
     try:
         svc = get_memory_service()
