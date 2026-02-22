@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import queue
+from datetime import datetime
 import random
 import subprocess
 import tempfile
@@ -47,6 +48,23 @@ from .playback import PlaybackController, SpeechEngine
 from .segmenter import CommandSegmenter
 
 logger = logging.getLogger("atlas.voice.pipeline")
+
+
+def _log_transcript(transcript: str, source: str, wake_to_asr_ms: float) -> None:
+    """Append one transcript record to data/transcripts.jsonl."""
+    try:
+        entry = {
+            "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "source": source,           # "batch" | "streaming"
+            "transcript": transcript,
+            "wake_to_asr_ms": round(wake_to_asr_ms, 1),
+        }
+        path = os.path.join("data", "transcripts.jsonl")
+        os.makedirs("data", exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass  # never crash pipeline for logging
 
 
 def _generate_tone(freq: int, duration_ms: int, sample_rate: int = 24000) -> np.ndarray:
@@ -762,6 +780,7 @@ class VoicePipeline:
         self.prefill_runner = prefill_runner
         self._prefill_in_progress = False
         self._last_llm_call_time: float = 0.0
+        self._wake_ts: float = 0.0          # perf_counter at last wake word detection
         self._prefill_cache_ttl = prefill_cache_ttl
         self._early_prep_runner = early_preparation_runner
         self._early_prep_in_progress = False
@@ -1158,6 +1177,9 @@ class VoicePipeline:
             self._speak_error(self.error_asr_empty)
             return
         logger.info("ASR: %s", transcript)
+        _asr_ms = (time.perf_counter() - self._wake_ts) * 1000 if self._wake_ts else 0.0
+        logger.info("Wake-to-ASR: %.0fms", _asr_ms)
+        _log_transcript(transcript, source="batch", wake_to_asr_ms=_asr_ms)
 
         # Use streaming LLM if enabled
         if self.streaming_llm_enabled and self.streaming_agent_runner:
@@ -1179,6 +1201,11 @@ class VoicePipeline:
             self._speak_error(reply)
             return
         logger.info("Speaking reply: %s", reply[:100] if len(reply) > 100 else reply)
+        if self._wake_ts:
+            logger.info(
+                "Wake-to-TTS-call: %.0fms",
+                (time.perf_counter() - self._wake_ts) * 1000,
+            )
         self.playback.speak(
             reply,
             on_start=self._on_playback_start,
@@ -1207,6 +1234,9 @@ class VoicePipeline:
             return
 
         logger.info("Streaming ASR: %s", transcript)
+        _asr_ms = (time.perf_counter() - self._wake_ts) * 1000 if self._wake_ts else 0.0
+        logger.info("Wake-to-ASR: %.0fms", _asr_ms)
+        _log_transcript(transcript, source="streaming", wake_to_asr_ms=_asr_ms)
 
         # Use streaming LLM if enabled
         if self.streaming_llm_enabled and self.streaming_agent_runner:
@@ -1228,6 +1258,11 @@ class VoicePipeline:
             self._speak_error(reply)
             return
         logger.info("Speaking reply: %s", reply[:100] if len(reply) > 100 else reply)
+        if self._wake_ts:
+            logger.info(
+                "Wake-to-TTS-call: %.0fms",
+                (time.perf_counter() - self._wake_ts) * 1000,
+            )
         self.playback.speak(
             reply,
             on_start=self._on_playback_start,
@@ -1283,6 +1318,11 @@ class VoicePipeline:
                 is_error[0] = True
 
             sentence_count[0] += 1
+            if sentence_count[0] == 1 and self._wake_ts:
+                logger.info(
+                    "Wake-to-first-sentence: %.0fms",
+                    (time.perf_counter() - self._wake_ts) * 1000,
+                )
             log_text = sentence[:80] if len(sentence) > 80 else sentence
             logger.info("Streaming LLM sentence %d: %s",
                         sentence_count[0], log_text)
@@ -1473,6 +1513,7 @@ class VoicePipeline:
         Prefill is deferred until after intent routing so fast-path tool
         queries (get_time, get_weather, etc.) never touch the LLM.
         """
+        self._wake_ts = time.perf_counter()
         self._play_wake_confirmation()
 
     def trigger_prefill(self):

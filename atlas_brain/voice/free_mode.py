@@ -102,14 +102,20 @@ class FreeModeManager:
     def _evaluate(self) -> None:
         """Check conditions and enter or exit free mode as needed."""
         should_be_free = self._check_conditions()
+        active = self.pipeline._free_mode_active
 
-        if should_be_free and not self.pipeline._free_mode_active:
-            logger.info("Free mode: conditions met — activating")
+        if should_be_free and not active:
+            logger.info("Free mode: conditions met -- activating")
             self.pipeline.enter_free_mode(timeout_ms=self.config.extended_timeout_ms)
-        elif not should_be_free and self.pipeline._free_mode_active:
+        elif not should_be_free and active:
             reason = self._exit_reason()
-            logger.info("Free mode: conditions no longer met (%s) — deactivating", reason)
+            logger.info("Free mode: conditions no longer met (%s) -- deactivating", reason)
             self.pipeline.exit_free_mode()
+        else:
+            logger.debug(
+                "Free mode: poll (active=%s, conditions_met=%s)",
+                active, should_be_free,
+            )
 
     def _check_conditions(self) -> bool:
         """Return True if all free mode entry conditions are satisfied."""
@@ -169,6 +175,9 @@ class FreeModeManager:
                 ambient, self.config.ambient_rms_max,
             )
             return False
+        logger.debug(
+            "Free mode: ambient RMS OK (%.4f <= %.4f)", ambient, self.config.ambient_rms_max
+        )
         return True
 
     def _exit_reason(self) -> str:
@@ -191,3 +200,11 @@ class FreeModeManager:
         """
         if confidence >= self.config.min_speaker_confidence:
             self._last_known_speaker_time = time.monotonic()
+            logger.debug(
+                "Free mode: speaker heartbeat updated (confidence=%.3f)", confidence
+            )
+        else:
+            logger.debug(
+                "Free mode: speaker confidence %.3f below threshold %.3f, heartbeat not updated",
+                confidence, self.config.min_speaker_confidence,
+            )
