@@ -76,6 +76,7 @@ class EdgeApplication:
                 # Set up callbacks
                 self._brain_connection.on_connected(self._on_brain_connected)
                 self._brain_connection.on_disconnected(self._on_brain_disconnected)
+                self._brain_connection.on_message(self._on_brain_message)
 
                 # Try to connect
                 await self._brain_connection.connect()
@@ -140,6 +141,53 @@ class EdgeApplication:
     def _on_brain_disconnected(self) -> None:
         """Handle brain disconnection."""
         logger.warning("Brain disconnected - running in offline mode")
+
+    async def _on_brain_message(self, message: dict) -> None:
+        """Handle inbound messages from brain server."""
+        msg_type = message.get("type", "")
+
+        if msg_type == "tts_announce":
+            await self._handle_tts_announce(message)
+        elif msg_type == "escalation_alert":
+            await self._handle_escalation_alert(message)
+
+    async def _handle_tts_announce(self, message: dict) -> None:
+        """Speak a TTS announcement from the brain."""
+        text = message.get("text", "")
+        if not text.strip():
+            return
+
+        priority = message.get("priority", "default")
+        logger.info("TTS announce (priority=%s): %s", priority, text[:80])
+
+        try:
+            from .pipeline.tts import get_tts_service
+
+            tts = get_tts_service()
+            await tts.speak(text)
+        except Exception as e:
+            logger.error("TTS announce playback failed: %s", e)
+
+    async def _handle_escalation_alert(self, message: dict) -> None:
+        """Speak a security escalation alert from the brain."""
+        text = message.get("text", "")
+        if not text.strip():
+            return
+
+        priority = message.get("priority", "high")
+        rule = message.get("rule", "unknown")
+        logger.warning(
+            "ESCALATION ALERT (rule=%s, priority=%s): %s",
+            rule, priority, text[:80],
+        )
+
+        try:
+            from .pipeline.tts import get_tts_service
+
+            tts = get_tts_service()
+            await tts.speak(text)
+        except Exception as e:
+            logger.error("Escalation alert playback failed: %s", e)
 
     async def run_interactive(self) -> None:
         """Run in interactive text mode (for testing)."""

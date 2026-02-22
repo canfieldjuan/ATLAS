@@ -8,6 +8,7 @@ Handles WebSocket connection to brain server with:
 """
 
 import asyncio
+import inspect
 import json
 import logging
 import time
@@ -302,7 +303,9 @@ class BrainConnectionManager:
                 message = self._decode_message(raw)
 
                 if self._on_message:
-                    self._on_message(message)
+                    result = self._on_message(message)
+                    if inspect.isawaitable(result):
+                        await result
 
             except asyncio.CancelledError:
                 break
