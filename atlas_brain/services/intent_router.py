@@ -8,8 +8,9 @@ classification with optional LLM fallback for low-confidence queries.
 import asyncio
 import json
 import logging
+import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -32,6 +33,7 @@ class IntentRouteResult:
     tool_name: Optional[str] = None  # Mapped tool name if applicable
     fast_path_ok: bool = False  # True if tool can execute without params
     entity_name: Optional[str] = None  # Extracted entity for graph traversal
+    tool_params: dict = field(default_factory=dict)  # Temporal/spatial params extracted from query
 
 
 # Tools that can execute without parameters (fast path OK)
@@ -44,6 +46,7 @@ PARAMETERLESS_TOOLS = {
     "get_location",
     "where_am_i",
     "who_is_here",
+    "run_digest",
 }
 
 
@@ -105,6 +108,11 @@ ROUTE_DEFINITIONS: dict[str, list[str]] = {
     "get_weather": [
         "what's the weather like", "how's the weather today", "is it going to rain",
         "what's the temperature outside", "weather forecast for today",
+        "what's the weather tomorrow", "what will the weather be like tomorrow",
+        "will it rain tomorrow", "forecast for tomorrow",
+        "what's the weather this weekend", "what will the weather be like on Friday",
+        "is it going to snow next week", "what's the temperature tomorrow",
+        "give me the weather forecast", "what's the forecast for the next few days",
     ],
     "get_calendar": [
         "what's on my calendar today", "do I have any meetings today",
@@ -253,6 +261,77 @@ ROUTE_TO_WORKFLOW: dict[str, str] = {
 
 # Valid route names for LLM fallback validation
 _VALID_ROUTES = set(ROUTE_TO_ACTION.keys()) | set(ROUTE_TO_WORKFLOW.keys())
+
+
+def _word_to_num(word: str) -> Optional[int]:
+    """Convert a word or digit string to an integer, or return None."""
+    _MAP = {
+        "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+        "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    }
+    if word.isdigit():
+        return int(word)
+    return _MAP.get(word.lower())
+
+
+def _extract_digest_params(query: str) -> dict:
+    """Infer digest_type from keywords in the user query."""
+    q = query.lower()
+    if "security" in q:
+        return {"digest_type": "security_summary"}
+    if "device" in q or "health" in q:
+        return {"digest_type": "device_health"}
+    if "email" in q or "gmail" in q or "inbox" in q:
+        return {"digest_type": "email_digest"}
+    # Default: morning briefing covers the general case
+    return {"digest_type": "morning_briefing"}
+
+
+def _extract_temporal_params(query: str, route_name: str) -> dict:
+    """Extract route-specific params from the query text.
+
+    Weather/traffic: days_ahead for forecast queries.
+    Digest: digest_type keyword inference (security, device, email).
+    """
+    if route_name == "digest":
+        return _extract_digest_params(query)
+    if route_name not in ("get_weather", "get_traffic"):
+        return {}
+    q = query.lower()
+
+    # "day after tomorrow" before "tomorrow" check
+    if "day after tomorrow" in q:
+        return {"days_ahead": 2}
+
+    if "tomorrow" in q:
+        return {"days_ahead": 1}
+
+    # "in N days"
+    m = re.search(r"in\s+(\w+)\s+days?", q)
+    if m:
+        num = _word_to_num(m.group(1))
+        if num is not None:
+            return {"days_ahead": num}
+
+    if "next week" in q:
+        return {"days_ahead": 7}
+
+    if "weekend" in q:
+        today = datetime.now(timezone.utc).weekday()  # Mon=0, Sun=6
+        days_to_sat = (5 - today) % 7 or 7
+        return {"days_ahead": days_to_sat}
+
+    _DAY_NUMS = {
+        "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+        "friday": 4, "saturday": 5, "sunday": 6,
+    }
+    for day_name, day_num in _DAY_NUMS.items():
+        if day_name in q:
+            today = datetime.now(timezone.utc).weekday()
+            days_ahead = (day_num - today) % 7 or 7
+            return {"days_ahead": days_ahead}
+
+    return {}
 
 
 class SemanticIntentRouter:
@@ -425,6 +504,7 @@ class SemanticIntentRouter:
                 route_time_ms=route_time,
                 tool_name=tool_name,
                 fast_path_ok=tool_name in PARAMETERLESS_TOOLS if tool_name else False,
+                tool_params=_extract_temporal_params(query, route_name),
             )
 
         # LLM fallback -- skip for very short queries (1-2 words) where the
@@ -455,6 +535,7 @@ class SemanticIntentRouter:
                     tool_name=tool_name,
                     fast_path_ok=tool_name in PARAMETERLESS_TOOLS if tool_name else False,
                     entity_name=llm_entity,
+                    tool_params=_extract_temporal_params(query, llm_route),
                 )
             else:
                 # LLM fallback failed (timeout/parse error) -- log anyway

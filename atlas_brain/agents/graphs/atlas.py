@@ -281,6 +281,7 @@ async def classify_and_route(
                 "action_type": "tool_use",
                 "confidence": confidence,
                 "tools_to_call": [tool_name] if tool_name else [],
+                "tool_params": getattr(route_result, "tool_params", {}),
                 "classify_ms": classify_ms,
             },
             goto="execute",
@@ -313,6 +314,7 @@ async def classify_and_route(
             "confidence": confidence,
             "classify_ms": classify_ms,
             "entity_name": entity_name,
+            "tool_name_hint": tool_name,
         },
         goto="retrieve_memory",
     )
@@ -530,7 +532,7 @@ async def execute_action(state: AtlasAgentState) -> AtlasAgentState:
         if tools_to_call:
             tool_name = tools_to_call[0]
             try:
-                tool_result = await tools.execute_tool(tool_name, {})
+                tool_result = await tools.execute_tool(tool_name, state.get("tool_params") or {})
                 result = ActionResult(
                     success=tool_result.get("success", False),
                     message=tool_result.get("message", ""),
@@ -543,23 +545,27 @@ async def execute_action(state: AtlasAgentState) -> AtlasAgentState:
                 logger.warning("Tool execution failed: %s", e)
                 result = ActionResult(success=False, message=str(e), error=str(e))
 
-        # Slow path: tool from LLM intent
-        elif intent and intent.target_name:
-            target_name = intent.target_name
-            params = intent.parameters or {}
-            try:
-                tool_result = await tools.execute_tool_by_intent(target_name, params)
-                result = ActionResult(
-                    success=tool_result.get("success", False),
-                    message=tool_result.get("message", ""),
-                    data=tool_result,
-                )
-                tool_results[target_name] = tool_result
-                tools_executed.append(target_name)
-                logger.info("Tool executed: %s", target_name)
-            except Exception as e:
-                logger.warning("Tool execution failed: %s", e)
-                result = ActionResult(success=False, message=str(e), error=str(e))
+        # Slow path: tool from LLM intent (or router hint fallback)
+        else:
+            target_name = (
+                (intent.target_name if intent else None)
+                or state.get("tool_name_hint")
+            )
+            params = (intent.parameters if intent else None) or {}
+            if target_name:
+                try:
+                    tool_result = await tools.execute_tool_by_intent(target_name, params)
+                    result = ActionResult(
+                        success=tool_result.get("success", False),
+                        message=tool_result.get("message", ""),
+                        data=tool_result,
+                    )
+                    tool_results[target_name] = tool_result
+                    tools_executed.append(target_name)
+                    logger.info("Tool executed: %s", target_name)
+                except Exception as e:
+                    logger.warning("Tool execution failed: %s", e)
+                    result = ActionResult(success=False, message=str(e), error=str(e))
 
     act_ms = (time.perf_counter() - start_time) * 1000
 

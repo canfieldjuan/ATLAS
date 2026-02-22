@@ -177,41 +177,45 @@ class HeadlessRunner:
         return val if isinstance(val, str) else None
 
     async def _notify_result(self, text: str, task: ScheduledTask) -> None:
-        """Send a push notification with the synthesized task result."""
+        """Send push notification and/or TTS broadcast for a task result.
+
+        Delivery channels are independent:
+        - ntfy: gated by ntfy_enabled + per-task notify opt-out
+        - TTS broadcast: gated by announce_results + per-task announce opt-in
+        """
         if not autonomous_config.notify_results:
             return
 
         from ..config import settings
 
-        if not settings.alerts.ntfy_enabled:
-            return
-
-        # Per-task opt-out via metadata
-        if (task.metadata or {}).get("notify") is False:
-            return
-
-        # Build a human-friendly title from task name
+        # Build common fields
         title = f"Atlas: {task.name.replace('_', ' ').title()}"
         priority = (
             (task.metadata or {}).get("notify_priority")
             or autonomous_config.notify_priority
         )
-        tags = (task.metadata or {}).get("notify_tags")
 
-        try:
-            from ..tools.notify import notify_tool
+        # Channel 1: ntfy push notification
+        ntfy_ok = (
+            settings.alerts.ntfy_enabled
+            and (task.metadata or {}).get("notify") is not False
+        )
+        if ntfy_ok:
+            tags = (task.metadata or {}).get("notify_tags")
+            try:
+                from ..tools.notify import notify_tool
 
-            await notify_tool._send_notification(
-                message=text,
-                title=title,
-                priority=priority,
-                tags=tags,
-            )
-            logger.info("Sent notification for task '%s'", task.name)
-        except Exception:
-            logger.warning("Failed to send notification for task '%s'", task.name, exc_info=True)
+                await notify_tool._send_notification(
+                    message=text,
+                    title=title,
+                    priority=priority,
+                    tags=tags,
+                )
+                logger.info("Sent notification for task '%s'", task.name)
+            except Exception:
+                logger.warning("Failed to send notification for task '%s'", task.name, exc_info=True)
 
-        # Optionally broadcast via TTS to edge nodes
+        # Channel 2: TTS broadcast to edge nodes (independent of ntfy)
         if (
             autonomous_config.announce_results
             and (task.metadata or {}).get("announce", False)
