@@ -64,8 +64,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             "_skip_synthesis": "Proactive actions skipped -- database not ready.",
         }
 
+    from ...config import settings
+
     metadata = task.metadata or {}
-    hours = metadata.get("lookback_hours", 24)
+    hours = metadata.get("lookback_hours", settings.autonomous.proactive_actions_lookback_hours)
     since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=hours)
 
     # Fetch recent user messages

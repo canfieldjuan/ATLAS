@@ -45,8 +45,8 @@ async def run(task: ScheduledTask) -> dict:
         }
 
     metadata = task.metadata or {}
-    battery_threshold = metadata.get("battery_threshold", 20)
-    stale_hours = metadata.get("stale_hours", 24)
+    battery_threshold = metadata.get("battery_threshold", settings.autonomous.device_health_battery_threshold)
+    stale_hours = metadata.get("stale_hours", settings.autonomous.device_health_stale_hours)
     domain_filter = metadata.get("domain_filter", None)
 
     backend = HomeAssistantBackend(

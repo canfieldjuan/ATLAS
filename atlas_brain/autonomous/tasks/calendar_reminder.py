@@ -43,8 +43,8 @@ async def run(task: ScheduledTask) -> dict[str, Any] | str:
         return "Skipped: calendar not configured"
 
     metadata = task.metadata or {}
-    lead_minutes = metadata.get("lead_minutes", 30)
-    min_minutes = metadata.get("min_minutes", 15)
+    lead_minutes = metadata.get("lead_minutes", settings.autonomous.calendar_reminder_lead_minutes)
+    min_minutes = metadata.get("min_minutes", settings.autonomous.calendar_reminder_min_minutes)
 
     # 3. Fetch upcoming events (1-hour window)
     from ...tools.calendar import calendar_tool

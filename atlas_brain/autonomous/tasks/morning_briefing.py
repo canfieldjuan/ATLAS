@@ -37,8 +37,8 @@ async def run(task: ScheduledTask) -> dict:
         security_hours (int): Lookback hours for security summary (default: 8)
     """
     metadata = task.metadata or {}
-    calendar_hours = metadata.get("calendar_hours", 12)
-    security_hours = metadata.get("security_hours", 8)
+    calendar_hours = metadata.get("calendar_hours", settings.autonomous.morning_briefing_calendar_hours)
+    security_hours = metadata.get("security_hours", settings.autonomous.morning_briefing_security_hours)
 
     today = datetime.now().strftime("%Y-%m-%d")
     result: dict = {"date": today}

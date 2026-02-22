@@ -16,7 +16,7 @@ from ...storage.models import ScheduledTask
 
 logger = logging.getLogger("atlas.autonomous.tasks.action_escalation")
 
-# Age tier thresholds in days
+# Age tier thresholds in days (defaults, overridden by config + task.metadata)
 STALE_DAYS = 7
 OVERDUE_DAYS = 3
 
@@ -42,8 +42,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         }
 
     metadata = task.metadata or {}
-    stale_threshold = metadata.get("stale_days", STALE_DAYS)
-    overdue_threshold = metadata.get("overdue_days", OVERDUE_DAYS)
+    stale_threshold = metadata.get("stale_days", settings.autonomous.action_escalation_stale_days)
+    overdue_threshold = metadata.get("overdue_days", settings.autonomous.action_escalation_overdue_days)
 
     # 2. Query pending actions
     from ...storage.database import get_db_pool

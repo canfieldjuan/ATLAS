@@ -46,8 +46,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     from ...storage.database import get_db_pool
 
     metadata = task.metadata or {}
-    deviation_threshold = metadata.get("deviation_threshold", 2.0)
-    min_samples = metadata.get("min_samples", 3)
+    deviation_threshold = metadata.get("deviation_threshold", settings.autonomous.anomaly_detection_deviation_threshold)
+    min_samples = metadata.get("min_samples", settings.autonomous.anomaly_detection_min_samples)
 
     pool = get_db_pool()
     if not pool.is_initialized:

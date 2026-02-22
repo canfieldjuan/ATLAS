@@ -23,7 +23,7 @@ import httpx
 
 logger = logging.getLogger("atlas.jobs.memory_sync")
 
-GRAPHITI_CONTAINER = "atlas-graphiti-wrapper"
+GRAPHITI_CONTAINER = "atlas-graphiti-wrapper"  # fallback; prefer settings.autonomous.nightly_sync_container_name
 
 
 class NightlyMemorySync:
@@ -35,7 +35,7 @@ class NightlyMemorySync:
     and deduplication internally.
     """
 
-    def __init__(self, purge_days: int = None, max_turns_per_run: int = 200):
+    def __init__(self, purge_days: int = None, max_turns_per_run: int = None):
         """
         Args:
             purge_days: Delete PostgreSQL messages older than this (default from config)
@@ -45,7 +45,7 @@ class NightlyMemorySync:
         from ..config import settings
 
         self.purge_days = purge_days if purge_days is not None else settings.memory.purge_days
-        self.max_turns_per_run = max_turns_per_run
+        self.max_turns_per_run = max_turns_per_run if max_turns_per_run is not None else settings.autonomous.nightly_sync_max_turns
         self._rag_client = None
 
     def _get_rag_client(self):
@@ -66,13 +66,14 @@ class NightlyMemorySync:
             return True
 
         # Unreachable -- try restarting the container
+        container = settings.autonomous.nightly_sync_container_name
         logger.warning(
             "Graphiti unreachable at %s, restarting container '%s'",
-            url, GRAPHITI_CONTAINER,
+            url, container,
         )
         try:
             subprocess.run(
-                ["docker", "restart", GRAPHITI_CONTAINER],
+                ["docker", "restart", container],
                 capture_output=True, timeout=30,
             )
         except Exception as e:

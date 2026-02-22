@@ -21,8 +21,10 @@ async def run(task: ScheduledTask) -> dict:
     Configurable via task.metadata:
         hours (int): Lookback window in hours (default: 24)
     """
+    from ...config import settings
+
     metadata = task.metadata or {}
-    hours = metadata.get("hours", 24)
+    hours = metadata.get("hours", settings.autonomous.security_summary_hours)
     # DB uses timestamp without time zone stored as UTC -- pass naive UTC
     since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=hours)
 

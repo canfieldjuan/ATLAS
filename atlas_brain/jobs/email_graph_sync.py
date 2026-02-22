@@ -29,11 +29,11 @@ logger = logging.getLogger("atlas.jobs.email_graph_sync")
 class EmailGraphSync:
     """Batch sync processed emails to the knowledge graph."""
 
-    def __init__(self, max_emails_per_run: int = 20):
+    def __init__(self, max_emails_per_run: int = None):
         from ..config import settings
 
         self._settings = settings
-        self.max_emails_per_run = max_emails_per_run
+        self.max_emails_per_run = max_emails_per_run if max_emails_per_run is not None else settings.autonomous.email_graph_sync_max_emails
         self._rag_client = None
         self._llm = None
         self._gmail_client = None
@@ -373,5 +373,5 @@ async def run_email_graph_sync() -> dict:
         logger.info("Email graph sync disabled in config")
         return {"status": "disabled", "_skip_synthesis": "Email graph sync disabled."}
 
-    sync = EmailGraphSync(max_emails_per_run=settings.memory.email_graph_max_per_run)
+    sync = EmailGraphSync()
     return await sync.run()

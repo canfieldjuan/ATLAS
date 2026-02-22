@@ -539,7 +539,7 @@ async def run(task: ScheduledTask) -> dict:
 
     # --- Fetch full content for new messages (concurrently, batched) ---
     emails: list[dict[str, Any]] = []
-    batch_size = 10
+    batch_size = metadata.get("batch_size", settings.autonomous.gmail_digest_batch_size)
     for i in range(0, len(new_messages), batch_size):
         batch = new_messages[i : i + batch_size]
         tasks = [client.get_message_full(m["id"]) for m in batch]

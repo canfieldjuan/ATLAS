@@ -1559,6 +1559,90 @@ class AutonomousConfig(BaseSettings):
         description="Default ntfy priority for autonomous task notifications",
     )
 
+    # --- Task-specific defaults (overridable per-task via task.metadata) ---
+
+    # device_health
+    device_health_battery_threshold: int = Field(
+        default=20, description="Low battery % threshold for device health check",
+    )
+    device_health_stale_hours: int = Field(
+        default=24, description="Hours before an entity is considered stale",
+    )
+
+    # morning_briefing
+    morning_briefing_calendar_hours: int = Field(
+        default=12, description="Hours ahead for calendar events in morning briefing",
+    )
+    morning_briefing_security_hours: int = Field(
+        default=8, description="Lookback hours for overnight security summary",
+    )
+
+    # calendar_reminder
+    calendar_reminder_lead_minutes: int = Field(
+        default=30, description="Max minutes before event to send reminder",
+    )
+    calendar_reminder_min_minutes: int = Field(
+        default=15, description="Min minutes before event to send reminder",
+    )
+
+    # security_summary
+    security_summary_hours: int = Field(
+        default=24, description="Lookback window in hours for security summary",
+    )
+
+    # action_escalation
+    action_escalation_stale_days: int = Field(
+        default=7, description="Days before a pending action is considered stale",
+    )
+    action_escalation_overdue_days: int = Field(
+        default=3, description="Days before a pending action is considered overdue",
+    )
+
+    # anomaly_detection
+    anomaly_detection_deviation_threshold: float = Field(
+        default=2.0, description="Standard-deviation multiplier for anomaly detection",
+    )
+    anomaly_detection_min_samples: int = Field(
+        default=3, description="Minimum pattern samples before anomaly comparison",
+    )
+
+    # pattern_learning
+    pattern_learning_lookback_days: int = Field(
+        default=30, description="Days of history for temporal pattern learning",
+    )
+
+    # preference_learning
+    preference_learning_lookback_days: int = Field(
+        default=7, description="Days of conversation history for preference learning",
+    )
+    preference_learning_min_turns: int = Field(
+        default=20, description="Minimum user turns before updating preferences",
+    )
+
+    # proactive_actions
+    proactive_actions_lookback_hours: int = Field(
+        default=24, description="Hours of conversation history to scan for action items",
+    )
+
+    # nightly_memory_sync
+    nightly_sync_max_turns: int = Field(
+        default=200, description="Max conversation turns to sync per nightly run",
+    )
+    nightly_sync_container_name: str = Field(
+        default="atlas-graphiti-wrapper",
+        description="Docker container name for the Graphiti wrapper service",
+    )
+
+    # email_graph_sync
+    email_graph_sync_max_emails: int = Field(
+        default=20, description="Max emails to process per email-graph sync run",
+    )
+
+    # gmail_digest
+    gmail_digest_batch_size: int = Field(
+        default=10, description="Concurrent batch size for Gmail message fetching",
+    )
+
 
 class EscalationConfig(BaseSettings):
     """Edge-local narration + brain-side escalation configuration."""

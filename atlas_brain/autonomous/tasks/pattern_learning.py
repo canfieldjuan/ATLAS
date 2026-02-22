@@ -39,8 +39,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     """Learn temporal patterns from presence and session data."""
     from ...storage.database import get_db_pool
 
+    from ...config import settings
+
     metadata = task.metadata or {}
-    lookback_days = metadata.get("lookback_days", 30)
+    lookback_days = metadata.get("lookback_days", settings.autonomous.pattern_learning_lookback_days)
 
     pool = get_db_pool()
     if not pool.is_initialized:

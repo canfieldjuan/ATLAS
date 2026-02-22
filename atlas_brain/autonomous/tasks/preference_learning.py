@@ -37,9 +37,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     from ...storage.database import get_db_pool
     from ...storage.repositories.profile import get_profile_repo
 
+    from ...config import settings
+
     metadata = task.metadata or {}
-    lookback_days = metadata.get("lookback_days", 7)
-    min_turns = metadata.get("min_turns", 20)
+    lookback_days = metadata.get("lookback_days", settings.autonomous.preference_learning_lookback_days)
+    min_turns = metadata.get("min_turns", settings.autonomous.preference_learning_min_turns)
 
     pool = get_db_pool()
     if not pool.is_initialized:
