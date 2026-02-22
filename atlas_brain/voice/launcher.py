@@ -9,6 +9,7 @@ import logging
 import signal
 import sys
 import threading
+from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, Optional
 
 from ..agents.interface import get_agent, process_with_fallback
@@ -139,6 +140,7 @@ def _create_streaming_agent_runner():
             use_streaming = False
             route_result = None
             has_active_workflow = False
+            _classify_ms: float = 0.0
 
             # Check for active workflow - if present, must use agent path
             session_id = context_dict.get("session_id")
@@ -183,7 +185,9 @@ def _create_streaming_agent_runner():
                     )
                 # Prefill already triggered by early silence
             elif settings.intent_router.enabled and not has_active_workflow:
+                _classify_t0 = _time.perf_counter()
                 route_result = await route_query(transcript)
+                _classify_ms = (_time.perf_counter() - _classify_t0) * 1000
                 _last_route_result["result"] = route_result
                 threshold = settings.intent_router.confidence_threshold
 
@@ -216,6 +220,7 @@ def _create_streaming_agent_runner():
                     transcript, context_dict, _tracked_on_sentence,
                     cached_mem_ctx=cached_prep.get("mem_ctx") if cached_prep else None,
                     entity_name=_entity,
+                    classify_ms=_classify_ms,
                 )
                 if not success:
                     # Discard partial sentences before running fallback agent
@@ -310,6 +315,7 @@ async def _stream_llm_response(
     on_sentence: Callable[[str], None],
     cached_mem_ctx: Optional[Any] = None,
     entity_name: Optional[str] = None,
+    classify_ms: float = 0.0,
 ) -> bool:
     """Stream LLM response for conversation queries.
 
@@ -354,6 +360,7 @@ async def _stream_llm_response(
             logger.debug("Pop session usage failed: %s", e)
 
     svc = get_memory_service()
+    _memory_t0 = _time.perf_counter()
     if cached_mem_ctx is not None:
         mem_ctx = cached_mem_ctx
         logger.info("Using cached context from early prep")
@@ -386,6 +393,7 @@ async def _stream_llm_response(
             include_physical=False,
             max_history=6,
         )
+    _memory_ms = (_time.perf_counter() - _memory_t0) * 1000
 
     # Stash this turn's RAG usage_ids for the next turn's correction detection
     if mem_ctx.feedback_context and mem_ctx.feedback_context.usage_ids and session_id:
@@ -488,6 +496,7 @@ async def _stream_llm_response(
     collected_sentences = []
     max_tokens = settings.voice.streaming_max_tokens
     try:
+        _loop_t0 = _time.perf_counter()
         async for token in llm.chat_stream_async(messages, max_tokens=max_tokens, stats=_stream_stats):
             sentence = buffer.add_token(token)
             if sentence:
@@ -501,12 +510,13 @@ async def _stream_llm_response(
             collected_sentences.append(remaining)
             logger.info("Streaming final chunk: %s", remaining[:60])
             on_sentence(remaining)
+        _loop_ms = (_time.perf_counter() - _loop_t0) * 1000
 
         # Persist conversation turns in background (don't block TTS)
         if sentence_count > 0 and session_id:
             full_response = " ".join(collected_sentences)
             speaker_uuid = context_dict.get("speaker_id")  # actual UUID
-            _respond_ms = (_time.perf_counter() - _span_start) * 1000
+            _total_ms = (_time.perf_counter() - _span_start) * 1000
             _tracer.end_span(
                 _stream_span,
                 status="completed",
@@ -517,7 +527,12 @@ async def _stream_llm_response(
                 ttft_ms=_stream_stats.get("prompt_eval_duration_ms"),
                 inference_time_ms=_stream_stats.get("eval_duration_ms"),
                 metadata={
-                    "timing": {"respond": round(_respond_ms, 1)},
+                    "timing": {
+                        "classify": round(classify_ms, 1),
+                        "memory": round(_memory_ms, 1),
+                        "respond": round(_loop_ms, 1),
+                        "total": round(_total_ms, 1),
+                    },
                     "action_type": "conversation",
                     "speaker_id": speaker_name,
                     "llm": {
@@ -529,6 +544,53 @@ async def _stream_llm_response(
                     },
                 },
             )
+            # Emit phase-level child spans to match LangGraph trace structure
+            try:
+                _span_dt = datetime.fromisoformat(_stream_span.start_iso)
+                _offset = 0.0
+                if classify_ms > 0:
+                    _cs = _span_dt + timedelta(milliseconds=_offset)
+                    _tracer.emit_child_span(
+                        parent=_stream_span,
+                        span_name="agent.classify",
+                        operation_type="classification",
+                        start_iso=_cs.isoformat(),
+                        end_iso=(_cs + timedelta(milliseconds=classify_ms)).isoformat(),
+                        duration_ms=classify_ms,
+                        metadata={"phase": "classify", "action_type": "conversation"},
+                    )
+                    _offset += classify_ms
+                if _memory_ms > 0:
+                    _ms = _span_dt + timedelta(milliseconds=_offset)
+                    _tracer.emit_child_span(
+                        parent=_stream_span,
+                        span_name="agent.memory",
+                        operation_type="retrieval",
+                        start_iso=_ms.isoformat(),
+                        end_iso=(_ms + timedelta(milliseconds=_memory_ms)).isoformat(),
+                        duration_ms=_memory_ms,
+                        metadata={"phase": "memory", "action_type": "conversation"},
+                    )
+                    _offset += _memory_ms
+                _rs = _span_dt + timedelta(milliseconds=_offset)
+                _tracer.emit_child_span(
+                    parent=_stream_span,
+                    span_name="agent.respond",
+                    operation_type="llm_call",
+                    start_iso=_rs.isoformat(),
+                    end_iso=(_rs + timedelta(milliseconds=_loop_ms)).isoformat(),
+                    duration_ms=_loop_ms,
+                    input_tokens=_stream_stats.get("input_tokens"),
+                    output_tokens=_stream_stats.get("output_tokens"),
+                    metadata={
+                        "phase": "respond",
+                        "action_type": "conversation",
+                        "ttft_ms": round(_stream_stats.get("prompt_eval_duration_ms") or 0),
+                        "inference_time_ms": round(_stream_stats.get("eval_duration_ms") or 0),
+                    },
+                )
+            except Exception:
+                pass  # never crash pipeline for child span emission
             asyncio.ensure_future(_persist_streaming_turns(
                 session_id, transcript, full_response, speaker_name,
                 speaker_uuid=speaker_uuid,
