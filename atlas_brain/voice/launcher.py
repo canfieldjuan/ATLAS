@@ -5,6 +5,7 @@ Integrates the voice pipeline with AtlasAgent.
 """
 
 import asyncio
+import concurrent.futures
 import logging
 import signal
 import sys
@@ -88,7 +89,7 @@ def _create_agent_runner():
             _notify_ui("response", text=response, audio_base64="")
             _notify_ui("idle")
             return response
-        except TimeoutError:
+        except (TimeoutError, concurrent.futures.TimeoutError):
             logger.error("Agent runner timed out after %.1fs", settings.voice.agent_timeout)
             return ErrorPhrase(settings.voice.error_agent_timeout)
         except Exception as e:
@@ -242,7 +243,7 @@ def _create_streaming_agent_runner():
         try:
             future = asyncio.run_coroutine_threadsafe(check_and_run(), _event_loop)
             future.result(timeout=settings.voice.agent_timeout)
-        except TimeoutError:
+        except (TimeoutError, concurrent.futures.TimeoutError):
             logger.error("Streaming agent runner timed out after %.1fs", settings.voice.agent_timeout)
             on_sentence(ErrorPhrase(settings.voice.error_agent_timeout))
         except Exception as e:

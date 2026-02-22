@@ -310,6 +310,7 @@ async def execute_action(state: HomeAgentState) -> HomeAgentState:
         **state,
         "action_result": result,
         "tool_results": tool_results,
+        "tools_executed": list(tool_results.keys()),
         "act_ms": act_ms,
         "last_entity_name": last_entity_name,
         "last_entity_type": last_entity_type,

@@ -405,8 +405,8 @@ async def view_transcript(transcript_id: UUID):
                     lines.append(f"Past calls: {len(ctx.call_transcripts)}")
                 if ctx.interactions:
                     lines.append(f"Interactions: {len(ctx.interactions)}")
-        except Exception:
-            pass  # fail-open
+        except Exception as e:
+            logger.warning("Customer context fetch failed for %s: %s", transcript_id, e)
 
     lines += ["", "--- TRANSCRIPT ---", record.get("transcript") or "(none)"]
     return PlainTextResponse("\n".join(lines))

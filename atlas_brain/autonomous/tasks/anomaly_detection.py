@@ -100,7 +100,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     # Reset dedup set if it grows too large
     if len(_notified_anomalies) > _MAX_DEDUP_ENTRIES:
-        _notified_anomalies = set()
+        _notified_anomalies.clear()
 
     anomalies: list[dict[str, Any]] = []
     today_str = now.strftime("%Y-%m-%d")
