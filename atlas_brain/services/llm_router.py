@@ -4,11 +4,12 @@ Holds a cloud LLM singleton alongside the local LLM in llm_registry.
 Routes workflow types to the appropriate backend.
 
 Routing map:
-    LOCAL   (Ollama qwen3:14b): conversation, reminder, calendar, intent
-    CLOUD   (Ollama cloud minimax-m2): booking, email, security escalation
-    DRAFT   (Anthropic Sonnet): email_draft
-    TRIAGE  (Anthropic Haiku): email_triage
-    NO LLM  (unchanged): security workflow, presence workflow
+    LOCAL     (Ollama qwen3:14b): conversation, reminder, calendar, intent
+    CLOUD     (Ollama cloud minimax-m2): booking, email, security escalation
+    DRAFT     (Anthropic Sonnet): email_draft
+    TRIAGE    (Anthropic Haiku): email_triage
+    REASONING (Anthropic Sonnet): reasoning agent deep analysis
+    NO LLM    (unchanged): security workflow, presence workflow
 """
 
 from __future__ import annotations
@@ -30,6 +31,9 @@ _draft_llm: Optional[LLMService] = None
 # Triage LLM singleton -- Anthropic Haiku for cheap email replyable classification
 _triage_llm: Optional[LLMService] = None
 
+# Reasoning LLM singleton -- Anthropic Sonnet for cross-domain reasoning agent
+_reasoning_llm: Optional[LLMService] = None
+
 # Workflows that require cloud reasoning
 CLOUD_WORKFLOWS = frozenset({"booking", "email"})
 
@@ -38,6 +42,9 @@ DRAFT_WORKFLOWS = frozenset({"email_draft"})
 
 # Workflows that use the triage LLM (Anthropic Haiku)
 TRIAGE_WORKFLOWS = frozenset({"email_triage"})
+
+# Workflows that use the reasoning LLM (Anthropic Sonnet)
+REASONING_WORKFLOWS = frozenset({"reasoning"})
 
 
 def init_cloud_llm(
@@ -137,6 +144,38 @@ def get_triage_llm() -> Optional[LLMService]:
     return _triage_llm
 
 
+def init_reasoning_llm(
+    model: str = "claude-sonnet-4-5-20250929",
+    api_key: str | None = None,
+) -> Optional[LLMService]:
+    """Initialize the reasoning LLM singleton (Anthropic). Called from main.py lifespan."""
+    global _reasoning_llm
+    from .llm.anthropic import AnthropicLLM
+
+    try:
+        _reasoning_llm = AnthropicLLM(model=model, api_key=api_key)
+        _reasoning_llm.load()
+        logger.info("Reasoning LLM initialized: %s (Anthropic)", model)
+        return _reasoning_llm
+    except Exception as e:
+        logger.error("Failed to initialize reasoning LLM: %s", e)
+        return None
+
+
+def shutdown_reasoning_llm() -> None:
+    """Unload the reasoning LLM. Called from main.py shutdown."""
+    global _reasoning_llm
+    if _reasoning_llm:
+        _reasoning_llm.unload()
+        _reasoning_llm = None
+        logger.info("Reasoning LLM shut down")
+
+
+def get_reasoning_llm() -> Optional[LLMService]:
+    """Get the reasoning LLM instance (or None if not loaded)."""
+    return _reasoning_llm
+
+
 def get_llm(workflow_type: Optional[str] = None) -> Optional[LLMService]:
     """Get the right LLM for a workflow type.
 
@@ -144,6 +183,14 @@ def get_llm(workflow_type: Optional[str] = None) -> Optional[LLMService]:
     Falls back to local if cloud is unavailable.
     """
     from . import llm_registry
+
+    if workflow_type and workflow_type in REASONING_WORKFLOWS:
+        if _reasoning_llm:
+            return _reasoning_llm
+        logger.warning(
+            "Reasoning LLM not initialized; falling back to local for workflow '%s'",
+            workflow_type,
+        )
 
     if workflow_type and workflow_type in TRIAGE_WORKFLOWS:
         if _triage_llm:

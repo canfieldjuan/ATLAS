@@ -214,6 +214,14 @@ async def approve_draft(draft_id: UUID):
             sent_to=reply_to_addr,
         )
 
+        # Emit event for reasoning agent
+        from ..reasoning.producers import emit_if_enabled
+        await emit_if_enabled(
+            "email.draft_sent", "email_drafts",
+            {"draft_id": str(draft_id), "sent_to": reply_to_addr,
+             "subject": row["draft_subject"]},
+        )
+
         return {
             "draft_id": str(draft_id),
             "status": "sent",
@@ -514,6 +522,15 @@ async def generate_draft(gmail_message_id: str):
     )
 
     logger.info("On-demand draft %s generated for message %s", draft_id, gmail_message_id)
+
+    # Emit event for reasoning agent
+    from ..reasoning.producers import emit_if_enabled
+    await emit_if_enabled(
+        "email.draft_generated", "email_drafts",
+        {"draft_id": str(draft_id), "gmail_message_id": gmail_message_id,
+         "subject": draft_subject, "from": full_msg.get("from", "")},
+    )
+
     return {
         "draft_id": draft_id,
         "status": "pending",

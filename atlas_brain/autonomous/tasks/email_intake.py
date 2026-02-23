@@ -928,6 +928,20 @@ async def run(task: ScheduledTask) -> dict:
     # 5b. Detect follow-ups to threads Atlas participated in
     followup_count = await _detect_followups(emails)
 
+    # 5b-emit: Emit follow-up events for reasoning agent
+    if followup_count > 0:
+        from ...reasoning.producers import emit_if_enabled as _emit
+        for e in emails:
+            if e.get("_followup_draft_id"):
+                await _emit(
+                    "email.followup_received", "email_intake",
+                    {"gmail_message_id": e.get("id"), "from": e.get("from", ""),
+                     "subject": e.get("subject", ""),
+                     "original_intent": e.get("_followup_original_intent")},
+                    entity_type="contact",
+                    entity_id=e.get("_contact_id"),
+                )
+
     # 6. CRM cross-reference (expanded: all replyable emails)
     crm_count = 0
     if cfg.crm_enabled:
@@ -950,6 +964,18 @@ async def run(task: ScheduledTask) -> dict:
 
     # 9. Record to DB (extended INSERT with intent + action_plan + customer_context_summary)
     await _record_with_action_plans(emails)
+
+    # 9-emit: Emit received events for reasoning agent
+    from ...reasoning.producers import emit_if_enabled as _emit_ev
+    for e in emails:
+        await _emit_ev(
+            "email.received", "email_intake",
+            {"gmail_message_id": e.get("id"), "from": e.get("from", ""),
+             "subject": e.get("subject", ""), "intent": e.get("_intent"),
+             "category": e.get("category")},
+            entity_type="contact",
+            entity_id=e.get("_contact_id"),
+        )
 
     # 9b. Auto-execute high-confidence intent actions
     auto_executed = 0

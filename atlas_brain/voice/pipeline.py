@@ -1696,6 +1696,22 @@ class VoicePipeline:
         except Exception:
             pass
 
+        # Acquire entity lock for reasoning agent sovereignty
+        if match.user_id and self.session_id and self.event_loop:
+            try:
+                import asyncio
+                from ..reasoning.lock_integration import on_voice_session_start
+                asyncio.run_coroutine_threadsafe(
+                    on_voice_session_start(
+                        session_id=self.session_id,
+                        speaker_id=str(match.user_id),
+                        contact_id=str(match.user_id),
+                    ),
+                    self.event_loop,
+                )
+            except Exception:
+                pass
+
     def _build_context(self) -> Dict[str, Any]:
         """Build context dict with session, node, and speaker info."""
         ctx = {

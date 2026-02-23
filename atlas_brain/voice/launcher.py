@@ -1222,6 +1222,20 @@ def stop_voice_pipeline() -> None:
         _free_mode_manager = None
 
     if _voice_pipeline is not None:
+        # Release entity locks for the ending session
+        session_id = getattr(_voice_pipeline, "session_id", None)
+        if session_id:
+            try:
+                import asyncio
+                from ..reasoning.lock_integration import on_voice_session_end
+                loop = getattr(_voice_pipeline, "event_loop", None)
+                if loop and loop.is_running():
+                    asyncio.run_coroutine_threadsafe(
+                        on_voice_session_end(session_id), loop
+                    )
+            except Exception:
+                pass
+
         try:
             _voice_pipeline.playback.stop()
             _voice_pipeline.command_executor.shutdown()

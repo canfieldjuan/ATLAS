@@ -1525,6 +1525,17 @@ class AtlasAgentGraph:
 
             logger.debug("Stored conversation turns for session %s", session_id)
 
+            # Emit event for reasoning agent
+            from ...reasoning.producers import emit_if_enabled
+            await emit_if_enabled(
+                "voice.turn_completed", "atlas_agent",
+                {"session_id": session_id, "turn_type": turn_type,
+                 "intent": intent_str,
+                 "input_preview": (state.get("input") or "")[:200]},
+                entity_type="contact" if runtime_ctx.get("speaker_uuid") else None,
+                entity_id=runtime_ctx.get("speaker_uuid"),
+            )
+
         except Exception as e:
             logger.warning("Failed to store conversation turn: %s", e)
 

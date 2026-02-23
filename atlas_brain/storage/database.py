@@ -88,6 +88,22 @@ class DatabasePool:
             raise RuntimeError("Database pool not initialized. Call initialize() first.")
         return await self._pool.acquire()
 
+    async def acquire_raw(self) -> asyncpg.Connection:
+        """Create a standalone connection (not from the pool).
+
+        Used for long-lived LISTEN connections that should not occupy a
+        pool slot.
+        """
+        if not self.is_initialized:
+            raise RuntimeError("Database pool not initialized. Call initialize() first.")
+        return await asyncpg.connect(
+            host=db_settings.host,
+            port=db_settings.port,
+            database=db_settings.database,
+            user=db_settings.user,
+            password=db_settings.password,
+        )
+
     async def release(self, connection: asyncpg.Connection) -> None:
         """Release a connection back to the pool."""
         if self._pool is not None:

@@ -27,6 +27,7 @@ from .email_actions import router as email_actions_router
 from .inbox_rules import router as inbox_rules_router
 from .invoicing import router as invoicing_router
 from .contacts import router as contacts_router
+from .reasoning import router as reasoning_router
 from .security import router as security_router
 from .system import router as system_router
 
@@ -56,5 +57,6 @@ router.include_router(email_actions_router)
 router.include_router(inbox_rules_router)
 router.include_router(invoicing_router)
 router.include_router(contacts_router)
+router.include_router(reasoning_router)
 router.include_router(security_router)
 router.include_router(system_router)

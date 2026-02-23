@@ -147,7 +147,18 @@ class DatabaseCRMProvider:
         if email:
             data["email"] = email
         data.update(extra)
-        return await self.create_contact(data)
+        result = await self.create_contact(data)
+
+        # Emit event for reasoning agent
+        from ..reasoning.producers import emit_if_enabled
+        await emit_if_enabled(
+            "crm.contact_created", "crm_provider",
+            {"contact_id": result.get("id", ""), "full_name": full_name,
+             "email": email, "phone": phone},
+            entity_type="contact",
+            entity_id=result.get("id"),
+        )
+        return result
 
     async def get_contact(self, contact_id: str) -> Optional[dict[str, Any]]:
         from ..storage.database import get_db_pool
@@ -314,7 +325,18 @@ class DatabaseCRMProvider:
             occ,
             intent,
         )
-        return dict(row) if row else {}
+        result = dict(row) if row else {}
+
+        # Emit event for reasoning agent
+        from ..reasoning.producers import emit_if_enabled
+        await emit_if_enabled(
+            "crm.interaction_logged", "crm_provider",
+            {"contact_id": contact_id, "interaction_type": interaction_type,
+             "intent": intent, "summary_preview": summary[:200]},
+            entity_type="contact",
+            entity_id=contact_id,
+        )
+        return result
 
     async def get_interactions(
         self, contact_id: str, limit: int = 20
