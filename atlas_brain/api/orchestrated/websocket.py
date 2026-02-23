@@ -160,6 +160,18 @@ async def orchestrated_websocket(websocket: WebSocket):
         # Signal ready
         await conn.send_state("idle")
 
+        # Send a welcome system_event so the feed is non-empty immediately
+        import uuid as _uuid
+        from datetime import datetime as _dt, timezone as _tz
+        await conn.send({
+            "state": "system_event",
+            "id": str(_uuid.uuid4()),
+            "ts": _dt.now(_tz.utc).isoformat(),
+            "category": "llm",
+            "level": "info",
+            "message": "Atlas connected",
+        })
+
         # Main message loop
         while True:
             message = await websocket.receive()
