@@ -650,6 +650,46 @@ class EmailIntakeConfig(BaseSettings):
     )
 
 
+class EmailStaleCheckConfig(BaseSettings):
+    """Stale email re-engagement: detect stale drafts, unactioned emails, unanswered estimates."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_EMAIL_STALE_CHECK_", env_file=".env", extra="ignore",
+    )
+
+    enabled: bool = Field(default=False, description="Enable stale email re-engagement checks")
+    interval_seconds: int = Field(
+        default=7200, ge=1800, le=86400, description="Check interval in seconds (default 2h)"
+    )
+
+    # Scenario 1: stale pending drafts
+    stale_draft_hours: int = Field(
+        default=12, ge=1, le=72, description="Hours before a pending draft is considered stale"
+    )
+
+    # Scenario 2: unactioned high-priority emails
+    unactioned_hours: int = Field(
+        default=24, ge=4, le=168, description="Hours before an unactioned email triggers escalation"
+    )
+
+    # Scenario 3: unanswered estimate replies
+    unanswered_days: int = Field(
+        default=3, ge=1, le=14, description="Days before generating a follow-up for unanswered sent replies"
+    )
+    unanswered_intents: list[str] = Field(
+        default=["estimate_request"],
+        description="Intents eligible for follow-up generation",
+    )
+    max_followups_per_cycle: int = Field(
+        default=3, ge=1, le=10, description="Max follow-up drafts to generate per cycle"
+    )
+
+    # Anti-spam
+    max_reminders: int = Field(
+        default=3, ge=1, le=10, description="Max stale reminders per draft/email before giving up"
+    )
+
+
 class ReminderConfig(BaseSettings):
     """Reminder system configuration."""
 
@@ -1783,6 +1823,20 @@ class CallIntelligenceConfig(BaseSettings):
     notify_enabled: bool = Field(default=True, description="Push ntfy after processing")
 
 
+class SMSIntelligenceConfig(BaseSettings):
+    """SMS classification, extraction, and notification."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_SMS_INTELLIGENCE_", env_file=".env", extra="ignore"
+    )
+    enabled: bool = Field(default=True, description="Enable SMS intelligence pipeline")
+    llm_max_tokens: int = Field(default=512, ge=128, le=2048)
+    llm_temperature: float = Field(default=0.3, ge=0.0, le=1.0)
+    llm_timeout: float = Field(default=20.0, ge=5.0, le=60.0, description="LLM call timeout in seconds")
+    notify_enabled: bool = Field(default=True, description="Push ntfy after processing")
+    auto_reply_timeout: float = Field(default=10.0, ge=3.0, le=30.0, description="Auto-reply LLM timeout")
+
+
 class TemporalPatternConfig(BaseSettings):
     """Temporal pattern context configuration."""
 
@@ -1885,8 +1939,10 @@ class Settings(BaseSettings):
     escalation: EscalationConfig = Field(default_factory=EscalationConfig)
     email_draft: EmailDraftConfig = Field(default_factory=EmailDraftConfig)
     email_intake: EmailIntakeConfig = Field(default_factory=EmailIntakeConfig)
+    email_stale_check: EmailStaleCheckConfig = Field(default_factory=EmailStaleCheckConfig)
     temporal: TemporalPatternConfig = Field(default_factory=TemporalPatternConfig)
     call_intelligence: CallIntelligenceConfig = Field(default_factory=CallIntelligenceConfig)
+    sms_intelligence: SMSIntelligenceConfig = Field(default_factory=SMSIntelligenceConfig)
     openai_compat: OpenAICompatConfig = Field(default_factory=OpenAICompatConfig)
     ftl_tracing: FTLTracingConfig = Field(default_factory=FTLTracingConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)

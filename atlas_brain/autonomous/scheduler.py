@@ -384,6 +384,15 @@ class TaskScheduler:
             "timeout_seconds": 60,
             "metadata": {"builtin_handler": "email_auto_approve"},
         },
+        {
+            "name": "email_stale_check",
+            "description": "Detect stale drafts, unactioned emails, and unanswered estimates",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": None,  # resolved from config
+            "timeout_seconds": 120,
+            "metadata": {"builtin_handler": "email_stale_check"},
+        },
     ]
 
     async def _ensure_default_tasks(self) -> None:
@@ -402,6 +411,7 @@ class TaskScheduler:
             _interval_overrides = {
                 "email_draft": settings.email_draft.schedule_interval_seconds,
                 "email_intake": settings.email_intake.interval_seconds,
+                "email_stale_check": settings.email_stale_check.interval_seconds,
             }
 
             for task_def in self._DEFAULT_TASKS:
@@ -480,6 +490,7 @@ class TaskScheduler:
             interval_overrides = {
                 "email_draft": settings.email_draft.schedule_interval_seconds,
                 "email_intake": settings.email_intake.interval_seconds,
+                "email_stale_check": settings.email_stale_check.interval_seconds,
             }
 
             for task_name, desired_interval in interval_overrides.items():
