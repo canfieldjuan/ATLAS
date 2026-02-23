@@ -102,7 +102,7 @@ async def list_calendars() -> str:
         ]
         return json.dumps(result, indent=2)
     except Exception as exc:
-        logger.error("list_calendars error: %s", exc)
+        logger.exception("list_calendars error")
         return json.dumps({"error": str(exc)})
 
 
@@ -147,7 +147,7 @@ async def list_events(
         ]
         return json.dumps(result, indent=2)
     except Exception as exc:
-        logger.error("list_events error: %s", exc)
+        logger.exception("list_events error")
         return json.dumps({"error": str(exc)})
 
 
@@ -184,7 +184,7 @@ async def get_event(event_id: str, calendar_id: Optional[str] = None) -> str:
             indent=2,
         )
     except Exception as exc:
-        logger.error("get_event error: %s", exc)
+        logger.exception("get_event error")
         return json.dumps({"error": str(exc)})
 
 
@@ -240,7 +240,7 @@ async def create_event(
             indent=2,
         )
     except Exception as exc:
-        logger.error("create_event error: %s", exc)
+        logger.exception("create_event error")
         return json.dumps({"error": str(exc)})
 
 
@@ -300,7 +300,7 @@ async def update_event(
             indent=2,
         )
     except Exception as exc:
-        logger.error("update_event error: %s", exc)
+        logger.exception("update_event error")
         return json.dumps({"error": str(exc)})
 
 
@@ -321,7 +321,7 @@ async def delete_event(event_id: str, calendar_id: Optional[str] = None) -> str:
         success = await _provider().delete_event(event_id, calendar_id=calendar_id)
         return json.dumps({"deleted": success, "event_id": event_id})
     except Exception as exc:
-        logger.error("delete_event error: %s", exc)
+        logger.exception("delete_event error")
         return json.dumps({"error": str(exc)})
 
 
@@ -421,7 +421,7 @@ async def find_free_slots(
             indent=2,
         )
     except Exception as exc:
-        logger.error("find_free_slots error: %s", exc)
+        logger.exception("find_free_slots error")
         return json.dumps({"error": str(exc)})
 
 
@@ -511,7 +511,7 @@ async def sync_appointment(
             indent=2,
         )
     except Exception as exc:
-        logger.error("sync_appointment error: %s", exc)
+        logger.exception("sync_appointment error")
         return json.dumps({"error": str(exc)})
 
 

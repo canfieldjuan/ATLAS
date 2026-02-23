@@ -85,8 +85,8 @@ async def run_calendar_workflow(
     messages.append(Message(role="user", content=input_text))
 
     # Get calendar tool schemas (prefer MCP names, fall back to internal)
-    from ...services.mcp_client import _resolve_tools
-    tool_names = _resolve_tools([
+    from ...services.mcp_client import resolve_tools
+    tool_names = resolve_tools([
         "create_event|create_calendar_event",
         "list_events|get_calendar",
         "find_free_slots",

@@ -29,6 +29,7 @@ Run:
 import json
 import logging
 import sys
+import uuid as _uuid
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -64,6 +65,15 @@ def _provider():
     from ..services.crm_provider import get_crm_provider
 
     return get_crm_provider()
+
+
+def _is_uuid(value: str) -> bool:
+    """Check if a string is a valid UUID."""
+    try:
+        _uuid.UUID(value)
+        return True
+    except (ValueError, AttributeError):
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +182,7 @@ async def get_contact(contact_id: str) -> str:
     """
     try:
         # If it doesn't look like a UUID, search by name instead
-        if len(contact_id) < 32:
+        if not _is_uuid(contact_id):
             results = await _provider().search_contacts(query=contact_id, limit=1)
             if results:
                 return json.dumps({"found": True, "contact": results[0]}, default=str)
@@ -463,7 +473,7 @@ async def get_customer_context(
         }
 
         # If contact_id doesn't look like a UUID, treat it as a name
-        if contact_id and len(contact_id) < 32:
+        if contact_id and not _is_uuid(contact_id):
             name = contact_id
             contact_id = None
 
@@ -493,10 +503,8 @@ async def get_customer_context(
             "appointments": ctx.appointments,
             "call_transcripts": ctx.call_transcripts,
             "sent_emails": ctx.sent_emails,
+            "inbox_emails": ctx.inbox_emails,
         }
-        # inbox_emails present after J5 lands
-        if hasattr(ctx, "inbox_emails"):
-            result["inbox_emails"] = ctx.inbox_emails
 
         return json.dumps(result, default=str)
     except Exception as exc:

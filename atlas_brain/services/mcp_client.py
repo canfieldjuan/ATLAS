@@ -62,8 +62,9 @@ def _convert_input_schema(schema: dict[str, Any]) -> list[ToolParameter]:
             # The LLM will read the description for format guidance.
             prop_type = "string"
         elif raw_type is None:
-            # Handle Optional patterns: anyOf: [{type: "string"}, {type: "null"}]
-            for variant in prop.get("anyOf", []):
+            # Handle Optional patterns: anyOf/oneOf: [{type: "string"}, {type: "null"}]
+            variants = prop.get("anyOf") or prop.get("oneOf") or []
+            for variant in variants:
                 t = variant.get("type")
                 if t and t != "null":
                     if t == "integer":
@@ -303,7 +304,7 @@ class MCPToolProvider:
         logger.info("MCP client shutdown complete")
 
 
-def _resolve_tools(specs: list[str]) -> list[str]:
+def resolve_tools(specs: list[str]) -> list[str]:
     """Resolve tool name specs, preferring MCP names with internal fallback.
 
     Each spec is "preferred|fallback" or just "name".
@@ -312,7 +313,7 @@ def _resolve_tools(specs: list[str]) -> list[str]:
     registered later by MCP).
 
     Example:
-        _resolve_tools(["send_email", "send_estimate|send_estimate_email"])
+        resolve_tools(["send_email", "send_estimate|send_estimate_email"])
         # => ["send_email", "send_estimate"]  (if MCP registered "send_estimate")
         # => ["send_email", "send_estimate_email"]  (if MCP not available)
     """

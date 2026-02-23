@@ -94,8 +94,18 @@ def _space_url() -> str:
     return f"https://{comms_settings.signalwire_space}.signalwire.com"
 
 
+_cached_client = None
+
+
 def _client():
-    """Lazily instantiate the telephony REST client (SignalWire or Twilio)."""
+    """Lazily instantiate the telephony REST client (SignalWire or Twilio).
+
+    Caches the client instance to reuse connection pools across tool calls.
+    """
+    global _cached_client
+    if _cached_client is not None:
+        return _cached_client
+
     from atlas_comms.core.config import comms_settings
 
     if _is_signalwire():
@@ -123,10 +133,11 @@ def _client():
                 "ATLAS_COMMS_SIGNALWIRE_RECORDING_TOKEN, and "
                 "ATLAS_COMMS_SIGNALWIRE_SPACE."
             )
-        return Client(
+        _cached_client = Client(
             account_sid, token,
             signalwire_space_url=f"https://{space}.signalwire.com",
         )
+        return _cached_client
     else:
         try:
             from twilio.rest import Client
@@ -143,7 +154,8 @@ def _client():
                 "Twilio credentials not configured. "
                 "Set ATLAS_COMMS_TWILIO_ACCOUNT_SID and ATLAS_COMMS_TWILIO_AUTH_TOKEN."
             )
-        return Client(account_sid, auth_token)
+        _cached_client = Client(account_sid, auth_token)
+        return _cached_client
 
 
 def _comms_settings():
@@ -176,7 +188,7 @@ def _account_sid() -> str:
 def _e164(number: str) -> str:
     """Strip whitespace/dashes and ensure leading + for E.164."""
     import re
-    n = re.sub(r"[\s\-\(\)]", "", number.strip())
+    n = re.sub(r"[\s\-\(\)\.]", "", number.strip())
     if not n.startswith("+"):
         n = "+" + n
     return n

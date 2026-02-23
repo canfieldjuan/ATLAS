@@ -132,8 +132,8 @@ async def run_email_workflow(
     messages.append(Message(role="user", content=input_text))
 
     # Get email + CRM tool schemas (prefer MCP names, fall back to internal)
-    from ...services.mcp_client import _resolve_tools
-    tool_names = _resolve_tools([
+    from ...services.mcp_client import resolve_tools
+    tool_names = resolve_tools([
         "send_email",
         "send_estimate|send_estimate_email",
         "send_proposal|send_proposal_email",
