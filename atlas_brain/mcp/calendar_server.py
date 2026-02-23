@@ -451,28 +451,23 @@ async def sync_appointment(
     from ..services.calendar_provider import CalendarEvent
 
     try:
-        import asyncpg
+        from ..storage.database import get_db_pool
 
-        from ..config import settings as cfg
-
-        conn = await asyncpg.connect(cfg.database_url)
-        try:
-            row = await conn.fetchrow(
-                """
-                SELECT id, customer_name, customer_address, start_time, end_time,
-                       notes, calendar_event_id
-                FROM appointments
-                WHERE id = $1
-                """,
-                appointment_id,
-            )
-        finally:
-            await conn.close()
+        pool = get_db_pool()
+        row = await pool.fetchrow(
+            """
+            SELECT id, customer_name, customer_address, start_time, end_time,
+                   notes, calendar_event_id
+            FROM appointments
+            WHERE id = $1
+            """,
+            appointment_id,
+        )
 
         if not row:
             return json.dumps({"error": "Appointment not found", "appointment_id": appointment_id})
 
-        summary = f"Cleaning – {row['customer_name']}"
+        summary = f"Cleaning - {row['customer_name']}"
         description = row["notes"] or ""
         location = row["customer_address"] or ""
         existing_event_id = row["calendar_event_id"]
@@ -498,15 +493,11 @@ async def sync_appointment(
 
         # Write calendar_event_id back to DB so appointments stay linked
         if result.uid:
-            conn = await asyncpg.connect(cfg.database_url)
-            try:
-                await conn.execute(
-                    "UPDATE appointments SET calendar_event_id = $1 WHERE id = $2",
-                    result.uid,
-                    appointment_id,
-                )
-            finally:
-                await conn.close()
+            await pool.execute(
+                "UPDATE appointments SET calendar_event_id = $1 WHERE id = $2",
+                result.uid,
+                appointment_id,
+            )
 
         return json.dumps(
             {

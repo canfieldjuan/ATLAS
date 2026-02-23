@@ -43,25 +43,30 @@ Configuration (env vars -- all prefixed ATLAS_COMMS_):
     ATLAS_COMMS_RECORD_CALLS         true/false (global default for recording)
 """
 
+import asyncio
 import json
 import logging
 import sys
 from contextlib import asynccontextmanager
-from typing import Optional
+from functools import partial
+from typing import Any, Optional
 
 from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger("atlas.mcp.twilio")
 
 
+async def _run_sync(fn, *args, **kwargs) -> Any:
+    """Run a synchronous Twilio/SignalWire SDK call in a thread executor."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, partial(fn, *args, **kwargs))
+
+
 @asynccontextmanager
 async def _lifespan(server):
-    """Initialize DB pool on startup, close on shutdown."""
-    from ..storage.database import init_database, close_database
-    await init_database()
-    logger.info("Twilio MCP: DB pool initialized")
+    """Twilio MCP has no DB dependency -- lifespan is a no-op."""
+    logger.info("Twilio MCP: started")
     yield
-    await close_database()
 
 
 mcp = FastMCP(
@@ -230,7 +235,7 @@ async def make_call(
             create_kwargs["recording_status_callback"] = recording_cb
             create_kwargs["recording_status_callback_event"] = "completed"
 
-        call = client.calls.create(**create_kwargs)
+        call = await _run_sync(client.calls.create, **create_kwargs)
 
         return json.dumps({
             "success": True,
@@ -259,7 +264,7 @@ async def get_call(call_sid: str) -> str:
     Returns: from, to, status, direction, duration, start_time, end_time.
     """
     try:
-        call = _client().calls(call_sid).fetch()
+        call = await _run_sync(_client().calls(call_sid).fetch)
         return json.dumps({
             "success": True,
             "call_sid": call.sid,
@@ -301,7 +306,7 @@ async def list_calls(
         if status:
             kwargs["status"] = status
 
-        calls = _client().calls.list(**kwargs)
+        calls = await _run_sync(_client().calls.list, **kwargs)
         return json.dumps({
             "success": True,
             "calls": [
@@ -334,7 +339,7 @@ async def hangup_call(call_sid: str) -> str:
     call_sid: Twilio Call SID.
     """
     try:
-        _client().calls(call_sid).update(status="completed")
+        await _run_sync(_client().calls(call_sid).update, status="completed")
         return json.dumps({"success": True, "call_sid": call_sid, "status": "completed"})
     except Exception as exc:
         logger.exception("hangup_call error")
@@ -378,7 +383,7 @@ async def start_recording(
             kwargs["recording_status_callback"] = cb_url
             kwargs["recording_status_callback_event"] = "completed"
 
-        recording = _client().calls(call_sid).recordings.create(**kwargs)
+        recording = await _run_sync(_client().calls(call_sid).recordings.create, **kwargs)
         return json.dumps({
             "success": True,
             "call_sid": call_sid,
@@ -403,7 +408,7 @@ async def stop_recording(call_sid: str, recording_sid: str) -> str:
     recording_sid: Recording SID (RExxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx).
     """
     try:
-        _client().calls(call_sid).recordings(recording_sid).update(status="stopped")
+        await _run_sync(_client().calls(call_sid).recordings(recording_sid).update, status="stopped")
         return json.dumps({
             "success": True,
             "call_sid": call_sid,
@@ -430,7 +435,7 @@ async def list_recordings(call_sid: str) -> str:
     """
     try:
         acct = _account_sid()
-        recordings = _client().recordings.list(call_sid=call_sid)
+        recordings = await _run_sync(_client().recordings.list, call_sid=call_sid)
         return json.dumps({
             "success": True,
             "call_sid": call_sid,
@@ -464,7 +469,7 @@ async def get_recording(recording_sid: str) -> str:
     Returns: duration, call_sid, status, and a direct MP3 download URL.
     """
     try:
-        r = _client().recordings(recording_sid).fetch()
+        r = await _run_sync(_client().recordings(recording_sid).fetch)
         media_url = _recording_media_url(recording_sid, _account_sid())
         return json.dumps({
             "success": True,
@@ -518,7 +523,7 @@ async def send_sms(
         if cfg.webhook_base_url:
             params["status_callback"] = f"{cfg.webhook_base_url}/api/v1/comms/sms/status"
 
-        msg = _client().messages.create(**params)
+        msg = await _run_sync(_client().messages.create, **params)
         return json.dumps({
             "success": True,
             "message_sid": msg.sid,
@@ -549,7 +554,7 @@ async def lookup_phone(phone_number: str) -> str:
 
     if _is_signalwire():
         return await _lookup_signalwire(e164)
-    return _lookup_twilio(e164)
+    return await _run_sync(_lookup_twilio, e164)
 
 
 async def _lookup_signalwire(e164: str) -> str:
