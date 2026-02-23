@@ -1,10 +1,9 @@
 """
 Near-real-time email intake pipeline.
 
-Polls the inbox via IMAP every N minutes, classifies emails,
-cross-references action_required + lead emails against the CRM,
-generates LLM action plans for known-contact emails, and sends
-enriched ntfy notifications.
+Polls the inbox via IMAP every N minutes, classifies emails (Stage 1 rule-based),
+cross-references against the CRM, runs Stage 2 LLM intent classification +
+action planning, and sends intent-aware ntfy notifications.
 """
 
 import asyncio
@@ -30,15 +29,65 @@ logger = logging.getLogger("atlas.autonomous.tasks.email_intake")
 
 
 # ---------------------------------------------------------------------------
-# CRM cross-reference
+# Valid business intents (Stage 2)
+# ---------------------------------------------------------------------------
+
+VALID_INTENTS = {"estimate_request", "reschedule", "complaint", "info_admin"}
+
+_INTENT_LABELS = {
+    "estimate_request": "Estimate Request",
+    "reschedule": "Reschedule",
+    "complaint": "Complaint",
+    "info_admin": "Info/Admin",
+}
+
+_INTENT_NTFY = {
+    "estimate_request": {
+        "buttons": [
+            ("http", "Get Quote", "/api/v1/email/actions/{id}/quote"),
+            ("http", "Draft Reply", "/api/v1/email/drafts/generate/{id}"),
+        ],
+        "tags": "email,dollar",
+        "priority": "high",
+    },
+    "reschedule": {
+        "buttons": [
+            ("http", "Show Slots", "/api/v1/email/actions/{id}/slots"),
+            ("http", "Draft Reply", "/api/v1/email/drafts/generate/{id}"),
+        ],
+        "tags": "email,calendar",
+        "priority": "high",
+    },
+    "complaint": {
+        "buttons": [
+            ("http", "Escalate", "/api/v1/email/actions/{id}/escalate"),
+            ("http", "Draft Reply", "/api/v1/email/drafts/generate/{id}"),
+        ],
+        "tags": "email,rotating_light",
+        "priority": "urgent",
+    },
+    "info_admin": {
+        "buttons": [
+            ("http", "Send Info", "/api/v1/email/actions/{id}/send-info"),
+            ("http", "Archive", "/api/v1/email/actions/{id}/archive"),
+        ],
+        "tags": "email,information_source",
+        "priority": "default",
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# CRM cross-reference (expanded scope)
 # ---------------------------------------------------------------------------
 
 async def _crm_cross_reference(emails: list[dict[str, Any]]) -> int:
-    """Cross-reference action_required/lead emails against the CRM.
+    """Cross-reference emails against the CRM.
 
-    For each match, stashes _contact_id, _customer_context, and
-    _customer_summary on the email dict.  Returns count of matches.
-    Fail-open per email.
+    Runs on ALL emails where replyable != False (expanded from just
+    action_required/lead).  For each match, stashes _contact_id,
+    _customer_context, and _customer_summary on the email dict.
+    Returns count of matches.  Fail-open per email.
     """
     from ...services.customer_context import get_customer_context_service
     from ...services.crm_provider import get_crm_provider
@@ -48,9 +97,7 @@ async def _crm_cross_reference(emails: list[dict[str, Any]]) -> int:
     matched = 0
 
     for e in emails:
-        priority = e.get("priority", "")
-        category = e.get("category", "")
-        if priority != "action_required" and category != "lead":
+        if e.get("replyable") is False:
             continue
 
         try:
@@ -91,16 +138,101 @@ async def _crm_cross_reference(emails: list[dict[str, Any]]) -> int:
 
 
 # ---------------------------------------------------------------------------
-# LLM action plan generation
+# Stage 2: LLM intent classification + action plan (merged)
 # ---------------------------------------------------------------------------
 
-async def _generate_action_plans(emails: list[dict[str, Any]]) -> int:
-    """Generate LLM action plans for CRM-matched emails.
+def _parse_intent_plan(text: str) -> dict | None:
+    """Parse LLM output into {intent, sentiment, confidence, actions[]}.
 
-    Only processes emails that have _customer_context set.
-    Respects max_action_plans_per_cycle cap.  Returns count of plans generated.
+    Returns None if parsing fails or intent is invalid.
     """
-    from ...comms.action_planner import _format_customer_context, _parse_plan
+    # Strip <think> tags (Qwen3)
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+    # Find first JSON object
+    obj_start = text.find("{")
+    if obj_start < 0:
+        return None
+
+    # Find matching closing brace
+    depth = 0
+    in_string = False
+    escape = False
+    obj_end = -1
+    for i in range(obj_start, len(text)):
+        ch = text[i]
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"' and not escape:
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                obj_end = i
+                break
+
+    if obj_end < 0:
+        return None
+
+    try:
+        data = json.loads(text[obj_start : obj_end + 1])
+    except json.JSONDecodeError:
+        logger.warning("Failed to parse intent plan JSON")
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    intent = data.get("intent", "").lower().strip()
+    if intent not in VALID_INTENTS:
+        logger.warning("Invalid intent '%s', discarding", intent)
+        return None
+
+    # Validate and normalize actions array
+    raw_actions = data.get("actions", [])
+    actions = []
+    if isinstance(raw_actions, list):
+        for a in raw_actions:
+            if isinstance(a, dict) and a.get("action"):
+                actions.append({
+                    "action": a["action"],
+                    "priority": a.get("priority", 99),
+                    "params": a.get("params", {}),
+                    "rationale": a.get("rationale", ""),
+                })
+        actions.sort(key=lambda x: x["priority"])
+
+    # Coerce confidence to float (LLM may return string)
+    try:
+        confidence = float(data.get("confidence", 0.5))
+    except (TypeError, ValueError):
+        confidence = 0.5
+
+    return {
+        "intent": intent,
+        "sentiment": data.get("sentiment", "neutral"),
+        "confidence": confidence,
+        "actions": actions,
+    }
+
+
+async def _classify_and_plan(emails: list[dict[str, Any]]) -> int:
+    """Stage 2: LLM intent classification + action planning.
+
+    Runs on ALL emails where replyable != False.  Uses the merged
+    email_intent_planning skill to get both intent and actions in one
+    LLM call.  Returns count of emails classified.
+    """
+    from ...comms.action_planner import _format_customer_context
     from ...skills import get_skill_registry
     from ...services.llm_router import get_triage_llm
     from ...services import llm_registry
@@ -112,22 +244,27 @@ async def _generate_action_plans(emails: list[dict[str, Any]]) -> int:
 
     llm = get_triage_llm() or llm_registry.get_active()
     if not llm:
-        logger.warning("No LLM available for email action planning")
+        logger.warning("No LLM available for email intent classification")
         return 0
 
-    skill = get_skill_registry().get("digest/email_action_planning")
-    plan_count = 0
+    skill = get_skill_registry().get("digest/email_intent_planning")
+    classified = 0
 
     for e in emails:
-        if plan_count >= cfg.max_action_plans_per_cycle:
+        if classified >= cfg.max_action_plans_per_cycle:
             break
 
-        ctx = e.get("_customer_context")
-        if ctx is None:
+        if e.get("replyable") is False:
             continue
 
         try:
-            customer_context_str = _format_customer_context(ctx)
+            # Build customer context string (or fallback for unknown senders)
+            ctx = e.get("_customer_context")
+            if ctx is not None:
+                customer_context_str = _format_customer_context(ctx)
+            else:
+                customer_context_str = "No prior customer history available."
+
             body = e.get("body_text", "")[:1500]
 
             if skill:
@@ -141,18 +278,20 @@ async def _generate_action_plans(emails: list[dict[str, Any]]) -> int:
                 )
             else:
                 system_prompt = (
-                    f"You are Atlas, planning follow-up actions for an email from a known customer.\n"
+                    f"You are Atlas, classifying and planning follow-up actions for an email.\n"
                     f"Customer: {customer_context_str}\n"
                     f"From: {e.get('from', '')}\n"
                     f"Subject: {e.get('subject', '')}\n"
                     f"Category: {e.get('category', 'other')}\n"
                     f"Body: {body}\n"
-                    f"Return a JSON array of actions: [{{action, priority, params, rationale}}]"
+                    f'Return a JSON object: {{"intent": "estimate_request|reschedule|complaint|info_admin", '
+                    f'"sentiment": "...", "confidence": 0.0-1.0, '
+                    f'"actions": [{{action, priority, params, rationale}}]}}'
                 )
 
             messages = [
                 Message(role="system", content=system_prompt),
-                Message(role="user", content="Generate the action plan for this email."),
+                Message(role="user", content="Classify the intent and generate the action plan for this email."),
             ]
 
             loop = asyncio.get_running_loop()
@@ -172,37 +311,42 @@ async def _generate_action_plans(emails: list[dict[str, Any]]) -> int:
             if not text:
                 continue
 
-            # Strip <think> tags (Qwen3)
-            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+            parsed = _parse_intent_plan(text)
+            if parsed is None:
+                continue
 
-            plan = _parse_plan(text, {})
-            if plan and plan[0].get("action") != "none":
-                e["_action_plan"] = plan
-                plan_count += 1
-                logger.info(
-                    "Action plan generated for email %s: %d actions",
-                    e.get("id"), len(plan),
-                )
+            e["_intent"] = parsed["intent"]
+            e["_sentiment"] = parsed["sentiment"]
+
+            # Store action plan if there are real actions
+            if parsed["actions"] and parsed["actions"][0].get("action") != "none":
+                e["_action_plan"] = parsed["actions"]
+
+            classified += 1
+            logger.info(
+                "Intent classified for email %s: %s (confidence=%.2f, actions=%d)",
+                e.get("id"), parsed["intent"], parsed["confidence"],
+                len(parsed["actions"]),
+            )
 
         except Exception as exc:
             logger.warning(
-                "Action plan generation failed for email %s: %s",
+                "Intent classification failed for email %s: %s",
                 e.get("id"), exc,
             )
 
-    return plan_count
+    return classified
 
 
 # ---------------------------------------------------------------------------
-# Enriched notifications
+# Enriched notifications (intent-aware)
 # ---------------------------------------------------------------------------
 
 async def _send_enriched_notifications(emails: list[dict[str, Any]]) -> None:
-    """Send ntfy notifications with CRM context and action plan summaries.
+    """Send ntfy notifications with intent-specific buttons and CRM context.
 
-    Enriches action_required/lead emails that have CRM matches with
-    customer context and suggested actions.  Non-CRM emails fall through
-    to the standard notification path.
+    Uses _INTENT_NTFY mapping for intent-classified emails.  Non-classified
+    emails fall through to the standard notification path.
     """
     if not settings.alerts.ntfy_enabled:
         return
@@ -221,11 +365,12 @@ async def _send_enriched_notifications(emails: list[dict[str, Any]]) -> None:
         if e.get("replyable") is False:
             continue
 
+        intent = e.get("_intent")
         customer_summary = e.get("_customer_summary")
         action_plan = e.get("_action_plan")
 
-        # No CRM enrichment -- use standard notification path
-        if not customer_summary and not action_plan:
+        # No intent and no CRM enrichment -- use standard notification path
+        if not intent and not customer_summary and not action_plan:
             standard_emails.append(e)
             continue
 
@@ -248,6 +393,8 @@ async def _send_enriched_notifications(emails: list[dict[str, Any]]) -> None:
             if lead_name or lead_email:
                 sender_name = lead_name or lead_email
 
+        is_new_lead = e.get("_is_new_lead", False)
+
         # Build enriched message body
         parts = [f"From: {sender_name}", f"Subject: {subject}"]
         if customer_summary:
@@ -258,27 +405,53 @@ async def _send_enriched_notifications(emails: list[dict[str, Any]]) -> None:
         parts.append(f"\n{body_snippet}")
         message = "\n".join(parts)
 
+        # Build View Email URL
         rfc_msg_id = e.get("message_id", "").strip("<>")
         view_url = (
             f"https://mail.google.com/mail/u/0/#search/rfc822msgid:{rfc_msg_id}"
             if rfc_msg_id
             else "https://mail.google.com/mail/u/0/#inbox"
         )
-        actions = (
-            f"http, Draft Reply, {api_url}/api/v1/email/drafts/generate/{msg_id}, method=POST, clear=true; "
-            f"view, View Email, {view_url}"
-        )
 
-        if is_lead:
-            ntfy_title = f"New Lead: {subject[:60]}"
-            ntfy_tags = "email,star"
+        # Intent-aware buttons and metadata
+        intent_cfg = _INTENT_NTFY.get(intent) if intent else None
+
+        if intent_cfg:
+            # Build action buttons from intent config
+            action_parts = []
+            for btn_type, label, url_template in intent_cfg["buttons"]:
+                btn_url = api_url + url_template.replace("{id}", msg_id)
+                action_parts.append(
+                    f"{btn_type}, {label}, {btn_url}, method=POST, clear=true"
+                )
+            action_parts.append(f"view, View Email, {view_url}")
+            actions = "; ".join(action_parts)
+
+            intent_label = _INTENT_LABELS.get(intent, intent.replace("_", " ").title())
+            if is_new_lead or (is_lead and e.get("_contact_id") is None):
+                ntfy_title = f"NEW LEAD: {intent_label} - {subject[:50]}"
+            else:
+                ntfy_title = f"{intent_label}: {subject[:50]}"
+
+            ntfy_tags = intent_cfg["tags"]
+            ntfy_priority = intent_cfg["priority"]
         else:
-            ntfy_title = f"Action Required: {subject[:60]}"
-            ntfy_tags = "email,warning"
+            # Fallback: generic buttons (pre-intent behavior)
+            actions = (
+                f"http, Draft Reply, {api_url}/api/v1/email/drafts/generate/{msg_id}, method=POST, clear=true; "
+                f"view, View Email, {view_url}"
+            )
+            if is_new_lead or is_lead:
+                ntfy_title = f"New Lead: {subject[:60]}"
+                ntfy_tags = "email,star"
+            else:
+                ntfy_title = f"Action Required: {subject[:60]}"
+                ntfy_tags = "email,warning"
+            ntfy_priority = "high"
 
         headers = {
             "Title": ntfy_title,
-            "Priority": "high",
+            "Priority": ntfy_priority,
             "Tags": ntfy_tags,
             "Actions": actions,
         }
@@ -288,7 +461,8 @@ async def _send_enriched_notifications(emails: list[dict[str, Any]]) -> None:
                 resp = await client.post(ntfy_url, content=message, headers=headers)
                 resp.raise_for_status()
             logger.info(
-                "Enriched notification sent for %s: %s", msg_id, subject[:40]
+                "Enriched notification sent for %s: intent=%s title=%s",
+                msg_id, intent or "none", ntfy_title[:40],
             )
         except Exception as exc:
             logger.warning(
@@ -306,7 +480,7 @@ async def _send_enriched_notifications(emails: list[dict[str, Any]]) -> None:
 # ---------------------------------------------------------------------------
 
 async def _record_with_action_plans(emails: list[dict[str, Any]]) -> None:
-    """Record processed emails with action_plan and customer_context_summary columns."""
+    """Record processed emails with action_plan, customer_context_summary, and intent."""
     pool = get_db_pool()
     if not pool.is_initialized or not emails:
         return
@@ -317,8 +491,9 @@ async def _record_with_action_plans(emails: list[dict[str, Any]]) -> None:
                 """
                 INSERT INTO processed_emails
                     (gmail_message_id, sender, subject, category, priority,
-                     replyable, contact_id, action_plan, customer_context_summary)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                     replyable, contact_id, action_plan, customer_context_summary,
+                     intent)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 ON CONFLICT (gmail_message_id) DO NOTHING
                 """,
                 [
@@ -332,11 +507,12 @@ async def _record_with_action_plans(emails: list[dict[str, Any]]) -> None:
                         e.get("_contact_id"),
                         json.dumps(e["_action_plan"]) if e.get("_action_plan") else None,
                         e.get("_customer_summary"),
+                        e.get("_intent"),
                     )
                     for e in emails
                 ],
             )
-        logger.debug("Recorded %d processed email IDs (with action plans)", len(emails))
+        logger.debug("Recorded %d processed email IDs (with intent + action plans)", len(emails))
     except Exception as e:
         logger.warning("Failed to record processed emails: %s", e)
 
@@ -346,7 +522,7 @@ async def _record_with_action_plans(emails: list[dict[str, Any]]) -> None:
 # ---------------------------------------------------------------------------
 
 async def run(task: ScheduledTask) -> dict:
-    """Near-real-time email intake: fetch via IMAP, classify, CRM xref, action plan, notify."""
+    """Near-real-time email intake: fetch via IMAP, classify, CRM xref, intent classify, notify."""
     cfg = settings.email_intake
     if not cfg.enabled:
         return {"_skip_synthesis": "Email intake disabled"}
@@ -409,27 +585,32 @@ async def run(task: ScheduledTask) -> dict:
     if not emails:
         return {"_skip_synthesis": True, "new_emails": 0}
 
-    # 4. Classify (rule-based, no LLM)
+    # 4. Stage 1: Classify (rule-based, no LLM)
     classifier = get_email_classifier()
     emails = classifier.classify_batch(emails)
 
     # 5. Process leads (CRM contact creation for web form submissions)
     await _process_lead_emails(emails)
 
-    # 6. CRM cross-reference for action_required + lead emails
+    # 6. CRM cross-reference (expanded: all replyable emails)
     crm_count = 0
     if cfg.crm_enabled:
         crm_count = await _crm_cross_reference(emails)
 
-    # 7. Generate action plans for CRM-matched emails
-    plan_count = 0
-    if cfg.action_plan_enabled and crm_count > 0:
-        plan_count = await _generate_action_plans(emails)
+    # 7. Stage 2: LLM intent classification + action planning
+    intent_count = 0
+    if cfg.action_plan_enabled:
+        intent_count = await _classify_and_plan(emails)
 
-    # 8. Record to DB (extended INSERT with action_plan + customer_context_summary)
+    # 8. Derive new_lead flag (intent classified + no existing CRM contact)
+    for e in emails:
+        if e.get("_intent") and e.get("_contact_id") is None:
+            e["_is_new_lead"] = True
+
+    # 9. Record to DB (extended INSERT with intent + action_plan + customer_context_summary)
     await _record_with_action_plans(emails)
 
-    # 9. Send enriched ntfy notifications
+    # 10. Send intent-aware ntfy notifications
     action_emails = [
         e for e in emails
         if (e.get("priority") == "action_required" or e.get("category") == "lead")
@@ -439,13 +620,13 @@ async def run(task: ScheduledTask) -> dict:
         await _send_enriched_notifications(action_emails)
 
     logger.info(
-        "Email intake: %d new, %d CRM matched, %d action plans",
-        len(emails), crm_count, plan_count,
+        "Email intake: %d new, %d CRM matched, %d intent classified",
+        len(emails), crm_count, intent_count,
     )
 
     return {
         "new_emails": len(emails),
         "crm_matched": crm_count,
-        "action_plans": plan_count,
+        "intent_classified": intent_count,
         "_skip_synthesis": True,
     }
