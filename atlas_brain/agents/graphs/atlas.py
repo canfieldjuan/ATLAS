@@ -651,6 +651,12 @@ async def generate_response(state: AtlasAgentState) -> AtlasAgentState:
         "context_tokens": llm_out.get("context_tokens") if llm_out else None,
         "retrieval_latency_ms": llm_out.get("retrieval_latency_ms") if llm_out else None,
     }
+
+    # Propagate tool execution from LLM tool calling (conversation with MCP tools)
+    if llm_out and llm_out.get("tools_executed"):
+        result["tools_executed"] = llm_out["tools_executed"]
+        result["tool_results"] = llm_out.get("tool_results", {})
+
     return result
 
 
@@ -1031,6 +1037,77 @@ async def _generate_llm_response(
     # Add current user message
     messages.append(Message(role="user", content=input_text))
 
+    # Use tool calling for conversation turns when LLM supports it.
+    # This gives the model access to MCP tools (CRM, calendar, email,
+    # telephony) so it can answer queries like "search for contact Smith"
+    # or "what's on my calendar today" during general conversation.
+    # Skip for with_tools=True (existing tool result summarization).
+    if not with_tools and hasattr(llm, "chat_with_tools"):
+        from ...services.tool_executor import execute_with_tools
+
+        try:
+            ewt_result = await execute_with_tools(
+                llm=llm,
+                messages=messages,
+                max_tokens=200,
+                temperature=0.7,
+            )
+            response = ewt_result.get("response", "").strip()
+            llm_meta = ewt_result.get("llm_meta", {})
+            tools_used = ewt_result.get("tools_executed", [])
+
+            # Use the result when tools were called (response summarizes tool
+            # output) or when the LLM produced a genuine text response.
+            # When the LLM returned empty and no tools were called,
+            # execute_with_tools substitutes a generic fallback -- skip it
+            # and try plain chat instead (tool schemas may confuse the model).
+            if tools_used:
+                return {
+                    "response": response,
+                    "input_tokens": llm_meta.get("input_tokens"),
+                    "output_tokens": llm_meta.get("output_tokens"),
+                    "system_prompt": system_msg,
+                    "history_count": len(history_messages),
+                    "prompt_eval_duration_ms": llm_meta.get("prompt_eval_duration_ms"),
+                    "eval_duration_ms": llm_meta.get("eval_duration_ms"),
+                    "total_duration_ms": llm_meta.get("total_duration_ms"),
+                    "provider_request_id": llm_meta.get("provider_request_id"),
+                    "has_llm_response": bool(llm_meta.get("has_llm_response")),
+                    "rag_graph_used": rag_nodes_retrieved > 0,
+                    "rag_nodes_retrieved": rag_nodes_retrieved if rag_nodes_retrieved > 0 else None,
+                    "rag_chunks_used": rag_nodes_retrieved if rag_nodes_retrieved > 0 else None,
+                    "context_tokens": context_tokens,
+                    "retrieval_latency_ms": retrieval_latency_ms,
+                    "tools_executed": tools_used,
+                    "tool_results": ewt_result.get("tool_results", {}),
+                }
+            if response:
+                from ...services.tool_executor import EMPTY_RESPONSE_FALLBACK
+
+                if response != EMPTY_RESPONSE_FALLBACK:
+                    return {
+                        "response": response,
+                        "input_tokens": llm_meta.get("input_tokens"),
+                        "output_tokens": llm_meta.get("output_tokens"),
+                        "system_prompt": system_msg,
+                        "history_count": len(history_messages),
+                        "prompt_eval_duration_ms": llm_meta.get("prompt_eval_duration_ms"),
+                        "eval_duration_ms": llm_meta.get("eval_duration_ms"),
+                        "total_duration_ms": llm_meta.get("total_duration_ms"),
+                        "provider_request_id": llm_meta.get("provider_request_id"),
+                        "has_llm_response": bool(llm_meta.get("has_llm_response")),
+                        "rag_graph_used": rag_nodes_retrieved > 0,
+                        "rag_nodes_retrieved": rag_nodes_retrieved if rag_nodes_retrieved > 0 else None,
+                        "rag_chunks_used": rag_nodes_retrieved if rag_nodes_retrieved > 0 else None,
+                        "context_tokens": context_tokens,
+                        "retrieval_latency_ms": retrieval_latency_ms,
+                    }
+                logger.info("Tool-calling LLM returned empty, trying plain chat")
+        except Exception as e:
+            logger.warning("Tool-calling LLM failed, falling back to chat: %s", e)
+
+    # Fallback: plain chat (LLM without tool support, tool calling failed,
+    # or with_tools=True for existing tool result summarization).
     try:
         cuda_lock = get_cuda_lock()
         async with cuda_lock:

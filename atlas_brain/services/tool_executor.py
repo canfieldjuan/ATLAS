@@ -23,16 +23,20 @@ logger = logging.getLogger("atlas.services.tool_executor")
 
 MAX_TOOL_ITERATIONS = 3
 
+# Response returned when the LLM produces no text and no tool calls.
+# Exported so callers can detect this fallback and retry with plain chat.
+EMPTY_RESPONSE_FALLBACK = "Sorry, I wasn't able to process that."
+
 # Priority tools for LLM tool calling (reduces model confusion)
 PRIORITY_TOOL_NAMES = [
     "get_time", "get_weather", "get_calendar", "get_location",
     "set_reminder", "list_reminders", "send_notification",
     "send_email", "check_availability", "book_appointment",
     "cancel_appointment", "reschedule_appointment",
-    # MCP-provided tools
-    "search_contacts", "get_customer_context",
-    "list_events", "find_free_slots", "create_event",
-    "list_inbox", "list_folders",
+    # MCP-provided tools (read-heavy set for general conversation)
+    "search_contacts", "get_contact", "get_customer_context",
+    "list_events", "get_event", "find_free_slots", "create_event",
+    "list_inbox", "get_message", "search_inbox", "list_folders",
 ]
 
 # Pattern to match text-based tool calls
@@ -298,7 +302,7 @@ async def execute_with_tools(
                 logger.info("LLM returned empty, using tool result as response: %s", final_response)
             elif not final_response:
                 logger.warning("LLM returned empty response with no tool results")
-                final_response = "Sorry, I wasn't able to process that."
+                final_response = EMPTY_RESPONSE_FALLBACK
             else:
                 logger.info("No tool calls from LLM, returning response directly")
             return {
