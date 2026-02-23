@@ -648,6 +648,9 @@ class EmailIntakeConfig(BaseSettings):
         default=["estimate_request", "reschedule", "info_admin"],
         description="Intents eligible for auto-execution (complaint always excluded)",
     )
+    inbox_rules_enabled: bool = Field(
+        default=False, description="Evaluate user-defined inbox rules before LLM"
+    )
 
 
 class EmailStaleCheckConfig(BaseSettings):
@@ -1837,6 +1840,21 @@ class SMSIntelligenceConfig(BaseSettings):
     auto_reply_timeout: float = Field(default=10.0, ge=3.0, le=30.0, description="Auto-reply LLM timeout")
 
 
+class InvoicingConfig(BaseSettings):
+    """Invoicing and payment tracking configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_INVOICING_", env_file=".env", extra="ignore"
+    )
+    enabled: bool = Field(default=False, description="Enable invoicing system")
+    default_payment_terms_days: int = Field(default=30, ge=1, le=365, description="Default days until due")
+    default_tax_rate: float = Field(default=0.0, ge=0.0, le=1.0, description="Default tax rate (0.0-1.0)")
+    reminder_max_count: int = Field(default=3, ge=0, le=10, description="Max payment reminders per invoice")
+    reminder_interval_days: int = Field(default=7, ge=1, le=90, description="Days between reminders")
+    notify_enabled: bool = Field(default=True, description="Push ntfy for invoice events")
+    invoice_number_prefix: str = Field(default="INV", description="Prefix for invoice numbers")
+
+
 class TemporalPatternConfig(BaseSettings):
     """Temporal pattern context configuration."""
 
@@ -1863,12 +1881,14 @@ class MCPConfig(BaseSettings):
     email_enabled: bool = Field(default=True, description="Enable Email MCP server")
     calendar_enabled: bool = Field(default=True, description="Enable Calendar MCP server")
     twilio_enabled: bool = Field(default=True, description="Enable Twilio MCP server")
+    invoicing_enabled: bool = Field(default=True, description="Enable Invoicing MCP server")
     transport: str = Field(default="stdio", description="MCP transport: stdio or sse")
     host: str = Field(default="0.0.0.0", description="Bind host for SSE transport")
     crm_port: int = Field(default=8056, description="Port for CRM MCP server (SSE transport)")
     email_port: int = Field(default=8057, description="Port for Email MCP server (SSE transport)")
     twilio_port: int = Field(default=8058, description="Port for Twilio MCP server (SSE transport)")
     calendar_port: int = Field(default=8059, description="Port for Calendar MCP server (SSE transport)")
+    invoicing_port: int = Field(default=8060, description="Port for Invoicing MCP server (SSE transport)")
 
 
 class Settings(BaseSettings):
@@ -1943,6 +1963,7 @@ class Settings(BaseSettings):
     temporal: TemporalPatternConfig = Field(default_factory=TemporalPatternConfig)
     call_intelligence: CallIntelligenceConfig = Field(default_factory=CallIntelligenceConfig)
     sms_intelligence: SMSIntelligenceConfig = Field(default_factory=SMSIntelligenceConfig)
+    invoicing: InvoicingConfig = Field(default_factory=InvoicingConfig)
     openai_compat: OpenAICompatConfig = Field(default_factory=OpenAICompatConfig)
     ftl_tracing: FTLTracingConfig = Field(default_factory=FTLTracingConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)

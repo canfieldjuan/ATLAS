@@ -485,6 +485,8 @@ async def _send_enriched_notifications(emails: list[dict[str, Any]]) -> None:
             continue
         if e.get("replyable") is False:
             continue
+        if e.get("_auto_executed", False):
+            continue
 
         intent = e.get("_intent")
         customer_summary = e.get("_customer_summary")
@@ -633,6 +635,44 @@ async def _send_enriched_notifications(emails: list[dict[str, Any]]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Inbox rule evaluation (step 6b)
+# ---------------------------------------------------------------------------
+
+
+async def _apply_inbox_rules(emails: list[dict[str, Any]]) -> int:
+    """Evaluate user-defined inbox rules against classified emails.
+
+    Rules are loaded from DB, sorted by position.  First matching rule wins
+    per email.  Matching rule can override priority/category/replyable,
+    apply a label, skip LLM, or suppress notifications.
+    """
+    from ..api.inbox_rules import _apply_rule_actions, _rule_matches
+
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        return 0
+
+    rules = await pool.fetch(
+        """SELECT * FROM email_inbox_rules
+           WHERE enabled = true
+           ORDER BY position ASC""",
+    )
+    if not rules:
+        return 0
+
+    matched = 0
+    for e in emails:
+        for rule in rules:
+            if _rule_matches(rule, e):
+                _apply_rule_actions(rule, e)
+                e["_inbox_rule_id"] = str(rule["id"])
+                e["_inbox_rule_label"] = rule["label"]
+                matched += 1
+                break  # first match wins
+    return matched
+
+
+# ---------------------------------------------------------------------------
 # Extended DB recording
 # ---------------------------------------------------------------------------
 
@@ -650,9 +690,9 @@ async def _record_with_action_plans(emails: list[dict[str, Any]]) -> None:
                     (gmail_message_id, sender, subject, category, priority,
                      replyable, contact_id, action_plan, customer_context_summary,
                      intent, message_id, in_reply_to, references_header,
-                     followup_of_draft_id)
+                     followup_of_draft_id, inbox_rule_id, inbox_rule_label)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                        $11, $12, $13, $14)
+                        $11, $12, $13, $14, $15, $16)
                 ON CONFLICT (gmail_message_id) DO NOTHING
                 """,
                 [
@@ -674,6 +714,8 @@ async def _record_with_action_plans(emails: list[dict[str, Any]]) -> None:
                         e.get("in_reply_to") or None,
                         e.get("references") or None,
                         e.get("_followup_draft_id"),
+                        e.get("_inbox_rule_id"),
+                        e.get("_inbox_rule_label"),
                     )
                     for e in emails
                 ],
@@ -837,6 +879,11 @@ async def run(task: ScheduledTask) -> dict:
     if cfg.crm_enabled:
         crm_count = await _crm_cross_reference(emails)
 
+    # 6b. User-defined inbox rules
+    rule_match_count = 0
+    if cfg.inbox_rules_enabled:
+        rule_match_count = await _apply_inbox_rules(emails)
+
     # 7. Stage 2: LLM intent classification + action planning
     intent_count = 0
     if cfg.action_plan_enabled:
@@ -869,13 +916,14 @@ async def run(task: ScheduledTask) -> dict:
         await _send_enriched_notifications(action_emails)
 
     logger.info(
-        "Email intake: %d new, %d CRM matched, %d intent classified, %d auto-executed, %d follow-ups",
-        len(emails), crm_count, intent_count, auto_executed, followup_count,
+        "Email intake: %d new, %d CRM matched, %d rule matched, %d intent classified, %d auto-executed, %d follow-ups",
+        len(emails), crm_count, rule_match_count, intent_count, auto_executed, followup_count,
     )
 
     return {
         "new_emails": len(emails),
         "crm_matched": crm_count,
+        "rule_matched": rule_match_count,
         "intent_classified": intent_count,
         "auto_executed": auto_executed,
         "followups_detected": followup_count,
