@@ -417,6 +417,40 @@ class TaskScheduler:
                 "synthesis_skill": "invoicing/payment_reminder",
             },
         },
+        {
+            "name": "monthly_invoice_generation",
+            "description": "Generate and send monthly invoices from calendar cleaning events",
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": "0 8 1 * *",
+            "timeout_seconds": 300,
+            "metadata": {
+                "builtin_handler": "monthly_invoice_generation",
+                "notify_priority": "high",
+            },
+        },
+        {
+            "name": "reasoning_tick",
+            "description": "Polling safety net for reasoning agent missed events",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": 300,
+            "timeout_seconds": 120,
+            "metadata": {
+                "builtin_handler": "reasoning_tick",
+            },
+        },
+        {
+            "name": "reasoning_reflection",
+            "description": "Proactive cross-domain pattern detection and recommendations",
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": "0 9,13,17,21 * * *",
+            "timeout_seconds": 300,
+            "metadata": {
+                "builtin_handler": "reasoning_reflection",
+            },
+        },
     ]
 
     async def _ensure_default_tasks(self) -> None:
@@ -536,6 +570,7 @@ class TaskScheduler:
                 "model_swap_day": settings.llm.model_swap_day_cron,
                 "model_swap_night": settings.llm.model_swap_night_cron,
                 "email_graph_sync": "0 1 * * *",
+                "reasoning_reflection": settings.reasoning.reflection_cron,
             }
 
             for task_name, desired_cron in cron_overrides.items():

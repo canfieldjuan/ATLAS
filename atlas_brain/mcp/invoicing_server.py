@@ -126,6 +126,8 @@ async def create_invoice(
     customer_address: Optional[str] = None,
     tax_rate: float = 0.0,
     discount_amount: float = 0.0,
+    invoice_for: Optional[str] = None,
+    contact_name: Optional[str] = None,
     notes: Optional[str] = None,
     source: str = "mcp_tool",
     business_context_id: Optional[str] = None,
@@ -137,6 +139,8 @@ async def create_invoice(
     due_days: days from today until due (default 30)
     contact_id: UUID of CRM contact (auto-resolved from phone/email if omitted)
     tax_rate: decimal tax rate (e.g. 0.0825 for 8.25%)
+    invoice_for: description of what the invoice covers (e.g. "Office Cleaning - January 2026")
+    contact_name: name of the contact person at the customer
     """
     try:
         items = json.loads(line_items) if isinstance(line_items, str) else line_items
@@ -160,6 +164,8 @@ async def create_invoice(
             customer_address=customer_address,
             tax_rate=tax_rate,
             discount_amount=discount_amount,
+            invoice_for=invoice_for,
+            contact_name=contact_name,
             source=source,
             business_context_id=business_context_id,
             notes=notes,
@@ -251,12 +257,16 @@ async def update_invoice(
     notes: Optional[str] = None,
     tax_rate: Optional[float] = None,
     discount_amount: Optional[float] = None,
+    invoice_for: Optional[str] = None,
+    contact_name: Optional[str] = None,
 ) -> str:
     """
     Edit a draft invoice. Only draft invoices can be modified.
 
     line_items: JSON array of [{description, quantity, unit_price}]
     due_date: ISO date string (YYYY-MM-DD)
+    invoice_for: description of what the invoice covers
+    contact_name: name of the contact person at the customer
     """
     try:
         items = json.loads(line_items) if line_items else None
@@ -274,6 +284,8 @@ async def update_invoice(
             notes=notes,
             tax_rate=tax_rate,
             discount_amount=discount_amount,
+            invoice_for=invoice_for,
+            contact_name=contact_name,
         )
         if updated is None:
             return json.dumps({"success": False, "error": "Invoice not found or not in draft status"})
@@ -318,30 +330,17 @@ async def send_invoice(
         if method == "email" and inv.get("customer_email"):
             try:
                 from ..services.email_provider import get_email_provider
+                from ..templates.email.invoice import render_invoice_html, render_invoice_text
                 email_provider = get_email_provider()
 
-                # Build email body from invoice data
-                items_text = "\n".join(
-                    f"  - {item['description']}: {item.get('quantity', 1)} x ${item.get('unit_price', 0):.2f} = ${item.get('amount', 0):.2f}"
-                    for item in inv.get("line_items", [])
-                )
-                body = (
-                    f"Invoice {inv['invoice_number']}\n\n"
-                    f"Dear {inv['customer_name']},\n\n"
-                    f"Please find your invoice details below:\n\n"
-                    f"Items:\n{items_text}\n\n"
-                    f"Subtotal: ${inv['subtotal']:.2f}\n"
-                    f"Tax: ${inv['tax_amount']:.2f}\n"
-                    f"Discount: -${inv['discount_amount']:.2f}\n"
-                    f"Total Due: ${inv['total_amount']:.2f}\n\n"
-                    f"Due Date: {inv['due_date']}\n\n"
-                    f"Thank you for your business."
-                )
+                html_body = render_invoice_html(inv)
+                text_body = render_invoice_text(inv)
 
                 await email_provider.send(
                     to=[inv["customer_email"]],
                     subject=f"Invoice {inv['invoice_number']} - ${inv['total_amount']:.2f}",
-                    body=body,
+                    body=text_body,
+                    html=html_body,
                 )
                 logger.info("Invoice email sent to %s for %s", inv["customer_email"], inv["invoice_number"])
             except Exception as e:
@@ -525,6 +524,237 @@ async def payment_history(
     except Exception as exc:
         logger.exception("payment_history error")
         return json.dumps({"error": str(exc), "found": False})
+
+
+# ---------------------------------------------------------------------------
+# Tool: create_service
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def create_service(
+    service_name: str,
+    rate: float,
+    calendar_keyword: str,
+    contact_id: Optional[str] = None,
+    phone: Optional[str] = None,
+    email: Optional[str] = None,
+    rate_label: str = "Per Visit",
+    tax_rate: float = 0.0,
+    calendar_id: Optional[str] = None,
+    start_date: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> str:
+    """
+    Create a recurring service agreement for a customer.
+
+    Links a CRM contact to a calendar keyword for monthly auto-invoicing.
+    The keyword is matched against calendar event summaries (case-insensitive).
+
+    contact_id: UUID of CRM contact (auto-resolved from phone/email if omitted)
+    rate: per-visit charge
+    calendar_keyword: substring to match in calendar event summaries (e.g. "Smith")
+    calendar_id: specific Google Calendar ID (omit for primary calendar)
+    start_date: ISO date (YYYY-MM-DD), defaults to today
+    """
+    resolved = await _resolve_contact_id(contact_id, phone, email)
+    if not resolved:
+        return json.dumps({"success": False, "error": "Customer not found. Provide contact_id, phone, or email."})
+
+    from ..storage.repositories.customer_service import get_customer_service_repo
+    repo = get_customer_service_repo()
+
+    sd = date.fromisoformat(start_date) if start_date else None
+
+    try:
+        service = await repo.create(
+            contact_id=_uuid.UUID(resolved),
+            service_name=service_name,
+            rate=rate,
+            calendar_keyword=calendar_keyword,
+            rate_label=rate_label,
+            tax_rate=tax_rate,
+            calendar_id=calendar_id,
+            start_date=sd,
+            notes=notes,
+        )
+
+        await _log_crm(
+            resolved, "service",
+            f"Service agreement created: {service_name} @ ${rate:.2f}/{rate_label}",
+        )
+
+        return json.dumps({"success": True, "service": service}, default=str)
+    except Exception as exc:
+        logger.exception("create_service error")
+        return json.dumps({"success": False, "error": str(exc)})
+
+
+# ---------------------------------------------------------------------------
+# Tool: list_services
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def list_services(
+    contact_id: Optional[str] = None,
+    status: Optional[str] = None,
+) -> str:
+    """
+    List customer service agreements.
+
+    contact_id: filter by CRM contact UUID
+    status: filter by status (active, paused, cancelled). Default: active only.
+    """
+    from ..storage.repositories.customer_service import get_customer_service_repo
+    repo = get_customer_service_repo()
+
+    try:
+        if contact_id and _is_uuid(contact_id):
+            services = await repo.get_by_contact(_uuid.UUID(contact_id))
+            if status:
+                services = [s for s in services if s["status"] == status]
+        else:
+            services = await repo.list_active()
+            if status and status != "active":
+                # list_active only returns active; for other statuses do a filtered query
+                from ..storage.database import get_db_pool
+                pool = get_db_pool()
+                rows = await pool.fetch(
+                    "SELECT * FROM customer_services WHERE status = $1 ORDER BY created_at",
+                    status,
+                )
+                services = [repo._row_to_dict(row) for row in rows]
+
+        return json.dumps({"services": services, "count": len(services)}, default=str)
+    except Exception as exc:
+        logger.exception("list_services error")
+        return json.dumps({"error": str(exc), "services": []})
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_service
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def get_service(service_id: str) -> str:
+    """
+    Get a customer service agreement by UUID.
+    """
+    if not _is_uuid(service_id):
+        return json.dumps({"found": False, "error": "Invalid UUID"})
+
+    from ..storage.repositories.customer_service import get_customer_service_repo
+    repo = get_customer_service_repo()
+
+    try:
+        svc = await repo.get_by_id(_uuid.UUID(service_id))
+        if svc is None:
+            return json.dumps({"found": False, "service": None})
+        return json.dumps({"found": True, "service": svc}, default=str)
+    except Exception as exc:
+        logger.exception("get_service error")
+        return json.dumps({"error": str(exc), "found": False})
+
+
+# ---------------------------------------------------------------------------
+# Tool: update_service
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def update_service(
+    service_id: str,
+    service_name: Optional[str] = None,
+    rate: Optional[float] = None,
+    calendar_keyword: Optional[str] = None,
+    rate_label: Optional[str] = None,
+    tax_rate: Optional[float] = None,
+    notes: Optional[str] = None,
+) -> str:
+    """
+    Update a customer service agreement. Only active/paused services can be edited.
+    """
+    if not _is_uuid(service_id):
+        return json.dumps({"success": False, "error": "Invalid UUID"})
+
+    from ..storage.repositories.customer_service import get_customer_service_repo
+    repo = get_customer_service_repo()
+
+    fields = {}
+    if service_name is not None:
+        fields["service_name"] = service_name
+    if rate is not None:
+        fields["rate"] = rate
+    if calendar_keyword is not None:
+        fields["calendar_keyword"] = calendar_keyword
+    if rate_label is not None:
+        fields["rate_label"] = rate_label
+    if tax_rate is not None:
+        fields["tax_rate"] = tax_rate
+    if notes is not None:
+        fields["notes"] = notes
+
+    if not fields:
+        return json.dumps({"success": False, "error": "No fields to update"})
+
+    try:
+        updated = await repo.update(_uuid.UUID(service_id), **fields)
+        if updated is None:
+            return json.dumps({"success": False, "error": "Service not found or not editable (must be active/paused)"})
+
+        # CRM log
+        contact_id = updated.get("contact_id")
+        changes = ", ".join(f"{k}={v}" for k, v in fields.items())
+        await _log_crm(
+            str(contact_id) if contact_id else None, "service",
+            f"Service {updated['service_name']} updated: {changes}",
+        )
+
+        return json.dumps({"success": True, "service": updated}, default=str)
+    except Exception as exc:
+        logger.exception("update_service error")
+        return json.dumps({"success": False, "error": str(exc)})
+
+
+# ---------------------------------------------------------------------------
+# Tool: set_service_status
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def set_service_status(
+    service_id: str,
+    status: str,
+) -> str:
+    """
+    Set service agreement status.
+
+    status: active | paused | cancelled
+    """
+    if not _is_uuid(service_id):
+        return json.dumps({"success": False, "error": "Invalid UUID"})
+
+    if status not in ("active", "paused", "cancelled"):
+        return json.dumps({"success": False, "error": "Status must be active, paused, or cancelled"})
+
+    from ..storage.repositories.customer_service import get_customer_service_repo
+    repo = get_customer_service_repo()
+
+    try:
+        svc = await repo.get_by_id(_uuid.UUID(service_id))
+        if svc is None:
+            return json.dumps({"success": False, "error": "Service not found"})
+
+        await repo.update_status(_uuid.UUID(service_id), status)
+
+        # CRM log
+        contact_id = svc.get("contact_id")
+        await _log_crm(
+            str(contact_id) if contact_id else None, "service",
+            f"Service {svc['service_name']} status changed to {status}",
+        )
+
+        return json.dumps({"success": True, "service_id": service_id, "status": status})
+    except Exception as exc:
+        logger.exception("set_service_status error")
+        return json.dumps({"success": False, "error": str(exc)})
 
 
 # ---------------------------------------------------------------------------

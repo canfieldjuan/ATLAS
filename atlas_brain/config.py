@@ -5,7 +5,7 @@ Configuration is loaded from environment variables with sensible defaults.
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -1860,6 +1860,9 @@ class InvoicingConfig(BaseSettings):
     reminder_interval_days: int = Field(default=7, ge=1, le=90, description="Days between reminders")
     notify_enabled: bool = Field(default=True, description="Push ntfy for invoice events")
     invoice_number_prefix: str = Field(default="INV", description="Prefix for invoice numbers")
+    auto_invoice_enabled: bool = Field(default=True, description="Monthly auto-invoice generation")
+    auto_invoice_send_email: bool = Field(default=True, description="Auto-send invoices via email")
+    auto_invoice_due_days: int = Field(default=30, ge=1, le=365, description="Payment terms for auto-invoices")
 
 
 class TemporalPatternConfig(BaseSettings):
@@ -1974,6 +1977,13 @@ class Settings(BaseSettings):
     openai_compat: OpenAICompatConfig = Field(default_factory=OpenAICompatConfig)
     ftl_tracing: FTLTracingConfig = Field(default_factory=FTLTracingConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
+
+    # Reasoning agent (cross-domain event-driven intelligence)
+    @staticmethod
+    def _reasoning_factory():
+        from .reasoning.config import ReasoningConfig
+        return ReasoningConfig()
+    reasoning: Any = Field(default_factory=lambda: Settings._reasoning_factory())
 
     # Presence tracking - imported from presence module
     @property

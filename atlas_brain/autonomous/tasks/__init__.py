@@ -23,6 +23,9 @@ def register_builtin_tasks(runner) -> None:
     from .email_stale_check import run as email_stale_check_run
     from .invoice_overdue_check import run as invoice_overdue_check_run
     from .invoice_payment_reminders import run as invoice_payment_reminders_run
+    from .monthly_invoice_generation import run as monthly_invoice_generation_run
+    from .reasoning_tick import run as reasoning_tick_run
+    from .reasoning_reflection import run as reasoning_reflection_run
 
     runner.register_builtin("security_summary", security_summary_run)
     runner.register_builtin("device_health_check", device_health_run)
@@ -45,3 +48,6 @@ def register_builtin_tasks(runner) -> None:
     runner.register_builtin("email_stale_check", email_stale_check_run)
     runner.register_builtin("invoice_overdue_check", invoice_overdue_check_run)
     runner.register_builtin("invoice_payment_reminders", invoice_payment_reminders_run)
+    runner.register_builtin("monthly_invoice_generation", monthly_invoice_generation_run)
+    runner.register_builtin("reasoning_tick", reasoning_tick_run)
+    runner.register_builtin("reasoning_reflection", reasoning_reflection_run)

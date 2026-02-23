@@ -33,6 +33,8 @@ class InvoiceRepository:
         customer_address: Optional[str] = None,
         tax_rate: float = 0.0,
         discount_amount: float = 0.0,
+        invoice_for: Optional[str] = None,
+        contact_name: Optional[str] = None,
         issue_date: Optional[date] = None,
         source: str = "manual",
         source_ref: Optional[str] = None,
@@ -73,7 +75,8 @@ class InvoiceRepository:
                     contact_id, customer_name, customer_email, customer_phone, customer_address,
                     line_items, subtotal, tax_rate, tax_amount, discount_amount, total_amount,
                     issue_date, due_date, status, source, source_ref, appointment_id,
-                    business_context_id, notes, metadata, created_at, updated_at
+                    business_context_id, notes, metadata, invoice_for, contact_name,
+                    created_at, updated_at
                 )
                 VALUES (
                     $1,
@@ -81,7 +84,8 @@ class InvoiceRepository:
                     $2, $3, $4, $5, $6,
                     $7::jsonb, $8, $9, $10, $11, $12,
                     $13, $14, 'draft', $15, $16, $17,
-                    $18, $20, $21::jsonb, $22, $22
+                    $18, $20, $21::jsonb, $22, $23,
+                    $24, $24
                 )
                 RETURNING *
                 """,
@@ -106,6 +110,8 @@ class InvoiceRepository:
                 "INV",  # $19 - prefix
                 notes,
                 json.dumps(metadata or {}),
+                invoice_for,
+                contact_name,
                 now,
             )
             if row:
@@ -131,6 +137,22 @@ class InvoiceRepository:
             raise
         except Exception as e:
             raise DatabaseOperationError("get invoice by id", e)
+
+    async def get_by_source_ref(self, source_ref: str) -> Optional[dict]:
+        """Get an invoice by source_ref (for deduplication)."""
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            raise DatabaseUnavailableError("get invoice by source_ref")
+
+        try:
+            row = await pool.fetchrow(
+                "SELECT * FROM invoices WHERE source_ref = $1", source_ref
+            )
+            return self._row_to_dict(row) if row else None
+        except DatabaseUnavailableError:
+            raise
+        except Exception as e:
+            raise DatabaseOperationError("get invoice by source_ref", e)
 
     async def get_by_number(self, invoice_number: str) -> Optional[dict]:
         """Get an invoice by invoice number (e.g. INV-2026-0001)."""
@@ -222,6 +244,8 @@ class InvoiceRepository:
         notes: Optional[str] = None,
         tax_rate: Optional[float] = None,
         discount_amount: Optional[float] = None,
+        invoice_for: Optional[str] = None,
+        contact_name: Optional[str] = None,
     ) -> Optional[dict]:
         """Update a draft invoice. Only draft invoices can be edited."""
         pool = get_db_pool()
@@ -267,7 +291,9 @@ class InvoiceRepository:
                     discount_amount = $7,
                     subtotal = $8,
                     total_amount = $9,
-                    updated_at = $10
+                    invoice_for = COALESCE($10, invoice_for),
+                    contact_name = COALESCE($11, contact_name),
+                    updated_at = $12
                 WHERE id = $1
                 RETURNING *
                 """,
@@ -280,6 +306,8 @@ class InvoiceRepository:
                 float(disc),
                 float(subtotal),
                 float(total),
+                invoice_for,
+                contact_name,
                 datetime.now(timezone.utc),
             )
             return self._row_to_dict(row) if row else None
