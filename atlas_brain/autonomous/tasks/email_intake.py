@@ -553,8 +553,10 @@ async def _send_enriched_notifications(emails: list[dict[str, Any]]) -> None:
         is_followup = followup_draft is not None
         followup_orig_intent = e.get("_followup_original_intent")
 
-        if is_followup and followup_orig_intent:
-            fu_cfg = _FOLLOWUP_NTFY.get(followup_orig_intent, _FOLLOWUP_NTFY.get("info_admin"))
+        # Use original thread intent if available, else fall back to current intent
+        fu_intent = followup_orig_intent or intent
+        if is_followup and fu_intent:
+            fu_cfg = _FOLLOWUP_NTFY.get(fu_intent, _FOLLOWUP_NTFY.get("info_admin"))
             action_parts = []
             for btn_type, label, url_template in fu_cfg["buttons"]:
                 btn_url = api_url + url_template.replace("{id}", msg_id)
@@ -564,7 +566,7 @@ async def _send_enriched_notifications(emails: list[dict[str, Any]]) -> None:
             action_parts.append(f"view, View Email, {view_url}")
             actions = "; ".join(action_parts)
 
-            fu_label = _INTENT_LABELS.get(followup_orig_intent, followup_orig_intent)
+            fu_label = _INTENT_LABELS.get(fu_intent, fu_intent)
             ntfy_title = f"Follow-up: {fu_label} - {subject[:40]}"
             ntfy_tags = fu_cfg["tags"]
             ntfy_priority = fu_cfg["priority"]
