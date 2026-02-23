@@ -253,28 +253,32 @@ async def _download_recording(recording_url: str) -> bytes:
     if not url.endswith(".wav"):
         url = url.rstrip("/") + ".wav"
 
-    auth = None
-    # REST-initiated recordings live under the Twilio-compatible API, which
-    # authenticates with project_id + api_token (the same creds the SDK uses).
-    # Fabric API credentials (account_sid + recording_token) are for a
-    # different API surface and will 401 on REST recording URLs.
-    account_sid = comms_settings.signalwire_project_id or comms_settings.signalwire_account_sid
-    recording_token = comms_settings.signalwire_api_token or comms_settings.signalwire_recording_token
-    if account_sid and recording_token:
-        auth = httpx.BasicAuth(account_sid, recording_token)
-    logger.info("Recording download: url=%s auth_user=%s", url, account_sid[:12] + "..." if account_sid else "none")
+    # LaML recording URLs authenticate with account_sid + recording_token.
+    # project_id + api_token returns 200 with an empty body, so try
+    # account_sid first and fall back to project_id on failure/empty.
+    primary = (comms_settings.signalwire_account_sid, comms_settings.signalwire_recording_token)
+    fallback = (comms_settings.signalwire_project_id, comms_settings.signalwire_api_token)
+
+    auth_pairs = []
+    if primary[0] and primary[1]:
+        auth_pairs.append(primary)
+    if fallback[0] and fallback[1] and fallback != primary:
+        auth_pairs.append(fallback)
 
     cfg = settings.call_intelligence
     async with httpx.AsyncClient(timeout=cfg.asr_timeout, follow_redirects=True) as client:
-        resp = await client.get(url, auth=auth)
-        if resp.status_code == 401 and auth:
-            # First credential set failed; try the other one.
-            alt_sid = comms_settings.signalwire_account_sid or ""
-            alt_tok = comms_settings.signalwire_recording_token or ""
-            if alt_sid and alt_tok and alt_sid != account_sid:
-                logger.info("Recording download 401, retrying with account_sid auth")
-                alt_auth = httpx.BasicAuth(alt_sid, alt_tok)
-                resp = await client.get(url, auth=alt_auth)
+        resp = None
+        for sid, tok in auth_pairs:
+            auth = httpx.BasicAuth(sid, tok)
+            logger.info("Recording download: url=%s auth_user=%s", url, sid[:12] + "...")
+            resp = await client.get(url, auth=auth)
+            if resp.status_code == 200 and len(resp.content) > 100:
+                break  # Got real audio data
+            logger.info("Recording download attempt: status=%d size=%d, trying next auth", resp.status_code, len(resp.content))
+
+        if resp is None:
+            raise RuntimeError("No SignalWire credentials configured for recording download")
+
         logger.info("Recording download response: status=%d size=%d", resp.status_code, len(resp.content))
         resp.raise_for_status()
         return resp.content

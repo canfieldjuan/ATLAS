@@ -780,6 +780,23 @@ async def handle_outbound_call(
 </Response>""")
 
 
+@router.post("/outbound-hold")
+async def handle_outbound_hold(
+    request: Request,
+    CallSid: str = Form(...),
+    To: str = Form(...),
+    From: str = Form(...),
+):
+    """Test endpoint: greets then holds the line (no AI stream) so recording captures caller speech."""
+    logger.info("Outbound hold call: %s to %s", CallSid, To)
+    return laml_response("""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Joanna">Hi, thank you for calling Effingham Maids. How can I help you today?</Say>
+    <Pause length="30"/>
+    <Say voice="Polly.Joanna">Thank you, goodbye.</Say>
+</Response>""")
+
+
 @router.post("/dial-status")
 async def handle_dial_status(
     request: Request,
@@ -1408,7 +1425,7 @@ async def _run_recording_processing(
         call = await provider.get_call(call_sid)
         from_number = call.from_number if call else ""
         to_number = call.to_number if call else ""
-        context_id = call.context_id if call else "unknown"
+        context_id = (call.context_id if call else None) or "unknown"
 
         # Resolve business context
         biz_ctx = None
