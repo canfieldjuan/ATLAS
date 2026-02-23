@@ -417,6 +417,16 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Calendar startup check failed: %s", e)
 
+    # Start MCP client (connects to CRM, Email, Calendar, Twilio servers)
+    mcp_provider = None
+    if settings.mcp.client_enabled:
+        try:
+            from .services.mcp_client import MCPToolProvider
+            mcp_provider = MCPToolProvider()
+            await mcp_provider.start()
+        except Exception as e:
+            logger.error("Failed to start MCP client: %s", e)
+
     # Start ASR server if voice is enabled and ASR isn't already running
     asr_process = None
     if settings.voice.enabled and settings.voice.asr_url:
@@ -506,6 +516,13 @@ async def lifespan(app: FastAPI):
             logger.info("Autonomous scheduler shutdown complete")
         except Exception as e:
             logger.error("Error shutting down autonomous scheduler: %s", e)
+
+    # Shutdown MCP client
+    if mcp_provider:
+        try:
+            await mcp_provider.shutdown()
+        except Exception as e:
+            logger.error("Error shutting down MCP client: %s", e)
 
     # Shutdown reminder service
     if reminder_service:

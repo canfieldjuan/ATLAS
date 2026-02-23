@@ -29,6 +29,10 @@ PRIORITY_TOOL_NAMES = [
     "set_reminder", "list_reminders", "send_notification",
     "send_email", "check_availability", "book_appointment",
     "cancel_appointment", "reschedule_appointment",
+    # MCP-provided tools
+    "search_contacts", "get_customer_context",
+    "list_events", "find_free_slots", "create_event",
+    "list_inbox", "list_folders",
 ]
 
 # Pattern to match text-based tool calls

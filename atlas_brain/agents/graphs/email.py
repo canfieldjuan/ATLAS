@@ -53,15 +53,13 @@ def _build_email_system_prompt(speaker_id: Optional[str] = None) -> str:
         f"You help send emails, estimate confirmations, proposals, and check email history.\n\n"
         f"Your workflow:\n"
         f"1. Collect information conversationally -- don't list all required fields\n"
-        f"2. Use lookup_customer to auto-fill client details when you have a name or phone\n"
+        f"2. Look up the customer to auto-fill client details when you have a name or phone\n"
         f"3. ALWAYS describe the email before sending (summarize to, subject, key points)\n"
         f"4. Only call a send tool AFTER the user confirms ('yes', 'send it', 'looks good')\n"
         f"5. After sending estimates or proposals, offer to set a follow-up reminder\n\n"
-        f"Available email types:\n"
-        f"- Generic email: use send_email for any freeform email\n"
-        f"- Estimate confirmation: use send_estimate_email for cleaning estimate confirmations\n"
-        f"- Proposal: use send_proposal_email for cleaning proposals to businesses/residential\n"
-        f"- Email history: use query_email_history to check what emails were sent\n\n"
+        f"You have tools for: sending generic emails, estimate confirmations, "
+        f"cleaning proposals, and querying sent email history. "
+        f"Match the user's request to the appropriate tool from your tool list.\n\n"
         f"Be conversational and brief. This is a voice interface -- keep responses "
         f"under 2-3 sentences. Don't list all parameters needed; ask naturally."
     )
@@ -133,11 +131,15 @@ async def run_email_workflow(
     # Add current user input
     messages.append(Message(role="user", content=input_text))
 
-    # Get email + CRM tool schemas
-    tool_names = [
-        "send_email", "send_estimate_email", "send_proposal_email",
-        "query_email_history", "lookup_customer",
-    ]
+    # Get email + CRM tool schemas (prefer MCP names, fall back to internal)
+    from ...services.mcp_client import _resolve_tools
+    tool_names = _resolve_tools([
+        "send_email",
+        "send_estimate|send_estimate_email",
+        "send_proposal|send_proposal_email",
+        "list_sent_history|query_email_history",
+        "lookup_customer",
+    ])
     tools = tool_registry.get_tool_schemas_filtered(tool_names)
 
     # Run LLM with tools (handles tool-call loop internally)
@@ -176,9 +178,11 @@ async def run_email_workflow(
     llm_meta = result.get("llm_meta") or empty_llm_meta
 
     # Terminal tools: any send action or history query completes the workflow
+    # Include both MCP and internal names for compatibility
     _terminal_tools = (
-        "send_email", "send_estimate_email", "send_proposal_email",
-        "query_email_history",
+        "send_email", "send_estimate", "send_estimate_email",
+        "send_proposal", "send_proposal_email",
+        "list_sent_history", "query_email_history",
     )
     workflow_done = any(t in tools_executed for t in _terminal_tools)
 

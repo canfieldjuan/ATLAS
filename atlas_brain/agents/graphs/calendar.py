@@ -29,14 +29,8 @@ def _build_calendar_system_prompt() -> str:
 
     return (
         f"You are a helpful calendar assistant. Today is {today_str}.\n\n"
-        f"You can:\n"
-        f"1. Create events -- use create_calendar_event with summary and start_time\n"
-        f"2. Query events -- use get_calendar to see upcoming events\n\n"
-        f"For create_calendar_event:\n"
-        f"  - summary: event title (required)\n"
-        f"  - start_time: natural language like 'tomorrow at 3pm' (required)\n"
-        f"  - duration_minutes: defaults to 60\n"
-        f"  - location: optional\n\n"
+        f"You can create events, query upcoming events, and check for free slots. "
+        f"Use the matching tool from your tool list for each action.\n\n"
         f"Be conversational and brief. This is a voice interface -- keep responses "
         f"under 2-3 sentences."
     )
@@ -90,8 +84,13 @@ async def run_calendar_workflow(
     # Add current user input
     messages.append(Message(role="user", content=input_text))
 
-    # Get calendar tool schemas
-    tool_names = ["create_calendar_event", "get_calendar"]
+    # Get calendar tool schemas (prefer MCP names, fall back to internal)
+    from ...services.mcp_client import _resolve_tools
+    tool_names = _resolve_tools([
+        "create_event|create_calendar_event",
+        "list_events|get_calendar",
+        "find_free_slots",
+    ])
     tools = tool_registry.get_tool_schemas_filtered(tool_names)
 
     # Run LLM with tools
@@ -130,7 +129,7 @@ async def run_calendar_workflow(
 
     # Only mutating tools end the workflow; read-only tools (get_calendar)
     # keep it alive for follow-ups like "add an event at that time"
-    _terminal_tools = ("create_calendar_event",)
+    _terminal_tools = ("create_event", "create_calendar_event")
     workflow_done = any(t in tools_executed for t in _terminal_tools)
 
     if workflow_done:
