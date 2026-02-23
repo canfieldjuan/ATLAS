@@ -78,7 +78,7 @@ class CommsService:
             await self._provider.connect()
 
             # Register business contexts
-            self._register_contexts()
+            await self._register_contexts()
 
             # Set up callbacks
             self._provider.set_call_event_callback(self._on_call_event)
@@ -109,11 +109,11 @@ class CommsService:
 
         logger.info("Communications service stopped")
 
-    def _register_contexts(self) -> None:
-        """Register business contexts from configuration."""
+    async def _register_contexts(self) -> None:
+        """Register business contexts from configuration and database."""
         router = self.context_router
 
-        # Register Effingham Office Maids if phone numbers are configured
+        # Always register the hardcoded Effingham context as baseline
         if EFFINGHAM_MAIDS_CONTEXT.phone_numbers:
             router.register_context(EFFINGHAM_MAIDS_CONTEXT)
             logger.info(
@@ -122,7 +122,76 @@ class CommsService:
                 EFFINGHAM_MAIDS_CONTEXT.phone_numbers,
             )
 
-        # TODO: Load additional contexts from database
+        # Load additional contexts from database (fail-open)
+        try:
+            from atlas_brain.storage.repositories.business_context import (
+                get_business_context_repo,
+            )
+            from .core.config import BusinessContext, BusinessHours, SchedulingConfig
+
+            repo = get_business_context_repo()
+            rows = await repo.list_enabled()
+
+            for row in rows:
+                # Skip if already registered via hardcoded config
+                if row["id"] == EFFINGHAM_MAIDS_CONTEXT.id:
+                    continue
+
+                ctx = BusinessContext(
+                    id=row["id"],
+                    name=row["name"],
+                    description=row.get("description", ""),
+                    phone_numbers=row.get("phone_numbers", []),
+                    greeting=row.get("greeting", "Hello, how can I help you today?"),
+                    voice_name=row.get("voice_name", "Atlas"),
+                    persona=row.get("persona", ""),
+                    business_type=row.get("business_type", ""),
+                    services=row.get("services", []),
+                    service_area=row.get("service_area", ""),
+                    pricing_info=row.get("pricing_info", ""),
+                    hours=BusinessHours(
+                        monday_open=row.get("monday_open", "09:00"),
+                        monday_close=row.get("monday_close", "17:00"),
+                        tuesday_open=row.get("tuesday_open", "09:00"),
+                        tuesday_close=row.get("tuesday_close", "17:00"),
+                        wednesday_open=row.get("wednesday_open", "09:00"),
+                        wednesday_close=row.get("wednesday_close", "17:00"),
+                        thursday_open=row.get("thursday_open", "09:00"),
+                        thursday_close=row.get("thursday_close", "17:00"),
+                        friday_open=row.get("friday_open", "09:00"),
+                        friday_close=row.get("friday_close", "17:00"),
+                        saturday_open=row.get("saturday_open"),
+                        saturday_close=row.get("saturday_close"),
+                        sunday_open=row.get("sunday_open"),
+                        sunday_close=row.get("sunday_close"),
+                        timezone=row.get("timezone", "America/Chicago"),
+                    ),
+                    after_hours_message=row.get("after_hours_message", ""),
+                    scheduling=SchedulingConfig(
+                        enabled=row.get("scheduling_enabled", True),
+                        calendar_id=row.get("scheduling_calendar_id"),
+                        min_notice_hours=row.get("scheduling_min_notice_hours", 24),
+                        max_advance_days=row.get("scheduling_max_advance_days", 30),
+                        default_duration_minutes=row.get("scheduling_default_duration", 60),
+                        buffer_minutes=row.get("scheduling_buffer_minutes", 15),
+                    ),
+                    transfer_number=row.get("transfer_number"),
+                    take_messages=row.get("take_messages", True),
+                    max_call_duration_minutes=row.get("max_call_duration_minutes", 10),
+                    sms_enabled=row.get("sms_enabled", True),
+                    sms_auto_reply=row.get("sms_auto_reply", True),
+                )
+                router.register_context(ctx)
+                logger.info(
+                    "Registered DB context: %s with numbers %s",
+                    ctx.id,
+                    ctx.phone_numbers,
+                )
+
+            if rows:
+                logger.info("Loaded %d business context(s) from database", len(rows))
+        except Exception as e:
+            logger.warning("Failed to load business contexts from DB (non-fatal): %s", e)
 
     def set_sms_handler(self, handler: MessageHandler) -> None:
         """

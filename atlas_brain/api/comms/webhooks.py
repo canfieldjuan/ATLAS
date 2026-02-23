@@ -1185,6 +1185,13 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
     await websocket.accept()
     logger.info("Audio stream connected for call %s", call_sid)
 
+    # Register in the global media stream registry so the Twilio provider's
+    # stream_audio_to_call() / set_audio_callback() can reach this WebSocket.
+    from ...comms.core.media_streams import get_media_stream_registry
+
+    media_registry = get_media_stream_registry()
+    media_stream = media_registry.register(call_sid)
+
     stream_sid = None
     processor = None
     from_number = ""
@@ -1299,13 +1306,28 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
                 logger.info("Stream connected data: %s", data)
 
             elif event == "start":
-                # SignalWire nests streamSid inside "start" object
+                # SignalWire/Twilio nests streamSid inside "start" object
                 start_data = data.get("start", {})
                 stream_sid = start_data.get("streamSid")
                 logger.info("Stream started: %s (format: %s)",
                            stream_sid, start_data.get("mediaFormat", {}))
                 if processor:
                     processor._state.stream_sid = stream_sid
+
+                # Wire the media stream registry so the Twilio provider
+                # can push audio to this WebSocket via stream_audio_to_call().
+                media_stream.stream_sid = stream_sid
+
+                async def _registry_send(payload_b64: str):
+                    if stream_sid:
+                        await websocket.send_json({
+                            "event": "media",
+                            "streamSid": stream_sid,
+                            "media": {"payload": payload_b64},
+                        })
+
+                media_stream.set_send_func(_registry_send)
+                await media_stream.flush_buffer()
 
                 # For pre-warmed PersonaPlex, now set callback and drain buffer
                 if needs_callback_setup and processor:
@@ -1338,8 +1360,16 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
 
             elif event == "media":
                 payload = data.get("media", {}).get("payload")
-                if payload and processor:
-                    await processor.process_audio_chunk(payload)
+                if payload:
+                    # Feed audio to PersonaPlex processor if active
+                    if processor:
+                        await processor.process_audio_chunk(payload)
+                    # Also feed to media stream registry callback (for
+                    # provider-level set_audio_callback consumers)
+                    if media_stream._audio_callback is not None:
+                        import base64 as _b64
+                        raw = _b64.b64decode(payload)
+                        await media_stream.receive_audio(raw)
 
             elif event == "stop":
                 logger.info("Stream stopped for call %s", call_sid)
@@ -1350,6 +1380,7 @@ async def handle_audio_stream(websocket: WebSocket, call_sid: str):
     except Exception as e:
         logger.error("Audio stream error for call %s: %s", call_sid, e)
     finally:
+        media_registry.unregister(call_sid)
         if processor:
             await remove_personaplex_processor(call_sid)
         logger.info("Audio stream ended for call %s", call_sid)

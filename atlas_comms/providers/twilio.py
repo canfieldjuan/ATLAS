@@ -321,23 +321,49 @@ class TwilioProvider(TelephonyProvider):
         audio_iterator: AsyncIterator[bytes],
     ) -> None:
         """
-        Stream audio to the call.
+        Stream audio to an active call via the Media Streams WebSocket.
 
-        This is used to play TTS responses. In Twilio, this is done
-        through Media Streams WebSocket.
+        Looks up the active media stream for this call in the global
+        MediaStreamRegistry and pushes each audio chunk through it.
+        Audio must be 8kHz mulaw bytes; the registry handles base64 encoding.
         """
-        # TODO: Implement Media Streams integration
-        # This requires a WebSocket connection to the media stream
-        logger.warning("Audio streaming not yet implemented")
-        pass
+        from ..core.media_streams import get_media_stream_registry
+
+        stream = get_media_stream_registry().get(call.provider_call_id)
+        if stream is None:
+            logger.warning(
+                "No active media stream for call %s, cannot send audio",
+                call.provider_call_id,
+            )
+            return
+
+        try:
+            async for chunk in audio_iterator:
+                await stream.send_audio(chunk)
+        except Exception as e:
+            logger.error(
+                "Error streaming audio to call %s: %s",
+                call.provider_call_id, e,
+            )
 
     def set_audio_callback(
         self,
         call: Call,
         callback: AudioChunkCallback,
     ) -> None:
-        """Set callback for receiving audio from the call."""
+        """Set callback for receiving audio from the call.
+
+        Registers the callback both locally and in the MediaStreamRegistry
+        so inbound audio from the WebSocket reaches the caller.
+        """
         self._audio_callbacks[call.provider_call_id] = callback
+
+        # Also wire into the media stream registry if a stream is active
+        from ..core.media_streams import get_media_stream_registry
+
+        stream = get_media_stream_registry().get(call.provider_call_id)
+        if stream is not None:
+            stream.set_audio_callback(callback)
 
     async def send_sms(
         self,
