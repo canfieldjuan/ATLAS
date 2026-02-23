@@ -18,6 +18,7 @@ def register_builtin_tasks(runner) -> None:
     from .email_draft import run as email_draft_run
     from .email_intake import run as email_intake_run
     from .model_swap import run_day as model_swap_day_run, run_night as model_swap_night_run
+    from .email_backfill import run as email_backfill_run
 
     runner.register_builtin("security_summary", security_summary_run)
     runner.register_builtin("device_health_check", device_health_run)
@@ -35,3 +36,4 @@ def register_builtin_tasks(runner) -> None:
     runner.register_builtin("email_intake", email_intake_run)
     runner.register_builtin("model_swap_day", model_swap_day_run)
     runner.register_builtin("model_swap_night", model_swap_night_run)
+    runner.register_builtin("email_backfill", email_backfill_run)

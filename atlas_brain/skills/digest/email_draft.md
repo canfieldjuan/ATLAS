@@ -20,13 +20,14 @@ You will receive JSON with these fields:
 - `original_body`: full email body text
 - `user_name`: the user's name for sign-off
 - `user_timezone`: the user's timezone
+- `customer_context`: (optional) CRM history -- name, type, past interactions, appointments, calls, sent emails
+- `graph_context`: (optional) list of verified facts from memory about the sender
 
 **Redraft-only fields** (present when `redraft: true`):
 - `redraft`: boolean, true when generating a replacement for a rejected draft
 - `redraft_guidance`: reason-specific instruction for what to change
 - `attempt_number`: which attempt this is (2 = first redraft, 3 = second, etc.)
 - `previous_draft_rejected`: first 500 characters of the rejected draft
-- `graph_context`: (optional) list of verified facts from memory about the sender
 
 ## Output Format
 
@@ -62,6 +63,8 @@ The `---` separator is required between subject and body.
 - If the email requests payment or financial action, acknowledge the amount/deadline and confirm it will be handled by when
 - If the email is a service notification requiring action, state what action will be taken and by when
 - If the email contains forms, attachments, or documents to complete, confirm which ones and when they'll be submitted
+- If `customer_context` is present, use it to personalize the reply: reference past interactions, use the correct name/title, acknowledge appointment history or previous correspondence. Do NOT recite the CRM data back -- weave it naturally into your response.
+- If `graph_context` is present, use verified facts to ensure accuracy. Only assert facts from the original email, customer_context, or graph_context.
 
 ## Redraft Handling
 
@@ -74,4 +77,4 @@ If the input JSON contains `"redraft": true`:
 
 - **soften_tone**: Use warmer, more empathetic language. Start with understanding, not requests. Avoid imperatives.
 - **be_shorter**: Cut ruthlessly. One main point + one clear next step. No pleasantries, no background context.
-- **wrong_info + graph_context**: `graph_context` is a list of verified facts from memory about the sender/organization. Use these to correct the draft. Only assert information from the original email or graph_context — do not invent facts.
+- **wrong_info**: Use `graph_context` and `customer_context` to correct the draft. Only assert information from the original email, customer_context, or graph_context -- do not invent facts.

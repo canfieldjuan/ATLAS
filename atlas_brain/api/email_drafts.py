@@ -365,14 +365,36 @@ async def generate_draft(gmail_message_id: str):
     skill = get_skill_registry().get("digest/email_draft")
     system_prompt = skill.content if skill else ""
 
+    # Enrich with CRM context
+    customer_context_str = ""
+    try:
+        _, sender_email = email.utils.parseaddr(full_msg.get("from", ""))
+        if sender_email:
+            from ..services.customer_context import get_customer_context_service
+            from ..comms.action_planner import _format_customer_context
+            ctx = await get_customer_context_service().get_context_by_email(sender_email)
+            if not ctx.is_empty:
+                customer_context_str = _format_customer_context(ctx)
+    except Exception:
+        logger.debug("CRM context lookup failed for draft, continuing without")
+
+    # Enrich with graph facts
+    graph_facts = await _get_sender_graph_context(full_msg.get("from", ""))
+
     # Build LLM input
-    user_input = json.dumps({
+    user_input_dict = {
         "original_from": full_msg.get("from", ""),
         "original_subject": full_msg.get("subject", ""),
         "original_body": full_msg.get("body_text", ""),
         "user_name": settings.persona.owner_name,
         "user_timezone": settings.reminder.default_timezone,
-    }, indent=2)
+    }
+    if customer_context_str:
+        user_input_dict["customer_context"] = customer_context_str
+    if graph_facts:
+        user_input_dict["graph_context"] = graph_facts
+
+    user_input = json.dumps(user_input_dict, indent=2)
 
     try:
         result = await asyncio.to_thread(
@@ -515,6 +537,22 @@ async def redraft(draft_id: UUID, reason: str | None = Query(default=None)):
     # Build reason-aware guidance
     guidance = _REDRAFT_REASONS.get(reason or "", _REDRAFT_GUIDANCE_DEFAULT)
 
+    # Enrich with CRM context
+    customer_context_str = ""
+    try:
+        _, sender_email = email.utils.parseaddr(parent["original_from"])
+        if sender_email:
+            from ..services.customer_context import get_customer_context_service
+            from ..comms.action_planner import _format_customer_context
+            ctx = await get_customer_context_service().get_context_by_email(sender_email)
+            if not ctx.is_empty:
+                customer_context_str = _format_customer_context(ctx)
+    except Exception:
+        logger.debug("CRM context lookup failed for redraft, continuing without")
+
+    # Enrich with graph facts (all reasons, not just wrong_info)
+    graph_facts = await _get_sender_graph_context(parent["original_from"])
+
     # Build LLM input with rejection context
     user_input_dict: dict = {
         "original_from": full_msg.get("from", ""),
@@ -527,16 +565,14 @@ async def redraft(draft_id: UUID, reason: str | None = Query(default=None)):
         "previous_draft_rejected": (parent["draft_body"] or "")[:500],
         "redraft_guidance": guidance,
     }
-
-    # For wrong_info: inject Graphiti facts about sender
-    if reason == "wrong_info":
-        graph_facts = await _get_sender_graph_context(parent["original_from"])
-        if graph_facts:
-            user_input_dict["graph_context"] = graph_facts
-            logger.info(
-                "Injecting %d graph facts for wrong_info redraft of %s",
-                len(graph_facts), draft_id,
-            )
+    if customer_context_str:
+        user_input_dict["customer_context"] = customer_context_str
+    if graph_facts:
+        user_input_dict["graph_context"] = graph_facts
+        logger.info(
+            "Injecting %d graph facts for redraft of %s",
+            len(graph_facts), draft_id,
+        )
 
     user_input = json.dumps(user_input_dict, indent=2)
 

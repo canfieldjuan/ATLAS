@@ -360,6 +360,21 @@ class TaskScheduler:
             "timeout_seconds": 60,
             "metadata": {"builtin_handler": "model_swap_night"},
         },
+        {
+            "name": "email_backfill",
+            "description": "Scan inbox history and populate CRM contacts",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": 86400,
+            "timeout_seconds": 1800,
+            "enabled": False,
+            "metadata": {
+                "builtin_handler": "email_backfill",
+                "query": "newer_than:90d",
+                "max_days": 90,
+                "batch_size": 10,
+            },
+        },
     ]
 
     async def _ensure_default_tasks(self) -> None:
@@ -420,17 +435,20 @@ class TaskScheduler:
                     cron_expression=task_def.get("cron_expression"),
                     interval_seconds=task_def.get("interval_seconds"),
                     timeout_seconds=task_def.get("timeout_seconds", 120),
+                    enabled=task_def.get("enabled", True),
                     metadata=task_def.get("metadata"),
                 )
-                self._register_task(task)
+                if task.enabled:
+                    self._register_task(task)
                 schedule_info = (
                     task.cron_expression
                     or (f"every {task.interval_seconds}s" if task.interval_seconds else task.schedule_type)
                 )
                 logger.info(
-                    "Seeded default task '%s' (%s)",
+                    "Seeded default task '%s' (%s, enabled=%s)",
                     task.name,
                     schedule_info,
+                    task.enabled,
                 )
 
         except Exception as e:
