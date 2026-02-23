@@ -115,11 +115,14 @@ async def run(task: ScheduledTask) -> dict:
     # Classify all
     classifier.classify_batch(all_emails)
 
-    # Filter to actionable categories (skip promo/newsletter/automated)
-    skip_categories = {"promotion", "newsletter", "automated", "social"}
+    # Filter to real human-replyable emails only.
+    # Must be replyable (not noreply/automated senders) AND from a
+    # category that indicates actual person-to-person correspondence.
+    _CONTACT_CATEGORIES = {"lead", "personal"}
     actionable = [
         e for e in all_emails
-        if e.get("category") not in skip_categories
+        if e.get("replyable") is True
+        and e.get("category") in _CONTACT_CATEGORIES
     ]
 
     if not actionable:
@@ -142,6 +145,11 @@ async def run(task: ScheduledTask) -> dict:
         try:
             _, sender_email = email.utils.parseaddr(e.get("from", ""))
             if not sender_email:
+                continue
+
+            # Skip automated/noreply senders that slipped through classification
+            local_part = sender_email.split("@")[0].lower().replace("_", "").replace("-", "").replace(".", "")
+            if local_part in ("noreply", "donotreply", "maildaemon", "postmaster"):
                 continue
 
             sender_name = e.get("from", "").split("<")[0].strip().strip('"')
