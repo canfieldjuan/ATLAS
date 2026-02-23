@@ -194,6 +194,24 @@ def _e164(number: str) -> str:
     return n
 
 
+def _outbound_caller_id() -> str:
+    """Get the business phone number (SignalWire-owned) for outbound caller ID.
+
+    Checks all registered business contexts for phone_numbers.
+    This is NOT the user's personal phone — it's the SignalWire number
+    customers see when called.
+    """
+    try:
+        from atlas_comms.core.config import EFFINGHAM_MAIDS_CONTEXT
+        for number in EFFINGHAM_MAIDS_CONTEXT.phone_numbers:
+            cleaned = _e164(number)
+            if cleaned.startswith("+"):
+                return cleaned
+    except Exception:
+        pass
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Tool: make_call
 # ---------------------------------------------------------------------------
@@ -206,15 +224,24 @@ async def make_call(
     context_id: Optional[str] = None,
 ) -> str:
     """
-    Initiate an outbound call via Twilio.
+    Call a customer and bridge them to your phone.
 
-    to: Destination phone number in E.164 format (+1XXXXXXXXXX).
-    from_number: Caller ID (must be a verified Twilio number).
-                 Defaults to ATLAS_COMMS_FORWARD_TO_NUMBER if not supplied.
-    record: Record this call (default True — fixes the outbound recording gap).
-            When True, a recording-status webhook is sent to Atlas when the
-            call ends and the recording becomes available.
-    context_id: Optional business context (e.g. 'effingham_maids').
+    How it works:
+      1. SignalWire calls the customer FROM your business number
+      2. Customer answers → hears "Please hold while we connect you"
+      3. Your phone rings (forward_to_number) → you pick up
+      4. Both connected — recording captures the full conversation
+      5. When the call ends, the recording is transcribed and processed
+
+    NOTE: AI does NOT talk to the customer. YOU have the conversation.
+
+    to: Customer phone number in E.164 format (+1XXXXXXXXXX).
+    from_number: Caller ID — must be a SignalWire-owned number.
+                 Auto-detected from the business context phone_numbers.
+    record: Record this call (default True). The recording feeds the call
+            intelligence pipeline (transcription, extraction, CRM update).
+    context_id: Business context (e.g. 'effingham_maids'). Used to pick
+                the right caller ID and greeting.
 
     Returns: call SID and initial status.
     """
@@ -222,9 +249,11 @@ async def make_call(
         client = _client()
         cfg = _comms_settings()
 
-        from_num = from_number or cfg.forward_to_number or ""
+        # Caller ID must be a SignalWire-owned number (NOT your personal phone).
+        # Priority: explicit param → business context phone_numbers → error.
+        from_num = from_number or _outbound_caller_id() or ""
         if not from_num:
-            return json.dumps({"success": False, "error": "from_number is required (or set ATLAS_COMMS_FORWARD_TO_NUMBER)"})
+            return json.dumps({"success": False, "error": "No outbound caller ID found. Set from_number or configure phone_numbers in a business context."})
 
         to_e164 = _e164(to)
         from_e164 = _e164(from_num)
@@ -519,7 +548,7 @@ async def send_sms(
     """
     try:
         cfg = _comms_settings()
-        from_num = from_number or cfg.forward_to_number or ""
+        from_num = from_number or _outbound_caller_id() or cfg.forward_to_number or ""
         if not from_num:
             return json.dumps({"success": False, "error": "from_number required (or set ATLAS_COMMS_FORWARD_TO_NUMBER)"})
 
@@ -536,6 +565,23 @@ async def send_sms(
             params["status_callback"] = f"{cfg.webhook_base_url}/api/v1/comms/sms/status"
 
         msg = await _run_sync(_client().messages.create, **params)
+
+        # Persist outbound SMS (fail-open)
+        try:
+            from atlas_brain.storage.repositories.sms_message import get_sms_message_repo
+            sms_repo = get_sms_message_repo()
+            await sms_repo.create(
+                message_sid=msg.sid,
+                from_number=msg.from_,
+                to_number=msg.to,
+                direction="outbound",
+                body=body,
+                status=msg.status or "queued",
+                source="mcp_tool",
+            )
+        except Exception as persist_err:
+            logger.warning("Failed to persist outbound SMS %s: %s", msg.sid, persist_err)
+
         return json.dumps({
             "success": True,
             "message_sid": msg.sid,

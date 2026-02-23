@@ -345,6 +345,25 @@ async def send_sms(transcript_id: UUID):
             body=body,
         )
         logger.info("SMS sent to %s for transcript %s", to_number, transcript_id)
+
+        # Persist outbound SMS (fail-open)
+        try:
+            from ...storage.repositories.sms_message import get_sms_message_repo
+            sms_repo = get_sms_message_repo()
+            await sms_repo.create(
+                message_sid=getattr(msg, "provider_message_id", "") or f"call_action_{transcript_id.hex[:12]}",
+                from_number=from_number,
+                to_number=to_number,
+                direction="outbound",
+                body=body,
+                business_context_id=record.get("business_context_id"),
+                status="sent",
+                source="call_action",
+                source_ref=str(transcript_id),
+            )
+        except Exception as persist_err:
+            logger.warning("Failed to persist outbound SMS: %s", persist_err)
+
         return JSONResponse({"status": "ok", "message_sid": msg.provider_message_id})
 
     except Exception as e:
@@ -528,6 +547,25 @@ async def send_drafted_sms(transcript_id: UUID):
             body=body,
         )
         logger.info("Drafted SMS sent to %s for transcript %s", to_number, transcript_id)
+
+        # Persist outbound SMS (fail-open)
+        try:
+            from ...storage.repositories.sms_message import get_sms_message_repo
+            sms_repo = get_sms_message_repo()
+            await sms_repo.create(
+                message_sid=getattr(msg, "provider_message_id", "") or f"call_action_draft_{transcript_id.hex[:12]}",
+                from_number=from_number,
+                to_number=to_number,
+                direction="outbound",
+                body=body,
+                business_context_id=record.get("business_context_id"),
+                status="sent",
+                source="call_action",
+                source_ref=str(transcript_id),
+            )
+        except Exception as persist_err:
+            logger.warning("Failed to persist drafted SMS: %s", persist_err)
+
         return JSONResponse({"status": "ok", "message_sid": msg.provider_message_id})
     except Exception as e:
         logger.error("Failed to send SMS for %s: %s", transcript_id, e)

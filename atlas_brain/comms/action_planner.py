@@ -86,6 +86,17 @@ def _format_customer_context(ctx: CustomerContext) -> str:
                 sent = sent.strftime("%Y-%m-%d")
             parts.append(f"  - {sent}: {subj}")
 
+    # SMS history
+    if ctx.sms_messages:
+        parts.append(f"\nSMS history ({len(ctx.sms_messages)}):")
+        for sms in ctx.sms_messages[:5]:
+            date = sms.get("created_at", "")
+            if isinstance(date, datetime):
+                date = date.strftime("%Y-%m-%d %H:%M")
+            direction = sms.get("direction", "?")
+            body_preview = (sms.get("body") or "")[:80]
+            parts.append(f"  - [{direction}] {date}: {body_preview}")
+
     return "\n".join(parts)
 
 

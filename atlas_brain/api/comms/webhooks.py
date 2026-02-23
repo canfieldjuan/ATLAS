@@ -657,10 +657,6 @@ async def handle_sip_outbound(request: Request):
     except Exception as e:
         logger.debug("Could not pre-track SIP outbound parent leg %s: %s", call_id, e)
 
-    # Do not start recording here. SIP outbound can fail fast before bridge,
-    # and eager recording attempts create noisy false-positive "started" logs.
-    # Recording is started from /status when the call is in-progress.
-
     dial_action = f"{comms_settings.webhook_base_url}/api/v1/comms/voice/dial-status"
 
     # For SIP-originated calls, provider default caller ID may remain a SIP URI,
@@ -680,9 +676,29 @@ async def handle_sip_outbound(request: Request):
         caller_id_attr or "<provider-default>",
     )
 
+    # Recording: use record= attribute on <Dial> instead of REST API.
+    # SignalWire's recordings.create() REST endpoint returns HTTP 200 with
+    # an unparseable body for SIP-originated calls — the recording is never
+    # actually created. The <Dial record=...> attribute works reliably and
+    # fires recordingStatusCallback when the recording is ready.
+    record_attr = ""
+    recording_cb_attr = ""
+    if comms_settings.record_calls:
+        recording_cb = (
+            f"{comms_settings.webhook_base_url}"
+            "/api/v1/comms/voice/recording-status"
+        )
+        record_attr = ' record="record-from-answer-dual"'
+        recording_cb_attr = f' recordingStatusCallback="{recording_cb}"'
+
+    # Answer the SIP leg immediately so Zoiper shows the call as active
+    # and the user hears ringing while the customer's phone rings.
+    # Without this, answerOnBridge keeps the SIP leg silent until the
+    # customer picks up — which feels like a dead call from Zoiper.
     return laml_response(f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Dial timeout="60" answerOnBridge="true"{caller_id_attr} action="{dial_action}" method="POST">
+    <Say voice="Polly.Joanna">Connecting your call.</Say>
+    <Dial timeout="60"{caller_id_attr}{record_attr}{recording_cb_attr} action="{dial_action}" method="POST">
         <Number>{clean}</Number>
     </Dial>
 </Response>""")
@@ -741,59 +757,47 @@ async def handle_outbound_call(
     From: str = Form(...),
 ):
     """
-    Handle outbound call connection.
+    Handle programmatic outbound calls (from make_call MCP tool).
 
-    Called when an outbound call is answered.
+    This is NOT the primary outbound path — SIP outbound via Zoiper uses
+    /sip-outbound instead. This endpoint handles calls initiated via the
+    REST API (e.g., the make_call MCP tool).
+
+    Flow: bridges the call to forward_to_number so the owner can talk
+    to the customer directly. Recording is handled by /status on in-progress.
+    AI does NOT talk to the customer.
     """
-    logger.info("Outbound call connected: %s to %s", CallSid, To)
+    logger.info("Outbound call answered: %s (customer=%s, from=%s)", CallSid, To, From)
 
     try:
-        provider = get_comms_service().provider
-        call = await provider.get_call(CallSid)
+        bridge_to = comms_settings.forward_to_number
+        if not bridge_to:
+            logger.error("No forward_to_number configured — cannot bridge outbound call %s", CallSid)
+            return laml_response("""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Joanna">Sorry, we are unable to connect your call right now.</Say>
+    <Hangup />
+</Response>""")
 
-        if call and call.context_id:
-            context_router = get_context_router()
-            context = context_router.get_context(call.context_id)
-            greeting = context.greeting if context else "Hello, this is Atlas."
-        else:
-            greeting = "Hello, this is Atlas calling."
+        dial_action = f"{comms_settings.webhook_base_url}/api/v1/comms/voice/dial-status"
 
-        ws_url = comms_settings.webhook_base_url.replace(
-            "https://", "wss://"
-        ).replace("http://", "ws://")
-        stream_url = f"{ws_url}/api/v1/comms/voice/stream/{CallSid}"
+        # Recording is started from /status when the call goes in-progress.
+        # No need to start it here — same pattern as inbound/SIP outbound.
 
         return laml_response(f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Joanna">{greeting}</Say>
-    <Connect>
-        <Stream url="{stream_url}" />
-    </Connect>
+    <Say voice="Polly.Joanna">Please hold while we connect you.</Say>
+    <Dial timeout="30" answerOnBridge="true" action="{dial_action}" method="POST">
+        {bridge_to}
+    </Dial>
 </Response>""")
 
     except Exception as e:
         logger.error("Error handling outbound call: %s", e)
         return laml_response("""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say>I'm sorry, I'm having trouble. Goodbye.</Say>
+    <Say voice="Polly.Joanna">Sorry, something went wrong. Goodbye.</Say>
     <Hangup />
-</Response>""")
-
-
-@router.post("/outbound-hold")
-async def handle_outbound_hold(
-    request: Request,
-    CallSid: str = Form(...),
-    To: str = Form(...),
-    From: str = Form(...),
-):
-    """Test endpoint: greets then holds the line (no AI stream) so recording captures caller speech."""
-    logger.info("Outbound hold call: %s to %s", CallSid, To)
-    return laml_response("""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say voice="Polly.Joanna">Hi, thank you for calling Effingham Maids. How can I help you today?</Say>
-    <Pause length="30"/>
-    <Say voice="Polly.Joanna">Thank you, goodbye.</Say>
 </Response>""")
 
 
@@ -1447,6 +1451,137 @@ async def _run_recording_processing(
         logger.error("Call recording processing failed for %s: %s", call_sid, e)
 
 
+async def _process_inbound_sms(
+    sms_id, from_number: str, to_number: str, body: str, context, media_urls: list,
+) -> None:
+    """Background task: CRM link, intelligence pipeline, ntfy, auto-reply.
+
+    Each step is fail-open -- partial results are better than no results.
+    Matches the pattern of _run_recording_processing for calls.
+    """
+    from ...storage.repositories.sms_message import get_sms_message_repo
+
+    sms_repo = get_sms_message_repo()
+
+    # Step 1: Run SMS intelligence pipeline (classify + CRM + action plan + ntfy)
+    try:
+        from ...comms.sms_intelligence import process_inbound_sms as run_intelligence
+        await run_intelligence(
+            sms_id=sms_id,
+            from_number=from_number,
+            to_number=to_number,
+            body=body,
+            business_context_id=context.id,
+            business_context=context,
+            media_urls=media_urls,
+        )
+    except Exception as e:
+        logger.error("SMS intelligence pipeline failed for %s: %s", sms_id, e)
+
+        # Fallback: basic CRM + ntfy if intelligence pipeline is unavailable
+        try:
+            await _sms_fallback_crm_and_notify(
+                sms_id, sms_repo, from_number, body, context,
+            )
+        except Exception as e2:
+            logger.error("SMS fallback CRM+ntfy also failed: %s", e2)
+
+    # Step 2: Auto-reply via LLM if enabled
+    if context.sms_auto_reply and context.sms_enabled and body.strip():
+        try:
+            reply = await _generate_sms_reply(body, context)
+            if reply:
+                provider = get_comms_service().provider
+                msg = await provider.send_sms(
+                    to_number=from_number,
+                    from_number=to_number,
+                    body=reply,
+                    context_id=context.id,
+                )
+                logger.info("SMS auto-reply sent to %s", from_number)
+
+                # Persist outbound auto-reply
+                try:
+                    from uuid import uuid4 as _uuid4
+                    await sms_repo.create(
+                        message_sid=getattr(msg, "provider_message_id", "") or f"auto_reply_{_uuid4().hex[:12]}",
+                        from_number=to_number,
+                        to_number=from_number,
+                        direction="outbound",
+                        body=reply,
+                        business_context_id=context.id,
+                        status="sent",
+                        source="auto_reply",
+                        source_ref=str(sms_id) if sms_id else None,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to persist auto-reply SMS: %s", e)
+        except Exception as e:
+            logger.warning("SMS auto-reply failed: %s", e)
+
+
+async def _sms_fallback_crm_and_notify(
+    sms_id, sms_repo, from_number: str, body: str, context,
+) -> None:
+    """Fallback CRM link + ntfy when full intelligence pipeline is unavailable."""
+    from ...services.crm_provider import get_crm_provider
+    from ...config import settings
+
+    # CRM lookup
+    contact_id = None
+    contact_name = from_number
+    is_new_lead = False
+    try:
+        crm = get_crm_provider()
+        contact = await crm.find_or_create_contact(
+            full_name=from_number,
+            phone=from_number,
+            contact_type="customer",
+            source="sms",
+            business_context_id=context.id,
+        )
+        if contact.get("id"):
+            contact_id = str(contact["id"])
+            contact_name = contact.get("full_name") or from_number
+            is_new_lead = contact.get("_was_created", False)
+            if sms_id:
+                await sms_repo.link_contact(sms_id, contact_id)
+            await crm.log_interaction(
+                contact_id=contact_id,
+                interaction_type="sms",
+                summary=f"Inbound SMS: {body[:100]}",
+            )
+    except Exception as e:
+        logger.warning("Fallback CRM link failed: %s", e)
+
+    # ntfy notification
+    try:
+        if not settings.alerts.ntfy_enabled or not settings.alerts.ntfy_url:
+            return
+
+        import httpx
+
+        ntfy_url = f"{settings.alerts.ntfy_url.rstrip('/')}/{settings.alerts.ntfy_topic}"
+        biz_name = context.name if hasattr(context, "name") else "Business"
+
+        title = f"NEW LEAD SMS: {biz_name}" if is_new_lead else f"SMS: {biz_name}"
+        message = f"From: {from_number}\nCustomer: {contact_name}\nMessage: {body[:200]}"
+
+        headers = {
+            "Title": title,
+            "Priority": "high",
+            "Tags": "speech_balloon",
+        }
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(ntfy_url, content=message, headers=headers)
+
+        if sms_id:
+            await sms_repo.mark_notified(sms_id)
+    except Exception as e:
+        logger.warning("Fallback ntfy notification failed: %s", e)
+
+
 async def _generate_sms_reply(body: str, context) -> Optional[str]:
     """Generate an SMS reply using the LLM with business context persona."""
     from ...services import llm_registry
@@ -1509,6 +1644,10 @@ async def handle_inbound_sms(
 ):
     """
     Handle incoming SMS webhook.
+
+    Persists to DB immediately, then spawns a background task for
+    CRM linking, intelligence pipeline, ntfy, and auto-reply.
+    Webhook returns TwiML in <1s.
     """
     logger.info("Inbound SMS from %s to %s: %s", From, To, Body[:50])
 
@@ -1535,26 +1674,43 @@ async def handle_inbound_sms(
             media_urls=media_urls,
         )
         message.context_id = context.id
-
-        # Auto-reply via LLM if enabled for this business context
-        if context.sms_auto_reply and context.sms_enabled and Body.strip():
-            try:
-                reply = await _generate_sms_reply(Body, context)
-                if reply:
-                    await provider.send_sms(
-                        to_number=From,
-                        from_number=To,
-                        body=reply,
-                        context_id=context.id,
-                    )
-                    logger.info("SMS auto-reply sent to %s", From)
-            except Exception as e:
-                logger.warning("SMS auto-reply failed: %s", e)
-
     except Exception as e:
         logger.error("Error handling inbound SMS: %s", e)
 
-    # Return empty TwiML to acknowledge
+    # Persist inbound SMS to DB (dedup on message_sid unique constraint)
+    sms_id = None
+    try:
+        from ...storage.repositories.sms_message import get_sms_message_repo
+        sms_repo = get_sms_message_repo()
+
+        # Check for duplicate (webhook retry)
+        existing = await sms_repo.get_by_message_sid(MessageSid)
+        if existing:
+            logger.info("Duplicate inbound SMS webhook for %s, skipping", MessageSid)
+            return laml_response("""<?xml version="1.0" encoding="UTF-8"?>
+<Response></Response>""")
+
+        record = await sms_repo.create(
+            message_sid=MessageSid,
+            from_number=From,
+            to_number=To,
+            direction="inbound",
+            body=Body,
+            media_urls=media_urls,
+            business_context_id=context.id,
+            source="webhook",
+        )
+        sms_id = record["id"]
+        logger.info("Inbound SMS persisted: id=%s sid=%s", sms_id, MessageSid)
+    except Exception as e:
+        logger.warning("Failed to persist inbound SMS %s: %s", MessageSid, e)
+
+    # Spawn background task for CRM + intelligence + ntfy + auto-reply
+    asyncio.create_task(
+        _process_inbound_sms(sms_id, From, To, Body, context, media_urls)
+    )
+
+    # Return empty TwiML immediately
     return laml_response("""<?xml version="1.0" encoding="UTF-8"?>
 <Response></Response>""")
 
@@ -1566,8 +1722,30 @@ async def handle_sms_status(
     MessageStatus: str = Form(...),
     To: str = Form(...),
 ):
-    """Handle SMS delivery status updates."""
+    """Handle SMS delivery status updates.
+
+    Updates the sms_messages row with the new status and delivery timestamp.
+    """
     logger.info("SMS %s to %s: %s", MessageSid, To, MessageStatus)
+
+    try:
+        from ...storage.repositories.sms_message import get_sms_message_repo
+        from datetime import datetime, timezone
+
+        sms_repo = get_sms_message_repo()
+        record = await sms_repo.get_by_message_sid(MessageSid)
+        if record:
+            if MessageStatus == "delivered":
+                await sms_repo.update_delivery(record["id"], datetime.now(timezone.utc))
+            else:
+                error_msg = None
+                if MessageStatus in ("failed", "undelivered"):
+                    error_msg = f"Delivery failed: {MessageStatus}"
+                await sms_repo.update_status(record["id"], MessageStatus, error_msg)
+            logger.info("SMS status updated: %s -> %s", MessageSid, MessageStatus)
+    except Exception as e:
+        logger.warning("Failed to update SMS status for %s: %s", MessageSid, e)
+
     return Response(status_code=204)
 
 
