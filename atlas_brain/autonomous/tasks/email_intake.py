@@ -797,6 +797,60 @@ async def _auto_execute_actions(
 
 
 # ---------------------------------------------------------------------------
+# Auto-execute follow-up actions (draft reply + optional slots)
+# ---------------------------------------------------------------------------
+
+async def _auto_execute_followup_actions(
+    emails: list[dict[str, Any]], cfg: Any,
+) -> int:
+    """Auto-draft replies for follow-up emails based on original thread intent.
+
+    Unlike Feature A, no confidence threshold -- thread matching is deterministic
+    (RFC Message-ID SQL match).  Returns count of auto-executed.
+    """
+    from ...api.email_drafts import generate_draft
+    from ...api.email_actions import show_slots
+
+    executed = 0
+    for e in emails:
+        if not e.get("_followup_draft"):
+            continue
+        if e.get("_auto_executed", False):
+            continue
+
+        original_intent = e.get("_followup_original_intent")
+        if original_intent == "complaint":
+            continue
+        if original_intent not in cfg.followup_auto_action_intents:
+            continue
+
+        msg_id = e.get("id", "")
+        if not msg_id:
+            continue
+
+        try:
+            await generate_draft(msg_id)
+        except Exception as exc:
+            logger.warning("Follow-up auto-draft failed for %s: %s", msg_id, exc)
+            continue  # _auto_executed NOT set -- step 10 notifies as fallback
+
+        # For scheduling-related threads, also show availability
+        if original_intent in ("estimate_request", "reschedule"):
+            try:
+                await show_slots(msg_id)
+            except Exception as exc:
+                logger.warning("Follow-up show_slots failed for %s: %s", msg_id, exc)
+
+        e["_auto_executed"] = True
+        executed += 1
+        logger.info(
+            "Follow-up auto-action: drafted reply for %s (original_intent=%s)",
+            msg_id, original_intent,
+        )
+    return executed
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -902,6 +956,11 @@ async def run(task: ScheduledTask) -> dict:
     if cfg.auto_execute_enabled:
         auto_executed = await _auto_execute_actions(emails, cfg)
 
+    # 9c. Auto-execute follow-up actions (draft reply + optional slots)
+    followup_auto_executed = 0
+    if cfg.followup_auto_action_enabled:
+        followup_auto_executed = await _auto_execute_followup_actions(emails, cfg)
+
     # 10. Send intent-aware ntfy notifications
     # Include follow-ups even if rule-based classifier assigned lower priority --
     # a reply to a thread Atlas participated in is always actionable.
@@ -916,8 +975,10 @@ async def run(task: ScheduledTask) -> dict:
         await _send_enriched_notifications(action_emails)
 
     logger.info(
-        "Email intake: %d new, %d CRM matched, %d rule matched, %d intent classified, %d auto-executed, %d follow-ups",
-        len(emails), crm_count, rule_match_count, intent_count, auto_executed, followup_count,
+        "Email intake: %d new, %d CRM matched, %d rule matched, %d intent classified, "
+        "%d auto-executed, %d follow-ups (%d auto-acted)",
+        len(emails), crm_count, rule_match_count, intent_count,
+        auto_executed, followup_count, followup_auto_executed,
     )
 
     return {
@@ -927,5 +988,6 @@ async def run(task: ScheduledTask) -> dict:
         "intent_classified": intent_count,
         "auto_executed": auto_executed,
         "followups_detected": followup_count,
+        "followups_auto_acted": followup_auto_executed,
         "_skip_synthesis": True,
     }

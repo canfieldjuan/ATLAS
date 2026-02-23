@@ -651,6 +651,13 @@ class EmailIntakeConfig(BaseSettings):
     inbox_rules_enabled: bool = Field(
         default=False, description="Evaluate user-defined inbox rules before LLM"
     )
+    followup_auto_action_enabled: bool = Field(
+        default=False, description="Auto-draft replies to follow-up emails"
+    )
+    followup_auto_action_intents: list[str] = Field(
+        default=["estimate_request", "reschedule", "info_admin"],
+        description="Original intents eligible for follow-up auto-actions (complaint always excluded)",
+    )
 
 
 class EmailStaleCheckConfig(BaseSettings):
