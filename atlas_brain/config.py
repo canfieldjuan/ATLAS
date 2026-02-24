@@ -1876,17 +1876,27 @@ class ExternalDataConfig(BaseSettings):
     # News
     news_enabled: bool = Field(default=True, description="Enable news intake (requires enabled=True)")
     news_interval_seconds: int = Field(default=900, description="News polling interval (15 min)")
-    news_api_provider: str = Field(default="newsapi", description="newsapi | google_rss")
-    news_api_key: Optional[str] = Field(default=None, description="API key for NewsAPI.org")
+    news_api_provider: str = Field(default="mediastack", description="mediastack | google_rss")
+    news_api_key: Optional[str] = Field(default=None, description="API key (Mediastack access_key)")
     news_max_articles_per_poll: int = Field(default=20, description="Max articles per poll cycle")
     news_significance_threshold: float = Field(default=0.6, description="LLM significance score cutoff (0-1)")
     # Markets
     market_enabled: bool = Field(default=True, description="Enable market intake (requires enabled=True)")
     market_interval_seconds: int = Field(default=300, description="Market polling interval (5 min)")
-    market_api_provider: str = Field(default="yfinance", description="yfinance | finnhub")
-    market_api_key: Optional[str] = Field(default=None, description="API key for Finnhub (if provider=finnhub)")
+    market_api_provider: str = Field(default="alpha_vantage", description="alpha_vantage | finnhub")
+    market_api_key: Optional[str] = Field(default=None, description="API key (Alpha Vantage or Finnhub)")
     market_default_threshold_pct: float = Field(default=5.0, description="Default price move % to trigger alert")
     market_hours_only: bool = Field(default=False, description="Only poll during US market hours (9:30-16:00 ET)")
+    # Context / reasoning windows
+    context_lookback_hours: int = Field(default=24, description="Hours of market/news data to include in reasoning context")
+    correlation_news_lookback_hours: int = Field(default=48, description="Hours to look back for news in correlation detection")
+    correlation_market_window_hours: int = Field(default=24, description="Hours after news to check for correlated market moves")
+    retention_days: int = Field(default=30, description="Days to retain dedup entries and market snapshots")
+    # API tuning
+    news_max_keywords_per_query: int = Field(default=10, description="Max keywords per NewsAPI query")
+    news_max_rss_feeds: int = Field(default=5, description="Max Google RSS feeds to poll per cycle")
+    news_keyword_min_length: int = Field(default=3, description="Min word length for market symbol cross-ref matching")
+    api_timeout_seconds: float = Field(default=20.0, description="HTTP timeout for external API calls")
 
 
 class TemporalPatternConfig(BaseSettings):

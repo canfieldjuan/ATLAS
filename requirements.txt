@@ -61,6 +61,5 @@ anthropic>=0.39.0
 # MCP (Model Context Protocol) — CRM and Email MCP servers
 mcp>=1.26.0
 
-# External data producers (news + financial markets)
-yfinance>=0.2.36
+# External data producers (news feeds)
 feedparser>=6.0

@@ -2,8 +2,8 @@
 Market data intake: poll prices for watchlist symbols, detect significant
 moves, record snapshots, emit market.* events.
 
-Uses yfinance (free, no API key) by default. Runs as an autonomous task
-on a configurable interval (default 5 min).
+Uses Alpha Vantage (free tier: 25 req/day) by default. Runs as an
+autonomous task on a configurable interval (default 5 min).
 """
 
 import asyncio
@@ -49,7 +49,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     symbols = list(watchlist.keys())
 
     # Fetch prices
-    quotes = await _fetch_prices(symbols, cfg.market_api_provider, cfg.market_api_key)
+    quotes = await _fetch_prices(
+        symbols, cfg.market_api_provider, cfg.market_api_key, cfg.api_timeout_seconds
+    )
     if not quotes:
         return {"_skip_synthesis": True, "symbols_checked": len(symbols), "emitted": 0, "error": "no quotes"}
 
@@ -148,55 +150,89 @@ def _is_market_hours() -> bool:
 
 
 async def _fetch_prices(
-    symbols: list[str], provider: str, api_key: str | None
+    symbols: list[str], provider: str, api_key: str | None,
+    timeout: float = 20.0,
 ) -> dict[str, dict[str, Any]]:
-    """Fetch current prices for symbols. Returns {symbol: {price, change_pct, volume, previous_close}}."""
-    if provider == "yfinance":
-        return await _fetch_yfinance(symbols)
+    """Fetch current prices for symbols.
+
+    Returns {symbol: {price, change_pct, volume, previous_close}}.
+    """
+    if provider == "alpha_vantage":
+        return await _fetch_alpha_vantage(symbols, api_key, timeout)
     elif provider == "finnhub":
-        return await _fetch_finnhub(symbols, api_key)
+        return await _fetch_finnhub(symbols, api_key, timeout)
     else:
         logger.warning("Unknown market provider: %s", provider)
         return {}
 
 
-async def _fetch_yfinance(symbols: list[str]) -> dict[str, dict[str, Any]]:
-    """Fetch via yfinance (synchronous library, run in thread)."""
-    def _sync_fetch():
-        import yfinance as yf
+async def _fetch_alpha_vantage(
+    symbols: list[str], api_key: str | None,
+    timeout: float = 20.0,
+) -> dict[str, dict[str, Any]]:
+    """Fetch via Alpha Vantage GLOBAL_QUOTE endpoint.
 
-        tickers = yf.Tickers(" ".join(symbols))
-        results = {}
+    Free tier: 25 requests/day.  Each symbol is one request.
+    Response key "Global Quote" contains:
+      01. symbol, 02. open, 03. high, 04. low, 05. price,
+      06. volume, 07. latest trading day, 08. previous close,
+      09. change, 10. change percent
+    """
+    if not api_key:
+        logger.warning("Alpha Vantage API key not configured (ATLAS_EXTERNAL_DATA_MARKET_API_KEY)")
+        return {}
+
+    import httpx
+
+    results = {}
+    async with httpx.AsyncClient(timeout=timeout) as client:
         for sym in symbols:
             try:
-                ticker = tickers.tickers.get(sym)
-                if not ticker:
+                resp = await client.get(
+                    "https://www.alphavantage.co/query",
+                    params={
+                        "function": "GLOBAL_QUOTE",
+                        "symbol": sym,
+                        "apikey": api_key,
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+                quote = data.get("Global Quote")
+                if not quote:
+                    # Rate-limit or invalid symbol
+                    note = data.get("Note") or data.get("Information") or ""
+                    if note:
+                        logger.debug("Alpha Vantage note for %s: %s", sym, note[:120])
                     continue
-                info = ticker.fast_info
-                price = getattr(info, "last_price", None)
-                prev_close = getattr(info, "previous_close", None)
-                if price is None or prev_close is None or prev_close == 0:
+
+                price = float(quote.get("05. price", 0))
+                prev_close = float(quote.get("08. previous close", 0))
+                if not price or not prev_close:
                     continue
-                change_pct = ((price - prev_close) / prev_close) * 100
+
+                change_pct_str = quote.get("10. change percent", "0%")
+                change_pct = float(change_pct_str.rstrip("%"))
+
+                volume_str = quote.get("06. volume")
+                volume = int(volume_str) if volume_str else None
+
                 results[sym] = {
                     "price": price,
                     "previous_close": prev_close,
                     "change_pct": change_pct,
-                    "volume": getattr(info, "last_volume", None),
+                    "volume": volume,
                 }
             except Exception:
-                logger.debug("yfinance fetch failed for %s", sym, exc_info=True)
-        return results
+                logger.debug("Alpha Vantage fetch failed for %s", sym, exc_info=True)
 
-    try:
-        return await asyncio.to_thread(_sync_fetch)
-    except Exception:
-        logger.warning("yfinance batch fetch failed", exc_info=True)
-        return {}
+    return results
 
 
 async def _fetch_finnhub(
-    symbols: list[str], api_key: str | None
+    symbols: list[str], api_key: str | None,
+    timeout: float = 20.0,
 ) -> dict[str, dict[str, Any]]:
     """Fetch via Finnhub REST API."""
     if not api_key:
@@ -206,7 +242,7 @@ async def _fetch_finnhub(
     import httpx
 
     results = {}
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         for sym in symbols:
             try:
                 resp = await client.get(

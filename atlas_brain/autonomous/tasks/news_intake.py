@@ -2,15 +2,13 @@
 News intake: poll news APIs, match against watchlist keywords,
 deduplicate, and emit news.* events.
 
-Supports NewsAPI.org (requires key) and Google News RSS (free fallback).
+Supports Mediastack (requires key) and Google News RSS (free fallback).
 Runs as an autonomous task on a configurable interval (default 15 min).
 """
 
 import asyncio
 import hashlib
-import json
 import logging
-from datetime import datetime, timezone
 from typing import Any
 
 from ...config import settings
@@ -73,12 +71,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         market_symbols.add(mr["sym"])
         # Also add name words for matching (e.g. "coffee" from "Coffee Futures")
         for word in mr["name"].split():
-            if len(word) > 3:
+            if len(word) > cfg.news_keyword_min_length:
                 market_symbols.add(word)
 
     # Fetch articles
     articles = await _fetch_articles(
-        cfg.news_api_provider, list(all_keywords), cfg.news_api_key, cfg.news_max_articles_per_poll
+        cfg.news_api_provider, list(all_keywords), cfg.news_api_key,
+        cfg.news_max_articles_per_poll, cfg,
     )
     if not articles:
         return {"_skip_synthesis": True, "fetched": 0, "emitted": 0}
@@ -164,57 +163,79 @@ async def _fetch_articles(
     keywords: list[str],
     api_key: str | None,
     max_articles: int,
+    cfg,
 ) -> list[dict[str, Any]]:
     """Fetch articles from the configured provider."""
-    if provider == "newsapi" and api_key:
-        return await _fetch_newsapi(keywords, api_key, max_articles)
+    if provider == "mediastack" and api_key:
+        return await _fetch_mediastack(
+            keywords, api_key, max_articles,
+            max_keywords=cfg.news_max_keywords_per_query,
+            timeout=cfg.api_timeout_seconds,
+        )
     # Default fallback: Google News RSS (free, no key needed)
-    return await _fetch_google_rss(keywords, max_articles)
+    return await _fetch_google_rss(
+        keywords, max_articles,
+        max_feeds=cfg.news_max_rss_feeds,
+        timeout=cfg.api_timeout_seconds,
+    )
 
 
-async def _fetch_newsapi(
-    keywords: list[str], api_key: str, max_articles: int
+async def _fetch_mediastack(
+    keywords: list[str],
+    api_key: str,
+    max_articles: int,
+    max_keywords: int = 10,
+    timeout: float = 20.0,
 ) -> list[dict[str, Any]]:
-    """Fetch from NewsAPI.org."""
+    """Fetch from Mediastack API."""
     import httpx
 
-    # Combine keywords with OR for broad search
-    query = " OR ".join(keywords[:10])  # API limit on query length
+    # Mediastack accepts comma-separated keywords
+    kw_str = ",".join(keywords[:max_keywords])
 
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.get(
-                "https://newsapi.org/v2/everything",
+                "http://api.mediastack.com/v1/news",
                 params={
-                    "q": query,
-                    "sortBy": "publishedAt",
-                    "pageSize": min(max_articles, 100),
-                    "apiKey": api_key,
-                    "language": "en",
+                    "access_key": api_key,
+                    "keywords": kw_str,
+                    "languages": "en",
+                    "limit": min(max_articles, 100),
+                    "sort": "published_desc",
                 },
             )
             resp.raise_for_status()
             data = resp.json()
 
+        if "error" in data:
+            logger.warning("Mediastack API error: %s", data["error"].get("message", data["error"]))
+            return []
+
         articles = []
-        for a in data.get("articles", [])[:max_articles]:
+        for a in data.get("data", [])[:max_articles]:
             articles.append({
                 "title": a.get("title", ""),
                 "description": a.get("description", ""),
                 "url": a.get("url", ""),
-                "source_name": (a.get("source") or {}).get("name", "unknown"),
-                "published_at": a.get("publishedAt", ""),
+                "source_name": a.get("source", "unknown"),
+                "published_at": a.get("published_at", ""),
             })
         return articles
     except Exception:
-        logger.warning("NewsAPI fetch failed", exc_info=True)
+        logger.warning("Mediastack fetch failed", exc_info=True)
         return []
 
 
 async def _fetch_google_rss(
-    keywords: list[str], max_articles: int
+    keywords: list[str],
+    max_articles: int,
+    max_feeds: int = 5,
+    timeout: float = 20.0,
 ) -> list[dict[str, Any]]:
     """Fetch from Google News RSS feeds (free, no API key)."""
+    _max_feeds = max_feeds
+
     def _sync_parse():
         import feedparser
         from urllib.parse import quote_plus
@@ -222,8 +243,7 @@ async def _fetch_google_rss(
         articles = []
         seen_urls: set[str] = set()
 
-        # Fetch a feed per keyword (or small groups)
-        for kw in keywords[:5]:  # limit to avoid too many requests
+        for kw in keywords[:_max_feeds]:
             url = f"https://news.google.com/rss/search?q={quote_plus(kw)}&hl=en-US&gl=US&ceid=US:en"
             try:
                 feed = feedparser.parse(url)

@@ -404,25 +404,31 @@ class HeadlessRunner:
             except Exception as e:
                 logger.warning("Email drafts expiration failed: %s", e)
 
-            # External data dedup cleanup (30-day retention)
+            # External data dedup cleanup
             try:
+                from ..config import settings as _settings
+                ext_retention = _settings.external_data.retention_days
                 dedup_result = await pool.execute(
                     """
                     DELETE FROM data_dedup
-                    WHERE first_seen_at < CURRENT_TIMESTAMP - INTERVAL '30 days'
+                    WHERE first_seen_at < CURRENT_TIMESTAMP - make_interval(days => $1)
                     """,
+                    ext_retention,
                 )
                 result["data_dedup_cleaned"] = dedup_result
             except Exception as e:
                 logger.debug("Data dedup cleanup skipped: %s", e)
 
-            # Market snapshots cleanup (30-day retention)
+            # Market snapshots cleanup
             try:
+                from ..config import settings as _settings
+                ext_retention = _settings.external_data.retention_days
                 snapshots_result = await pool.execute(
                     """
                     DELETE FROM market_snapshots
-                    WHERE snapshot_at < CURRENT_TIMESTAMP - INTERVAL '30 days'
+                    WHERE snapshot_at < CURRENT_TIMESTAMP - make_interval(days => $1)
                     """,
+                    ext_retention,
                 )
                 result["market_snapshots_cleaned"] = snapshots_result
             except Exception as e:

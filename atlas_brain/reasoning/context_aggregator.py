@@ -233,12 +233,15 @@ async def _fetch_recent_events(
 
 
 async def _fetch_market_context() -> list[dict[str, Any]]:
-    """Fetch recent significant market moves (24h window)."""
+    """Fetch recent significant market moves."""
+    from ..config import settings
     from ..storage.database import get_db_pool
 
     pool = get_db_pool()
     if not pool.is_initialized:
         return []
+
+    lookback_hours = settings.external_data.context_lookback_hours
 
     try:
         rows = await pool.fetch(
@@ -247,12 +250,13 @@ async def _fetch_market_context() -> list[dict[str, Any]]:
                    dw.name, dw.category, dw.threshold_pct
             FROM market_snapshots ms
             JOIN data_watchlist dw ON dw.symbol = ms.symbol AND dw.enabled = true
-            WHERE ms.snapshot_at > NOW() - INTERVAL '24 hours'
+            WHERE ms.snapshot_at > NOW() - make_interval(hours => $1)
               AND ms.change_pct IS NOT NULL
               AND ABS(ms.change_pct) >= COALESCE(dw.threshold_pct, 5.0)
             ORDER BY ABS(ms.change_pct) DESC
             LIMIT 20
-            """
+            """,
+            lookback_hours,
         )
         return [dict(r) for r in rows]
     except Exception:
@@ -261,12 +265,15 @@ async def _fetch_market_context() -> list[dict[str, Any]]:
 
 
 async def _fetch_news_context() -> list[dict[str, Any]]:
-    """Fetch recent news events (24h window)."""
+    """Fetch recent news events."""
+    from ..config import settings
     from ..storage.database import get_db_pool
 
     pool = get_db_pool()
     if not pool.is_initialized:
         return []
+
+    lookback_hours = settings.external_data.context_lookback_hours
 
     try:
         rows = await pool.fetch(
@@ -274,10 +281,11 @@ async def _fetch_news_context() -> list[dict[str, Any]]:
             SELECT id, event_type, payload, created_at
             FROM atlas_events
             WHERE event_type LIKE 'news.%'
-              AND created_at > NOW() - INTERVAL '24 hours'
+              AND created_at > NOW() - make_interval(hours => $1)
             ORDER BY created_at DESC
             LIMIT 20
-            """
+            """,
+            lookback_hours,
         )
         return [dict(r) for r in rows]
     except Exception:
