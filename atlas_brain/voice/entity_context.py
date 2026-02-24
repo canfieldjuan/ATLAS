@@ -43,6 +43,7 @@ _TOPIC_KEYWORDS: list[tuple[str, list[str]]] = [
     ("traffic",   ["traffic", "commute", "how long to drive", "road conditions"]),
     ("email",     ["send an email", "send a message", "email to", "write to"]),
     ("booking",   ["book a", "make a reservation", "reserve a"]),
+    ("call",      ["call someone", "make a call", "phone", "dial", "ring", "give them a call"]),
     ("time",      ["what time is it", "current time", "what's the time"]),
     ("camera",    ["show the camera", "camera feed", "show me the feed"]),
     ("location",  ["where am i", "what's my location", "current location"]),

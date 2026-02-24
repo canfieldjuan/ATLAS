@@ -152,6 +152,18 @@ async def run_call_workflow(
     if workflow_done:
         if session_id:
             await manager.clear_workflow_state(session_id)
+
+        # Emit reasoning event for cross-domain intelligence
+        try:
+            from ...reasoning.producers import emit_if_enabled
+            await emit_if_enabled(
+                "call.completed", "call_workflow",
+                {"session_id": session_id, "input_text": input_text,
+                 "speaker_id": speaker_id},
+            )
+        except Exception:
+            pass
+
         return {
             "response": response or "Call placed.",
             "awaiting_user_input": False,
