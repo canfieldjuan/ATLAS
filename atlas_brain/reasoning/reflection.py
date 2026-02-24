@@ -47,13 +47,13 @@ async def run_reflection() -> dict[str, Any]:
     )
 
     try:
-        from .graph import _llm_generate
+        from .graph import _llm_generate, _parse_llm_json
         text = await _llm_generate(
             llm, prompt, REFLECTION_SYSTEM,
             max_tokens=settings.reasoning.max_tokens,
             temperature=settings.reasoning.temperature,
         )
-        analyzed = json.loads(text)
+        analyzed = _parse_llm_json(text)
         llm_findings = analyzed.get("findings", [])
     except Exception:
         logger.warning("Reflection LLM analysis failed", exc_info=True)

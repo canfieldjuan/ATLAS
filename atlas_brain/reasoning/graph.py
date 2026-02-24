@@ -9,11 +9,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any
 
 from .state import ReasoningAgentState
 
 logger = logging.getLogger("atlas.reasoning.graph")
+
+# Regex to strip markdown code fences from LLM output
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n?(.*?)\n?\s*```", re.DOTALL)
 
 
 async def _llm_generate(llm, prompt: str, system_prompt: str,
@@ -34,6 +38,34 @@ async def _llm_generate(llm, prompt: str, system_prompt: str,
         llm.chat, messages=messages, max_tokens=max_tokens, temperature=temperature,
     )
     return result.get("response", "")
+
+
+def _parse_llm_json(text: str) -> dict[str, Any]:
+    """Extract and parse JSON from an LLM response.
+
+    Handles: raw JSON, markdown-fenced JSON, JSON embedded in prose.
+    Raises JSONDecodeError if no valid JSON found.
+    """
+    text = text.strip()
+    if not text:
+        raise json.JSONDecodeError("Empty response", text, 0)
+
+    # 1. Try raw parse first (ideal case)
+    if text.startswith("{"):
+        return json.loads(text)
+
+    # 2. Try stripping markdown code fences
+    m = _JSON_FENCE_RE.search(text)
+    if m:
+        return json.loads(m.group(1).strip())
+
+    # 3. Try finding first { ... last } in the text
+    first = text.find("{")
+    last = text.rfind("}")
+    if first != -1 and last > first:
+        return json.loads(text[first : last + 1])
+
+    raise json.JSONDecodeError("No JSON object found in response", text, 0)
 
 
 async def run_reasoning_graph(state: ReasoningAgentState) -> ReasoningAgentState:
@@ -103,7 +135,7 @@ async def _node_triage(state: ReasoningAgentState) -> ReasoningAgentState:
             max_tokens=settings.reasoning.triage_max_tokens,
             temperature=0.1,
         )
-        parsed = json.loads(text)
+        parsed = _parse_llm_json(text)
         state["triage_priority"] = parsed.get("priority", "medium")
         state["needs_reasoning"] = parsed.get("needs_reasoning", True)
         state["triage_reasoning"] = parsed.get("reasoning", "")
@@ -243,7 +275,7 @@ async def _node_reason(state: ReasoningAgentState) -> ReasoningAgentState:
         )
         state["reasoning_output"] = text
 
-        parsed = json.loads(text)
+        parsed = _parse_llm_json(text)
         state["connections_found"] = parsed.get("connections", [])
         state["recommended_actions"] = parsed.get("actions", [])
         state["rationale"] = parsed.get("rationale", "")
