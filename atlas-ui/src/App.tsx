@@ -1,10 +1,11 @@
 import { useEffect, useState, useRef } from 'react';
 import { Avatar } from './components/Avatar/Avatar';
+import { VoiceSettingsModal } from './components/Settings/VoiceSettings';
 import { useAtlas } from './hooks/useAtlas';
 import { useAtlasStore } from './state/store';
 import clsx from 'clsx';
 import {
-  Cpu, Activity, Terminal, Wifi, VolumeX, Volume2, Send, X
+  Cpu, Activity, Terminal, Wifi, VolumeX, Volume2, Send, X, Settings
 } from 'lucide-react';
 
 function App() {
@@ -17,6 +18,7 @@ function App() {
   const inputRef = useRef<HTMLInputElement>(null);
   const [showLeftPanel, setShowLeftPanel] = useState(false);
   const [showRightPanel, setShowRightPanel] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [cpuLoad, setCpuLoad] = useState(0);
   const [networkSpeed, setNetworkSpeed] = useState(0);
 
@@ -181,6 +183,13 @@ function App() {
               title="Toggle System Logs"
             >
               <Terminal size={14} className={showRightPanel ? "text-cyan-400" : "text-cyan-700"} />
+            </button>
+            <button
+              onClick={() => setShowSettings(true)}
+              className="p-1.5 rounded border border-cyan-500/30 hover:border-cyan-500 hover:bg-cyan-500/10 transition-all"
+              title="Voice Pipeline Settings"
+            >
+              <Settings size={14} className="text-cyan-700 hover:text-cyan-400" />
             </button>
           </div>
           <div className="flex flex-col items-end">
@@ -444,6 +453,11 @@ function App() {
           75% { transform: translateY(-20px) translateX(5px); }
         }
       `}} />
+
+      {/* Voice Pipeline Settings Modal */}
+      {showSettings && (
+        <VoiceSettingsModal onClose={() => setShowSettings(false)} />
+      )}
     </div>
   );
 }
