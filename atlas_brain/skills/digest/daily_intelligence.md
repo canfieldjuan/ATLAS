@@ -117,6 +117,7 @@ Respond with a JSON object containing these fields:
 
 ## Rules
 
+- Output the raw JSON object directly -- NO markdown code fences, NO ```json wrapping, just the { ... } object
 - NEVER suggest trading actions (buy, sell, short, etc.) -- informational only
 - NEVER fabricate data -- only reference what's in the input
 - Keep `analysis_text` under 500 words -- it goes to a push notification
@@ -124,7 +125,8 @@ Respond with a JSON object containing these fields:
 - If prior_reasoning is empty, note that this is your first analysis session
 - If a data section is empty, acknowledge it briefly and move on -- don't skip the section entirely
 - Prioritize pressure signals and cross-domain connections over single-domain summaries
-- pressure_readings should include ALL entities with enough data to score, not just high-pressure ones
-- If an entity appeared in prior pressure_readings but has no new data today, include it with trajectory "steady" and prior score
+- Limit `pressure_readings` to the top 10 most significant entities -- quality over quantity
+- If an entity appeared in prior pressure_readings but has no new data today, include it with trajectory "steady" and prior score (only if in top 10)
+- Limit `key_insights` to 5-8 items, `connections_found` to 3-5 items, `recommendations` to 3-5 items
 - Use plain language -- this may be read aloud
 - Always output valid JSON (no trailing commas, no comments)

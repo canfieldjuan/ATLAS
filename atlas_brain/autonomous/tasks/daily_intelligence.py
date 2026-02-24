@@ -479,9 +479,14 @@ async def _upsert_pressure_baselines(
 
 
 async def _run_llm_analysis(payload: dict[str, Any], max_tokens: int) -> str | None:
-    """Load skill, call LLM, return raw text response."""
+    """Load skill, call LLM, return raw text response.
+
+    Prefers Anthropic (triage LLM) for reliable JSON output.
+    Falls back to local Ollama if Anthropic is unavailable.
+    """
     from ...skills import get_skill_registry
     from ...services import llm_registry
+    from ...services.llm_router import get_triage_llm
     from ...services.protocols import Message
 
     skill = get_skill_registry().get("digest/daily_intelligence")
@@ -489,7 +494,12 @@ async def _run_llm_analysis(payload: dict[str, Any], max_tokens: int) -> str | N
         logger.warning("Skill 'digest/daily_intelligence' not found")
         return None
 
-    llm = llm_registry.get_active()
+    # Prefer Anthropic for structured JSON output
+    llm = get_triage_llm()
+    if llm:
+        logger.debug("Using triage LLM (Anthropic) for daily intelligence")
+    else:
+        llm = llm_registry.get_active()
     if llm is None:
         try:
             from ...config import settings as _settings
@@ -559,8 +569,50 @@ def _parse_analysis(raw_text: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             pass
 
+    # Try to recover truncated JSON (output cut off by max_tokens)
+    recovered = _recover_truncated_json(raw_text)
+    if recovered:
+        return recovered
+
     # Fallback: wrap raw text
     return {"analysis_text": raw_text}
+
+
+def _recover_truncated_json(raw_text: str) -> dict[str, Any] | None:
+    """Attempt to recover a JSON object from truncated LLM output.
+
+    When max_tokens cuts off output mid-JSON, we try closing open
+    structures progressively to salvage whatever fields were complete.
+    """
+    # Find the start of JSON
+    start = raw_text.find("{")
+    if start < 0:
+        return None
+
+    text = raw_text[start:]
+
+    # Try closing open brackets/braces from the end
+    for trim in range(0, min(len(text), 500), 1):
+        candidate = text if trim == 0 else text[:-trim]
+        # Count unclosed structures
+        opens = candidate.count("{") - candidate.count("}")
+        open_brackets = candidate.count("[") - candidate.count("]")
+        if opens <= 0 and open_brackets <= 0:
+            continue
+        # Build closing sequence
+        suffix = "]" * max(open_brackets, 0) + "}" * max(opens, 0)
+        try:
+            result = json.loads(candidate + suffix)
+            if isinstance(result, dict) and result.get("analysis_text"):
+                logger.info(
+                    "Recovered truncated JSON (trimmed %d chars, closed %d braces)",
+                    trim, opens + open_brackets,
+                )
+                return result
+        except json.JSONDecodeError:
+            continue
+
+    return None
 
 
 # ------------------------------------------------------------------

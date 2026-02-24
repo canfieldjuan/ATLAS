@@ -1907,7 +1907,7 @@ class ExternalDataConfig(BaseSettings):
     intelligence_cron: str = Field(default="0 20 * * *", description="Cron for daily intelligence (default 8 PM)")
     intelligence_analysis_window_days: int = Field(default=7, description="Days of data to include in analysis")
     intelligence_max_prior_sessions: int = Field(default=5, description="Max prior reasoning journal entries to include")
-    intelligence_max_tokens: int = Field(default=4096, description="Max tokens for intelligence LLM call")
+    intelligence_max_tokens: int = Field(default=16384, description="Max tokens for intelligence LLM call")
     intelligence_journal_retention_days: int = Field(default=90, description="Days to retain reasoning journal entries")
     intelligence_news_retention_days: int = Field(default=30, description="Days to retain news articles")
     # API tuning
