@@ -1,17 +1,21 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Save, RotateCcw, Loader } from 'lucide-react';
+import { Save, RotateCcw, Loader, Plus, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
 import clsx from 'clsx';
 
 // ---------- types ----------
 
 export interface IntelligenceSettings {
   enabled: boolean;
-  topics: string;
+  watchlist: string;          // JSON string
+  topics: string;             // simple-mode fallback
   regions: string;
   languages: string;
   lookback_days: number;
   pressure_velocity_threshold: number;
   signal_min_articles: number;
+  sentiment_enabled: boolean;
+  source_diversity_enabled: boolean;
+  composite_score_threshold: number;
   max_articles_per_topic: number;
   llm_model: string;
   schedule_hour: number;
@@ -20,13 +24,22 @@ export interface IntelligenceSettings {
   include_in_morning_briefing: boolean;
 }
 
+export type EntityType = 'company' | 'sports_team' | 'market' | 'crypto' | 'custom';
+
+export interface WatchlistEntry {
+  name: string;
+  type: EntityType;
+  query: string;
+  ticker: string;
+}
+
 // ---------- helpers ----------
 
 const API_BASE = '/api/v1/settings';
 
 async function fetchIntelligenceSettings(): Promise<IntelligenceSettings> {
   const res = await fetch(`${API_BASE}/intelligence`);
-  if (!res.ok) throw new Error(`Failed to load intelligence settings: ${res.status} ${res.statusText}`);
+  if (!res.ok) throw new Error(`Failed to load settings: ${res.status} ${res.statusText}`);
   return res.json();
 }
 
@@ -36,8 +49,20 @@ async function saveIntelligenceSettings(patch: Partial<IntelligenceSettings>): P
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
   });
-  if (!res.ok) throw new Error(`Failed to save intelligence settings: ${res.status} ${res.statusText}`);
+  if (!res.ok) throw new Error(`Failed to save settings: ${res.status} ${res.statusText}`);
   return res.json();
+}
+
+function parseWatchlist(raw: string): WatchlistEntry[] {
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed as WatchlistEntry[];
+  } catch { /* ignore */ }
+  return [];
+}
+
+function serializeWatchlist(entries: WatchlistEntry[]): string {
+  return JSON.stringify(entries);
 }
 
 // ---------- sub-components ----------
@@ -52,9 +77,7 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
   );
 }
 
-function Toggle({
-  label, description, checked, onChange,
-}: {
+function Toggle({ label, description, checked, onChange }: {
   label: string; description?: string; checked: boolean; onChange: (v: boolean) => void;
 }) {
   return (
@@ -63,50 +86,20 @@ function Toggle({
         <div className="text-sm text-cyan-200">{label}</div>
         {description && <div className="text-[11px] text-cyan-600 mt-0.5">{description}</div>}
       </div>
-      <button
-        type="button"
-        onClick={() => onChange(!checked)}
+      <button type="button" onClick={() => onChange(!checked)}
         className={clsx(
           'relative shrink-0 w-10 h-5 rounded-full border transition-all duration-200',
-          checked
-            ? 'bg-cyan-500/30 border-cyan-500 shadow-[0_0_8px_rgba(34,211,238,0.4)]'
-            : 'bg-black/30 border-cyan-500/30',
+          checked ? 'bg-cyan-500/30 border-cyan-500 shadow-[0_0_8px_rgba(34,211,238,0.4)]' : 'bg-black/30 border-cyan-500/30',
         )}
-        aria-checked={checked}
-        role="switch"
-      >
-        <span className={clsx(
-          'absolute top-0.5 w-4 h-4 rounded-full transition-all duration-200',
-          checked ? 'left-5 bg-cyan-400' : 'left-0.5 bg-cyan-700',
-        )} />
+        aria-checked={checked} role="switch">
+        <span className={clsx('absolute top-0.5 w-4 h-4 rounded-full transition-all duration-200',
+          checked ? 'left-5 bg-cyan-400' : 'left-0.5 bg-cyan-700')} />
       </button>
     </div>
   );
 }
 
-function TextInput({
-  label, description, value, onChange, placeholder,
-}: {
-  label: string; description?: string; value: string; onChange: (v: string) => void; placeholder?: string;
-}) {
-  return (
-    <div className="py-2">
-      <label className="text-sm text-cyan-200 block">{label}</label>
-      {description && <div className="text-[11px] text-cyan-600 mb-1">{description}</div>}
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="w-full mt-1 bg-black/30 border border-cyan-500/30 rounded px-2 py-1.5 text-sm text-cyan-200 placeholder-cyan-700/50 outline-none focus:border-cyan-500/60 transition-all"
-      />
-    </div>
-  );
-}
-
-function NumberInput({
-  label, description, value, onChange, min, max, step, unit,
-}: {
+function NumberInput({ label, description, value, onChange, min, max, step, unit }: {
   label: string; description?: string; value: number; onChange: (v: number) => void;
   min?: number; max?: number; step?: number; unit?: string;
 }) {
@@ -115,24 +108,16 @@ function NumberInput({
       <label className="text-sm text-cyan-200 block">{label}</label>
       {description && <div className="text-[11px] text-cyan-600 mb-1">{description}</div>}
       <div className="flex items-center gap-2 mt-1">
-        <input
-          type="number"
-          value={value}
-          min={min}
-          max={max}
-          step={step ?? 1}
+        <input type="number" value={value} min={min} max={max} step={step ?? 1}
           onChange={(e) => onChange(Number(e.target.value))}
-          className="w-28 bg-black/30 border border-cyan-500/30 rounded px-2 py-1.5 text-sm text-cyan-200 outline-none focus:border-cyan-500/60 tabular-nums transition-all"
-        />
+          className="w-28 bg-black/30 border border-cyan-500/30 rounded px-2 py-1.5 text-sm text-cyan-200 outline-none focus:border-cyan-500/60 tabular-nums transition-all" />
         {unit && <span className="text-[11px] text-cyan-600">{unit}</span>}
       </div>
     </div>
   );
 }
 
-function SliderInput({
-  label, description, value, onChange, min, max, step, format,
-}: {
+function SliderInput({ label, description, value, onChange, min, max, step, format }: {
   label: string; description?: string; value: number; onChange: (v: number) => void;
   min: number; max: number; step?: number; format?: (v: number) => string;
 }) {
@@ -144,19 +129,25 @@ function SliderInput({
         <span className="text-sm text-cyan-400 font-mono tabular-nums">{fmt(value)}</span>
       </div>
       {description && <div className="text-[11px] text-cyan-600 mt-0.5 mb-1">{description}</div>}
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step ?? 0.1}
-        value={value}
+      <input type="range" min={min} max={max} step={step ?? 0.1} value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full mt-1 accent-cyan-400 cursor-pointer"
-      />
+        className="w-full mt-1 accent-cyan-400 cursor-pointer" />
       <div className="flex justify-between text-[10px] text-cyan-700 mt-0.5">
-        <span>{min}</span>
-        <span>{max}</span>
+        <span>{min}</span><span>{max}</span>
       </div>
+    </div>
+  );
+}
+
+function TextInput({ label, description, value, onChange, placeholder }: {
+  label: string; description?: string; value: string; onChange: (v: string) => void; placeholder?: string;
+}) {
+  return (
+    <div className="py-2">
+      <label className="text-sm text-cyan-200 block">{label}</label>
+      {description && <div className="text-[11px] text-cyan-600 mb-1">{description}</div>}
+      <input type="text" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
+        className="w-full mt-1 bg-black/30 border border-cyan-500/30 rounded px-2 py-1.5 text-sm text-cyan-200 placeholder-cyan-700/50 outline-none focus:border-cyan-500/60 transition-all" />
     </div>
   );
 }
@@ -181,35 +172,238 @@ function CredentialNote({ envVar }: { envVar: string }) {
   );
 }
 
-/** Shows how "pressure" concept works as a visual explainer */
+// ---------- How It Works Explainer ----------
+
 function PressureExplainer() {
   return (
     <div className="bg-black/20 border border-cyan-500/15 rounded px-3 py-3 my-3">
-      <div className="text-[10px] uppercase tracking-widest text-cyan-500/50 mb-2">How it works</div>
-      <div className="flex items-stretch gap-0 text-[10px] mb-1">
-        {/* Timeline */}
+      <div className="text-[10px] uppercase tracking-widest text-cyan-500/50 mb-2">How pre-movement pressure works</div>
+
+      {/* Timeline */}
+      <div className="flex items-stretch gap-0 text-[10px] mb-3">
         <div className="flex flex-col items-center w-5 shrink-0">
-          <div className="w-1.5 h-1.5 rounded-full bg-cyan-700 mt-1" />
-          <div className="flex-1 w-px bg-gradient-to-b from-cyan-700 via-cyan-500 to-cyan-400" />
+          <div className="w-1.5 h-1.5 rounded-full bg-cyan-800 mt-1" />
+          <div className="flex-1 w-px bg-gradient-to-b from-cyan-800 via-cyan-500 to-cyan-400" />
           <div className="w-2 h-2 rounded-full bg-cyan-400 mb-1" />
         </div>
         <div className="flex flex-col justify-between ml-2 gap-3">
           <div>
             <span className="text-cyan-600 font-bold">PRESSURE BUILDS</span>
-            <span className="text-cyan-700"> — topic mentions accelerate in niche &amp; regional outlets.
-            Atlas detects the velocity spike and flags it as a leading indicator.</span>
+            <span className="text-cyan-700"> — article velocity accelerates in niche &amp; trade outlets,
+            tone shifts, new sources start covering it. Still below mainstream radar.</span>
           </div>
           <div>
-            <span className="text-cyan-400 font-bold">NEWS BREAKS</span>
-            <span className="text-cyan-600"> — event reaches mainstream headlines, often days later.
-            By then Atlas has already surfaced the pattern.</span>
+            <span className="text-cyan-400 font-bold">MOVEMENT</span>
+            <span className="text-cyan-600"> — price moves, odds shift, or narrative changes.
+            Wall Street / mainstream media report it. By then Atlas already flagged the build-up.</span>
           </div>
         </div>
       </div>
-      <div className="text-[10px] text-cyan-700 mt-2">
-        Velocity = <em>today's article count</em> ÷ <em>daily average over lookback window</em>.
-        A velocity of <strong className="text-cyan-500">1.5×</strong> means 50% more articles than usual — a meaningful acceleration.
+
+      {/* What you can track */}
+      <div className="grid grid-cols-2 gap-1.5 mb-3">
+        {[
+          { icon: '📈', label: 'Companies', ex: 'AAPL, TSLA, NVDA — supply chain, earnings whispers' },
+          { icon: '📊', label: 'Markets', ex: 'S&P 500, Oil, Gold — macro pressure shifts' },
+          { icon: '₿', label: 'Crypto', ex: 'BTC, ETH — regulatory & adoption signals' },
+          { icon: '🏆', label: 'Sports Teams', ex: 'Cowboys, Lakers — roster & injury news' },
+        ].map(({ icon, label, ex }) => (
+          <div key={label} className="bg-black/20 rounded px-2 py-1.5 border border-cyan-500/10">
+            <div className="text-[10px] font-bold text-cyan-400">{icon} {label}</div>
+            <div className="text-[10px] text-cyan-700 mt-0.5">{ex}</div>
+          </div>
+        ))}
       </div>
+
+      {/* Three signals */}
+      <div className="text-[10px] text-cyan-700">
+        <span className="text-cyan-500 font-semibold">Three pressure dimensions</span>
+        {' — '}composite score = velocity × sentiment_factor × diversity_factor
+      </div>
+      <div className="grid grid-cols-3 gap-1 mt-1.5">
+        {[
+          { label: 'Volume', color: 'text-cyan-400', desc: 'More articles than usual?' },
+          { label: 'Sentiment', color: 'text-amber-400', desc: 'Tone suddenly shifting?' },
+          { label: 'Diversity', color: 'text-purple-400', desc: 'Story spreading to new outlets?' },
+        ].map(({ label, color, desc }) => (
+          <div key={label} className="bg-black/20 rounded px-2 py-1 border border-cyan-500/10 text-center">
+            <div className={clsx('text-[10px] font-bold', color)}>{label}</div>
+            <div className="text-[9px] text-cyan-700 mt-0.5">{desc}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------- Entity Type Badge ----------
+
+const TYPE_META: Record<EntityType, { icon: string; color: string; label: string }> = {
+  company:     { icon: '📈', color: 'text-cyan-400 border-cyan-500/40 bg-cyan-500/10', label: 'Company' },
+  sports_team: { icon: '🏆', color: 'text-amber-400 border-amber-500/40 bg-amber-500/10', label: 'Sports Team' },
+  market:      { icon: '📊', color: 'text-purple-400 border-purple-500/40 bg-purple-500/10', label: 'Market' },
+  crypto:      { icon: '₿', color: 'text-orange-400 border-orange-500/40 bg-orange-500/10', label: 'Crypto' },
+  custom:      { icon: '◉', color: 'text-cyan-600 border-cyan-700/40 bg-cyan-900/20', label: 'Custom' },
+};
+
+function TypeBadge({ type }: { type: EntityType }) {
+  const meta = TYPE_META[type] ?? TYPE_META.custom;
+  return (
+    <span className={clsx('text-[10px] px-1.5 py-0.5 rounded border font-bold', meta.color)}>
+      {meta.icon} {meta.label}
+    </span>
+  );
+}
+
+// ---------- Single Watchlist Entry Card ----------
+
+interface EntryCardProps {
+  entry: WatchlistEntry;
+  onChange: (e: WatchlistEntry) => void;
+  onDelete: () => void;
+}
+
+function EntryCard({ entry, onChange, onDelete }: EntryCardProps) {
+  const [expanded, setExpanded] = useState(false);
+
+  const set = <K extends keyof WatchlistEntry>(k: K, v: WatchlistEntry[K]) =>
+    onChange({ ...entry, [k]: v });
+
+  return (
+    <div className="border border-cyan-500/20 rounded bg-black/20 overflow-hidden">
+      {/* collapsed header */}
+      <div className="flex items-center gap-2 px-3 py-2">
+        <button type="button" onClick={() => setExpanded((x) => !x)} className="flex-1 flex items-center gap-2 text-left min-w-0">
+          {entry.name
+            ? <span className="text-sm text-cyan-200 font-semibold truncate">{entry.name}</span>
+            : <span className="text-sm text-cyan-700 font-semibold truncate">Unnamed entity</span>
+          }
+          {entry.ticker && (
+            <span className="text-[10px] text-cyan-600 font-mono border border-cyan-700/40 px-1 rounded shrink-0">
+              {entry.ticker}
+            </span>
+          )}
+          <TypeBadge type={entry.type} />
+          <span className="ml-auto shrink-0 text-cyan-600">{expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}</span>
+        </button>
+        <button type="button" onClick={onDelete} title="Remove entity"
+          className="shrink-0 text-red-500/50 hover:text-red-400 transition-colors p-0.5">
+          <Trash2 size={13} />
+        </button>
+      </div>
+
+      {/* expanded editor */}
+      {expanded && (
+        <div className="px-3 pb-3 border-t border-cyan-500/10 pt-2 space-y-2">
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[10px] text-cyan-600 uppercase tracking-wider">Name</label>
+              <input value={entry.name} onChange={(e) => set('name', e.target.value)}
+                placeholder="e.g. Apple Inc"
+                className="w-full mt-0.5 bg-black/30 border border-cyan-500/30 rounded px-2 py-1 text-xs text-cyan-200 outline-none focus:border-cyan-500/60" />
+            </div>
+            <div>
+              <label className="text-[10px] text-cyan-600 uppercase tracking-wider">Ticker / Symbol</label>
+              <input value={entry.ticker} onChange={(e) => set('ticker', e.target.value)}
+                placeholder="e.g. AAPL"
+                className="w-full mt-0.5 bg-black/30 border border-cyan-500/30 rounded px-2 py-1 text-xs text-cyan-200 font-mono outline-none focus:border-cyan-500/60" />
+            </div>
+          </div>
+
+          <div>
+            <label className="text-[10px] text-cyan-600 uppercase tracking-wider">Type</label>
+            <select value={entry.type} onChange={(e) => set('type', e.target.value as EntityType)}
+              className="w-full mt-0.5 bg-black/50 border border-cyan-500/30 rounded px-2 py-1 text-xs text-cyan-200 outline-none focus:border-cyan-500/60">
+              {(Object.keys(TYPE_META) as EntityType[]).map((t) => (
+                <option key={t} value={t}>{TYPE_META[t].icon} {TYPE_META[t].label}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="text-[10px] text-cyan-600 uppercase tracking-wider">Search query</label>
+            <div className="text-[10px] text-cyan-700 mb-0.5">NewsAPI search string — use OR for aliases, quotes for exact phrases</div>
+            <input value={entry.query} onChange={(e) => set('query', e.target.value)}
+              placeholder='e.g. Apple OR AAPL "supply chain" earnings'
+              className="w-full mt-0.5 bg-black/30 border border-cyan-500/30 rounded px-2 py-1 text-xs text-cyan-200 outline-none focus:border-cyan-500/60" />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------- Watchlist Editor ----------
+
+interface WatchlistEditorProps {
+  value: string;
+  onChange: (v: string) => void;
+}
+
+const ENTITY_TEMPLATES: Record<EntityType, Omit<WatchlistEntry, 'name' | 'ticker'>> = {
+  company:     { type: 'company',     query: 'Company OR TICKER earnings supply chain' },
+  sports_team: { type: 'sports_team', query: 'Team Name roster injury trade' },
+  market:      { type: 'market',      query: 'INDEX OR SYMBOL price outlook' },
+  crypto:      { type: 'crypto',      query: 'COIN regulation adoption price' },
+  custom:      { type: 'custom',      query: 'your search terms here' },
+};
+
+function WatchlistEditor({ value, onChange }: WatchlistEditorProps) {
+  const entries = parseWatchlist(value);
+  const [addType, setAddType] = useState<EntityType>('company');
+
+  const update = (newEntries: WatchlistEntry[]) => onChange(serializeWatchlist(newEntries));
+
+  const addEntry = () => {
+    const tmpl = ENTITY_TEMPLATES[addType];
+    update([...entries, { name: '', ticker: '', ...tmpl }]);
+  };
+
+  const removeEntry = (i: number) => update(entries.filter((_, idx) => idx !== i));
+  const changeEntry = (i: number, e: WatchlistEntry) => update(entries.map((x, idx) => idx === i ? e : x));
+
+  return (
+    <div className="space-y-2">
+      {entries.length === 0 && (
+        <div className="border border-dashed border-cyan-500/20 rounded px-3 py-4 text-center text-[11px] text-cyan-700">
+          No entities in the watchlist — add one below to start tracking
+        </div>
+      )}
+
+      {entries.map((entry, i) => (
+        <EntryCard key={i} entry={entry} onChange={(e) => changeEntry(i, e)} onDelete={() => removeEntry(i)} />
+      ))}
+
+      {/* Add new entity row */}
+      <div className="flex items-center gap-2 pt-1">
+        <select value={addType} onChange={(e) => setAddType(e.target.value as EntityType)}
+          className="flex-1 bg-black/40 border border-cyan-500/25 rounded px-2 py-1.5 text-xs text-cyan-400 outline-none focus:border-cyan-500/50">
+          {(Object.keys(TYPE_META) as EntityType[]).map((t) => (
+            <option key={t} value={t}>{TYPE_META[t].icon} {TYPE_META[t].label}</option>
+          ))}
+        </select>
+        <button type="button" onClick={addEntry}
+          className="flex items-center gap-1 px-3 py-1.5 rounded border border-cyan-500/40 text-xs text-cyan-400 hover:border-cyan-500 hover:bg-cyan-500/10 transition-all">
+          <Plus size={12} />
+          Add entity
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Collapsible Advanced Section ----------
+
+function Collapsible({ title, children }: { title: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="border border-cyan-500/15 rounded mt-3">
+      <button type="button" onClick={() => setOpen((x) => !x)}
+        className="w-full flex items-center justify-between px-3 py-2 text-xs text-cyan-600 hover:text-cyan-400 transition-colors">
+        <span className="font-bold uppercase tracking-wider">{title}</span>
+        {open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+      </button>
+      {open && <div className="px-3 pb-3 border-t border-cyan-500/10">{children}</div>}
     </div>
   );
 }
@@ -236,7 +430,7 @@ export function IntelligenceSettingsForm({ onDirtyChange }: IntelligenceSettings
       setOriginal(data);
       setDraft(data);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load intelligence settings');
+      setError(e instanceof Error ? e.message : 'Failed to load settings');
     } finally {
       setLoading(false);
     }
@@ -251,9 +445,7 @@ export function IntelligenceSettingsForm({ onDirtyChange }: IntelligenceSettings
 
   const isDirty = draft && original && JSON.stringify(draft) !== JSON.stringify(original);
 
-  useEffect(() => {
-    onDirtyChange?.(!!isDirty);
-  }, [isDirty, onDirtyChange]);
+  useEffect(() => { onDirtyChange?.(!!isDirty); }, [isDirty, onDirtyChange]);
 
   const handleSave = async () => {
     if (!draft || !original) return;
@@ -271,15 +463,13 @@ export function IntelligenceSettingsForm({ onDirtyChange }: IntelligenceSettings
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to save intelligence settings');
+      setError(e instanceof Error ? e.message : 'Failed to save settings');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleReset = () => {
-    if (original) { setDraft(original); setSaved(false); }
-  };
+  const handleReset = () => { if (original) { setDraft(original); setSaved(false); } };
 
   if (loading) {
     return (
@@ -300,7 +490,6 @@ export function IntelligenceSettingsForm({ onDirtyChange }: IntelligenceSettings
 
   return (
     <div className="flex flex-col h-full">
-      {/* scrollable body */}
       <div className="flex-1 overflow-y-auto px-5 py-4 custom-scrollbar">
         {error && (
           <div className="bg-red-900/20 border border-red-500/30 rounded px-3 py-2 text-sm text-red-400 mb-4">
@@ -312,71 +501,70 @@ export function IntelligenceSettingsForm({ onDirtyChange }: IntelligenceSettings
         <SectionHeader>General</SectionHeader>
         <PressureExplainer />
         <Toggle
-          label="Enable news intelligence"
-          description="Run the daily pressure signal analysis. Requires a NewsAPI.org API key."
+          label="Enable intelligence analysis"
+          description="Run the daily pre-movement pressure scan. Requires a NewsAPI.org API key."
           checked={draft.enabled}
           onChange={(v) => set('enabled', v)}
         />
         <CredentialNote envVar="ATLAS_NEWS_API_KEY" />
 
-        {/* ── What to Monitor ── */}
-        <SectionHeader>What to Monitor</SectionHeader>
+        {/* ── Watchlist ── */}
+        <SectionHeader>Watchlist</SectionHeader>
         <InfoBox>
-          Topics are the seeds for each analysis. Atlas fetches recent news for each topic,
-          measures how fast it's growing, and flags any that are accelerating unusually.
-          Separate multiple topics with commas.
+          Each entity gets its own independent pressure scan. Use specific, targeted search queries
+          — include ticker symbols, common abbreviations, and key terms associated with the entity.
+          <br /><br />
+          <strong className="text-cyan-400">Good query:</strong>{' '}
+          <code className="text-cyan-500">Apple OR AAPL "supply chain" earnings</code>
+          <br />
+          <strong className="text-cyan-400">Avoid:</strong>{' '}
+          generic single words that match unrelated stories.
         </InfoBox>
-        <TextInput
-          label="Topics"
-          description="Comma-separated — each becomes an independent pressure signal feed"
-          value={draft.topics}
-          onChange={(v) => set('topics', v)}
-          placeholder="supply chain,interest rates,AI regulation,energy prices"
-        />
-        <TextInput
-          label="Geographic focus"
-          description="Comma-separated regions or country names prepended to queries to bias toward local sources"
-          value={draft.regions}
-          onChange={(v) => set('regions', v)}
-          placeholder="US,Europe"
-        />
-        <TextInput
-          label="Article languages"
-          description="Comma-separated ISO language codes — limits which articles NewsAPI returns"
-          value={draft.languages}
-          onChange={(v) => set('languages', v)}
-          placeholder="en"
+        <WatchlistEditor
+          value={draft.watchlist}
+          onChange={(v) => set('watchlist', v)}
         />
 
-        {/* ── Pressure Signal Detection ── */}
-        <SectionHeader>Pressure Signal Detection</SectionHeader>
-        <InfoBox>
-          A <strong className="text-cyan-400">pressure signal</strong> is flagged when a topic's
-          article count today is significantly higher than its recent baseline — indicating the
-          topic is accelerating in the media before it becomes mainstream news.
-        </InfoBox>
-        <NumberInput
-          label="Baseline window"
-          description="Days of history used to calculate each topic's normal article rate — longer = more stable baseline"
-          value={draft.lookback_days}
-          onChange={(v) => set('lookback_days', v)}
-          min={2}
-          max={30}
-          unit="days"
-        />
+        {/* ── Signal Detection ── */}
+        <SectionHeader>Signal Detection</SectionHeader>
+
+        <div className="space-y-1">
+          <Toggle
+            label="Sentiment shift scoring"
+            description="Amplify signal when tone suddenly becomes more negative or positive — a tone change often precedes a price or odds movement"
+            checked={draft.sentiment_enabled}
+            onChange={(v) => set('sentiment_enabled', v)}
+          />
+          <Toggle
+            label="Source diversity scoring"
+            description="Amplify signal when coverage spreads to new outlets — stories moving from trade press to mainstream are strong leading indicators"
+            checked={draft.source_diversity_enabled}
+            onChange={(v) => set('source_diversity_enabled', v)}
+          />
+        </div>
+
         <SliderInput
-          label="Velocity threshold"
-          description="Minimum growth multiplier to flag a pressure signal — 1.5× means 50% more articles than the baseline daily average"
-          value={draft.pressure_velocity_threshold}
-          onChange={(v) => set('pressure_velocity_threshold', v)}
+          label="Composite score threshold"
+          description="Minimum composite score (velocity × sentiment_factor × diversity_factor) to flag a signal — lower = more sensitive, higher = fewer false positives"
+          value={draft.composite_score_threshold}
+          onChange={(v) => set('composite_score_threshold', v)}
           min={1.0}
           max={5.0}
           step={0.1}
           format={(v) => `${v.toFixed(1)}×`}
         />
         <NumberInput
+          label="Baseline window"
+          description="Days of history used to calculate each entity's normal article rate"
+          value={draft.lookback_days}
+          onChange={(v) => set('lookback_days', v)}
+          min={2}
+          max={30}
+          unit="days"
+        />
+        <NumberInput
           label="Minimum confirming articles"
-          description="A topic needs at least this many articles today before it's flagged — prevents single-source noise from triggering false alerts"
+          description="Entity needs at least this many articles today to confirm a signal — prevents single-source noise"
           value={draft.signal_min_articles}
           onChange={(v) => set('signal_min_articles', v)}
           min={1}
@@ -384,84 +572,98 @@ export function IntelligenceSettingsForm({ onDirtyChange }: IntelligenceSettings
           unit="articles"
         />
 
-        {/* ── Operations ── */}
-        <SectionHeader>Operations</SectionHeader>
-        <NumberInput
-          label="Max articles per topic"
-          description="Caps NewsAPI calls per topic per run — each topic uses one API request"
-          value={draft.max_articles_per_topic}
-          onChange={(v) => set('max_articles_per_topic', v)}
-          min={5}
-          max={100}
-          unit="articles"
-        />
-        <TextInput
-          label="LLM model"
-          description="Ollama model used to write the intelligence briefing summary"
-          value={draft.llm_model}
-          onChange={(v) => set('llm_model', v)}
-          placeholder="qwen3:14b"
-        />
-        <NumberInput
-          label="Run hour"
-          description="Hour of day (0–23) to run the analysis — runs before the 7 AM morning briefing by default"
-          value={draft.schedule_hour}
-          onChange={(v) => set('schedule_hour', Math.min(23, Math.max(0, v)))}
-          min={0}
-          max={23}
-          unit="h (24-hr)"
-        />
-
-        {/* ── Notifications & Output ── */}
+        {/* ── Notifications ── */}
         <SectionHeader>Notifications & Output</SectionHeader>
         <Toggle
-          label="Notify on pressure signals"
-          description="Send a push notification (via ntfy) when at least one new pressure signal is detected"
+          label="Notify on signals"
+          description="Send a push notification when pre-movement pressure signals are detected"
           checked={draft.notify_on_signal}
           onChange={(v) => set('notify_on_signal', v)}
         />
         <Toggle
           label="Notify on every run"
-          description="Send a push notification even when no new signals are detected — useful for confirming the task ran"
+          description="Send a notification even when no signals are found — confirms the task ran"
           checked={draft.notify_all_runs}
           onChange={(v) => set('notify_all_runs', v)}
         />
         <Toggle
           label="Include in morning briefing"
-          description="Surface active pressure signals in the 7 AM morning briefing summary"
+          description="Surface active pre-movement signals in the 7 AM daily briefing"
           checked={draft.include_in_morning_briefing}
           onChange={(v) => set('include_in_morning_briefing', v)}
         />
+
+        {/* ── Advanced (collapsed) ── */}
+        <Collapsible title="Advanced">
+          <SliderInput
+            label="Volume-only threshold"
+            description="Minimum volume velocity to flag a signal when sentiment/diversity scoring is disabled"
+            value={draft.pressure_velocity_threshold}
+            onChange={(v) => set('pressure_velocity_threshold', v)}
+            min={1.0}
+            max={5.0}
+            step={0.1}
+            format={(v) => `${v.toFixed(1)}×`}
+          />
+          <NumberInput
+            label="Max articles per entity"
+            description="Caps NewsAPI calls per entity per run (free tier: 100 req/day total)"
+            value={draft.max_articles_per_topic}
+            onChange={(v) => set('max_articles_per_topic', v)}
+            min={5}
+            max={100}
+            unit="articles"
+          />
+          <TextInput
+            label="LLM model"
+            description="Ollama model for synthesising the intelligence briefing"
+            value={draft.llm_model}
+            onChange={(v) => set('llm_model', v)}
+            placeholder="qwen3:14b"
+          />
+          <NumberInput
+            label="Run hour"
+            description="Hour of day (0–23) to run — default 5 AM, before the 7 AM morning briefing"
+            value={draft.schedule_hour}
+            onChange={(v) => set('schedule_hour', Math.min(23, Math.max(0, v)))}
+            min={0}
+            max={23}
+            unit="h"
+          />
+          <TextInput
+            label="Geographic focus (simple mode)"
+            description="Prepended to simple-mode topic queries when no watchlist is configured"
+            value={draft.regions}
+            onChange={(v) => set('regions', v)}
+            placeholder="US"
+          />
+          <TextInput
+            label="Article language filter"
+            description="Comma-separated ISO language codes"
+            value={draft.languages}
+            onChange={(v) => set('languages', v)}
+            placeholder="en"
+          />
+        </Collapsible>
       </div>
 
       {/* footer */}
       <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-cyan-500/20 shrink-0">
-        <button
-          onClick={handleReset}
-          disabled={!isDirty}
-          className={clsx(
-            'flex items-center gap-1.5 px-3 py-1.5 rounded border text-xs transition-all',
-            isDirty
-              ? 'border-cyan-500/40 text-cyan-500 hover:border-cyan-500 hover:bg-cyan-500/10'
-              : 'border-cyan-500/15 text-cyan-700 cursor-not-allowed',
-          )}
-        >
+        <button onClick={handleReset} disabled={!isDirty}
+          className={clsx('flex items-center gap-1.5 px-3 py-1.5 rounded border text-xs transition-all',
+            isDirty ? 'border-cyan-500/40 text-cyan-500 hover:border-cyan-500 hover:bg-cyan-500/10'
+                    : 'border-cyan-500/15 text-cyan-700 cursor-not-allowed')}>
           <RotateCcw size={12} />
           Revert
         </button>
         <div className="flex items-center gap-2">
           {saved && <span className="text-[11px] text-cyan-400 animate-in fade-in duration-300">✓ Saved</span>}
           {error && <span className="text-[11px] text-red-400">{error}</span>}
-          <button
-            onClick={handleSave}
-            disabled={saving || !isDirty}
-            className={clsx(
-              'flex items-center gap-1.5 px-4 py-1.5 rounded border text-xs font-bold uppercase tracking-wider transition-all',
+          <button onClick={handleSave} disabled={saving || !isDirty}
+            className={clsx('flex items-center gap-1.5 px-4 py-1.5 rounded border text-xs font-bold uppercase tracking-wider transition-all',
               isDirty && !saving
                 ? 'border-cyan-500 text-cyan-400 bg-cyan-500/10 hover:bg-cyan-500/20 shadow-[0_0_12px_rgba(34,211,238,0.2)]'
-                : 'border-cyan-500/15 text-cyan-700 cursor-not-allowed',
-            )}
-          >
+                : 'border-cyan-500/15 text-cyan-700 cursor-not-allowed')}>
             {saving ? <Loader size={12} className="animate-spin" /> : <Save size={12} />}
             {saving ? 'Saving…' : 'Save'}
           </button>

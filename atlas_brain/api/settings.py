@@ -742,12 +742,16 @@ async def update_daily_settings(updates: DailySettingsUpdate) -> DailySettings:
 
 _INTEL_ENV_MAP: dict[str, str] = {
     "enabled": "ATLAS_NEWS_ENABLED",
+    "watchlist": "ATLAS_NEWS_WATCHLIST",
     "topics": "ATLAS_NEWS_TOPICS",
     "regions": "ATLAS_NEWS_REGIONS",
     "languages": "ATLAS_NEWS_LANGUAGES",
     "lookback_days": "ATLAS_NEWS_LOOKBACK_DAYS",
     "pressure_velocity_threshold": "ATLAS_NEWS_PRESSURE_VELOCITY_THRESHOLD",
     "signal_min_articles": "ATLAS_NEWS_SIGNAL_MIN_ARTICLES",
+    "sentiment_enabled": "ATLAS_NEWS_SENTIMENT_ENABLED",
+    "source_diversity_enabled": "ATLAS_NEWS_SOURCE_DIVERSITY_ENABLED",
+    "composite_score_threshold": "ATLAS_NEWS_COMPOSITE_SCORE_THRESHOLD",
     "max_articles_per_topic": "ATLAS_NEWS_MAX_ARTICLES_PER_TOPIC",
     "llm_model": "ATLAS_NEWS_LLM_MODEL",
     "schedule_hour": "ATLAS_NEWS_SCHEDULE_HOUR",
@@ -763,32 +767,48 @@ class IntelligenceSettings(BaseModel):
     # General
     enabled: bool = Field(description="Enable daily news intelligence analysis")
 
-    # What to monitor
+    # Watchlist
+    watchlist: str = Field(
+        description=(
+            'JSON array of watched entities — each with name, type, query, ticker. '
+            'Example: [{"name":"Apple","type":"company","query":"Apple AAPL","ticker":"AAPL"}]'
+        )
+    )
+
+    # Simple-mode fallback
     topics: str = Field(
-        description="Comma-separated topics to monitor (e.g. supply chain,interest rates,AI regulation)"
+        description="Comma-separated plain topics (simple mode, used only when watchlist is empty)"
     )
     regions: str = Field(
-        description="Comma-separated geographic focus areas prepended to queries (e.g. US,Europe)"
+        description="Comma-separated geographic focus areas prepended to simple-mode queries"
     )
-    languages: str = Field(description="Comma-separated language codes for article filtering (e.g. en,es)")
+    languages: str = Field(description="Comma-separated language codes for article filtering")
 
     # Pressure signal detection
     lookback_days: int = Field(
-        description="Days of history used to establish the baseline article volume for each topic"
+        description="Days of history used to establish the baseline article volume for each entity"
     )
     pressure_velocity_threshold: float = Field(
-        description=(
-            "Topic must grow at least this multiple above its baseline to flag as a pressure signal "
-            "(1.5 = 50% acceleration, 2.0 = double the normal rate)"
-        )
+        description="Minimum volume growth multiplier to flag a volume-only signal"
     )
     signal_min_articles: int = Field(
         description="Minimum articles today to confirm a signal — prevents single-source noise"
     )
 
+    # Multi-dimensional scoring
+    sentiment_enabled: bool = Field(
+        description="Score sentiment shift — tone change often precedes a movement"
+    )
+    source_diversity_enabled: bool = Field(
+        description="Score source diversity — story spreading to new outlets strengthens the signal"
+    )
+    composite_score_threshold: float = Field(
+        description="Minimum composite pressure score (velocity × sentiment × diversity) to flag a signal"
+    )
+
     # Operations
     max_articles_per_topic: int = Field(
-        description="Max articles fetched per topic per run (controls NewsAPI quota usage)"
+        description="Max articles fetched per entity per run (controls NewsAPI quota usage)"
     )
     llm_model: str = Field(description="Ollama model used to synthesise the intelligence briefing")
     schedule_hour: int = Field(description="Hour of day (0–23) to run the daily analysis")
@@ -805,12 +825,16 @@ class IntelligenceSettingsUpdate(BaseModel):
     """Partial update payload for news intelligence settings."""
 
     enabled: Optional[bool] = None
+    watchlist: Optional[str] = None
     topics: Optional[str] = None
     regions: Optional[str] = None
     languages: Optional[str] = None
     lookback_days: Optional[int] = None
     pressure_velocity_threshold: Optional[float] = None
     signal_min_articles: Optional[int] = None
+    sentiment_enabled: Optional[bool] = None
+    source_diversity_enabled: Optional[bool] = None
+    composite_score_threshold: Optional[float] = None
     max_articles_per_topic: Optional[int] = None
     llm_model: Optional[str] = None
     schedule_hour: Optional[int] = None
@@ -824,12 +848,16 @@ def _current_intelligence_settings() -> IntelligenceSettings:
     n = settings.news_intel
     return IntelligenceSettings(
         enabled=n.enabled,
+        watchlist=n.watchlist,
         topics=n.topics,
         regions=n.regions,
         languages=n.languages,
         lookback_days=n.lookback_days,
         pressure_velocity_threshold=n.pressure_velocity_threshold,
         signal_min_articles=n.signal_min_articles,
+        sentiment_enabled=n.sentiment_enabled,
+        source_diversity_enabled=n.source_diversity_enabled,
+        composite_score_threshold=n.composite_score_threshold,
         max_articles_per_topic=n.max_articles_per_topic,
         llm_model=n.llm_model,
         schedule_hour=n.schedule_hour,
