@@ -1,20 +1,22 @@
 /**
- * SettingsModal — tabbed settings panel combining Voice Pipeline and Email.
+ * SettingsModal — tabbed settings panel combining Voice Pipeline, Email, and Daily Ops.
  *
  * Opens as a full modal overlay.  Each tab hosts its own form which manages
  * its own load/save lifecycle independently.
  */
 import { useState } from 'react';
-import { X, Mic, Mail } from 'lucide-react';
+import { X, Mic, Mail, Brain } from 'lucide-react';
 import clsx from 'clsx';
 import { VoiceSettingsForm } from './VoiceSettings';
 import { EmailSettingsForm } from './EmailSettings';
+import { DailySettingsForm } from './DailyIntelligenceSettings';
 
-type Tab = 'voice' | 'email';
+type Tab = 'voice' | 'email' | 'daily';
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'voice', label: 'Voice Pipeline', icon: <Mic size={13} /> },
   { id: 'email', label: 'Email', icon: <Mail size={13} /> },
+  { id: 'daily', label: 'Daily Ops', icon: <Brain size={13} /> },
 ];
 
 interface SettingsModalProps {
@@ -73,6 +75,7 @@ export function SettingsModal({ onClose, initialTab = 'voice' }: SettingsModalPr
         <div className="flex-1 min-h-0 flex flex-col">
           {activeTab === 'voice' && <VoiceSettingsForm />}
           {activeTab === 'email' && <EmailSettingsForm />}
+          {activeTab === 'daily' && <DailySettingsForm />}
         </div>
       </div>
 

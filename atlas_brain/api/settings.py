@@ -458,3 +458,279 @@ async def update_email_settings(updates: EmailSettingsUpdate) -> EmailSettings:
                 logger.warning("Failed to persist email settings to .env.local: %s", exc)
 
     return _current_email_settings()
+
+
+# ---------------------------------------------------------------------------
+# Daily intelligence / nightly reasoning settings
+# ---------------------------------------------------------------------------
+
+_DAILY_ENV_MAP: dict[str, str] = {
+    # PersonaConfig (ATLAS_PERSONA_*)
+    "persona_name": "ATLAS_PERSONA_NAME",
+    "persona_owner_name": "ATLAS_PERSONA_OWNER_NAME",
+    "persona_system_prompt": "ATLAS_PERSONA_SYSTEM_PROMPT",
+    # HomeAgentConfig (ATLAS_HOME_AGENT_*)
+    "llm_temperature": "ATLAS_HOME_AGENT_TEMPERATURE",
+    "llm_max_tokens": "ATLAS_HOME_AGENT_MAX_TOKENS",
+    "llm_max_history": "ATLAS_HOME_AGENT_MAX_HISTORY",
+    # AutonomousConfig (ATLAS_AUTONOMOUS_*)
+    "autonomous_enabled": "ATLAS_AUTONOMOUS_ENABLED",
+    "autonomous_timezone": "ATLAS_AUTONOMOUS_DEFAULT_TIMEZONE",
+    "notify_results": "ATLAS_AUTONOMOUS_NOTIFY_RESULTS",
+    "announce_results": "ATLAS_AUTONOMOUS_ANNOUNCE_RESULTS",
+    "synthesis_enabled": "ATLAS_AUTONOMOUS_SYNTHESIS_ENABLED",
+    "synthesis_temperature": "ATLAS_AUTONOMOUS_SYNTHESIS_TEMPERATURE",
+    # Morning briefing (ATLAS_AUTONOMOUS_*)
+    "briefing_calendar_hours": "ATLAS_AUTONOMOUS_MORNING_BRIEFING_CALENDAR_HOURS",
+    "briefing_security_hours": "ATLAS_AUTONOMOUS_MORNING_BRIEFING_SECURITY_HOURS",
+    # Nightly memory sync (ATLAS_AUTONOMOUS_* + ATLAS_MEMORY_*)
+    "nightly_sync_enabled": "ATLAS_MEMORY_NIGHTLY_SYNC_ENABLED",
+    "nightly_sync_max_turns": "ATLAS_AUTONOMOUS_NIGHTLY_SYNC_MAX_TURNS",
+    "memory_purge_days": "ATLAS_MEMORY_PURGE_DAYS",
+    # Pattern & preference learning (ATLAS_AUTONOMOUS_*)
+    "pattern_learning_lookback_days": "ATLAS_AUTONOMOUS_PATTERN_LEARNING_LOOKBACK_DAYS",
+    "preference_learning_lookback_days": "ATLAS_AUTONOMOUS_PREFERENCE_LEARNING_LOOKBACK_DAYS",
+    "preference_learning_min_turns": "ATLAS_AUTONOMOUS_PREFERENCE_LEARNING_MIN_TURNS",
+    # Proactive intelligence (ATLAS_AUTONOMOUS_*)
+    "proactive_lookback_hours": "ATLAS_AUTONOMOUS_PROACTIVE_ACTIONS_LOOKBACK_HOURS",
+    "action_escalation_stale_days": "ATLAS_AUTONOMOUS_ACTION_ESCALATION_STALE_DAYS",
+    "action_escalation_overdue_days": "ATLAS_AUTONOMOUS_ACTION_ESCALATION_OVERDUE_DAYS",
+    # Device & security (ATLAS_AUTONOMOUS_*)
+    "device_health_battery_threshold": "ATLAS_AUTONOMOUS_DEVICE_HEALTH_BATTERY_THRESHOLD",
+    "device_health_stale_hours": "ATLAS_AUTONOMOUS_DEVICE_HEALTH_STALE_HOURS",
+    "security_summary_hours": "ATLAS_AUTONOMOUS_SECURITY_SUMMARY_HOURS",
+}
+
+# Sub-config routing for write path
+_DAILY_PERSONA_FIELDS = {"persona_name", "persona_owner_name", "persona_system_prompt"}
+_DAILY_HOME_AGENT_FIELDS = {"llm_temperature", "llm_max_tokens", "llm_max_history"}
+_DAILY_MEMORY_FIELDS = {"nightly_sync_enabled", "memory_purge_days"}
+# Everything else → settings.autonomous
+
+
+class DailySettings(BaseModel):
+    """User-configurable settings for Atlas's daily reasoning and nightly intelligence cycle."""
+
+    # ── Atlas Identity ────────────────────────────────────────────────────────
+    persona_name: str = Field(description="Atlas's name (used in greetings and responses)")
+    persona_owner_name: str = Field(description="Your name — used in emails, sign-offs, and personalization")
+    persona_system_prompt: str = Field(description="Core personality and instructions sent to the LLM for every conversation")
+
+    # ── LLM Response Behaviour ────────────────────────────────────────────────
+    llm_temperature: float = Field(description="Conversational temperature — higher = more creative, lower = more precise")
+    llm_max_tokens: int = Field(description="Maximum tokens Atlas generates per conversational response")
+    llm_max_history: int = Field(description="Conversation turns to include as context (higher = better memory, more tokens)")
+
+    # ── Autonomous Scheduler ──────────────────────────────────────────────────
+    autonomous_enabled: bool = Field(description="Enable the daily/nightly autonomous task scheduler")
+    autonomous_timezone: str = Field(description="Timezone used for scheduling all nightly and daily tasks")
+    notify_results: bool = Field(description="Push a notification (via ntfy) when a nightly task produces a result")
+    announce_results: bool = Field(description="Speak nightly task results aloud via TTS on edge nodes")
+    synthesis_enabled: bool = Field(description="Use LLM to synthesise nightly task results into plain-language summaries")
+    synthesis_temperature: float = Field(description="LLM temperature for nightly synthesis (lower = more consistent summaries)")
+
+    # ── Daily Briefing (7:00 AM) ──────────────────────────────────────────────
+    briefing_calendar_hours: int = Field(description="Hours ahead to include calendar events in the morning briefing")
+    briefing_security_hours: int = Field(description="Hours to look back for overnight security events in the morning briefing")
+
+    # ── Nightly Memory Sync (3:00 AM) ─────────────────────────────────────────
+    nightly_sync_enabled: bool = Field(description="Sync today's conversations into the knowledge graph each night")
+    nightly_sync_max_turns: int = Field(description="Max conversation turns to process per nightly sync run (spread across nights if > cap)")
+    memory_purge_days: int = Field(description="Delete raw conversation turns from the database after this many days (knowledge graph keeps the facts)")
+
+    # ── Pattern & Preference Learning ─────────────────────────────────────────
+    pattern_learning_lookback_days: int = Field(description="Days of history used to learn your temporal patterns (presence, device usage)")
+    preference_learning_lookback_days: int = Field(description="Days of conversation history to analyse for user preferences")
+    preference_learning_min_turns: int = Field(description="Minimum user messages needed before Atlas updates preferences (prevents premature changes)")
+
+    # ── Proactive Intelligence ────────────────────────────────────────────────
+    proactive_lookback_hours: int = Field(description="Hours of recent conversation Atlas scans to extract pending action items")
+    action_escalation_stale_days: int = Field(description="Flag a pending action as stale after this many days of inactivity")
+    action_escalation_overdue_days: int = Field(description="Flag a pending action as overdue after this many days past its deadline")
+
+    # ── Device & Security ────────────────────────────────────────────────────
+    device_health_battery_threshold: int = Field(description="Battery percentage below which a device is flagged as low in the daily health check")
+    device_health_stale_hours: int = Field(description="Hours without a state update before a device is considered stale")
+    security_summary_hours: int = Field(description="Lookback window for security event summaries (runs every 6 hours)")
+
+
+class DailySettingsUpdate(BaseModel):
+    """Partial update payload for daily intelligence settings."""
+
+    # Persona
+    persona_name: Optional[str] = None
+    persona_owner_name: Optional[str] = None
+    persona_system_prompt: Optional[str] = None
+
+    # LLM
+    llm_temperature: Optional[float] = None
+    llm_max_tokens: Optional[int] = None
+    llm_max_history: Optional[int] = None
+
+    # Autonomous
+    autonomous_enabled: Optional[bool] = None
+    autonomous_timezone: Optional[str] = None
+    notify_results: Optional[bool] = None
+    announce_results: Optional[bool] = None
+    synthesis_enabled: Optional[bool] = None
+    synthesis_temperature: Optional[float] = None
+
+    # Briefing
+    briefing_calendar_hours: Optional[int] = None
+    briefing_security_hours: Optional[int] = None
+
+    # Nightly sync
+    nightly_sync_enabled: Optional[bool] = None
+    nightly_sync_max_turns: Optional[int] = None
+    memory_purge_days: Optional[int] = None
+
+    # Learning
+    pattern_learning_lookback_days: Optional[int] = None
+    preference_learning_lookback_days: Optional[int] = None
+    preference_learning_min_turns: Optional[int] = None
+
+    # Proactive
+    proactive_lookback_hours: Optional[int] = None
+    action_escalation_stale_days: Optional[int] = None
+    action_escalation_overdue_days: Optional[int] = None
+
+    # Device & security
+    device_health_battery_threshold: Optional[int] = None
+    device_health_stale_hours: Optional[int] = None
+    security_summary_hours: Optional[int] = None
+
+
+def _current_daily_settings() -> DailySettings:
+    """Build a DailySettings snapshot from the live settings objects."""
+    p = settings.persona
+    ha = settings.home_agent
+    a = settings.autonomous
+    m = settings.memory
+    return DailySettings(
+        persona_name=p.name,
+        persona_owner_name=p.owner_name,
+        persona_system_prompt=p.system_prompt,
+        llm_temperature=ha.temperature,
+        llm_max_tokens=ha.max_tokens,
+        llm_max_history=ha.max_history,
+        autonomous_enabled=a.enabled,
+        autonomous_timezone=a.default_timezone,
+        notify_results=a.notify_results,
+        announce_results=a.announce_results,
+        synthesis_enabled=a.synthesis_enabled,
+        synthesis_temperature=a.synthesis_temperature,
+        briefing_calendar_hours=a.morning_briefing_calendar_hours,
+        briefing_security_hours=a.morning_briefing_security_hours,
+        nightly_sync_enabled=m.nightly_sync_enabled,
+        nightly_sync_max_turns=a.nightly_sync_max_turns,
+        memory_purge_days=m.purge_days,
+        pattern_learning_lookback_days=a.pattern_learning_lookback_days,
+        preference_learning_lookback_days=a.preference_learning_lookback_days,
+        preference_learning_min_turns=a.preference_learning_min_turns,
+        proactive_lookback_hours=a.proactive_actions_lookback_hours,
+        action_escalation_stale_days=a.action_escalation_stale_days,
+        action_escalation_overdue_days=a.action_escalation_overdue_days,
+        device_health_battery_threshold=a.device_health_battery_threshold,
+        device_health_stale_hours=a.device_health_stale_hours,
+        security_summary_hours=a.security_summary_hours,
+    )
+
+
+# Persona field name → actual PersonaConfig attribute
+_PERSONA_ATTR_MAP = {
+    "persona_name": "name",
+    "persona_owner_name": "owner_name",
+    "persona_system_prompt": "system_prompt",
+}
+# HomeAgentConfig attribute map
+_HOME_AGENT_ATTR_MAP = {
+    "llm_temperature": "temperature",
+    "llm_max_tokens": "max_tokens",
+    "llm_max_history": "max_history",
+}
+# MemoryConfig attribute map
+_MEMORY_ATTR_MAP = {
+    "nightly_sync_enabled": "nightly_sync_enabled",
+    "memory_purge_days": "purge_days",
+}
+# AutonomousConfig attribute map (strip prefix from API field name)
+_AUTONOMOUS_ATTR_MAP = {
+    "autonomous_enabled": "enabled",
+    "autonomous_timezone": "default_timezone",
+    "notify_results": "notify_results",
+    "announce_results": "announce_results",
+    "synthesis_enabled": "synthesis_enabled",
+    "synthesis_temperature": "synthesis_temperature",
+    "briefing_calendar_hours": "morning_briefing_calendar_hours",
+    "briefing_security_hours": "morning_briefing_security_hours",
+    "nightly_sync_max_turns": "nightly_sync_max_turns",
+    "pattern_learning_lookback_days": "pattern_learning_lookback_days",
+    "preference_learning_lookback_days": "preference_learning_lookback_days",
+    "preference_learning_min_turns": "preference_learning_min_turns",
+    "proactive_lookback_hours": "proactive_actions_lookback_hours",
+    "action_escalation_stale_days": "action_escalation_stale_days",
+    "action_escalation_overdue_days": "action_escalation_overdue_days",
+    "device_health_battery_threshold": "device_health_battery_threshold",
+    "device_health_stale_hours": "device_health_stale_hours",
+    "security_summary_hours": "security_summary_hours",
+}
+
+
+@router.get("/daily", response_model=DailySettings)
+async def get_daily_settings() -> DailySettings:
+    """Return current user-configurable daily intelligence / nightly reasoning settings."""
+    return _current_daily_settings()
+
+
+@router.patch("/daily", response_model=DailySettings)
+async def update_daily_settings(updates: DailySettingsUpdate) -> DailySettings:
+    """
+    Update daily intelligence settings.
+
+    Changes apply in-memory immediately and are persisted to .env.local.
+    Persona changes (name, system_prompt) take effect on the next LLM call.
+    Schedule timing changes take effect on the next scheduler cycle.
+    """
+    update_dict = updates.model_dump(exclude_none=True)
+
+    if not update_dict:
+        return _current_daily_settings()
+
+    for field, value in update_dict.items():
+        if field in _PERSONA_ATTR_MAP:
+            attr = _PERSONA_ATTR_MAP[field]
+            if hasattr(settings.persona, attr):
+                setattr(settings.persona, attr, value)
+                logger.info("Persona setting updated: %s = %r", attr, value)
+        elif field in _HOME_AGENT_ATTR_MAP:
+            attr = _HOME_AGENT_ATTR_MAP[field]
+            if hasattr(settings.home_agent, attr):
+                setattr(settings.home_agent, attr, value)
+                logger.info("Home agent setting updated: %s = %r", attr, value)
+        elif field in _MEMORY_ATTR_MAP:
+            attr = _MEMORY_ATTR_MAP[field]
+            if hasattr(settings.memory, attr):
+                setattr(settings.memory, attr, value)
+                logger.info("Memory setting updated: %s = %r", attr, value)
+        elif field in _AUTONOMOUS_ATTR_MAP:
+            attr = _AUTONOMOUS_ATTR_MAP[field]
+            if hasattr(settings.autonomous, attr):
+                setattr(settings.autonomous, attr, value)
+                logger.info("Autonomous setting updated: %s = %r", attr, value)
+
+    # Persist to .env.local
+    env_updates: dict[str, str] = {}
+    for field, value in update_dict.items():
+        env_key = _DAILY_ENV_MAP.get(field)
+        if env_key is not None:
+            env_updates[env_key] = str(value)
+
+    if env_updates:
+        async with _env_write_lock:
+            try:
+                _write_env_local(env_updates)
+                logger.info("Daily settings persisted to .env.local: %s", list(env_updates.keys()))
+            except OSError as exc:
+                logger.warning("Failed to persist daily settings to .env.local: %s", exc)
+
+    return _current_daily_settings()
