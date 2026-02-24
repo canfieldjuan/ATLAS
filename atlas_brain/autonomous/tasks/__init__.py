@@ -34,6 +34,7 @@ _BUILTIN_TASKS = [
     ("news_intake", "run", "news_intake"),
     ("market_intake", "run", "market_intake"),
     ("daily_intelligence", "run", "daily_intelligence"),
+    ("article_enrichment", "run", "article_enrichment"),
 ]
 
 

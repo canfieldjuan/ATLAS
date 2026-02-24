@@ -1905,6 +1905,18 @@ class ExternalDataConfig(BaseSettings):
     news_max_rss_feeds: int = Field(default=5, description="Max Google RSS feeds to poll per cycle")
     news_keyword_min_length: int = Field(default=3, description="Min word length for market symbol cross-ref matching")
     api_timeout_seconds: float = Field(default=20.0, description="HTTP timeout for external API calls")
+    # Article enrichment
+    enrichment_enabled: bool = Field(default=True, description="Enable article content enrichment")
+    enrichment_interval_seconds: int = Field(default=600, description="Article enrichment polling interval (10 min)")
+    enrichment_max_per_batch: int = Field(default=10, description="Max articles to enrich per batch")
+    enrichment_max_attempts: int = Field(default=3, description="Max fetch attempts before marking failed")
+    enrichment_content_max_chars: int = Field(default=10000, description="Max chars to store from article body")
+    enrichment_fetch_timeout: float = Field(default=15.0, description="HTTP timeout for article content fetch")
+    # Pressure scoring
+    pressure_enabled: bool = Field(default=True, description="Enable pressure signal detection")
+    pressure_baseline_window_days: int = Field(default=180, description="Rolling window for baseline (6 months)")
+    pressure_alert_threshold: float = Field(default=7.0, description="Pressure score alert threshold (0-10)")
+    pressure_drift_alert_threshold: float = Field(default=2.0, description="Sentiment drift alert threshold")
 
 
 class TemporalPatternConfig(BaseSettings):
@@ -1934,6 +1946,7 @@ class MCPConfig(BaseSettings):
     calendar_enabled: bool = Field(default=True, description="Enable Calendar MCP server")
     twilio_enabled: bool = Field(default=True, description="Enable Twilio MCP server")
     invoicing_enabled: bool = Field(default=True, description="Enable Invoicing MCP server")
+    auth_token: str = Field(default="", description="Bearer token for SSE transport auth (empty = no auth)")
     transport: str = Field(default="stdio", description="MCP transport: stdio or sse")
     host: str = Field(default="0.0.0.0", description="Bind host for SSE transport")
     crm_port: int = Field(default=8056, description="Port for CRM MCP server (SSE transport)")

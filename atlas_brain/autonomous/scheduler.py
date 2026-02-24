@@ -482,6 +482,15 @@ class TaskScheduler:
                 "notify_tags": "brain,chart_with_upwards_trend",
             },
         },
+        {
+            "name": "article_enrichment",
+            "description": "Fetch article content and classify via SORAM pressure channels",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": None,
+            "timeout_seconds": 180,
+            "metadata": {"builtin_handler": "article_enrichment"},
+        },
     ]
 
     async def _ensure_default_tasks(self) -> None:
@@ -503,6 +512,7 @@ class TaskScheduler:
                 "email_stale_check": settings.email_stale_check.interval_seconds,
                 "news_intake": settings.external_data.news_interval_seconds,
                 "market_intake": settings.external_data.market_interval_seconds,
+                "article_enrichment": settings.external_data.enrichment_interval_seconds,
             }
 
             for task_def in self._DEFAULT_TASKS:
@@ -582,6 +592,7 @@ class TaskScheduler:
                 "email_draft": settings.email_draft.schedule_interval_seconds,
                 "email_intake": settings.email_intake.interval_seconds,
                 "email_stale_check": settings.email_stale_check.interval_seconds,
+                "article_enrichment": settings.external_data.enrichment_interval_seconds,
             }
 
             for task_name, desired_interval in interval_overrides.items():

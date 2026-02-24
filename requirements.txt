@@ -63,3 +63,4 @@ mcp>=1.26.0
 
 # External data producers (news feeds)
 feedparser>=6.0
+trafilatura>=1.6

@@ -464,6 +464,21 @@ class HeadlessRunner:
             except Exception as e:
                 logger.debug("Reasoning journal cleanup skipped: %s", e)
 
+            # Entity pressure baselines cleanup
+            try:
+                from ..config import settings as _settings
+                journal_retention = _settings.external_data.intelligence_journal_retention_days
+                baselines_result = await pool.execute(
+                    """
+                    DELETE FROM entity_pressure_baselines
+                    WHERE last_computed_at < CURRENT_TIMESTAMP - make_interval(days => $1)
+                    """,
+                    journal_retention,
+                )
+                result["pressure_baselines_cleaned"] = baselines_result
+            except Exception as e:
+                logger.debug("Pressure baselines cleanup skipped: %s", e)
+
         return result
 
 

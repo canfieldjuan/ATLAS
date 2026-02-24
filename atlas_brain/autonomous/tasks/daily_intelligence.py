@@ -12,7 +12,7 @@ import asyncio
 import json
 import logging
 import re
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any
 
 from ...config import settings
@@ -36,16 +36,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     max_prior = cfg.intelligence_max_prior_sessions
     today = date.today()
 
-    # Gather all 5 data sources in parallel
-    market_data, news_articles, business_ctx, graph_ctx, prior_reasoning = (
-        await asyncio.gather(
-            _fetch_market_data(pool, window_days),
-            _fetch_news_articles(pool, window_days),
-            _fetch_business_context(pool, window_days),
-            _fetch_graph_context(),
-            _fetch_prior_reasoning(pool, max_prior),
-            return_exceptions=True,
-        )
+    # Gather all 6 data sources in parallel
+    (
+        market_data, news_articles, business_ctx,
+        graph_ctx, prior_reasoning, pressure_baselines,
+    ) = await asyncio.gather(
+        _fetch_market_data(pool, window_days),
+        _fetch_news_articles(pool, window_days),
+        _fetch_business_context(pool, window_days),
+        _fetch_graph_context(),
+        _fetch_prior_reasoning(pool, max_prior),
+        _fetch_pressure_baselines(pool),
+        return_exceptions=True,
     )
 
     # Convert exceptions to empty values
@@ -64,6 +66,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if isinstance(prior_reasoning, Exception):
         logger.warning("Prior reasoning fetch failed: %s", prior_reasoning)
         prior_reasoning = []
+    if isinstance(pressure_baselines, Exception):
+        logger.warning("Pressure baselines fetch failed: %s", pressure_baselines)
+        pressure_baselines = []
 
     # Check if there's enough data to analyze
     total_data_points = len(market_data) + len(news_articles)
@@ -78,6 +83,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "news_articles": news_articles,
         "business_context": business_ctx,
         "graph_context": graph_ctx,
+        "pressure_baselines": pressure_baselines,
         "prior_reasoning": prior_reasoning,
     }
 
@@ -90,6 +96,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     parsed = _parse_analysis(analysis)
 
     # Persist to reasoning_journal
+    pressure_readings = parsed.get("pressure_readings", [])
     try:
         await pool.execute(
             """
@@ -97,8 +104,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 session_date, analysis_type, analysis_window_days,
                 raw_data_summary, reasoning_output, key_insights,
                 connections_found, recommendations, market_summary,
-                news_summary, business_implications
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                news_summary, business_implications, pressure_readings
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             """,
             today,
             "daily",
@@ -109,6 +116,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 "business_keys": list(business_ctx.keys()) if isinstance(business_ctx, dict) else [],
                 "graph_facts": len(graph_ctx),
                 "prior_sessions": len(prior_reasoning),
+                "pressure_baselines": len(pressure_baselines),
             }),
             parsed.get("analysis_text", analysis),
             json.dumps(parsed.get("key_insights", [])),
@@ -117,10 +125,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             json.dumps(parsed.get("market_summary", {})),
             json.dumps(parsed.get("news_summary", {})),
             json.dumps(parsed.get("business_implications", [])),
+            json.dumps(pressure_readings),
         )
         logger.info("Stored reasoning journal entry for %s", today)
     except Exception:
         logger.exception("Failed to store reasoning journal entry")
+
+    # Upsert entity pressure baselines
+    if cfg.pressure_enabled and pressure_readings:
+        await _upsert_pressure_baselines(pool, pressure_readings)
 
     # Send ntfy notification
     analysis_text = parsed.get("analysis_text", analysis)
@@ -170,11 +183,12 @@ async def _fetch_market_data(pool, window_days: int) -> list[dict[str, Any]]:
 
 
 async def _fetch_news_articles(pool, window_days: int) -> list[dict[str, Any]]:
-    """Fetch stored news articles from the analysis window."""
+    """Fetch stored news articles from the analysis window (with enrichment data)."""
     rows = await pool.fetch(
         """
         SELECT title, source_name, url, published_at, summary,
-               matched_keywords, is_market_related, created_at
+               matched_keywords, is_market_related, created_at,
+               content, soram_channels, linguistic_indicators, entities_detected
         FROM news_articles
         WHERE created_at > NOW() - make_interval(days => $1)
         ORDER BY created_at DESC
@@ -182,8 +196,9 @@ async def _fetch_news_articles(pool, window_days: int) -> list[dict[str, Any]]:
         """,
         window_days,
     )
-    return [
-        {
+    result = []
+    for r in rows:
+        article: dict[str, Any] = {
             "title": r["title"],
             "source": r["source_name"],
             "summary": r["summary"],
@@ -191,8 +206,30 @@ async def _fetch_news_articles(pool, window_days: int) -> list[dict[str, Any]]:
             "is_market_related": r["is_market_related"],
             "published_at": r["published_at"],
         }
-        for r in rows
-    ]
+        # Enrichment fields (may be NULL if not yet enriched)
+        if r["content"]:
+            article["content"] = r["content"][:2000]  # truncate for LLM context
+        soram = r["soram_channels"]
+        if isinstance(soram, str):
+            try:
+                soram = json.loads(soram)
+            except (json.JSONDecodeError, TypeError):
+                soram = None
+        if soram:
+            article["soram_channels"] = soram
+        ling = r["linguistic_indicators"]
+        if isinstance(ling, str):
+            try:
+                ling = json.loads(ling)
+            except (json.JSONDecodeError, TypeError):
+                ling = None
+        if ling:
+            article["linguistic_indicators"] = ling
+        entities = r["entities_detected"]
+        if entities:
+            article["entities_detected"] = list(entities)
+        result.append(article)
+    return result
 
 
 async def _fetch_business_context(pool, window_days: int) -> dict[str, Any]:
@@ -321,15 +358,16 @@ async def _fetch_prior_reasoning(pool, max_sessions: int) -> list[dict[str, Any]
         """
         SELECT session_date, reasoning_output, key_insights,
                connections_found, recommendations, market_summary,
-               news_summary, business_implications
+               news_summary, business_implications, pressure_readings
         FROM reasoning_journal
         ORDER BY session_date DESC
         LIMIT $1
         """,
         max_sessions,
     )
-    return [
-        {
+    result = []
+    for r in rows:
+        entry: dict[str, Any] = {
             "session_date": str(r["session_date"]),
             "reasoning_output": (r["reasoning_output"] or "")[:1000],
             "key_insights": r["key_insights"] if isinstance(r["key_insights"], list) else [],
@@ -339,8 +377,100 @@ async def _fetch_prior_reasoning(pool, max_sessions: int) -> list[dict[str, Any]
             "news_summary": r["news_summary"] if isinstance(r["news_summary"], dict) else {},
             "business_implications": r["business_implications"] if isinstance(r["business_implications"], list) else [],
         }
-        for r in rows
-    ]
+        pr = r["pressure_readings"]
+        if isinstance(pr, str):
+            try:
+                pr = json.loads(pr)
+            except (json.JSONDecodeError, TypeError):
+                pr = []
+        if isinstance(pr, list) and pr:
+            entry["pressure_readings"] = pr
+        result.append(entry)
+    return result
+
+
+async def _fetch_pressure_baselines(pool) -> list[dict[str, Any]]:
+    """Fetch current entity pressure baselines (highest pressure first)."""
+    rows = await pool.fetch(
+        """
+        SELECT entity_name, entity_type, pressure_score, sentiment_drift,
+               narrative_frequency, soram_breakdown, linguistic_signals,
+               last_computed_at
+        FROM entity_pressure_baselines
+        ORDER BY pressure_score DESC
+        LIMIT 50
+        """,
+    )
+    result = []
+    for r in rows:
+        entry: dict[str, Any] = {
+            "entity_name": r["entity_name"],
+            "entity_type": r["entity_type"],
+            "pressure_score": float(r["pressure_score"]) if r["pressure_score"] is not None else 0.0,
+            "sentiment_drift": float(r["sentiment_drift"]) if r["sentiment_drift"] is not None else 0.0,
+            "narrative_frequency": r["narrative_frequency"] or 0,
+            "last_computed_at": r["last_computed_at"].isoformat() if r["last_computed_at"] else None,
+        }
+        soram = r["soram_breakdown"]
+        if isinstance(soram, str):
+            try:
+                soram = json.loads(soram)
+            except (json.JSONDecodeError, TypeError):
+                soram = {}
+        entry["soram_breakdown"] = soram if isinstance(soram, dict) else {}
+        ling = r["linguistic_signals"]
+        if isinstance(ling, str):
+            try:
+                ling = json.loads(ling)
+            except (json.JSONDecodeError, TypeError):
+                ling = {}
+        entry["linguistic_signals"] = ling if isinstance(ling, dict) else {}
+        result.append(entry)
+    return result
+
+
+async def _upsert_pressure_baselines(
+    pool, pressure_readings: list[dict[str, Any]]
+) -> None:
+    """Upsert entity pressure baselines from LLM pressure readings."""
+    now = datetime.now(timezone.utc)
+    upserted = 0
+    for reading in pressure_readings:
+        entity_name = reading.get("entity_name")
+        if not entity_name:
+            continue
+        entity_type = reading.get("entity_type", "company")
+        try:
+            await pool.execute(
+                """
+                INSERT INTO entity_pressure_baselines (
+                    entity_name, entity_type, pressure_score, sentiment_drift,
+                    narrative_frequency, soram_breakdown, linguistic_signals,
+                    last_computed_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                ON CONFLICT (entity_name, entity_type) DO UPDATE SET
+                    pressure_score = EXCLUDED.pressure_score,
+                    sentiment_drift = EXCLUDED.sentiment_drift,
+                    narrative_frequency = EXCLUDED.narrative_frequency,
+                    soram_breakdown = EXCLUDED.soram_breakdown,
+                    linguistic_signals = EXCLUDED.linguistic_signals,
+                    last_computed_at = EXCLUDED.last_computed_at
+                """,
+                entity_name,
+                entity_type,
+                reading.get("pressure_score", 0.0),
+                reading.get("sentiment_drift", 0.0),
+                reading.get("narrative_frequency", 0),
+                json.dumps(reading.get("soram_breakdown", {})),
+                json.dumps(reading.get("linguistic_signals", {})),
+                now,
+            )
+            upserted += 1
+        except Exception:
+            logger.debug("Failed to upsert pressure baseline for %s", entity_name, exc_info=True)
+
+    if upserted:
+        logger.info("Upserted %d entity pressure baselines", upserted)
 
 
 # ------------------------------------------------------------------
