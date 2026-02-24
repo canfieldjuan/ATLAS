@@ -375,6 +375,22 @@ class TaskScheduler:
                 "mailbox": "[Gmail]/Sent Mail",
             },
         },
+        {
+            "name": "news_intelligence",
+            "description": (
+                "Daily news pressure signal detection — identifies topics accelerating "
+                "in article volume before they become mainstream headline news"
+            ),
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": "0 5 * * *",  # 5 AM daily, before morning briefing
+            "timeout_seconds": 300,
+            "enabled": False,  # opt-in: requires ATLAS_NEWS_API_KEY
+            "metadata": {
+                "builtin_handler": "news_intelligence",
+                "synthesis_skill": "digest/news_intelligence",
+            },
+        },
     ]
 
     async def _ensure_default_tasks(self) -> None:

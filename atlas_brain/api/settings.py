@@ -734,3 +734,148 @@ async def update_daily_settings(updates: DailySettingsUpdate) -> DailySettings:
                 logger.warning("Failed to persist daily settings to .env.local: %s", exc)
 
     return _current_daily_settings()
+
+
+# ---------------------------------------------------------------------------
+# News intelligence settings
+# ---------------------------------------------------------------------------
+
+_INTEL_ENV_MAP: dict[str, str] = {
+    "enabled": "ATLAS_NEWS_ENABLED",
+    "topics": "ATLAS_NEWS_TOPICS",
+    "regions": "ATLAS_NEWS_REGIONS",
+    "languages": "ATLAS_NEWS_LANGUAGES",
+    "lookback_days": "ATLAS_NEWS_LOOKBACK_DAYS",
+    "pressure_velocity_threshold": "ATLAS_NEWS_PRESSURE_VELOCITY_THRESHOLD",
+    "signal_min_articles": "ATLAS_NEWS_SIGNAL_MIN_ARTICLES",
+    "max_articles_per_topic": "ATLAS_NEWS_MAX_ARTICLES_PER_TOPIC",
+    "llm_model": "ATLAS_NEWS_LLM_MODEL",
+    "schedule_hour": "ATLAS_NEWS_SCHEDULE_HOUR",
+    "notify_on_signal": "ATLAS_NEWS_NOTIFY_ON_SIGNAL",
+    "notify_all_runs": "ATLAS_NEWS_NOTIFY_ALL_RUNS",
+    "include_in_morning_briefing": "ATLAS_NEWS_INCLUDE_IN_MORNING_BRIEFING",
+}
+
+
+class IntelligenceSettings(BaseModel):
+    """User-configurable news intelligence / pressure signal settings."""
+
+    # General
+    enabled: bool = Field(description="Enable daily news intelligence analysis")
+
+    # What to monitor
+    topics: str = Field(
+        description="Comma-separated topics to monitor (e.g. supply chain,interest rates,AI regulation)"
+    )
+    regions: str = Field(
+        description="Comma-separated geographic focus areas prepended to queries (e.g. US,Europe)"
+    )
+    languages: str = Field(description="Comma-separated language codes for article filtering (e.g. en,es)")
+
+    # Pressure signal detection
+    lookback_days: int = Field(
+        description="Days of history used to establish the baseline article volume for each topic"
+    )
+    pressure_velocity_threshold: float = Field(
+        description=(
+            "Topic must grow at least this multiple above its baseline to flag as a pressure signal "
+            "(1.5 = 50% acceleration, 2.0 = double the normal rate)"
+        )
+    )
+    signal_min_articles: int = Field(
+        description="Minimum articles today to confirm a signal — prevents single-source noise"
+    )
+
+    # Operations
+    max_articles_per_topic: int = Field(
+        description="Max articles fetched per topic per run (controls NewsAPI quota usage)"
+    )
+    llm_model: str = Field(description="Ollama model used to synthesise the intelligence briefing")
+    schedule_hour: int = Field(description="Hour of day (0–23) to run the daily analysis")
+
+    # Output
+    notify_on_signal: bool = Field(description="Push a notification when pressure signals are detected")
+    notify_all_runs: bool = Field(description="Push a notification after every run, even with no new signals")
+    include_in_morning_briefing: bool = Field(
+        description="Include active pressure signals in the morning briefing"
+    )
+
+
+class IntelligenceSettingsUpdate(BaseModel):
+    """Partial update payload for news intelligence settings."""
+
+    enabled: Optional[bool] = None
+    topics: Optional[str] = None
+    regions: Optional[str] = None
+    languages: Optional[str] = None
+    lookback_days: Optional[int] = None
+    pressure_velocity_threshold: Optional[float] = None
+    signal_min_articles: Optional[int] = None
+    max_articles_per_topic: Optional[int] = None
+    llm_model: Optional[str] = None
+    schedule_hour: Optional[int] = None
+    notify_on_signal: Optional[bool] = None
+    notify_all_runs: Optional[bool] = None
+    include_in_morning_briefing: Optional[bool] = None
+
+
+def _current_intelligence_settings() -> IntelligenceSettings:
+    """Build an IntelligenceSettings snapshot from the live settings object."""
+    n = settings.news_intel
+    return IntelligenceSettings(
+        enabled=n.enabled,
+        topics=n.topics,
+        regions=n.regions,
+        languages=n.languages,
+        lookback_days=n.lookback_days,
+        pressure_velocity_threshold=n.pressure_velocity_threshold,
+        signal_min_articles=n.signal_min_articles,
+        max_articles_per_topic=n.max_articles_per_topic,
+        llm_model=n.llm_model,
+        schedule_hour=n.schedule_hour,
+        notify_on_signal=n.notify_on_signal,
+        notify_all_runs=n.notify_all_runs,
+        include_in_morning_briefing=n.include_in_morning_briefing,
+    )
+
+
+@router.get("/intelligence", response_model=IntelligenceSettings)
+async def get_intelligence_settings() -> IntelligenceSettings:
+    """Return current user-configurable news intelligence settings."""
+    return _current_intelligence_settings()
+
+
+@router.patch("/intelligence", response_model=IntelligenceSettings)
+async def update_intelligence_settings(updates: IntelligenceSettingsUpdate) -> IntelligenceSettings:
+    """
+    Update news intelligence settings.
+
+    Changes are applied in-memory immediately and persisted to .env.local.
+    Note: ATLAS_NEWS_API_KEY is a credential — set it in your .env file directly,
+    not via this endpoint.
+    """
+    update_dict = updates.model_dump(exclude_none=True)
+
+    if not update_dict:
+        return _current_intelligence_settings()
+
+    for field, value in update_dict.items():
+        if hasattr(settings.news_intel, field):
+            setattr(settings.news_intel, field, value)
+            logger.info("Intelligence setting updated: %s = %r", field, value)
+
+    env_updates: dict[str, str] = {}
+    for field, value in update_dict.items():
+        env_key = _INTEL_ENV_MAP.get(field)
+        if env_key is not None:
+            env_updates[env_key] = str(value)
+
+    if env_updates:
+        async with _env_write_lock:
+            try:
+                _write_env_local(env_updates)
+                logger.info("Intelligence settings persisted to .env.local: %s", list(env_updates.keys()))
+            except OSError as exc:
+                logger.warning("Failed to persist intelligence settings to .env.local: %s", exc)
+
+    return _current_intelligence_settings()

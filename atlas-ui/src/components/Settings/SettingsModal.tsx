@@ -5,18 +5,20 @@
  * its own load/save lifecycle independently.
  */
 import { useState } from 'react';
-import { X, Mic, Mail, Brain } from 'lucide-react';
+import { X, Mic, Mail, Brain, Newspaper } from 'lucide-react';
 import clsx from 'clsx';
 import { VoiceSettingsForm } from './VoiceSettings';
 import { EmailSettingsForm } from './EmailSettings';
 import { DailySettingsForm } from './DailyIntelligenceSettings';
+import { IntelligenceSettingsForm } from './NewsIntelligenceSettings';
 
-type Tab = 'voice' | 'email' | 'daily';
+type Tab = 'voice' | 'email' | 'daily' | 'intelligence';
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'voice', label: 'Voice Pipeline', icon: <Mic size={13} /> },
   { id: 'email', label: 'Email', icon: <Mail size={13} /> },
   { id: 'daily', label: 'Daily Ops', icon: <Brain size={13} /> },
+  { id: 'intelligence', label: 'Intelligence', icon: <Newspaper size={13} /> },
 ];
 
 interface SettingsModalProps {
@@ -76,6 +78,7 @@ export function SettingsModal({ onClose, initialTab = 'voice' }: SettingsModalPr
           {activeTab === 'voice' && <VoiceSettingsForm />}
           {activeTab === 'email' && <EmailSettingsForm />}
           {activeTab === 'daily' && <DailySettingsForm />}
+          {activeTab === 'intelligence' && <IntelligenceSettingsForm />}
         </div>
       </div>
 

@@ -1792,6 +1792,82 @@ class MCPConfig(BaseSettings):
     calendar_port: int = Field(default=8059, description="Port for Calendar MCP server (SSE transport)")
 
 
+class NewsIntelligenceConfig(BaseSettings):
+    """News intelligence configuration — daily pressure signal detection.
+
+    Monitors a set of topics via the NewsAPI and identifies which ones are
+    accelerating in volume *before* they become mainstream headlines.
+    Think of 'pressure' as the leading-indicator signal that builds up quietly
+    while the eventual news event is still below the fold.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_NEWS_", env_file=".env", extra="ignore"
+    )
+
+    enabled: bool = Field(default=False, description="Enable daily news intelligence analysis")
+    api_key: str | None = Field(default=None, description="NewsAPI.org API key (newsapi.org/register)")
+
+    # What to monitor
+    topics: str = Field(
+        default="supply chain,interest rates,AI regulation,energy prices,housing market",
+        description="Comma-separated topics to monitor for pressure signal build-up",
+    )
+    regions: str = Field(
+        default="US",
+        description="Comma-separated regions or country names prepended to topic queries",
+    )
+    languages: str = Field(
+        default="en",
+        description="Comma-separated language codes for article filtering (e.g. en,es)",
+    )
+
+    # Pressure signal detection
+    lookback_days: int = Field(
+        default=7, ge=2, le=30,
+        description="Days of history used to establish the baseline article volume for each topic",
+    )
+    pressure_velocity_threshold: float = Field(
+        default=1.5, ge=1.0, le=10.0,
+        description=(
+            "Minimum growth multiplier above the baseline to flag a topic as a pressure signal — "
+            "1.5 means the topic is mentioned 50% more than its recent average"
+        ),
+    )
+    signal_min_articles: int = Field(
+        default=3, ge=1, le=20,
+        description="Minimum articles in the most-recent day to confirm a signal (filters single-source noise)",
+    )
+
+    # Operations
+    max_articles_per_topic: int = Field(
+        default=20, ge=5, le=100,
+        description="Maximum articles fetched per topic per run (controls NewsAPI quota usage)",
+    )
+    llm_model: str = Field(
+        default="qwen3:14b",
+        description="Ollama model used to synthesise the intelligence briefing",
+    )
+    schedule_hour: int = Field(
+        default=5, ge=0, le=23,
+        description="Hour of day (0–23, local time) to run the daily intelligence analysis",
+    )
+
+    # Output
+    notify_on_signal: bool = Field(
+        default=True,
+        description="Send a push notification when new pressure signals are detected",
+    )
+    notify_all_runs: bool = Field(
+        default=False,
+        description="Send a push notification after every run, even when no new signals are found",
+    )
+    include_in_morning_briefing: bool = Field(
+        default=True,
+        description="Include active pressure signals in the morning briefing summary",
+    )
+
+
 class Settings(BaseSettings):
     """Application-wide settings."""
 
@@ -1865,6 +1941,7 @@ class Settings(BaseSettings):
     openai_compat: OpenAICompatConfig = Field(default_factory=OpenAICompatConfig)
     ftl_tracing: FTLTracingConfig = Field(default_factory=FTLTracingConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
+    news_intel: NewsIntelligenceConfig = Field(default_factory=NewsIntelligenceConfig)
 
     # Presence tracking - imported from presence module
     @property
