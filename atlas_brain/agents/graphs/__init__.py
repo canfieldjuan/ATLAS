@@ -48,6 +48,10 @@ from .email import (
     run_email_workflow,
     EMAIL_WORKFLOW_TYPE,
 )
+from .email_query import (
+    run_email_query_workflow,
+    EMAIL_QUERY_WORKFLOW_TYPE,
+)
 from .calendar import (
     run_calendar_workflow,
     CALENDAR_WORKFLOW_TYPE,
@@ -99,6 +103,9 @@ __all__ = [
     # Email workflow
     "run_email_workflow",
     "EMAIL_WORKFLOW_TYPE",
+    # Email query workflow
+    "run_email_query_workflow",
+    "EMAIL_QUERY_WORKFLOW_TYPE",
     # Calendar workflow
     "CalendarWorkflowState",
     "run_calendar_workflow",

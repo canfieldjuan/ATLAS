@@ -7,7 +7,7 @@ Routing map:
     LOCAL     (Ollama qwen3:14b): conversation, reminder, calendar, intent
     CLOUD     (Ollama cloud minimax-m2): booking, email, security escalation
     DRAFT     (Anthropic Sonnet): email_draft
-    TRIAGE    (Anthropic Haiku): email_triage
+    TRIAGE    (Anthropic Haiku): email_triage, email_query
     REASONING (Anthropic Sonnet): reasoning agent deep analysis
     NO LLM    (unchanged): security workflow, presence workflow
 """
@@ -41,7 +41,7 @@ CLOUD_WORKFLOWS = frozenset({"booking", "email"})
 DRAFT_WORKFLOWS = frozenset({"email_draft"})
 
 # Workflows that use the triage LLM (Anthropic Haiku)
-TRIAGE_WORKFLOWS = frozenset({"email_triage"})
+TRIAGE_WORKFLOWS = frozenset({"email_triage", "email_query"})
 
 # Workflows that use the reasoning LLM (Anthropic Sonnet)
 REASONING_WORKFLOWS = frozenset({"reasoning"})

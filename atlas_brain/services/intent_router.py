@@ -81,6 +81,16 @@ ROUTE_DEFINITIONS: dict[str, list[str]] = {
         "send the cleaning estimate to the customer", "what emails did I send today",
         "show me my email history", "check what emails were sent this week",
     ],
+    "email_query": [
+        "what was my last email about", "check my inbox",
+        "any new emails today", "read my latest email",
+        "what did John say in his email", "was that email angry",
+        "what's the tone of the last email", "summarize my recent emails",
+        "did I get a reply from Sarah", "any emails from the contractor",
+        "what emails came in today", "show me my unread emails",
+        "reply to John's last email", "respond to that email",
+        "let's reply to the last email", "send a reply to Sarah",
+    ],
     "calendar_write": [
         "add a meeting to my calendar for Thursday", "create a calendar event for Tuesday",
         "schedule a meeting with the team on Friday", "put a dentist appointment on my calendar",
@@ -233,6 +243,7 @@ ROUTE_TO_ACTION: dict[str, tuple[str, Optional[str]]] = {
     "device_command": ("device_command", None),
     "reminder":       ("tool_use", "set_reminder"),
     "email":          ("tool_use", "send_email"),
+    "email_query":    ("tool_use", "search_inbox"),
     "calendar_write": ("tool_use", "create_calendar_event"),
     "booking":            ("tool_use", "book_appointment"),
     "cancel_booking":     ("tool_use", "cancel_appointment"),
@@ -259,6 +270,7 @@ ROUTE_TO_ACTION: dict[str, tuple[str, Optional[str]]] = {
 ROUTE_TO_WORKFLOW: dict[str, str] = {
     "reminder": "reminder",
     "email": "email",
+    "email_query": "email_query",
     "calendar_write": "calendar",
     "booking": "booking",
     "cancel_booking": "booking",
@@ -671,6 +683,7 @@ class SemanticIntentRouter:
                 "- device_command: control a physical device (lights, TV, thermostat)\n"
                 "- reminder: set a reminder or alarm\n"
                 "- email: send an email\n"
+                "- email_query: check inbox, read emails, ask about email content or tone, reply to received email\n"
                 "- calendar_write: create a calendar event\n"
                 "- booking/cancel_booking/reschedule_booking: manage appointments\n"
                 "- get_time: ask for current time\n"
