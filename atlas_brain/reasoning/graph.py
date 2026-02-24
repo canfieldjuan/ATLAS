@@ -174,6 +174,8 @@ async def _node_aggregate_context(
     state["sms_messages"] = ctx.get("sms", [])
     state["graph_facts"] = ctx.get("graph_facts", [])
     state["recent_events"] = ctx.get("recent_events", [])
+    state["market_context"] = ctx.get("market_data", [])
+    state["news_context"] = ctx.get("recent_news", [])
 
     return state
 
@@ -255,6 +257,16 @@ async def _node_reason(state: ReasoningAgentState) -> ReasoningAgentState:
         sections.append(
             f"## Recent Events ({len(state['recent_events'])})\n"
             + json.dumps(state["recent_events"][:5], default=str)[:1500]
+        )
+    if state.get("market_context"):
+        sections.append(
+            f"## Market Data ({len(state['market_context'])})\n"
+            + json.dumps(state["market_context"][:10], default=str)[:2000]
+        )
+    if state.get("news_context"):
+        sections.append(
+            f"## Recent News ({len(state['news_context'])})\n"
+            + json.dumps(state["news_context"][:10], default=str)[:2000]
         )
 
     prompt = "\n\n".join(sections)

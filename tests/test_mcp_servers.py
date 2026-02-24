@@ -739,10 +739,11 @@ class TestTwilioMCPTools:
         from atlas_brain.mcp.twilio_server import make_call
 
         _mock_comms_settings.forward_to_number = ""
-        raw = await make_call(to="+16185551234", from_number=None)
+        with patch("atlas_brain.mcp.twilio_server._outbound_caller_id", return_value=""):
+            raw = await make_call(to="+16185551234", from_number=None)
         data = json.loads(raw)
         assert data["success"] is False
-        assert "from_number" in data["error"]
+        assert "caller ID" in data["error"] or "from_number" in data["error"]
 
     async def test_make_call_twilio_error(self, _mock_twilio_client, _mock_comms_settings):
         from atlas_brain.mcp.twilio_server import make_call

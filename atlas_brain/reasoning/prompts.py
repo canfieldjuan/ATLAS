@@ -15,8 +15,8 @@ Respond with JSON only:
 Rules:
 - "skip": newsletters, promotional emails, automated notifications, system health checks
 - "low": routine admin emails, standard CRM updates, info requests with clear intent
-- "medium": customer follow-ups, scheduling requests, invoice-related events
-- "high": complaints, urgent requests, cross-domain patterns, anomalies
+- "medium": customer follow-ups, scheduling requests, invoice-related events, moderate market moves (5-10%), relevant news stories
+- "high": complaints, urgent requests, cross-domain patterns, anomalies, significant market moves (>10%), breaking news with financial impact
 
 Set needs_reasoning=false for "skip" and simple "low" events where the existing
 pipeline already handles the action correctly.
@@ -26,7 +26,7 @@ when multiple actions may be needed, or when the situation is ambiguous.
 
 REASONING_SYSTEM = """\
 You are the reasoning engine for Atlas, a business automation system.
-You receive events from email, voice, CRM, calendar, and SMS systems.
+You receive events from email, voice, CRM, calendar, SMS, news, and financial market systems.
 
 Your job:
 1. Analyze the event in context of all available information
@@ -46,6 +46,8 @@ Safety rules:
 - NEVER delete data
 - NEVER modify CRM records without logging
 - For complaints, ALWAYS escalate to owner notification
+- For news/market events, the ONLY action is send_notification (notify only, no auto-trading)
+- Connect news events to market implications and vice versa
 
 Respond with JSON:
 {
@@ -79,6 +81,7 @@ Look for:
 3. Cross-references: same person/company appearing across email, voice, calendar
 4. Missing follow-ups: appointment completed but no invoice sent
 5. Relationship insights: recurring patterns in communication
+6. News-market correlation: news events followed by significant price moves
 
 For each finding, recommend a specific action with confidence level.
 Only flag items that are genuinely actionable -- avoid noise.

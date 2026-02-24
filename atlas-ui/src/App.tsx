@@ -205,15 +205,12 @@ function App() {
       {/* Main Content Grid */}
       <main className={clsx(
         "flex-1 grid gap-4 relative z-10 transition-all duration-300",
-        showLeftPanel && showRightPanel && "grid-cols-12",
-        showLeftPanel && !showRightPanel && "grid-cols-9",
-        !showLeftPanel && showRightPanel && "grid-cols-9",
-        !showLeftPanel && !showRightPanel && "grid-cols-1"
+        showLeftPanel ? "grid-cols-[theme(spacing.72)_1fr]" : "grid-cols-1"
       )}>
 
         {/* Left Panel: System Stats */}
         {showLeftPanel && (
-          <section className="col-span-3 flex flex-col gap-4 min-h-0 animate-in fade-in slide-in-from-left duration-300">
+          <section className="flex flex-col gap-4 min-h-0 animate-in fade-in slide-in-from-left duration-300">
             <div className="relative bg-black/15 p-4 rounded-sm flex-1 flex flex-col backdrop-blur-md overflow-hidden">
               <div className="flex items-center gap-2 mb-4 pb-2 border-b border-cyan-400/20">
                 <Cpu size={16} className="text-cyan-400" />
@@ -294,13 +291,7 @@ function App() {
         )}
 
         {/* Center Panel: Main Orb */}
-        <section className={clsx(
-          "flex flex-col items-center justify-center relative transition-all duration-300",
-          showLeftPanel && showRightPanel && "col-span-6",
-          showLeftPanel && !showRightPanel && "col-span-6",
-          !showLeftPanel && showRightPanel && "col-span-6",
-          !showLeftPanel && !showRightPanel && "col-span-1"
-        )}>
+        <section className="flex flex-col items-center justify-center relative">
           <div className="mb-6 animate-[float_6s_ease-in-out_infinite]">
             <Avatar />
           </div>
@@ -406,21 +397,32 @@ function App() {
           </p>
         </section>
 
-        {/* Right Panel: Live Logs */}
-        {showRightPanel && (
-          <section className="col-span-3 flex flex-col gap-4 min-h-0 animate-in fade-in slide-in-from-right duration-300">
-          <div className="relative bg-black/15 p-4 rounded-sm flex-1 flex flex-col backdrop-blur-md overflow-hidden group">
-            <div className="flex items-center justify-between mb-4 pb-2 relative z-20 border-b border-cyan-400/20">
+      </main>
+
+      {/* Right Panel: System Feed — fixed overlay, orb unaffected */}
+      {showRightPanel && (
+        <div className="fixed top-0 right-0 h-full w-72 z-50 p-4 flex flex-col animate-in fade-in slide-in-from-right duration-300">
+          <div className="relative bg-black/60 p-4 rounded-sm flex-1 min-h-0 flex flex-col backdrop-blur-xl border border-cyan-400/15 overflow-hidden">
+            <div className="flex items-center justify-between mb-4 pb-2 border-b border-cyan-400/20">
               <div className="flex items-center gap-2">
                 <Terminal size={16} className="text-cyan-400" />
                 <span className="text-sm uppercase tracking-wider font-bold text-cyan-300">System Feed</span>
               </div>
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 bg-cyan-400 rounded-full shadow-[0_0_8px_rgba(34,211,238,0.8)]" />
-                <span className="text-[10px] text-cyan-400 font-bold tracking-wider">LIVE</span>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 bg-cyan-400 rounded-full shadow-[0_0_8px_rgba(34,211,238,0.8)]" />
+                  <span className="text-[10px] text-cyan-400 font-bold tracking-wider">LIVE</span>
+                </div>
+                <button
+                  onClick={() => setShowRightPanel(false)}
+                  className="p-0.5 rounded hover:bg-cyan-500/10 transition-colors"
+                  title="Close"
+                >
+                  <X size={12} className="text-cyan-600 hover:text-cyan-400" />
+                </button>
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar scroll-smooth relative z-20">
+            <div className="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar scroll-smooth">
               {systemEvents.length === 0 ? (
                 <div className="text-[10px] text-cyan-700 italic font-mono mt-2">Waiting for system events...</div>
               ) : (
@@ -447,10 +449,8 @@ function App() {
               <div ref={logEndRef} />
             </div>
           </div>
-
-        </section>
-        )}
-      </main>
+        </div>
+      )}
 
       {/* Footer: Text Input */}
       <footer className="mt-4 flex gap-2 z-10 relative">

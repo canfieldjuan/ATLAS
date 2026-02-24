@@ -39,6 +39,14 @@ class EventType:
     INVOICE_SENT = "invoice.sent"
     INVOICE_OVERDUE = "invoice.overdue"
 
+    # News
+    NEWS_SIGNIFICANT = "news.significant"
+    NEWS_MARKET_MOVING = "news.market_moving"
+
+    # Market
+    MARKET_SIGNIFICANT_MOVE = "market.significant_move"
+    MARKET_ALERT = "market.alert"
+
 
 @dataclass
 class AtlasEvent:

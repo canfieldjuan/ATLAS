@@ -451,6 +451,24 @@ class TaskScheduler:
                 "builtin_handler": "reasoning_reflection",
             },
         },
+        {
+            "name": "news_intake",
+            "description": "Poll news feeds, match watchlist keywords, emit news events",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": None,  # resolved from settings.external_data.news_interval_seconds
+            "timeout_seconds": 120,
+            "metadata": {"builtin_handler": "news_intake"},
+        },
+        {
+            "name": "market_intake",
+            "description": "Poll market prices for watchlist symbols, detect significant moves",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": None,  # resolved from settings.external_data.market_interval_seconds
+            "timeout_seconds": 60,
+            "metadata": {"builtin_handler": "market_intake"},
+        },
     ]
 
     async def _ensure_default_tasks(self) -> None:
@@ -470,6 +488,8 @@ class TaskScheduler:
                 "email_draft": settings.email_draft.schedule_interval_seconds,
                 "email_intake": settings.email_intake.interval_seconds,
                 "email_stale_check": settings.email_stale_check.interval_seconds,
+                "news_intake": settings.external_data.news_interval_seconds,
+                "market_intake": settings.external_data.market_interval_seconds,
             }
 
             for task_def in self._DEFAULT_TASKS:

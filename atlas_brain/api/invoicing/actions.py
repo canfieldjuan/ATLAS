@@ -77,28 +77,17 @@ async def send_invoice(invoice_id: str):
     if inv.get("customer_email"):
         try:
             from ...services.email_provider import get_email_provider
+            from ...templates.email.invoice import render_invoice_html, render_invoice_text
             email_provider = get_email_provider()
 
-            items_text = "\n".join(
-                f"  - {item['description']}: {item.get('quantity', 1)} x ${item.get('unit_price', 0):.2f} = ${item.get('amount', 0):.2f}"
-                for item in inv.get("line_items", [])
-            )
-            body = (
-                f"Invoice {inv['invoice_number']}\n\n"
-                f"Dear {inv['customer_name']},\n\n"
-                f"Please find your invoice details below:\n\n"
-                f"Items:\n{items_text}\n\n"
-                f"Subtotal: ${inv['subtotal']:.2f}\n"
-                f"Tax: ${inv['tax_amount']:.2f}\n"
-                f"Total Due: ${inv['total_amount']:.2f}\n\n"
-                f"Due Date: {inv['due_date']}\n\n"
-                f"Thank you for your business."
-            )
+            html_body = render_invoice_html(inv)
+            text_body = render_invoice_text(inv)
 
             await email_provider.send(
                 to=[inv["customer_email"]],
                 subject=f"Invoice {inv['invoice_number']} - ${inv['total_amount']:.2f}",
-                body=body,
+                body=text_body,
+                html=html_body,
             )
             email_sent = True
         except Exception as e:
@@ -153,23 +142,18 @@ async def send_reminder(invoice_id: str):
     if inv.get("customer_email"):
         try:
             from ...services.email_provider import get_email_provider
+            from ...templates.email.invoice import render_invoice_html, render_invoice_text
             email_provider = get_email_provider()
 
-            body = (
-                f"Payment Reminder - Invoice {inv['invoice_number']}\n\n"
-                f"Dear {inv['customer_name']},\n\n"
-                f"This is a friendly reminder that invoice {inv['invoice_number']} "
-                f"for ${inv['amount_due']:.2f} is past due.\n\n"
-                f"Original Due Date: {inv['due_date']}\n"
-                f"Amount Due: ${inv['amount_due']:.2f}\n\n"
-                f"Please arrange payment at your earliest convenience.\n\n"
-                f"Thank you."
-            )
+            # Render the full invoice as HTML for the reminder attachment
+            html_body = render_invoice_html(inv)
+            text_body = render_invoice_text(inv)
 
             await email_provider.send(
                 to=[inv["customer_email"]],
                 subject=f"Payment Reminder: Invoice {inv['invoice_number']} - ${inv['amount_due']:.2f}",
-                body=body,
+                body=text_body,
+                html=html_body,
             )
             email_sent = True
         except Exception as e:

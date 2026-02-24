@@ -384,7 +384,8 @@ class TestFullPipelineDryRun:
 
         # Mock SignalWire download response
         download_resp = MagicMock()
-        download_resp.content = b"RIFF....fake-wav-audio-bytes"
+        download_resp.content = b"RIFF" + b"\x00" * 200  # >100 bytes to pass auth loop check
+        download_resp.status_code = 200
         download_resp.raise_for_status = MagicMock()
 
         # Mock ASR response
@@ -415,6 +416,8 @@ class TestFullPipelineDryRun:
 
         # Mock comms_settings for download auth
         mock_comms = MagicMock()
+        mock_comms.signalwire_account_sid = "acct-test-789"
+        mock_comms.signalwire_recording_token = "rec-tok-012"
         mock_comms.signalwire_project_id = "proj-test-123"
         mock_comms.signalwire_api_token = "tok-test-456"
 
@@ -525,7 +528,8 @@ class TestFullPipelineDryRun:
         repo = FakeCallTranscriptRepo()
 
         download_resp = MagicMock()
-        download_resp.content = b"fake-wav"
+        download_resp.content = b"RIFF" + b"\x00" * 200  # >100 bytes to pass auth loop check
+        download_resp.status_code = 200
         download_resp.raise_for_status = MagicMock()
 
         asr_resp = MagicMock()
@@ -539,10 +543,10 @@ class TestFullPipelineDryRun:
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
         mock_comms = MagicMock()
+        mock_comms.signalwire_account_sid = "acct-test"
+        mock_comms.signalwire_recording_token = "rec-tok"
         mock_comms.signalwire_project_id = ""
         mock_comms.signalwire_api_token = ""
-        mock_comms.signalwire_account_sid = ""
-        mock_comms.signalwire_recording_token = ""
 
         with patch("atlas_brain.comms.call_intelligence.settings") as mock_settings, \
              patch("atlas_brain.comms.call_intelligence.get_call_transcript_repo", return_value=repo), \

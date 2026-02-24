@@ -26,6 +26,8 @@ def register_builtin_tasks(runner) -> None:
     from .monthly_invoice_generation import run as monthly_invoice_generation_run
     from .reasoning_tick import run as reasoning_tick_run
     from .reasoning_reflection import run as reasoning_reflection_run
+    from .news_intake import run as news_intake_run
+    from .market_intake import run as market_intake_run
 
     runner.register_builtin("security_summary", security_summary_run)
     runner.register_builtin("device_health_check", device_health_run)
@@ -51,3 +53,5 @@ def register_builtin_tasks(runner) -> None:
     runner.register_builtin("monthly_invoice_generation", monthly_invoice_generation_run)
     runner.register_builtin("reasoning_tick", reasoning_tick_run)
     runner.register_builtin("reasoning_reflection", reasoning_reflection_run)
+    runner.register_builtin("news_intake", news_intake_run)
+    runner.register_builtin("market_intake", market_intake_run)

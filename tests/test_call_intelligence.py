@@ -29,6 +29,7 @@ from atlas_brain.comms.call_intelligence import (
 # ---------------------------------------------------------------------------
 
 RECORDING_URL = "https://test.signalwire.com/api/recordings/rec-123"
+FAKE_WAV = b"RIFF" + b"\x00" * 200  # >100 bytes to pass auth loop content check
 
 
 def _make_business_context():
@@ -42,13 +43,14 @@ def _make_business_context():
     return ctx
 
 
-def _mock_comms(project_id="", api_token=""):
+def _mock_comms(project_id="", api_token="",
+                account_sid="acct-test", recording_token="rec-tok"):
     """Create a mock comms_settings with all required SignalWire attributes."""
     mock = MagicMock()
     mock.signalwire_project_id = project_id
     mock.signalwire_api_token = api_token
-    mock.signalwire_account_sid = ""
-    mock.signalwire_recording_token = ""
+    mock.signalwire_account_sid = account_sid
+    mock.signalwire_recording_token = recording_token
     return mock
 
 
@@ -74,7 +76,8 @@ class TestDownloadRecording:
     @pytest.mark.asyncio
     async def test_downloads_with_auth(self):
         mock_resp = MagicMock()
-        mock_resp.content = b"fake-wav-data"
+        mock_resp.content = FAKE_WAV
+        mock_resp.status_code = 200
         mock_resp.raise_for_status = MagicMock()
         mock_client = _mock_httpx_client(response=mock_resp)
 
@@ -85,7 +88,7 @@ class TestDownloadRecording:
              patch.dict("sys.modules", {"atlas_brain.comms": MagicMock(comms_settings=mock_comms)}):
             result = await _download_recording(RECORDING_URL)
 
-        assert result == b"fake-wav-data"
+        assert result == FAKE_WAV
         call_args = mock_client.get.call_args
         assert call_args.args[0].endswith(".wav")
         assert call_args.kwargs.get("auth") is not None
@@ -93,7 +96,8 @@ class TestDownloadRecording:
     @pytest.mark.asyncio
     async def test_appends_wav_extension(self):
         mock_resp = MagicMock()
-        mock_resp.content = b"wav-data"
+        mock_resp.content = FAKE_WAV
+        mock_resp.status_code = 200
         mock_resp.raise_for_status = MagicMock()
         mock_client = _mock_httpx_client(response=mock_resp)
 
@@ -109,7 +113,8 @@ class TestDownloadRecording:
     @pytest.mark.asyncio
     async def test_skips_wav_if_already_present(self):
         mock_resp = MagicMock()
-        mock_resp.content = b"wav-data"
+        mock_resp.content = FAKE_WAV
+        mock_resp.status_code = 200
         mock_resp.raise_for_status = MagicMock()
         mock_client = _mock_httpx_client(response=mock_resp)
 

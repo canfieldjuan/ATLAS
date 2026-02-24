@@ -14,6 +14,11 @@ from .proposal import (
     format_residential_proposal,
 )
 
+from .invoice import (
+    render_invoice_html,
+    render_invoice_text,
+)
+
 __all__ = [
     "BUSINESS_NAME",
     "BUSINESS_PHONE",
@@ -23,4 +28,6 @@ __all__ = [
     "format_residential_email",
     "format_business_proposal",
     "format_residential_proposal",
+    "render_invoice_html",
+    "render_invoice_text",
 ]

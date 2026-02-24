@@ -145,6 +145,63 @@ async def detect_missing_followups() -> list[dict[str, Any]]:
     ]
 
 
+async def detect_news_market_correlation() -> list[dict[str, Any]]:
+    """Find news events from last 48h that correlate with significant price moves within 24h."""
+    from ..storage.database import get_db_pool
+
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        return []
+
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT ne.id AS news_event_id,
+                   ne.payload->>'title' AS news_title,
+                   ne.payload->'matched_interests' AS matched_interests,
+                   ne.created_at AS news_at,
+                   ms.symbol, ms.price, ms.change_pct, ms.snapshot_at,
+                   dw.name AS asset_name
+            FROM atlas_events ne
+            JOIN data_watchlist dw ON dw.enabled = true
+                AND dw.category IN ('stock','etf','commodity','crypto','forex')
+            JOIN market_snapshots ms ON ms.symbol = dw.symbol
+                AND ms.snapshot_at > ne.created_at
+                AND ms.snapshot_at < ne.created_at + INTERVAL '24 hours'
+                AND ABS(ms.change_pct) >= COALESCE(dw.threshold_pct, 5.0)
+            WHERE ne.event_type LIKE 'news.%'
+              AND ne.created_at > NOW() - INTERVAL '48 hours'
+            ORDER BY ABS(ms.change_pct) DESC
+            LIMIT 10
+            """
+        )
+    except Exception:
+        logger.debug("News-market correlation query failed", exc_info=True)
+        return []
+
+    seen = set()
+    findings = []
+    for r in rows:
+        key = f"{r['news_event_id']}:{r['symbol']}"
+        if key in seen:
+            continue
+        seen.add(key)
+        findings.append({
+            "pattern": "news_market_correlation",
+            "description": (
+                f"News: \"{r['news_title'][:100]}\" followed by "
+                f"{r['symbol']} ({r['asset_name']}) moving {r['change_pct']:+.1f}% "
+                f"within {(r['snapshot_at'] - r['news_at']).total_seconds() / 3600:.0f}h"
+            ),
+            "entity_type": None,
+            "entity_id": None,
+            "news_event_id": str(r["news_event_id"]),
+            "symbol": r["symbol"],
+            "change_pct": float(r["change_pct"]),
+        })
+    return findings
+
+
 async def run_all_pattern_detectors() -> list[dict[str, Any]]:
     """Run all pattern detectors and aggregate findings."""
     import asyncio
@@ -153,6 +210,7 @@ async def run_all_pattern_detectors() -> list[dict[str, Any]]:
         detect_stale_threads(),
         detect_scheduling_gaps(),
         detect_missing_followups(),
+        detect_news_market_correlation(),
         return_exceptions=True,
     )
 

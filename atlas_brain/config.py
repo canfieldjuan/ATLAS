@@ -1865,6 +1865,30 @@ class InvoicingConfig(BaseSettings):
     auto_invoice_due_days: int = Field(default=30, ge=1, le=365, description="Payment terms for auto-invoices")
 
 
+class ExternalDataConfig(BaseSettings):
+    """External data producers: news feeds and financial markets."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_EXTERNAL_DATA_", env_file=".env", extra="ignore"
+    )
+
+    enabled: bool = Field(default=False, description="Master switch for external data producers")
+    # News
+    news_enabled: bool = Field(default=True, description="Enable news intake (requires enabled=True)")
+    news_interval_seconds: int = Field(default=900, description="News polling interval (15 min)")
+    news_api_provider: str = Field(default="newsapi", description="newsapi | google_rss")
+    news_api_key: Optional[str] = Field(default=None, description="API key for NewsAPI.org")
+    news_max_articles_per_poll: int = Field(default=20, description="Max articles per poll cycle")
+    news_significance_threshold: float = Field(default=0.6, description="LLM significance score cutoff (0-1)")
+    # Markets
+    market_enabled: bool = Field(default=True, description="Enable market intake (requires enabled=True)")
+    market_interval_seconds: int = Field(default=300, description="Market polling interval (5 min)")
+    market_api_provider: str = Field(default="yfinance", description="yfinance | finnhub")
+    market_api_key: Optional[str] = Field(default=None, description="API key for Finnhub (if provider=finnhub)")
+    market_default_threshold_pct: float = Field(default=5.0, description="Default price move % to trigger alert")
+    market_hours_only: bool = Field(default=False, description="Only poll during US market hours (9:30-16:00 ET)")
+
+
 class TemporalPatternConfig(BaseSettings):
     """Temporal pattern context configuration."""
 
@@ -1974,6 +1998,7 @@ class Settings(BaseSettings):
     call_intelligence: CallIntelligenceConfig = Field(default_factory=CallIntelligenceConfig)
     sms_intelligence: SMSIntelligenceConfig = Field(default_factory=SMSIntelligenceConfig)
     invoicing: InvoicingConfig = Field(default_factory=InvoicingConfig)
+    external_data: ExternalDataConfig = Field(default_factory=ExternalDataConfig)
     openai_compat: OpenAICompatConfig = Field(default_factory=OpenAICompatConfig)
     ftl_tracing: FTLTracingConfig = Field(default_factory=FTLTracingConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)

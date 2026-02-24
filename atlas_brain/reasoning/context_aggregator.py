@@ -36,9 +36,24 @@ async def aggregate_context(
         "sms": [],
         "graph_facts": [],
         "recent_events": [],
+        "market_data": [],
+        "recent_news": [],
     }
 
     if not entity_type or not entity_id:
+        # Entity-less events (news, market) still get external context
+        if event_type.startswith(("news.", "market.")):
+            ext_tasks = {
+                "market_data": _fetch_market_context(),
+                "recent_news": _fetch_news_context(),
+            }
+            try:
+                results = await asyncio.wait_for(
+                    _gather_with_timeouts(ext_tasks), timeout=_TOTAL_TIMEOUT
+                )
+                ctx.update(results)
+            except asyncio.TimeoutError:
+                logger.warning("External context aggregation timed out")
         return ctx
 
     tasks = {
@@ -48,6 +63,8 @@ async def aggregate_context(
         "calendar": _fetch_calendar(entity_id),
         "sms": _fetch_sms(entity_id),
         "recent_events": _fetch_recent_events(entity_type, entity_id),
+        "market_data": _fetch_market_context(),
+        "recent_news": _fetch_news_context(),
     }
 
     try:
@@ -213,3 +230,56 @@ async def _fetch_recent_events(
         entity_id,
     )
     return [dict(r) for r in rows]
+
+
+async def _fetch_market_context() -> list[dict[str, Any]]:
+    """Fetch recent significant market moves (24h window)."""
+    from ..storage.database import get_db_pool
+
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        return []
+
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT ms.symbol, ms.price, ms.change_pct, ms.volume, ms.snapshot_at,
+                   dw.name, dw.category, dw.threshold_pct
+            FROM market_snapshots ms
+            JOIN data_watchlist dw ON dw.symbol = ms.symbol AND dw.enabled = true
+            WHERE ms.snapshot_at > NOW() - INTERVAL '24 hours'
+              AND ms.change_pct IS NOT NULL
+              AND ABS(ms.change_pct) >= COALESCE(dw.threshold_pct, 5.0)
+            ORDER BY ABS(ms.change_pct) DESC
+            LIMIT 20
+            """
+        )
+        return [dict(r) for r in rows]
+    except Exception:
+        logger.debug("Market context fetch failed", exc_info=True)
+        return []
+
+
+async def _fetch_news_context() -> list[dict[str, Any]]:
+    """Fetch recent news events (24h window)."""
+    from ..storage.database import get_db_pool
+
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        return []
+
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT id, event_type, payload, created_at
+            FROM atlas_events
+            WHERE event_type LIKE 'news.%'
+              AND created_at > NOW() - INTERVAL '24 hours'
+            ORDER BY created_at DESC
+            LIMIT 20
+            """
+        )
+        return [dict(r) for r in rows]
+    except Exception:
+        logger.debug("News context fetch failed", exc_info=True)
+        return []

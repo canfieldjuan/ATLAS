@@ -29,6 +29,8 @@ class ReasoningAgentState(TypedDict, total=False):
     sms_messages: list[dict[str, Any]]
     graph_facts: list[str]
     recent_events: list[dict[str, Any]]
+    market_context: list[dict[str, Any]]
+    news_context: list[dict[str, Any]]
 
     # Lock check
     entity_locked: bool
