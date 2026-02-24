@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { Avatar } from './components/Avatar/Avatar';
-import { VoiceSettingsModal } from './components/Settings/VoiceSettings';
+import { SettingsModal } from './components/Settings/SettingsModal';
 import { useAtlas } from './hooks/useAtlas';
 import { useAtlasStore } from './state/store';
 import clsx from 'clsx';
@@ -454,9 +454,9 @@ function App() {
         }
       `}} />
 
-      {/* Voice Pipeline Settings Modal */}
+      {/* Settings Modal (Voice + Email tabs) */}
       {showSettings && (
-        <VoiceSettingsModal onClose={() => setShowSettings(false)} />
+        <SettingsModal onClose={() => setShowSettings(false)} />
       )}
     </div>
   );

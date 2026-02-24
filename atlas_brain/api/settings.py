@@ -229,3 +229,232 @@ async def update_voice_settings(updates: VoiceSettingsUpdate) -> VoiceSettings:
                 logger.warning("Failed to persist voice settings to .env.local: %s", exc)
 
     return _current_voice_settings()
+
+
+# ---------------------------------------------------------------------------
+# Email settings
+# ---------------------------------------------------------------------------
+
+# Flat field-name → environment variable for all three email-related configs.
+# Fields are prefixed (intake_*, draft_*) to namespace them within one model.
+_EMAIL_ENV_MAP: dict[str, str] = {
+    # EmailConfig  (ATLAS_EMAIL_*)
+    "enabled": "ATLAS_EMAIL_ENABLED",
+    "default_from": "ATLAS_EMAIL_DEFAULT_FROM",
+    "gmail_send_enabled": "ATLAS_EMAIL_GMAIL_SEND_ENABLED",
+    "timeout": "ATLAS_EMAIL_TIMEOUT",
+    "imap_host": "ATLAS_EMAIL_IMAP_HOST",
+    "imap_port": "ATLAS_EMAIL_IMAP_PORT",
+    "imap_username": "ATLAS_EMAIL_IMAP_USERNAME",
+    "imap_ssl": "ATLAS_EMAIL_IMAP_SSL",
+    "imap_mailbox": "ATLAS_EMAIL_IMAP_MAILBOX",
+    # ToolsConfig  (ATLAS_TOOLS_*)
+    "gmail_query": "ATLAS_TOOLS_GMAIL_QUERY",
+    "gmail_max_results": "ATLAS_TOOLS_GMAIL_MAX_RESULTS",
+    # EmailIntakeConfig  (ATLAS_EMAIL_INTAKE_*)
+    "intake_enabled": "ATLAS_EMAIL_INTAKE_ENABLED",
+    "intake_interval_seconds": "ATLAS_EMAIL_INTAKE_INTERVAL_SECONDS",
+    "intake_crm_enabled": "ATLAS_EMAIL_INTAKE_CRM_ENABLED",
+    "intake_action_plan_enabled": "ATLAS_EMAIL_INTAKE_ACTION_PLAN_ENABLED",
+    "intake_max_action_plans_per_cycle": "ATLAS_EMAIL_INTAKE_MAX_ACTION_PLANS_PER_CYCLE",
+    # EmailDraftConfig  (ATLAS_EMAIL_DRAFT_*)
+    # Note: EmailDraftConfig has env_prefix="ATLAS_EMAIL_DRAFT_" and the field is
+    # named "draft_expiry_hours", so pydantic-settings resolves the env var as
+    # ATLAS_EMAIL_DRAFT_ + DRAFT_EXPIRY_HOURS = ATLAS_EMAIL_DRAFT_DRAFT_EXPIRY_HOURS.
+    # The double-DRAFT is correct and intentional.
+    "draft_enabled": "ATLAS_EMAIL_DRAFT_ENABLED",
+    "draft_auto_draft_enabled": "ATLAS_EMAIL_DRAFT_AUTO_DRAFT_ENABLED",
+    "draft_model_name": "ATLAS_EMAIL_DRAFT_MODEL_NAME",
+    "draft_temperature": "ATLAS_EMAIL_DRAFT_TEMPERATURE",
+    "draft_expiry_hours": "ATLAS_EMAIL_DRAFT_DRAFT_EXPIRY_HOURS",
+    "draft_notify_drafts": "ATLAS_EMAIL_DRAFT_NOTIFY_DRAFTS",
+    "draft_schedule_interval_seconds": "ATLAS_EMAIL_DRAFT_SCHEDULE_INTERVAL_SECONDS",
+    "draft_triage_enabled": "ATLAS_EMAIL_DRAFT_TRIAGE_ENABLED",
+}
+
+
+class EmailSettings(BaseModel):
+    """User-configurable email settings returned by the API.
+
+    Combines EmailConfig, ToolsConfig (gmail_*), EmailIntakeConfig, and
+    EmailDraftConfig into a single flat model.  Credentials (api_key,
+    imap_password, OAuth tokens) are intentionally omitted — manage those
+    via environment variables or the .env file.
+    """
+
+    # General
+    enabled: bool = Field(description="Enable the email system (sending + reading)")
+    default_from: Optional[str] = Field(description="Default sender address (e.g. you@gmail.com)")
+    gmail_send_enabled: bool = Field(description="Prefer Gmail API for sending; falls back to Resend when false")
+    timeout: int = Field(description="HTTP request timeout for email API calls (seconds)")
+
+    # IMAP inbox reading
+    imap_host: str = Field(description="IMAP server host (e.g. imap.gmail.com, outlook.office365.com)")
+    imap_port: int = Field(description="IMAP port — 993 (SSL) or 143 (STARTTLS)")
+    imap_username: str = Field(description="IMAP login username (usually your email address)")
+    imap_ssl: bool = Field(description="Use SSL/TLS for the IMAP connection")
+    imap_mailbox: str = Field(description="Default IMAP mailbox / folder to read from")
+    gmail_query: str = Field(description="Default inbox search query (IMAP/Gmail syntax)")
+    gmail_max_results: int = Field(description="Maximum emails to fetch per inbox read")
+
+    # Autonomous intake polling
+    intake_enabled: bool = Field(description="Enable background email polling")
+    intake_interval_seconds: int = Field(description="How often to poll for new emails (minimum 300 s)")
+    intake_crm_enabled: bool = Field(description="Cross-reference incoming emails against CRM contacts")
+    intake_action_plan_enabled: bool = Field(description="Generate AI action plans for CRM-matched emails")
+    intake_max_action_plans_per_cycle: int = Field(description="Max LLM calls per polling cycle (cost control)")
+
+    # AI draft generation
+    draft_enabled: bool = Field(description="Enable AI-powered reply draft generation")
+    draft_auto_draft_enabled: bool = Field(
+        description=(
+            "Automatically generate drafts on a schedule — when off, drafts are only "
+            "generated on demand via the ntfy Draft Reply button"
+        )
+    )
+    draft_model_name: str = Field(description="LLM model used to write reply drafts")
+    draft_temperature: float = Field(description="Draft creativity — lower = more conservative, higher = more varied")
+    draft_expiry_hours: int = Field(description="Hours a pending draft stays available before it expires")
+    draft_notify_drafts: bool = Field(description="Send a push notification when a new draft is ready for review")
+    draft_schedule_interval_seconds: int = Field(
+        description="How often the draft generation task runs when auto-draft is enabled (seconds)"
+    )
+    draft_triage_enabled: bool = Field(
+        description="Use a fast LLM to classify ambiguous emails as replyable/non-replyable before drafting"
+    )
+
+
+class EmailSettingsUpdate(BaseModel):
+    """Partial update payload for email settings (all fields optional)."""
+
+    # General
+    enabled: Optional[bool] = None
+    default_from: Optional[str] = None
+    gmail_send_enabled: Optional[bool] = None
+    timeout: Optional[int] = None
+
+    # IMAP
+    imap_host: Optional[str] = None
+    imap_port: Optional[int] = None
+    imap_username: Optional[str] = None
+    imap_ssl: Optional[bool] = None
+    imap_mailbox: Optional[str] = None
+    gmail_query: Optional[str] = None
+    gmail_max_results: Optional[int] = None
+
+    # Intake
+    intake_enabled: Optional[bool] = None
+    intake_interval_seconds: Optional[int] = None
+    intake_crm_enabled: Optional[bool] = None
+    intake_action_plan_enabled: Optional[bool] = None
+    intake_max_action_plans_per_cycle: Optional[int] = None
+
+    # Draft
+    draft_enabled: Optional[bool] = None
+    draft_auto_draft_enabled: Optional[bool] = None
+    draft_model_name: Optional[str] = None
+    draft_temperature: Optional[float] = None
+    draft_expiry_hours: Optional[int] = None
+    draft_notify_drafts: Optional[bool] = None
+    draft_schedule_interval_seconds: Optional[int] = None
+    draft_triage_enabled: Optional[bool] = None
+
+
+def _current_email_settings() -> EmailSettings:
+    """Build an EmailSettings snapshot from the live settings objects."""
+    e = settings.email
+    t = settings.tools
+    ei = settings.email_intake
+    ed = settings.email_draft
+    return EmailSettings(
+        enabled=e.enabled,
+        default_from=e.default_from,
+        gmail_send_enabled=e.gmail_send_enabled,
+        timeout=e.timeout,
+        imap_host=e.imap_host,
+        imap_port=e.imap_port,
+        imap_username=e.imap_username,
+        imap_ssl=e.imap_ssl,
+        imap_mailbox=e.imap_mailbox,
+        gmail_query=t.gmail_query,
+        gmail_max_results=t.gmail_max_results,
+        intake_enabled=ei.enabled,
+        intake_interval_seconds=ei.interval_seconds,
+        intake_crm_enabled=ei.crm_enabled,
+        intake_action_plan_enabled=ei.action_plan_enabled,
+        intake_max_action_plans_per_cycle=ei.max_action_plans_per_cycle,
+        draft_enabled=ed.enabled,
+        draft_auto_draft_enabled=ed.auto_draft_enabled,
+        draft_model_name=ed.model_name,
+        draft_temperature=ed.temperature,
+        draft_expiry_hours=ed.draft_expiry_hours,
+        draft_notify_drafts=ed.notify_drafts,
+        draft_schedule_interval_seconds=ed.schedule_interval_seconds,
+        draft_triage_enabled=ed.triage_enabled,
+    )
+
+
+# Fields prefixed with "intake_" live in settings.email_intake (strip prefix)
+_INTAKE_PREFIX = "intake_"
+# Fields prefixed with "draft_" live in settings.email_draft (strip prefix)
+_DRAFT_PREFIX = "draft_"
+# "gmail_*" fields live in settings.tools
+_TOOLS_FIELDS = {"gmail_query", "gmail_max_results"}
+
+
+@router.get("/email", response_model=EmailSettings)
+async def get_email_settings() -> EmailSettings:
+    """Return current user-configurable email settings."""
+    return _current_email_settings()
+
+
+@router.patch("/email", response_model=EmailSettings)
+async def update_email_settings(updates: EmailSettingsUpdate) -> EmailSettings:
+    """
+    Update email settings.
+
+    Changes are applied to the in-memory settings objects immediately and
+    persisted to .env.local.  Credentials (IMAP password, API keys, OAuth
+    tokens) are not managed here — set them in your .env file directly.
+    """
+    update_dict = updates.model_dump(exclude_none=True)
+
+    if not update_dict:
+        return _current_email_settings()
+
+    for field, value in update_dict.items():
+        if field.startswith(_INTAKE_PREFIX):
+            real_field = field[len(_INTAKE_PREFIX):]
+            if hasattr(settings.email_intake, real_field):
+                setattr(settings.email_intake, real_field, value)
+                logger.info("Email intake setting updated: %s = %r", real_field, value)
+        elif field.startswith(_DRAFT_PREFIX):
+            real_field = field[len(_DRAFT_PREFIX):]
+            if hasattr(settings.email_draft, real_field):
+                setattr(settings.email_draft, real_field, value)
+                logger.info("Email draft setting updated: %s = %r", real_field, value)
+        elif field in _TOOLS_FIELDS:
+            if hasattr(settings.tools, field):
+                setattr(settings.tools, field, value)
+                logger.info("Tools setting updated: %s = %r", field, value)
+        else:
+            if hasattr(settings.email, field):
+                setattr(settings.email, field, value)
+                logger.info("Email setting updated: %s = %r", field, value)
+
+    # Persist to .env.local
+    env_updates: dict[str, str] = {}
+    for field, value in update_dict.items():
+        env_key = _EMAIL_ENV_MAP.get(field)
+        if env_key is not None:
+            env_updates[env_key] = str(value)
+
+    if env_updates:
+        async with _env_write_lock:
+            try:
+                _write_env_local(env_updates)
+                logger.info("Email settings persisted to .env.local: %s", list(env_updates.keys()))
+            except OSError as exc:
+                logger.warning("Failed to persist email settings to .env.local: %s", exc)
+
+    return _current_email_settings()

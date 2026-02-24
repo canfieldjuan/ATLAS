@@ -205,13 +205,13 @@ function SelectInput({
   );
 }
 
-// ---------- main modal ----------
+// ---------- main form ----------
 
-interface VoiceSettingsModalProps {
-  onClose: () => void;
+interface VoiceSettingsFormProps {
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
-export function VoiceSettingsModal({ onClose }: VoiceSettingsModalProps) {
+export function VoiceSettingsForm({ onDirtyChange }: VoiceSettingsFormProps) {
   const [original, setOriginal] = useState<VoiceSettings | null>(null);
   const [draft, setDraft] = useState<VoiceSettings | null>(null);
   const [loading, setLoading] = useState(true);
@@ -275,45 +275,32 @@ export function VoiceSettingsModal({ onClose }: VoiceSettingsModalProps) {
 
   const isDirty = draft && original && JSON.stringify(draft) !== JSON.stringify(original);
 
+  // Notify parent of dirty state
+  useEffect(() => {
+    onDirtyChange?.(!!isDirty);
+  }, [isDirty, onDirtyChange]);
+
   return (
-    /* backdrop */
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
-      onClick={(e) => e.target === e.currentTarget && onClose()}
-    >
-      {/* panel */}
-      <div className="relative w-full max-w-lg max-h-[90vh] flex flex-col bg-[#020617]/95 border border-cyan-500/30 rounded-sm shadow-[0_0_40px_rgba(34,211,238,0.1)] overflow-hidden">
-
-        {/* header */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-cyan-500/20 shrink-0">
-          <div>
-            <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-300">Voice Pipeline Settings</h2>
-            <p className="text-[10px] text-cyan-600 mt-0.5">Changes apply immediately · restart required for hardware settings</p>
+    <div className="flex flex-col h-full">
+      {/* body */}
+      <div className="flex-1 overflow-y-auto px-5 py-4 custom-scrollbar">
+        {loading && (
+          <div className="flex items-center justify-center h-40 gap-2 text-cyan-600">
+            <Loader size={16} className="animate-spin" />
+            <span className="text-sm">Loading settings…</span>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded border border-cyan-500/20 hover:border-cyan-500/60 hover:bg-cyan-500/10 transition-all">
-            <X size={14} className="text-cyan-500" />
-          </button>
-        </div>
+        )}
 
-        {/* body */}
-        <div className="flex-1 overflow-y-auto px-5 py-4 custom-scrollbar">
-          {loading && (
-            <div className="flex items-center justify-center h-40 gap-2 text-cyan-600">
-              <Loader size={16} className="animate-spin" />
-              <span className="text-sm">Loading settings…</span>
-            </div>
-          )}
+        {error && (
+          <div className="bg-red-900/20 border border-red-500/30 rounded px-3 py-2 text-sm text-red-400 mb-4">
+            {error}
+          </div>
+        )}
 
-          {error && (
-            <div className="bg-red-900/20 border border-red-500/30 rounded px-3 py-2 text-sm text-red-400 mb-4">
-              {error}
-            </div>
-          )}
-
-          {draft && !loading && (
-            <>
-              {/* ── Pipeline ── */}
-              <SectionHeader>Pipeline</SectionHeader>
+        {draft && !loading && (
+          <>
+            {/* ── Pipeline ── */}
+            <SectionHeader>Pipeline</SectionHeader>
               <Toggle
                 label="Voice pipeline enabled"
                 description="Start the wake-word / voice pipeline when Atlas Brain starts"
@@ -516,57 +503,84 @@ export function VoiceSettingsModal({ onClose }: VoiceSettingsModalProps) {
           )}
         </div>
 
-        {/* footer */}
-        {draft && !loading && (
-          <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-cyan-500/20 shrink-0">
+      {/* footer */}
+      {draft && !loading && (
+        <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-cyan-500/20 shrink-0">
+          <button
+            onClick={handleReset}
+            disabled={!isDirty}
+            className={clsx(
+              'flex items-center gap-1.5 px-3 py-1.5 rounded border text-xs transition-all',
+              isDirty
+                ? 'border-cyan-500/40 text-cyan-500 hover:border-cyan-500 hover:bg-cyan-500/10'
+                : 'border-cyan-500/15 text-cyan-700 cursor-not-allowed',
+            )}
+          >
+            <RotateCcw size={12} />
+            Revert
+          </button>
+
+          <div className="flex items-center gap-2">
+            {saved && (
+              <span className="text-[11px] text-cyan-400 animate-in fade-in duration-300">
+                ✓ Saved
+              </span>
+            )}
+            {error && (
+              <span className="text-[11px] text-red-400">{error}</span>
+            )}
             <button
-              onClick={handleReset}
-              disabled={!isDirty}
+              onClick={handleSave}
+              disabled={saving || !isDirty}
               className={clsx(
-                'flex items-center gap-1.5 px-3 py-1.5 rounded border text-xs transition-all',
-                isDirty
-                  ? 'border-cyan-500/40 text-cyan-500 hover:border-cyan-500 hover:bg-cyan-500/10'
+                'flex items-center gap-1.5 px-4 py-1.5 rounded border text-xs font-bold uppercase tracking-wider transition-all',
+                isDirty && !saving
+                  ? 'border-cyan-500 text-cyan-400 bg-cyan-500/10 hover:bg-cyan-500/20 shadow-[0_0_12px_rgba(34,211,238,0.2)]'
                   : 'border-cyan-500/15 text-cyan-700 cursor-not-allowed',
               )}
             >
-              <RotateCcw size={12} />
-              Revert
+              {saving ? <Loader size={12} className="animate-spin" /> : <Save size={12} />}
+              {saving ? 'Saving…' : 'Save'}
             </button>
-
-            <div className="flex items-center gap-2">
-              {saved && (
-                <span className="text-[11px] text-cyan-400 animate-in fade-in duration-300">
-                  ✓ Saved
-                </span>
-              )}
-              {error && (
-                <span className="text-[11px] text-red-400">{error}</span>
-              )}
-              <button
-                onClick={handleSave}
-                disabled={saving || !isDirty}
-                className={clsx(
-                  'flex items-center gap-1.5 px-4 py-1.5 rounded border text-xs font-bold uppercase tracking-wider transition-all',
-                  isDirty && !saving
-                    ? 'border-cyan-500 text-cyan-400 bg-cyan-500/10 hover:bg-cyan-500/20 shadow-[0_0_12px_rgba(34,211,238,0.2)]'
-                    : 'border-cyan-500/15 text-cyan-700 cursor-not-allowed',
-                )}
-              >
-                {saving ? <Loader size={12} className="animate-spin" /> : <Save size={12} />}
-                {saving ? 'Saving…' : 'Save'}
-              </button>
-            </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
-      <style>{`
-        .custom-scrollbar::-webkit-scrollbar { width: 3px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(8,145,178,0.05); }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(34,211,238,0.3); border-radius: 10px; }
-        input[type=range] { height: 4px; }
-        select option { background: #020617; }
-      `}</style>
+// Legacy standalone modal wrapper (kept for backward compatibility)
+interface VoiceSettingsModalProps {
+  onClose: () => void;
+}
+
+export function VoiceSettingsModal({ onClose }: VoiceSettingsModalProps) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+    >
+      <div className="relative w-full max-w-lg max-h-[90vh] flex flex-col bg-[#020617]/95 border border-cyan-500/30 rounded-sm shadow-[0_0_40px_rgba(34,211,238,0.1)] overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-cyan-500/20 shrink-0">
+          <div>
+            <h2 className="text-sm font-bold uppercase tracking-widest text-cyan-300">Voice Pipeline Settings</h2>
+            <p className="text-[10px] text-cyan-600 mt-0.5">Changes apply immediately · restart required for hardware settings</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded border border-cyan-500/20 hover:border-cyan-500/60 hover:bg-cyan-500/10 transition-all">
+            <X size={14} className="text-cyan-500" />
+          </button>
+        </div>
+        <div className="flex-1 min-h-0 flex flex-col">
+          <VoiceSettingsForm />
+        </div>
+        <style>{`
+          .custom-scrollbar::-webkit-scrollbar { width: 3px; }
+          .custom-scrollbar::-webkit-scrollbar-track { background: rgba(8,145,178,0.05); }
+          .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(34,211,238,0.3); border-radius: 10px; }
+          input[type=range] { height: 4px; }
+          select option { background: #020617; }
+        `}</style>
+      </div>
     </div>
   );
 }
