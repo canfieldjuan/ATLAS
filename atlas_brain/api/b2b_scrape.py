@@ -214,6 +214,7 @@ async def trigger_scrape(target_id: UUID) -> dict:
     from ..services.scraping.client import get_scrape_client
     from ..services.scraping.parsers import ScrapeTarget, get_parser
 
+    raw_meta = row["metadata"] or "{}"
     target = ScrapeTarget(
         id=str(row["id"]),
         source=row["source"],
@@ -222,7 +223,7 @@ async def trigger_scrape(target_id: UUID) -> dict:
         product_slug=row["product_slug"],
         product_category=row["product_category"],
         max_pages=row["max_pages"],
-        metadata=row["metadata"] or {},
+        metadata=json.loads(raw_meta) if isinstance(raw_meta, str) else raw_meta,
     )
 
     parser = get_parser(target.source)

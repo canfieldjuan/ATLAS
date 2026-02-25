@@ -100,6 +100,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     results_summary: list[dict] = []
 
     for row in targets:
+        raw_meta = row["metadata"] or "{}"
         target = ScrapeTarget(
             id=str(row["id"]),
             source=row["source"],
@@ -108,7 +109,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             product_slug=row["product_slug"],
             product_category=row["product_category"],
             max_pages=row["max_pages"],
-            metadata=row["metadata"] or {},
+            metadata=json.loads(raw_meta) if isinstance(raw_meta, str) else raw_meta,
         )
 
         parser = get_parser(target.source)
@@ -226,7 +227,7 @@ async def _insert_reviews(pool, reviews: list[dict], batch_id: str) -> int:
             r.get("product_name"),
             r.get("product_category"),
             r.get("rating"),
-            r.get("rating_max", 5),
+            r.get("rating_max") or 5,
             r.get("summary"),
             r["review_text"],
             r.get("pros"),

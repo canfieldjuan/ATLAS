@@ -99,7 +99,7 @@ class RedditParser:
                         "product_name": target.product_name,
                         "product_category": target.product_category,
                         "rating": None,  # Reddit has no rating system
-                        "rating_max": None,
+                        "rating_max": 5,  # DB column is NOT NULL, use default
                         "summary": post.get("title", "")[:500],
                         "review_text": selftext[:10000],
                         "pros": None,
