@@ -389,22 +389,15 @@ async def search_inbox(
     mailbox: IMAP folder to search (default: INBOX).
              Use list_folders to discover available folders.
 
-    Returns up to max_results message stubs; fetches metadata for the first 10.
+    Returns up to max_results messages with full header metadata.
     """
     try:
         provider = _provider()
-        message_stubs = await provider.list_messages(
+        messages = await provider.list_messages(
             query=query, max_results=min(max_results, 100), mailbox=mailbox,
         )
-        enriched: list[dict] = []
-        for stub in message_stubs[:10]:
-            try:
-                meta = await provider.get_message_metadata(stub["id"], mailbox=mailbox)
-                enriched.append(meta)
-            except Exception:
-                enriched.append(stub)
         return json.dumps(
-            {"results": enriched, "total_matched": len(message_stubs)}, default=str
+            {"results": messages, "total_matched": len(messages)}, default=str
         )
     except Exception as exc:
         logger.exception("search_inbox error")

@@ -192,6 +192,7 @@ class IMAPEmailProvider:
         self._ssl: bool = True
         self._mailbox: str = "INBOX"
         self._loaded = False
+        self._cached_conn: imaplib.IMAP4 | None = None
 
     def _load_config(self) -> None:
         if self._loaded:
@@ -237,6 +238,33 @@ class IMAPEmailProvider:
         conn.login(self._username, self._password)
         return conn
 
+    def _get_conn(self) -> imaplib.IMAP4:
+        """Return a cached IMAP connection, reconnecting if stale."""
+        if self._cached_conn is not None:
+            try:
+                self._cached_conn.noop()
+                return self._cached_conn
+            except Exception:
+                try:
+                    self._cached_conn.logout()
+                except Exception:
+                    pass
+                self._cached_conn = None
+        conn = self._connect()
+        self._cached_conn = conn
+        return conn
+
+    def _release_conn(self, conn: imaplib.IMAP4, *, discard: bool = False) -> None:
+        """Release a connection back to cache (or discard on error)."""
+        if discard:
+            try:
+                conn.logout()
+            except Exception:
+                pass
+            if self._cached_conn is conn:
+                self._cached_conn = None
+        # Otherwise keep cached for reuse
+
     # -----------------------------------------------------------------------
     # Async wrappers
     # -----------------------------------------------------------------------
@@ -247,7 +275,7 @@ class IMAPEmailProvider:
 
     def _list_folders_sync(self) -> list[dict[str, Any]]:
         """List all IMAP folders/mailboxes (blocking)."""
-        conn = self._connect()
+        conn = self._get_conn()
         try:
             status, data = conn.list()
             if status != "OK" or not data:
@@ -271,16 +299,14 @@ class IMAPEmailProvider:
                         "selectable": "\\Noselect" not in flags,
                     })
             return folders
-        finally:
-            try:
-                conn.logout()
-            except Exception:
-                pass
+        except Exception:
+            self._release_conn(conn, discard=True)
+            raise
 
     def _list_messages_sync(
         self, query: str, max_results: int, mailbox: str | None = None,
     ) -> list[dict[str, Any]]:
-        conn = self._connect()
+        conn = self._get_conn()
         target = mailbox or self._mailbox
         try:
             conn.select(f'"{target}"', readonly=True)
@@ -310,14 +336,12 @@ class IMAPEmailProvider:
                     messages.append(_parse_envelope(uid, header_bytes))
                 i += 1
             return messages
-        finally:
-            try:
-                conn.logout()
-            except Exception:
-                pass
+        except Exception:
+            self._release_conn(conn, discard=True)
+            raise
 
     def _get_message_sync(self, uid: str, mailbox: str | None = None) -> dict[str, Any]:
-        conn = self._connect()
+        conn = self._get_conn()
         target = mailbox or self._mailbox
         try:
             conn.select(f'"{target}"', readonly=True)
@@ -331,14 +355,12 @@ class IMAPEmailProvider:
             meta = _parse_envelope(uid, item[1])
             meta["body_text"] = _extract_body(msg)
             return meta
-        finally:
-            try:
-                conn.logout()
-            except Exception:
-                pass
+        except Exception:
+            self._release_conn(conn, discard=True)
+            raise
 
     def _get_message_metadata_sync(self, uid: str, mailbox: str | None = None) -> dict[str, Any]:
-        conn = self._connect()
+        conn = self._get_conn()
         target = mailbox or self._mailbox
         try:
             conn.select(f'"{target}"', readonly=True)
@@ -349,11 +371,9 @@ class IMAPEmailProvider:
             if not isinstance(item, tuple) or len(item) < 2:
                 return {"error": "Unexpected fetch format"}
             return _parse_envelope(uid, item[1])
-        finally:
-            try:
-                conn.logout()
-            except Exception:
-                pass
+        except Exception:
+            self._release_conn(conn, discard=True)
+            raise
 
     def _get_thread_sync(self, thread_id: str, mailbox: str | None = None) -> dict[str, Any]:
         """
@@ -363,7 +383,7 @@ class IMAPEmailProvider:
         For other servers: searches by References/Message-ID match using the
         thread_id as a message UID seed.
         """
-        conn = self._connect()
+        conn = self._get_conn()
         target = mailbox or self._mailbox
         try:
             conn.select(f'"{target}"', readonly=True)
@@ -396,13 +416,12 @@ class IMAPEmailProvider:
             return {"thread_id": thread_id, "messages": [root]}
         except imaplib.IMAP4.error:
             # X-GM-THRID not supported — fall back to single message
+            self._release_conn(conn, discard=True)
             root = self._get_message_sync(thread_id)
             return {"thread_id": thread_id, "messages": [root]}
-        finally:
-            try:
-                conn.logout()
-            except Exception:
-                pass
+        except Exception:
+            self._release_conn(conn, discard=True)
+            raise
 
     # -----------------------------------------------------------------------
     # Public async interface

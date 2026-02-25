@@ -239,6 +239,22 @@ def _create_streaming_agent_runner():
                     route_result = await route_query(transcript)
                     _last_route_result["result"] = route_result
 
+                    # If the new route is a different workflow or a clear
+                    # non-conversation intent, the user is starting something
+                    # new — clear the stale workflow so it doesn't hijack.
+                    from ..services.intent_router import ROUTE_TO_WORKFLOW
+                    new_wf = ROUTE_TO_WORKFLOW.get(route_result.raw_label)
+                    if (route_result.confidence >= settings.intent_router.confidence_threshold
+                            and route_result.action_category != "conversation"
+                            and new_wf != workflow.workflow_type):
+                        logger.info(
+                            "New intent %s (conf=%.2f) overrides active %s workflow — clearing",
+                            route_result.raw_label, route_result.confidence,
+                            workflow.workflow_type,
+                        )
+                        await manager.clear_workflow_state(session_id)
+                        has_active_workflow = False
+
             # Conversation mode: use agent path for full tool access.
             # Streaming has no tools — the LLM can't search emails, check
             # calendars, or execute any MCP tools in streaming mode.

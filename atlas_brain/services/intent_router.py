@@ -101,26 +101,47 @@ ROUTE_DEFINITIONS: dict[str, list[str]] = {
         "add a meeting to my calendar for Thursday", "create a calendar event for Tuesday",
         "schedule a meeting with the team on Friday", "put a dentist appointment on my calendar",
         "create an event called team standup", "add lunch with Maria to my calendar",
+        "block out Thursday afternoon for the contractor", "mark my calendar for the 5th",
+        "set up a meeting with John tomorrow at 2", "log a call with the client for Monday",
+        "add my son's game to the calendar Saturday morning", "put a block on my calendar for project work",
+        "create an appointment at 3pm Friday", "add an event for the team lunch next week",
     ],
     "booking": [
         "book an appointment for next Monday", "schedule an appointment with the barber",
         "I need to book an appointment", "set up an appointment for a haircut",
         "make an appointment for next week", "I want to schedule a visit",
+        "can you get me in for a cleaning next Tuesday", "find me an opening this week",
+        "get me in with the dentist", "put me down for an appointment Thursday",
+        "can you book me in for Friday afternoon", "I need to get on the schedule",
+        "book me a slot tomorrow", "get me an appointment as soon as possible",
     ],
     "cancel_booking": [
         "cancel my appointment", "I need to cancel my booking",
         "cancel the appointment for Thursday", "I want to cancel",
         "remove my appointment", "cancel the booking",
+        "drop the appointment tomorrow", "I can't make my appointment",
+        "clear my Thursday appointment", "call off the meeting",
+        "delete the appointment on Friday", "scratch that booking",
+        "I won't be able to make it to my appointment", "get rid of my appointment this week",
     ],
     "reschedule_booking": [
         "reschedule my appointment", "move my appointment to Friday",
         "change my booking to next week", "I need to reschedule",
         "can we move the appointment", "reschedule the booking",
+        "push my appointment back to next week", "bump the appointment to Wednesday",
+        "can you move the appointment to a later time", "shift my booking earlier",
+        "postpone my appointment", "change the time of my appointment",
+        "I need to push back my appointment", "move the meeting up an hour",
     ],
     "get_time": [
         "what time is it", "what's the current time right now",
         "tell me the time right now", "what's today's date",
         "what day of the week is it",
+        "what's the time", "do you have the time",
+        "how late is it", "what month are we in",
+        "check the time for me", "what time is it currently",
+        "what's the current date", "is it morning or afternoon",
+        "what year is it", "tell me today's date",
     ],
     "get_weather": [
         "what's the weather like", "how's the weather today", "is it going to rain",
@@ -135,26 +156,49 @@ ROUTE_DEFINITIONS: dict[str, list[str]] = {
         "what's on my calendar today", "do I have any meetings today",
         "show me my schedule", "what events do I have this week",
         "am I free this afternoon", "any appointments today",
+        "what do I have coming up", "what's my day look like",
+        "am I busy tomorrow", "do I have anything scheduled this week",
+        "what are my plans for Friday", "check my calendar",
+        "what meetings do I have tomorrow", "do I have anything going on tonight",
+        "what's on the schedule for this week",
     ],
     "list_reminders": [
         "show my reminders", "what reminders do I have", "list all my alarms",
         "what are my active reminders", "do I have any reminders",
+        "read me my reminders", "check my reminders",
+        "any upcoming reminders", "what alarms do I have set",
+        "are there any reminders pending", "what's on my reminder list",
+        "how many reminders do I have", "tell me what reminders are set",
+        "show me all pending reminders",
     ],
     "get_traffic": [
         "how's the traffic", "what's the traffic like to work",
         "how long is my commute", "traffic conditions to downtown",
+        "is the highway clear", "how bad is traffic right now",
+        "how long will it take to get home", "is there a lot of traffic",
+        "how's the drive to work today", "any accidents on the road",
+        "should I leave now to beat traffic", "traffic report",
+        "is it a good time to drive", "how long to get downtown from here",
+        "what's the drive time looking like",
     ],
     "get_location": [
         "what is my GPS location", "what are my coordinates",
         "what city am I in", "what is my address",
         "track my phone location", "find my phone",
         "what is my geo location", "show my location on a map",
+        "where am I located right now", "give me my current location",
+        "what neighborhood am I in", "can you find my location",
+        "ping my location", "what's my exact location",
     ],
     "where_am_i": [
         "where am I", "what room am I in", "which room is this",
         "what room am I in right now", "what space am I in",
         "which room does the system think I am in",
         "detect my room",
+        "what part of the house am I in", "what area am I in",
+        "where does atlas think I am", "am I in the bedroom",
+        "tell me what room I'm in", "what zone am I in",
+        "can you detect where I am in the house", "identify my current room",
     ],
     "who_is_here": [
         "who is here", "who is in the office", "is anyone home",
@@ -169,6 +213,10 @@ ROUTE_DEFINITIONS: dict[str, list[str]] = {
         "push a notification to my phone about the groceries",
         "notify my phone that dinner is ready",
         "send an alert to my phone saying I need to leave",
+        "ping my phone", "flash a notification saying the meeting starts soon",
+        "buzz my phone with a reminder", "pop up a notification about dinner",
+        "shoot me a notification", "send a heads up to my phone",
+        "alert me on my phone that the package arrived", "notify me right now",
     ],
     "show_camera": [
         "show me the camera feed on the left monitor",
@@ -178,6 +226,10 @@ ROUTE_DEFINITIONS: dict[str, list[str]] = {
         "put the backyard camera on screen",
         "close the camera viewer", "hide the camera viewer window",
         "close all camera viewer windows",
+        "bring up the front door camera", "let me see the driveway camera",
+        "switch to the backyard camera", "open the camera view",
+        "show me what the front camera sees", "pull up the live feed",
+        "display the security camera on screen", "view the garage camera",
     ],
     "security": [
         "list my cameras", "show me all the cameras",
@@ -483,13 +535,19 @@ class SemanticIntentRouter:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self._embedder.load)
 
-        # Compute centroids for each route
+        # Batch all route phrases into a single embed call (1 progress bar, not 26)
+        all_phrases: list[str] = []
+        route_slices: list[tuple[str, int, int]] = []
         for route_name, utterances in ROUTE_DEFINITIONS.items():
-            embeddings = await loop.run_in_executor(
-                None, self._embedder.embed_batch, utterances,
-            )
-            # Centroid = mean of normalized vectors, re-normalized
-            centroid = embeddings.mean(axis=0)
+            start_idx = len(all_phrases)
+            all_phrases.extend(utterances)
+            route_slices.append((route_name, start_idx, len(all_phrases)))
+
+        all_embeddings = await loop.run_in_executor(
+            None, self._embedder.embed_batch, all_phrases,
+        )
+        for route_name, s, e in route_slices:
+            centroid = all_embeddings[s:e].mean(axis=0)
             centroid = centroid / np.linalg.norm(centroid)
             self._route_centroids[route_name] = centroid
 
@@ -520,9 +578,17 @@ class SemanticIntentRouter:
         )
         self._embedder.load()
 
+        # Batch all route phrases into a single embed call (1 progress bar, not 26)
+        all_phrases: list[str] = []
+        route_slices: list[tuple[str, int, int]] = []
         for route_name, utterances in ROUTE_DEFINITIONS.items():
-            embeddings = self._embedder.embed_batch(utterances)
-            centroid = embeddings.mean(axis=0)
+            start_idx = len(all_phrases)
+            all_phrases.extend(utterances)
+            route_slices.append((route_name, start_idx, len(all_phrases)))
+
+        all_embeddings = self._embedder.embed_batch(all_phrases)
+        for route_name, s, e in route_slices:
+            centroid = all_embeddings[s:e].mean(axis=0)
             centroid = centroid / np.linalg.norm(centroid)
             self._route_centroids[route_name] = centroid
 
@@ -763,8 +829,8 @@ class SemanticIntentRouter:
                 "- notification: send a push notification\n"
                 "- show_camera: show a camera feed\n"
                 "- security/presence: arm security or check presence sensors\n"
-                "- crm_query: look up a customer or contact by name, check if someone is in the CRM\n"
-                "- detection_query: ask who was at a door/camera, check for people\n"
+                "- crm_query: look up a customer or contact by name in the database, check if someone is in the CRM, find a contact's phone or email\n"
+                "- detection_query: ask who was physically seen by a security camera or at a door, check camera footage for people\n"
                 "- motion_query: ask about motion or movement on cameras\n"
                 "- digest: request a briefing, summary, or status report\n"
                 "- conversation: general chat, personal questions, opinions, "

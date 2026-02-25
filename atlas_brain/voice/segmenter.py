@@ -33,7 +33,7 @@ class CommandSegmenter:
         hangover_ms: int,
         max_command_seconds: int,
         min_command_ms: int = 1500,
-        min_speech_frames: int = 3,
+        min_speech_frames: int = 0,
         # Sliding window params (disabled by default for wake-word commands)
         speech_threshold: float = 0.5,
         window_frames: int = 0,

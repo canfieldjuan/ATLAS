@@ -852,7 +852,7 @@ class VoiceClientConfig(BaseSettings):
     conversation_silence_ratio: float = Field(default=0.15, description="Speech ratio below which silence counter engages")
     conversation_asr_holdoff_ms: int = Field(default=500, description="Suppress finalization for N ms after last ASR partial")
     asr_quiet_limit: int = Field(
-        default=10,
+        default=5,
         description="Max frames with no new ASR partial before stopping audio feed (~80ms/frame)"
     )
 

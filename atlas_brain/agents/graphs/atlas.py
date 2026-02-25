@@ -1566,7 +1566,7 @@ class AtlasAgentGraph:
             # from poisoning conversation history on subsequent turns).
             response = state.get("response")
             if response:
-                from ..memory.service import _sanitize_for_storage
+                from ...memory.service import _sanitize_for_storage
                 await self._memory.add_turn(
                     session_id=session_id,
                     role="assistant",

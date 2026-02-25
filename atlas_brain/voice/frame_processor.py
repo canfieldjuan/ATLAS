@@ -68,7 +68,7 @@ class FrameProcessor:
         conversation_silence_ratio: float = 0.15,
         conversation_asr_holdoff_ms: int = 1000,
         wake_buffer_frames: int = 5,
-        asr_quiet_limit: int = 10,
+        asr_quiet_limit: int = 5,
         on_early_silence: Optional[Callable[[str], None]] = None,
         conversation_early_silence_ms: int = 600,
     ):
@@ -498,9 +498,12 @@ class FrameProcessor:
             # Stop feeding frames after _asr_quiet_limit frames with no new
             # partial -- trailing silence causes transcript oscillation as the
             # model re-evaluates its hypothesis on an ever-growing silent tail.
+            # Also stop when VAD is confident we're in silence (silence_counter
+            # >= 3) to prevent HVAC/background noise from being transcribed.
             asr_active = False
             if self._streaming_active and self.streaming_asr_client is not None:
-                if self._asr_quiet_frames < self._asr_quiet_limit:
+                vad_says_silence = self.segmenter.silence_counter >= 3
+                if self._asr_quiet_frames < self._asr_quiet_limit and not vad_says_silence:
                     try:
                         partial = self.streaming_asr_client.send_audio(frame_bytes)
                         # Only log when partial changes to reduce noise.

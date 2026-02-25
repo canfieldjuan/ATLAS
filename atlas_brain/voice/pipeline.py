@@ -170,6 +170,7 @@ class NemotronAsrStreamingClient:
         self._lock = threading.Lock()
         self._connected = False
         self._last_partial = ""
+        self._best_partial = ""  # Longest partial seen (word count)
 
     def connect(self) -> bool:
         """Establish WebSocket connection.
@@ -202,11 +203,11 @@ class NemotronAsrStreamingClient:
                     self.url,
                     open_timeout=self.timeout,
                     close_timeout=5,
-                    ping_interval=20,
-                    ping_timeout=20,
+                    ping_interval=None,
                 )
                 self._connected = True
                 self._last_partial = ""
+                self._best_partial = ""
                 logger.info("Streaming ASR connected to %s", self.url)
                 return True
             except Exception as e:
@@ -226,6 +227,7 @@ class NemotronAsrStreamingClient:
                 self._ws = None
             self._connected = False
             self._last_partial = ""
+            self._best_partial = ""
 
     def send_audio(self, pcm_bytes: bytes) -> Optional[str]:
         """Send audio chunk and return any partial transcript.
@@ -250,6 +252,11 @@ class NemotronAsrStreamingClient:
                 data = json.loads(response)
                 if data.get("type") == "partial":
                     self._last_partial = data.get("text", "")
+                    # Track best partial by word count — RNNT models can
+                    # degrade mid-stream (oscillation), so we keep the
+                    # longest meaningful hypothesis as a fallback.
+                    if len(self._last_partial.split()) > len(self._best_partial.split()):
+                        self._best_partial = self._last_partial
                     return self._last_partial
             except TimeoutError:
                 pass  # No data available yet
@@ -291,6 +298,22 @@ class NemotronAsrStreamingClient:
                 if msg_type == "final":
                     text = data.get("text", "")
                     duration = data.get("duration_sec", 0)
+                    # Guard against RNNT oscillation: if the final
+                    # transcript has fewer words than the best streaming
+                    # partial, the model degraded during finalization
+                    # (e.g. "what time is it" → "with diamond").
+                    # Prefer the best partial in that case.
+                    best = self._best_partial
+                    final_words = len(text.split()) if text else 0
+                    best_words = len(best.split()) if best else 0
+                    if best_words > final_words and best_words >= 3:
+                        logger.warning(
+                            "ASR oscillation detected: final '%s' (%d words) "
+                            "< best partial '%s' (%d words), using best partial",
+                            text[:50], final_words,
+                            best[:50], best_words,
+                        )
+                        text = best
                     logger.info(
                         "Streaming ASR finalized: %.2fs -> '%s'",
                         duration,
@@ -325,6 +348,7 @@ class NemotronAsrStreamingClient:
             except Exception as e:
                 logger.debug("Reset drain failed (expected): %s", e)
             self._last_partial = ""
+            self._best_partial = ""
         except Exception as e:
             logger.warning("Error resetting streaming ASR: %s", e)
 
@@ -739,7 +763,7 @@ class VoicePipeline:
         conversation_window_frames: int = 20,
         conversation_silence_ratio: float = 0.15,
         conversation_asr_holdoff_ms: int = 1000,
-        asr_quiet_limit: int = 10,
+        asr_quiet_limit: int = 5,
         # Workflow-aware thresholds
         workflow_silence_ms: int = 1500,
         workflow_hangover_ms: int = 500,
