@@ -1046,3 +1046,578 @@ async def update_intelligence_settings(updates: IntelligenceSettingsUpdate) -> I
                 logger.warning("Failed to persist intelligence settings to .env.local: %s", exc)
 
     return _current_intelligence_settings()
+
+
+# ---------------------------------------------------------------------------
+# LLM / AI Model settings
+# ---------------------------------------------------------------------------
+
+_LLM_ENV_MAP: dict[str, str] = {
+    # LLMConfig (ATLAS_LLM_*)
+    "backend": "ATLAS_LLM_DEFAULT_MODEL",
+    "ollama_model": "ATLAS_LLM_OLLAMA_MODEL",
+    "ollama_url": "ATLAS_LLM_OLLAMA_URL",
+    "groq_model": "ATLAS_LLM_GROQ_MODEL",
+    "together_model": "ATLAS_LLM_TOGETHER_MODEL",
+    "cloud_enabled": "ATLAS_LLM_CLOUD_ENABLED",
+    "cloud_ollama_model": "ATLAS_LLM_CLOUD_OLLAMA_MODEL",
+    "model_swap_enabled": "ATLAS_LLM_MODEL_SWAP_ENABLED",
+    "day_model": "ATLAS_LLM_DAY_MODEL",
+    "night_model": "ATLAS_LLM_NIGHT_MODEL",
+    "model_swap_day_cron": "ATLAS_LLM_MODEL_SWAP_DAY_CRON",
+    "model_swap_night_cron": "ATLAS_LLM_MODEL_SWAP_NIGHT_CRON",
+}
+
+
+class LLMSettings(BaseModel):
+    """User-configurable LLM / AI model settings.
+
+    Credentials (groq_api_key, together_api_key, anthropic_api_key) are
+    intentionally omitted -- manage those via environment variables.
+    """
+
+    # Backend selection
+    backend: str = Field(
+        description=(
+            "Active LLM backend: ollama (local Ollama), groq (Groq cloud), "
+            "together (Together AI), llama-cpp (GGUF file), or hybrid"
+        )
+    )
+
+    # Ollama (local)
+    ollama_model: str = Field(description="Ollama model tag used for all conversations (e.g. qwen3:14b)")
+    ollama_url: str = Field(description="Ollama API base URL (default: http://localhost:11434)")
+
+    # Groq (cloud -- low latency)
+    groq_model: str = Field(description="Groq model name when backend=groq (e.g. llama-3.3-70b-versatile)")
+
+    # Together AI (cloud)
+    together_model: str = Field(description="Together AI model name when backend=together")
+
+    # Cloud / hybrid routing
+    cloud_enabled: bool = Field(
+        description=(
+            "Enable a second cloud LLM (via Ollama cloud relay) for business workflows "
+            "like email drafting and booking -- runs alongside the local model"
+        )
+    )
+    cloud_ollama_model: str = Field(
+        description="Ollama cloud relay model tag for business workflows (e.g. minimax-m2:cloud)"
+    )
+
+    # Automatic day/night model swap
+    model_swap_enabled: bool = Field(
+        description=(
+            "Swap Ollama models on a schedule to optimise VRAM -- "
+            "loads a lighter model during the day, heavier model at night for background tasks"
+        )
+    )
+    day_model: str = Field(
+        description="Ollama model loaded during daytime hours (pre-warmed for conversations)"
+    )
+    night_model: str = Field(
+        description="Ollama model loaded at night for background processing (e.g. memory graph extraction)"
+    )
+    model_swap_day_cron: str = Field(
+        description="Cron expression for the day-model swap (default: 30 7 * * * = 7:30 AM)"
+    )
+    model_swap_night_cron: str = Field(
+        description="Cron expression for the night-model swap (default: 0 0 * * * = midnight)"
+    )
+
+
+class LLMSettingsUpdate(BaseModel):
+    """Partial update payload for LLM settings (all fields optional)."""
+
+    backend: Optional[str] = None
+    ollama_model: Optional[str] = None
+    ollama_url: Optional[str] = None
+    groq_model: Optional[str] = None
+    together_model: Optional[str] = None
+    cloud_enabled: Optional[bool] = None
+    cloud_ollama_model: Optional[str] = None
+    model_swap_enabled: Optional[bool] = None
+    day_model: Optional[str] = None
+    night_model: Optional[str] = None
+    model_swap_day_cron: Optional[str] = None
+    model_swap_night_cron: Optional[str] = None
+
+
+def _current_llm_settings() -> LLMSettings:
+    """Build an LLMSettings snapshot from the live settings object."""
+    lc = settings.llm
+    return LLMSettings(
+        backend=lc.default_model,
+        ollama_model=lc.ollama_model,
+        ollama_url=lc.ollama_url,
+        groq_model=lc.groq_model,
+        together_model=lc.together_model,
+        cloud_enabled=lc.cloud_enabled,
+        cloud_ollama_model=lc.cloud_ollama_model,
+        model_swap_enabled=lc.model_swap_enabled,
+        day_model=lc.day_model,
+        night_model=lc.night_model,
+        model_swap_day_cron=lc.model_swap_day_cron,
+        model_swap_night_cron=lc.model_swap_night_cron,
+    )
+
+
+# LLM API field -> LLMConfig attribute
+_LLM_ATTR_MAP: dict[str, str] = {
+    "backend": "default_model",
+    "ollama_model": "ollama_model",
+    "ollama_url": "ollama_url",
+    "groq_model": "groq_model",
+    "together_model": "together_model",
+    "cloud_enabled": "cloud_enabled",
+    "cloud_ollama_model": "cloud_ollama_model",
+    "model_swap_enabled": "model_swap_enabled",
+    "day_model": "day_model",
+    "night_model": "night_model",
+    "model_swap_day_cron": "model_swap_day_cron",
+    "model_swap_night_cron": "model_swap_night_cron",
+}
+
+
+@router.get("/llm", response_model=LLMSettings)
+async def get_llm_settings() -> LLMSettings:
+    """Return current user-configurable LLM / AI model settings."""
+    return _current_llm_settings()
+
+
+@router.patch("/llm", response_model=LLMSettings)
+async def update_llm_settings(updates: LLMSettingsUpdate) -> LLMSettings:
+    """
+    Update LLM / AI model settings.
+
+    Changes apply in-memory immediately and are persisted to .env.local.
+    API keys (GROQ_API_KEY, TOGETHER_API_KEY, ANTHROPIC_API_KEY) are credentials
+    and must be set in your .env file directly.
+    Note: backend and model_swap changes require a server restart to take full effect.
+    """
+    update_dict = updates.model_dump(exclude_none=True)
+
+    if not update_dict:
+        return _current_llm_settings()
+
+    for field, value in update_dict.items():
+        attr = _LLM_ATTR_MAP.get(field, field)
+        if hasattr(settings.llm, attr):
+            setattr(settings.llm, attr, value)
+            logger.info("LLM setting updated: %s = %r", attr, value)
+
+    env_updates: dict[str, str] = {}
+    for field, value in update_dict.items():
+        env_key = _LLM_ENV_MAP.get(field)
+        if env_key is not None:
+            env_updates[env_key] = str(value)
+
+    if env_updates:
+        async with _env_write_lock:
+            try:
+                _write_env_local(env_updates)
+                logger.info("LLM settings persisted to .env.local: %s", list(env_updates.keys()))
+            except OSError as exc:
+                logger.warning("Failed to persist LLM settings to .env.local: %s", exc)
+
+    return _current_llm_settings()
+
+
+# ---------------------------------------------------------------------------
+# Notifications settings (alerts, reminders, call intelligence)
+# ---------------------------------------------------------------------------
+
+_NOTIFY_ENV_MAP: dict[str, str] = {
+    # AlertsConfig (ATLAS_ALERTS_*)
+    "alerts_enabled": "ATLAS_ALERTS_ENABLED",
+    "alerts_cooldown_seconds": "ATLAS_ALERTS_DEFAULT_COOLDOWN_SECONDS",
+    "alerts_tts_enabled": "ATLAS_ALERTS_TTS_ENABLED",
+    "alerts_persist": "ATLAS_ALERTS_PERSIST_ALERTS",
+    "ntfy_enabled": "ATLAS_ALERTS_NTFY_ENABLED",
+    "ntfy_url": "ATLAS_ALERTS_NTFY_URL",
+    "ntfy_topic": "ATLAS_ALERTS_NTFY_TOPIC",
+    # ReminderConfig (ATLAS_REMINDER_*)
+    "reminders_enabled": "ATLAS_REMINDER_ENABLED",
+    "reminder_timezone": "ATLAS_REMINDER_DEFAULT_TIMEZONE",
+    "reminder_max_per_user": "ATLAS_REMINDER_MAX_REMINDERS_PER_USER",
+    # CallIntelligenceConfig (ATLAS_CALL_INTELLIGENCE_*)
+    "call_intel_enabled": "ATLAS_CALL_INTELLIGENCE_ENABLED",
+    "call_min_duration_seconds": "ATLAS_CALL_INTELLIGENCE_MIN_DURATION_SECONDS",
+    "call_notify_enabled": "ATLAS_CALL_INTELLIGENCE_NOTIFY_ENABLED",
+}
+
+_NOTIFY_ALERTS_FIELDS = {
+    "alerts_enabled", "alerts_cooldown_seconds", "alerts_tts_enabled", "alerts_persist",
+    "ntfy_enabled", "ntfy_url", "ntfy_topic",
+}
+_NOTIFY_REMINDER_FIELDS = {"reminders_enabled", "reminder_timezone", "reminder_max_per_user"}
+_NOTIFY_CALL_FIELDS = {"call_intel_enabled", "call_min_duration_seconds", "call_notify_enabled"}
+
+_NOTIFY_ALERTS_ATTR_MAP: dict[str, str] = {
+    "alerts_enabled": "enabled",
+    "alerts_cooldown_seconds": "default_cooldown_seconds",
+    "alerts_tts_enabled": "tts_enabled",
+    "alerts_persist": "persist_alerts",
+    "ntfy_enabled": "ntfy_enabled",
+    "ntfy_url": "ntfy_url",
+    "ntfy_topic": "ntfy_topic",
+}
+_NOTIFY_REMINDER_ATTR_MAP: dict[str, str] = {
+    "reminders_enabled": "enabled",
+    "reminder_timezone": "default_timezone",
+    "reminder_max_per_user": "max_reminders_per_user",
+}
+_NOTIFY_CALL_ATTR_MAP: dict[str, str] = {
+    "call_intel_enabled": "enabled",
+    "call_min_duration_seconds": "min_duration_seconds",
+    "call_notify_enabled": "notify_enabled",
+}
+
+
+class NotificationSettings(BaseModel):
+    """User-configurable notification settings (alerts, ntfy, reminders, call intelligence)."""
+
+    # Alert system
+    alerts_enabled: bool = Field(description="Enable the centralised alert system")
+    alerts_cooldown_seconds: int = Field(
+        description="Minimum seconds between repeated alerts of the same type"
+    )
+    alerts_tts_enabled: bool = Field(
+        description="Speak alert messages aloud via TTS on edge nodes"
+    )
+    alerts_persist: bool = Field(
+        description="Persist every alert to the database for history and reporting"
+    )
+
+    # ntfy push notifications
+    ntfy_enabled: bool = Field(
+        description="Enable ntfy push notifications -- receives alerts on your phone or browser"
+    )
+    ntfy_url: str = Field(description="ntfy server URL (self-hosted or ntfy.sh)")
+    ntfy_topic: str = Field(
+        description="ntfy topic to publish to -- subscribe to the same topic in the ntfy app"
+    )
+
+    # Reminders
+    reminders_enabled: bool = Field(description="Enable the reminder system")
+    reminder_timezone: str = Field(
+        description="Default IANA timezone for reminder scheduling (e.g. America/Chicago)"
+    )
+    reminder_max_per_user: int = Field(
+        description="Maximum active reminders allowed per user"
+    )
+
+    # Call intelligence
+    call_intel_enabled: bool = Field(
+        description="Automatically transcribe and extract data from Twilio call recordings after a call ends"
+    )
+    call_min_duration_seconds: int = Field(
+        description="Skip post-call processing for calls shorter than this duration (seconds)"
+    )
+    call_notify_enabled: bool = Field(
+        description="Push an ntfy notification with the call summary after processing"
+    )
+
+
+class NotificationSettingsUpdate(BaseModel):
+    """Partial update payload for notification settings (all fields optional)."""
+
+    alerts_enabled: Optional[bool] = None
+    alerts_cooldown_seconds: Optional[int] = None
+    alerts_tts_enabled: Optional[bool] = None
+    alerts_persist: Optional[bool] = None
+    ntfy_enabled: Optional[bool] = None
+    ntfy_url: Optional[str] = None
+    ntfy_topic: Optional[str] = None
+    reminders_enabled: Optional[bool] = None
+    reminder_timezone: Optional[str] = None
+    reminder_max_per_user: Optional[int] = None
+    call_intel_enabled: Optional[bool] = None
+    call_min_duration_seconds: Optional[int] = None
+    call_notify_enabled: Optional[bool] = None
+
+
+def _current_notification_settings() -> NotificationSettings:
+    """Build a NotificationSettings snapshot from the live settings objects."""
+    al = settings.alerts
+    re = settings.reminder
+    ci = settings.call_intelligence
+    return NotificationSettings(
+        alerts_enabled=al.enabled,
+        alerts_cooldown_seconds=al.default_cooldown_seconds,
+        alerts_tts_enabled=al.tts_enabled,
+        alerts_persist=al.persist_alerts,
+        ntfy_enabled=al.ntfy_enabled,
+        ntfy_url=al.ntfy_url,
+        ntfy_topic=al.ntfy_topic,
+        reminders_enabled=re.enabled,
+        reminder_timezone=re.default_timezone,
+        reminder_max_per_user=re.max_reminders_per_user,
+        call_intel_enabled=ci.enabled,
+        call_min_duration_seconds=ci.min_duration_seconds,
+        call_notify_enabled=ci.notify_enabled,
+    )
+
+
+@router.get("/notifications", response_model=NotificationSettings)
+async def get_notification_settings() -> NotificationSettings:
+    """Return current user-configurable notification settings."""
+    return _current_notification_settings()
+
+
+@router.patch("/notifications", response_model=NotificationSettings)
+async def update_notification_settings(updates: NotificationSettingsUpdate) -> NotificationSettings:
+    """
+    Update notification settings.
+
+    Changes apply in-memory immediately and are persisted to .env.local.
+    """
+    update_dict = updates.model_dump(exclude_none=True)
+
+    if not update_dict:
+        return _current_notification_settings()
+
+    for field, value in update_dict.items():
+        if field in _NOTIFY_ALERTS_FIELDS:
+            attr = _NOTIFY_ALERTS_ATTR_MAP.get(field, field)
+            if hasattr(settings.alerts, attr):
+                setattr(settings.alerts, attr, value)
+                logger.info("Alerts setting updated: %s = %r", attr, value)
+        elif field in _NOTIFY_REMINDER_FIELDS:
+            attr = _NOTIFY_REMINDER_ATTR_MAP.get(field, field)
+            if hasattr(settings.reminder, attr):
+                setattr(settings.reminder, attr, value)
+                logger.info("Reminder setting updated: %s = %r", attr, value)
+        elif field in _NOTIFY_CALL_FIELDS:
+            attr = _NOTIFY_CALL_ATTR_MAP.get(field, field)
+            if hasattr(settings.call_intelligence, attr):
+                setattr(settings.call_intelligence, attr, value)
+                logger.info("Call intelligence setting updated: %s = %r", attr, value)
+
+    env_updates: dict[str, str] = {}
+    for field, value in update_dict.items():
+        env_key = _NOTIFY_ENV_MAP.get(field)
+        if env_key is not None:
+            env_updates[env_key] = str(value)
+
+    if env_updates:
+        async with _env_write_lock:
+            try:
+                _write_env_local(env_updates)
+                logger.info("Notification settings persisted to .env.local: %s", list(env_updates.keys()))
+            except OSError as exc:
+                logger.warning("Failed to persist notification settings to .env.local: %s", exc)
+
+    return _current_notification_settings()
+
+
+# ---------------------------------------------------------------------------
+# Integrations settings (Home Assistant, MQTT, MCP servers)
+# ---------------------------------------------------------------------------
+
+_INTEG_ENV_MAP: dict[str, str] = {
+    # HomeAssistantConfig (ATLAS_HA_*)
+    "ha_enabled": "ATLAS_HA_ENABLED",
+    "ha_url": "ATLAS_HA_URL",
+    "ha_entity_filter": "ATLAS_HA_ENTITY_FILTER",
+    "ha_websocket_enabled": "ATLAS_HA_WEBSOCKET_ENABLED",
+    "ha_websocket_reconnect_interval": "ATLAS_HA_WEBSOCKET_RECONNECT_INTERVAL",
+    "ha_state_cache_ttl": "ATLAS_HA_STATE_CACHE_TTL",
+    # MQTTConfig (ATLAS_MQTT_*)
+    "mqtt_enabled": "ATLAS_MQTT_ENABLED",
+    "mqtt_host": "ATLAS_MQTT_HOST",
+    "mqtt_port": "ATLAS_MQTT_PORT",
+    "mqtt_username": "ATLAS_MQTT_USERNAME",
+    # MCPConfig (ATLAS_MCP_*)
+    "mcp_crm_enabled": "ATLAS_MCP_CRM_ENABLED",
+    "mcp_email_enabled": "ATLAS_MCP_EMAIL_ENABLED",
+    "mcp_calendar_enabled": "ATLAS_MCP_CALENDAR_ENABLED",
+    "mcp_twilio_enabled": "ATLAS_MCP_TWILIO_ENABLED",
+    "mcp_transport": "ATLAS_MCP_TRANSPORT",
+}
+
+_INTEG_HA_FIELDS = {
+    "ha_enabled", "ha_url", "ha_entity_filter", "ha_websocket_enabled",
+    "ha_websocket_reconnect_interval", "ha_state_cache_ttl",
+}
+_INTEG_MQTT_FIELDS = {"mqtt_enabled", "mqtt_host", "mqtt_port", "mqtt_username"}
+_INTEG_MCP_FIELDS = {
+    "mcp_crm_enabled", "mcp_email_enabled", "mcp_calendar_enabled",
+    "mcp_twilio_enabled", "mcp_transport",
+}
+
+_INTEG_HA_ATTR_MAP: dict[str, str] = {
+    "ha_enabled": "enabled",
+    "ha_url": "url",
+    "ha_entity_filter": "entity_filter",
+    "ha_websocket_enabled": "websocket_enabled",
+    "ha_websocket_reconnect_interval": "websocket_reconnect_interval",
+    "ha_state_cache_ttl": "state_cache_ttl",
+}
+_INTEG_MQTT_ATTR_MAP: dict[str, str] = {
+    "mqtt_enabled": "enabled",
+    "mqtt_host": "host",
+    "mqtt_port": "port",
+    "mqtt_username": "username",
+}
+_INTEG_MCP_ATTR_MAP: dict[str, str] = {
+    "mcp_crm_enabled": "crm_enabled",
+    "mcp_email_enabled": "email_enabled",
+    "mcp_calendar_enabled": "calendar_enabled",
+    "mcp_twilio_enabled": "twilio_enabled",
+    "mcp_transport": "transport",
+}
+
+
+class IntegrationSettings(BaseModel):
+    """User-configurable integration settings (Home Assistant, MQTT, MCP)."""
+
+    # Home Assistant
+    ha_enabled: bool = Field(description="Enable Home Assistant backend for device control")
+    ha_url: str = Field(description="Home Assistant base URL (e.g. http://homeassistant.local:8123)")
+    ha_entity_filter: str = Field(
+        description=(
+            'JSON array of entity-prefix strings to auto-discover '
+            '(e.g. ["light.","switch.","media_player."])'
+        )
+    )
+    ha_websocket_enabled: bool = Field(
+        description="Enable WebSocket for real-time HA state updates (recommended)"
+    )
+    ha_websocket_reconnect_interval: int = Field(
+        description="Seconds between WebSocket reconnection attempts"
+    )
+    ha_state_cache_ttl: int = Field(
+        description="Seconds to cache HA entity state before treating it as stale"
+    )
+
+    # MQTT
+    mqtt_enabled: bool = Field(description="Enable MQTT backend for direct device messaging")
+    mqtt_host: str = Field(description="MQTT broker hostname or IP address")
+    mqtt_port: int = Field(description="MQTT broker port (default 1883)")
+    mqtt_username: str = Field(
+        description="MQTT broker username (leave empty if no authentication required)"
+    )
+
+    # MCP servers (Claude Desktop / Cursor tool integration)
+    mcp_crm_enabled: bool = Field(description="Enable CRM MCP server (exposes contacts tools to AI clients)")
+    mcp_email_enabled: bool = Field(description="Enable Email MCP server (exposes email tools to AI clients)")
+    mcp_calendar_enabled: bool = Field(
+        description="Enable Calendar MCP server (exposes scheduling tools to AI clients)"
+    )
+    mcp_twilio_enabled: bool = Field(
+        description="Enable Twilio MCP server (exposes call and SMS tools to AI clients)"
+    )
+    mcp_transport: str = Field(
+        description="MCP transport mode: stdio (Claude Desktop/Cursor) or sse (HTTP endpoint)"
+    )
+
+
+class IntegrationSettingsUpdate(BaseModel):
+    """Partial update payload for integration settings (all fields optional)."""
+
+    # Home Assistant
+    ha_enabled: Optional[bool] = None
+    ha_url: Optional[str] = None
+    ha_entity_filter: Optional[str] = None
+    ha_websocket_enabled: Optional[bool] = None
+    ha_websocket_reconnect_interval: Optional[int] = None
+    ha_state_cache_ttl: Optional[int] = None
+
+    # MQTT
+    mqtt_enabled: Optional[bool] = None
+    mqtt_host: Optional[str] = None
+    mqtt_port: Optional[int] = None
+    mqtt_username: Optional[str] = None
+
+    # MCP
+    mcp_crm_enabled: Optional[bool] = None
+    mcp_email_enabled: Optional[bool] = None
+    mcp_calendar_enabled: Optional[bool] = None
+    mcp_twilio_enabled: Optional[bool] = None
+    mcp_transport: Optional[str] = None
+
+
+def _current_integration_settings() -> IntegrationSettings:
+    """Build an IntegrationSettings snapshot from the live settings objects."""
+    import json
+    ha = settings.homeassistant
+    mq = settings.mqtt
+    mc = settings.mcp
+    return IntegrationSettings(
+        ha_enabled=ha.enabled,
+        ha_url=ha.url,
+        ha_entity_filter=json.dumps(ha.entity_filter),
+        ha_websocket_enabled=ha.websocket_enabled,
+        ha_websocket_reconnect_interval=ha.websocket_reconnect_interval,
+        ha_state_cache_ttl=ha.state_cache_ttl,
+        mqtt_enabled=mq.enabled,
+        mqtt_host=mq.host,
+        mqtt_port=mq.port,
+        mqtt_username=mq.username or "",
+        mcp_crm_enabled=mc.crm_enabled,
+        mcp_email_enabled=mc.email_enabled,
+        mcp_calendar_enabled=mc.calendar_enabled,
+        mcp_twilio_enabled=mc.twilio_enabled,
+        mcp_transport=mc.transport,
+    )
+
+
+@router.get("/integrations", response_model=IntegrationSettings)
+async def get_integration_settings() -> IntegrationSettings:
+    """Return current user-configurable integration settings."""
+    return _current_integration_settings()
+
+
+@router.patch("/integrations", response_model=IntegrationSettings)
+async def update_integration_settings(updates: IntegrationSettingsUpdate) -> IntegrationSettings:
+    """
+    Update integration settings.
+
+    Changes apply in-memory immediately and are persisted to .env.local.
+    Credentials (HA token, MQTT password) must be set in your .env file directly.
+    Note: enabling/disabling HA or MQTT backends requires a server restart.
+    """
+    import json
+    update_dict = updates.model_dump(exclude_none=True)
+
+    if not update_dict:
+        return _current_integration_settings()
+
+    for field, value in update_dict.items():
+        if field in _INTEG_HA_FIELDS:
+            attr = _INTEG_HA_ATTR_MAP.get(field, field)
+            if attr == "entity_filter":
+                try:
+                    value = json.loads(value) if isinstance(value, str) else value
+                except (ValueError, TypeError):
+                    pass
+            if hasattr(settings.homeassistant, attr):
+                setattr(settings.homeassistant, attr, value)
+                logger.info("Home Assistant setting updated: %s = %r", attr, value)
+        elif field in _INTEG_MQTT_FIELDS:
+            attr = _INTEG_MQTT_ATTR_MAP.get(field, field)
+            if hasattr(settings.mqtt, attr):
+                setattr(settings.mqtt, attr, value)
+                logger.info("MQTT setting updated: %s = %r", attr, value)
+        elif field in _INTEG_MCP_FIELDS:
+            attr = _INTEG_MCP_ATTR_MAP.get(field, field)
+            if hasattr(settings.mcp, attr):
+                setattr(settings.mcp, attr, value)
+                logger.info("MCP setting updated: %s = %r", attr, value)
+
+    env_updates: dict[str, str] = {}
+    for field, value in update_dict.items():
+        env_key = _INTEG_ENV_MAP.get(field)
+        if env_key is not None:
+            env_updates[env_key] = str(value)
+
+    if env_updates:
+        async with _env_write_lock:
+            try:
+                _write_env_local(env_updates)
+                logger.info("Integration settings persisted to .env.local: %s", list(env_updates.keys()))
+            except OSError as exc:
+                logger.warning("Failed to persist integration settings to .env.local: %s", exc)
+
+    return _current_integration_settings()

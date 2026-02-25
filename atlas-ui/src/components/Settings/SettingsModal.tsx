@@ -1,24 +1,30 @@
 /**
- * SettingsModal — tabbed settings panel combining Voice Pipeline, Email, and Daily Ops.
+ * SettingsModal — tabbed settings panel combining all configurable Atlas systems.
  *
  * Opens as a full modal overlay.  Each tab hosts its own form which manages
  * its own load/save lifecycle independently.
  */
 import { useState } from 'react';
-import { X, Mic, Mail, Brain, Newspaper } from 'lucide-react';
+import { X, Mic, Mail, Brain, Newspaper, Cpu, Bell, Plug } from 'lucide-react';
 import clsx from 'clsx';
 import { VoiceSettingsForm } from './VoiceSettings';
 import { EmailSettingsForm } from './EmailSettings';
 import { DailySettingsForm } from './DailyIntelligenceSettings';
 import { IntelligenceSettingsForm } from './NewsIntelligenceSettings';
+import { LLMSettingsForm } from './LLMSettings';
+import { NotificationSettingsForm } from './NotificationSettings';
+import { IntegrationSettingsForm } from './IntegrationSettings';
 
-type Tab = 'voice' | 'email' | 'daily' | 'intelligence';
+type Tab = 'voice' | 'email' | 'daily' | 'intelligence' | 'llm' | 'notifications' | 'integrations';
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
-  { id: 'voice', label: 'Voice Pipeline', icon: <Mic size={13} /> },
-  { id: 'email', label: 'Email', icon: <Mail size={13} /> },
-  { id: 'daily', label: 'Daily Ops', icon: <Brain size={13} /> },
-  { id: 'intelligence', label: 'Intelligence', icon: <Newspaper size={13} /> },
+  { id: 'voice',          label: 'Voice Pipeline', icon: <Mic size={13} /> },
+  { id: 'email',          label: 'Email',          icon: <Mail size={13} /> },
+  { id: 'daily',          label: 'Daily Ops',      icon: <Brain size={13} /> },
+  { id: 'intelligence',   label: 'Intelligence',   icon: <Newspaper size={13} /> },
+  { id: 'llm',            label: 'AI Model',       icon: <Cpu size={13} /> },
+  { id: 'notifications',  label: 'Notifications',  icon: <Bell size={13} /> },
+  { id: 'integrations',   label: 'Integrations',   icon: <Plug size={13} /> },
 ];
 
 interface SettingsModalProps {
@@ -75,10 +81,13 @@ export function SettingsModal({ onClose, initialTab = 'voice' }: SettingsModalPr
 
         {/* tab content — flex-1 so the form footer sticks to the bottom */}
         <div className="flex-1 min-h-0 flex flex-col">
-          {activeTab === 'voice' && <VoiceSettingsForm />}
-          {activeTab === 'email' && <EmailSettingsForm />}
-          {activeTab === 'daily' && <DailySettingsForm />}
-          {activeTab === 'intelligence' && <IntelligenceSettingsForm />}
+          {activeTab === 'voice'         && <VoiceSettingsForm />}
+          {activeTab === 'email'         && <EmailSettingsForm />}
+          {activeTab === 'daily'         && <DailySettingsForm />}
+          {activeTab === 'intelligence'  && <IntelligenceSettingsForm />}
+          {activeTab === 'llm'           && <LLMSettingsForm />}
+          {activeTab === 'notifications' && <NotificationSettingsForm />}
+          {activeTab === 'integrations'  && <IntegrationSettingsForm />}
         </div>
       </div>
 
