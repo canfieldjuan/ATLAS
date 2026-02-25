@@ -236,6 +236,23 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         cfg.sec_edgar_enabled, cfg.usaspending_enabled,
     )
 
+    # Warn when sources are enabled that have no fetch implementation yet.
+    # state_sos, county_recorder, and bls require custom regional integrations
+    # and do not contribute to signal scores in the current release.
+    _unimplemented = [
+        name for name, enabled in [
+            ("state_sos", cfg.state_sos_enabled),
+            ("county_recorder", cfg.county_recorder_enabled),
+            ("bls", cfg.bls_enabled),
+        ] if enabled
+    ]
+    if _unimplemented:
+        logger.warning(
+            "Data source(s) enabled but not yet integrated: %s. "
+            "These will not contribute to signal scores until a custom provider is configured.",
+            ", ".join(_unimplemented),
+        )
+
     now_utc = datetime.now(timezone.utc)
     signals: list[dict] = []
     entity_results: list[dict] = []
@@ -981,8 +998,8 @@ def _detect_macro_correlations(signals: list[dict], cfg: Any) -> list[dict]:
                 "entities": [s["name"] for s in group],
                 "avg_composite_score": round(avg_score, 2),
                 "interpretation": (
-                    f"Macro {etype} signal — {len(group)} entities signalling simultaneously "
-                    f"(avg score {avg_score:.1f}×). Likely sector-wide or macro catalyst."
+                    f"Macro {etype} signal: {len(group)} entities signalling simultaneously "
+                    f"(avg score {avg_score:.1f}x). Likely sector-wide or macro catalyst."
                 ),
             })
     return macro
@@ -1017,12 +1034,12 @@ def _build_summary(
         f"{len(signals)} pre-movement signal(s) detected across {total} watched entities."
     ]
 
-    _TYPE_EMOJI = {
-        "company": "📈",
-        "sports_team": "🏆",
-        "market": "📊",
-        "crypto": "₿",
-        "custom": "◉",
+    _TYPE_LABEL = {
+        "company": "[stock]",
+        "sports_team": "[sports]",
+        "market": "[market]",
+        "crypto": "[crypto]",
+        "custom": "[*]",
     }
 
     for sig in signals:
@@ -1043,7 +1060,7 @@ def _build_summary(
         recent = sig.get("recent_count", 0)
         pct = int((velocity - 1.0) * 100) if velocity >= 1.0 else 0
 
-        icon = _TYPE_EMOJI.get(entity_type, "◉")
+        label = _TYPE_LABEL.get(entity_type, "[*]")
         ticker_str = f" ({ticker})" if ticker else ""
         sentiment_str = f", sentiment {sentiment_dir}" if sentiment_dir != "neutral" else ""
         linguistic_str = f", [{', '.join(linguistic_markers)}]" if linguistic_markers else ""
@@ -1055,7 +1072,7 @@ def _build_summary(
             data_str = ", +SEC 8-K elevated"
         elif usaspending_elevated:
             data_str = ", +gov contracts elevated"
-        streak_str = f" ⚠ {streak}-day streak" if streak_alert else (f" ({streak}d streak)" if streak > 1 else "")
+        streak_str = f" [!! {streak}-day streak]" if streak_alert else (f" ({streak}d streak)" if streak > 1 else "")
         driver = {
             "volume": "volume spike",
             "sentiment": "sentiment shift",
@@ -1065,9 +1082,9 @@ def _build_summary(
         }.get(signal_type, "pressure")
 
         line = (
-            f"{icon} {name}{ticker_str}: {driver} — {recent} articles today "
+            f"{label} {name}{ticker_str}: {driver} - {recent} articles today "
             f"({pct}% above baseline{sentiment_str}{linguistic_str}{soram_str}{data_str}, "
-            f"composite score {composite:.1f}×){streak_str}."
+            f"composite score {composite:.1f}x){streak_str}."
         )
         if headlines:
             line += f" \"{headlines[0]['title']}\""
@@ -1076,7 +1093,7 @@ def _build_summary(
     # Append macro correlation alerts
     for macro in macro_signals:
         parts.append(
-            f"🌐 MACRO: {macro['interpretation']}"
+            f"[MACRO] {macro['interpretation']}"
         )
 
     return " ".join(parts)
