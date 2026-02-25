@@ -1,18 +1,14 @@
 """
 TrustRadius parser for B2B review scraping.
 
-URL pattern: trustradius.com/products/{slug}/reviews?page={n}
-Uses BeautifulSoup for HTML parsing. Rating scale is 1-10.
-Residential proxy recommended.
+Uses TrustRadius JSON API: /api/v1/products/{slug}/reviews
+Rating scale is 1-10 (normalized). Residential proxy recommended.
 """
 
 from __future__ import annotations
 
 import logging
-import re
 from urllib.parse import quote_plus
-
-from bs4 import BeautifulSoup
 
 from ..client import AntiDetectionClient
 from . import ScrapeResult, ScrapeTarget, register_parser
@@ -20,11 +16,12 @@ from . import ScrapeResult, ScrapeTarget, register_parser
 logger = logging.getLogger("atlas.services.scraping.parsers.trustradius")
 
 _DOMAIN = "trustradius.com"
-_BASE_URL = "https://www.trustradius.com/products"
+_API_BASE = "https://www.trustradius.com/api/v1/products"
+_PAGE_SIZE = 25
 
 
 class TrustRadiusParser:
-    """Parse TrustRadius review pages."""
+    """Parse TrustRadius reviews via their JSON API."""
 
     source_name = "trustradius"
     prefer_residential = True
@@ -36,12 +33,16 @@ class TrustRadiusParser:
         pages_scraped = 0
         seen_ids: set[str] = set()
 
-        for page in range(1, target.max_pages + 1):
-            url = f"{_BASE_URL}/{target.product_slug}/reviews?page={page}"
+        for page in range(target.max_pages):
+            offset = page * _PAGE_SIZE
+            url = (
+                f"{_API_BASE}/{target.product_slug}/reviews"
+                f"?limit={_PAGE_SIZE}&offset={offset}"
+            )
             referer = (
                 f"https://www.google.com/search?q={quote_plus(target.vendor_name)}+trustradius+reviews"
-                if page == 1
-                else f"{_BASE_URL}/{target.product_slug}/reviews?page={page - 1}"
+                if page == 0
+                else f"https://www.trustradius.com/products/{target.product_slug}/reviews"
             )
 
             try:
@@ -55,21 +56,26 @@ class TrustRadiusParser:
                 pages_scraped += 1
 
                 if resp.status_code == 403:
-                    errors.append(f"Page {page}: blocked (403)")
+                    errors.append(f"Page {page + 1}: blocked (403)")
                     break
                 if resp.status_code != 200:
-                    errors.append(f"Page {page}: HTTP {resp.status_code}")
+                    errors.append(f"Page {page + 1}: HTTP {resp.status_code}")
                     continue
 
-                page_reviews = _parse_page(resp.text, target, seen_ids)
-                if not page_reviews:
+                data = resp.json()
+                records = data.get("records", [])
+
+                if not records:
                     break  # No more reviews
 
-                reviews.extend(page_reviews)
+                for record in records:
+                    review = _parse_record(record, target, seen_ids)
+                    if review:
+                        reviews.append(review)
 
             except Exception as exc:
-                errors.append(f"Page {page}: {exc}")
-                logger.warning("TrustRadius page %d failed for %s: %s", page, target.product_slug, exc)
+                errors.append(f"Page {page + 1}: {exc}")
+                logger.warning("TrustRadius page %d failed for %s: %s", page + 1, target.product_slug, exc)
                 break
 
         logger.info(
@@ -80,107 +86,44 @@ class TrustRadiusParser:
         return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors)
 
 
-def _parse_page(
-    html: str, target: ScrapeTarget, seen_ids: set[str]
-) -> list[dict]:
-    """Parse a single TrustRadius review page."""
-    soup = BeautifulSoup(html, "html.parser")
-    reviews: list[dict] = []
-
-    # TrustRadius review cards are in div elements with review data
-    review_cards = soup.select('[data-testid="review-card"], .review-card, [class*="ReviewCard"]')
-
-    # Fallback: look for common review container patterns
-    if not review_cards:
-        review_cards = soup.select('div[id^="review-"], article[class*="review"]')
-
-    for card in review_cards:
-        try:
-            review = _parse_review_card(card, target)
-            if review and review.get("source_review_id") not in seen_ids:
-                seen_ids.add(review["source_review_id"])
-                reviews.append(review)
-        except Exception:
-            logger.debug("Failed to parse TrustRadius review card", exc_info=True)
-
-    return reviews
-
-
-def _parse_review_card(card, target: ScrapeTarget) -> dict | None:
-    """Extract review data from a single TrustRadius review card."""
-    # Extract review ID
-    review_id = card.get("id", "") or card.get("data-review-id", "")
-    if not review_id:
-        # Try to find any unique identifier
-        link = card.select_one("a[href*='/reviews/']")
-        if link:
-            href = link.get("href", "")
-            parts = href.rstrip("/").split("/")
-            review_id = parts[-1] if parts else ""
-    if not review_id:
+def _parse_record(record: dict, target: ScrapeTarget, seen_ids: set[str]) -> dict | None:
+    """Parse a single TrustRadius API review record."""
+    review_id = record.get("_id", "")
+    if not review_id or review_id in seen_ids:
         return None
+    seen_ids.add(review_id)
 
-    # Extract rating (TrustRadius uses 1-10 scale)
-    rating = None
-    rating_el = card.select_one('[class*="rating"], [class*="score"], [data-rating]')
-    if rating_el:
-        rating_text = rating_el.get("data-rating") or rating_el.get_text(strip=True)
-        rating_match = re.search(r"(\d+(?:\.\d+)?)", rating_text or "")
-        if rating_match:
-            rating = float(rating_match.group(1))
+    # Rating: {"normalized": 9, "possible": 100, "earned": 90}
+    rating_obj = record.get("rating", {})
+    rating = rating_obj.get("normalized")  # 1-10 scale
 
-    # Extract review text
-    review_text = ""
-    text_el = card.select_one('[class*="review-text"], [class*="ReviewText"], .review-body')
-    if text_el:
-        review_text = text_el.get_text(strip=True)
+    # Review text: synopsis is the main text, verbatims are key quotes
+    synopsis = record.get("synopsis", "")
+    verbatims = record.get("verbatims", [])
+    heading = record.get("heading", "")
 
-    # Extract pros/cons if available
-    pros = _extract_section(card, "like", "pros", "best")
-    cons = _extract_section(card, "dislike", "cons", "worst")
-
-    # Combine for review_text if main text is empty
-    if not review_text:
-        parts = []
-        if pros:
-            parts.append(f"Pros: {pros}")
-        if cons:
-            parts.append(f"Cons: {cons}")
-        review_text = "\n".join(parts)
+    # Build review_text from synopsis + verbatims
+    parts = []
+    if synopsis:
+        parts.append(synopsis)
+    if verbatims:
+        parts.append("\n".join(verbatims))
+    review_text = "\n\n".join(parts)
 
     if not review_text or len(review_text) < 20:
         return None
 
-    # Extract reviewer info
-    reviewer_name = ""
-    reviewer_el = card.select_one('[class*="reviewer"], [class*="author"], [class*="Reviewer"]')
-    if reviewer_el:
-        reviewer_name = reviewer_el.get_text(strip=True)
+    # Date
+    reviewed_at = record.get("publishedDate")
 
-    reviewer_title = ""
-    title_el = card.select_one('[class*="title"], [class*="role"], [class*="Title"]')
-    if title_el and title_el != reviewer_el:
-        reviewer_title = title_el.get_text(strip=True)
+    # Reviewer info
+    reviewer_title = record.get("reviewerJobType")
+    reviewer_dept = record.get("reviewerDepartment")
+    if reviewer_title and reviewer_dept:
+        reviewer_title = f"{reviewer_title}, {reviewer_dept}"
 
-    reviewer_company = ""
-    company_el = card.select_one('[class*="company"], [class*="org"], [class*="Company"]')
-    if company_el:
-        reviewer_company = company_el.get_text(strip=True)
-
-    company_size = ""
-    size_el = card.select_one('[class*="size"], [class*="employees"]')
-    if size_el:
-        company_size = size_el.get_text(strip=True)
-
-    # Extract date
-    reviewed_at = None
-    date_el = card.select_one("time, [class*='date'], [class*='Date']")
-    if date_el:
-        date_str = date_el.get("datetime") or date_el.get_text(strip=True)
-        reviewed_at = date_str
-
-    # Build source URL
-    source_url = f"https://www.trustradius.com/products/{target.product_slug}/reviews#{review_id}"
+    slug = record.get("slug", review_id)
+    source_url = f"https://www.trustradius.com/reviews/{slug}"
 
     return {
         "source": "trustradius",
@@ -190,30 +133,23 @@ def _parse_review_card(card, target: ScrapeTarget) -> dict | None:
         "product_name": target.product_name,
         "product_category": target.product_category,
         "rating": rating,
-        "rating_max": 10,  # TrustRadius uses 10-point scale
-        "summary": None,
+        "rating_max": 10,
+        "summary": heading[:500] if heading else None,
         "review_text": review_text[:10000],
-        "pros": pros,
-        "cons": cons,
-        "reviewer_name": reviewer_name or None,
-        "reviewer_title": reviewer_title or None,
-        "reviewer_company": reviewer_company or None,
-        "company_size_raw": company_size or None,
-        "reviewer_industry": None,
+        "pros": None,
+        "cons": None,
+        "reviewer_name": None,  # API doesn't expose reviewer name
+        "reviewer_title": reviewer_title,
+        "reviewer_company": None,
+        "company_size_raw": record.get("companySize"),
+        "reviewer_industry": record.get("companyIndustry"),
         "reviewed_at": reviewed_at,
-        "raw_metadata": {},
+        "raw_metadata": {
+            "grade": record.get("grade"),
+            "rating_earned": rating_obj.get("earned"),
+            "rating_possible": rating_obj.get("possible"),
+        },
     }
-
-
-def _extract_section(card, *keywords: str) -> str | None:
-    """Extract a pros/cons section by looking for keyword matches in class names."""
-    for kw in keywords:
-        el = card.select_one(f'[class*="{kw}"]')
-        if el:
-            text = el.get_text(strip=True)
-            if text and len(text) > 5:
-                return text[:5000]
-    return None
 
 
 # Auto-register
