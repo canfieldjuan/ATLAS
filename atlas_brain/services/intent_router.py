@@ -190,6 +190,14 @@ ROUTE_DEFINITIONS: dict[str, list[str]] = {
         "arm the home security", "disarm the home security",
         "activate the security system", "deactivate the security system",
     ],
+    "crm_query": [
+        "look up John", "is John in the CRM", "find customer Smith",
+        "search for a contact named Mary", "look up the customer",
+        "do we have a customer named Garcia", "find the contact",
+        "who is John Smith in our system", "search contacts for Sarah",
+        "check if we have a record for them", "look up that customer",
+        "pull up the customer file", "find the client",
+    ],
     "detection_query": [
         "who was at the front door", "who is at the back door",
         "is anyone outside", "what did the cameras see", "who came by today",
@@ -267,6 +275,7 @@ ROUTE_TO_ACTION: dict[str, tuple[str, Optional[str]]] = {
     "show_camera":   ("tool_use", "show_camera_feed"),
     "security":         ("device_command", None),
     "presence":         ("device_command", None),
+    "crm_query":        ("tool_use", "search_contacts"),
     "detection_query":  ("tool_use", "get_person_at_location"),
     "motion_query":     ("tool_use", "get_motion_events"),
     "digest":           ("tool_use", "run_digest"),
@@ -289,6 +298,36 @@ ROUTE_TO_WORKFLOW: dict[str, str] = {
 
 # Valid route names for LLM fallback validation
 _VALID_ROUTES = set(ROUTE_TO_ACTION.keys()) | set(ROUTE_TO_WORKFLOW.keys())
+
+# Routes where we should attempt lightweight entity extraction on the
+# semantic path (no LLM call — just strip known verb/preposition prefixes).
+_ENTITY_ROUTES = {
+    "crm_query", "call_person", "email", "email_query", "detection_query",
+}
+_ENTITY_STRIP_RE = re.compile(
+    r"^(?:look\s*up|find|search\s*(?:for)?|check|pull\s*up|call|phone|ring"
+    r"|email|send\s*(?:an?\s*)?(?:email|message)\s*to|reply\s*to"
+    r"|who\s*(?:was|is)|is\s*there|any)\s+",
+    re.IGNORECASE,
+)
+_ENTITY_SUFFIX_RE = re.compile(
+    r"\s+(?:in\s+(?:the\s+)?(?:crm|system|database|contacts?|our\s+records?)"
+    r"|on\s+(?:the\s+)?(?:camera|phone|door)"
+    r"|(?:at|from)\s+(?:the\s+)?(?:front|back|side)\s*(?:door|gate)?)\.?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _extract_entity_from_query(query: str, route: str) -> Optional[str]:
+    """Best-effort entity extraction without LLM — strip known prefixes/suffixes."""
+    if route not in _ENTITY_ROUTES:
+        return None
+    text = _ENTITY_STRIP_RE.sub("", query).strip()
+    text = _ENTITY_SUFFIX_RE.sub("", text).strip().rstrip("?.!")
+    # Only return if we actually extracted something meaningful
+    if text and text.lower() != query.lower() and len(text) < 60:
+        return text
+    return None
 
 
 def _word_to_num(word: str) -> Optional[int]:
@@ -333,17 +372,36 @@ def _extract_detection_params(query: str) -> dict:
     return {}
 
 
+def _extract_entity_tool_params(query: str, route_name: str) -> dict:
+    """Map extracted entity to tool params for entity-bearing routes.
+
+    Makes routes like crm_query fast-path eligible by populating the
+    tool's required params from the entity name.
+    """
+    entity = _extract_entity_from_query(query, route_name)
+    if not entity:
+        return {}
+    if route_name == "crm_query":
+        return {"query": entity}
+    if route_name == "email_query":
+        return {"query": entity}
+    return {}
+
+
 def _extract_temporal_params(query: str, route_name: str) -> dict:
     """Extract route-specific params from the query text.
 
     Weather/traffic: days_ahead for forecast queries.
     Digest: digest_type keyword inference (security, device, email).
     Detection: location keyword extraction.
+    CRM/email queries: entity name to search query.
     """
     if route_name == "digest":
         return _extract_digest_params(query)
     if route_name == "detection_query":
         return _extract_detection_params(query)
+    if route_name in ("crm_query", "email_query"):
+        return _extract_entity_tool_params(query, route_name)
     if route_name not in ("get_weather", "get_traffic"):
         return {}
     q = query.lower()
@@ -535,8 +593,6 @@ class SemanticIntentRouter:
                 )
 
         # If above threshold, use semantic result.
-        # NOTE: entity_name is NOT extracted on this path (no LLM call).
-        # Entity graph traversal only fires when LLM fallback runs.
         if similarity >= threshold:
             route_time = (time.time() - start) * 1000
             action_category, tool_name = ROUTE_TO_ACTION.get(
@@ -548,6 +604,7 @@ class SemanticIntentRouter:
             )
             tool_params = _extract_temporal_params(query, route_name)
             fast_ok = (tool_name in PARAMETERLESS_TOOLS if tool_name else False) or bool(tool_params)
+            entity = _extract_entity_from_query(query, route_name)
             return IntentRouteResult(
                 action_category=action_category,
                 raw_label=route_name,
@@ -556,6 +613,7 @@ class SemanticIntentRouter:
                 tool_name=tool_name,
                 fast_path_ok=fast_ok,
                 tool_params=tool_params,
+                entity_name=entity,
             )
 
         # LLM fallback -- skip for very short queries (1-2 words) where the
@@ -705,6 +763,7 @@ class SemanticIntentRouter:
                 "- notification: send a push notification\n"
                 "- show_camera: show a camera feed\n"
                 "- security/presence: arm security or check presence sensors\n"
+                "- crm_query: look up a customer or contact by name, check if someone is in the CRM\n"
                 "- detection_query: ask who was at a door/camera, check for people\n"
                 "- motion_query: ask about motion or movement on cameras\n"
                 "- digest: request a briefing, summary, or status report\n"
