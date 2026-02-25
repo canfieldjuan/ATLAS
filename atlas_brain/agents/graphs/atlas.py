@@ -1562,13 +1562,15 @@ class AtlasAgentGraph:
                 metadata=user_metadata,
             )
 
-            # Store assistant turn
+            # Store assistant turn (sanitize to prevent tool-call artifacts
+            # from poisoning conversation history on subsequent turns).
             response = state.get("response")
             if response:
+                from ..memory.service import _sanitize_for_storage
                 await self._memory.add_turn(
                     session_id=session_id,
                     role="assistant",
-                    content=response,
+                    content=_sanitize_for_storage(response),
                     speaker_uuid=runtime_ctx.get("speaker_uuid"),
                     turn_type=turn_type,
                     metadata=assistant_metadata,

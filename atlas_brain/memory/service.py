@@ -22,6 +22,36 @@ from .token_estimator import TokenBudget, get_token_estimator
 
 logger = logging.getLogger("atlas.memory.service")
 
+# ---------------------------------------------------------------------------
+# Response sanitization — strip LLM artifacts before persisting to history.
+# Poisoned history causes cascading failures: wrong tool selection, language
+# switching, and 30s timeouts on subsequent turns.
+# ---------------------------------------------------------------------------
+import re as _re
+
+_TOOL_CALL_PATTERNS = _re.compile(
+    r"<think>.*?</think>"         # reasoning model thinking tags
+    r"|</?tool_call>"             # tool_call XML tags
+    r"|<function=\w+>.*?</function>"  # text-based tool call syntax
+    r"|\.encoder\s*\n?\s*\{.*?\}"    # hallucinated .encoder{"name":...} fragments
+    r"|```json\s*\{[^}]*\"name\"\s*:.*?\}\s*```"  # fenced JSON tool calls
+    , _re.DOTALL
+)
+
+
+def _sanitize_for_storage(text: str) -> str:
+    """Remove LLM tool-call artifacts and non-response junk before storing.
+
+    Applied to assistant content at both store points (agent path and
+    streaming path) to prevent poisoned history from affecting later turns.
+    """
+    if not text:
+        return text
+    text = _TOOL_CALL_PATTERNS.sub("", text)
+    # Collapse leftover blank lines from stripped content
+    text = _re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
 
 @dataclass
 class MemoryContext:
@@ -595,7 +625,7 @@ class MemoryService:
                 await conv_repo.add_turn(
                     session_id=session_uuid,
                     role="assistant",
-                    content=assistant_content,
+                    content=_sanitize_for_storage(assistant_content),
                     speaker_uuid=uuid_val,
                     turn_type=turn_type,
                     metadata=assistant_metadata,
