@@ -1878,8 +1878,76 @@ class NewsIntelligenceConfig(BaseSettings):
         default=1.3, ge=1.0, le=10.0,
         description=(
             "Minimum composite pressure score to flag a signal. "
-            "Composite = velocity × sentiment_factor × diversity_factor. "
+            "Composite = velocity × sentiment_factor × diversity_factor × linguistic_factor. "
             "Lower than velocity_threshold because extra dimensions add confirmation."
+        ),
+    )
+
+    # Linguistic pre-indicator analysis (behavioral stacking)
+    linguistic_analysis_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable linguistic pre-indicator pattern analysis. "
+            "Detects language patterns that statistically appear before major movements — "
+            "hedging, deflection, insider sourcing, and escalation language."
+        ),
+    )
+    linguistic_hedge_enabled: bool = Field(
+        default=True,
+        description=(
+            "Detect hedging/uncertainty language ('reportedly', 'could', 'may', 'sources say') — "
+            "builds before unconfirmed information goes mainstream"
+        ),
+    )
+    linguistic_deflection_enabled: bool = Field(
+        default=True,
+        description=(
+            "Detect deflection/denial language ('denies', 'dismisses', 'refuses to comment') — "
+            "denial clusters often appear immediately before a story breaks"
+        ),
+    )
+    linguistic_insider_enabled: bool = Field(
+        default=True,
+        description=(
+            "Detect insider/source language ('people familiar with the matter', 'anonymous sources') — "
+            "indicates information leakage before official disclosure"
+        ),
+    )
+    linguistic_escalation_enabled: bool = Field(
+        default=True,
+        description=(
+            "Detect escalation/urgency language ('breaking', 'crisis', 'urgent', 'imminent') — "
+            "urgency words in trade press before mainstream indicates accelerating pressure"
+        ),
+    )
+
+    # Signal streak and cross-entity correlation
+    signal_streak_enabled: bool = Field(
+        default=True,
+        description=(
+            "Track consecutive days with elevated signals per entity. "
+            "A streak of N days is significantly more predictive than a single-day spike."
+        ),
+    )
+    signal_streak_threshold: int = Field(
+        default=3, ge=2, le=14,
+        description=(
+            "Number of consecutive elevated-signal days that triggers a 'building pressure' alert. "
+            "Streaks indicate sustained pre-movement accumulation, not noise."
+        ),
+    )
+    cross_entity_correlation_enabled: bool = Field(
+        default=True,
+        description=(
+            "Detect macro signals when multiple entities of the same type spike simultaneously. "
+            "Correlated spikes across companies/markets indicate sector-wide events."
+        ),
+    )
+    cross_entity_min_signals: int = Field(
+        default=3, ge=2, le=10,
+        description=(
+            "Minimum number of same-type entities that must signal simultaneously "
+            "to flag a cross-entity macro correlation."
         ),
     )
 

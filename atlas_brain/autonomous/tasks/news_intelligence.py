@@ -8,10 +8,17 @@ watchlist (companies, sports teams, markets, crypto, or custom topics):
 2. Measures *volume velocity* — how many more articles today vs the baseline?
 3. Measures *sentiment shift* — is the tone suddenly more negative/positive?
 4. Measures *source diversity* — is the story spreading to new outlets?
-5. Computes a composite *pressure score* from all three dimensions.
-6. Flags entities whose composite score exceeds the threshold as
-   *pre-movement signals* — leading indicators that typically build up
-   before a price move, odds shift, or public narrative change.
+5. Measures *linguistic pre-indicators* (behavioral stacking) — are the four
+   Chase Hughes pre-event language patterns building?
+   - Hedging: "reportedly", "could", "may" — uncertainty before disclosure
+   - Deflection: "denies", "refuses to comment" — denial clusters before breaks
+   - Insider: "sources say", "people familiar" — information leakage
+   - Escalation: "breaking", "urgent", "crisis" — urgency before mainstream hit
+6. Computes a composite *pressure score* from all active dimensions.
+7. Tracks a *signal streak* — how many consecutive days has this entity been
+   elevated? A multi-day streak is far more predictive than a single spike.
+8. Detects *cross-entity correlation* — when multiple watched entities of the
+   same type signal simultaneously it's a macro event, not individual noise.
 
 This is intentionally a proxy-only approach: no ML models, no paid data feeds,
 just structured observation of publicly available article patterns.
@@ -41,6 +48,10 @@ _HTTP_TIMEOUT = 15.0
 # activity is genuine emergence rather than acceleration.
 _MIN_BASELINE_DAILY = 0.5
 
+# ---------------------------------------------------------------------------
+# Keyword sets — sentiment (direction) and linguistic pre-indicators (behavioral)
+# ---------------------------------------------------------------------------
+
 # Keyword proxies for sentiment scoring (no external NLP dependency).
 # These are intentionally broad — the goal is direction, not precision.
 _NEGATIVE_KEYWORDS = frozenset([
@@ -57,6 +68,44 @@ _POSITIVE_KEYWORDS = frozenset([
     "innovation", "breakthrough", "all-time", "milestone", "best",
 ])
 
+# Chase Hughes pre-indicator linguistic patterns.
+# Each set detects one of four behavioral signal dimensions that statistically
+# appear in news coverage *before* a meaningful movement is publicly reported.
+
+# Hedging: uncertainty language that builds as unverified information circulates
+_HEDGE_KEYWORDS = frozenset([
+    "reportedly", "allegedly", "said to be", "could", "may have", "might",
+    "possibly", "potential", "expected to", "likely to", "appears to",
+    "seems to", "uncertain", "unclear", "unconfirmed", "rumored", "rumour",
+    "speculation", "whispers", "whisper", "chatter", "buzz",
+])
+
+# Deflection: denial/dismissal clusters that appear right before a story breaks
+_DEFLECT_KEYWORDS = frozenset([
+    "denies", "deny", "dismisses", "rejects", "refutes", "disputes",
+    "refuses to comment", "declines to comment", "no comment",
+    "pushes back", "calls unfounded", "calls speculation", "has not responded",
+    "did not respond", "declined to respond", "won't say", "not commenting",
+    "spokesperson declined",
+])
+
+# Insider: sourcing language indicating information leakage before official disclosure
+_INSIDER_KEYWORDS = frozenset([
+    "sources say", "sources close", "people familiar", "according to sources",
+    "person familiar", "insiders say", "insider says", "anonymous sources",
+    "speaking on condition", "not authorized to speak", "exclusive report",
+    "obtained by", "reviewed by", "seen by", "leaked", "document shows",
+    "filing shows", "internal memo",
+])
+
+# Escalation: urgency/crisis language in trade press before mainstream pickup
+_ESCALATION_KEYWORDS = frozenset([
+    "breaking", "urgent", "crisis", "critical", "emergency", "imminent",
+    "rapid", "accelerating", "mounting", "intensifying", "escalating",
+    "deteriorating", "worsening", "spiraling", "alarming", "dire",
+    "dramatic", "drastic", "unprecedented", "pivotal", "decisive",
+])
+
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -69,6 +118,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     Configurable via task.metadata:
         watchlist (str): JSON watchlist override
         lookback_days (int): History window override
+        signal_history (dict): Persisted streak counters from prior runs
     """
     cfg = settings.news_intel
     metadata = task.metadata or {}
@@ -94,9 +144,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     lookback_days = int(metadata.get("lookback_days", cfg.lookback_days))
 
+    # Restore per-entity streak counters persisted from previous runs
+    signal_history: dict[str, int] = metadata.get("signal_history", {})
+
     logger.info(
-        "News intelligence: analysing %d entity/entities over %d-day window (sentiment=%s, diversity=%s)",
-        len(entities), lookback_days, cfg.sentiment_enabled, cfg.source_diversity_enabled,
+        "News intelligence: analysing %d entity/entities over %d-day window "
+        "(sentiment=%s, diversity=%s, linguistic=%s, streak=%s, correlation=%s)",
+        len(entities), lookback_days,
+        cfg.sentiment_enabled, cfg.source_diversity_enabled,
+        cfg.linguistic_analysis_enabled, cfg.signal_streak_enabled,
+        cfg.cross_entity_correlation_enabled,
     )
 
     now_utc = datetime.now(timezone.utc)
@@ -105,20 +162,33 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
         for entity in entities:
-            result = await _analyse_entity(client, entity, lookback_days, now_utc, cfg)
+            result = await _analyse_entity(
+                client, entity, lookback_days, now_utc, cfg, signal_history
+            )
             entity_results.append(result)
             if result.get("is_signal"):
                 signals.append(result)
                 logger.info(
-                    "Pre-movement pressure: '%s' (%s) score=%.2f velocity=%.2f sentiment=%.2f diversity=%.2f",
+                    "Pre-movement pressure: '%s' (%s) score=%.2f "
+                    "velocity=%.2f sentiment=%.2f diversity=%.2f linguistic=%.2f streak=%d",
                     entity["name"], entity["type"],
                     result.get("composite_score", 0),
                     result.get("velocity", 0),
                     result.get("sentiment_score", 0),
                     result.get("diversity_score", 0),
+                    result.get("linguistic_score", 0),
+                    result.get("signal_streak", 0),
                 )
 
-    summary = _build_summary(signals, entity_results, now_utc)
+    # Update streak counters for persistence
+    updated_history = _update_signal_history(signal_history, entity_results, cfg)
+
+    # Detect cross-entity macro correlations
+    macro_signals = []
+    if cfg.cross_entity_correlation_enabled:
+        macro_signals = _detect_macro_correlations(signals, cfg)
+
+    summary = _build_summary(signals, macro_signals, entity_results, now_utc)
 
     return {
         "status": "ok",
@@ -126,7 +196,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "entities_analysed": len(entities),
         "signals_detected": len(signals),
         "signals": signals,
+        "macro_signals": macro_signals,
         "all_entities": entity_results,
+        "signal_history": updated_history,
         "summary": summary,
     }
 
@@ -182,14 +254,16 @@ async def _analyse_entity(
     lookback_days: int,
     now_utc: datetime,
     cfg: Any,
+    signal_history: dict[str, int],
 ) -> dict[str, Any]:
     """
     Fetch and analyse news for a single entity.
 
     Returns structured result including:
-    - velocity, sentiment_score, diversity_score, composite_score
-    - is_signal, signal_type (volume | sentiment | composite)
-    - top_headlines with sentiment direction
+    - velocity, sentiment_score, diversity_score, linguistic_score, composite_score
+    - is_signal, signal_type (volume | sentiment | linguistic | composite)
+    - signal_streak (consecutive days with elevated signal)
+    - top_headlines with sentiment and linguistic tone labels
     - entity metadata (type, ticker)
     """
     name = entity["name"]
@@ -259,14 +333,21 @@ async def _analyse_entity(
     if cfg.source_diversity_enabled:
         diversity_score = _score_diversity(recent_articles, historical_articles, historical_days)
 
+    # ── Linguistic Pre-Indicator Analysis ────────────────────────────────────
+    linguistic_score = 0.0
+    linguistic_markers: list[str] = []
+    if cfg.linguistic_analysis_enabled and recent_articles:
+        linguistic_score, linguistic_markers = _score_linguistic(recent_articles, cfg)
+
     # ── Composite Pressure Score ─────────────────────────────────────────────
-    # Sentiment amplifies the score when tone is shifting (abs value)
-    # Diversity amplifies when coverage is spreading to new outlets
+    # Each enabled dimension amplifies the base velocity score.
+    # Linguistic analysis adds the behavioral stacking dimension.
     sentiment_factor = 1.0 + abs(sentiment_score) * 0.4
     diversity_factor = 1.0 + diversity_score * 0.3
-    composite_score = velocity * sentiment_factor * diversity_factor
+    linguistic_factor = 1.0 + linguistic_score * 0.5
+    composite_score = velocity * sentiment_factor * diversity_factor * linguistic_factor
 
-    # Signal logic: composite score OR volume-only (if extras disabled)
+    # Signal logic: composite score must exceed threshold with minimum article count
     is_signal = (
         recent_count >= cfg.signal_min_articles
         and composite_score >= cfg.composite_score_threshold
@@ -275,6 +356,8 @@ async def _analyse_entity(
     # Determine primary signal driver
     if not is_signal:
         signal_type = None
+    elif linguistic_score >= 0.4:
+        signal_type = "linguistic"
     elif velocity >= cfg.pressure_velocity_threshold:
         signal_type = "volume"
     elif abs(sentiment_score) >= 0.4:
@@ -282,7 +365,15 @@ async def _analyse_entity(
     else:
         signal_type = "composite"
 
-    # Top headlines (clean, with sentiment labels)
+    # ── Signal Streak ────────────────────────────────────────────────────────
+    prior_streak = signal_history.get(name, 0)
+    signal_streak = (prior_streak + 1) if is_signal else 0
+    streak_alert = (
+        cfg.signal_streak_enabled
+        and signal_streak >= cfg.signal_streak_threshold
+    )
+
+    # Top headlines (clean, with sentiment + linguistic labels)
     top_headlines = _extract_headlines(recent_articles)
 
     return {
@@ -295,6 +386,8 @@ async def _analyse_entity(
         "sentiment_score": round(sentiment_score, 3),
         "sentiment_direction": sentiment_direction,
         "diversity_score": round(diversity_score, 2),
+        "linguistic_score": round(linguistic_score, 3),
+        "linguistic_markers": linguistic_markers,
         "composite_score": round(composite_score, 2),
         # Counts
         "recent_count": recent_count,
@@ -304,6 +397,8 @@ async def _analyse_entity(
         # Signal
         "is_signal": is_signal,
         "signal_type": signal_type,
+        "signal_streak": signal_streak,
+        "streak_alert": streak_alert,
         "top_headlines": top_headlines,
     }
 
@@ -381,8 +476,74 @@ def _score_diversity(
     return round(recent_domains / baseline_domains_per_day, 2)
 
 
+def _score_linguistic(
+    recent: list[dict], cfg: Any
+) -> tuple[float, list[str]]:
+    """
+    Score linguistic pre-indicator patterns (behavioral stacking dimension).
+
+    Detects four language pattern types in recent article headlines/descriptions
+    that statistically build before a meaningful movement:
+      - Hedging: uncertainty language ("reportedly", "may", "could")
+      - Deflection: denial clusters ("denies", "refuses to comment")
+      - Insider: source language ("sources say", "people familiar")
+      - Escalation: urgency language ("breaking", "crisis", "urgent")
+
+    Returns (score 0-1, list of active marker labels).
+    """
+    if not recent:
+        return 0.0, []
+
+    hedge_hits = 0
+    deflect_hits = 0
+    insider_hits = 0
+    escalation_hits = 0
+
+    for a in recent:
+        text = f"{a.get('title', '')} {a.get('description', '')}".lower()
+        if cfg.linguistic_hedge_enabled and any(kw in text for kw in _HEDGE_KEYWORDS):
+            hedge_hits += 1
+        if cfg.linguistic_deflection_enabled and any(kw in text for kw in _DEFLECT_KEYWORDS):
+            deflect_hits += 1
+        if cfg.linguistic_insider_enabled and any(kw in text for kw in _INSIDER_KEYWORDS):
+            insider_hits += 1
+        if cfg.linguistic_escalation_enabled and any(kw in text for kw in _ESCALATION_KEYWORDS):
+            escalation_hits += 1
+
+    n = len(recent)
+    # Normalize each dimension to 0-1 and weight them equally
+    hedge_ratio     = min(hedge_hits / n, 1.0)
+    deflect_ratio   = min(deflect_hits / n, 1.0)
+    insider_ratio   = min(insider_hits / n, 1.0)
+    escalation_ratio = min(escalation_hits / n, 1.0)
+
+    # Composite linguistic score: average of active dimensions
+    active_dimensions = [
+        r for r, enabled in [
+            (hedge_ratio,      cfg.linguistic_hedge_enabled),
+            (deflect_ratio,    cfg.linguistic_deflection_enabled),
+            (insider_ratio,    cfg.linguistic_insider_enabled),
+            (escalation_ratio, cfg.linguistic_escalation_enabled),
+        ] if enabled
+    ]
+    score = sum(active_dimensions) / max(len(active_dimensions), 1)
+
+    # Build a list of triggered marker labels for the briefing
+    markers: list[str] = []
+    if cfg.linguistic_hedge_enabled and hedge_ratio >= 0.2:
+        markers.append("hedging")
+    if cfg.linguistic_deflection_enabled and deflect_ratio >= 0.15:
+        markers.append("deflection")
+    if cfg.linguistic_insider_enabled and insider_ratio >= 0.15:
+        markers.append("insider-sourcing")
+    if cfg.linguistic_escalation_enabled and escalation_ratio >= 0.2:
+        markers.append("escalation")
+
+    return round(score, 3), markers
+
+
 def _extract_headlines(articles: list[dict]) -> list[dict]:
-    """Extract top 3 clean headlines with sentiment labels."""
+    """Extract top 3 clean headlines with sentiment and linguistic tone labels."""
     result = []
     for a in articles[:3]:
         title = a.get("title", "")
@@ -397,7 +558,21 @@ def _extract_headlines(articles: list[dict]) -> list[dict]:
             tone = "positive"
         else:
             tone = "neutral"
-        result.append({"title": title, "tone": tone, "source": a.get("source", {}).get("name", "")})
+
+        # Flag if any linguistic pre-indicator pattern is present
+        has_linguistic = (
+            any(kw in text for kw in _HEDGE_KEYWORDS)
+            or any(kw in text for kw in _DEFLECT_KEYWORDS)
+            or any(kw in text for kw in _INSIDER_KEYWORDS)
+            or any(kw in text for kw in _ESCALATION_KEYWORDS)
+        )
+
+        result.append({
+            "title": title,
+            "tone": tone,
+            "linguistic": has_linguistic,
+            "source": a.get("source", {}).get("name", ""),
+        })
     return result
 
 
@@ -411,6 +586,8 @@ def _error_result(entity: dict[str, str], error: str) -> dict[str, Any]:
         "sentiment_score": 0.0,
         "sentiment_direction": "neutral",
         "diversity_score": 0.0,
+        "linguistic_score": 0.0,
+        "linguistic_markers": [],
         "composite_score": 0.0,
         "recent_count": 0,
         "baseline_daily": 0.0,
@@ -418,16 +595,87 @@ def _error_result(entity: dict[str, str], error: str) -> dict[str, Any]:
         "total_fetched": 0,
         "is_signal": False,
         "signal_type": None,
+        "signal_streak": 0,
+        "streak_alert": False,
         "top_headlines": [],
         "error": error,
     }
 
 
 # ---------------------------------------------------------------------------
+# Signal history (streak tracking)
+# ---------------------------------------------------------------------------
+
+def _update_signal_history(
+    prior_history: dict[str, int],
+    entity_results: list[dict],
+    cfg: Any,
+) -> dict[str, int]:
+    """
+    Update the per-entity streak counter dict.
+
+    Each entity's streak increments when is_signal=True and resets to 0
+    when the signal clears. Persisted via task.metadata between runs.
+    """
+    if not cfg.signal_streak_enabled:
+        return {}
+    updated = dict(prior_history)
+    for result in entity_results:
+        if "error" in result:
+            continue
+        name = result["name"]
+        updated[name] = result.get("signal_streak", 0)
+    return updated
+
+
+# ---------------------------------------------------------------------------
+# Cross-entity correlation detection
+# ---------------------------------------------------------------------------
+
+def _detect_macro_correlations(signals: list[dict], cfg: Any) -> list[dict]:
+    """
+    Detect macro signals by grouping simultaneous per-entity signals by type.
+
+    When >= cross_entity_min_signals entities of the same type are all
+    signalling on the same run, it indicates a sector-wide macro event rather
+    than individual noise.
+    """
+    if not cfg.cross_entity_correlation_enabled or len(signals) < cfg.cross_entity_min_signals:
+        return []
+
+    # Group signals by entity type
+    by_type: dict[str, list[dict]] = {}
+    for sig in signals:
+        etype = sig.get("type", "custom")
+        by_type.setdefault(etype, []).append(sig)
+
+    macro: list[dict] = []
+    for etype, group in by_type.items():
+        if len(group) >= cfg.cross_entity_min_signals:
+            avg_score = sum(s.get("composite_score", 0) for s in group) / len(group)
+            macro.append({
+                "type": etype,
+                "entity_count": len(group),
+                "entities": [s["name"] for s in group],
+                "avg_composite_score": round(avg_score, 2),
+                "interpretation": (
+                    f"Macro {etype} signal — {len(group)} entities signalling simultaneously "
+                    f"(avg score {avg_score:.1f}×). Likely sector-wide or macro catalyst."
+                ),
+            })
+    return macro
+
+
+# ---------------------------------------------------------------------------
 # Summary builder
 # ---------------------------------------------------------------------------
 
-def _build_summary(signals: list[dict], all_entities: list[dict], now_utc: datetime) -> str:
+def _build_summary(
+    signals: list[dict],
+    macro_signals: list[dict],
+    all_entities: list[dict],
+    now_utc: datetime,
+) -> str:
     """Build a plain-language pre-movement intelligence briefing."""
     date_str = now_utc.strftime("%B %d, %Y")
     total = len(all_entities)
@@ -463,6 +711,9 @@ def _build_summary(signals: list[dict], all_entities: list[dict], now_utc: datet
         composite = sig.get("composite_score", 0)
         sentiment_dir = sig.get("sentiment_direction", "neutral")
         signal_type = sig.get("signal_type", "composite")
+        linguistic_markers = sig.get("linguistic_markers", [])
+        streak = sig.get("signal_streak", 0)
+        streak_alert = sig.get("streak_alert", False)
         headlines = sig.get("top_headlines", [])
         recent = sig.get("recent_count", 0)
         pct = int((velocity - 1.0) * 100) if velocity >= 1.0 else 0
@@ -470,16 +721,27 @@ def _build_summary(signals: list[dict], all_entities: list[dict], now_utc: datet
         icon = _TYPE_EMOJI.get(entity_type, "◉")
         ticker_str = f" ({ticker})" if ticker else ""
         sentiment_str = f", sentiment {sentiment_dir}" if sentiment_dir != "neutral" else ""
-        driver = {"volume": "volume spike", "sentiment": "sentiment shift", "composite": "multi-signal"}.get(
-            signal_type, "pressure"
-        )
+        linguistic_str = f", [{', '.join(linguistic_markers)}]" if linguistic_markers else ""
+        streak_str = f" ⚠ {streak}-day streak" if streak_alert else (f" ({streak}d streak)" if streak > 1 else "")
+        driver = {
+            "volume": "volume spike",
+            "sentiment": "sentiment shift",
+            "linguistic": "linguistic pre-indicators",
+            "composite": "multi-signal",
+        }.get(signal_type, "pressure")
 
         line = (
             f"{icon} {name}{ticker_str}: {driver} — {recent} articles today "
-            f"({pct}% above baseline{sentiment_str}, composite score {composite:.1f}×)."
+            f"({pct}% above baseline{sentiment_str}{linguistic_str}, composite score {composite:.1f}×){streak_str}."
         )
         if headlines:
             line += f" \"{headlines[0]['title']}\""
         parts.append(line)
+
+    # Append macro correlation alerts
+    for macro in macro_signals:
+        parts.append(
+            f"🌐 MACRO: {macro['interpretation']}"
+        )
 
     return " ".join(parts)
