@@ -1920,6 +1920,113 @@ class NewsIntelligenceConfig(BaseSettings):
             "urgency words in trade press before mainstream indicates accelerating pressure"
         ),
     )
+    linguistic_permission_enabled: bool = Field(
+        default=True,
+        description=(
+            "Detect moral permission language ('must be stopped', 'for the greater good', "
+            "'no option but') — grants readers permission to act against prior values, "
+            "often appears before coordinated pressure campaigns"
+        ),
+    )
+    linguistic_certainty_enabled: bool = Field(
+        default=True,
+        description=(
+            "Detect certainty/moral panic language ('undeniable', 'settled', 'always', 'never') — "
+            "absolute language combined with emotional triggers precedes coordinated narratives"
+        ),
+    )
+    linguistic_dissociation_enabled: bool = Field(
+        default=True,
+        description=(
+            "Detect we/us → they/them language shifts and label-based framing ('these people', "
+            "'their kind', 'outsiders') — group identity dissociation builds before major events"
+        ),
+    )
+
+    # SORAM Framework (Chase Hughes) — 5 societal pressure channels
+    soram_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable SORAM framework analysis. Scores five societal pressure channels "
+            "(Societal / Operational / Regulatory / Alignment / Media Novelty) that "
+            "Hughes identifies as the levers pulled simultaneously before major events."
+        ),
+    )
+    soram_societal_enabled: bool = Field(
+        default=True,
+        description=(
+            "SORAM Societal: detect coordinated threat/fear framing across outlets — "
+            "a sudden obsession with a specific 'threat' or 'misinformation' topic across "
+            "unrelated platforms signals a coordinated pressure campaign"
+        ),
+    )
+    soram_operational_enabled: bool = Field(
+        default=True,
+        description=(
+            "SORAM Operational: detect drills, simulations, and readiness exercises in coverage — "
+            "an increase in 'exercise' and 'preparedness' language often precedes actual events"
+        ),
+    )
+    soram_regulatory_enabled: bool = Field(
+        default=True,
+        description=(
+            "SORAM Regulatory: detect new emergency powers, executive orders, or rule changes — "
+            "quietly introduced regulations that are only useful if a certain crisis occurs"
+        ),
+    )
+    soram_alignment_enabled: bool = Field(
+        default=True,
+        description=(
+            "SORAM Alignment: detect scripted consensus — when government, media, and tech "
+            "begin using the exact same phrasing simultaneously (coordinated messaging)"
+        ),
+    )
+    soram_media_novelty_enabled: bool = Field(
+        default=True,
+        description=(
+            "SORAM Media Novelty: detect novelty hijacking — a constant stream of 'breaking' "
+            "and unrelated urgent news keeps the brain in high suggestibility, often preceding "
+            "a major coordinated narrative push"
+        ),
+    )
+
+    # Alternative data sources
+    sec_edgar_enabled: bool = Field(
+        default=False,
+        description=(
+            "Fetch recent SEC 8-K filings for company/crypto entities via EDGAR free API. "
+            "Elevated 8-K activity indicates undisclosed material events. Requires no API key."
+        ),
+    )
+    usaspending_enabled: bool = Field(
+        default=False,
+        description=(
+            "Fetch recent USAspending.gov contract awards for watched entities. "
+            "Sudden government contracts indicate business momentum or regulatory attention. "
+            "No API key required."
+        ),
+    )
+    state_sos_enabled: bool = Field(
+        default=False,
+        description=(
+            "Monitor State Secretary of State filings for new business formations near watched entities. "
+            "Requires custom regional integration — see docs for setup."
+        ),
+    )
+    county_recorder_enabled: bool = Field(
+        default=False,
+        description=(
+            "Monitor county recorder / building permit data for commercial development signals. "
+            "Requires custom regional integration — see docs for setup."
+        ),
+    )
+    bls_enabled: bool = Field(
+        default=False,
+        description=(
+            "Fetch BLS/Census employment and industry trend data for watched sectors. "
+            "Useful for macro context on company and market entities."
+        ),
+    )
 
     # Signal streak and cross-entity correlation
     signal_streak_enabled: bool = Field(

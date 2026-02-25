@@ -22,6 +22,33 @@ export interface IntelligenceSettings {
   notify_on_signal: boolean;
   notify_all_runs: boolean;
   include_in_morning_briefing: boolean;
+  // Linguistic pre-indicator patterns
+  linguistic_analysis_enabled: boolean;
+  linguistic_hedge_enabled: boolean;
+  linguistic_deflection_enabled: boolean;
+  linguistic_insider_enabled: boolean;
+  linguistic_escalation_enabled: boolean;
+  linguistic_permission_enabled: boolean;
+  linguistic_certainty_enabled: boolean;
+  linguistic_dissociation_enabled: boolean;
+  // SORAM Framework
+  soram_enabled: boolean;
+  soram_societal_enabled: boolean;
+  soram_operational_enabled: boolean;
+  soram_regulatory_enabled: boolean;
+  soram_alignment_enabled: boolean;
+  soram_media_novelty_enabled: boolean;
+  // Alternative data sources
+  sec_edgar_enabled: boolean;
+  usaspending_enabled: boolean;
+  state_sos_enabled: boolean;
+  county_recorder_enabled: boolean;
+  bls_enabled: boolean;
+  // Signal streak / correlation
+  signal_streak_enabled: boolean;
+  signal_streak_threshold: number;
+  cross_entity_correlation_enabled: boolean;
+  cross_entity_min_signals: number;
 }
 
 export type EntityType = 'company' | 'sports_team' | 'market' | 'crypto' | 'custom';
@@ -215,20 +242,53 @@ function PressureExplainer() {
         ))}
       </div>
 
-      {/* Three signals */}
+      {/* Five signals */}
       <div className="text-[10px] text-cyan-700">
-        <span className="text-cyan-500 font-semibold">Three pressure dimensions</span>
-        {' — '}composite score = velocity × sentiment_factor × diversity_factor
+        <span className="text-cyan-500 font-semibold">Five pressure dimensions</span>
+        {' — '}score = velocity × sentiment × diversity × linguistic × SORAM
       </div>
-      <div className="grid grid-cols-3 gap-1 mt-1.5">
+      <div className="grid grid-cols-5 gap-1 mt-1.5">
         {[
-          { label: 'Volume', color: 'text-cyan-400', desc: 'More articles than usual?' },
-          { label: 'Sentiment', color: 'text-amber-400', desc: 'Tone suddenly shifting?' },
-          { label: 'Diversity', color: 'text-purple-400', desc: 'Story spreading to new outlets?' },
+          { label: 'Volume',    color: 'text-cyan-400',   desc: 'More articles?' },
+          { label: 'Sentiment', color: 'text-amber-400',  desc: 'Tone shifting?' },
+          { label: 'Diversity', color: 'text-purple-400', desc: 'New outlets?' },
+          { label: 'Linguistic',color: 'text-rose-400',   desc: 'Pre-event language?' },
+          { label: 'SORAM',     color: 'text-green-400',  desc: 'Societal levers?' },
         ].map(({ label, color, desc }) => (
           <div key={label} className="bg-black/20 rounded px-2 py-1 border border-cyan-500/10 text-center">
             <div className={clsx('text-[10px] font-bold', color)}>{label}</div>
             <div className="text-[9px] text-cyan-700 mt-0.5">{desc}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------- SORAM Explainer ----------
+
+function SORAMExplainer() {
+  return (
+    <div className="bg-black/20 border border-green-500/15 rounded px-3 py-3 my-3">
+      <div className="text-[10px] uppercase tracking-widest text-green-500/50 mb-2">SORAM Framework — Chase Hughes</div>
+      <div className="text-[10px] text-cyan-700 mb-2">
+        Hughes identifies five societal "levers" pulled simultaneously before major events.
+        When multiple channels activate at once, the probability of imminent movement rises sharply.
+      </div>
+      <div className="grid grid-cols-1 gap-1">
+        {[
+          { code: 'S', label: 'Societal',    color: 'text-green-400',  desc: 'Coordinated threat/fear framing spread across unrelated platforms' },
+          { code: 'O', label: 'Operational', color: 'text-cyan-400',   desc: 'Increase in "drills", "exercises", and "readiness" reporting' },
+          { code: 'R', label: 'Regulatory',  color: 'text-amber-400',  desc: 'Quiet introduction of emergency powers or laws only useful in a specific crisis' },
+          { code: 'A', label: 'Alignment',   color: 'text-purple-400', desc: 'Govt, media, and tech using the exact same phrasing — scripted consensus' },
+          { code: 'M', label: 'Media',       color: 'text-rose-400',   desc: '"Breaking news" novelty hijacking — keeps brains in high suggestibility' },
+        ].map(({ code, label, color, desc }) => (
+          <div key={code} className="flex items-start gap-2 bg-black/20 rounded px-2 py-1.5 border border-green-500/10">
+            <span className={clsx('text-[11px] font-bold shrink-0 w-4', color)}>{code}</span>
+            <div>
+              <span className={clsx('text-[10px] font-bold', color)}>{label}</span>
+              <span className="text-[10px] text-cyan-700 ml-1">{desc}</span>
+            </div>
           </div>
         ))}
       </div>
@@ -531,7 +591,7 @@ export function IntelligenceSettingsForm({ onDirtyChange }: IntelligenceSettings
         <div className="space-y-1">
           <Toggle
             label="Sentiment shift scoring"
-            description="Amplify signal when tone suddenly becomes more negative or positive — a tone change often precedes a price or odds movement"
+            description="Amplify signal when tone suddenly becomes more negative or positive"
             checked={draft.sentiment_enabled}
             onChange={(v) => set('sentiment_enabled', v)}
           />
@@ -545,7 +605,7 @@ export function IntelligenceSettingsForm({ onDirtyChange }: IntelligenceSettings
 
         <SliderInput
           label="Composite score threshold"
-          description="Minimum composite score (velocity × sentiment_factor × diversity_factor) to flag a signal — lower = more sensitive, higher = fewer false positives"
+          description="Minimum composite score to flag a signal — lower = more sensitive, higher = fewer false positives"
           value={draft.composite_score_threshold}
           onChange={(v) => set('composite_score_threshold', v)}
           min={1.0}
@@ -564,13 +624,188 @@ export function IntelligenceSettingsForm({ onDirtyChange }: IntelligenceSettings
         />
         <NumberInput
           label="Minimum confirming articles"
-          description="Entity needs at least this many articles today to confirm a signal — prevents single-source noise"
+          description="Entity needs at least this many articles today to confirm a signal"
           value={draft.signal_min_articles}
           onChange={(v) => set('signal_min_articles', v)}
           min={1}
           max={20}
           unit="articles"
         />
+
+        {/* ── Linguistic Pre-Indicators ── */}
+        <SectionHeader>Linguistic Pre-Indicators</SectionHeader>
+        <InfoBox>
+          Seven language pattern types that statistically appear in coverage <strong className="text-cyan-400">before</strong> a
+          major movement. The system scans every article headline and description for these patterns and uses them to amplify
+          the composite pressure score.
+        </InfoBox>
+
+        <Toggle
+          label="Enable linguistic analysis"
+          description="Master toggle for all linguistic pre-indicator pattern detection"
+          checked={draft.linguistic_analysis_enabled}
+          onChange={(v) => set('linguistic_analysis_enabled', v)}
+        />
+
+        {draft.linguistic_analysis_enabled && (
+          <div className="ml-3 border-l border-cyan-500/20 pl-3 space-y-0.5 mt-1">
+            <div className="text-[10px] uppercase tracking-widest text-cyan-600/60 mb-1.5">Original four (pre-event signals)</div>
+            <Toggle label="Hedging language"
+              description="'reportedly', 'could', 'may', 'unconfirmed' — uncertainty builds before disclosure"
+              checked={draft.linguistic_hedge_enabled}
+              onChange={(v) => set('linguistic_hedge_enabled', v)} />
+            <Toggle label="Deflection / denial"
+              description="'denies', 'refuses to comment', 'pushes back' — denial clusters appear right before breaks"
+              checked={draft.linguistic_deflection_enabled}
+              onChange={(v) => set('linguistic_deflection_enabled', v)} />
+            <Toggle label="Insider sourcing"
+              description="'sources say', 'people familiar', 'obtained by' — information leakage before official disclosure"
+              checked={draft.linguistic_insider_enabled}
+              onChange={(v) => set('linguistic_insider_enabled', v)} />
+            <Toggle label="Escalation language"
+              description="'breaking', 'crisis', 'urgent', 'imminent' — urgency in trade press before mainstream pickup"
+              checked={draft.linguistic_escalation_enabled}
+              onChange={(v) => set('linguistic_escalation_enabled', v)} />
+
+            <div className="text-[10px] uppercase tracking-widest text-cyan-600/60 mt-3 mb-1.5">SORAM behavioral layer (three new)</div>
+            <Toggle label="Permission shifts"
+              description="'must be stopped', 'for the greater good', 'no option but' — moral permission granted to act against prior values"
+              checked={draft.linguistic_permission_enabled}
+              onChange={(v) => set('linguistic_permission_enabled', v)} />
+            <Toggle label="Certainty / moral panic"
+              description="'undeniable', 'settled', 'beyond doubt', 'no debate' — absolute language + emotional triggers precede coordinated narratives"
+              checked={draft.linguistic_certainty_enabled}
+              onChange={(v) => set('linguistic_certainty_enabled', v)} />
+            <Toggle label="Linguistic dissociation"
+              description="'these people', 'their kind', 'outsiders' — we/us → they/them shift precedes mobilization events"
+              checked={draft.linguistic_dissociation_enabled}
+              onChange={(v) => set('linguistic_dissociation_enabled', v)} />
+          </div>
+        )}
+
+        {/* ── SORAM Framework ── */}
+        <SectionHeader>SORAM Framework</SectionHeader>
+        <SORAMExplainer />
+
+        <Toggle
+          label="Enable SORAM analysis"
+          description="Score the five societal pressure channels (S/O/R/A/M) — when multiple channels activate simultaneously, imminent movement probability rises"
+          checked={draft.soram_enabled}
+          onChange={(v) => set('soram_enabled', v)}
+        />
+
+        {draft.soram_enabled && (
+          <div className="ml-3 border-l border-green-500/20 pl-3 space-y-0.5 mt-1">
+            <Toggle label="S — Societal"
+              description="Detect coordinated threat/fear framing: 'national security', 'existential threat', 'misinformation'"
+              checked={draft.soram_societal_enabled}
+              onChange={(v) => set('soram_societal_enabled', v)} />
+            <Toggle label="O — Operational"
+              description="Detect drills and exercises: 'tabletop', 'readiness exercise', 'war game', 'simulation'"
+              checked={draft.soram_operational_enabled}
+              onChange={(v) => set('soram_operational_enabled', v)} />
+            <Toggle label="R — Regulatory"
+              description="Detect new emergency powers/laws: 'executive order', 'emergency declaration', 'emergency measure'"
+              checked={draft.soram_regulatory_enabled}
+              onChange={(v) => set('soram_regulatory_enabled', v)} />
+            <Toggle label="A — Alignment"
+              description="Detect scripted consensus: 'experts agree', 'officials confirm', 'fact-checkers', 'scientists agree'"
+              checked={draft.soram_alignment_enabled}
+              onChange={(v) => set('soram_alignment_enabled', v)} />
+            <Toggle label="M — Media Novelty"
+              description="Detect novelty hijacking: 'breaking:', 'just in', 'bombshell', 'stunning' — high-suggestibility priming"
+              checked={draft.soram_media_novelty_enabled}
+              onChange={(v) => set('soram_media_novelty_enabled', v)} />
+          </div>
+        )}
+
+        {/* ── Data Sources ── */}
+        <SectionHeader>Alternative Data Sources</SectionHeader>
+        <InfoBox>
+          External data sources provide independent confirmation signals beyond news articles.
+          When a source flags elevated activity for the same entity simultaneously with a news signal,
+          the composite pressure score receives a bonus multiplier.
+          <br /><br />
+          <strong className="text-cyan-400">Free APIs (no key required):</strong> SEC EDGAR, USAspending.gov
+          <br />
+          <strong className="text-cyan-400">Custom setup required:</strong> State SoS, County Recorder, BLS/Census
+        </InfoBox>
+
+        <div className="space-y-1">
+          <Toggle
+            label="SEC EDGAR 8-K filings"
+            description="Fetch recent material-event disclosures for company/crypto entities — elevated 8-K activity signals undisclosed events. Free EDGAR API, no key needed."
+            checked={draft.sec_edgar_enabled}
+            onChange={(v) => set('sec_edgar_enabled', v)}
+          />
+          <Toggle
+            label="USAspending.gov contracts"
+            description="Monitor government contract awards — sudden awards signal business momentum or regulatory attention. Free API, no key needed."
+            checked={draft.usaspending_enabled}
+            onChange={(v) => set('usaspending_enabled', v)}
+          />
+          <Toggle
+            label="State Secretary of State filings"
+            description="Track new business formations near watched entities. Requires custom regional integration — see docs."
+            checked={draft.state_sos_enabled}
+            onChange={(v) => set('state_sos_enabled', v)}
+          />
+          <Toggle
+            label="County recorder / building permits"
+            description="Monitor commercial development signals. Requires custom regional integration — see docs."
+            checked={draft.county_recorder_enabled}
+            onChange={(v) => set('county_recorder_enabled', v)}
+          />
+          <Toggle
+            label="BLS / Census employment data"
+            description="Fetch employment and industry trend data for macro context on company and market entities."
+            checked={draft.bls_enabled}
+            onChange={(v) => set('bls_enabled', v)}
+          />
+        </div>
+
+        {/* ── Signal Accumulation ── */}
+        <SectionHeader>Signal Accumulation</SectionHeader>
+        <div className="space-y-1">
+          <Toggle
+            label="Signal streak tracking"
+            description="Track consecutive days with elevated signals — a multi-day streak is far more predictive than a single spike"
+            checked={draft.signal_streak_enabled}
+            onChange={(v) => set('signal_streak_enabled', v)}
+          />
+          {draft.signal_streak_enabled && (
+            <div className="ml-3 border-l border-cyan-500/20 pl-3 mt-1">
+              <NumberInput
+                label="Streak alert threshold"
+                description="Consecutive elevated-signal days before triggering a 'building pressure' alert"
+                value={draft.signal_streak_threshold}
+                onChange={(v) => set('signal_streak_threshold', Math.min(14, Math.max(2, v)))}
+                min={2}
+                max={14}
+                unit="days"
+              />
+            </div>
+          )}
+          <Toggle
+            label="Cross-entity correlation"
+            description="Detect macro events when multiple same-type entities signal simultaneously — correlated spikes indicate sector-wide catalysts, not individual noise"
+            checked={draft.cross_entity_correlation_enabled}
+            onChange={(v) => set('cross_entity_correlation_enabled', v)}
+          />
+          {draft.cross_entity_correlation_enabled && (
+            <div className="ml-3 border-l border-cyan-500/20 pl-3 mt-1">
+              <NumberInput
+                label="Macro correlation threshold"
+                description="Minimum number of same-type entities signalling simultaneously to flag a macro alert"
+                value={draft.cross_entity_min_signals}
+                onChange={(v) => set('cross_entity_min_signals', Math.min(10, Math.max(2, v)))}
+                min={2}
+                max={10}
+                unit="entities"
+              />
+            </div>
+          )}
+        </div>
 
         {/* ── Notifications ── */}
         <SectionHeader>Notifications & Output</SectionHeader>
@@ -597,7 +832,7 @@ export function IntelligenceSettingsForm({ onDirtyChange }: IntelligenceSettings
         <Collapsible title="Advanced">
           <SliderInput
             label="Volume-only threshold"
-            description="Minimum volume velocity to flag a signal when sentiment/diversity scoring is disabled"
+            description="Minimum volume velocity to flag a signal when all other scoring is disabled"
             value={draft.pressure_velocity_threshold}
             onChange={(v) => set('pressure_velocity_threshold', v)}
             min={1.0}

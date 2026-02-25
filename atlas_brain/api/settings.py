@@ -785,6 +785,33 @@ _INTEL_ENV_MAP: dict[str, str] = {
     "notify_on_signal": "ATLAS_NEWS_NOTIFY_ON_SIGNAL",
     "notify_all_runs": "ATLAS_NEWS_NOTIFY_ALL_RUNS",
     "include_in_morning_briefing": "ATLAS_NEWS_INCLUDE_IN_MORNING_BRIEFING",
+    # Linguistic pre-indicator patterns
+    "linguistic_analysis_enabled": "ATLAS_NEWS_LINGUISTIC_ANALYSIS_ENABLED",
+    "linguistic_hedge_enabled": "ATLAS_NEWS_LINGUISTIC_HEDGE_ENABLED",
+    "linguistic_deflection_enabled": "ATLAS_NEWS_LINGUISTIC_DEFLECTION_ENABLED",
+    "linguistic_insider_enabled": "ATLAS_NEWS_LINGUISTIC_INSIDER_ENABLED",
+    "linguistic_escalation_enabled": "ATLAS_NEWS_LINGUISTIC_ESCALATION_ENABLED",
+    "linguistic_permission_enabled": "ATLAS_NEWS_LINGUISTIC_PERMISSION_ENABLED",
+    "linguistic_certainty_enabled": "ATLAS_NEWS_LINGUISTIC_CERTAINTY_ENABLED",
+    "linguistic_dissociation_enabled": "ATLAS_NEWS_LINGUISTIC_DISSOCIATION_ENABLED",
+    # SORAM Framework
+    "soram_enabled": "ATLAS_NEWS_SORAM_ENABLED",
+    "soram_societal_enabled": "ATLAS_NEWS_SORAM_SOCIETAL_ENABLED",
+    "soram_operational_enabled": "ATLAS_NEWS_SORAM_OPERATIONAL_ENABLED",
+    "soram_regulatory_enabled": "ATLAS_NEWS_SORAM_REGULATORY_ENABLED",
+    "soram_alignment_enabled": "ATLAS_NEWS_SORAM_ALIGNMENT_ENABLED",
+    "soram_media_novelty_enabled": "ATLAS_NEWS_SORAM_MEDIA_NOVELTY_ENABLED",
+    # Alternative data sources
+    "sec_edgar_enabled": "ATLAS_NEWS_SEC_EDGAR_ENABLED",
+    "usaspending_enabled": "ATLAS_NEWS_USASPENDING_ENABLED",
+    "state_sos_enabled": "ATLAS_NEWS_STATE_SOS_ENABLED",
+    "county_recorder_enabled": "ATLAS_NEWS_COUNTY_RECORDER_ENABLED",
+    "bls_enabled": "ATLAS_NEWS_BLS_ENABLED",
+    # Signal streak / correlation
+    "signal_streak_enabled": "ATLAS_NEWS_SIGNAL_STREAK_ENABLED",
+    "signal_streak_threshold": "ATLAS_NEWS_SIGNAL_STREAK_THRESHOLD",
+    "cross_entity_correlation_enabled": "ATLAS_NEWS_CROSS_ENTITY_CORRELATION_ENABLED",
+    "cross_entity_min_signals": "ATLAS_NEWS_CROSS_ENTITY_MIN_SIGNALS",
 }
 
 
@@ -830,8 +857,39 @@ class IntelligenceSettings(BaseModel):
         description="Score source diversity — story spreading to new outlets strengthens the signal"
     )
     composite_score_threshold: float = Field(
-        description="Minimum composite pressure score (velocity × sentiment × diversity) to flag a signal"
+        description="Minimum composite pressure score to flag a signal"
     )
+
+    # Linguistic pre-indicator patterns
+    linguistic_analysis_enabled: bool = Field(description="Enable linguistic pre-indicator analysis")
+    linguistic_hedge_enabled: bool = Field(description="Detect hedging/uncertainty language")
+    linguistic_deflection_enabled: bool = Field(description="Detect deflection/denial language")
+    linguistic_insider_enabled: bool = Field(description="Detect insider/source language")
+    linguistic_escalation_enabled: bool = Field(description="Detect escalation/urgency language")
+    linguistic_permission_enabled: bool = Field(description="Detect moral permission language")
+    linguistic_certainty_enabled: bool = Field(description="Detect certainty/moral panic language")
+    linguistic_dissociation_enabled: bool = Field(description="Detect we/us → they/them dissociation language")
+
+    # SORAM Framework
+    soram_enabled: bool = Field(description="Enable SORAM framework channel analysis")
+    soram_societal_enabled: bool = Field(description="SORAM Societal: coordinated threat/fear framing")
+    soram_operational_enabled: bool = Field(description="SORAM Operational: drills and readiness exercises")
+    soram_regulatory_enabled: bool = Field(description="SORAM Regulatory: new emergency powers/laws")
+    soram_alignment_enabled: bool = Field(description="SORAM Alignment: scripted consensus messaging")
+    soram_media_novelty_enabled: bool = Field(description="SORAM Media Novelty: breaking-news hijacking")
+
+    # Alternative data sources
+    sec_edgar_enabled: bool = Field(description="Fetch SEC 8-K filings for company entities (free EDGAR API)")
+    usaspending_enabled: bool = Field(description="Fetch USAspending.gov contract awards (free API)")
+    state_sos_enabled: bool = Field(description="Monitor State SoS filings (requires custom regional setup)")
+    county_recorder_enabled: bool = Field(description="Monitor county recorder/permit data (requires custom setup)")
+    bls_enabled: bool = Field(description="Fetch BLS/Census employment trend data (free API)")
+
+    # Signal streak / correlation
+    signal_streak_enabled: bool = Field(description="Track consecutive-day signal streaks per entity")
+    signal_streak_threshold: int = Field(description="Consecutive elevated-signal days to trigger a streak alert")
+    cross_entity_correlation_enabled: bool = Field(description="Detect macro signals across multiple entities")
+    cross_entity_min_signals: int = Field(description="Min same-type entities signalling simultaneously for a macro alert")
 
     # Operations
     max_articles_per_topic: int = Field(
@@ -868,6 +926,33 @@ class IntelligenceSettingsUpdate(BaseModel):
     notify_on_signal: Optional[bool] = None
     notify_all_runs: Optional[bool] = None
     include_in_morning_briefing: Optional[bool] = None
+    # Linguistic
+    linguistic_analysis_enabled: Optional[bool] = None
+    linguistic_hedge_enabled: Optional[bool] = None
+    linguistic_deflection_enabled: Optional[bool] = None
+    linguistic_insider_enabled: Optional[bool] = None
+    linguistic_escalation_enabled: Optional[bool] = None
+    linguistic_permission_enabled: Optional[bool] = None
+    linguistic_certainty_enabled: Optional[bool] = None
+    linguistic_dissociation_enabled: Optional[bool] = None
+    # SORAM
+    soram_enabled: Optional[bool] = None
+    soram_societal_enabled: Optional[bool] = None
+    soram_operational_enabled: Optional[bool] = None
+    soram_regulatory_enabled: Optional[bool] = None
+    soram_alignment_enabled: Optional[bool] = None
+    soram_media_novelty_enabled: Optional[bool] = None
+    # Data sources
+    sec_edgar_enabled: Optional[bool] = None
+    usaspending_enabled: Optional[bool] = None
+    state_sos_enabled: Optional[bool] = None
+    county_recorder_enabled: Optional[bool] = None
+    bls_enabled: Optional[bool] = None
+    # Streak / correlation
+    signal_streak_enabled: Optional[bool] = None
+    signal_streak_threshold: Optional[int] = None
+    cross_entity_correlation_enabled: Optional[bool] = None
+    cross_entity_min_signals: Optional[int] = None
 
 
 def _current_intelligence_settings() -> IntelligenceSettings:
@@ -891,6 +976,33 @@ def _current_intelligence_settings() -> IntelligenceSettings:
         notify_on_signal=n.notify_on_signal,
         notify_all_runs=n.notify_all_runs,
         include_in_morning_briefing=n.include_in_morning_briefing,
+        # Linguistic
+        linguistic_analysis_enabled=n.linguistic_analysis_enabled,
+        linguistic_hedge_enabled=n.linguistic_hedge_enabled,
+        linguistic_deflection_enabled=n.linguistic_deflection_enabled,
+        linguistic_insider_enabled=n.linguistic_insider_enabled,
+        linguistic_escalation_enabled=n.linguistic_escalation_enabled,
+        linguistic_permission_enabled=n.linguistic_permission_enabled,
+        linguistic_certainty_enabled=n.linguistic_certainty_enabled,
+        linguistic_dissociation_enabled=n.linguistic_dissociation_enabled,
+        # SORAM
+        soram_enabled=n.soram_enabled,
+        soram_societal_enabled=n.soram_societal_enabled,
+        soram_operational_enabled=n.soram_operational_enabled,
+        soram_regulatory_enabled=n.soram_regulatory_enabled,
+        soram_alignment_enabled=n.soram_alignment_enabled,
+        soram_media_novelty_enabled=n.soram_media_novelty_enabled,
+        # Data sources
+        sec_edgar_enabled=n.sec_edgar_enabled,
+        usaspending_enabled=n.usaspending_enabled,
+        state_sos_enabled=n.state_sos_enabled,
+        county_recorder_enabled=n.county_recorder_enabled,
+        bls_enabled=n.bls_enabled,
+        # Streak / correlation
+        signal_streak_enabled=n.signal_streak_enabled,
+        signal_streak_threshold=n.signal_streak_threshold,
+        cross_entity_correlation_enabled=n.cross_entity_correlation_enabled,
+        cross_entity_min_signals=n.cross_entity_min_signals,
     )
 
 

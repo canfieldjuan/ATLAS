@@ -106,6 +106,86 @@ _ESCALATION_KEYWORDS = frozenset([
     "dramatic", "drastic", "unprecedented", "pivotal", "decisive",
 ])
 
+# ---------------------------------------------------------------------------
+# Extended linguistic patterns — the three SORAM behavioral dimensions
+# ---------------------------------------------------------------------------
+
+# Permission Shifts: moral permission language — grants "right" to act against prior values.
+# Appears before coordinated pressure campaigns; primes the audience for action.
+_LINGUISTIC_PERMISSION = frozenset([
+    "must be stopped", "cannot be tolerated", "for the greater good",
+    "no option but", "we have no choice", "deserve what", "duty to",
+    "obligation to", "justified in", "entitled to", "for public safety",
+    "time to act", "enough is enough", "we must act", "cannot allow",
+    "protecting our", "defending our", "threat to our",
+])
+
+# Certainty / Moral Panic: absolute language + emotional triggers.
+# Spikes before a coordinated narrative is launched — creates urgency via certainty.
+_LINGUISTIC_CERTAINTY = frozenset([
+    "undeniable", "settled", "irrefutable", "beyond doubt", "unquestionable",
+    "without question", "everyone knows", "no one disputes", "clearly proven",
+    "definitive proof", "absolute certainty", "fact is", "the truth is",
+    "plain and simple", "period", "full stop", "there is no debate",
+    "dangerous misinformation", "dangerous conspiracy",
+])
+
+# Linguistic Dissociation: we/us → they/them shifts and label-based dehumanization.
+# The transition from "people" to categorical labels precedes mobilization events.
+_LINGUISTIC_DISSOCIATION = frozenset([
+    "these people", "those people", "their kind", "the likes of",
+    "that group", "such individuals", "the others", "outsiders",
+    "not one of us", "foreign element", "radical element", "extremist element",
+    "they believe", "they want", "they are trying", "their agenda",
+    "anti-", "pro-", "followers of",
+])
+
+# ---------------------------------------------------------------------------
+# SORAM Framework keyword sets (Chase Hughes)
+# Five societal pressure channels pulled simultaneously before major events
+# ---------------------------------------------------------------------------
+
+# Societal: coordinated threat/fear framing across disparate outlets
+_SORAM_SOCIETAL = frozenset([
+    "threat to", "public threat", "national security", "public safety",
+    "misinformation", "disinformation", "conspiracy theory", "dangerous narrative",
+    "harmful content", "existential threat", "unprecedented danger",
+    "clear and present", "looming threat", "growing threat", "hidden threat",
+])
+
+# Operational: drills, exercises, readiness — often precede actual events
+_SORAM_OPERATIONAL = frozenset([
+    "drill", "exercise", "simulation", "readiness", "preparedness",
+    "tabletop", "war game", "wargame", "practice run", "rehearsal",
+    "test scenario", "training exercise", "emergency response exercise",
+    "live drill", "full-scale exercise", "response exercise",
+])
+
+# Regulatory: new laws / emergency powers quietly introduced before a crisis
+_SORAM_REGULATORY = frozenset([
+    "emergency powers", "executive order", "emergency declaration",
+    "emergency regulation", "rule change", "bill introduced",
+    "legislation passed", "law enacted", "policy enacted",
+    "emergency measure", "temporary measure", "interim rule",
+    "regulatory guidance", "new framework", "oversight expansion",
+])
+
+# Alignment: scripted consensus — identical phrasing across government, media, tech
+_SORAM_ALIGNMENT = frozenset([
+    "experts say", "officials confirm", "authorities warn", "scientists agree",
+    "studies confirm", "data confirms", "research confirms", "experts agree",
+    "consensus", "unanimous", "widely accepted", "fact-checkers",
+    "trusted sources confirm", "verified by", "independent experts",
+])
+
+# Media Novelty: hijack tactics — constant "breaking" keeps brain in high suggestibility
+_SORAM_MEDIA_NOVELTY = frozenset([
+    "breaking", "just in", "developing story", "happening now",
+    "major breaking", "live updates", "breaking news", "breaking:",
+    "shocking new", "stunning revelation", "bombshell", "exclusive:",
+    "we're following", "this just in", "urgent update",
+])
+
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -149,11 +229,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     logger.info(
         "News intelligence: analysing %d entity/entities over %d-day window "
-        "(sentiment=%s, diversity=%s, linguistic=%s, streak=%s, correlation=%s)",
+        "(sentiment=%s, diversity=%s, linguistic=%s, soram=%s, sec_edgar=%s, usaspending=%s)",
         len(entities), lookback_days,
         cfg.sentiment_enabled, cfg.source_diversity_enabled,
-        cfg.linguistic_analysis_enabled, cfg.signal_streak_enabled,
-        cfg.cross_entity_correlation_enabled,
+        cfg.linguistic_analysis_enabled, cfg.soram_enabled,
+        cfg.sec_edgar_enabled, cfg.usaspending_enabled,
     )
 
     now_utc = datetime.now(timezone.utc)
@@ -170,13 +250,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 signals.append(result)
                 logger.info(
                     "Pre-movement pressure: '%s' (%s) score=%.2f "
-                    "velocity=%.2f sentiment=%.2f diversity=%.2f linguistic=%.2f streak=%d",
+                    "velocity=%.2f sentiment=%.2f diversity=%.2f linguistic=%.2f soram=%.2f streak=%d",
                     entity["name"], entity["type"],
                     result.get("composite_score", 0),
                     result.get("velocity", 0),
                     result.get("sentiment_score", 0),
                     result.get("diversity_score", 0),
                     result.get("linguistic_score", 0),
+                    result.get("soram_score", 0),
                     result.get("signal_streak", 0),
                 )
 
@@ -339,13 +420,36 @@ async def _analyse_entity(
     if cfg.linguistic_analysis_enabled and recent_articles:
         linguistic_score, linguistic_markers = _score_linguistic(recent_articles, cfg)
 
+    # ── SORAM Framework ───────────────────────────────────────────────────────
+    soram_score = 0.0
+    soram_channels: list[str] = []
+    if cfg.soram_enabled and recent_articles:
+        soram_score, soram_channels = _score_soram(recent_articles, cfg)
+
+    # ── Alternative Data Sources ──────────────────────────────────────────────
+    sec_signals: dict[str, Any] = {}
+    if cfg.sec_edgar_enabled and entity_type in ("company", "crypto") and ticker:
+        sec_signals = await _fetch_sec_edgar_signals(client, ticker, now_utc)
+
+    usaspending_signals: dict[str, Any] = {}
+    if cfg.usaspending_enabled and name:
+        usaspending_signals = await _fetch_usaspending_signals(client, name, now_utc)
+
     # ── Composite Pressure Score ─────────────────────────────────────────────
     # Each enabled dimension amplifies the base velocity score.
-    # Linguistic analysis adds the behavioral stacking dimension.
+    # SORAM carries the highest amplification weight — it represents macro
+    # societal coordination which is the strongest pre-event signal.
     sentiment_factor = 1.0 + abs(sentiment_score) * 0.4
     diversity_factor = 1.0 + diversity_score * 0.3
     linguistic_factor = 1.0 + linguistic_score * 0.5
-    composite_score = velocity * sentiment_factor * diversity_factor * linguistic_factor
+    soram_factor = 1.0 + soram_score * 0.6
+    # Data source bonus: confirmed external signals boost composite by a flat multiplier
+    data_source_bonus = 1.0
+    if sec_signals.get("elevated"):
+        data_source_bonus += 0.2
+    if usaspending_signals.get("elevated"):
+        data_source_bonus += 0.15
+    composite_score = velocity * sentiment_factor * diversity_factor * linguistic_factor * soram_factor * data_source_bonus
 
     # Signal logic: composite score must exceed threshold with minimum article count
     is_signal = (
@@ -356,6 +460,8 @@ async def _analyse_entity(
     # Determine primary signal driver
     if not is_signal:
         signal_type = None
+    elif soram_score >= 0.35:
+        signal_type = "soram"
     elif linguistic_score >= 0.4:
         signal_type = "linguistic"
     elif velocity >= cfg.pressure_velocity_threshold:
@@ -388,7 +494,12 @@ async def _analyse_entity(
         "diversity_score": round(diversity_score, 2),
         "linguistic_score": round(linguistic_score, 3),
         "linguistic_markers": linguistic_markers,
+        "soram_score": round(soram_score, 3),
+        "soram_channels": soram_channels,
         "composite_score": round(composite_score, 2),
+        # External data signals
+        "sec_signals": sec_signals,
+        "usaspending_signals": usaspending_signals,
         # Counts
         "recent_count": recent_count,
         "baseline_daily": round(baseline_daily, 2),
@@ -482,22 +593,25 @@ def _score_linguistic(
     """
     Score linguistic pre-indicator patterns (behavioral stacking dimension).
 
-    Detects four language pattern types in recent article headlines/descriptions
+    Detects seven language pattern types in recent article headlines/descriptions
     that statistically build before a meaningful movement:
-      - Hedging: uncertainty language ("reportedly", "may", "could")
-      - Deflection: denial clusters ("denies", "refuses to comment")
-      - Insider: source language ("sources say", "people familiar")
-      - Escalation: urgency language ("breaking", "crisis", "urgent")
+      Original four:
+        - Hedging: uncertainty language ("reportedly", "may", "could")
+        - Deflection: denial clusters ("denies", "refuses to comment")
+        - Insider: source language ("sources say", "people familiar")
+        - Escalation: urgency language ("breaking", "crisis", "urgent")
+      SORAM behavioral layer (three new):
+        - Permission Shifts: moral permission language ("must be stopped", "for the greater good")
+        - Certainty/Panic: absolute language ("undeniable", "settled", "no debate")
+        - Dissociation: we/us → they/them shifts ("these people", "their kind")
 
     Returns (score 0-1, list of active marker labels).
     """
     if not recent:
         return 0.0, []
 
-    hedge_hits = 0
-    deflect_hits = 0
-    insider_hits = 0
-    escalation_hits = 0
+    hedge_hits = deflect_hits = insider_hits = escalation_hits = 0
+    permission_hits = certainty_hits = dissociation_hits = 0
 
     for a in recent:
         text = f"{a.get('title', '')} {a.get('description', '')}".lower()
@@ -509,21 +623,32 @@ def _score_linguistic(
             insider_hits += 1
         if cfg.linguistic_escalation_enabled and any(kw in text for kw in _ESCALATION_KEYWORDS):
             escalation_hits += 1
+        if cfg.linguistic_permission_enabled and any(kw in text for kw in _LINGUISTIC_PERMISSION):
+            permission_hits += 1
+        if cfg.linguistic_certainty_enabled and any(kw in text for kw in _LINGUISTIC_CERTAINTY):
+            certainty_hits += 1
+        if cfg.linguistic_dissociation_enabled and any(kw in text for kw in _LINGUISTIC_DISSOCIATION):
+            dissociation_hits += 1
 
     n = len(recent)
-    # Normalize each dimension to 0-1 and weight them equally
-    hedge_ratio     = min(hedge_hits / n, 1.0)
-    deflect_ratio   = min(deflect_hits / n, 1.0)
-    insider_ratio   = min(insider_hits / n, 1.0)
-    escalation_ratio = min(escalation_hits / n, 1.0)
+    hedge_ratio       = min(hedge_hits / n, 1.0)
+    deflect_ratio     = min(deflect_hits / n, 1.0)
+    insider_ratio     = min(insider_hits / n, 1.0)
+    escalation_ratio  = min(escalation_hits / n, 1.0)
+    permission_ratio  = min(permission_hits / n, 1.0)
+    certainty_ratio   = min(certainty_hits / n, 1.0)
+    dissociation_ratio = min(dissociation_hits / n, 1.0)
 
     # Composite linguistic score: average of active dimensions
     active_dimensions = [
         r for r, enabled in [
-            (hedge_ratio,      cfg.linguistic_hedge_enabled),
-            (deflect_ratio,    cfg.linguistic_deflection_enabled),
-            (insider_ratio,    cfg.linguistic_insider_enabled),
-            (escalation_ratio, cfg.linguistic_escalation_enabled),
+            (hedge_ratio,        cfg.linguistic_hedge_enabled),
+            (deflect_ratio,      cfg.linguistic_deflection_enabled),
+            (insider_ratio,      cfg.linguistic_insider_enabled),
+            (escalation_ratio,   cfg.linguistic_escalation_enabled),
+            (permission_ratio,   cfg.linguistic_permission_enabled),
+            (certainty_ratio,    cfg.linguistic_certainty_enabled),
+            (dissociation_ratio, cfg.linguistic_dissociation_enabled),
         ] if enabled
     ]
     score = sum(active_dimensions) / max(len(active_dimensions), 1)
@@ -538,8 +663,194 @@ def _score_linguistic(
         markers.append("insider-sourcing")
     if cfg.linguistic_escalation_enabled and escalation_ratio >= 0.2:
         markers.append("escalation")
+    if cfg.linguistic_permission_enabled and permission_ratio >= 0.15:
+        markers.append("permission-shift")
+    if cfg.linguistic_certainty_enabled and certainty_ratio >= 0.15:
+        markers.append("certainty-panic")
+    if cfg.linguistic_dissociation_enabled and dissociation_ratio >= 0.15:
+        markers.append("dissociation")
 
     return round(score, 3), markers
+
+
+def _score_soram(
+    recent: list[dict], cfg: Any
+) -> tuple[float, list[str]]:
+    """
+    Score the SORAM framework channels against recent article text.
+
+    SORAM = Societal / Operational / Regulatory / Alignment / Media Novelty.
+    Each channel detects a specific type of societal pressure lever that,
+    when pulled simultaneously, precedes major coordinated events.
+
+    Returns (score 0-1, list of active channel labels).
+    """
+    if not recent:
+        return 0.0, []
+
+    societal_hits = operational_hits = regulatory_hits = 0
+    alignment_hits = novelty_hits = 0
+
+    for a in recent:
+        text = f"{a.get('title', '')} {a.get('description', '')}".lower()
+        if cfg.soram_societal_enabled and any(kw in text for kw in _SORAM_SOCIETAL):
+            societal_hits += 1
+        if cfg.soram_operational_enabled and any(kw in text for kw in _SORAM_OPERATIONAL):
+            operational_hits += 1
+        if cfg.soram_regulatory_enabled and any(kw in text for kw in _SORAM_REGULATORY):
+            regulatory_hits += 1
+        if cfg.soram_alignment_enabled and any(kw in text for kw in _SORAM_ALIGNMENT):
+            alignment_hits += 1
+        if cfg.soram_media_novelty_enabled and any(kw in text for kw in _SORAM_MEDIA_NOVELTY):
+            novelty_hits += 1
+
+    n = len(recent)
+    societal_ratio   = min(societal_hits / n, 1.0)
+    operational_ratio = min(operational_hits / n, 1.0)
+    regulatory_ratio  = min(regulatory_hits / n, 1.0)
+    alignment_ratio   = min(alignment_hits / n, 1.0)
+    novelty_ratio     = min(novelty_hits / n, 1.0)
+
+    active_dimensions = [
+        r for r, enabled in [
+            (societal_ratio,    cfg.soram_societal_enabled),
+            (operational_ratio, cfg.soram_operational_enabled),
+            (regulatory_ratio,  cfg.soram_regulatory_enabled),
+            (alignment_ratio,   cfg.soram_alignment_enabled),
+            (novelty_ratio,     cfg.soram_media_novelty_enabled),
+        ] if enabled
+    ]
+    score = sum(active_dimensions) / max(len(active_dimensions), 1)
+
+    # Label active channels (threshold set deliberately low — any presence is notable)
+    channels: list[str] = []
+    if cfg.soram_societal_enabled and societal_ratio >= 0.1:
+        channels.append("S:societal")
+    if cfg.soram_operational_enabled and operational_ratio >= 0.1:
+        channels.append("O:operational")
+    if cfg.soram_regulatory_enabled and regulatory_ratio >= 0.1:
+        channels.append("R:regulatory")
+    if cfg.soram_alignment_enabled and alignment_ratio >= 0.15:
+        channels.append("A:alignment")
+    if cfg.soram_media_novelty_enabled and novelty_ratio >= 0.2:
+        channels.append("M:novelty")
+
+    return round(score, 3), channels
+
+
+_SEC_EDGAR_BASE = "https://efts.sec.gov/LATEST/search-index"
+_USASPENDING_BASE = "https://api.usaspending.gov/api/v2/search/spending_by_award/"
+
+
+async def _fetch_sec_edgar_signals(
+    client: httpx.AsyncClient,
+    ticker: str,
+    now_utc: datetime,
+) -> dict[str, Any]:
+    """
+    Fetch recent SEC 8-K filings for a company ticker via the free EDGAR full-text search API.
+
+    8-K forms are material event disclosures — an elevated count in the last 24h
+    compared to the trailing 7-day average signals undisclosed activity.
+    No API key required.
+    """
+    yesterday = (now_utc - timedelta(hours=24)).strftime("%Y-%m-%d")
+    week_ago  = (now_utc - timedelta(days=7)).strftime("%Y-%m-%d")
+    today     = now_utc.strftime("%Y-%m-%d")
+
+    try:
+        # Recent 24h count
+        resp_recent = await client.get(
+            _SEC_EDGAR_BASE,
+            params={"q": f'"{ticker}"', "dateRange": "custom",
+                    "startdt": yesterday, "enddt": today, "forms": "8-K"},
+            headers={"User-Agent": "Atlas Intelligence atlas@example.com"},
+        )
+        resp_recent.raise_for_status()
+        recent_count = resp_recent.json().get("hits", {}).get("total", {}).get("value", 0)
+
+        # 7-day baseline
+        resp_hist = await client.get(
+            _SEC_EDGAR_BASE,
+            params={"q": f'"{ticker}"', "dateRange": "custom",
+                    "startdt": week_ago, "enddt": yesterday, "forms": "8-K"},
+            headers={"User-Agent": "Atlas Intelligence atlas@example.com"},
+        )
+        resp_hist.raise_for_status()
+        hist_count = resp_hist.json().get("hits", {}).get("total", {}).get("value", 0)
+
+        baseline_daily = hist_count / 6  # 6 full days in the trailing window
+        elevated = bool(recent_count > 0 and (baseline_daily < 0.3 or recent_count > baseline_daily * 1.5))
+
+        return {
+            "source": "sec_edgar",
+            "ticker": ticker,
+            "recent_8k_count": recent_count,
+            "baseline_8k_daily": round(baseline_daily, 2),
+            "elevated": elevated,
+        }
+    except Exception as exc:
+        logger.debug("SEC EDGAR fetch failed for '%s': %s", ticker, exc)
+        return {"source": "sec_edgar", "ticker": ticker, "elevated": False, "error": str(exc)}
+
+
+async def _fetch_usaspending_signals(
+    client: httpx.AsyncClient,
+    entity_name: str,
+    now_utc: datetime,
+) -> dict[str, Any]:
+    """
+    Fetch recent government contract awards mentioning the entity via USAspending.gov free API.
+
+    A sudden increase in contract awards indicates business momentum or regulatory attention.
+    No API key required.
+    """
+    yesterday = (now_utc - timedelta(hours=24)).strftime("%Y-%m-%d")
+    week_ago  = (now_utc - timedelta(days=7)).strftime("%Y-%m-%d")
+    today     = now_utc.strftime("%Y-%m-%d")
+
+    payload_base = {
+        "filters": {
+            "keywords": [entity_name],
+            "award_type_codes": ["A", "B", "C", "D"],  # contracts
+        },
+        "fields": ["Award ID", "Recipient Name", "Award Amount", "Action Date"],
+        "limit": 5,
+        "page": 1,
+    }
+
+    try:
+        # Recent 24h
+        recent_payload = {**payload_base, "filters": {
+            **payload_base["filters"],
+            "time_period": [{"start_date": yesterday, "end_date": today}],
+        }}
+        resp_recent = await client.post(_USASPENDING_BASE, json=recent_payload)
+        resp_recent.raise_for_status()
+        recent_count = resp_recent.json().get("page_metadata", {}).get("count", 0)
+
+        # 7-day baseline
+        hist_payload = {**payload_base, "filters": {
+            **payload_base["filters"],
+            "time_period": [{"start_date": week_ago, "end_date": yesterday}],
+        }}
+        resp_hist = await client.post(_USASPENDING_BASE, json=hist_payload)
+        resp_hist.raise_for_status()
+        hist_count = resp_hist.json().get("page_metadata", {}).get("count", 0)
+
+        baseline_daily = hist_count / 6
+        elevated = bool(recent_count > 0 and (baseline_daily < 0.2 or recent_count > baseline_daily * 1.5))
+
+        return {
+            "source": "usaspending",
+            "entity": entity_name,
+            "recent_award_count": recent_count,
+            "baseline_award_daily": round(baseline_daily, 2),
+            "elevated": elevated,
+        }
+    except Exception as exc:
+        logger.debug("USAspending fetch failed for '%s': %s", entity_name, exc)
+        return {"source": "usaspending", "entity": entity_name, "elevated": False, "error": str(exc)}
 
 
 def _extract_headlines(articles: list[dict]) -> list[dict]:
@@ -559,12 +870,19 @@ def _extract_headlines(articles: list[dict]) -> list[dict]:
         else:
             tone = "neutral"
 
-        # Flag if any linguistic pre-indicator pattern is present
+        # Flag if any linguistic or SORAM pre-indicator pattern is present
         has_linguistic = (
             any(kw in text for kw in _HEDGE_KEYWORDS)
             or any(kw in text for kw in _DEFLECT_KEYWORDS)
             or any(kw in text for kw in _INSIDER_KEYWORDS)
             or any(kw in text for kw in _ESCALATION_KEYWORDS)
+            or any(kw in text for kw in _LINGUISTIC_PERMISSION)
+            or any(kw in text for kw in _LINGUISTIC_CERTAINTY)
+            or any(kw in text for kw in _LINGUISTIC_DISSOCIATION)
+            or any(kw in text for kw in _SORAM_SOCIETAL)
+            or any(kw in text for kw in _SORAM_OPERATIONAL)
+            or any(kw in text for kw in _SORAM_REGULATORY)
+            or any(kw in text for kw in _SORAM_ALIGNMENT)
         )
 
         result.append({
@@ -588,7 +906,11 @@ def _error_result(entity: dict[str, str], error: str) -> dict[str, Any]:
         "diversity_score": 0.0,
         "linguistic_score": 0.0,
         "linguistic_markers": [],
+        "soram_score": 0.0,
+        "soram_channels": [],
         "composite_score": 0.0,
+        "sec_signals": {},
+        "usaspending_signals": {},
         "recent_count": 0,
         "baseline_daily": 0.0,
         "historical_count": 0,
@@ -712,6 +1034,9 @@ def _build_summary(
         sentiment_dir = sig.get("sentiment_direction", "neutral")
         signal_type = sig.get("signal_type", "composite")
         linguistic_markers = sig.get("linguistic_markers", [])
+        soram_channels = sig.get("soram_channels", [])
+        sec_elevated = sig.get("sec_signals", {}).get("elevated", False)
+        usaspending_elevated = sig.get("usaspending_signals", {}).get("elevated", False)
         streak = sig.get("signal_streak", 0)
         streak_alert = sig.get("streak_alert", False)
         headlines = sig.get("top_headlines", [])
@@ -722,17 +1047,27 @@ def _build_summary(
         ticker_str = f" ({ticker})" if ticker else ""
         sentiment_str = f", sentiment {sentiment_dir}" if sentiment_dir != "neutral" else ""
         linguistic_str = f", [{', '.join(linguistic_markers)}]" if linguistic_markers else ""
+        soram_str = f", SORAM [{', '.join(soram_channels)}]" if soram_channels else ""
+        data_str = ""
+        if sec_elevated and usaspending_elevated:
+            data_str = ", +SEC 8-K +gov contracts"
+        elif sec_elevated:
+            data_str = ", +SEC 8-K elevated"
+        elif usaspending_elevated:
+            data_str = ", +gov contracts elevated"
         streak_str = f" ⚠ {streak}-day streak" if streak_alert else (f" ({streak}d streak)" if streak > 1 else "")
         driver = {
             "volume": "volume spike",
             "sentiment": "sentiment shift",
             "linguistic": "linguistic pre-indicators",
+            "soram": "SORAM pressure",
             "composite": "multi-signal",
         }.get(signal_type, "pressure")
 
         line = (
             f"{icon} {name}{ticker_str}: {driver} — {recent} articles today "
-            f"({pct}% above baseline{sentiment_str}{linguistic_str}, composite score {composite:.1f}×){streak_str}."
+            f"({pct}% above baseline{sentiment_str}{linguistic_str}{soram_str}{data_str}, "
+            f"composite score {composite:.1f}×){streak_str}."
         )
         if headlines:
             line += f" \"{headlines[0]['title']}\""
