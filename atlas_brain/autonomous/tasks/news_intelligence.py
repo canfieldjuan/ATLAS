@@ -364,7 +364,7 @@ def _score_diversity(
         for a in articles:
             url = a.get("url", "")
             try:
-                domain = urlparse(url).netloc.lower().lstrip("www.")
+                domain = urlparse(url).netloc.lower().removeprefix("www.")
                 if domain:
                     domains.add(domain)
             except Exception:

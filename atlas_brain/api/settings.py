@@ -128,11 +128,38 @@ class VoiceSettingsUpdate(BaseModel):
     agent_timeout: Optional[float] = None
 
 
+def _quote_env_value(value: str) -> str:
+    """Quote a .env value that contains characters python-dotenv would misparse.
+
+    python-dotenv treats unquoted values as ending at any `` # `` (space-hash)
+    and strips leading/trailing whitespace.  Embedded newlines would also split
+    the entry across multiple lines, corrupting the file.
+
+    When quoting is needed the value is wrapped in double quotes and the
+    standard escape sequences (``\\n``, ``\\r``, ``\\"`` , ``\\\\``) are
+    applied.  python-dotenv restores these escape sequences back to their
+    original characters when reading a double-quoted value, so the round-trip
+    is lossless.
+    """
+    if "\n" not in value and "\r" not in value and " #" not in value:
+        return value
+    escaped = (
+        value
+        .replace("\\", "\\\\")  # escape backslashes first
+        .replace('"', '\\"')    # escape embedded double quotes
+        .replace("\n", "\\n")   # escape newlines
+        .replace("\r", "\\r")   # escape carriage returns
+    )
+    return f'"{escaped}"'
+
+
 def _write_env_local(updates: dict[str, str]) -> None:
     """Upsert key=value pairs in .env.local, preserving unrelated lines.
 
     Values that contain ``=`` are handled correctly because we only split on
-    the *first* ``=`` when extracting existing keys.
+    the *first* ``=`` when extracting existing keys.  Values with embedded
+    newlines or comment markers are automatically quoted (see
+    :func:`_quote_env_value`).
     """
     env_path = _ENV_LOCAL_PATH
 
@@ -149,7 +176,7 @@ def _write_env_local(updates: dict[str, str]) -> None:
             key_to_line_idx[key] = idx
 
     for key, value in updates.items():
-        new_line = f"{key}={value}"
+        new_line = f"{key}={_quote_env_value(value)}"
         if key in key_to_line_idx:
             existing_lines[key_to_line_idx[key]] = new_line
         else:
