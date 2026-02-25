@@ -2036,6 +2036,12 @@ class B2BScrapeConfig(BaseSettings):
     blocked_cooldown_hours: int = Field(default=24, description="Hours to cool down after blocked")
     scrape_log_retention_days: int = Field(default=30, description="Days to retain scrape logs")
 
+    # CAPTCHA solving
+    captcha_enabled: bool = Field(default=False, description="Enable CAPTCHA solving for protected sites")
+    captcha_provider: str = Field(default="capsolver", description="CAPTCHA solver provider (capsolver or 2captcha)")
+    captcha_api_key: str = Field(default="", description="CAPTCHA solver API key")
+    captcha_domains: str = Field(default="g2.com,capterra.com", description="Domains with CAPTCHA solving enabled (comma-separated)")
+
 
 class TemporalPatternConfig(BaseSettings):
     """Temporal pattern context configuration."""
