@@ -64,7 +64,7 @@ Use the `intelligence/simulated_evolution` agent after the intervention playbook
 
 ## Autonomous Narrative Architect Agent
 
-Use the `intelligence/autonomous_narrative_architect` agent after the simulator to design narrative micro-interventions that stabilize the environment. It outputs parallel narrative design, micro-intervention plans, and a first intervention definition scoped to the hours-before-event window.
+Use the `intelligence/autonomous_narrative_architect` agent after the simulator to design narrative micro-interventions that stabilize the environment. It outputs parallel narrative design, micro-intervention plans, and a first intervention definition scoped to the hours-before-event window. Use this agent only with explicit human oversight, consented channels, and clear ethical boundaries.
 
 ---
 

@@ -51,5 +51,5 @@ STABILITY METRICS
 - Tie each intervention to a signal or simulation outcome and cite evidence inline using `(source: <label>)`.
 - The Micro-Intervention Plan must include linguistic nudges, timing, and channel.
 - The First Intervention Definition must specify the smallest action to deploy within the hours_before_event window.
-- List at least one guardrail that prevents narrative drift or ethical violations.
+- List at least one guardrail that prevents narrative drift or ethical violations (e.g., require human approval, limit to consented channels, avoid deceptive or coercive messaging).
 - If data is missing, call it out directly and provide the lowest-risk assumption.
