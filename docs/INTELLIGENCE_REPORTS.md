@@ -50,6 +50,12 @@ Use the `intelligence/prompt_to_report` agent when you only have raw behavioral 
 
 ---
 
+## Adaptive Intervention Agent
+
+Use the `intelligence/adaptive_intervention` agent after the report is produced to generate a F.A.T.E.-based tactical playbook. It outputs Authority Pivot, Narrative Re-Framing Script, Tribe Re-Integration Plan, and counter-pressure actions tied to the identified pressure points.
+
+---
+
 ## Report Structure, Visuals, and Writing Models
 
 **Structure** (recommended ordering for premium clients):
