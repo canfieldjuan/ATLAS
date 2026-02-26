@@ -51,6 +51,6 @@ STABILITY METRICS
 - The Micro-Intervention Plan must include linguistic nudges, timing, and channel.
 - The First Intervention Definition must specify the smallest action to deploy within the hours_before_event window.
 - List at least two guardrails that prevent narrative drift or ethical violations; include approval gates and consented channels at minimum, and add others like audit logging.
-- Do not propose deceptive or coercive messaging (e.g., no fabricated facts, impersonation, threats, or pressure tactics).
-- Assume the orchestration layer enforces approval workflows, audit logs, content filtering, and human review gates before execution; flag any missing controls.
+- Do not propose deceptive or coercive messaging (e.g., no fabricated facts, impersonation, threats, or pressure tactics); enforce via orchestration-layer content filtering if available.
+- Verify the orchestration layer enforces approval workflows, audit logs, content filtering, and human review gates before execution; if controls are unconfirmed, state that deployment must be blocked until they are implemented.
 - If data is missing, call it out directly and provide the lowest-risk assumption.
