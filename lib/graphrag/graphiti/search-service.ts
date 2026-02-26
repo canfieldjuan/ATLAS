@@ -415,9 +415,13 @@ export class SearchService {
     return edges.reduce((max, edge) => Math.max(max, edge.score || 0), 0);
   }
 
-  private normalizeScore(score: number): number {
+  private normalizeScore(score: number, edge?: GraphitiSearchResult['edges'][number]): number {
     if (!Number.isFinite(score)) {
-      log.warn('GraphRAG', 'Non-finite rescore value, defaulting to 0', { score });
+      log.warn('GraphRAG', 'Non-finite rescore value, defaulting to 0', {
+        score,
+        edgeUuid: edge?.uuid,
+        edgeFact: edge?.fact?.slice(0, 120),
+      });
       return 0;
     }
     return Math.min(1, Math.max(0, score));
@@ -450,7 +454,7 @@ export class SearchService {
       }
       acc.push({
         ...edge,
-        score: this.normalizeScore(result.score),
+        score: this.normalizeScore(result.score, edge),
       });
       return acc;
     }, []);
