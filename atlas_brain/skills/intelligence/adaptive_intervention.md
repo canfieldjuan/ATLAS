@@ -40,7 +40,8 @@ MONITORING & CLOSED-LOOP SIGNALS
 
 ## Rules
 
-- Aim for approximately 450 words (roughly a one-page executive brief) for quick executive review; treat this as guidance, not a hard limit, and prioritize the Authority Pivot and Counter-Pressure Actions if space is tight.
+- Aim for approximately 450 words (roughly a one-page executive brief) for quick executive review.
+- Treat this as guidance, not a hard limit; prioritize the Authority Pivot and Counter-Pressure Actions if space is tight.
 - Use short, declarative sentences with command-level clarity.
 - Tie each recommendation to a trigger or pressure point and cite evidence inline using `(source: <label>)`.
 - The Authority Pivot must address Behavior, Mindset, and Context.
