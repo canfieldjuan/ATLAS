@@ -19,6 +19,27 @@ NegotiationRigiditySensorTool
     Detects loss of flexibility in labor or vendor negotiations by measuring
     absolutist language vs flexibility markers.
 
+Cross-sensor correlation
+------------------------
+``correlate()`` connects the three sensor outputs to find relationships between
+the collected signals and produce a composite risk level::
+
+    from atlas_brain.tools.risk_sensors import (
+        alignment_sensor_tool,
+        operational_urgency_tool,
+        negotiation_rigidity_tool,
+        correlate,
+    )
+
+    text = "They are demanding we stop immediately — non-negotiable, final offer."
+    a = alignment_sensor_tool.analyze(text)
+    u = operational_urgency_tool.analyze(text)
+    r = negotiation_rigidity_tool.analyze(text)
+
+    cross = correlate(a, u, r)
+    # cross["composite_risk_level"]  → "CRITICAL"
+    # cross["relationships"][0]["label"]  → "full_friction_cascade"
+
 Pipeline integration
 --------------------
 Each tool exposes an ``analyze(text)`` helper that returns a plain dict so the
@@ -123,6 +144,8 @@ _ABSOLUTIST_TERMS: frozenset[str] = frozenset({
     "ultimatum", "absolute", "absolutely", "dead",
     "failed", "broken", "wall", "finished", "unacceptable",
     "final", "mandate", "mandatory",
+    # Hyphenated absolutist unigrams (tokenizer preserves hyphens as one token)
+    "non-negotiable",
 })
 
 _ABSOLUTIST_PHRASES: frozenset[str] = frozenset({
@@ -572,6 +595,145 @@ class NegotiationRigiditySensorTool:
             data=result,
             message=result["summary"],
         )
+
+
+# ---------------------------------------------------------------------------
+# Cross-sensor correlation
+# ---------------------------------------------------------------------------
+
+# Named relationship patterns — each describes what it means when a specific
+# combination of sensors co-triggers on the same text.
+_CROSS_SENSOR_PATTERNS: tuple[dict[str, Any], ...] = (
+    {
+        "sensors": frozenset({"alignment", "negotiation_rigidity"}),
+        "label": "adversarial_rigidity",
+        "insight": (
+            "Identity adversarialism and negotiation absolutism are co-active: "
+            "parties have hardened both their language and their positions. "
+            "The adversarial framing reinforces the rigid stance — "
+            "trust has eroded at the same time flexibility has vanished."
+        ),
+    },
+    {
+        "sensors": frozenset({"alignment", "operational_urgency"}),
+        "label": "adversarial_reactivity",
+        "insight": (
+            "Adversarial identity framing has escalated into reactive urgency: "
+            "the us-vs-them divide is no longer theoretical — it is driving "
+            "immediate operational pressure. The situation is being reacted to, "
+            "not managed."
+        ),
+    },
+    {
+        "sensors": frozenset({"operational_urgency", "negotiation_rigidity"}),
+        "label": "reactive_lock",
+        "insight": (
+            "Reactionary urgency and absolutist rigidity are co-active: "
+            "positions have hardened precisely as time pressure has spiked. "
+            "High probability of imminent work stoppage or operational breakdown."
+        ),
+    },
+    {
+        "sensors": frozenset({"alignment", "operational_urgency", "negotiation_rigidity"}),
+        "label": "full_friction_cascade",
+        "insight": (
+            "All three friction axes are simultaneously active. "
+            "Identity adversarialism, reactive urgency, and negotiation lock "
+            "form a self-reinforcing cascade: each dimension amplifies the others. "
+            "This pattern is a pre-event signature — strike, walkout, or shutdown "
+            "is likely imminent."
+        ),
+    },
+)
+
+# Composite risk levels keyed by the number of sensors that triggered (0–3).
+_COMPOSITE_RISK_LEVELS: dict[int, str] = {
+    0: "LOW",
+    1: "MEDIUM",
+    2: "HIGH",
+    3: "CRITICAL",
+}
+
+
+def correlate(
+    alignment_result: dict[str, Any],
+    urgency_result: dict[str, Any],
+    rigidity_result: dict[str, Any],
+) -> dict[str, Any]:
+    """Cross-correlate the outputs of all three sensors to find relationships.
+
+    Takes the result dicts returned by each sensor's ``analyze()`` method and
+    identifies which cross-sensor patterns are active.  Returns a composite
+    risk level and a list of named relationship insights that explain *how* the
+    triggered sensors are connected — answering what the data means together,
+    not just individually.
+
+    Args:
+        alignment_result: Return value of ``AlignmentSensorTool.analyze()``.
+        urgency_result:   Return value of ``OperationalUrgencySensorTool.analyze()``.
+        rigidity_result:  Return value of ``NegotiationRigiditySensorTool.analyze()``.
+
+    Returns:
+        dict with keys:
+
+        triggered_sensors
+            Sorted list of sensor names that individually triggered.
+        sensor_count
+            Number of sensors that triggered (0–3).
+        composite_risk_level
+            "LOW" / "MEDIUM" / "HIGH" / "CRITICAL" based on sensor_count.
+        relationships
+            List of dicts, one per matched cross-sensor pattern, each with
+            ``label``, ``sensors`` (sorted list), and ``insight`` keys.
+        relationship_count
+            Number of cross-sensor patterns matched.
+        summary
+            Human-readable composite assessment.
+    """
+    triggered: list[str] = [
+        result["sensor"]
+        for result in (alignment_result, urgency_result, rigidity_result)
+        if result.get("triggered")
+    ]
+    triggered_set = frozenset(triggered)
+    sensor_count = len(triggered)
+    risk_level = _COMPOSITE_RISK_LEVELS[sensor_count]
+
+    # A pattern matches when every sensor in the pattern triggered.
+    relationships = [
+        {
+            "label": p["label"],
+            "sensors": sorted(p["sensors"]),
+            "insight": p["insight"],
+        }
+        for p in _CROSS_SENSOR_PATTERNS
+        if p["sensors"].issubset(triggered_set)
+    ]
+
+    if sensor_count == 0:
+        summary = "No sensors triggered. Risk level: LOW."
+    elif sensor_count == 1:
+        summary = (
+            f"1 of 3 sensors triggered ({triggered[0]}). "
+            f"Risk level: MEDIUM. No cross-sensor relationships active."
+        )
+    else:
+        pattern_labels = ", ".join(r["label"] for r in relationships)
+        summary = (
+            f"{sensor_count} of 3 sensors triggered "
+            f"({', '.join(sorted(triggered))}). "
+            f"Risk level: {risk_level}. "
+            f"Cross-sensor patterns: {pattern_labels}."
+        )
+
+    return {
+        "triggered_sensors": sorted(triggered),
+        "sensor_count": sensor_count,
+        "composite_risk_level": risk_level,
+        "relationships": relationships,
+        "relationship_count": len(relationships),
+        "summary": summary,
+    }
 
 
 # ---------------------------------------------------------------------------

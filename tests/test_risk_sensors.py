@@ -18,6 +18,7 @@ from atlas_brain.tools.risk_sensors import (
     alignment_sensor_tool,
     operational_urgency_tool,
     negotiation_rigidity_tool,
+    correlate,
     _tokenize,
     _count_terms,
     _COLLABORATIVE_TERMS,
@@ -210,8 +211,16 @@ class TestOperationalUrgencySensor:
         assert result["urgency_density"] >= 0.0
 
     def test_custom_density_factor(self):
-        # Require urgency to be 10x more dense — should not trigger
-        result = operational_urgency_tool.analyze(self.URGENCY_TEXT, density_factor=10.0)
+        # Require urgency to be 10x more dense — should not trigger on text
+        # that still has planning terms to compare against.
+        # (The original test used pure urgency text with no planning terms,
+        # which always triggers regardless of density_factor because the
+        # code deliberately fires when urgency > 0 and planning == 0.)
+        mixed_text = (
+            "We have scheduled a proposal for next quarter on the roadmap. "
+            "There is some urgency today but the situation is not critical."
+        )
+        result = operational_urgency_tool.analyze(mixed_text, density_factor=10.0)
         assert result["triggered"] is False
 
     def test_no_planning_terms_with_urgency_triggers(self):
@@ -371,3 +380,149 @@ class TestRegistration:
         ):
             assert len(sensor.parameters) >= 1
             assert any(p.name == "text" for p in sensor.parameters)
+
+
+# ---------------------------------------------------------------------------
+# correlate() — cross-sensor relationship detection
+# ---------------------------------------------------------------------------
+
+
+class TestCorrelate:
+    """Tests for the correlate() function that connects sensor outputs."""
+
+    # Pre-built result stubs — real sensor output shapes, values chosen to
+    # control triggered=True/False without running full text analysis.
+
+    def _make(self, sensor: str, triggered: bool) -> dict:
+        return {"sensor": sensor, "triggered": triggered, "summary": "stub"}
+
+    def test_no_sensors_triggered_low_risk(self):
+        result = correlate(
+            self._make("alignment", False),
+            self._make("operational_urgency", False),
+            self._make("negotiation_rigidity", False),
+        )
+        assert result["composite_risk_level"] == "LOW"
+        assert result["sensor_count"] == 0
+        assert result["triggered_sensors"] == []
+        assert result["relationship_count"] == 0
+
+    def test_one_sensor_triggered_medium_risk(self):
+        result = correlate(
+            self._make("alignment", True),
+            self._make("operational_urgency", False),
+            self._make("negotiation_rigidity", False),
+        )
+        assert result["composite_risk_level"] == "MEDIUM"
+        assert result["sensor_count"] == 1
+        assert result["triggered_sensors"] == ["alignment"]
+        assert result["relationship_count"] == 0
+
+    def test_two_sensors_triggered_high_risk(self):
+        result = correlate(
+            self._make("alignment", True),
+            self._make("operational_urgency", False),
+            self._make("negotiation_rigidity", True),
+        )
+        assert result["composite_risk_level"] == "HIGH"
+        assert result["sensor_count"] == 2
+        assert "negotiation_rigidity" in result["triggered_sensors"]
+        assert "alignment" in result["triggered_sensors"]
+
+    def test_alignment_rigidity_pattern_detected(self):
+        result = correlate(
+            self._make("alignment", True),
+            self._make("operational_urgency", False),
+            self._make("negotiation_rigidity", True),
+        )
+        labels = [r["label"] for r in result["relationships"]]
+        assert "adversarial_rigidity" in labels
+
+    def test_alignment_urgency_pattern_detected(self):
+        result = correlate(
+            self._make("alignment", True),
+            self._make("operational_urgency", True),
+            self._make("negotiation_rigidity", False),
+        )
+        labels = [r["label"] for r in result["relationships"]]
+        assert "adversarial_reactivity" in labels
+
+    def test_urgency_rigidity_pattern_detected(self):
+        result = correlate(
+            self._make("alignment", False),
+            self._make("operational_urgency", True),
+            self._make("negotiation_rigidity", True),
+        )
+        labels = [r["label"] for r in result["relationships"]]
+        assert "reactive_lock" in labels
+
+    def test_all_three_triggered_critical_risk(self):
+        result = correlate(
+            self._make("alignment", True),
+            self._make("operational_urgency", True),
+            self._make("negotiation_rigidity", True),
+        )
+        assert result["composite_risk_level"] == "CRITICAL"
+        assert result["sensor_count"] == 3
+        labels = [r["label"] for r in result["relationships"]]
+        assert "full_friction_cascade" in labels
+        # All pair patterns also present
+        assert "adversarial_rigidity" in labels
+        assert "adversarial_reactivity" in labels
+        assert "reactive_lock" in labels
+
+    def test_relationship_has_required_keys(self):
+        result = correlate(
+            self._make("alignment", True),
+            self._make("operational_urgency", True),
+            self._make("negotiation_rigidity", True),
+        )
+        for rel in result["relationships"]:
+            assert "label" in rel
+            assert "sensors" in rel
+            assert "insight" in rel
+            assert isinstance(rel["sensors"], list)
+            assert len(rel["insight"]) > 0
+
+    def test_result_has_required_keys(self):
+        result = correlate(
+            self._make("alignment", False),
+            self._make("operational_urgency", False),
+            self._make("negotiation_rigidity", False),
+        )
+        for key in (
+            "triggered_sensors", "sensor_count", "composite_risk_level",
+            "relationships", "relationship_count", "summary",
+        ):
+            assert key in result, f"Missing key: {key}"
+
+    def test_end_to_end_with_real_sensors(self):
+        """Run all three real sensors on high-friction text and correlate."""
+        text = (
+            "They are demanding we stop everything immediately — "
+            "non-negotiable, final offer. Management must accept now. "
+            "The corporation will never budge. Crisis. Halt all operations."
+        )
+        a = alignment_sensor_tool.analyze(text)
+        u = operational_urgency_tool.analyze(text)
+        r = negotiation_rigidity_tool.analyze(text)
+        result = correlate(a, u, r)
+        # All three sensors should fire on this extreme text
+        assert result["composite_risk_level"] == "CRITICAL"
+        assert result["sensor_count"] == 3
+        assert "full_friction_cascade" in [
+            rel["label"] for rel in result["relationships"]
+        ]
+
+    def test_end_to_end_low_friction_text(self):
+        """Run all three real sensors on calm collaborative text and correlate."""
+        text = (
+            "Our team is planning for next quarter. We will propose a roadmap "
+            "and explore alternative options together. Partners are aligned."
+        )
+        a = alignment_sensor_tool.analyze(text)
+        u = operational_urgency_tool.analyze(text)
+        r = negotiation_rigidity_tool.analyze(text)
+        result = correlate(a, u, r)
+        assert result["composite_risk_level"] in ("LOW", "MEDIUM")
+        assert result["relationship_count"] == 0
