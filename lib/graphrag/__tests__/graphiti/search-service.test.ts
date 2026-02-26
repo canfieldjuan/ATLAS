@@ -8,6 +8,8 @@ import type { GraphitiSearchResult } from '../../graphiti/client';
 import type { GraphRAGRetrievalMetadata } from '../../types';
 import { log } from '@/lib/utils/logger';
 
+const mockedLog = vi.mocked(log);
+
 // Use vi.hoisted to define mocks before they're hoisted
 const {
   mockSearch,
@@ -303,7 +305,7 @@ describe('SearchService', () => {
       const result = await searchService.search('test query', 'user-123');
 
       expect(mockRerank).toHaveBeenCalledTimes(1);
-      expect(log.error).toHaveBeenCalledWith(
+      expect(mockedLog.error).toHaveBeenCalledWith(
         'GraphRAG',
         'Rescore loop failed, using original scores',
         expect.objectContaining({ error: expect.any(Error) }),

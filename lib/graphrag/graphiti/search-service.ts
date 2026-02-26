@@ -14,6 +14,8 @@ import { fallbackService } from '../service/fallback-service';
 import { temporalClassifier } from '../utils/temporal-classifier';
 import { expandQuery, shouldExpandQuery, getBestVariant } from '../utils/query-expansion';
 
+const MAX_FACT_LOG_LENGTH = 120;
+
 // ============================================================================
 // Search Service
 // ============================================================================
@@ -403,8 +405,14 @@ export class SearchService {
   }
 
   private getMaxScore(edges: GraphitiSearchResult['edges']): number {
-    if (!edges.length) return 0;
-    return edges.reduce((max, edge) => Math.max(max, edge.score || 0), 0);
+    let maxScore = 0;
+    for (const edge of edges) {
+      const score = edge.score || 0;
+      if (score > maxScore) {
+        maxScore = score;
+      }
+    }
+    return maxScore;
   }
 
   /**
@@ -415,7 +423,7 @@ export class SearchService {
       log.warn('GraphRAG', 'Non-finite rescore value, defaulting to 0', {
         score,
         edgeUuid: edge?.uuid ?? 'unknown',
-        edgeFact: edge?.fact?.slice(0, 120) ?? 'unknown',
+        edgeFact: edge?.fact?.slice(0, MAX_FACT_LOG_LENGTH) ?? 'unknown',
       });
       return 0;
     }
