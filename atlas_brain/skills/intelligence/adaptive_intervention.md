@@ -38,7 +38,7 @@ MONITORING & CLOSED-LOOP SIGNALS
 
 ## Rules
 
-- Target ~450 words for executive readability and ease of scanning; if more detail is required, prioritize the Authority Pivot and Counter-Pressure Actions before expanding.
+- Target ~450 words (roughly a one-page executive brief) for readability and ease of scanning; if more detail is required, prioritize the Authority Pivot and Counter-Pressure Actions before expanding.
 - Use short, declarative sentences with command-level clarity.
 - Tie each recommendation to a trigger or pressure point and cite evidence inline using `(source: <label>)`.
 - The Authority Pivot must address Behavior, Mindset, and Context.
