@@ -44,6 +44,12 @@ The report should read like a premium analyst brief: concise, defensible, and de
 
 ---
 
+## Prompt-to-Report Executive Summary
+
+Use the `intelligence/prompt_to_report` agent when you only have raw behavioral triggers and need a clinical, predictive executive summary in a high-authority tone. It outputs a single EXECUTIVE SUMMARY section with evidence citations.
+
+---
+
 ## Report Structure, Visuals, and Writing Models
 
 **Structure** (recommended ordering for premium clients):
