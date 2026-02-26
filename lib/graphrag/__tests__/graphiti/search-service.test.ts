@@ -6,6 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { GraphitiSearchResult } from '../../graphiti/client';
 import type { GraphRAGRetrievalMetadata } from '../../types';
+import { log } from '@/lib/utils/logger';
 
 // Use vi.hoisted to define mocks before they're hoisted
 const {
@@ -283,6 +284,52 @@ describe('SearchService', () => {
       expect(result.sources.length).toBe(2);
       expect(result.sources[0].confidence).toBeCloseTo(0.9, 3);
       expect(result.sources[1].confidence).toBeCloseTo(0.75, 3);
+    });
+
+    it('should fall back to original scores when rescoring fails', async () => {
+      mockConfig.reranking.enabled = true;
+      mockRerank.mockRejectedValue(new Error('rescore failed'));
+      searchService = new SearchService();
+
+      const mockResult: GraphitiSearchResult = {
+        edges: [
+          { uuid: '1', name: 'rel1', fact: 'Low fact 1', score: 0.4, created_at: '2024-01-01' },
+          { uuid: '2', name: 'rel2', fact: 'Low fact 2', score: 0.2, created_at: '2024-01-01' },
+        ],
+      };
+
+      mockSearch.mockResolvedValue(mockResult);
+
+      const result = await searchService.search('test query', 'user-123');
+
+      expect(mockRerank).toHaveBeenCalledTimes(1);
+      expect(log.error).toHaveBeenCalled();
+      expect(result.sources.length).toBe(0);
+      expect(result.context).toBe('');
+    });
+
+    it('should skip rescore when scores already exceed threshold', async () => {
+      mockConfig.reranking.enabled = true;
+      mockRerank.mockResolvedValue([
+        { originalIndex: 0, score: 0.8, text: 'High fact', metadata: {} },
+      ]);
+      searchService = new SearchService();
+
+      const mockResult: GraphitiSearchResult = {
+        edges: [
+          { uuid: '1', name: 'rel1', fact: 'High fact', score: 0.8, created_at: '2024-01-01' },
+          { uuid: '2', name: 'rel2', fact: 'Below threshold', score: 0.6, created_at: '2024-01-01' },
+        ],
+      };
+
+      mockSearch.mockResolvedValue(mockResult);
+
+      const result = await searchService.search('test query', 'user-123');
+
+      expect(mockRerank).toHaveBeenCalledTimes(1);
+      expect(mockRerank.mock.calls[0][1]).toHaveLength(1);
+      expect(result.sources.length).toBe(1);
+      expect(result.sources[0].fact).toBe('High fact');
     });
   });
 

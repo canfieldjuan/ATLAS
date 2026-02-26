@@ -143,7 +143,7 @@ export class SearchService {
       rescoreApplied,
     });
 
-    // Apply reranking if enabled
+    // Apply reranking if enabled (skip if rescore already used reranker output)
     let finalEdges = filteredEdges;
     if (this.reranker && filteredEdges.length > 0 && !rescoreApplied) {
       try {
@@ -416,7 +416,10 @@ export class SearchService {
   }
 
   private normalizeScore(score: number): number {
-    if (!Number.isFinite(score)) return 0;
+    if (!Number.isFinite(score)) {
+      log.warn('GraphRAG', 'Non-finite rescore value, defaulting to 0', { score });
+      return 0;
+    }
     return Math.min(1, Math.max(0, score));
   }
 
