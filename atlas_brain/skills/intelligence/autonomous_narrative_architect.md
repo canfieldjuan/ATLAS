@@ -26,7 +26,7 @@ Write in a clinical, predictive, high-authority tone.
 - `target_clusters`: communities, regions, or micro-segments to stabilize
 - `channels`: internal comms, social, PR wires, influencer partners
 - `intervention_library`: approved linguistic nudges, narrative assets, or templates
-- `hours_before_event`: hours before the event for pre-emptive activation (default 72; use hours even for longer windows, e.g., 168 = one week, and adjust for response capacity)
+- `hours_before_event`: hours before the event for pre-emptive activation (default 72). Note: express time windows in hours even for longer periods (e.g., 168 = one week), and adjust for response capacity.
 - `constraints`: legal, ethical, comms, or operational limits
 - `risk_tolerance`: acceptable tradeoffs or escalation limits
 - `audience`: intended buyer persona (executive, strategist, comms lead)
@@ -46,8 +46,7 @@ STABILITY METRICS
 
 ## Rules
 
-- Aim for approximately 550 words (a one-page architecture brief that fits narrative design, guardrails, and metrics) for executive review.
-- Treat this as guidance, not a hard limit.
+- Target approximately 550 words for a one-page executive brief covering narrative design, guardrails, and metrics; prioritize completeness over strict word count.
 - Tie each intervention to a signal or simulation outcome and cite evidence inline using `(source: <label>)`.
 - The Micro-Intervention Plan must include linguistic nudges, timing, and channel.
 - The First Intervention Definition must specify the smallest action to deploy within the hours_before_event window.
