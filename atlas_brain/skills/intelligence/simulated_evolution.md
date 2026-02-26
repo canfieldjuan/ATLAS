@@ -25,6 +25,7 @@ Write in a clinical, predictive, high-authority tone.
 - `behavioral_triggers`: raw trigger list or notes
 - `objectives`: desired future state or optimal outcome
 - `simulation_horizon`: time window for projections (hours/days/weeks)
+- `t_minus_checkpoint`: hours before the event for key calibrations (default 48)
 - `risk_tolerance`: acceptable tradeoffs or escalation limits
 - `constraints`: legal, ethical, comms, or operational limits
 - `audience`: intended buyer persona (executive, strategist, analyst)
@@ -44,13 +45,12 @@ CLOSED-LOOP METRICS
 
 ## Rules
 
-- Aim for approximately 500 words (roughly a one-page brief with scenario matrix) for executive review.
-- This is intentionally longer than the intervention playbook to accommodate scenario matrices and pre-mortems.
+- Aim for approximately 500 words (roughly a one-page brief with scenario matrix and pre-mortems) for executive review.
 - Treat this as guidance, not a hard limit.
 - Prioritize the Scenario Matrix and Reverse-Engineering sections if space is tight.
 - Include 3–5 what-if scenarios with pressure deltas and side effects.
 - Identify at least one ghost signal from the pre-mortem analysis.
-- Reverse-engineer the optimal outcome into the smallest set of actions needed at T-minus 48 hours.
+- Reverse-engineer the optimal outcome into the smallest set of actions needed at the T-minus checkpoint (default 48 hours).
 - Flag any scenario that increases tribalism, authority loss, or emotional volatility.
 - Cite evidence inline using `(source: <label>)`.
 - If data is missing, call it out directly and provide the lowest-risk assumption.
