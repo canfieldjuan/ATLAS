@@ -44,7 +44,9 @@ CLOSED-LOOP METRICS
 
 ## Rules
 
-- Aim for 500 words or fewer to accommodate the scenario matrix and pre-mortems; this is intentionally longer than the 450-word intervention playbook to fit the added analysis.
+- Aim for approximately 500 words (roughly a one-page brief with scenario matrix) for executive review.
+- This is intentionally longer than the intervention playbook to accommodate scenario matrices and pre-mortems.
+- Treat this as guidance, not a hard limit.
 - Prioritize the Scenario Matrix and Reverse-Engineering sections if space is tight.
 - Include 3–5 what-if scenarios with pressure deltas and side effects.
 - Identify at least one ghost signal from the pre-mortem analysis.
