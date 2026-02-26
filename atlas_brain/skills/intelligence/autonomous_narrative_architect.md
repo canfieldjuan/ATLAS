@@ -26,7 +26,7 @@ Write in a clinical, predictive, high-authority tone.
 - `target_clusters`: communities, regions, or micro-segments to stabilize
 - `channels`: internal comms, social, PR wires, influencer partners
 - `intervention_library`: approved linguistic nudges, narrative assets, or templates
-- `hours_before_event`: hours before the event for pre-emptive activation (default 72, adjust for event pace such as hours vs. weeks and response capacity)
+- `hours_before_event`: hours before the event for pre-emptive activation (default 72; use hours even for longer windows, e.g., 168 = one week, and adjust for response capacity)
 - `constraints`: legal, ethical, comms, or operational limits
 - `risk_tolerance`: acceptable tradeoffs or escalation limits
 - `audience`: intended buyer persona (executive, strategist, comms lead)
@@ -52,5 +52,5 @@ STABILITY METRICS
 - The Micro-Intervention Plan must include linguistic nudges, timing, and channel.
 - The First Intervention Definition must specify the smallest action to deploy within the hours_before_event window.
 - List at least two guardrails that prevent narrative drift or ethical violations; include approval gates and consented channels at minimum, and add others like audit logging.
-- Do not propose deceptive or coercive messaging.
+- Do not propose deceptive or coercive messaging (e.g., no fabricated facts, impersonation, threats, or pressure tactics).
 - If data is missing, call it out directly and provide the lowest-risk assumption.
