@@ -56,6 +56,12 @@ Use the `intelligence/adaptive_intervention` agent after the report is produced 
 
 ---
 
+## Simulated Evolution & Predictive Forensics Agent
+
+Use the `intelligence/simulated_evolution` agent after the intervention playbook to run what-if simulations, pre-mortems, and reverse-engineer the optimal outcome. It produces a digital-twin simulation brief with scenario matrices, ghost-signal forensics, and T-minus 48 linguistic calibrations.
+
+---
+
 ## Report Structure, Visuals, and Writing Models
 
 **Structure** (recommended ordering for premium clients):
