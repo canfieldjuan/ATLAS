@@ -38,7 +38,7 @@ MONITORING & CLOSED-LOOP SIGNALS
 
 ## Rules
 
-- Keep the full playbook under 350 words.
+- Keep the full playbook under 450 words for executive readability.
 - Use short, declarative sentences with command-level clarity.
 - Tie each recommendation to a trigger or pressure point and cite evidence inline using `(source: <label>)`.
 - The Authority Pivot must address Behavior, Mindset, and Context.
