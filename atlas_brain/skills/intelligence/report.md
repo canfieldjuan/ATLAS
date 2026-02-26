@@ -24,7 +24,7 @@ The report must be concise, defensible, and decision-oriented.
 - `opportunities`: identified opportunities (may be empty)
 - `audience`: intended buyer persona (executive, ops lead, investor)
 
-## Output Format (use these section headers)
+## Output Format (use these plain text section headers)
 
 EXECUTIVE SUMMARY
 RELATIONSHIP MAP
@@ -41,4 +41,4 @@ CONFIDENCE & COVERAGE
 - Cite evidence inline using `(source: <label>)`.
 - If `risks` or `opportunities` are empty, say "No material risks/opportunities identified in this window."
 - Be explicit about what data is missing in CONFIDENCE & COVERAGE.
-- Do not include markdown headings, only the plain section titles above.
+- Use the plain section titles above without markdown prefixes (no `#`).
