@@ -93,6 +93,14 @@ from .display import (
     close_camera_feed_tool,
 )
 from .digest import RunDigestTool, digest_tool
+from .risk_sensors import (
+    AlignmentSensorTool,
+    alignment_sensor_tool,
+    OperationalUrgencySensorTool,
+    operational_urgency_tool,
+    NegotiationRigiditySensorTool,
+    negotiation_rigidity_tool,
+)
 
 # Register tools on import
 # NOTE: Read-only tools are registered for fast-path execution. Scheduling, reminder,
@@ -131,6 +139,10 @@ tool_registry.register(show_camera_feed_tool)
 tool_registry.register(close_camera_feed_tool)
 # Digest tools
 tool_registry.register(digest_tool)
+# Risk sensors - behavioral/linguistic analysis for operational risk assessment
+tool_registry.register(alignment_sensor_tool)
+tool_registry.register(operational_urgency_tool)
+tool_registry.register(negotiation_rigidity_tool)
 # Scheduling tools - available for LLM tool calling in booking conversations
 tool_registry.register(check_availability_tool)
 tool_registry.register(book_appointment_tool)
@@ -244,4 +256,11 @@ __all__ = [
     # Digest tool
     "RunDigestTool",
     "digest_tool",
+    # Risk sensors
+    "AlignmentSensorTool",
+    "alignment_sensor_tool",
+    "OperationalUrgencySensorTool",
+    "operational_urgency_tool",
+    "NegotiationRigiditySensorTool",
+    "negotiation_rigidity_tool",
 ]
