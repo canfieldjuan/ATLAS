@@ -44,6 +44,33 @@ The report should read like a premium analyst brief: concise, defensible, and de
 
 ---
 
+## Report Structure, Visuals, and Writing Models
+
+**Structure** (recommended ordering for premium clients):
+1. Executive summary (decision impact + next steps)
+2. Relationship map (key entities, influence, and scoring)
+3. Evidence highlights (top sources + confidence)
+4. Risks & opportunities (ranked)
+5. Recommended actions (owner + timing)
+6. Confidence & coverage (data gaps)
+
+**Visuals vs. plain text**:
+- **4-figure** reports can be plain text with 1–2 visuals (relationship map + evidence table).
+- **5-figure** reports should be visual-heavy (deck or dashboard) with charts that reinforce scoring and evidence.
+
+**Suggested charts/graphs**:
+- Relationship network graph (entities + edges sized by confidence)
+- Signal scorecard (recency, frequency, impact, confidence)
+- Timeline of key events (evidence anchored by date)
+- Risk/opportunity matrix (impact vs. likelihood)
+- CRM revenue/interaction summary (pipeline or touchpoint volume)
+
+**Writing models**:
+- **Drafting**: local `qwen3:14b` for fast synthesis and internal reviews.
+- **Polish**: cloud `minimax-m2:cloud` for executive-ready narrative and tone.
+
+---
+
 ## Selling the Reports
 
 Package reports into tiers that clients can buy:

@@ -22,7 +22,9 @@ The output must define how to deliver 4-figure and 5-figure report packages with
 - `time_window`: data coverage range
 - `data_sources`: graph, CRM, comms, external signals
 - `delivery_format`: PDF, deck, dashboard, or briefing
+- `visual_preference`: "visual-heavy" or "plain-text"
 - `urgency`: delivery timeline expectations
+- `writer_model`: model preference or routing hints
 
 ## Output Format (use these plain text section headers)
 
@@ -30,6 +32,9 @@ REPORT TIER
 SCOPE & OBJECTIVES
 DATA & EVIDENCE PLAN
 ANALYSIS & SCORING
+STRUCTURE & FORMAT
+VISUALS & CHARTS
+WRITER MODEL
 DELIVERABLES
 TIMELINE & MILESTONES
 PRICING RATIONALE
@@ -40,5 +45,7 @@ NEXT STEPS
 - Explicitly state whether this is a 4-figure or 5-figure engagement and why.
 - Tie the scope to relationship scoring, evidence density, and decision impact.
 - Include a clear deliverable list (e.g., report, relationship map, briefings).
+- Specify whether visuals are required and which charts/graphs support the narrative.
+- Confirm the recommended model for drafting and polishing the report.
 - Emphasize defensibility: cite evidence sources and confidence.
 - Recommend at least one premium add-on for upsell.
