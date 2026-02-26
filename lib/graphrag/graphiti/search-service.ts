@@ -147,15 +147,7 @@ export class SearchService {
     let finalEdges = filteredEdges;
     if (this.reranker && filteredEdges.length > 0 && !rescoreApplied) {
       try {
-        const candidates = filteredEdges.map(edge => ({
-          text: edge.fact,
-          score: edge.score || 0,
-          metadata: {
-            uuid: edge.uuid,
-            sourceDescription: edge.source_description,
-            createdAt: edge.created_at,
-          },
-        }));
+        const candidates = this.buildRerankCandidates(filteredEdges);
 
         const reranked = await this.reranker.rerank(query, candidates);
 
@@ -415,6 +407,9 @@ export class SearchService {
     return edges.reduce((max, edge) => Math.max(max, edge.score || 0), 0);
   }
 
+  /**
+   * Normalize reranker scores into a 0-1 range, defaulting to 0 for non-finite values.
+   */
   private normalizeScore(score: number, edge?: GraphitiSearchResult['edges'][number]): number {
     if (!Number.isFinite(score)) {
       log.warn('GraphRAG', 'Non-finite rescore value, defaulting to 0', {
@@ -427,15 +422,8 @@ export class SearchService {
     return Math.min(1, Math.max(0, score));
   }
 
-  private async rescoreEdges(
-    query: string,
-    edges: GraphitiSearchResult['edges']
-  ): Promise<GraphitiSearchResult['edges']> {
-    if (!this.reranker || edges.length === 0) {
-      return edges;
-    }
-
-    const candidates = edges.map(edge => ({
+  private buildRerankCandidates(edges: GraphitiSearchResult['edges']) {
+    return edges.map(edge => ({
       text: edge.fact,
       score: edge.score || 0,
       metadata: {
@@ -444,6 +432,17 @@ export class SearchService {
         createdAt: edge.created_at,
       },
     }));
+  }
+
+  private async rescoreEdges(
+    query: string,
+    edges: GraphitiSearchResult['edges']
+  ): Promise<GraphitiSearchResult['edges']> {
+    if (!this.reranker || edges.length === 0) {
+      return edges;
+    }
+
+    const candidates = this.buildRerankCandidates(edges);
 
     const rescored = await this.reranker.rerank(query, candidates);
 

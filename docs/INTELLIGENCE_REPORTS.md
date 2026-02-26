@@ -58,6 +58,17 @@ Selling points:
 
 ---
 
+## High-Ticket Report Builder (4–5 Figures)
+
+Use the `intelligence/report_builder` skill to scope premium report packages for high-ticket clients.
+
+- **4-figure package**: rapid intelligence snapshot, relationship map, and action brief.
+- **5-figure package**: deep-dive analysis, multi-source enrichment, and executive briefing cadence.
+
+Each package should justify pricing based on evidence density, relationship scoring, and decision impact.
+
+---
+
 ## Next Implementation Hooks
 
 - GraphRAG relationship traversal (`lib/graphrag/graphiti/traversal-service.ts`)

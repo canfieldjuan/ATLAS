@@ -312,7 +312,7 @@ describe('SearchService', () => {
       expect(result.context).toBe('');
     });
 
-    it('should skip rescore and rerank filtered results when top score exceeds threshold', async () => {
+    it('should skip rescore but still rerank filtered results when top score exceeds threshold', async () => {
       mockConfig.reranking.enabled = true;
       mockRerank.mockResolvedValue([
         { originalIndex: 0, score: 0.8, text: 'High fact', metadata: {} },
