@@ -26,7 +26,7 @@ logs/
 models/
 
 # Database (PostgreSQL data files - now using Docker named volume)
-data/
+/data/
 
 # Temp files
 *.tmp

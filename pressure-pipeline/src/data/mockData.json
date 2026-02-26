@@ -1,0 +1,261 @@
+{
+  "sectors": [
+    {
+      "id": "energy",
+      "name": "Energy",
+      "stress_score": 0.82,
+      "linguistic_mirroring": 67,
+      "news_delay_predicted": 42,
+      "complexity_index": 0.71,
+      "temporal_ratio": { "past": 0.15, "present": 0.55, "future": 0.30 },
+      "identity_gap": 0.78,
+      "posts_per_minute": 340,
+      "dehumanization_score": 0.65,
+      "absolutist_triggers": 23
+    },
+    {
+      "id": "logistics",
+      "name": "Logistics",
+      "stress_score": 0.64,
+      "linguistic_mirroring": 52,
+      "news_delay_predicted": 78,
+      "complexity_index": 0.58,
+      "temporal_ratio": { "past": 0.25, "present": 0.50, "future": 0.25 },
+      "identity_gap": 0.45,
+      "posts_per_minute": 210,
+      "dehumanization_score": 0.38,
+      "absolutist_triggers": 11
+    },
+    {
+      "id": "finance",
+      "name": "Finance",
+      "stress_score": 0.91,
+      "linguistic_mirroring": 78,
+      "news_delay_predicted": 18,
+      "complexity_index": 0.85,
+      "temporal_ratio": { "past": 0.10, "present": 0.40, "future": 0.50 },
+      "identity_gap": 0.88,
+      "posts_per_minute": 520,
+      "dehumanization_score": 0.72,
+      "absolutist_triggers": 34
+    },
+    {
+      "id": "manufacturing",
+      "name": "Manufacturing",
+      "stress_score": 0.73,
+      "linguistic_mirroring": 61,
+      "news_delay_predicted": 56,
+      "complexity_index": 0.62,
+      "temporal_ratio": { "past": 0.30, "present": 0.45, "future": 0.25 },
+      "identity_gap": 0.67,
+      "posts_per_minute": 180,
+      "dehumanization_score": 0.55,
+      "absolutist_triggers": 18
+    },
+    {
+      "id": "healthcare",
+      "name": "Healthcare",
+      "stress_score": 0.55,
+      "linguistic_mirroring": 44,
+      "news_delay_predicted": 96,
+      "complexity_index": 0.48,
+      "temporal_ratio": { "past": 0.20, "present": 0.60, "future": 0.20 },
+      "identity_gap": 0.35,
+      "posts_per_minute": 150,
+      "dehumanization_score": 0.28,
+      "absolutist_triggers": 7
+    },
+    {
+      "id": "tech",
+      "name": "Technology",
+      "stress_score": 0.47,
+      "linguistic_mirroring": 39,
+      "news_delay_predicted": 120,
+      "complexity_index": 0.42,
+      "temporal_ratio": { "past": 0.15, "present": 0.55, "future": 0.30 },
+      "identity_gap": 0.28,
+      "posts_per_minute": 430,
+      "dehumanization_score": 0.22,
+      "absolutist_triggers": 5
+    },
+    {
+      "id": "agriculture",
+      "name": "Agriculture",
+      "stress_score": 0.38,
+      "linguistic_mirroring": 33,
+      "news_delay_predicted": 144,
+      "complexity_index": 0.35,
+      "temporal_ratio": { "past": 0.35, "present": 0.45, "future": 0.20 },
+      "identity_gap": 0.22,
+      "posts_per_minute": 85,
+      "dehumanization_score": 0.18,
+      "absolutist_triggers": 3
+    },
+    {
+      "id": "defense",
+      "name": "Defense",
+      "stress_score": 0.86,
+      "linguistic_mirroring": 71,
+      "news_delay_predicted": 32,
+      "complexity_index": 0.79,
+      "temporal_ratio": { "past": 0.20, "present": 0.35, "future": 0.45 },
+      "identity_gap": 0.82,
+      "posts_per_minute": 290,
+      "dehumanization_score": 0.68,
+      "absolutist_triggers": 27
+    },
+    {
+      "id": "retail",
+      "name": "Retail",
+      "stress_score": 0.52,
+      "linguistic_mirroring": 41,
+      "news_delay_predicted": 88,
+      "complexity_index": 0.44,
+      "temporal_ratio": { "past": 0.25, "present": 0.55, "future": 0.20 },
+      "identity_gap": 0.38,
+      "posts_per_minute": 310,
+      "dehumanization_score": 0.30,
+      "absolutist_triggers": 9
+    }
+  ],
+  "timeseries": [
+    { "timestamp": "00:00", "complexity": 0.42, "temporal": 0.38, "identity_gap": 0.15, "blink_rate": 120 },
+    { "timestamp": "01:00", "complexity": 0.45, "temporal": 0.40, "identity_gap": 0.18, "blink_rate": 135 },
+    { "timestamp": "02:00", "complexity": 0.48, "temporal": 0.42, "identity_gap": 0.22, "blink_rate": 150 },
+    { "timestamp": "03:00", "complexity": 0.52, "temporal": 0.45, "identity_gap": 0.28, "blink_rate": 180 },
+    { "timestamp": "04:00", "complexity": 0.55, "temporal": 0.50, "identity_gap": 0.32, "blink_rate": 210 },
+    { "timestamp": "05:00", "complexity": 0.60, "temporal": 0.55, "identity_gap": 0.38, "blink_rate": 245 },
+    { "timestamp": "06:00", "complexity": 0.58, "temporal": 0.52, "identity_gap": 0.35, "blink_rate": 230 },
+    { "timestamp": "07:00", "complexity": 0.65, "temporal": 0.60, "identity_gap": 0.42, "blink_rate": 280 },
+    { "timestamp": "08:00", "complexity": 0.72, "temporal": 0.68, "identity_gap": 0.55, "blink_rate": 340 },
+    { "timestamp": "09:00", "complexity": 0.78, "temporal": 0.72, "identity_gap": 0.62, "blink_rate": 390 },
+    { "timestamp": "10:00", "complexity": 0.82, "temporal": 0.75, "identity_gap": 0.68, "blink_rate": 420 },
+    { "timestamp": "11:00", "complexity": 0.85, "temporal": 0.78, "identity_gap": 0.72, "blink_rate": 460 },
+    { "timestamp": "12:00", "complexity": 0.88, "temporal": 0.82, "identity_gap": 0.78, "blink_rate": 500 },
+    { "timestamp": "13:00", "complexity": 0.85, "temporal": 0.80, "identity_gap": 0.75, "blink_rate": 480 },
+    { "timestamp": "14:00", "complexity": 0.82, "temporal": 0.76, "identity_gap": 0.70, "blink_rate": 445 },
+    { "timestamp": "15:00", "complexity": 0.78, "temporal": 0.72, "identity_gap": 0.65, "blink_rate": 410 },
+    { "timestamp": "16:00", "complexity": 0.80, "temporal": 0.74, "identity_gap": 0.68, "blink_rate": 430 },
+    { "timestamp": "17:00", "complexity": 0.84, "temporal": 0.79, "identity_gap": 0.74, "blink_rate": 470 },
+    { "timestamp": "18:00", "complexity": 0.88, "temporal": 0.84, "identity_gap": 0.80, "blink_rate": 510 },
+    { "timestamp": "19:00", "complexity": 0.91, "temporal": 0.88, "identity_gap": 0.85, "blink_rate": 540 },
+    { "timestamp": "20:00", "complexity": 0.89, "temporal": 0.85, "identity_gap": 0.82, "blink_rate": 520 },
+    { "timestamp": "21:00", "complexity": 0.86, "temporal": 0.80, "identity_gap": 0.76, "blink_rate": 480 },
+    { "timestamp": "22:00", "complexity": 0.78, "temporal": 0.72, "identity_gap": 0.65, "blink_rate": 400 },
+    { "timestamp": "23:00", "complexity": 0.70, "temporal": 0.65, "identity_gap": 0.55, "blink_rate": 340 }
+  ],
+  "news_events": [
+    {
+      "id": "evt-001",
+      "predicted_at": "2025-01-15T08:30:00Z",
+      "actual_at": "2025-01-17T02:15:00Z",
+      "headline": "Major Port Workers Strike Disrupts East Coast Supply Chain",
+      "sector": "logistics",
+      "delay_hours": 41.75
+    },
+    {
+      "id": "evt-002",
+      "predicted_at": "2025-01-20T14:00:00Z",
+      "actual_at": "2025-01-22T18:30:00Z",
+      "headline": "Energy Sector Faces Unprecedented Worker Walkout",
+      "sector": "energy",
+      "delay_hours": 52.5
+    },
+    {
+      "id": "evt-003",
+      "predicted_at": "2025-02-01T09:15:00Z",
+      "actual_at": "2025-02-02T16:45:00Z",
+      "headline": "Financial Markets Rattled by Insider Trading Scandal",
+      "sector": "finance",
+      "delay_hours": 31.5
+    },
+    {
+      "id": "evt-004",
+      "predicted_at": "2025-02-10T11:00:00Z",
+      "actual_at": null,
+      "headline": "Defense Contractor Labor Dispute Escalating",
+      "sector": "defense",
+      "delay_hours": 42
+    },
+    {
+      "id": "evt-005",
+      "predicted_at": "2025-02-15T06:00:00Z",
+      "actual_at": null,
+      "headline": "Manufacturing Sector Showing Pre-Strike Linguistic Patterns",
+      "sector": "manufacturing",
+      "delay_hours": 56
+    }
+  ],
+  "reports": [
+    {
+      "id": "rpt-001",
+      "title": "Energy Sector Disruption — Critical Alert",
+      "sector": "energy",
+      "confidence_score": 89,
+      "generated_at": "2025-02-20T10:00:00Z",
+      "t_minus_hours": 42,
+      "summary": "Linguistic analysis of 12,400+ social media posts, internal forum leaks, and union communications reveals a sharp escalation in dehumanizing language targeting management. Absolutist triggers ('never', 'always', 'impossible') have increased 340% in the past 72 hours. Temporal shift toward future-tense language indicates coordinated action planning.",
+      "evidence": [
+        {
+          "id": "ev-001",
+          "type": "quote",
+          "content": "They don't see us as people anymore, just numbers on a spreadsheet. This ends now.",
+          "source": "Anonymous forum post — Energy Workers United",
+          "timestamp": "2025-02-19T22:15:00Z",
+          "severity": "critical"
+        },
+        {
+          "id": "ev-002",
+          "type": "pattern",
+          "content": "Us vs. Them language ratio: 4.2:1 (baseline: 1.3:1). Identity gap widening at 0.08/hour.",
+          "source": "Linguistic Pattern Analysis Engine",
+          "timestamp": "2025-02-20T08:00:00Z",
+          "severity": "high"
+        },
+        {
+          "id": "ev-003",
+          "type": "metric",
+          "content": "Absolutist trigger density: 34 per 1000 words (threshold: 12). Dehumanization index: 0.72 (critical > 0.60).",
+          "source": "Behavioral Metrics Dashboard",
+          "timestamp": "2025-02-20T09:30:00Z",
+          "severity": "critical"
+        },
+        {
+          "id": "ev-004",
+          "type": "quote",
+          "content": "Management will NEVER change. We have NO choice. Everyone knows what happens next.",
+          "source": "Public social media — X/Twitter",
+          "timestamp": "2025-02-20T01:45:00Z",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "id": "rpt-002",
+      "title": "Financial Sector — Elevated Risk",
+      "sector": "finance",
+      "confidence_score": 76,
+      "generated_at": "2025-02-21T14:00:00Z",
+      "t_minus_hours": 18,
+      "summary": "Monitoring 8,200+ posts across financial forums and internal Slack leaks. Complexity index spiking as language becomes more convoluted — a known precursor to institutional crisis. Future-tense dominance at 50% suggests anticipated disruption.",
+      "evidence": [
+        {
+          "id": "ev-005",
+          "type": "quote",
+          "content": "The board knows exactly what they're doing. This is calculated destruction of shareholder value.",
+          "source": "Glassdoor review — Anonymous",
+          "timestamp": "2025-02-21T10:30:00Z",
+          "severity": "high"
+        },
+        {
+          "id": "ev-006",
+          "type": "metric",
+          "content": "Sentence complexity increased 280% week-over-week. Mirroring rate: 78% (coordinated messaging detected).",
+          "source": "Behavioral Metrics Dashboard",
+          "timestamp": "2025-02-21T12:00:00Z",
+          "severity": "medium"
+        }
+      ]
+    }
+  ]
+}
