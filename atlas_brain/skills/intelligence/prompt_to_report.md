@@ -28,7 +28,7 @@ EXECUTIVE SUMMARY
 
 ## Rules
 
-- Keep the summary under 200 words.
+- Keep the summary under 200 words for executive readability.
 - Use short, declarative sentences with high confidence phrasing.
 - Be predictive: call out likely next moves or trajectories based on triggers.
 - Cite evidence inline using `(source: <label>)`.
