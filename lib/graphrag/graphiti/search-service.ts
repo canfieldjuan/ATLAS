@@ -419,8 +419,8 @@ export class SearchService {
     if (!Number.isFinite(score)) {
       log.warn('GraphRAG', 'Non-finite rescore value, defaulting to 0', {
         score,
-        edgeUuid: edge?.uuid,
-        edgeFact: edge?.fact?.slice(0, 120),
+        edgeUuid: edge?.uuid ?? 'unknown',
+        edgeFact: edge?.fact?.slice(0, 120) ?? 'unknown',
       });
       return 0;
     }
@@ -450,6 +450,10 @@ export class SearchService {
     return rescored.reduce<GraphitiSearchResult['edges']>((acc, result) => {
       const edge = edges[result.originalIndex];
       if (!edge) {
+        log.warn('GraphRAG', 'Rescore result index out of bounds', {
+          originalIndex: result.originalIndex,
+          edgeCount: edges.length,
+        });
         return acc;
       }
       acc.push({

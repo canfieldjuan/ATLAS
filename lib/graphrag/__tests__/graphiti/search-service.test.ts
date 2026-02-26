@@ -303,12 +303,16 @@ describe('SearchService', () => {
       const result = await searchService.search('test query', 'user-123');
 
       expect(mockRerank).toHaveBeenCalledTimes(1);
-      expect(log.error).toHaveBeenCalled();
+      expect(log.error).toHaveBeenCalledWith(
+        'GraphRAG',
+        'Rescore loop failed, using original scores',
+        expect.objectContaining({ error: expect.any(Error) }),
+      );
       expect(result.sources.length).toBe(0);
       expect(result.context).toBe('');
     });
 
-    it('should rerank filtered results when scores already exceed threshold', async () => {
+    it('should skip rescore and rerank filtered results when top score exceeds threshold', async () => {
       mockConfig.reranking.enabled = true;
       mockRerank.mockResolvedValue([
         { originalIndex: 0, score: 0.8, text: 'High fact', metadata: {} },
