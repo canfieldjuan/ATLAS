@@ -103,27 +103,49 @@ export class SearchService {
     });
 
     const graphitiResult = await this.client.search(params);
+    const edges = graphitiResult.edges ?? [];
+
+    const threshold = graphragConfig.search.threshold;
+    const initialTopScore = this.getMaxScore(edges);
+    let edgesForFiltering = edges;
+    let rescoreApplied = false;
 
     log.debug('GraphRAG', 'Graphiti search returned', {
-      edgesCount: graphitiResult.edges?.length || 0,
-      firstEdgeScore: graphitiResult.edges?.[0]?.score
+      edgesCount: edges.length,
+      firstEdgeScore: edges[0]?.score,
+      topScore: initialTopScore,
     });
 
+    if (this.reranker && edges.length > 0 && initialTopScore < threshold) {
+      try {
+        edgesForFiltering = await this.rescoreEdges(query, edges);
+        rescoreApplied = true;
+        log.debug('GraphRAG', 'Rescore loop applied', {
+          threshold,
+          initialTopScore,
+          rescoredTopScore: this.getMaxScore(edgesForFiltering),
+        });
+      } catch (rescoreError) {
+        log.error('GraphRAG', 'Rescore loop failed, using original scores', { error: rescoreError });
+        edgesForFiltering = edges;
+      }
+    }
+
     // Apply threshold filtering from config
-    const threshold = graphragConfig.search.threshold;
-    const filteredEdges = graphitiResult.edges.filter(
+    const filteredEdges = edgesForFiltering.filter(
       edge => (edge.score || 0) >= threshold
     );
 
     log.debug('GraphRAG', 'Threshold filtering applied', {
       threshold,
-      beforeCount: graphitiResult.edges.length,
-      afterCount: filteredEdges.length
+      beforeCount: edgesForFiltering.length,
+      afterCount: filteredEdges.length,
+      rescoreApplied,
     });
 
     // Apply reranking if enabled
     let finalEdges = filteredEdges;
-    if (this.reranker && filteredEdges.length > 0) {
+    if (this.reranker && filteredEdges.length > 0 && !rescoreApplied) {
       try {
         const candidates = filteredEdges.map(edge => ({
           text: edge.fact,
@@ -190,7 +212,7 @@ export class SearchService {
             })),
             5
           ),
-          totalCandidates: graphitiResult.edges.length, // Original count before filtering
+          totalCandidates: edges.length, // Original count before filtering
           avgConfidence: avgRelevance,
         };
 
@@ -386,6 +408,49 @@ export class SearchService {
     }
 
     return unique;
+  }
+
+  private getMaxScore(edges: GraphitiSearchResult['edges']): number {
+    if (!edges.length) return 0;
+    return edges.reduce((max, edge) => Math.max(max, edge.score || 0), 0);
+  }
+
+  private normalizeScore(score: number): number {
+    if (!Number.isFinite(score)) return 0;
+    return Math.min(1, Math.max(0, score));
+  }
+
+  private async rescoreEdges(
+    query: string,
+    edges: GraphitiSearchResult['edges']
+  ): Promise<GraphitiSearchResult['edges']> {
+    if (!this.reranker || edges.length === 0) {
+      return edges;
+    }
+
+    const candidates = edges.map(edge => ({
+      text: edge.fact,
+      score: edge.score || 0,
+      metadata: {
+        uuid: edge.uuid,
+        sourceDescription: edge.source_description,
+        createdAt: edge.created_at,
+      },
+    }));
+
+    const rescored = await this.reranker.rerank(query, candidates);
+
+    return rescored.reduce<GraphitiSearchResult['edges']>((acc, result) => {
+      const edge = edges[result.originalIndex];
+      if (!edge) {
+        return acc;
+      }
+      acc.push({
+        ...edge,
+        score: this.normalizeScore(result.score),
+      });
+      return acc;
+    }, []);
   }
 
   /**

@@ -8,14 +8,42 @@ import type { GraphitiSearchResult } from '../../graphiti/client';
 import type { GraphRAGRetrievalMetadata } from '../../types';
 
 // Use vi.hoisted to define mocks before they're hoisted
-const { mockSearch, mockGetEntityEdges, mockClientInstance } = vi.hoisted(() => {
+const {
+  mockSearch,
+  mockGetEntityEdges,
+  mockClientInstance,
+  mockRerank,
+  mockCreateReranker,
+  mockConfig,
+} = vi.hoisted(() => {
   const mockSearch = vi.fn();
   const mockGetEntityEdges = vi.fn();
+  const mockRerank = vi.fn();
+  const mockCreateReranker = vi.fn(() => ({ rerank: mockRerank }));
   const mockClientInstance = {
     search: mockSearch,
     getEntityEdges: mockGetEntityEdges,
   };
-  return { mockSearch, mockGetEntityEdges, mockClientInstance };
+  const mockConfig = {
+    search: {
+      topK: 10,
+      searchMethod: 'hybrid',
+      threshold: 0.7,
+    },
+    reranking: {
+      enabled: false,
+      type: 'heuristic',
+      topK: 10,
+    },
+  };
+  return {
+    mockSearch,
+    mockGetEntityEdges,
+    mockClientInstance,
+    mockRerank,
+    mockCreateReranker,
+    mockConfig,
+  };
 });
 
 // Mock dependencies before importing
@@ -24,13 +52,11 @@ vi.mock('../../graphiti/client', () => ({
 }));
 
 vi.mock('../../config', () => ({
-  graphragConfig: {
-    search: {
-      topK: 10,
-      searchMethod: 'hybrid',
-      threshold: 0.7,
-    },
-  },
+  graphragConfig: mockConfig,
+}));
+
+vi.mock('../../reranking', () => ({
+  createReranker: mockCreateReranker,
 }));
 
 vi.mock('@/lib/tracing/trace.service', () => ({
@@ -56,6 +82,7 @@ describe('SearchService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockConfig.reranking.enabled = false;
     searchService = new SearchService();
   });
 
@@ -229,6 +256,33 @@ describe('SearchService', () => {
 
       // Whitespace normalized, both become "the gpu has high performance and excellent cooling"
       expect(result.sources.length).toBe(1);
+    });
+  });
+
+  describe('Rescore Loop', () => {
+    it('should rescore results when top score is below threshold', async () => {
+      mockConfig.reranking.enabled = true;
+      mockRerank.mockResolvedValue([
+        { originalIndex: 0, score: 0.9, text: 'Low fact 1', metadata: {} },
+        { originalIndex: 1, score: 0.75, text: 'Low fact 2', metadata: {} },
+      ]);
+      searchService = new SearchService();
+
+      const mockResult: GraphitiSearchResult = {
+        edges: [
+          { uuid: '1', name: 'rel1', fact: 'Low fact 1', score: 0.4, created_at: '2024-01-01' },
+          { uuid: '2', name: 'rel2', fact: 'Low fact 2', score: 0.2, created_at: '2024-01-01' },
+        ],
+      };
+
+      mockSearch.mockResolvedValue(mockResult);
+
+      const result = await searchService.search('test query', 'user-123');
+
+      expect(mockRerank).toHaveBeenCalledTimes(1);
+      expect(result.sources.length).toBe(2);
+      expect(result.sources[0].confidence).toBeCloseTo(0.9, 3);
+      expect(result.sources[1].confidence).toBeCloseTo(0.75, 3);
     });
   });
 
