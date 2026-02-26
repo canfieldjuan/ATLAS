@@ -16,6 +16,7 @@ from atlas_brain.services.intent_router import (
     ROUTE_TO_ACTION,
     ROUTE_TO_WORKFLOW,
     SemanticIntentRouter,
+    WORKFLOW_ONLY_TOOLS,
     _VALID_ROUTES,
 )
 
@@ -408,6 +409,108 @@ class TestRouteMappings:
             assert len(utterances) > 0, (
                 f"ROUTE_DEFINITIONS['{route_name}'] has no exemplar utterances"
             )
+
+
+# ---------------------------------------------------------------------------
+# Standalone tool routability
+# ---------------------------------------------------------------------------
+
+
+# Canonical set of standalone tool names: every tool that is NOT workflow-only
+# and therefore MUST have its name appear in ROUTE_TO_ACTION values.
+# This list is derived from WORKFLOW_ONLY_TOOLS (services/intent_router.py) and
+# the registered tool registry. It is duplicated here intentionally so the test
+# does NOT import the heavy tool modules (which have external deps like httpx).
+# NOTE: If you add a new standalone tool to atlas_brain/tools/ and the tool
+# registry but forget to add it here, the invariant test won't catch it. Keep
+# this set in sync with tool registrations in atlas_brain/tools/__init__.py.
+_EXPECTED_STANDALONE_TOOL_NAMES: frozenset[str] = frozenset({
+    # Utility / query tools (direct routes)
+    "get_time",
+    "get_weather",
+    "get_traffic",
+    "get_location",
+    "get_calendar",
+    "list_reminders",
+    "run_digest",
+    # Notification
+    "send_notification",
+    # Presence (room detection, occupancy)
+    "where_am_i",
+    "who_is_here",
+    # Security: standalone detection queries (direct routes)
+    "get_person_at_location",
+    "get_motion_events",
+    # Display
+    "show_camera_feed",
+    "close_camera_feed",
+})
+
+
+class TestStandaloneToolRoutability:
+    """
+    Regression tests that prevent standalone tools from becoming unreachable.
+
+    Root cause of the original tool-unreachability bug (2026-02-07 audit):
+    20 of 26 registered tools had no entry in ROUTE_DEFINITIONS, ROUTE_TO_ACTION,
+    or ROUTE_TO_WORKFLOW.  The SemanticIntentRouter therefore never assigned user
+    queries to those tools and they silently fell through to 'conversation'.
+
+    How reachability works (three required entries):
+      1. ROUTE_DEFINITIONS  — exemplar utterances that train the route centroid
+      2. ROUTE_TO_ACTION    — maps route name → (action_category, tool_name)
+      3. ROUTE_TO_WORKFLOW  — for multi-turn workflows, maps route → workflow type
+
+    A tool NOT in WORKFLOW_ONLY_TOOLS (tools/__init__.py) is "standalone" and
+    MUST appear in ROUTE_TO_ACTION values.  Failing to add ROUTE_DEFINITIONS +
+    ROUTE_TO_ACTION entries for a new standalone tool silently makes it
+    unreachable from voice/text.
+    """
+
+    def test_all_standalone_tools_appear_in_route_to_action_values(self):
+        """Every expected standalone tool name must be in ROUTE_TO_ACTION values."""
+        routable_names = {
+            tool_name
+            for _, tool_name in ROUTE_TO_ACTION.values()
+            if tool_name is not None
+        }
+        for tool_name in _EXPECTED_STANDALONE_TOOL_NAMES:
+            assert tool_name in routable_names, (
+                f"Standalone tool '{tool_name}' has no ROUTE_TO_ACTION entry. "
+                f"Add an exemplar route in ROUTE_DEFINITIONS and map it in "
+                f"ROUTE_TO_ACTION, otherwise voice/text commands will silently "
+                f"fall through to conversation instead of executing the tool."
+            )
+
+    def test_route_to_action_tool_names_are_standalone_or_workflow_only(self):
+        """Every tool_name in ROUTE_TO_ACTION should be a known standalone tool.
+
+        This catches accidental typos in ROUTE_TO_ACTION tool names and also
+        flags if a workflow-only tool was incorrectly given a direct route entry
+        (which is harmless but indicates a mapping inconsistency).
+        """
+        routable_names = {
+            tool_name
+            for _, tool_name in ROUTE_TO_ACTION.values()
+            if tool_name is not None
+        }
+        # Every tool name in ROUTE_TO_ACTION must be either standalone or workflow-only.
+        # Unknown names indicate a typo or a tool that was renamed without updating the router.
+        all_known_names = _EXPECTED_STANDALONE_TOOL_NAMES | WORKFLOW_ONLY_TOOLS
+        for tool_name in routable_names:
+            assert tool_name in all_known_names, (
+                f"ROUTE_TO_ACTION references tool '{tool_name}' which is not in "
+                f"_EXPECTED_STANDALONE_TOOL_NAMES or WORKFLOW_ONLY_TOOLS. "
+                f"Either add it to the appropriate set or correct the tool name."
+            )
+
+    def test_workflow_only_tools_are_not_standalone_tools(self):
+        """WORKFLOW_ONLY_TOOLS and _EXPECTED_STANDALONE_TOOL_NAMES must be disjoint."""
+        overlap = WORKFLOW_ONLY_TOOLS & _EXPECTED_STANDALONE_TOOL_NAMES
+        assert not overlap, (
+            f"Tools appear in both WORKFLOW_ONLY_TOOLS and "
+            f"_EXPECTED_STANDALONE_TOOL_NAMES (they should be disjoint): {overlap}"
+        )
 
 
 # ---------------------------------------------------------------------------

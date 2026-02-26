@@ -50,6 +50,83 @@ PARAMETERLESS_TOOLS = {
     "get_motion_events",
 }
 
+# ---------------------------------------------------------------------------
+# WORKFLOW_ONLY_TOOLS — tools invoked by a workflow's internal LLM tool-calling.
+#
+# These tools are registered in tool_registry so workflows can call them, but
+# they do NOT need their own entry in ROUTE_DEFINITIONS or ROUTE_TO_ACTION.
+# They are reached through the workflow route that invokes them (e.g. the
+# "reminder" workflow calls set_reminder internally via LLM tool-calling).
+#
+# Any tool NOT listed here is a "standalone" tool and MUST have:
+#   - An exemplar route in ROUTE_DEFINITIONS  (trains the semantic centroid)
+#   - A (action_category, tool_name) entry in ROUTE_TO_ACTION
+# Omitting those entries silently makes the tool unreachable from voice/text.
+# The test TestStandaloneToolRoutability in tests/test_intent_router.py
+# enforces this invariant.
+# ---------------------------------------------------------------------------
+WORKFLOW_ONLY_TOOLS: frozenset[str] = frozenset({
+    # Reminder workflow
+    "set_reminder",
+    "complete_reminder",
+    # Calendar workflow
+    "create_calendar_event",
+    # Email workflow
+    "send_email",
+    "send_estimate_email",
+    "send_proposal_email",
+    "query_email_history",
+    # Booking workflow
+    "check_availability",
+    "book_appointment",
+    "cancel_appointment",
+    "reschedule_appointment",
+    "lookup_customer",
+    # Security workflow (camera, detection, zone tools called by the LLM inside the workflow)
+    "list_cameras",
+    "get_camera_status",
+    "start_recording",
+    "stop_recording",
+    "ptz_control",
+    "get_current_detections",
+    "query_detections",
+    "list_zones",
+    "get_zone_status",
+    "arm_zone",
+    "disarm_zone",
+    # Presence workflow
+    "lights_near_user",
+    "media_near_user",
+    "scene_near_user",
+})
+
+
+# -- How tool reachability works --
+#
+# A tool is reachable by voice/text only if ALL THREE of the following are true:
+#
+#   1. ROUTE_DEFINITIONS has a route whose exemplar utterances semantically match
+#      the queries a user would say to invoke the tool.  The SemanticIntentRouter
+#      trains one embedding centroid per route from these utterances; a query that
+#      doesn't score above the confidence threshold on any route falls back to
+#      "conversation" and the tool is never executed.
+#
+#   2. ROUTE_TO_ACTION maps that route name to (action_category, tool_name).
+#      - "tool_use" + a tool_name  → direct tool execution path
+#      - "device_command"          → delegated to HomeAgent (device control)
+#      - If the entry is missing entirely, the route lands in "conversation"
+#
+#   3. For multi-turn workflows (reminder, booking, email, etc.) the route
+#      must also appear in ROUTE_TO_WORKFLOW so classify_and_route sends the
+#      query to start_workflow instead of the single-turn execute path.
+#
+# If any of these three entries is absent, the tool silently becomes
+# unreachable — user queries appear to Atlas as general conversation.
+#
+# Tools invoked *only* by a workflow's internal LLM tool-calling
+# (set_reminder, book_appointment, send_email, etc.) do NOT need their own
+# ROUTE_DEFINITIONS entry; they are reached through the workflow that does.
+# See WORKFLOW_ONLY_TOOLS in atlas_brain/tools/__init__.py.
 
 # -- Route definitions: exemplar utterances per route --
 
@@ -160,8 +237,12 @@ ROUTE_DEFINITIONS: dict[str, list[str]] = {
         "display the front door camera on the right monitor",
         "show the office webcam on the left display",
         "put the backyard camera on screen",
+        "open the camera viewer",
+    ],
+    "close_camera": [
         "close the camera viewer", "hide the camera viewer window",
-        "close all camera viewer windows",
+        "close all camera viewer windows", "close the camera feed",
+        "stop showing the camera", "hide the camera feed",
     ],
     "security": [
         "list my cameras", "show me all the cameras",
@@ -247,6 +328,7 @@ ROUTE_TO_ACTION: dict[str, tuple[str, Optional[str]]] = {
     "who_is_here":   ("tool_use", "who_is_here"),
     "notification":  ("tool_use", "send_notification"),
     "show_camera":   ("tool_use", "show_camera_feed"),
+    "close_camera":  ("tool_use", "close_camera_feed"),
     "security":         ("device_command", None),
     "presence":         ("device_command", None),
     "detection_query":  ("tool_use", "get_person_at_location"),

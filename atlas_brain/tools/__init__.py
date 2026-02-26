@@ -148,12 +148,17 @@ tool_registry.register(estimate_email_tool)
 tool_registry.register(proposal_email_tool)
 tool_registry.register(query_email_history_tool)
 
+# WORKFLOW_ONLY_TOOLS is defined in services/intent_router.py (the routing module)
+# and re-exported here for convenience.  See that module for the full explanation.
+from ..services.intent_router import WORKFLOW_ONLY_TOOLS  # noqa: E402
+
 __all__ = [
     "Tool",
     "ToolParameter",
     "ToolResult",
     "ToolRegistry",
     "tool_registry",
+    "WORKFLOW_ONLY_TOOLS",
     "WeatherTool",
     "weather_tool",
     "TrafficTool",
