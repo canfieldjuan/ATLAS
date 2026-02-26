@@ -41,7 +41,7 @@ MONITORING & CLOSED-LOOP SIGNALS
 ## Rules
 
 - Aim for approximately 450 words (roughly a one-page executive brief) for readability and ease of scanning.
-- This target keeps the playbook shorter than the 600-word intelligence report format.
+- This target keeps the playbook shorter than the full intelligence report for quick executive review.
 - Treat this word target as guidance, not a hard limit.
 - If more detail is required, prioritize the Authority Pivot and Counter-Pressure Actions before expanding.
 - Use short, declarative sentences with command-level clarity.
