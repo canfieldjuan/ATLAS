@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+/* ── Obsidian Industrial Theme ── */
+
+@theme inline {
+  --color-obsidian: #0a0e17;
+  --color-obsidian-surface: #0f1523;
+  --color-hazard: #f97316;
+  --color-hazard-dim: #c2410c;
+  --color-cobalt: #1e40af;
+  --color-cobalt-light: #3b82f6;
+  --color-background: #0a0e17;
+  --color-foreground: #e2e8f0;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+}
+
+body {
+  background: var(--color-obsidian);
+  color: var(--color-foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Custom scrollbar for dark theme */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(15, 21, 35, 0.5);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(59, 130, 246, 0.3);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(59, 130, 246, 0.5);
+}
