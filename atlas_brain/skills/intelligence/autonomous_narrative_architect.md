@@ -27,7 +27,7 @@ Write in a clinical, predictive, high-authority tone.
 - `channels`: internal comms, social, PR wires, influencer partners
 - `intervention_library`: approved linguistic nudges, narrative assets, or templates (include approved_by, scope, and usage constraints)
 - `pressure_thresholds`: green/yellow/red thresholds for pressure scores or risk indicators
-- `hours_before_event`: hours before the event for pre-emptive activation (default 72, maximum 720 for 30-day planning windows; adjust for response capacity).
+- `hours_before_event`: hours before the event for pre-emptive activation (default 72, maximum 720 hours/30 days; adjust for response capacity).
 - `constraints`: legal, ethical, comms, or operational limits
 - `risk_tolerance`: acceptable tradeoffs or escalation limits
 - `audience`: intended buyer persona (executive, strategist, comms lead)
@@ -52,8 +52,9 @@ STABILITY METRICS
 - The Micro-Intervention Plan must include linguistic nudges, timing, and channel.
 - The First Intervention Definition must specify the smallest action to deploy within the hours_before_event window.
 - If pressure_thresholds are missing, define provisional green/yellow/red thresholds and label them as assumptions.
-- Consented channels mean explicit opt-in or contractual authorization with recorded approval.
+- Consented channels mean explicit opt-in or contractual authorization with recorded approval, retention, and revocation paths.
 - List at least two guardrails that prevent narrative drift or ethical violations; include approval gates and consented channels at minimum, and add others like audit logging.
 - Do not propose deceptive or coercive messaging (e.g., no fabricated facts, impersonation, threats, or pressure tactics); enforce via orchestration-layer content filtering.
 - Require verification that the orchestration layer enforces approval workflows, audit logs, content filtering, and human review gates before execution; if controls are unconfirmed, refuse to proceed and state that deployment must be blocked until they are implemented.
+- These safeguards must be enforced by orchestration-layer validation hooks before any deployment.
 - If data is missing, call it out directly and provide the lowest-risk assumption.
