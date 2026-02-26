@@ -55,8 +55,8 @@ The report should read like a premium analyst brief: concise, defensible, and de
 6. Confidence & coverage (data gaps)
 
 **Visuals vs. plain text**:
-- **4-figure** reports can be plain text with 1–2 visuals (relationship map + evidence table).
-- **5-figure** reports should be visual-heavy (deck or dashboard) with charts that reinforce scoring and evidence.
+- **4-figure** reports ($1,000–$9,999) can be plain text with 1–2 visuals (relationship map + evidence table).
+- **5-figure** reports ($10,000+) should be visual-heavy (deck or dashboard) with charts that reinforce scoring and evidence.
 
 **Suggested charts/graphs**:
 - Relationship network graph (entities + edges sized by confidence)

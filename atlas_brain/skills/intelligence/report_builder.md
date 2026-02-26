@@ -22,7 +22,7 @@ The output must define how to deliver 4-figure and 5-figure report packages with
 - `time_window`: data coverage range
 - `data_sources`: graph, CRM, comms, external signals
 - `delivery_format`: PDF, deck, dashboard, or briefing
-- `visual_preference`: "visual-heavy" or "plain-text"
+- `visual_preference`: "visual-heavy" or "plain-text" (use plain-text for 4-figure, visual-heavy for 5-figure)
 - `urgency`: delivery timeline expectations
 - `writer_model`: model preference or routing hints
 
