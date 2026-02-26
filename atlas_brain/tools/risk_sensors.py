@@ -86,6 +86,16 @@ _PLANNING_TERMS: frozenset[str] = frozenset({
     "quarterly", "annually",
 })
 
+# Multi-word planning phrases (matched as bigrams / trigrams)
+_PLANNING_PHRASES: frozenset[str] = frozenset({
+    "next quarter",
+    "next month",
+    "long term",
+    "road map",
+    "strategic plan",
+    "future planning",
+})
+
 _URGENCY_TERMS: frozenset[str] = frozenset({
     "now", "immediate", "immediately", "stop", "stopped", "blocked",
     "halt", "halted", "urgent", "urgently", "critical", "crisis",
@@ -111,7 +121,7 @@ _ABSOLUTIST_TERMS: frozenset[str] = frozenset({
     "never", "always", "must", "zero", "none",
     "impossible", "demanding", "demand", "demands",
     "ultimatum", "absolute", "absolutely", "dead",
-    "failed", "broken", "finished", "unacceptable",
+    "failed", "broken", "wall", "finished", "unacceptable",
     "final", "mandate", "mandatory",
 })
 
@@ -376,7 +386,7 @@ class OperationalUrgencySensorTool:
         tokens = _tokenize(text)
         total_words = max(len(tokens), 1)
 
-        planning_count = _count_terms(tokens, _PLANNING_TERMS)
+        planning_count = _count_terms(tokens, _PLANNING_TERMS, _PLANNING_PHRASES)
         urgency_count = _count_terms(tokens, _URGENCY_TERMS, _URGENCY_PHRASES)
 
         planning_density = planning_count / total_words
