@@ -66,12 +66,42 @@ export default function Dashboard() {
     },
     {
       key: 'pain',
-      header: 'Pain Category',
+      header: 'Pain',
       render: (r) => <span className="text-slate-400">{r.pain ?? '--'}</span>,
     },
     {
+      key: 'seats',
+      header: 'Seats',
+      render: (r) => <span className="text-slate-300">{r.seat_count ?? '--'}</span>,
+      sortable: true,
+      sortValue: (r) => r.seat_count ?? 0,
+    },
+    {
+      key: 'buying_stage',
+      header: 'Stage',
+      render: (r) => {
+        if (!r.buying_stage || r.buying_stage === 'unknown') return <span className="text-slate-500 text-xs">--</span>
+        const colors: Record<string, string> = {
+          active_purchase: 'text-red-400',
+          renewal_decision: 'text-amber-400',
+          evaluation: 'text-cyan-400',
+          post_purchase: 'text-slate-400',
+        }
+        return (
+          <span className={`text-xs font-medium ${colors[r.buying_stage] ?? 'text-slate-400'}`}>
+            {r.buying_stage.replace(/_/g, ' ')}
+          </span>
+        )
+      },
+    },
+    {
+      key: 'contract_end',
+      header: 'Contract End',
+      render: (r) => <span className="text-slate-300 text-xs">{r.contract_end ?? '--'}</span>,
+    },
+    {
       key: 'dm',
-      header: 'Decision Maker',
+      header: 'DM',
       render: (r) =>
         r.decision_maker ? (
           <span className="text-cyan-400 text-xs font-medium">Yes</span>

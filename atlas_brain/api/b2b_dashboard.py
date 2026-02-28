@@ -170,6 +170,12 @@ async def get_signal(
         "top_feature_gaps": _safe_json(row["top_feature_gaps"]),
         "company_churn_list": _safe_json(row["company_churn_list"]),
         "quotable_evidence": _safe_json(row["quotable_evidence"]),
+        "top_use_cases": _safe_json(row["top_use_cases"]),
+        "top_integration_stacks": _safe_json(row["top_integration_stacks"]),
+        "budget_signal_summary": _safe_json(row["budget_signal_summary"]),
+        "sentiment_distribution": _safe_json(row["sentiment_distribution"]),
+        "buyer_authority_summary": _safe_json(row["buyer_authority_summary"]),
+        "timeline_summary": _safe_json(row["timeline_summary"]),
         "last_computed_at": str(row["last_computed_at"]) if row["last_computed_at"] else None,
         "created_at": str(row["created_at"]) if row["created_at"] else None,
     }
@@ -214,7 +220,12 @@ async def list_high_intent(
                (enrichment->>'urgency_score')::numeric AS urgency,
                enrichment->>'pain_category' AS pain,
                enrichment->'competitors_mentioned' AS alternatives,
-               enrichment->'contract_context'->>'contract_value_signal' AS value_signal
+               enrichment->'contract_context'->>'contract_value_signal' AS value_signal,
+               CASE WHEN enrichment->'budget_signals'->>'seat_count' ~ '^\\d+$'
+                    THEN (enrichment->'budget_signals'->>'seat_count')::int END AS seat_count,
+               enrichment->'use_case'->>'lock_in_level' AS lock_in_level,
+               enrichment->'timeline'->>'contract_end' AS contract_end,
+               enrichment->'buyer_authority'->>'buying_stage' AS buying_stage
         FROM b2b_reviews
         WHERE {where}
         ORDER BY (enrichment->>'urgency_score')::numeric DESC
@@ -235,6 +246,10 @@ async def list_high_intent(
             "pain": r["pain"],
             "alternatives": _safe_json(r["alternatives"]),
             "contract_signal": r["value_signal"],
+            "seat_count": r["seat_count"],
+            "lock_in_level": r["lock_in_level"],
+            "contract_end": r["contract_end"],
+            "buying_stage": r["buying_stage"],
         })
 
     return {"companies": companies, "count": len(companies)}
@@ -315,6 +330,12 @@ async def get_vendor_profile(vendor_name: str):
             "top_competitors": _safe_json(signal_row["top_competitors"]),
             "top_feature_gaps": _safe_json(signal_row["top_feature_gaps"]),
             "quotable_evidence": _safe_json(signal_row["quotable_evidence"]),
+            "top_use_cases": _safe_json(signal_row["top_use_cases"]),
+            "top_integration_stacks": _safe_json(signal_row["top_integration_stacks"]),
+            "budget_signal_summary": _safe_json(signal_row["budget_signal_summary"]),
+            "sentiment_distribution": _safe_json(signal_row["sentiment_distribution"]),
+            "buyer_authority_summary": _safe_json(signal_row["buyer_authority_summary"]),
+            "timeline_summary": _safe_json(signal_row["timeline_summary"]),
             "last_computed_at": str(signal_row["last_computed_at"]) if signal_row["last_computed_at"] else None,
         }
     else:

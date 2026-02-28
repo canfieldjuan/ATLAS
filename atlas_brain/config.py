@@ -2003,7 +2003,7 @@ class B2BChurnConfig(BaseSettings):
     enrichment_interval_seconds: int = Field(default=300, description="Enrichment polling interval")
     enrichment_max_per_batch: int = Field(default=10, description="Max reviews to enrich per batch")
     enrichment_max_attempts: int = Field(default=3, description="Max enrichment attempts")
-    enrichment_max_tokens: int = Field(default=1024, description="Max LLM output tokens")
+    enrichment_max_tokens: int = Field(default=2048, description="Max LLM output tokens")
     enrichment_local_only: bool = Field(default=False, description="Force local LLM only")
 
     # Intelligence aggregation
@@ -2016,6 +2016,16 @@ class B2BChurnConfig(BaseSettings):
     # Churn thresholds
     high_churn_urgency_threshold: int = Field(default=7, description="Urgency score >= this = high churn risk")
     enterprise_only: bool = Field(default=False, description="Only include enterprise-segment reviews")
+
+    # Aggregation thresholds
+    negative_review_threshold: float = Field(default=0.5, description="Rating ratio below this is negative")
+    feature_gap_min_mentions: int = Field(default=2, description="Min mentions to include a feature gap")
+    quotable_phrase_min_urgency: float = Field(default=6, description="Min urgency for quotable phrases")
+    timeline_signals_limit: int = Field(default=50, description="Max timeline signal rows per run")
+    prior_reports_limit: int = Field(default=4, description="Prior reports for trend comparison")
+
+    # Enrichment tuning
+    review_truncate_length: int = Field(default=3000, description="Max review text length before truncation")
 
     # Customer context enrichment
     context_enrichment_enabled: bool = Field(

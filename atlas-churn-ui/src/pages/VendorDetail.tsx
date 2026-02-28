@@ -177,97 +177,276 @@ export default function VendorDetail() {
       </div>
 
       {tab === 'overview' && signal && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="space-y-4">
-            <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
-              <h3 className="text-sm font-medium text-slate-300 mb-3">Key Metrics</h3>
-              <dl className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <dt className="text-slate-400">NPS Proxy</dt>
-                  <dd className="text-white">{signal.nps_proxy?.toFixed(1) ?? '--'}</dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-slate-400">Price Complaint Rate</dt>
-                  <dd className="text-white">
-                    {signal.price_complaint_rate !== null
-                      ? `${(signal.price_complaint_rate * 100).toFixed(0)}%`
-                      : '--'}
-                  </dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-slate-400">DM Churn Rate</dt>
-                  <dd className="text-white">
-                    {signal.decision_maker_churn_rate !== null
-                      ? `${(signal.decision_maker_churn_rate * 100).toFixed(0)}%`
-                      : '--'}
-                  </dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-slate-400">Churn Intent Count</dt>
-                  <dd className="text-white">{signal.churn_intent_count}</dd>
-                </div>
-              </dl>
-            </div>
-            {signal.top_competitors && signal.top_competitors.length > 0 && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="space-y-4">
               <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
-                <h3 className="text-sm font-medium text-slate-300 mb-3">Top Competitors</h3>
-                <ul className="space-y-1">
-                  {signal.top_competitors.map((c, i) => (
-                    <li key={i} className="text-sm text-slate-300">{typeof c === 'string' ? c : JSON.stringify(c)}</li>
-                  ))}
-                </ul>
+                <h3 className="text-sm font-medium text-slate-300 mb-3">Key Metrics</h3>
+                <dl className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <dt className="text-slate-400">NPS Proxy</dt>
+                    <dd className="text-white">{signal.nps_proxy?.toFixed(1) ?? '--'}</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-slate-400">Price Complaint Rate</dt>
+                    <dd className="text-white">
+                      {signal.price_complaint_rate !== null
+                        ? `${(signal.price_complaint_rate * 100).toFixed(0)}%`
+                        : '--'}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-slate-400">DM Churn Rate</dt>
+                    <dd className="text-white">
+                      {signal.decision_maker_churn_rate !== null
+                        ? `${(signal.decision_maker_churn_rate * 100).toFixed(0)}%`
+                        : '--'}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-slate-400">Churn Intent Count</dt>
+                    <dd className="text-white">{signal.churn_intent_count}</dd>
+                  </div>
+                </dl>
+              </div>
+              {signal.top_competitors && signal.top_competitors.length > 0 && (
+                <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
+                  <h3 className="text-sm font-medium text-slate-300 mb-3">Top Competitors</h3>
+                  <ul className="space-y-1">
+                    {signal.top_competitors.map((c, i) => (
+                      <li key={i} className="text-sm text-slate-300">{typeof c === 'string' ? c : JSON.stringify(c)}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {signal.top_feature_gaps && signal.top_feature_gaps.length > 0 && (
+                <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
+                  <h3 className="text-sm font-medium text-slate-300 mb-3">Feature Gaps</h3>
+                  <ul className="space-y-1">
+                    {signal.top_feature_gaps.map((g, i) => (
+                      <li key={i} className="text-sm text-slate-300">{typeof g === 'string' ? g : JSON.stringify(g)}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+            <div className="space-y-4">
+              {painData.length > 0 && (
+                <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
+                  <h3 className="text-sm font-medium text-slate-300 mb-3">Pain Distribution</h3>
+                  <ResponsiveContainer width="100%" height={250}>
+                    <BarChart data={painData} layout="vertical" margin={{ left: 80 }}>
+                      <XAxis type="number" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={{ stroke: '#334155' }} />
+                      <YAxis
+                        type="category"
+                        dataKey="name"
+                        tick={{ fill: '#94a3b8', fontSize: 11 }}
+                        axisLine={{ stroke: '#334155' }}
+                        width={80}
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: '#1e293b',
+                          border: '1px solid #334155',
+                          borderRadius: 8,
+                          color: '#e2e8f0',
+                          fontSize: 13,
+                        }}
+                      />
+                      <Bar dataKey="count" fill="#22d3ee" radius={[0, 4, 4, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+              {signal.quotable_evidence && signal.quotable_evidence.length > 0 && (
+                <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
+                  <h3 className="text-sm font-medium text-slate-300 mb-3">Quotable Evidence</h3>
+                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                    {signal.quotable_evidence.map((q: string, i: number) => (
+                      <blockquote
+                        key={i}
+                        className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3"
+                      >
+                        {typeof q === 'string' ? q : JSON.stringify(q)}
+                      </blockquote>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Expanded enrichment panels */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Sentiment Distribution */}
+            {signal.sentiment_distribution && Object.keys(signal.sentiment_distribution).length > 0 && (
+              <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
+                <h3 className="text-sm font-medium text-slate-300 mb-3">Sentiment Trajectory</h3>
+                <div className="space-y-2">
+                  {Object.entries(signal.sentiment_distribution)
+                    .sort(([, a], [, b]) => (b as number) - (a as number))
+                    .map(([direction, count]) => {
+                      const colors: Record<string, string> = {
+                        declining: 'bg-red-500/80',
+                        consistently_negative: 'bg-amber-500/80',
+                        improving: 'bg-green-500/80',
+                        stable_positive: 'bg-cyan-500/80',
+                        unknown: 'bg-slate-500/80',
+                      }
+                      const total = Object.values(signal.sentiment_distribution!).reduce((a, b) => a + b, 0)
+                      const pct = total > 0 ? Math.round(((count as number) / total) * 100) : 0
+                      return (
+                        <div key={direction}>
+                          <div className="flex justify-between text-xs mb-1">
+                            <span className="text-slate-400">{direction.replace(/_/g, ' ')}</span>
+                            <span className="text-slate-300">{count as number} ({pct}%)</span>
+                          </div>
+                          <div className="h-1.5 bg-slate-700/50 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full ${colors[direction] ?? 'bg-slate-500/80'}`}
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                        </div>
+                      )
+                    })}
+                </div>
               </div>
             )}
-            {signal.top_feature_gaps && signal.top_feature_gaps.length > 0 && (
+
+            {/* Budget Signals */}
+            {signal.budget_signal_summary && Object.keys(signal.budget_signal_summary).length > 0 && (
               <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
-                <h3 className="text-sm font-medium text-slate-300 mb-3">Feature Gaps</h3>
-                <ul className="space-y-1">
-                  {signal.top_feature_gaps.map((g, i) => (
-                    <li key={i} className="text-sm text-slate-300">{typeof g === 'string' ? g : JSON.stringify(g)}</li>
-                  ))}
-                </ul>
+                <h3 className="text-sm font-medium text-slate-300 mb-3">Budget Signals</h3>
+                <dl className="space-y-2 text-sm">
+                  {(signal.budget_signal_summary as Record<string, unknown>).avg_seat_count != null && (
+                    <div className="flex justify-between">
+                      <dt className="text-slate-400">Avg Seat Count</dt>
+                      <dd className="text-white">{Math.round(signal.budget_signal_summary.avg_seat_count as number)}</dd>
+                    </div>
+                  )}
+                  {(signal.budget_signal_summary as Record<string, unknown>).median_seat_count != null && (
+                    <div className="flex justify-between">
+                      <dt className="text-slate-400">Median Seats</dt>
+                      <dd className="text-white">{Math.round(signal.budget_signal_summary.median_seat_count as number)}</dd>
+                    </div>
+                  )}
+                  {(signal.budget_signal_summary as Record<string, unknown>).max_seat_count != null && (
+                    <div className="flex justify-between">
+                      <dt className="text-slate-400">Max Seats</dt>
+                      <dd className="text-white">{Math.round(signal.budget_signal_summary.max_seat_count as number)}</dd>
+                    </div>
+                  )}
+                  {(signal.budget_signal_summary as Record<string, unknown>).price_increase_rate != null && (
+                    <div className="flex justify-between">
+                      <dt className="text-slate-400">Price Increase Rate</dt>
+                      <dd className="text-white">{Math.round((signal.budget_signal_summary.price_increase_rate as number) * 100)}%</dd>
+                    </div>
+                  )}
+                </dl>
+              </div>
+            )}
+
+            {/* Buyer Authority */}
+            {signal.buyer_authority_summary && Object.keys(signal.buyer_authority_summary).length > 0 && (
+              <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
+                <h3 className="text-sm font-medium text-slate-300 mb-3">Buyer Authority</h3>
+                {(signal.buyer_authority_summary as Record<string, Record<string, number>>).role_types && (
+                  <div className="mb-3">
+                    <p className="text-xs text-slate-500 mb-1.5">Role Types</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {Object.entries((signal.buyer_authority_summary as Record<string, Record<string, number>>).role_types)
+                        .sort(([, a], [, b]) => b - a)
+                        .map(([role, count]) => (
+                          <span key={role} className="px-2 py-0.5 bg-slate-800 rounded text-xs text-slate-300">
+                            {role.replace(/_/g, ' ')} ({count})
+                          </span>
+                        ))}
+                    </div>
+                  </div>
+                )}
+                {(signal.buyer_authority_summary as Record<string, Record<string, number>>).buying_stages && (
+                  <div>
+                    <p className="text-xs text-slate-500 mb-1.5">Buying Stages</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {Object.entries((signal.buyer_authority_summary as Record<string, Record<string, number>>).buying_stages)
+                        .sort(([, a], [, b]) => b - a)
+                        .map(([stage, count]) => {
+                          const hot = stage === 'active_purchase' || stage === 'renewal_decision'
+                          return (
+                            <span key={stage} className={`px-2 py-0.5 rounded text-xs ${hot ? 'bg-red-900/50 text-red-300' : 'bg-slate-800 text-slate-300'}`}>
+                              {stage.replace(/_/g, ' ')} ({count})
+                            </span>
+                          )
+                        })}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
-          <div className="space-y-4">
-            {painData.length > 0 && (
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Use Cases & Integration Stacks */}
+            {((signal.top_use_cases && signal.top_use_cases.length > 0) || (signal.top_integration_stacks && signal.top_integration_stacks.length > 0)) && (
               <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
-                <h3 className="text-sm font-medium text-slate-300 mb-3">Pain Distribution</h3>
-                <ResponsiveContainer width="100%" height={250}>
-                  <BarChart data={painData} layout="vertical" margin={{ left: 80 }}>
-                    <XAxis type="number" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={{ stroke: '#334155' }} />
-                    <YAxis
-                      type="category"
-                      dataKey="name"
-                      tick={{ fill: '#94a3b8', fontSize: 11 }}
-                      axisLine={{ stroke: '#334155' }}
-                      width={80}
-                    />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: '#1e293b',
-                        border: '1px solid #334155',
-                        borderRadius: 8,
-                        color: '#e2e8f0',
-                        fontSize: 13,
-                      }}
-                    />
-                    <Bar dataKey="count" fill="#22d3ee" radius={[0, 4, 4, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
+                <h3 className="text-sm font-medium text-slate-300 mb-3">Use Cases & Integrations</h3>
+                {signal.top_use_cases && signal.top_use_cases.length > 0 && (
+                  <div className="mb-3">
+                    <p className="text-xs text-slate-500 mb-1.5">Top Modules</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {signal.top_use_cases.slice(0, 8).map((m, i) => (
+                        <span key={i} className="px-2 py-0.5 bg-cyan-900/30 border border-cyan-800/30 rounded text-xs text-cyan-300">
+                          {m.module} ({m.mentions})
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {signal.top_integration_stacks && signal.top_integration_stacks.length > 0 && (
+                  <div>
+                    <p className="text-xs text-slate-500 mb-1.5">Integration Stack</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {signal.top_integration_stacks.slice(0, 8).map((t, i) => (
+                        <span key={i} className="px-2 py-0.5 bg-slate-800 rounded text-xs text-slate-300">
+                          {t.tool} ({t.mentions})
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
-            {signal.quotable_evidence && signal.quotable_evidence.length > 0 && (
+
+            {/* Timeline Signals */}
+            {signal.timeline_summary && signal.timeline_summary.length > 0 && (
               <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
-                <h3 className="text-sm font-medium text-slate-300 mb-3">Quotable Evidence</h3>
-                <div className="space-y-2 max-h-64 overflow-y-auto">
-                  {signal.quotable_evidence.map((q: string, i: number) => (
-                    <blockquote
-                      key={i}
-                      className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3"
-                    >
-                      {typeof q === 'string' ? q : JSON.stringify(q)}
-                    </blockquote>
+                <h3 className="text-sm font-medium text-slate-300 mb-3">Timeline Signals</h3>
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {signal.timeline_summary.map((t, i) => (
+                    <div key={i} className="flex items-center justify-between text-sm py-1 border-b border-slate-700/30 last:border-0">
+                      <div>
+                        <span className="text-white">{t.company ?? 'Unknown'}</span>
+                        {t.contract_end && (
+                          <span className="ml-2 text-xs text-amber-400">ends {t.contract_end}</span>
+                        )}
+                        {t.evaluation_deadline && (
+                          <span className="ml-2 text-xs text-cyan-400">eval by {t.evaluation_deadline}</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {t.decision_timeline && t.decision_timeline !== 'unknown' && (
+                          <span className={`text-xs px-1.5 py-0.5 rounded ${
+                            t.decision_timeline === 'immediate' ? 'bg-red-900/50 text-red-300' :
+                            t.decision_timeline === 'within_quarter' ? 'bg-amber-900/50 text-amber-300' :
+                            'bg-slate-700 text-slate-400'
+                          }`}>
+                            {t.decision_timeline.replace(/_/g, ' ')}
+                          </span>
+                        )}
+                        <UrgencyBadge score={t.urgency} />
+                      </div>
+                    </div>
                   ))}
                 </div>
               </div>

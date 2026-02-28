@@ -18,6 +18,12 @@ export interface ChurnSignalDetail extends ChurnSignal {
   top_feature_gaps: string[] | null
   company_churn_list: string[] | null
   quotable_evidence: string[] | null
+  top_use_cases: { module: string; mentions: number }[] | null
+  top_integration_stacks: { tool: string; mentions: number }[] | null
+  budget_signal_summary: Record<string, unknown> | null
+  sentiment_distribution: Record<string, number> | null
+  buyer_authority_summary: Record<string, unknown> | null
+  timeline_summary: { company: string | null; contract_end: string | null; evaluation_deadline: string | null; decision_timeline: string | null; urgency: number }[] | null
   created_at: string | null
 }
 
@@ -31,6 +37,10 @@ export interface HighIntentCompany {
   pain: string | null
   alternatives: string[] | null
   contract_signal: string | null
+  seat_count: number | null
+  lock_in_level: string | null
+  contract_end: string | null
+  buying_stage: string | null
 }
 
 export interface VendorProfile {
@@ -46,6 +56,12 @@ export interface VendorProfile {
     top_competitors: string[] | null
     top_feature_gaps: string[] | null
     quotable_evidence: string[] | null
+    top_use_cases: { module: string; mentions: number }[] | null
+    top_integration_stacks: { tool: string; mentions: number }[] | null
+    budget_signal_summary: Record<string, unknown> | null
+    sentiment_distribution: Record<string, number> | null
+    buyer_authority_summary: Record<string, unknown> | null
+    timeline_summary: { company: string | null; contract_end: string | null; evaluation_deadline: string | null; decision_timeline: string | null; urgency: number }[] | null
     last_computed_at: string | null
   } | null
   review_counts: {
