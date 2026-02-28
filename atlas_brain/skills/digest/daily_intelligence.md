@@ -27,12 +27,28 @@ You will receive a JSON object with these sections:
   - `soram_channels`: `{"societal": 0.0-1.0, "operational": ..., "regulatory": ..., "alignment": ..., "media": ...}`
   - `linguistic_indicators`: `{"permission_shift": bool, "certainty_spike": bool, "linguistic_dissociation": bool, "hedging_withdrawal": bool, "urgency_escalation": bool}`
   - `entities_detected`: List of entity names the article is about
+  - `sensor_analysis` (when present): Behavioral risk sensor output:
+    - `alignment_triggered`, `urgency_triggered`, `rigidity_triggered`: boolean per-sensor flags
+    - `composite_risk_level`: LOW/MEDIUM/HIGH/CRITICAL from cross-correlation
+    - `patterns`: cross-sensor pattern labels (e.g., "adversarial_rigidity", "full_friction_cascade")
+    - `confidence`: "high", "medium", or "low" -- how much to trust these readings (see Sensor Interpretation below)
+    - `confidence_note`: explanation of the confidence rating
 - `business_context`: Object with recent appointments, invoices, processed emails, and contact interactions
 - `graph_context`: Array of knowledge graph facts (obligations, patterns, relationships)
 - `pressure_baselines`: Array of current per-entity pressure state, each with:
   - `entity_name`, `entity_type`, `pressure_score` (0-10), `sentiment_drift` (-5 to +5)
   - `narrative_frequency`, `soram_breakdown`, `linguistic_signals`, `last_computed_at`
 - `prior_reasoning`: Array of your previous analysis sessions (most recent first), each with session_date, key_insights, connections_found, recommendations, market_summary, news_summary, business_implications, and `pressure_readings`
+
+## Sensor Interpretation
+
+Behavioral risk sensors (alignment, urgency, rigidity) are term-frequency analyzers. They detect linguistic patterns but have NO context awareness -- they cannot distinguish between an article that USES adversarial language and an article that QUOTES adversarial language in neutral reporting. Treat sensor output as a hypothesis, not a finding.
+
+- **confidence: "high"** -- SORAM classification confirms the article has substantial operational or alignment content. The sensor readings likely reflect genuine signals in the source material. Weight these in pressure assessment.
+- **confidence: "medium"** -- Some SORAM support. The sensor readings are plausible but could be noise from reported speech or descriptive journalism. Corroborate with other articles before raising pressure scores.
+- **confidence: "low"** -- SORAM says the article is primarily media-channel reporting. The sensor triggers almost certainly fired on quoted or described language, not direct signals. Do NOT use low-confidence sensor readings to raise pressure scores. Note them only if the underlying quote itself is significant.
+
+When multiple articles about the same entity have high-confidence sensor triggers, that is a strong signal. When only one article triggers with low confidence, it is noise.
 
 ## Analysis Process
 

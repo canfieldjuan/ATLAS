@@ -285,6 +285,14 @@ def _run_risk_sensors(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
             rigidity = negotiation_rigidity_tool.analyze(text)
             cross = correlate(alignment, urgency, rigidity)
 
+            # Cross-validate sensors against SORAM classification.
+            # Sensors are bag-of-words -- they fire on quoted language
+            # in neutral reporting just like direct adversarial text.
+            # SORAM classification (LLM-driven) understands context.
+            # Use SORAM to assign confidence to sensor readings.
+            soram = article.get("soram_channels", {})
+            confidence = _sensor_confidence(soram, cross)
+
             article["sensor_analysis"] = {
                 "alignment_triggered": alignment["triggered"],
                 "urgency_triggered": urgency["triggered"],
@@ -292,11 +300,70 @@ def _run_risk_sensors(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "composite_risk_level": cross["composite_risk_level"],
                 "sensor_count": cross["sensor_count"],
                 "patterns": [r["label"] for r in cross["relationships"]],
+                "confidence": confidence,
+                "confidence_note": _sensor_confidence_note(soram, cross, confidence),
             }
         except Exception:
             logger.debug("Sensor analysis failed for article: %s", article.get("title", ""), exc_info=True)
 
     return articles
+
+
+def _sensor_confidence(soram: dict, cross: dict) -> str:
+    """Rate sensor confidence using SORAM classification as ground truth.
+
+    Sensors are term-frequency based (context-blind). SORAM classification
+    is LLM-based (context-aware). When sensors fire but SORAM says the
+    article is mostly media-channel reporting (not operational or
+    alignment-heavy), the sensor hits are likely from quoted language
+    in neutral coverage -- downgrade confidence.
+
+    Returns: "high", "medium", or "low"
+    """
+    if not soram or cross.get("sensor_count", 0) == 0:
+        return "low"
+
+    # Which SORAM channels support the sensor readings?
+    operational = soram.get("operational", 0.0)
+    alignment = soram.get("alignment", 0.0)
+    media = soram.get("media", 0.0)
+    societal = soram.get("societal", 0.0)
+
+    # Sensors measure adversarial/urgency/rigidity language.
+    # These are most meaningful when O or A channels are active
+    # (actual operational/alignment content, not just media reporting).
+    supporting_signal = max(operational, alignment, societal)
+    reporting_signal = media
+
+    # High confidence: SORAM confirms the content is operational/alignment
+    # AND sensors fired
+    if supporting_signal >= 0.5 and cross.get("sensor_count", 0) >= 2:
+        return "high"
+
+    # Medium: some SORAM support, or sensors strongly triggered
+    if supporting_signal >= 0.3:
+        return "medium"
+
+    # Low: article is mostly media-channel (reporting about events)
+    # but sensors fired on quoted/described language
+    if reporting_signal >= 0.6 and supporting_signal < 0.3:
+        return "low"
+
+    return "medium"
+
+
+def _sensor_confidence_note(soram: dict, cross: dict, confidence: str) -> str:
+    """Generate a short explanation of why sensor confidence is what it is."""
+    if confidence == "high":
+        return "SORAM confirms operational/alignment content -- sensor readings reflect direct signals"
+    if confidence == "low":
+        if not soram:
+            return "No SORAM classification available -- sensor readings unvalidated"
+        media = soram.get("media", 0.0)
+        if media >= 0.6:
+            return "Article is primarily media reporting -- sensor triggers likely from quoted language, not direct signals"
+        return "Weak SORAM support for sensor-detected patterns"
+    return "Moderate SORAM support -- sensor readings are plausible but not confirmed"
 
 
 async def _fetch_business_context(pool, window_days: int) -> dict[str, Any]:

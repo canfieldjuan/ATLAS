@@ -720,9 +720,11 @@ def _run_sensors_on_articles(articles: list[dict]) -> dict[str, Any]:
         return {}
 
     triggered_counts = {"alignment": 0, "urgency": 0, "rigidity": 0}
+    high_confidence_triggers = {"alignment": 0, "urgency": 0, "rigidity": 0}
     risk_levels: list[str] = []
     patterns_seen: list[str] = []
     analyzed = 0
+    confidence_dist = {"high": 0, "medium": 0, "low": 0}
 
     for a in articles:
         text = a.get("content_preview") or a.get("summary") or ""
@@ -735,13 +737,25 @@ def _run_sensors_on_articles(articles: list[dict]) -> dict[str, Any]:
             ri = negotiation_rigidity_tool.analyze(text)
             cross = correlate(al, ur, ri)
 
+            # Cross-validate sensors with SORAM (same logic as daily_intelligence)
+            soram = a.get("soram_channels", {})
+            conf = _sensor_confidence_from_soram(soram, cross)
+
             analyzed += 1
+            confidence_dist[conf] = confidence_dist.get(conf, 0) + 1
+
             if al["triggered"]:
                 triggered_counts["alignment"] += 1
+                if conf == "high":
+                    high_confidence_triggers["alignment"] += 1
             if ur["triggered"]:
                 triggered_counts["urgency"] += 1
+                if conf == "high":
+                    high_confidence_triggers["urgency"] += 1
             if ri["triggered"]:
                 triggered_counts["rigidity"] += 1
+                if conf == "high":
+                    high_confidence_triggers["rigidity"] += 1
             risk_levels.append(cross["composite_risk_level"])
             for rel in cross["relationships"]:
                 if rel["label"] not in patterns_seen:
@@ -760,7 +774,33 @@ def _run_sensors_on_articles(articles: list[dict]) -> dict[str, Any]:
     return {
         "articles_analyzed": analyzed,
         "triggered_counts": triggered_counts,
+        "high_confidence_triggers": high_confidence_triggers,
         "dominant_risk_level": dominant_level,
         "risk_level_distribution": dict(level_counts),
         "cross_sensor_patterns": patterns_seen,
+        "confidence_distribution": confidence_dist,
     }
+
+
+def _sensor_confidence_from_soram(soram: dict, cross: dict) -> str:
+    """Rate sensor confidence using SORAM as ground truth.
+
+    Sensors are context-blind term counters. SORAM is LLM-driven and
+    understands whether adversarial language is direct or quoted.
+    """
+    if not soram or cross.get("sensor_count", 0) == 0:
+        return "low"
+
+    supporting = max(
+        soram.get("operational", 0.0),
+        soram.get("alignment", 0.0),
+        soram.get("societal", 0.0),
+    )
+
+    if supporting >= 0.5 and cross.get("sensor_count", 0) >= 2:
+        return "high"
+    if supporting >= 0.3:
+        return "medium"
+    if soram.get("media", 0.0) >= 0.6 and supporting < 0.3:
+        return "low"
+    return "medium"
