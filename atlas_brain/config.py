@@ -2088,6 +2088,10 @@ class B2BScrapeConfig(BaseSettings):
     captcha_2captcha_api_key: str = Field(default="", description="2Captcha API key (used as fallback or per-domain override)")
     captcha_2captcha_domains: str = Field(default="", description="Domains that should use 2Captcha instead of primary provider (comma-separated)")
 
+    # Relevance filtering (social media noise reduction)
+    relevance_filter_enabled: bool = Field(default=True, description="Enable relevance filtering for social media sources")
+    relevance_threshold: float = Field(default=0.35, description="Min relevance score (0.0-1.0) for social media posts")
+
 
 class TemporalPatternConfig(BaseSettings):
     """Temporal pattern context configuration."""
