@@ -100,6 +100,7 @@ from .risk_sensors import (
     operational_urgency_tool,
     NegotiationRigiditySensorTool,
     negotiation_rigidity_tool,
+    correlate,
 )
 
 # Register tools on import
@@ -263,4 +264,5 @@ __all__ = [
     "operational_urgency_tool",
     "NegotiationRigiditySensorTool",
     "negotiation_rigidity_tool",
+    "correlate",
 ]

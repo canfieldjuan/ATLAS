@@ -164,7 +164,7 @@ _FLEXIBILITY_TERMS: frozenset[str] = frozenset({
     "options", "option", "potential", "possibly", "likely",
     "could", "suggest", "suggesting", "open", "flexible",
     "adjusting", "shifting", "evolving", "progress", "exploring",
-    "negotiate", "negotiating", "compromise", "middle ground",
+    "negotiate", "negotiating", "compromise",
     "creative", "workable", "revisit", "reconsider",
 })
 
@@ -175,6 +175,7 @@ _FLEXIBILITY_PHRASES: frozenset[str] = frozenset({
     "might work",
     "could work",
     "worth exploring",
+    "middle ground",
 })
 
 
@@ -253,7 +254,7 @@ class AlignmentSensorTool:
                 param_type="float",
                 description=(
                     "Adversarial-share threshold (0–1) that triggers the alert. "
-                    "Default 0.30 means adversarial terms ≥ 30 %% of combined total."
+                    "Default 0.30 means adversarial terms ≥ 30 % of combined total."
                 ),
                 required=False,
                 default=_ALIGNMENT_ADV_RATIO_THRESHOLD,
@@ -512,7 +513,7 @@ class NegotiationRigiditySensorTool:
                 param_type="float",
                 description=(
                     "Absolutist share (0–1) that triggers the alert.  "
-                    "Default 0.50 means absolutist terms ≥ 50 %% of combined total."
+                    "Default 0.50 means absolutist terms ≥ 50 % of combined total."
                 ),
                 required=False,
                 default=_RIGIDITY_ABSOLUTIST_THRESHOLD,
