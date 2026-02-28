@@ -211,6 +211,7 @@ class MCPToolProvider:
             ("twilio", settings.mcp.twilio_enabled, "atlas_brain.mcp.twilio_server"),
             ("invoicing", settings.mcp.invoicing_enabled, "atlas_brain.mcp.invoicing_server"),
             ("intelligence", settings.mcp.intelligence_enabled, "atlas_brain.mcp.intelligence_server"),
+            ("b2b_churn", settings.mcp.b2b_churn_enabled, "atlas_brain.mcp.b2b_churn_server"),
         ]
 
         configs = []

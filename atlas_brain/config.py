@@ -2099,6 +2099,7 @@ class MCPConfig(BaseSettings):
     twilio_enabled: bool = Field(default=True, description="Enable Twilio MCP server")
     invoicing_enabled: bool = Field(default=True, description="Enable Invoicing MCP server")
     intelligence_enabled: bool = Field(default=True, description="Enable Intelligence MCP server")
+    b2b_churn_enabled: bool = Field(default=True, description="Enable B2B Churn Intelligence MCP server")
     auth_token: str = Field(default="", description="Bearer token for SSE transport auth (empty = no auth)")
     transport: str = Field(default="stdio", description="MCP transport: stdio or sse")
     host: str = Field(default="0.0.0.0", description="Bind host for SSE transport")
@@ -2108,6 +2109,7 @@ class MCPConfig(BaseSettings):
     calendar_port: int = Field(default=8059, description="Port for Calendar MCP server (SSE transport)")
     invoicing_port: int = Field(default=8060, description="Port for Invoicing MCP server (SSE transport)")
     intelligence_port: int = Field(default=8061, description="Port for Intelligence MCP server (SSE transport)")
+    b2b_churn_port: int = Field(default=8062, description="Port for B2B Churn Intelligence MCP server (SSE transport)")
 
 
 class AlertMonitorConfig(BaseSettings):

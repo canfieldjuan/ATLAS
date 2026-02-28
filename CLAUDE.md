@@ -56,7 +56,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - ✅ STT/TTS for voice interface
 - ✅ PostgreSQL for conversation persistence
 - ✅ Contacts CRM — `contacts` table + NocoDB browser UI (http://localhost:8090)
-- ✅ 6 MCP servers: CRM (10 tools), Email (8), Twilio (10), Calendar (8), Invoicing (15), Intelligence (8)
+- ✅ 7 MCP servers: CRM (10 tools), Email (8), Twilio (10), Calendar (8), Invoicing (15), Intelligence (8), B2B Churn (10)
 
 ### Future Capabilities (Planned)
 - 🔲 Unified always-on voice interface (wake word "Hey Atlas")
@@ -246,7 +246,8 @@ atlas_brain/mcp/                 # MCP servers (Claude Desktop / Cursor compatib
 ├── twilio_server.py             # Twilio MCP server        (10 tools, port 8058)
 ├── calendar_server.py           # Calendar MCP server      (8 tools, port 8059)
 ├── invoicing_server.py          # Invoicing MCP server     (15 tools, port 8060)
-└── intelligence_server.py       # Intelligence MCP server  (8 tools, port 8061)
+├── intelligence_server.py       # Intelligence MCP server  (8 tools, port 8061)
+└── b2b_churn_server.py          # B2B Churn MCP server     (10 tools, port 8062)
 ```
 
 ## Key Patterns
@@ -348,12 +349,14 @@ ATLAS_MCP_TWILIO_ENABLED=true
 ATLAS_MCP_CALENDAR_ENABLED=true
 ATLAS_MCP_INVOICING_ENABLED=true
 ATLAS_MCP_INTELLIGENCE_ENABLED=true
+ATLAS_MCP_B2B_CHURN_ENABLED=true
 ATLAS_MCP_CRM_PORT=8056
 ATLAS_MCP_EMAIL_PORT=8057
 ATLAS_MCP_TWILIO_PORT=8058
 ATLAS_MCP_CALENDAR_PORT=8059
 ATLAS_MCP_INVOICING_PORT=8060
 ATLAS_MCP_INTELLIGENCE_PORT=8061
+ATLAS_MCP_B2B_CHURN_PORT=8062
 
 # IMAP — provider-agnostic email reading (works with Gmail, Outlook, any IMAP server)
 # Leave blank to fall back to Gmail API reading
@@ -388,7 +391,7 @@ service required.
 
 ## MCP Servers
 
-Six MCP servers expose Atlas capabilities to any MCP client (Claude Desktop, Cursor, custom agents).
+Seven MCP servers expose Atlas capabilities to any MCP client (Claude Desktop, Cursor, custom agents).
 All share `ATLAS_MCP_TRANSPORT` (stdio/sse), `ATLAS_MCP_HOST`, and `ATLAS_MCP_AUTH_TOKEN` config.
 Each server has an independent enable/disable toggle (`ATLAS_MCP_<NAME>_ENABLED`).
 
@@ -520,6 +523,28 @@ Tools: `generate_intelligence_report`, `list_intelligence_reports`,
 news, and market snapshots. `run_intervention_pipeline` generates actionable
 interventions with approval workflow.
 
+### B2B Churn Intelligence MCP Server (10 tools)
+```bash
+# stdio mode (Claude Desktop / Cursor)
+python -m atlas_brain.mcp.b2b_churn_server
+
+# SSE HTTP mode (port 8062)
+python -m atlas_brain.mcp.b2b_churn_server --sse
+```
+
+Tools: `list_churn_signals`, `get_churn_signal`, `list_high_intent_companies`,
+`get_vendor_profile`, `list_reports`, `get_report`, `search_reviews`,
+`get_review`, `get_pipeline_status`, `list_scrape_targets`
+
+**B2B churn intelligence**: Query vendor churn signals, search enriched reviews,
+read intelligence reports, identify high-intent companies, and monitor the
+scrape/enrichment pipeline. Data sourced from G2, Capterra, TrustRadius, Reddit.
+
+```bash
+ATLAS_MCP_B2B_CHURN_ENABLED=true
+ATLAS_MCP_B2B_CHURN_PORT=8062
+```
+
 ### Claude Desktop config (`~/.claude/claude_desktop_config.json`)
 ```json
 {
@@ -552,6 +577,11 @@ interventions with approval workflow.
     "atlas-intelligence": {
       "command": "python",
       "args": ["-m", "atlas_brain.mcp.intelligence_server"],
+      "cwd": "/path/to/ATLAS"
+    },
+    "atlas-b2b-churn": {
+      "command": "python",
+      "args": ["-m", "atlas_brain.mcp.b2b_churn_server"],
       "cwd": "/path/to/ATLAS"
     }
   }
