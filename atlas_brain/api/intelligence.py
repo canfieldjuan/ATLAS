@@ -177,3 +177,62 @@ async def list_pressure_baselines(
         ],
         "count": len(rows),
     }
+
+
+# ---------------------------------------------------------------------------
+# Approval workflow endpoints
+# ---------------------------------------------------------------------------
+
+
+class ApprovalReviewRequest(BaseModel):
+    reviewed_by: str = Field(..., min_length=1, max_length=100)
+    notes: str = Field(default="", max_length=1000)
+
+
+@router.get("/approvals")
+async def list_pending_approvals(
+    entity_name: Optional[str] = Query(default=None),
+    limit: int = Query(default=20, le=100),
+):
+    """List pending intervention approval requests."""
+    from ..services.safety_gate import get_safety_gate
+
+    gate = get_safety_gate()
+    approvals = await gate.list_pending(entity_name=entity_name, limit=limit)
+    return {"approvals": approvals, "count": len(approvals)}
+
+
+@router.get("/approvals/{approval_id}")
+async def get_approval(approval_id: str):
+    """Check the status of an approval request."""
+    from ..services.safety_gate import get_safety_gate
+
+    gate = get_safety_gate()
+    result = await gate.check_approval(approval_id)
+    if result.get("status") == "not_found":
+        raise HTTPException(status_code=404, detail="Approval not found")
+    return result
+
+
+@router.post("/approvals/{approval_id}/approve")
+async def approve_intervention(approval_id: str, req: ApprovalReviewRequest):
+    """Approve a pending intervention request."""
+    from ..services.safety_gate import get_safety_gate
+
+    gate = get_safety_gate()
+    success = await gate.approve(approval_id, req.reviewed_by, req.notes)
+    if not success:
+        raise HTTPException(status_code=400, detail="Approval not found or already reviewed")
+    return {"status": "approved", "approval_id": approval_id}
+
+
+@router.post("/approvals/{approval_id}/reject")
+async def reject_intervention(approval_id: str, req: ApprovalReviewRequest):
+    """Reject a pending intervention request."""
+    from ..services.safety_gate import get_safety_gate
+
+    gate = get_safety_gate()
+    success = await gate.reject(approval_id, req.reviewed_by, req.notes)
+    if not success:
+        raise HTTPException(status_code=400, detail="Approval not found or already reviewed")
+    return {"status": "rejected", "approval_id": approval_id}

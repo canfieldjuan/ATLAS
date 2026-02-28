@@ -178,66 +178,123 @@ async def run_intervention_pipeline(
     }
 
     # ---- Stage 3: Narrative Architect (safety-gated) ----
+    from .safety_gate import get_safety_gate
+    gate = get_safety_gate()
+
     if not allow_narrative_architect:
         safety_warnings.append(_SAFETY_WARNING)
         stages["narrative_plan"] = {
             "skill": "intelligence/autonomous_narrative_architect",
-            "status": "blocked_by_safety_gate",
+            "status": "blocked_by_caller",
             "reason": _SAFETY_WARNING,
         }
-        logger.info("Pipeline %s stage 3 skipped: safety gate active", pipeline_id)
+        logger.info("Pipeline %s stage 3 skipped: caller did not opt in", pipeline_id)
     else:
         logger.info("Pipeline %s stage 3: narrative architect for %s", pipeline_id, entity_name)
-        safety_warnings.append(
-            "Stage 3 (Narrative Architect) enabled by caller override. "
-            "Orchestration-layer safety controls are not yet implemented. "
-            "Output is for testing/research purposes only."
+
+        # Run safety gate on stage 2 output before proceeding
+        gate_result = await gate.gate_check(
+            pipeline_id=pipeline_id,
+            stage="narrative_architect",
+            entity_name=entity_name,
+            stage_output=simulation_text,
+            sensor_summary=sensor_summary,
+            pressure=pressure,
+            requested_by=requested_by or "unknown",
         )
 
-        # Build pressure thresholds from current data
-        current_score = pressure.get("pressure_score", 0)
-        if isinstance(current_score, (int, float)):
-            thresholds = {
-                "green": f"0-{max(3, current_score - 2):.0f}",
-                "yellow": f"{max(3, current_score - 2):.0f}-{max(6, current_score):.0f}",
-                "red": f"{max(6, current_score):.0f}-10",
-            }
-        else:
-            thresholds = {"green": "0-3", "yellow": "4-6", "red": "7-10"}
-
-        narrative_payload = {
-            "subject": entity_name,
-            "time_window": time_window_str,
-            "high_pressure_signals": pressure_points,
-            "simulation_outcomes": simulation_text,
-            "core_story": _detect_core_story(articles),
-            "target_clusters": [entity_name],
-            "channels": channels,
-            "intervention_library": "No pre-approved intervention library available -- generate from analysis",
-            "pressure_thresholds": thresholds,
-            "hours_before_event": hours_before_event,
-            "constraints": "; ".join(constraints) if constraints else "Standard legal and ethical guidelines apply",
-            "risk_tolerance": risk_tolerance,
-            "audience": audience,
-            "evidence": evidence,
-        }
-
-        narrative_text = call_llm_with_skill(
-            "intelligence/autonomous_narrative_architect", narrative_payload,
-            max_tokens=1500, temperature=0.3,
-        )
-
-        if narrative_text:
+        if not gate_result["allowed"]:
+            safety_warnings.append(gate_result["reason"])
             stages["narrative_plan"] = {
                 "skill": "intelligence/autonomous_narrative_architect",
-                "text": narrative_text,
-                "status": "completed",
+                "status": "blocked_by_safety_gate",
+                "reason": gate_result["reason"],
+                "approval_id": gate_result.get("approval_id"),
+                "risk_assessment": gate_result.get("risk_assessment"),
+                "content_check": gate_result.get("content_check"),
             }
+            logger.info(
+                "Pipeline %s stage 3 blocked by safety gate: %s",
+                pipeline_id, gate_result["reason"],
+            )
         else:
-            stages["narrative_plan"] = {
-                "skill": "intelligence/autonomous_narrative_architect",
-                "status": "failed",
+            # Safety gate passed -- proceed with stage 3
+            current_score = pressure.get("pressure_score", 0)
+            if isinstance(current_score, (int, float)):
+                thresholds = {
+                    "green": f"0-{max(3, current_score - 2):.0f}",
+                    "yellow": f"{max(3, current_score - 2):.0f}-{max(6, current_score):.0f}",
+                    "red": f"{max(6, current_score):.0f}-10",
+                }
+            else:
+                thresholds = {"green": "0-3", "yellow": "4-6", "red": "7-10"}
+
+            narrative_payload = {
+                "subject": entity_name,
+                "time_window": time_window_str,
+                "high_pressure_signals": pressure_points,
+                "simulation_outcomes": simulation_text,
+                "core_story": _detect_core_story(articles),
+                "target_clusters": [entity_name],
+                "channels": channels,
+                "intervention_library": "No pre-approved intervention library available -- generate from analysis",
+                "pressure_thresholds": thresholds,
+                "hours_before_event": hours_before_event,
+                "constraints": "; ".join(constraints) if constraints else "Standard legal and ethical guidelines apply",
+                "risk_tolerance": risk_tolerance,
+                "audience": audience,
+                "evidence": evidence,
             }
+
+            narrative_text = call_llm_with_skill(
+                "intelligence/autonomous_narrative_architect", narrative_payload,
+                max_tokens=1500, temperature=0.3,
+            )
+
+            if narrative_text:
+                # Run content filter on the output
+                content_check = gate.check_content(narrative_text)
+                if content_check["blocked"]:
+                    safety_warnings.append(
+                        f"Stage 3 output blocked by content filter: "
+                        f"{', '.join(f['pattern'] for f in content_check['flags'])}"
+                    )
+                    await gate.log_event(
+                        event_type="intervention.output_blocked",
+                        source="safety_gate",
+                        entity_name=entity_name,
+                        payload={
+                            "pipeline_id": pipeline_id,
+                            "stage": "narrative_architect",
+                            "flags": content_check["flags"],
+                        },
+                    )
+                    stages["narrative_plan"] = {
+                        "skill": "intelligence/autonomous_narrative_architect",
+                        "status": "blocked_by_content_filter",
+                        "content_check": content_check,
+                    }
+                else:
+                    await gate.log_event(
+                        event_type="intervention.stage_completed",
+                        source=requested_by or "unknown",
+                        entity_name=entity_name,
+                        payload={
+                            "pipeline_id": pipeline_id,
+                            "stage": "narrative_architect",
+                            "risk_level": gate_result.get("risk_assessment", {}).get("risk_level", "UNKNOWN"),
+                        },
+                    )
+                    stages["narrative_plan"] = {
+                        "skill": "intelligence/autonomous_narrative_architect",
+                        "text": narrative_text,
+                        "status": "completed",
+                    }
+            else:
+                stages["narrative_plan"] = {
+                    "skill": "intelligence/autonomous_narrative_architect",
+                    "status": "failed",
+                }
 
     # ---- Build result ----
     result: dict[str, Any] = {

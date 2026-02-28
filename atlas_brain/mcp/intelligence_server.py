@@ -311,6 +311,74 @@ async def run_intervention_pipeline(
 
 
 # ---------------------------------------------------------------------------
+# Tool: list_pending_approvals
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def list_pending_approvals(
+    entity_name: Optional[str] = None,
+    limit: int = 20,
+) -> str:
+    """
+    List pending intervention approval requests.
+
+    High-risk intervention pipeline stages require human approval before
+    proceeding. Use this tool to see what needs review.
+
+    entity_name: Filter by entity name (optional, partial match)
+    limit: Maximum results (default 20)
+    """
+    try:
+        from ..services.safety_gate import get_safety_gate
+
+        gate = get_safety_gate()
+        approvals = await gate.list_pending(entity_name=entity_name, limit=min(limit, 100))
+        return json.dumps({"approvals": approvals, "count": len(approvals)}, default=str)
+    except Exception as exc:
+        logger.exception("list_pending_approvals error")
+        return json.dumps({"error": str(exc), "approvals": []})
+
+
+# ---------------------------------------------------------------------------
+# Tool: review_approval
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def review_approval(
+    approval_id: str,
+    action: str = "approve",
+    reviewed_by: str = "mcp_user",
+    notes: str = "",
+) -> str:
+    """
+    Approve or reject a pending intervention approval request.
+
+    approval_id: UUID of the approval request
+    action: "approve" or "reject"
+    reviewed_by: Identifier of the reviewer
+    notes: Optional review notes
+    """
+    try:
+        from ..services.safety_gate import get_safety_gate
+
+        gate = get_safety_gate()
+
+        if action == "approve":
+            success = await gate.approve(approval_id, reviewed_by, notes)
+        elif action == "reject":
+            success = await gate.reject(approval_id, reviewed_by, notes)
+        else:
+            return json.dumps({"error": "action must be 'approve' or 'reject'"})
+
+        if success:
+            return json.dumps({"status": action + "d", "approval_id": approval_id})
+        return json.dumps({"error": "Approval not found or already reviewed"})
+    except Exception as exc:
+        logger.exception("review_approval error")
+        return json.dumps({"error": str(exc)})
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
