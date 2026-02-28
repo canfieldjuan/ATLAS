@@ -147,9 +147,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     except Exception:
         logger.exception("Failed to store reasoning journal entry")
 
-    # Upsert entity pressure baselines
+    # Upsert entity pressure baselines (with delta-clamping against prior)
     if cfg.pressure_enabled and pressure_readings:
-        await _upsert_pressure_baselines(pool, pressure_readings)
+        await _upsert_pressure_baselines(pool, pressure_readings, pressure_baselines)
 
     # Send ntfy notification
     from ...pipelines.notify import send_pipeline_notification
@@ -564,16 +564,57 @@ async def _fetch_pressure_baselines(pool) -> list[dict[str, Any]]:
 
 
 async def _upsert_pressure_baselines(
-    pool, pressure_readings: list[dict[str, Any]]
+    pool,
+    pressure_readings: list[dict[str, Any]],
+    prior_baselines: list[dict[str, Any]] | None = None,
 ) -> None:
-    """Upsert entity pressure baselines from LLM pressure readings."""
+    """Upsert entity pressure baselines with delta-clamping.
+
+    The LLM sees yesterday's score and tends to anchor to it, inheriting any
+    prior overestimate. Delta-clamping limits the per-day change to +/-2 points
+    unless sensor composite risk (HIGH/CRITICAL) justifies a larger jump.
+    """
+    # Build lookup: (entity_name, entity_type) -> prior_pressure_score
+    prior_scores: dict[tuple[str, str], float] = {}
+    for b in prior_baselines or []:
+        key = (b.get("entity_name", ""), b.get("entity_type", "company"))
+        prior_scores[key] = float(b.get("pressure_score", 0.0))
+
+    MAX_DELTA = 2.0  # max change per day without sensor support
+    SENSOR_SUPPORTED_DELTA = 5.0  # max change when HIGH/CRITICAL sensor composite
+
     now = datetime.now(timezone.utc)
     upserted = 0
+    clamped = 0
     for reading in pressure_readings:
         entity_name = reading.get("entity_name")
         if not entity_name:
             continue
         entity_type = reading.get("entity_type", "company")
+        raw_score = float(reading.get("pressure_score", 0.0))
+
+        # Delta-clamp against prior baseline
+        key = (entity_name, entity_type)
+        if key in prior_scores:
+            prior = prior_scores[key]
+            delta = raw_score - prior
+            # Sensor composite from the reading's own sensor_analysis or note
+            # HIGH/CRITICAL allows larger jumps (e.g., sudden crisis)
+            sensor_level = str(reading.get("sensor_composite", "")).upper()
+            max_d = SENSOR_SUPPORTED_DELTA if sensor_level in ("HIGH", "CRITICAL") else MAX_DELTA
+            if abs(delta) > max_d:
+                clamped_score = prior + max_d * (1.0 if delta > 0 else -1.0)
+                clamped_score = max(0.0, min(10.0, clamped_score))
+                logger.debug(
+                    "Clamped %s pressure: LLM=%.1f prior=%.1f -> %.1f (max_delta=%.1f)",
+                    entity_name, raw_score, prior, clamped_score, max_d,
+                )
+                raw_score = clamped_score
+                clamped += 1
+
+        # Clamp to valid range
+        raw_score = max(0.0, min(10.0, raw_score))
+
         try:
             await pool.execute(
                 """
@@ -592,7 +633,7 @@ async def _upsert_pressure_baselines(
                 """,
                 entity_name,
                 entity_type,
-                reading.get("pressure_score", 0.0),
+                raw_score,
                 reading.get("sentiment_drift", 0.0),
                 reading.get("narrative_frequency", 0),
                 json.dumps(reading.get("soram_breakdown", {})),
@@ -604,6 +645,6 @@ async def _upsert_pressure_baselines(
             logger.debug("Failed to upsert pressure baseline for %s", entity_name, exc_info=True)
 
     if upserted:
-        logger.info("Upserted %d entity pressure baselines", upserted)
+        logger.info("Upserted %d entity pressure baselines (%d clamped)", upserted, clamped)
 
 

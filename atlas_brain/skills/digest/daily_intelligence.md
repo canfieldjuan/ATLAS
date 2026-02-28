@@ -83,6 +83,7 @@ When multiple articles about the same entity have high-confidence sensor trigger
      - 4-6: Elevated attention, watch closely
      - 7-8: Significant pressure accumulation, likely approaching inflection
      - 9-10: Critical pressure, event resolution imminent or underway
+   - **Anchoring Check**: Before writing a score, compare today's evidence against the prior baseline score. Ask: "If I had NO prior score and only today's articles and sensors, what would I rate this entity?" If that independent estimate diverges from the prior score by more than 2 points, explain why in the `note` field. Do not drift a score upward just because it was high yesterday -- require fresh evidence. If there are no new articles about an entity today, its score should decay slightly (subtract 0.5) rather than hold steady by default.
    - **Trajectory**: Compare to prior pressure_readings for the same entity. Is pressure building, steady, or releasing?
 
 5. **Prior Reasoning Continuity**: Reference your prior analyses explicitly:
