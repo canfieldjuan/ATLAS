@@ -1,41 +1,52 @@
-import { useEffect, useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Search } from 'lucide-react'
+import { Search, RefreshCw, X, Loader2 } from 'lucide-react'
+import { clsx } from 'clsx'
 import DataTable, { type Column } from '../components/DataTable'
 import UrgencyBadge from '../components/UrgencyBadge'
+import { PageError } from '../components/ErrorBoundary'
+import useApiData from '../hooks/useApiData'
 import { fetchSignals } from '../api/client'
 import type { ChurnSignal } from '../types'
 
 export default function Vendors() {
   const navigate = useNavigate()
-  const [signals, setSignals] = useState<ChurnSignal[]>([])
-  const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [minUrgency, setMinUrgency] = useState(0)
   const [category, setCategory] = useState('')
+  const [debouncePending, setDebouncePending] = useState(false)
 
   useEffect(() => {
-    async function load() {
-      setLoading(true)
-      try {
-        const res = await fetchSignals({
-          vendor_name: search || undefined,
-          min_urgency: minUrgency || undefined,
-          category: category || undefined,
-          limit: 100,
-        })
-        setSignals(res.signals)
-      } catch (err) {
-        console.error('Vendors load error:', err)
-      } finally {
-        setLoading(false)
-      }
-    }
-    const timer = setTimeout(load, 300)
+    setDebouncePending(true)
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search)
+      setDebouncePending(false)
+    }, 300)
     return () => clearTimeout(timer)
-  }, [search, minUrgency, category])
+  }, [search])
 
+  const { data, loading, error, refresh, refreshing } = useApiData(
+    () =>
+      fetchSignals({
+        vendor_name: debouncedSearch || undefined,
+        min_urgency: minUrgency || undefined,
+        category: category || undefined,
+        limit: 100,
+      }),
+    [debouncedSearch, minUrgency, category],
+  )
+
+  const signals = data?.signals ?? []
   const categories = [...new Set(signals.map((s) => s.product_category).filter(Boolean))]
+  const hasFilters = search !== '' || minUrgency > 0 || category !== ''
+
+  function clearFilters() {
+    setSearch('')
+    setDebouncedSearch('')
+    setMinUrgency(0)
+    setCategory('')
+  }
 
   const columns: Column<ChurnSignal>[] = [
     {
@@ -102,12 +113,24 @@ export default function Vendors() {
     },
   ]
 
+  if (error) return <PageError error={error} onRetry={refresh} />
+
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-white">Vendor Signals</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-white">Vendor Signals</h1>
+        <button
+          onClick={refresh}
+          disabled={refreshing}
+          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
+        >
+          <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
+          Refresh
+        </button>
+      </div>
 
-      <div className="flex items-center gap-4">
-        <div className="relative flex-1 max-w-sm">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+        <div className="relative flex-1 max-w-sm w-full">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
           <input
             type="text"
@@ -142,17 +165,38 @@ export default function Vendors() {
             ))}
           </select>
         )}
+        {hasFilters && (
+          <button
+            onClick={clearFilters}
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors"
+          >
+            <X className="h-3 w-3" />
+            Clear filters
+          </button>
+        )}
+      </div>
+
+      <div className="flex items-center gap-2 text-sm text-slate-400">
+        {debouncePending || loading ? (
+          <>
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Searching...
+          </>
+        ) : (
+          <span>{signals.length} vendor{signals.length !== 1 ? 's' : ''} found</span>
+        )}
       </div>
 
       <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl overflow-hidden">
         {loading ? (
-          <div className="p-8 text-center text-slate-500">Loading...</div>
+          <DataTable columns={columns} data={[]} skeletonRows={8} />
         ) : (
           <DataTable
             columns={columns}
             data={signals}
             onRowClick={(r) => navigate(`/vendors/${encodeURIComponent(r.vendor_name)}`)}
             emptyMessage="No signals match your filters"
+            emptyAction={hasFilters ? { label: 'Clear all filters', onClick: clearFilters } : undefined}
           />
         )}
       </div>

@@ -1,26 +1,46 @@
-import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, ExternalLink } from 'lucide-react'
+import { ArrowLeft, ExternalLink, RefreshCw } from 'lucide-react'
+import { clsx } from 'clsx'
 import UrgencyBadge from '../components/UrgencyBadge'
+import { PageError } from '../components/ErrorBoundary'
+import useApiData from '../hooks/useApiData'
 import { fetchReview } from '../api/client'
 import type { ReviewDetail as ReviewDetailType } from '../types'
+
+function DetailSkeleton() {
+  return (
+    <div className="space-y-6 max-w-4xl animate-pulse">
+      <div className="h-4 w-28 bg-slate-700/50 rounded" />
+      <div className="flex items-start justify-between">
+        <div>
+          <div className="h-7 w-48 bg-slate-700/50 rounded mb-2" />
+          <div className="h-4 w-36 bg-slate-700/50 rounded" />
+        </div>
+        <div className="h-8 w-16 bg-slate-700/50 rounded" />
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 h-48" />
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 h-48" />
+      </div>
+    </div>
+  )
+}
 
 export default function ReviewDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const [review, setReview] = useState<ReviewDetailType | null>(null)
-  const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    if (!id) return
-    fetchReview(id)
-      .then(setReview)
-      .catch((err) => console.error('ReviewDetail load error:', err))
-      .finally(() => setLoading(false))
-  }, [id])
+  const { data: review, loading, error, refresh, refreshing } = useApiData<ReviewDetailType>(
+    () => {
+      if (!id) return Promise.reject(new Error('Missing review ID'))
+      return fetchReview(id)
+    },
+    [id],
+  )
 
-  if (loading) return <div className="text-slate-500 p-8">Loading review...</div>
-  if (!review) return <div className="text-slate-500 p-8">Review not found</div>
+  if (error) return <PageError error={error} onRetry={refresh} />
+  if (loading) return <DetailSkeleton />
+  if (!review) return <PageError error={new Error('Review not found')} />
 
   const enrichment = review.enrichment as Record<string, unknown> | null
   const urgency = enrichment?.urgency_score as number | undefined
@@ -32,13 +52,22 @@ export default function ReviewDetail() {
 
   return (
     <div className="space-y-6 max-w-4xl">
-      <button
-        onClick={() => navigate('/reviews')}
-        className="flex items-center gap-1 text-sm text-slate-400 hover:text-white transition-colors"
-      >
-        <ArrowLeft className="h-4 w-4" />
-        Back to Reviews
-      </button>
+      <div className="flex items-center justify-between">
+        <button
+          onClick={() => navigate('/reviews')}
+          className="flex items-center gap-1 text-sm text-slate-400 hover:text-white transition-colors"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Back to Reviews
+        </button>
+        <button
+          onClick={refresh}
+          disabled={refreshing}
+          className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
+        >
+          <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
+        </button>
+      </div>
 
       <div className="flex items-start justify-between">
         <div>
@@ -70,7 +99,7 @@ export default function ReviewDetail() {
         </a>
       )}
 
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="space-y-4">
           {review.review_text && (
             <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">

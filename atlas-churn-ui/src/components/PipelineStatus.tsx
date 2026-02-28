@@ -11,13 +11,36 @@ function timeAgo(dateStr: string | null): string {
   return `${Math.floor(hrs / 24)}d ago`
 }
 
+function Skeleton() {
+  return (
+    <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 animate-pulse">
+      <div className="flex items-center gap-2 mb-4">
+        <div className="h-4 w-4 bg-slate-700/50 rounded" />
+        <div className="h-4 w-28 bg-slate-700/50 rounded" />
+      </div>
+      <div className="space-y-3">
+        <div className="flex justify-between">
+          <div className="h-3 w-24 bg-slate-700/50 rounded" />
+          <div className="h-3 w-8 bg-slate-700/50 rounded" />
+        </div>
+        <div className="h-2 bg-slate-700/50 rounded-full" />
+        <div className="grid grid-cols-2 gap-3">
+          <div className="h-3 w-20 bg-slate-700/50 rounded" />
+          <div className="h-3 w-20 bg-slate-700/50 rounded" />
+        </div>
+        <div className="pt-2 border-t border-slate-800 space-y-2">
+          <div className="h-3 w-full bg-slate-700/50 rounded" />
+          <div className="h-3 w-full bg-slate-700/50 rounded" />
+          <div className="h-3 w-3/4 bg-slate-700/50 rounded" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function PipelineStatusWidget({ data }: { data: PipelineStatusType | null }) {
   if (!data) {
-    return (
-      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 text-slate-500 text-sm">
-        Loading pipeline status...
-      </div>
-    )
+    return <Skeleton />
   }
 
   const enriched = data.enrichment_counts['enriched'] ?? 0

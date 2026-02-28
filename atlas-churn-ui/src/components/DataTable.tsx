@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { ChevronUp, ChevronDown } from 'lucide-react'
+import { ChevronUp, ChevronDown, Inbox } from 'lucide-react'
 import { clsx } from 'clsx'
 
 export interface Column<T> {
@@ -15,6 +15,8 @@ interface DataTableProps<T> {
   data: T[]
   onRowClick?: (row: T) => void
   emptyMessage?: string
+  skeletonRows?: number
+  emptyAction?: { label: string; onClick: () => void }
 }
 
 export default function DataTable<T>({
@@ -22,6 +24,8 @@ export default function DataTable<T>({
   data,
   onRowClick,
   emptyMessage = 'No data',
+  skeletonRows,
+  emptyAction,
 }: DataTableProps<T>) {
   const [sortKey, setSortKey] = useState<string | null>(null)
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
@@ -47,6 +51,35 @@ export default function DataTable<T>({
       setSortKey(key)
       setSortDir('desc')
     }
+  }
+
+  if (skeletonRows) {
+    return (
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-slate-700/50">
+              {columns.map((col) => (
+                <th key={col.key} className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">
+                  {col.header}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-800/50">
+            {Array.from({ length: skeletonRows }, (_, i) => (
+              <tr key={i} className="animate-pulse">
+                {columns.map((col) => (
+                  <td key={col.key} className="px-4 py-3">
+                    <div className="h-4 bg-slate-700/50 rounded w-3/4" />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )
   }
 
   return (
@@ -76,8 +109,19 @@ export default function DataTable<T>({
         <tbody className="divide-y divide-slate-800/50">
           {sorted.length === 0 ? (
             <tr>
-              <td colSpan={columns.length} className="px-4 py-8 text-center text-slate-500">
-                {emptyMessage}
+              <td colSpan={columns.length} className="px-4 py-12 text-center">
+                <div className="flex flex-col items-center gap-3">
+                  <Inbox className="h-8 w-8 text-slate-600" />
+                  <p className="text-slate-500">{emptyMessage}</p>
+                  {emptyAction && (
+                    <button
+                      onClick={emptyAction.onClick}
+                      className="mt-1 px-3 py-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 text-sm font-medium hover:bg-cyan-500/20 transition-colors"
+                    >
+                      {emptyAction.label}
+                    </button>
+                  )}
+                </div>
               </td>
             </tr>
           ) : (

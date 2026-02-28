@@ -1,42 +1,58 @@
-import { useEffect, useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Search } from 'lucide-react'
+import { Search, RefreshCw, X, Loader2 } from 'lucide-react'
+import { clsx } from 'clsx'
 import DataTable, { type Column } from '../components/DataTable'
 import UrgencyBadge from '../components/UrgencyBadge'
+import { PageError } from '../components/ErrorBoundary'
+import useApiData from '../hooks/useApiData'
 import { fetchReviews } from '../api/client'
 import type { ReviewSummary } from '../types'
 
 export default function Reviews() {
   const navigate = useNavigate()
-  const [reviews, setReviews] = useState<ReviewSummary[]>([])
-  const [loading, setLoading] = useState(true)
   const [vendor, setVendor] = useState('')
+  const [debouncedVendor, setDebouncedVendor] = useState('')
   const [company, setCompany] = useState('')
+  const [debouncedCompany, setDebouncedCompany] = useState('')
   const [minUrgency, setMinUrgency] = useState(0)
   const [churnOnly, setChurnOnly] = useState(false)
+  const [debouncePending, setDebouncePending] = useState(false)
 
   useEffect(() => {
-    async function load() {
-      setLoading(true)
-      try {
-        const res = await fetchReviews({
-          vendor_name: vendor || undefined,
-          company: company || undefined,
-          min_urgency: minUrgency || undefined,
-          has_churn_intent: churnOnly || undefined,
-          window_days: 365,
-          limit: 100,
-        })
-        setReviews(res.reviews)
-      } catch (err) {
-        console.error('Reviews load error:', err)
-      } finally {
-        setLoading(false)
-      }
-    }
-    const timer = setTimeout(load, 300)
+    setDebouncePending(true)
+    const timer = setTimeout(() => {
+      setDebouncedVendor(vendor)
+      setDebouncedCompany(company)
+      setDebouncePending(false)
+    }, 300)
     return () => clearTimeout(timer)
-  }, [vendor, company, minUrgency, churnOnly])
+  }, [vendor, company])
+
+  const { data, loading, error, refresh, refreshing } = useApiData(
+    () =>
+      fetchReviews({
+        vendor_name: debouncedVendor || undefined,
+        company: debouncedCompany || undefined,
+        min_urgency: minUrgency || undefined,
+        has_churn_intent: churnOnly || undefined,
+        window_days: 365,
+        limit: 100,
+      }),
+    [debouncedVendor, debouncedCompany, minUrgency, churnOnly],
+  )
+
+  const reviews = data?.reviews ?? []
+  const hasFilters = vendor !== '' || company !== '' || minUrgency > 0 || churnOnly
+
+  function clearFilters() {
+    setVendor('')
+    setDebouncedVendor('')
+    setCompany('')
+    setDebouncedCompany('')
+    setMinUrgency(0)
+    setChurnOnly(false)
+  }
 
   const columns: Column<ReviewSummary>[] = [
     {
@@ -92,12 +108,24 @@ export default function Reviews() {
     },
   ]
 
+  if (error) return <PageError error={error} onRetry={refresh} />
+
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-white">Reviews</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-white">Reviews</h1>
+        <button
+          onClick={refresh}
+          disabled={refreshing}
+          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
+        >
+          <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
+          Refresh
+        </button>
+      </div>
 
-      <div className="flex items-center gap-4 flex-wrap">
-        <div className="relative flex-1 max-w-xs">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 flex-wrap">
+        <div className="relative flex-1 max-w-xs w-full">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
           <input
             type="text"
@@ -107,7 +135,7 @@ export default function Reviews() {
             className="w-full pl-9 pr-3 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
           />
         </div>
-        <div className="relative flex-1 max-w-xs">
+        <div className="relative flex-1 max-w-xs w-full">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
           <input
             type="text"
@@ -139,17 +167,38 @@ export default function Reviews() {
           />
           Churn intent only
         </label>
+        {hasFilters && (
+          <button
+            onClick={clearFilters}
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors"
+          >
+            <X className="h-3 w-3" />
+            Clear filters
+          </button>
+        )}
+      </div>
+
+      <div className="flex items-center gap-2 text-sm text-slate-400">
+        {debouncePending || loading ? (
+          <>
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Searching...
+          </>
+        ) : (
+          <span>{reviews.length} review{reviews.length !== 1 ? 's' : ''} found</span>
+        )}
       </div>
 
       <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl overflow-hidden">
         {loading ? (
-          <div className="p-8 text-center text-slate-500">Loading...</div>
+          <DataTable columns={columns} data={[]} skeletonRows={8} />
         ) : (
           <DataTable
             columns={columns}
             data={reviews}
             onRowClick={(r) => navigate(`/reviews/${r.id}`)}
             emptyMessage="No reviews match your filters"
+            emptyAction={hasFilters ? { label: 'Clear all filters', onClick: clearFilters } : undefined}
           />
         )}
       </div>

@@ -1,40 +1,40 @@
-import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Building2, AlertTriangle, MessageSquareText, Zap } from 'lucide-react'
+import { Building2, AlertTriangle, MessageSquareText, Zap, RefreshCw } from 'lucide-react'
+import { clsx } from 'clsx'
 import StatCard from '../components/StatCard'
 import ChurnChart from '../components/ChurnChart'
 import PipelineStatusWidget from '../components/PipelineStatus'
 import DataTable, { type Column } from '../components/DataTable'
 import UrgencyBadge from '../components/UrgencyBadge'
+import { PageError } from '../components/ErrorBoundary'
+import useApiData from '../hooks/useApiData'
 import { fetchSignals, fetchHighIntent, fetchPipeline } from '../api/client'
 import type { ChurnSignal, HighIntentCompany, PipelineStatus } from '../types'
 
+interface DashboardData {
+  signals: ChurnSignal[]
+  companies: HighIntentCompany[]
+  pipeline: PipelineStatus
+}
+
 export default function Dashboard() {
   const navigate = useNavigate()
-  const [signals, setSignals] = useState<ChurnSignal[]>([])
-  const [companies, setCompanies] = useState<HighIntentCompany[]>([])
-  const [pipeline, setPipeline] = useState<PipelineStatus | null>(null)
-  const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const [sigRes, hiRes, pipe] = await Promise.all([
-          fetchSignals({ limit: 20 }),
-          fetchHighIntent({ limit: 10 }),
-          fetchPipeline(),
-        ])
-        setSignals(sigRes.signals)
-        setCompanies(hiRes.companies)
-        setPipeline(pipe)
-      } catch (err) {
-        console.error('Dashboard load error:', err)
-      } finally {
-        setLoading(false)
-      }
-    }
-    load()
-  }, [])
+  const { data, loading, error, refresh, refreshing } = useApiData<DashboardData>(
+    async () => {
+      const [sigRes, hiRes, pipe] = await Promise.all([
+        fetchSignals({ limit: 20 }),
+        fetchHighIntent({ limit: 10 }),
+        fetchPipeline(),
+      ])
+      return { signals: sigRes.signals, companies: hiRes.companies, pipeline: pipe }
+    },
+    [],
+  )
+
+  const signals = data?.signals ?? []
+  const companies = data?.companies ?? []
+  const pipeline = data?.pipeline ?? null
 
   const highUrgency = signals.filter((s) => s.avg_urgency_score >= 7).length
   const totalReviews = pipeline
@@ -81,48 +81,68 @@ export default function Dashboard() {
     },
   ]
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64 text-slate-500">
-        Loading dashboard...
-      </div>
-    )
-  }
+  if (error) return <PageError error={error} onRetry={refresh} />
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-white">Churn Intelligence Overview</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-white">Churn Intelligence Overview</h1>
+        <button
+          onClick={refresh}
+          disabled={refreshing}
+          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
+        >
+          <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
+          Refresh
+        </button>
+      </div>
 
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           label="Vendors Tracked"
           value={signals.length}
           icon={<Building2 className="h-5 w-5" />}
+          skeleton={loading}
         />
         <StatCard
           label="High Urgency"
           value={highUrgency}
           icon={<AlertTriangle className="h-5 w-5" />}
           sub="Urgency >= 7"
+          skeleton={loading}
         />
         <StatCard
           label="Total Reviews"
           value={totalReviews}
           icon={<MessageSquareText className="h-5 w-5" />}
+          skeleton={loading}
         />
         <StatCard
           label="Enrichment Rate"
           value={`${enrichRate}%`}
           icon={<Zap className="h-5 w-5" />}
+          skeleton={loading}
         />
       </div>
 
-      <div className="grid grid-cols-3 gap-6">
-        <div className="col-span-2 bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-5">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-5">
           <h3 className="text-sm font-medium text-slate-300 mb-4">
             Top Churn Signals by Urgency
           </h3>
-          <ChurnChart signals={signals} />
+          {loading ? (
+            <div className="h-[300px] flex items-end gap-3 animate-pulse">
+              {[75, 50, 88, 40, 65, 55, 80, 45].map((h, i) => (
+                <div
+                  key={i}
+                  className="flex-1 bg-slate-700/50 rounded-t"
+                  style={{ height: `${h}%` }}
+                />
+              ))}
+            </div>
+          ) : (
+            <ChurnChart signals={signals} />
+          )}
         </div>
         <PipelineStatusWidget data={pipeline} />
       </div>
@@ -131,12 +151,17 @@ export default function Dashboard() {
         <h3 className="text-sm font-medium text-slate-300 mb-4">
           Recent High-Intent Companies
         </h3>
-        <DataTable
-          columns={companyColumns}
-          data={companies}
-          onRowClick={(r) => navigate(`/vendors/${encodeURIComponent(r.vendor)}`)}
-          emptyMessage="No high-intent companies detected"
-        />
+        {loading ? (
+          <DataTable columns={companyColumns} data={[]} skeletonRows={5} />
+        ) : (
+          <DataTable
+            columns={companyColumns}
+            data={companies}
+            onRowClick={(r) => navigate(`/vendors/${encodeURIComponent(r.vendor)}`)}
+            emptyMessage="No high-intent companies detected"
+            emptyAction={{ label: 'Check Pipeline Status', onClick: () => window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+          />
+        )}
       </div>
     </div>
   )

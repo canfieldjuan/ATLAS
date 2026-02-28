@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, RefreshCw } from 'lucide-react'
+import { clsx } from 'clsx'
 import {
   BarChart,
   Bar,
@@ -11,43 +12,58 @@ import {
 } from 'recharts'
 import UrgencyBadge from '../components/UrgencyBadge'
 import DataTable, { type Column } from '../components/DataTable'
+import { PageError } from '../components/ErrorBoundary'
+import useApiData from '../hooks/useApiData'
 import { fetchVendorProfile, fetchReviews } from '../api/client'
 import type { VendorProfile, ReviewSummary } from '../types'
+
+interface VendorData {
+  profile: VendorProfile
+  reviews: ReviewSummary[]
+}
+
+function DetailSkeleton() {
+  return (
+    <div className="space-y-6 animate-pulse">
+      <div className="h-4 w-32 bg-slate-700/50 rounded" />
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="h-7 w-48 bg-slate-700/50 rounded mb-2" />
+          <div className="h-4 w-32 bg-slate-700/50 rounded" />
+        </div>
+        <div className="h-10 w-16 bg-slate-700/50 rounded" />
+      </div>
+      <div className="h-10 w-64 bg-slate-700/50 rounded" />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 h-64" />
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 h-64" />
+      </div>
+    </div>
+  )
+}
 
 export default function VendorDetail() {
   const { name } = useParams<{ name: string }>()
   const navigate = useNavigate()
-  const [profile, setProfile] = useState<VendorProfile | null>(null)
-  const [reviews, setReviews] = useState<ReviewSummary[]>([])
   const [tab, setTab] = useState<'overview' | 'reviews' | 'companies'>('overview')
-  const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    if (!name) return
-    async function load() {
-      try {
-        const [prof, revRes] = await Promise.all([
-          fetchVendorProfile(name!),
-          fetchReviews({ vendor_name: name, limit: 50, window_days: 365 }),
-        ])
-        setProfile(prof)
-        setReviews(revRes.reviews)
-      } catch (err) {
-        console.error('VendorDetail load error:', err)
-      } finally {
-        setLoading(false)
-      }
-    }
-    load()
-  }, [name])
+  const { data, loading, error, refresh, refreshing } = useApiData<VendorData>(
+    async () => {
+      if (!name) throw new Error('Missing vendor name')
+      const [profile, revRes] = await Promise.all([
+        fetchVendorProfile(name),
+        fetchReviews({ vendor_name: name, limit: 50, window_days: 365 }),
+      ])
+      return { profile, reviews: revRes.reviews }
+    },
+    [name],
+  )
 
-  if (loading) {
-    return <div className="text-slate-500 p-8">Loading vendor profile...</div>
-  }
+  if (error) return <PageError error={error} onRetry={refresh} />
+  if (loading) return <DetailSkeleton />
 
-  if (!profile) {
-    return <div className="text-slate-500 p-8">Vendor not found</div>
-  }
+  const profile = data?.profile
+  if (!profile) return <PageError error={new Error('Vendor not found')} />
 
   const signal = profile.churn_signal
   const painData = profile.pain_distribution.map((p) => ({
@@ -127,14 +143,21 @@ export default function VendorDetail() {
             {profile.review_counts.total} reviews ({profile.review_counts.enriched} enriched)
           </p>
         </div>
-        {signal && (
-          <div className="flex items-center gap-4">
+        <div className="flex items-center gap-4">
+          {signal && (
             <div className="text-right">
               <p className="text-xs text-slate-400">Urgency Score</p>
               <p className="text-3xl font-bold text-white">{signal.avg_urgency_score.toFixed(1)}</p>
             </div>
-          </div>
-        )}
+          )}
+          <button
+            onClick={refresh}
+            disabled={refreshing}
+            className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
+          </button>
+        </div>
       </div>
 
       <div className="flex gap-1 border-b border-slate-700/50">
@@ -154,7 +177,7 @@ export default function VendorDetail() {
       </div>
 
       {tab === 'overview' && signal && (
-        <div className="grid grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="space-y-4">
             <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
               <h3 className="text-sm font-medium text-slate-300 mb-3">Key Metrics</h3>
@@ -257,7 +280,7 @@ export default function VendorDetail() {
         <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl overflow-hidden">
           <DataTable
             columns={reviewColumns}
-            data={reviews}
+            data={data?.reviews ?? []}
             onRowClick={(r) => navigate(`/reviews/${r.id}`)}
             emptyMessage="No enriched reviews for this vendor"
           />

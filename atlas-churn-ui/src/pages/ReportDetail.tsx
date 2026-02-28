@@ -1,35 +1,60 @@
-import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, RefreshCw } from 'lucide-react'
+import { clsx } from 'clsx'
+import { PageError } from '../components/ErrorBoundary'
+import useApiData from '../hooks/useApiData'
 import { fetchReport } from '../api/client'
 import type { ReportDetail as ReportDetailType } from '../types'
+
+function DetailSkeleton() {
+  return (
+    <div className="space-y-6 max-w-4xl animate-pulse">
+      <div className="h-4 w-28 bg-slate-700/50 rounded" />
+      <div>
+        <div className="h-5 w-32 bg-slate-700/50 rounded mb-2" />
+        <div className="h-7 w-56 bg-slate-700/50 rounded mb-2" />
+        <div className="h-4 w-40 bg-slate-700/50 rounded" />
+      </div>
+      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 h-32" />
+      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 h-48" />
+    </div>
+  )
+}
 
 export default function ReportDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const [report, setReport] = useState<ReportDetailType | null>(null)
-  const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    if (!id) return
-    fetchReport(id)
-      .then(setReport)
-      .catch((err) => console.error('ReportDetail load error:', err))
-      .finally(() => setLoading(false))
-  }, [id])
+  const { data: report, loading, error, refresh, refreshing } = useApiData<ReportDetailType>(
+    () => {
+      if (!id) return Promise.reject(new Error('Missing report ID'))
+      return fetchReport(id)
+    },
+    [id],
+  )
 
-  if (loading) return <div className="text-slate-500 p-8">Loading report...</div>
-  if (!report) return <div className="text-slate-500 p-8">Report not found</div>
+  if (error) return <PageError error={error} onRetry={refresh} />
+  if (loading) return <DetailSkeleton />
+  if (!report) return <PageError error={new Error('Report not found')} />
 
   return (
     <div className="space-y-6 max-w-4xl">
-      <button
-        onClick={() => navigate('/reports')}
-        className="flex items-center gap-1 text-sm text-slate-400 hover:text-white transition-colors"
-      >
-        <ArrowLeft className="h-4 w-4" />
-        Back to Reports
-      </button>
+      <div className="flex items-center justify-between">
+        <button
+          onClick={() => navigate('/reports')}
+          className="flex items-center gap-1 text-sm text-slate-400 hover:text-white transition-colors"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Back to Reports
+        </button>
+        <button
+          onClick={refresh}
+          disabled={refreshing}
+          className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
+        >
+          <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
+        </button>
+      </div>
 
       <div>
         <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-cyan-500/20 text-cyan-400 mb-2">
@@ -76,7 +101,7 @@ export default function ReportDetail() {
       {report.data_density && Object.keys(report.data_density).length > 0 && (
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
           <h3 className="text-sm font-medium text-slate-300 mb-3">Data Density</h3>
-          <dl className="grid grid-cols-2 gap-2 text-sm">
+          <dl className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
             {Object.entries(report.data_density).map(([key, value]) => (
               <div key={key} className="flex justify-between">
                 <dt className="text-slate-400">{key.replace(/_/g, ' ')}</dt>
