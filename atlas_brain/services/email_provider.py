@@ -34,6 +34,7 @@ import email as _email_stdlib
 import imaplib
 import logging
 import re
+import threading
 from email.header import decode_header as _decode_header
 from typing import Any, Optional
 
@@ -193,6 +194,7 @@ class IMAPEmailProvider:
         self._mailbox: str = "INBOX"
         self._loaded = False
         self._cached_conn: imaplib.IMAP4 | None = None
+        self._lock = threading.Lock()
 
     def _load_config(self) -> None:
         if self._loaded:
@@ -239,20 +241,24 @@ class IMAPEmailProvider:
         return conn
 
     def _get_conn(self) -> imaplib.IMAP4:
-        """Return a cached IMAP connection, reconnecting if stale."""
-        if self._cached_conn is not None:
-            try:
-                self._cached_conn.noop()
-                return self._cached_conn
-            except Exception:
+        """Return a cached IMAP connection, reconnecting if stale.
+
+        Thread-safe: sync methods run in executor threads via _run().
+        """
+        with self._lock:
+            if self._cached_conn is not None:
                 try:
-                    self._cached_conn.logout()
+                    self._cached_conn.noop()
+                    return self._cached_conn
                 except Exception:
-                    pass
-                self._cached_conn = None
-        conn = self._connect()
-        self._cached_conn = conn
-        return conn
+                    try:
+                        self._cached_conn.logout()
+                    except Exception:
+                        pass
+                    self._cached_conn = None
+            conn = self._connect()
+            self._cached_conn = conn
+            return conn
 
     def _release_conn(self, conn: imaplib.IMAP4, *, discard: bool = False) -> None:
         """Release a connection back to cache (or discard on error)."""
@@ -261,8 +267,9 @@ class IMAPEmailProvider:
                 conn.logout()
             except Exception:
                 pass
-            if self._cached_conn is conn:
-                self._cached_conn = None
+            with self._lock:
+                if self._cached_conn is conn:
+                    self._cached_conn = None
         # Otherwise keep cached for reuse
 
     # -----------------------------------------------------------------------
@@ -270,7 +277,7 @@ class IMAPEmailProvider:
     # -----------------------------------------------------------------------
 
     async def _run(self, fn, *args, **kwargs):
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: fn(*args, **kwargs))
 
     def _list_folders_sync(self) -> list[dict[str, Any]]:

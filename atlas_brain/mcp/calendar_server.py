@@ -520,9 +520,7 @@ async def sync_appointment(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import logging as _logging
-
-    _logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s %(message)s")
+    logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s %(message)s")
 
     sse_mode = "--sse" in sys.argv
     if sse_mode:

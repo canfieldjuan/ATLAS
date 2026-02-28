@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS contact_interactions (
     contact_id      UUID NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
     interaction_type VARCHAR(32) NOT NULL, -- call, email, appointment, sms, note, meeting
     summary         TEXT,
+    intent          VARCHAR(256),          -- e.g. booking, inquiry, complaint, follow_up
     occurred_at     TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     metadata        JSONB DEFAULT '{}'::jsonb

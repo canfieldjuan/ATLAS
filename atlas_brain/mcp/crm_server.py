@@ -100,6 +100,8 @@ async def search_contacts(
     phone: any format accepted (digits extracted automatically)
     limit: max results (default 20)
     """
+    if not any([query, phone, email, business_context_id]):
+        return json.dumps({"error": "At least one of query, phone, email, or business_context_id is required"})
     try:
         results = await _provider().search_contacts(
             query=query,

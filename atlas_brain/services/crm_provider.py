@@ -226,8 +226,13 @@ class DatabaseCRMProvider:
             "full_name", "first_name", "last_name", "email", "phone",
             "address", "city", "state", "zip", "contact_type", "status",
             "tags", "notes", "business_context_id", "source", "source_ref",
+            "metadata",
         }
         updates = {k: v for k, v in data.items() if k in allowed}
+        if "email" in updates and updates["email"]:
+            updates["email"] = updates["email"].lower()
+        if "metadata" in updates:
+            updates["metadata"] = json.dumps(updates["metadata"]) if isinstance(updates["metadata"], dict) else updates["metadata"]
         if not updates:
             return await self.get_contact(contact_id)
 

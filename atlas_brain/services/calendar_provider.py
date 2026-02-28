@@ -111,6 +111,12 @@ class GoogleCalendarProvider:
             )
         return self._client
 
+    async def aclose(self) -> None:
+        """Close the underlying httpx client."""
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
     async def _refresh_token(self, force: bool = False) -> str:
         import time
 
@@ -316,6 +322,14 @@ class GoogleCalendarProvider:
             headers=headers,
             json=body,
         )
+        if resp.status_code == 401:
+            headers = await self._auth_headers(force_refresh=True)
+            headers["Content-Type"] = "application/json"
+            resp = await client.put(
+                f"{_GCAL_BASE}/calendars/{cal_id}/events/{event.uid}",
+                headers=headers,
+                json=body,
+            )
         resp.raise_for_status()
         return self._parse_event(resp.json(), calendar_id=cal_id) or event
 
@@ -504,8 +518,18 @@ class CalDAVCalendarProvider:
         self._base_url = (cfg.caldav_url or "").rstrip("/")
         self._username = cfg.caldav_username or ""
         self._password = cfg.caldav_password or ""
+        if self._base_url and not self._username:
+            logger.warning("CalDAV URL set but ATLAS_TOOLS_CALDAV_USERNAME is empty")
+        if self._base_url and not self._password:
+            logger.warning("CalDAV URL set but ATLAS_TOOLS_CALDAV_PASSWORD is empty")
         self._calendar_url: Optional[str] = cfg.caldav_calendar_url or None
         self._client: Optional[httpx.AsyncClient] = None
+
+    async def aclose(self) -> None:
+        """Close the underlying httpx client."""
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
     def _client_(self) -> httpx.AsyncClient:
         if self._client is None:

@@ -245,8 +245,12 @@ class TwilioProvider(TelephonyProvider):
             kwargs["recording_status_callback"] = recording_status_callback
             kwargs["recording_status_callback_event"] = "completed"
 
-        self._client.calls(call_sid).recordings.create(**kwargs)
-        logger.info("Started recording for call %s", call_sid)
+        try:
+            self._client.calls(call_sid).recordings.create(**kwargs)
+            logger.info("Started recording for call %s", call_sid)
+        except Exception as exc:
+            logger.error("Failed to start recording for call %s: %s", call_sid, exc)
+            raise
 
     async def stop_recording(self, call_sid: str, recording_sid: str) -> bool:
         """
@@ -287,11 +291,17 @@ class TwilioProvider(TelephonyProvider):
             return False
 
         try:
-            # Update call with new TwiML to dial the transfer number
+            # Validate to_number to prevent TwiML injection
+            import re as _re
+            if not _re.match(r'^[\d\+\-\(\)\s]+$', to_number):
+                logger.error("Invalid transfer number: %s", to_number)
+                return False
+            from xml.sax.saxutils import escape as _xml_escape
+            safe_number = _xml_escape(to_number)
             transfer_twiml = f"""
             <Response>
                 <Say>Please hold while I transfer your call.</Say>
-                <Dial>{to_number}</Dial>
+                <Dial>{safe_number}</Dial>
             </Response>
             """
 

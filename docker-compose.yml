@@ -33,7 +33,7 @@ services:
     volumes:
       - atlas_nocodb_data:/usr/app/data
     environment:
-      NC_DB: "pg://postgres:5432?u=atlas&p=atlas_dev_password&d=nocodb_meta"
+      NC_DB: "pg://postgres:5432?u=atlas&p=atlas_dev_password&d=atlas"
     depends_on:
       postgres:
         condition: service_healthy
