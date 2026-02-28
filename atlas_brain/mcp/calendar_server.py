@@ -4,23 +4,23 @@ Atlas Calendar MCP Server.
 Provider-agnostic MCP server exposing calendar operations to any MCP-compatible
 client (Claude Desktop, Cursor, custom agents, etc.).
 
-Providers (configured via env vars — no code changes needed to swap):
-    Google Calendar — ATLAS_TOOLS_CALENDAR_ENABLED=true
+Providers (configured via env vars --no code changes needed to swap):
+    Google Calendar --ATLAS_TOOLS_CALENDAR_ENABLED=true
                       (run scripts/setup_google_oauth.py once to get tokens)
-    CalDAV          — ATLAS_TOOLS_CALDAV_URL + ATLAS_TOOLS_CALDAV_USERNAME
+    CalDAV          --ATLAS_TOOLS_CALDAV_URL + ATLAS_TOOLS_CALDAV_USERNAME
                       + ATLAS_TOOLS_CALDAV_PASSWORD
                       Compatible with Nextcloud, Apple Calendar, Fastmail,
-                      Proton Calendar, SOGo, Baikal, Radicale, …
+                      Proton Calendar, SOGo, Baikal, Radicale, etc.
 
 Tools:
-    list_calendars    — list all calendars available on the account
-    list_events       — list events in an ISO-8601 date/time range
-    get_event         — fetch a specific event by ID
-    create_event      — create a new event
-    update_event      — update fields on an existing event
-    delete_event      — delete / cancel an event
-    find_free_slots   — find open scheduling windows (avoids conflicts)
-    sync_appointment  — sync a local DB appointment → calendar event
+    list_calendars    --list all calendars available on the account
+    list_events       --list events in an ISO-8601 date/time range
+    get_event         --fetch a specific event by ID
+    create_event      --create a new event
+    update_event      --update fields on an existing event
+    delete_event      --delete / cancel an event
+    find_free_slots   --find open scheduling windows (avoids conflicts)
+    sync_appointment  --sync a local DB appointment -> calendar event
 
 Run:
     python -m atlas_brain.mcp.calendar_server          # stdio (Claude Desktop / Cursor)
@@ -30,6 +30,7 @@ Run:
 import json
 import logging
 import sys
+import uuid as _uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -37,6 +38,15 @@ from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger("atlas.mcp.calendar")
+
+
+def _is_uuid(value: str) -> bool:
+    """Check if a string is a valid UUID."""
+    try:
+        _uuid.UUID(value)
+        return True
+    except (ValueError, AttributeError):
+        return False
 
 
 @asynccontextmanager
@@ -100,10 +110,10 @@ async def list_calendars() -> str:
             }
             for c in calendars
         ]
-        return json.dumps(result, indent=2)
+        return json.dumps({"calendars": result, "count": len(result)}, indent=2)
     except Exception as exc:
         logger.exception("list_calendars error")
-        return json.dumps({"error": str(exc)})
+        return json.dumps({"error": str(exc), "calendars": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -145,10 +155,10 @@ async def list_events(
             }
             for e in events
         ]
-        return json.dumps(result, indent=2)
+        return json.dumps({"events": result, "count": len(result)}, indent=2)
     except Exception as exc:
         logger.exception("list_events error")
-        return json.dumps({"error": str(exc)})
+        return json.dumps({"error": str(exc), "events": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +216,7 @@ async def create_event(
     """Create a new calendar event.
 
     Args:
-        summary:     Event title (e.g. 'House cleaning — Smith residence')
+        summary:     Event title (e.g. 'House cleaning --Smith residence')
         start:       ISO-8601 start datetime (e.g. '2025-03-10T09:00:00-06:00')
         end:         ISO-8601 end datetime   (e.g. '2025-03-10T11:00:00-06:00')
         calendar_id: Optional calendar to create in (default: primary)
@@ -214,6 +224,9 @@ async def create_event(
         description: Optional notes or description
         all_day:     True for all-day events (start/end should be dates only)
     """
+    if not summary or not summary.strip():
+        return json.dumps({"success": False, "error": "summary is required"})
+
     from ..services.calendar_provider import CalendarEvent
 
     try:
@@ -229,6 +242,7 @@ async def create_event(
         created = await _provider().create_event(event, calendar_id=calendar_id)
         return json.dumps(
             {
+                "success": True,
                 "id": created.uid,
                 "summary": created.summary,
                 "start": created.start.isoformat(),
@@ -241,7 +255,7 @@ async def create_event(
         )
     except Exception as exc:
         logger.exception("create_event error")
-        return json.dumps({"error": str(exc)})
+        return json.dumps({"success": False, "error": str(exc)})
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +305,7 @@ async def update_event(
         result = await _provider().update_event(updated, calendar_id=calendar_id)
         return json.dumps(
             {
+                "success": True,
                 "id": result.uid,
                 "summary": result.summary,
                 "start": result.start.isoformat(),
@@ -301,7 +316,7 @@ async def update_event(
         )
     except Exception as exc:
         logger.exception("update_event error")
-        return json.dumps({"error": str(exc)})
+        return json.dumps({"success": False, "error": str(exc)})
 
 
 # ---------------------------------------------------------------------------
@@ -319,10 +334,10 @@ async def delete_event(event_id: str, calendar_id: Optional[str] = None) -> str:
     """
     try:
         success = await _provider().delete_event(event_id, calendar_id=calendar_id)
-        return json.dumps({"deleted": success, "event_id": event_id})
+        return json.dumps({"success": success, "deleted": success, "event_id": event_id})
     except Exception as exc:
         logger.exception("delete_event error")
-        return json.dumps({"error": str(exc)})
+        return json.dumps({"success": False, "error": str(exc)})
 
 
 # ---------------------------------------------------------------------------
@@ -422,7 +437,7 @@ async def find_free_slots(
         )
     except Exception as exc:
         logger.exception("find_free_slots error")
-        return json.dumps({"error": str(exc)})
+        return json.dumps({"error": str(exc), "free_slots": [], "total_found": 0, "duration_minutes": duration_minutes})
 
 
 # ---------------------------------------------------------------------------
@@ -448,6 +463,9 @@ async def sync_appointment(
         appointment_id: UUID of the appointment in the local database
         calendar_id:    Optional calendar to sync into (default: primary)
     """
+    if not _is_uuid(appointment_id):
+        return json.dumps({"success": False, "error": "Invalid appointment_id (must be UUID)"})
+
     from ..services.calendar_provider import CalendarEvent
 
     try:
@@ -465,7 +483,7 @@ async def sync_appointment(
         )
 
         if not row:
-            return json.dumps({"error": "Appointment not found", "appointment_id": appointment_id})
+            return json.dumps({"success": False, "error": "Appointment not found", "appointment_id": appointment_id})
 
         summary = f"Cleaning - {row['customer_name']}"
         description = row["notes"] or ""
@@ -501,6 +519,7 @@ async def sync_appointment(
 
         return json.dumps(
             {
+                "success": True,
                 "appointment_id": appointment_id,
                 "calendar_event_id": result.uid,
                 "summary": result.summary,
@@ -512,7 +531,7 @@ async def sync_appointment(
         )
     except Exception as exc:
         logger.exception("sync_appointment error")
-        return json.dumps({"error": str(exc)})
+        return json.dumps({"success": False, "error": str(exc)})
 
 
 # ---------------------------------------------------------------------------

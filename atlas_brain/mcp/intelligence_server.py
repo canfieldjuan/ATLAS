@@ -19,12 +19,24 @@ Run:
 import json
 import logging
 import sys
+import uuid as _uuid
 from contextlib import asynccontextmanager
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger("atlas.mcp.intelligence")
+
+VALID_ENTITY_TYPES = ("company", "person", "sector")
+
+
+def _is_uuid(value: str) -> bool:
+    """Check if a string is a valid UUID."""
+    try:
+        _uuid.UUID(value)
+        return True
+    except (ValueError, AttributeError):
+        return False
 
 
 @asynccontextmanager
@@ -71,21 +83,26 @@ async def generate_intelligence_report(
     report_type: "full" (600-word report) or "executive" (200-word summary)
     audience: Target reader -- "executive", "ops lead", or "investor"
     """
+    if not entity_name or not entity_name.strip():
+        return json.dumps({"success": False, "error": "entity_name is required"})
+    if entity_type not in VALID_ENTITY_TYPES:
+        return json.dumps({"success": False, "error": f"entity_type must be one of {VALID_ENTITY_TYPES}"})
+
     try:
         from ..services.intelligence_report import generate_report
 
         result = await generate_report(
-            entity_name=entity_name,
+            entity_name=entity_name.strip(),
             entity_type=entity_type,
             time_window_days=max(1, min(90, time_window_days)),
             report_type=report_type if report_type in ("full", "executive") else "full",
             audience=audience,
             requested_by="mcp",
         )
-        return json.dumps(result, default=str)
+        return json.dumps({"success": True, **result}, default=str)
     except Exception as exc:
         logger.exception("generate_intelligence_report error")
-        return json.dumps({"error": str(exc)})
+        return json.dumps({"success": False, "error": str(exc)})
 
 
 # ---------------------------------------------------------------------------
@@ -127,13 +144,16 @@ async def get_intelligence_report(report_id: str) -> str:
 
     report_id: UUID of the report to retrieve
     """
+    if not _is_uuid(report_id):
+        return json.dumps({"error": "Invalid report_id (must be UUID)", "found": False})
+
     try:
         from ..services.intelligence_report import get_report
 
         report = await get_report(report_id)
         if not report:
             return json.dumps({"error": "Report not found", "found": False})
-        return json.dumps({"found": True, **report}, default=str)
+        return json.dumps({"found": True, "report": report}, default=str)
     except Exception as exc:
         logger.exception("get_intelligence_report error")
         return json.dumps({"error": str(exc), "found": False})
@@ -160,6 +180,9 @@ async def list_pressure_baselines(
     entity_type: Filter by type ("company", "person", "sector")
     limit: Maximum results (default 20)
     """
+    if entity_type and entity_type not in VALID_ENTITY_TYPES:
+        return json.dumps({"error": f"entity_type must be one of {VALID_ENTITY_TYPES}", "baselines": []})
+
     try:
         from ..storage.database import get_db_pool
 
@@ -231,7 +254,7 @@ async def analyze_risk_sensors(text: str) -> str:
     Returns per-sensor results plus composite risk level (LOW/MEDIUM/HIGH/CRITICAL).
     """
     if not text or len(text.strip()) < 10:
-        return json.dumps({"error": "Text too short for analysis"})
+        return json.dumps({"success": False, "error": "Text too short for analysis (minimum 10 characters)"})
 
     try:
         from ..tools.risk_sensors import (
@@ -247,6 +270,7 @@ async def analyze_risk_sensors(text: str) -> str:
         cross = correlate(alignment, urgency, rigidity)
 
         return json.dumps({
+            "success": True,
             "alignment": alignment,
             "operational_urgency": urgency,
             "negotiation_rigidity": rigidity,
@@ -254,7 +278,7 @@ async def analyze_risk_sensors(text: str) -> str:
         })
     except Exception as exc:
         logger.exception("analyze_risk_sensors error")
-        return json.dumps({"error": str(exc)})
+        return json.dumps({"success": False, "error": str(exc)})
 
 
 # ---------------------------------------------------------------------------
@@ -294,13 +318,18 @@ async def run_intervention_pipeline(
     channels: Comma-separated communication channels for interventions
     allow_narrative_architect: Enable stage 3 (blocked by default until safety layer exists)
     """
+    if not entity_name or not entity_name.strip():
+        return json.dumps({"success": False, "error": "entity_name is required"})
+    if entity_type not in VALID_ENTITY_TYPES:
+        return json.dumps({"success": False, "error": f"entity_type must be one of {VALID_ENTITY_TYPES}"})
+
     try:
         from ..services.intervention_pipeline import (
             run_intervention_pipeline as _run_pipeline,
         )
 
         result = await _run_pipeline(
-            entity_name=entity_name,
+            entity_name=entity_name.strip(),
             entity_type=entity_type,
             time_window_days=max(1, min(90, time_window_days)),
             objectives=[o.strip() for o in objectives.split(",")],
@@ -313,10 +342,10 @@ async def run_intervention_pipeline(
             allow_narrative_architect=allow_narrative_architect,
             requested_by="mcp",
         )
-        return json.dumps(result, default=str)
+        return json.dumps({"success": True, **result}, default=str)
     except Exception as exc:
         logger.exception("run_intervention_pipeline error")
-        return json.dumps({"error": str(exc)})
+        return json.dumps({"success": False, "error": str(exc)})
 
 
 # ---------------------------------------------------------------------------
@@ -367,24 +396,27 @@ async def review_approval(
     reviewed_by: Identifier of the reviewer
     notes: Optional review notes
     """
+    if not _is_uuid(approval_id):
+        return json.dumps({"success": False, "error": "Invalid approval_id (must be UUID)"})
+    if action not in ("approve", "reject"):
+        return json.dumps({"success": False, "error": "action must be 'approve' or 'reject'"})
+
     try:
         from ..services.safety_gate import get_safety_gate
 
         gate = get_safety_gate()
 
         if action == "approve":
-            success = await gate.approve(approval_id, reviewed_by, notes)
-        elif action == "reject":
-            success = await gate.reject(approval_id, reviewed_by, notes)
+            ok = await gate.approve(approval_id, reviewed_by, notes)
         else:
-            return json.dumps({"error": "action must be 'approve' or 'reject'"})
+            ok = await gate.reject(approval_id, reviewed_by, notes)
 
-        if success:
-            return json.dumps({"status": action + "d", "approval_id": approval_id})
-        return json.dumps({"error": "Approval not found or already reviewed"})
+        if ok:
+            return json.dumps({"success": True, "status": action + "d", "approval_id": approval_id})
+        return json.dumps({"success": False, "error": "Approval not found or already reviewed"})
     except Exception as exc:
         logger.exception("review_approval error")
-        return json.dumps({"error": str(exc)})
+        return json.dumps({"success": False, "error": str(exc)})
 
 
 # ---------------------------------------------------------------------------

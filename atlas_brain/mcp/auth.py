@@ -10,6 +10,7 @@ If it is set, every HTTP request to the SSE app must carry:
 Returns HTTP 401 otherwise.  Only active in SSE transport.
 """
 
+import hmac
 import logging
 import os
 
@@ -33,7 +34,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
             logger.warning("MCP SSE rejected request: missing Bearer token from %s", request.client)
             return Response("Unauthorized", status_code=401)
         provided = auth.split(" ", 1)[1].strip()
-        if provided != self._token:
+        if not hmac.compare_digest(provided, self._token):
             logger.warning("MCP SSE rejected request: invalid token from %s", request.client)
             return Response("Unauthorized", status_code=401)
         return await call_next(request)

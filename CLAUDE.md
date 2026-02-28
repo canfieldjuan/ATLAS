@@ -56,8 +56,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - ✅ STT/TTS for voice interface
 - ✅ PostgreSQL for conversation persistence
 - ✅ Contacts CRM — `contacts` table + NocoDB browser UI (http://localhost:8090)
-- ✅ CRM MCP server (9 tools)
-- ✅ Email MCP server (8 tools, provider-agnostic)
+- ✅ 6 MCP servers: CRM (10 tools), Email (8), Twilio (10), Calendar (8), Invoicing (15), Intelligence (8)
 
 ### Future Capabilities (Planned)
 - 🔲 Unified always-on voice interface (wake word "Hey Atlas")
@@ -242,9 +241,12 @@ atlas_brain/
         └── switches.py          # MQTTSwitch, HomeAssistantSwitch
 
 atlas_brain/mcp/                 # MCP servers (Claude Desktop / Cursor compatible)
-├── crm_server.py                # CRM MCP server  (9 tools, port 8056 SSE)
-├── email_server.py              # Email MCP server (8 tools, port 8057 SSE)
-└── twilio_server.py             # Twilio MCP server (10 tools, port 8058 SSE)
+├── crm_server.py                # CRM MCP server          (10 tools, port 8056)
+├── email_server.py              # Email MCP server         (8 tools, port 8057)
+├── twilio_server.py             # Twilio MCP server        (10 tools, port 8058)
+├── calendar_server.py           # Calendar MCP server      (8 tools, port 8059)
+├── invoicing_server.py          # Invoicing MCP server     (15 tools, port 8060)
+└── intelligence_server.py       # Intelligence MCP server  (8 tools, port 8061)
 ```
 
 ## Key Patterns
@@ -337,11 +339,21 @@ ATLAS_TOOLS_CALENDAR_REFRESH_TOKEN=your_refresh_token
 
 # MCP Servers (Claude Desktop / Cursor integration)
 # Default transport is stdio. Set ATLAS_MCP_TRANSPORT=sse to expose as HTTP.
-ATLAS_MCP_TRANSPORT=stdio
-ATLAS_MCP_CRM_PORT=8056      # CRM MCP server (SSE mode only)
-ATLAS_MCP_EMAIL_PORT=8057    # Email MCP server (SSE mode only)
-ATLAS_MCP_TWILIO_PORT=8058   # Twilio MCP server (SSE mode only)
-ATLAS_MCP_CALENDAR_PORT=8059 # Calendar MCP server (SSE mode only)
+ATLAS_MCP_TRANSPORT=stdio            # stdio (Claude Desktop/Cursor) or sse (HTTP)
+ATLAS_MCP_HOST=0.0.0.0              # Bind host for SSE mode
+ATLAS_MCP_AUTH_TOKEN=                # Bearer token for SSE mode (optional)
+ATLAS_MCP_CRM_ENABLED=true          # Enable/disable individual servers
+ATLAS_MCP_EMAIL_ENABLED=true
+ATLAS_MCP_TWILIO_ENABLED=true
+ATLAS_MCP_CALENDAR_ENABLED=true
+ATLAS_MCP_INVOICING_ENABLED=true
+ATLAS_MCP_INTELLIGENCE_ENABLED=true
+ATLAS_MCP_CRM_PORT=8056
+ATLAS_MCP_EMAIL_PORT=8057
+ATLAS_MCP_TWILIO_PORT=8058
+ATLAS_MCP_CALENDAR_PORT=8059
+ATLAS_MCP_INVOICING_PORT=8060
+ATLAS_MCP_INTELLIGENCE_PORT=8061
 
 # IMAP — provider-agnostic email reading (works with Gmail, Outlook, any IMAP server)
 # Leave blank to fall back to Gmail API reading
@@ -376,10 +388,11 @@ service required.
 
 ## MCP Servers
 
-Three provider-agnostic MCP servers expose the CRM, email, and telephony to any MCP client
-(Claude Desktop, Cursor, custom agents).
+Six MCP servers expose Atlas capabilities to any MCP client (Claude Desktop, Cursor, custom agents).
+All share `ATLAS_MCP_TRANSPORT` (stdio/sse), `ATLAS_MCP_HOST`, and `ATLAS_MCP_AUTH_TOKEN` config.
+Each server has an independent enable/disable toggle (`ATLAS_MCP_<NAME>_ENABLED`).
 
-### CRM MCP Server (9 tools)
+### CRM MCP Server (10 tools)
 ```bash
 # stdio mode (Claude Desktop / Cursor)
 python -m atlas_brain.mcp.crm_server
@@ -390,7 +403,7 @@ python -m atlas_brain.mcp.crm_server --sse
 
 Tools: `search_contacts`, `get_contact`, `create_contact`, `update_contact`,
 `delete_contact`, `list_contacts`, `log_interaction`, `get_interactions`,
-`get_contact_appointments`
+`get_contact_appointments`, `get_customer_context`
 
 ### Email MCP Server (8 tools)
 ```bash
@@ -476,6 +489,37 @@ ATLAS_TOOLS_CALDAV_CALENDAR_URL=   # optional; auto-discovered via PROPFIND if b
 ATLAS_MCP_CALENDAR_PORT=8059  # Calendar MCP server (SSE mode only)
 ```
 
+### Invoicing MCP Server (15 tools)
+```bash
+# stdio mode (Claude Desktop / Cursor)
+python -m atlas_brain.mcp.invoicing_server
+
+# SSE HTTP mode (port 8060)
+python -m atlas_brain.mcp.invoicing_server --sse
+```
+
+Tools: `create_invoice`, `get_invoice`, `list_invoices`, `update_invoice`,
+`send_invoice`, `record_payment`, `mark_void`, `customer_balance`,
+`payment_history`, `create_service`, `list_services`, `get_service`,
+`update_service`, `set_service_status`, `search_invoices`
+
+### Intelligence MCP Server (8 tools)
+```bash
+# stdio mode (Claude Desktop / Cursor)
+python -m atlas_brain.mcp.intelligence_server
+
+# SSE HTTP mode (port 8061)
+python -m atlas_brain.mcp.intelligence_server --sse
+```
+
+Tools: `generate_intelligence_report`, `list_intelligence_reports`,
+`get_intelligence_report`, `list_pressure_baselines`, `analyze_risk_sensors`,
+`run_intervention_pipeline`, `list_pending_approvals`, `review_approval`
+
+**Intelligence reports**: On-demand competitive/market analysis from B2B churn data,
+news, and market snapshots. `run_intervention_pipeline` generates actionable
+interventions with approval workflow.
+
 ### Claude Desktop config (`~/.claude/claude_desktop_config.json`)
 ```json
 {
@@ -498,6 +542,16 @@ ATLAS_MCP_CALENDAR_PORT=8059  # Calendar MCP server (SSE mode only)
     "atlas-calendar": {
       "command": "python",
       "args": ["-m", "atlas_brain.mcp.calendar_server"],
+      "cwd": "/path/to/ATLAS"
+    },
+    "atlas-invoicing": {
+      "command": "python",
+      "args": ["-m", "atlas_brain.mcp.invoicing_server"],
+      "cwd": "/path/to/ATLAS"
+    },
+    "atlas-intelligence": {
+      "command": "python",
+      "args": ["-m", "atlas_brain.mcp.intelligence_server"],
       "cwd": "/path/to/ATLAS"
     }
   }

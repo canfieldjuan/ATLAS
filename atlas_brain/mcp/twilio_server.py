@@ -198,7 +198,7 @@ def _outbound_caller_id() -> str:
     """Get the business phone number (SignalWire-owned) for outbound caller ID.
 
     Checks all registered business contexts for phone_numbers.
-    This is NOT the user's personal phone — it's the SignalWire number
+    This is NOT the user's personal phone --it's the SignalWire number
     customers see when called.
     """
     try:
@@ -207,8 +207,8 @@ def _outbound_caller_id() -> str:
             cleaned = _e164(number)
             if cleaned.startswith("+"):
                 return cleaned
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to resolve outbound caller ID: %s", exc)
     return ""
 
 
@@ -228,15 +228,15 @@ async def make_call(
 
     How it works:
       1. SignalWire calls the customer FROM your business number
-      2. Customer answers → hears "Please hold while we connect you"
-      3. Your phone rings (forward_to_number) → you pick up
-      4. Both connected — recording captures the full conversation
+      2. Customer answers ->hears "Please hold while we connect you"
+      3. Your phone rings (forward_to_number) ->you pick up
+      4. Both connected --recording captures the full conversation
       5. When the call ends, the recording is transcribed and processed
 
     NOTE: AI does NOT talk to the customer. YOU have the conversation.
 
     to: Customer phone number in E.164 format (+1XXXXXXXXXX).
-    from_number: Caller ID — must be a SignalWire-owned number.
+    from_number: Caller ID --must be a SignalWire-owned number.
                  Auto-detected from the business context phone_numbers.
     record: Record this call (default True). The recording feeds the call
             intelligence pipeline (transcription, extraction, CRM update).
@@ -245,12 +245,15 @@ async def make_call(
 
     Returns: call SID and initial status.
     """
+    if not to or not to.strip():
+        return json.dumps({"success": False, "error": "'to' phone number is required"})
+
     try:
         client = _client()
         cfg = _comms_settings()
 
         # Caller ID must be a SignalWire-owned number (NOT your personal phone).
-        # Priority: explicit param → business context phone_numbers → error.
+        # Priority: explicit param ->business context phone_numbers ->error.
         from_num = from_number or _outbound_caller_id() or ""
         if not from_num:
             return json.dumps({"success": False, "error": "No outbound caller ID found. Set from_number or configure phone_numbers in a business context."})
@@ -304,6 +307,9 @@ async def get_call(call_sid: str) -> str:
 
     Returns: from, to, status, direction, duration, start_time, end_time.
     """
+    if not call_sid or not call_sid.strip():
+        return json.dumps({"success": False, "error": "call_sid is required"})
+
     try:
         call = await _run_sync(_client().calls(call_sid).fetch)
         return json.dumps({
@@ -337,7 +343,7 @@ async def list_calls(
 
     status: Filter by call status. One of:
         queued, ringing, in-progress, canceled, completed,
-        failed, busy, no-answer — or omit for all.
+        failed, busy, no-answer --or omit for all.
     limit: Maximum calls to return (default 20, max 100).
 
     Returns a list of call summaries.
@@ -365,12 +371,7 @@ async def list_calls(
         }, default=str)
     except Exception as exc:
         logger.exception("list_calls error")
-        return json.dumps({"success": False, "error": str(exc)})
-
-
-# ---------------------------------------------------------------------------
-# Tool: hangup_call
-# ---------------------------------------------------------------------------
+        return json.dumps({"success": False, "error": str(exc), "calls": []})
 
 @mcp.tool()
 async def hangup_call(call_sid: str) -> str:
@@ -379,6 +380,9 @@ async def hangup_call(call_sid: str) -> str:
 
     call_sid: Twilio Call SID.
     """
+    if not call_sid or not call_sid.strip():
+        return json.dumps({"success": False, "error": "call_sid is required"})
+
     try:
         await _run_sync(_client().calls(call_sid).update, status="completed")
         return json.dumps({"success": True, "call_sid": call_sid, "status": "completed"})
@@ -400,7 +404,7 @@ async def start_recording(
     Start recording an active call.
 
     Use this when a call is already in progress and you want to begin
-    recording it — for example, if make_call was called without record=True,
+    recording it --for example, if make_call was called without record=True,
     or to start recording after a specific point in the call.
 
     call_sid: Twilio Call SID of the active call.
@@ -412,6 +416,9 @@ async def start_recording(
     NOTE: To record outbound calls from the start, prefer make_call(record=True).
     This tool handles mid-call recording or retroactive recording starts.
     """
+    if not call_sid or not call_sid.strip():
+        return json.dumps({"success": False, "error": "call_sid is required"})
+
     try:
         cfg = _comms_settings()
         cb_url = recording_status_callback or (
@@ -448,6 +455,11 @@ async def stop_recording(call_sid: str, recording_sid: str) -> str:
     call_sid: Twilio Call SID.
     recording_sid: Recording SID (RExxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx).
     """
+    if not call_sid or not call_sid.strip():
+        return json.dumps({"success": False, "error": "call_sid is required"})
+    if not recording_sid or not recording_sid.strip():
+        return json.dumps({"success": False, "error": "recording_sid is required"})
+
     try:
         await _run_sync(_client().calls(call_sid).recordings(recording_sid).update, status="stopped")
         return json.dumps({
@@ -474,8 +486,10 @@ async def list_recordings(call_sid: str) -> str:
 
     Returns: list of recordings with SID, status, duration, and media URL.
     """
+    if not call_sid or not call_sid.strip():
+        return json.dumps({"success": False, "error": "call_sid is required", "recordings": []})
+
     try:
-        acct = _account_sid()
         recordings = await _run_sync(_client().recordings.list, call_sid=call_sid)
         return json.dumps({
             "success": True,
@@ -486,14 +500,14 @@ async def list_recordings(call_sid: str) -> str:
                     "status": r.status,
                     "duration": r.duration,
                     "date_created": str(r.date_created),
-                    "media_url": _recording_media_url(r.sid, acct),
+                    "media_url": _recording_media_url(r.sid, _account_sid()),
                 }
                 for r in recordings
             ],
         }, default=str)
     except Exception as exc:
         logger.exception("list_recordings error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": str(exc), "recordings": [], "call_sid": call_sid})
 
 
 # ---------------------------------------------------------------------------
@@ -509,6 +523,9 @@ async def get_recording(recording_sid: str) -> str:
 
     Returns: duration, call_sid, status, and a direct MP3 download URL.
     """
+    if not recording_sid or not recording_sid.strip():
+        return json.dumps({"success": False, "error": "recording_sid is required"})
+
     try:
         r = await _run_sync(_client().recordings(recording_sid).fetch)
         media_url = _recording_media_url(recording_sid, _account_sid())
@@ -546,6 +563,11 @@ async def send_sms(
                  ATLAS_COMMS_FORWARD_TO_NUMBER.
     media_urls: Comma-separated list of public media URLs for MMS (optional).
     """
+    if not to or not to.strip():
+        return json.dumps({"success": False, "error": "'to' phone number is required"})
+    if not body or not body.strip():
+        return json.dumps({"success": False, "error": "'body' is required"})
+
     try:
         cfg = _comms_settings()
         from_num = from_number or _outbound_caller_id() or cfg.forward_to_number or ""

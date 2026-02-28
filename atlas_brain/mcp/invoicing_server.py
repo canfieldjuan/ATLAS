@@ -142,6 +142,9 @@ async def create_invoice(
     invoice_for: description of what the invoice covers (e.g. "Office Cleaning - January 2026")
     contact_name: name of the contact person at the customer
     """
+    if not customer_name or not customer_name.strip():
+        return json.dumps({"success": False, "error": "customer_name is required"})
+
     try:
         items = json.loads(line_items) if isinstance(line_items, str) else line_items
     except json.JSONDecodeError:
@@ -207,7 +210,7 @@ async def get_invoice(invoice_id: str) -> str:
         return json.dumps({"found": True, "invoice": inv}, default=str)
     except Exception as exc:
         logger.exception("get_invoice error")
-        return json.dumps({"error": str(exc), "found": False})
+        return json.dumps({"error": str(exc), "found": False, "invoice": None})
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +236,7 @@ async def list_invoices(
         invoices = await repo.search(
             contact_id=cid,
             status=status,
-            limit=limit,
+            limit=min(limit, 200),
         )
 
         if business_context_id:
@@ -242,7 +245,7 @@ async def list_invoices(
         return json.dumps({"invoices": invoices, "count": len(invoices)}, default=str)
     except Exception as exc:
         logger.exception("list_invoices error")
-        return json.dumps({"error": str(exc), "invoices": []})
+        return json.dumps({"error": str(exc), "invoices": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -276,8 +279,16 @@ async def update_invoice(
     dd = date.fromisoformat(due_date) if due_date else None
 
     try:
-        iid = _uuid.UUID(invoice_id)
-        updated = await _repo().update_invoice(
+        repo = _repo()
+        if _is_uuid(invoice_id):
+            iid = _uuid.UUID(invoice_id)
+        else:
+            inv = await repo.get_by_number(invoice_id)
+            if not inv:
+                return json.dumps({"success": False, "error": "Invoice not found"})
+            iid = inv["id"]
+
+        updated = await repo.update_invoice(
             invoice_id=iid,
             line_items=items,
             due_date=dd,
@@ -495,7 +506,7 @@ async def customer_balance(
         return json.dumps({"found": True, "balance": balance}, default=str)
     except Exception as exc:
         logger.exception("customer_balance error")
-        return json.dumps({"error": str(exc), "found": False})
+        return json.dumps({"error": str(exc), "found": False, "balance": None})
 
 
 # ---------------------------------------------------------------------------
@@ -523,7 +534,7 @@ async def payment_history(
         return json.dumps({"found": True, "behavior": behavior}, default=str)
     except Exception as exc:
         logger.exception("payment_history error")
-        return json.dumps({"error": str(exc), "found": False})
+        return json.dumps({"error": str(exc), "found": False, "behavior": None})
 
 
 # ---------------------------------------------------------------------------
@@ -556,6 +567,11 @@ async def create_service(
     calendar_id: specific Google Calendar ID (omit for primary calendar)
     start_date: ISO date (YYYY-MM-DD), defaults to today
     """
+    if not service_name or not service_name.strip():
+        return json.dumps({"success": False, "error": "service_name is required"})
+    if not calendar_keyword or not calendar_keyword.strip():
+        return json.dumps({"success": False, "error": "calendar_keyword is required"})
+
     resolved = await _resolve_contact_id(contact_id, phone, email)
     if not resolved:
         return json.dumps({"success": False, "error": "Customer not found. Provide contact_id, phone, or email."})
@@ -620,7 +636,7 @@ async def list_services(
         return json.dumps({"services": services, "count": len(services)}, default=str)
     except Exception as exc:
         logger.exception("list_services error")
-        return json.dumps({"error": str(exc), "services": []})
+        return json.dumps({"error": str(exc), "services": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -780,12 +796,12 @@ async def search_invoices(
             status=status,
             from_date=fd,
             to_date=td,
-            limit=limit,
+            limit=min(limit, 200),
         )
         return json.dumps({"invoices": results, "count": len(results)}, default=str)
     except Exception as exc:
         logger.exception("search_invoices error")
-        return json.dumps({"error": str(exc), "invoices": []})
+        return json.dumps({"error": str(exc), "invoices": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------

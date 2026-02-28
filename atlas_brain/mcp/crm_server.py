@@ -6,20 +6,20 @@ to any MCP-compatible client (Claude Desktop, Cursor, custom agents, etc.).
 
 The `contacts` table is the single source of truth for customer data.
 Contacts are enriched over time via interaction logs, linked appointments,
-and email history — replacing the previous approach of scraping appointment
+and email history --replacing the previous approach of scraping appointment
 rows and relying solely on GraphRAG accumulation.
 
 Tools:
-    search_contacts         — find contacts by name / phone / email
-    get_contact             — fetch a contact by UUID
-    create_contact          — create a new contact record
-    update_contact          — update contact fields
-    delete_contact          — archive (soft-delete) a contact
-    list_contacts           — paginated list with filters
-    log_interaction         — record a customer touch-point
-    get_interactions        — retrieve interaction history
-    get_contact_appointments — fetch appointments linked to a contact
-    get_customer_context     — unified view: contact + interactions + calls + emails
+    search_contacts         --find contacts by name / phone / email
+    get_contact             --fetch a contact by UUID
+    create_contact          --create a new contact record
+    update_contact          --update contact fields
+    delete_contact          --archive (soft-delete) a contact
+    list_contacts           --paginated list with filters
+    log_interaction         --record a customer touch-point
+    get_interactions        --retrieve interaction history
+    get_contact_appointments --fetch appointments linked to a contact
+    get_customer_context     --unified view: contact + interactions + calls + emails
 
 Run:
     python -m atlas_brain.mcp.crm_server          # stdio (Claude Desktop / Cursor)
@@ -410,7 +410,7 @@ async def get_interactions(contact_id: str, limit: int = 20) -> str:
     """
     Retrieve interaction history for a contact.
 
-    Returns calls, emails, appointments, and notes — most recent first.
+    Returns calls, emails, appointments, and notes --most recent first.
     This is the longitudinal view of the customer relationship.
     """
     if not _is_uuid(contact_id):
@@ -468,13 +468,13 @@ async def get_customer_context(
     max_emails: int = 10,
 ) -> str:
     """
-    Get the full unified customer context — everything Atlas knows about a customer.
+    Get the full unified customer context --everything Atlas knows about a customer.
 
     Provide at least one of contact_id, phone, email, or name.  The service resolves
     the contact record first, then fetches all linked data in parallel.
 
     contact_id: UUID of the contact (use search_contacts first if you only have a name)
-    name: customer name — will search contacts and use the first match
+    name: customer name --will search contacts and use the first match
     phone: phone number in any format
     email: email address
     """

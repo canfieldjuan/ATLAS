@@ -3,22 +3,22 @@ Atlas Email MCP Server.
 
 Provider-agnostic MCP server for email operations.
 
-Sending:  CompositeEmailProvider — Gmail preferred, Resend fallback, or any
+Sending:  CompositeEmailProvider --Gmail preferred, Resend fallback, or any
           provider registered via get_email_provider().
 Reading:  IMAP preferred (provider-agnostic: Gmail, Outlook, Yahoo, any server).
           Falls back to Gmail API when IMAP is not configured.
 History:  Atlas sent_emails DB table (all outbound email sent through Atlas).
 
 Tools:
-    send_email          — send a plain email
-    send_estimate       — send a cleaning estimate confirmation (templated)
-    send_proposal       — send a cleaning proposal (templated, auto-PDF)
-    list_folders        — list all IMAP folders / mailboxes
-    list_inbox          — list messages in a folder (default: INBOX)
-    get_message         — fetch a full message with body
-    search_inbox        — search messages with arbitrary query syntax
-    get_thread          — fetch a thread
-    list_sent_history   — query Atlas sent_emails history from the DB
+    send_email          --send a plain email
+    send_estimate       --send a cleaning estimate confirmation (templated)
+    send_proposal       --send a cleaning proposal (templated, auto-PDF)
+    list_folders        --list all IMAP folders / mailboxes
+    list_inbox          --list messages in a folder (default: INBOX)
+    get_message         --fetch a full message with body
+    search_inbox        --search messages with arbitrary query syntax
+    get_thread          --fetch a thread
+    list_sent_history   --query Atlas sent_emails history from the DB
 
 Run:
     python -m atlas_brain.mcp.email_server          # stdio (Claude Desktop / Cursor)
@@ -95,8 +95,12 @@ async def send_email(
     Send a plain email via the configured email provider.
 
     to / cc / bcc: single address or comma-separated list.
-    The provider is resolved at runtime — Gmail preferred, Resend fallback.
+    The provider is resolved at runtime -- Gmail preferred, Resend fallback.
     """
+    if not to or not to.strip():
+        return json.dumps({"success": False, "error": "'to' address is required"})
+    if not body or not body.strip():
+        return json.dumps({"success": False, "error": "'body' is required"})
     try:
         result = await _provider().send(
             to=_to_list(to),
@@ -272,7 +276,7 @@ async def send_proposal(
             attachments=attachments,
         )
 
-        msg = f"Proposal sent to {client_name} ({to}) — ${price} {frequency}"
+        msg = f"Proposal sent to {client_name} ({to}) --${price} {frequency}"
         if pdf_path:
             msg += " [PDF attached]"
         return json.dumps({
@@ -309,7 +313,7 @@ async def list_folders() -> str:
         return json.dumps({"folders": folders, "count": len(folders)}, default=str)
     except Exception as exc:
         logger.exception("list_folders error")
-        return json.dumps({"error": str(exc), "folders": []})
+        return json.dumps({"error": str(exc), "folders": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -326,14 +330,14 @@ async def list_inbox(
     List messages in a mailbox matching a search query.
 
     query: search syntax (default 'is:unread'). Supported filters:
-        'is:unread'              — unread messages
-        'is:read'                — read messages
-        'from:john@example.com'  — from a specific sender
-        'to:alice@example.com'   — to a specific recipient
-        'subject:invoice'        — subject contains text
-        'newer_than:7d'          — last 7 days
-        'older_than:30d'         — older than 30 days
-        'is:starred'             — starred / flagged messages
+        'is:unread'              --unread messages
+        'is:read'                --read messages
+        'from:john@example.com'  --from a specific sender
+        'to:alice@example.com'   --to a specific recipient
+        'subject:invoice'        --subject contains text
+        'newer_than:7d'          --last 7 days
+        'older_than:30d'         --older than 30 days
+        'is:starred'             --starred / flagged messages
     max_results: capped at 100
     mailbox: IMAP folder to read from (default: INBOX).
              Use list_folders to discover available folders.
@@ -346,7 +350,7 @@ async def list_inbox(
         return json.dumps({"messages": messages, "count": len(messages)}, default=str)
     except Exception as exc:
         logger.exception("list_inbox error")
-        return json.dumps({"error": str(exc), "messages": []})
+        return json.dumps({"error": str(exc), "messages": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -368,7 +372,7 @@ async def get_message(message_id: str, mailbox: Optional[str] = None) -> str:
         return json.dumps({"message": msg}, default=str)
     except Exception as exc:
         logger.exception("get_message error")
-        return json.dumps({"error": str(exc)})
+        return json.dumps({"error": str(exc), "message": None})
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +395,9 @@ async def search_inbox(
 
     Returns up to max_results messages with full header metadata.
     """
+    if not query or not query.strip():
+        return json.dumps({"error": "query is required", "messages": [], "count": 0})
+
     try:
         provider = _provider()
         messages = await provider.list_messages(
@@ -401,7 +408,7 @@ async def search_inbox(
         )
     except Exception as exc:
         logger.exception("search_inbox error")
-        return json.dumps({"error": str(exc), "messages": []})
+        return json.dumps({"error": str(exc), "messages": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -423,11 +430,7 @@ async def get_thread(thread_id: str, mailbox: Optional[str] = None) -> str:
         return json.dumps({"thread": thread}, default=str)
     except Exception as exc:
         logger.exception("get_thread error")
-        return json.dumps({"error": str(exc)})
-
-
-# ---------------------------------------------------------------------------
-# Tool: list_sent_history
+        return json.dumps({"error": str(exc), "thread": None})
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
@@ -440,7 +443,7 @@ async def list_sent_history(
     Query the history of emails sent through Atlas (from the DB).
 
     hours: how far back to look (default 24)
-    template_type: 'estimate' | 'proposal' | 'generic' — or omit for all
+    template_type: 'estimate' | 'proposal' | 'generic' --or omit for all
     limit: max results (default 20)
 
     This covers all outbound mail sent via Atlas tools, not inbox mail.
@@ -451,7 +454,7 @@ async def list_sent_history(
         result = await query_email_history_tool.execute({
             "hours": hours,
             "template_type": template_type,
-            "limit": limit,
+            "limit": min(limit, 100),
         })
         return json.dumps(
             {"success": result.success, "data": result.data, "message": result.message},
@@ -459,7 +462,7 @@ async def list_sent_history(
         )
     except Exception as exc:
         logger.exception("list_sent_history error")
-        return json.dumps({"error": str(exc)})
+        return json.dumps({"success": False, "error": str(exc), "data": None, "message": None})
 
 
 # ---------------------------------------------------------------------------
