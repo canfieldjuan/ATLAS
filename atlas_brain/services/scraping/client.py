@@ -140,7 +140,7 @@ class AntiDetectionClient:
                     captcha_type = detect_captcha(resp.text, resp.status_code)
 
                     if captcha_type != CaptchaType.NONE:
-                        solver = get_captcha_solver()
+                        solver = get_captcha_solver(domain)
                         if solver:
                             logger.info(
                                 "CAPTCHA detected on %s (%s), solving attempt %d/%d",

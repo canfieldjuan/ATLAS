@@ -327,7 +327,22 @@ class CaptchaSolver:
         user_agent: str,
         proxy_url: str | None,
     ) -> dict[str, str]:
-        base = "https://2captcha.com"
+        from urllib.parse import urlparse
+
+        base = "https://api.2captcha.com"
+
+        # Build proxy fields (2Captcha uses split format)
+        proxy_fields: dict = {}
+        if proxy_url:
+            p = urlparse(proxy_url)
+            proxy_fields = {
+                "proxyType": "http",
+                "proxyAddress": p.hostname,
+                "proxyPort": p.port,
+            }
+            if p.username:
+                proxy_fields["proxyLogin"] = p.username
+                proxy_fields["proxyPassword"] = p.password
 
         if captcha_type == CaptchaType.DATADOME:
             dd = _extract_datadome_params(page_html)
@@ -345,73 +360,70 @@ class CaptchaSolver:
                 "initialCid": dd.get("cid", ""),
                 "hash": dd.get("hsh", ""),
                 "cid": dd.get("cid", ""),
-                "t": dd.get("t", "fe"),
+                "t": dd.get("t") or dd.get("rt", "fe"),
                 "referer": quote(page_url, safe=""),
                 "s": dd.get("s", ""),
                 "e": dd.get("e", ""),
             }
             captcha_url = f"https://{host}/captcha/?{urlencode(captcha_qs)}"
-            params: dict = {
-                "key": self._api_key,
-                "method": "datadome",
-                "captcha_url": captcha_url,
-                "pageurl": page_url,
+
+            task: dict = {
+                "type": "DataDomeSliderTask",
+                "websiteURL": page_url,
+                "captchaUrl": captcha_url,
                 "userAgent": user_agent,
-                "json": 1,
+                **proxy_fields,
             }
-            if proxy_url:
-                params["proxy"] = proxy_url
-                params["proxytype"] = "HTTP"
 
         elif captcha_type == CaptchaType.CLOUDFLARE:
-            params = {
-                "key": self._api_key,
-                "method": "managed",
-                "sitekey": "",  # 2Captcha extracts from page
-                "pageurl": page_url,
+            task = {
+                "type": "TurnstileTask",
+                "websiteURL": page_url,
                 "userAgent": user_agent,
-                "json": 1,
+                **proxy_fields,
             }
-            if proxy_url:
-                params["proxy"] = proxy_url
-                params["proxytype"] = "HTTP"
         else:
             raise ValueError(f"Unsupported captcha type for 2Captcha: {captcha_type}")
 
-        # Submit task
+        # Create task
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(f"{base}/in.php", data=params)
-            resp.raise_for_status()
+            resp = await client.post(
+                f"{base}/createTask",
+                json={"clientKey": self._api_key, "task": task},
+            )
             data = resp.json()
 
-        if data.get("status") != 1:
-            raise RuntimeError(f"2Captcha submit error: {data.get('request', data)}")
+        if data.get("errorId", 0) != 0:
+            raise RuntimeError(
+                f"2Captcha createTask error: "
+                f"{data.get('errorCode', '?')} — {data.get('errorDescription', data)}"
+            )
 
-        task_id = data["request"]
+        task_id = str(data["taskId"])
         return await self._poll_2captcha(base, task_id)
 
     async def _poll_2captcha(self, base: str, task_id: str) -> dict[str, str]:
         async with httpx.AsyncClient(timeout=30) as client:
             for _ in range(_MAX_POLL_ATTEMPTS):
-                await asyncio.sleep(_POLL_INTERVAL_S)
-                resp = await client.get(
-                    f"{base}/res.php",
-                    params={
-                        "key": self._api_key,
-                        "action": "get",
-                        "id": task_id,
-                        "json": 1,
-                    },
+                await asyncio.sleep(_POLL_INTERVAL_S + 2)  # 2Captcha is slower, poll less aggressively
+                resp = await client.post(
+                    f"{base}/getTaskResult",
+                    json={"clientKey": self._api_key, "taskId": task_id},
                 )
                 resp.raise_for_status()
                 data = resp.json()
 
-                if data.get("status") == 1:
-                    return _parse_2captcha_solution(data.get("request", ""))
-                if data.get("request") not in ("CAPCHA_NOT_READY",):
-                    raise RuntimeError(f"2Captcha error: {data.get('request', data)}")
+                status = data.get("status", "")
+                if status == "ready":
+                    solution = data.get("solution", {})
+                    return _parse_2captcha_cookies(solution)
+                if data.get("errorId", 0) != 0:
+                    raise RuntimeError(
+                        f"2Captcha task failed: "
+                        f"{data.get('errorCode', '?')} — {data.get('errorDescription', data)}"
+                    )
 
-        raise TimeoutError(f"2Captcha task {task_id} timed out after {_POLL_INTERVAL_S * _MAX_POLL_ATTEMPTS}s")
+        raise TimeoutError(f"2Captcha task {task_id} timed out after {(_POLL_INTERVAL_S + 2) * _MAX_POLL_ATTEMPTS}s")
 
 
 # ---------------------------------------------------------------------------
@@ -445,20 +457,30 @@ def _extract_cookies(solution: dict) -> dict[str, str]:
     return cookies
 
 
-def _parse_2captcha_solution(raw: str) -> dict[str, str]:
-    """Parse 2Captcha solution string into cookies dict.
+def _parse_2captcha_cookies(solution: dict) -> dict[str, str]:
+    """Parse 2Captcha solution into cookies dict.
 
-    2Captcha returns cookies as ``key=value; key2=value2`` in the request field.
+    New API returns ``{"cookie": "*datadome=abc; expires=...; domain=.g2.com"}``.
+    The ``*`` prefix on the cookie name is a 2Captcha convention — strip it.
+    Cookie attributes (expires, domain, path, secure, samesite) are filtered out.
     """
+    _COOKIE_ATTRS = {"path", "secure", "samesite", "domain", "httponly", "max-age", "expires"}
     cookies: dict[str, str] = {}
-    for part in raw.split(";"):
-        part = part.strip()
-        if "=" in part:
-            k, v = part.split("=", 1)
-            cookies[k.strip()] = v.strip()
+
+    raw = solution.get("cookie", "")
+    if isinstance(raw, dict):
+        cookies.update(raw)
+    elif isinstance(raw, str):
+        for part in raw.split(";"):
+            part = part.strip()
+            if "=" in part:
+                k, v = part.split("=", 1)
+                k = k.strip().lstrip("*")  # Strip 2Captcha's * prefix
+                if k.lower() not in _COOKIE_ATTRS:
+                    cookies[k] = v.strip()
 
     if not cookies:
-        logger.warning("No cookies parsed from 2Captcha solution: %s", raw)
+        logger.warning("No cookies parsed from 2Captcha solution: %s", solution)
     return cookies
 
 
@@ -467,24 +489,40 @@ def _parse_2captcha_solution(raw: str) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 _solver: CaptchaSolver | None = None
+_solver_2captcha: CaptchaSolver | None = None
+_2captcha_domains: set[str] = set()
 _enabled_domains: set[str] = set()
 _checked: bool = False
 
 
-def get_captcha_solver() -> CaptchaSolver | None:
-    """Get the module-level CAPTCHA solver, or None if disabled."""
-    global _solver, _enabled_domains, _checked
-    if _solver is not None:
-        return _solver
-    if _checked:
+def get_captcha_solver(domain: str | None = None) -> CaptchaSolver | None:
+    """Get the CAPTCHA solver for a domain.
+
+    If the domain is in the 2Captcha override list, returns the 2Captcha solver.
+    Otherwise returns the primary solver (CapSolver by default).
+    """
+    global _solver, _solver_2captcha, _2captcha_domains, _enabled_domains, _checked
+    if not _checked:
+        _init_solvers()
+    if _solver is None:
         return None
+
+    # Route to 2Captcha for specific domains
+    if domain and domain.lower() in _2captcha_domains and _solver_2captcha:
+        return _solver_2captcha
+    return _solver
+
+
+def _init_solvers() -> None:
+    """Initialize solver singletons from config."""
+    global _solver, _solver_2captcha, _2captcha_domains, _enabled_domains, _checked
+    _checked = True
 
     from ...config import settings
 
     cfg = settings.b2b_scrape
-    _checked = True
     if not cfg.captcha_enabled or not cfg.captcha_api_key:
-        return None
+        return
 
     _solver = CaptchaSolver(provider=cfg.captcha_provider, api_key=cfg.captcha_api_key)
     _enabled_domains = {d.strip().lower() for d in cfg.captcha_domains.split(",") if d.strip()}
@@ -492,7 +530,16 @@ def get_captcha_solver() -> CaptchaSolver | None:
         "CAPTCHA solver initialized: provider=%s, domains=%s",
         cfg.captcha_provider, _enabled_domains,
     )
-    return _solver
+
+    # Optional 2Captcha override for specific domains
+    if cfg.captcha_2captcha_api_key and cfg.captcha_2captcha_domains:
+        _solver_2captcha = CaptchaSolver(provider="2captcha", api_key=cfg.captcha_2captcha_api_key)
+        _2captcha_domains.update(
+            d.strip().lower() for d in cfg.captcha_2captcha_domains.split(",") if d.strip()
+        )
+        logger.info(
+            "2Captcha override initialized for domains: %s", _2captcha_domains,
+        )
 
 
 def is_captcha_enabled_for_domain(domain: str) -> bool:
