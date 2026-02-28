@@ -33,6 +33,7 @@ from .system import router as system_router
 from .b2b_reviews import router as b2b_reviews_router
 from .b2b_scrape import router as b2b_scrape_router
 from .intelligence import router as intelligence_router
+from .b2b_dashboard import router as b2b_dashboard_router
 
 # Main router that aggregates all sub-routers
 router = APIRouter()
@@ -66,3 +67,4 @@ router.include_router(system_router)
 router.include_router(b2b_reviews_router)
 router.include_router(b2b_scrape_router)
 router.include_router(intelligence_router)
+router.include_router(b2b_dashboard_router)

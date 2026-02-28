@@ -686,6 +686,16 @@ app.include_router(openai_compat_router)
 from .api.ollama_compat import router as ollama_compat_router
 app.include_router(ollama_compat_router)
 
+# CORS middleware for dashboard dev servers
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5174", "http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    allow_headers=["*"],
+)
+
 # Serve the web UI production build (atlas-ui/dist) as static files.
 # Root "/" uses content negotiation: browsers get the UI, API clients get
 # the Ollama health-check response. Static assets mounted at /.
