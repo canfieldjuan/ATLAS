@@ -28,6 +28,7 @@ EXECUTIVE SUMMARY
 
 - Keep the summary under 200 words for executive readability.
 - Use short, declarative sentences with high confidence phrasing.
-- Be predictive: call out likely next moves or trajectories based on triggers.
+- Be predictive: call out likely next moves or trajectories based on triggers. Name the causal pattern: what signal combination you see, what it historically precedes, and the expected timeline.
+- Do not just list what happened. State what it means and what comes next.
 - Cite evidence inline using `(source: <label>)`.
 - Never fabricate; if evidence is thin, state the gap directly.

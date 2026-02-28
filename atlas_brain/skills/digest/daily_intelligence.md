@@ -40,11 +40,22 @@ You will receive a JSON object with these sections:
 
 2. **News Digest**: Group articles by theme. Identify which stories are developing over multiple days vs. one-off. Note SORAM channel concentrations per theme.
 
-3. **Cross-Domain Connections**: Look for:
-   - News events that correlate with or explain market movements
-   - Business activity that relates to market or news themes
-   - Multi-day patterns (e.g., a sector declining while related news intensifies)
-   - Knowledge graph facts that connect to current events
+3. **Cross-Domain Connections**: Do not just note that two events co-occur. Name the causal mechanism. Use the connection types below to classify each connection you find. If a connection does not fit any type, describe the mechanism explicitly.
+
+   **Pressure Cascade Patterns** (behavioral sequences that predict outcomes):
+   - **Regulatory + Leadership Change = Strategic Pivot**: When regulatory pressure rises (R channel) and leadership/alignment shifts appear (A channel), the entity is likely preparing to change course. Predict: public strategy announcement within 2-4 weeks.
+   - **Sentiment Drift + Certainty Spike = Public Commitment Imminent**: When sentiment moves directionally AND hedging language disappears (certainty_spike), a public statement or action is being locked in. The window between certainty spike and announcement is typically short (days, not weeks).
+   - **Operational Disruption + Adversarial Language = Labor/Vendor Action**: When operational channel (O) spikes alongside adversarial alignment sensor triggers, collective action (strike, walkout, contract termination) is forming. The adversarial language shift precedes the action.
+   - **Permission Shift + Media Narrative Intensification = Policy Change Pre-Sell**: When permission_shift appears in coverage AND media channel (M) intensity rises, someone is preparing public opinion for a previously unacceptable action. Track who benefits from the shifted permission.
+   - **Hedging Withdrawal + Urgency Escalation = Deadline Pressure**: When sources stop qualifying their statements AND urgency language compresses timelines, a hard deadline (regulatory, contractual, financial) is driving behavior. Find the deadline.
+
+   **Cross-Domain Correlation Patterns** (connecting different data types):
+   - **News-Market Temporal**: An article cluster about an entity within 4-24 hours of abnormal price movement suggests causation, not coincidence. Note which came first -- news before price = information asymmetry; price before news = insider activity or algorithmic response.
+   - **Business-News Echo**: When business activity (emails, appointments, CRM interactions) references themes also appearing in news, the external environment is directly affecting operations. Escalate these connections.
+   - **Graph-Event Confirmation**: When knowledge graph relationships (prior learned facts) connect to current events, the connection has historical grounding. Weight these higher than single-source observations.
+   - **Multi-Day Narrative Build**: When the same entity or theme appears across 3+ days with increasing SORAM scores or shifting channel mix, pressure is compounding. This is more significant than any single-day spike.
+
+   For each connection, state: what you observed, which pattern it matches, and what it predicts.
 
 4. **Pressure Assessment** (per entity with sufficient data):
    - **SORAM Profile**: Which channels are most active? Has the channel mix shifted from prior sessions?
@@ -76,7 +87,7 @@ Respond with a JSON object containing these fields:
     {"insight": "Brief insight statement", "confidence": "high|medium|low", "domain": "market|news|business|cross-domain|pressure"}
   ],
   "connections_found": [
-    {"description": "Description of the connection", "domains": ["market", "news"], "significance": "high|medium|low"}
+    {"description": "Description of the connection", "pattern": "regulatory_pivot|commitment_imminent|labor_action|policy_presell|deadline_pressure|news_market_temporal|business_echo|graph_confirmation|narrative_build|other", "domains": ["market", "news"], "prediction": "What this connection predicts will happen next", "significance": "high|medium|low"}
   ],
   "recommendations": [
     {"action": "What to watch or consider", "urgency": "immediate|this_week|ongoing", "reasoning": "Why this matters"}
@@ -125,6 +136,7 @@ Respond with a JSON object containing these fields:
 - If prior_reasoning is empty, note that this is your first analysis session
 - If a data section is empty, acknowledge it briefly and move on -- don't skip the section entirely
 - Prioritize pressure signals and cross-domain connections over single-domain summaries
+- Every connection MUST name its causal mechanism or pattern type -- "X and Y co-occurred" is not a connection. "X preceded Y via [pattern]" is.
 - Limit `pressure_readings` to the top 10 most significant entities -- quality over quantity
 - If an entity appeared in prior pressure_readings but has no new data today, include it with trajectory "steady" and prior score (only if in top 10)
 - Limit `key_insights` to 5-8 items, `connections_found` to 3-5 items, `recommendations` to 3-5 items
