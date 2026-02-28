@@ -102,30 +102,30 @@ class VoiceSettingsUpdate(BaseModel):
     debug_logging: Optional[bool] = None
 
     input_device: Optional[str] = None
-    audio_gain: Optional[float] = None
+    audio_gain: Optional[float] = Field(default=None, ge=0.0, le=10.0)
     use_arecord: Optional[bool] = None
     arecord_device: Optional[str] = None
 
-    wake_threshold: Optional[float] = None
+    wake_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     wake_confirmation_enabled: Optional[bool] = None
 
     asr_url: Optional[str] = None
-    asr_timeout: Optional[int] = None
+    asr_timeout: Optional[int] = Field(default=None, ge=5, le=120)
     asr_streaming_enabled: Optional[bool] = None
     asr_ws_url: Optional[str] = None
 
-    piper_length_scale: Optional[float] = None
+    piper_length_scale: Optional[float] = Field(default=None, ge=0.1, le=5.0)
 
-    vad_aggressiveness: Optional[int] = None
-    silence_ms: Optional[int] = None
+    vad_aggressiveness: Optional[int] = Field(default=None, ge=0, le=3)
+    silence_ms: Optional[int] = Field(default=None, ge=100, le=5000)
 
     conversation_mode_enabled: Optional[bool] = None
-    conversation_timeout_ms: Optional[int] = None
+    conversation_timeout_ms: Optional[int] = Field(default=None, ge=5000, le=300000)
 
     filler_enabled: Optional[bool] = None
-    filler_delay_ms: Optional[int] = None
+    filler_delay_ms: Optional[int] = Field(default=None, ge=100, le=10000)
 
-    agent_timeout: Optional[float] = None
+    agent_timeout: Optional[float] = Field(default=None, ge=5.0, le=120.0)
 
 
 def _quote_env_value(value: str) -> str:
@@ -367,23 +367,23 @@ class EmailSettingsUpdate(BaseModel):
     imap_ssl: Optional[bool] = None
     imap_mailbox: Optional[str] = None
     gmail_query: Optional[str] = None
-    gmail_max_results: Optional[int] = None
+    gmail_max_results: Optional[int] = Field(default=None, ge=1, le=50)
 
     # Intake
     intake_enabled: Optional[bool] = None
-    intake_interval_seconds: Optional[int] = None
+    intake_interval_seconds: Optional[int] = Field(default=None, ge=300)
     intake_crm_enabled: Optional[bool] = None
     intake_action_plan_enabled: Optional[bool] = None
-    intake_max_action_plans_per_cycle: Optional[int] = None
+    intake_max_action_plans_per_cycle: Optional[int] = Field(default=None, ge=1, le=20)
 
     # Draft
     draft_enabled: Optional[bool] = None
     draft_auto_draft_enabled: Optional[bool] = None
     draft_model_name: Optional[str] = None
-    draft_temperature: Optional[float] = None
-    draft_expiry_hours: Optional[int] = None
+    draft_temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
+    draft_expiry_hours: Optional[int] = Field(default=None, ge=1, le=168)
     draft_notify_drafts: Optional[bool] = None
-    draft_schedule_interval_seconds: Optional[int] = None
+    draft_schedule_interval_seconds: Optional[int] = Field(default=None, ge=300)
     draft_triage_enabled: Optional[bool] = None
 
 
@@ -590,9 +590,9 @@ class DailySettingsUpdate(BaseModel):
     persona_system_prompt: Optional[str] = None
 
     # LLM
-    llm_temperature: Optional[float] = None
-    llm_max_tokens: Optional[int] = None
-    llm_max_history: Optional[int] = None
+    llm_temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
+    llm_max_tokens: Optional[int] = Field(default=None, ge=50, le=1024)
+    llm_max_history: Optional[int] = Field(default=None, ge=0, le=20)
 
     # Autonomous
     autonomous_enabled: Optional[bool] = None
@@ -600,31 +600,31 @@ class DailySettingsUpdate(BaseModel):
     notify_results: Optional[bool] = None
     announce_results: Optional[bool] = None
     synthesis_enabled: Optional[bool] = None
-    synthesis_temperature: Optional[float] = None
+    synthesis_temperature: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 
     # Briefing
-    briefing_calendar_hours: Optional[int] = None
-    briefing_security_hours: Optional[int] = None
+    briefing_calendar_hours: Optional[int] = Field(default=None, ge=1, le=168)
+    briefing_security_hours: Optional[int] = Field(default=None, ge=1, le=168)
 
     # Nightly sync
     nightly_sync_enabled: Optional[bool] = None
-    nightly_sync_max_turns: Optional[int] = None
-    memory_purge_days: Optional[int] = None
+    nightly_sync_max_turns: Optional[int] = Field(default=None, ge=10, le=500)
+    memory_purge_days: Optional[int] = Field(default=None, ge=7, le=365)
 
     # Learning
-    pattern_learning_lookback_days: Optional[int] = None
-    preference_learning_lookback_days: Optional[int] = None
-    preference_learning_min_turns: Optional[int] = None
+    pattern_learning_lookback_days: Optional[int] = Field(default=None, ge=1, le=90)
+    preference_learning_lookback_days: Optional[int] = Field(default=None, ge=1, le=90)
+    preference_learning_min_turns: Optional[int] = Field(default=None, ge=1, le=100)
 
     # Proactive
-    proactive_lookback_hours: Optional[int] = None
-    action_escalation_stale_days: Optional[int] = None
-    action_escalation_overdue_days: Optional[int] = None
+    proactive_lookback_hours: Optional[int] = Field(default=None, ge=1, le=168)
+    action_escalation_stale_days: Optional[int] = Field(default=None, ge=1, le=30)
+    action_escalation_overdue_days: Optional[int] = Field(default=None, ge=1, le=30)
 
     # Device & security
-    device_health_battery_threshold: Optional[int] = None
-    device_health_stale_hours: Optional[int] = None
-    security_summary_hours: Optional[int] = None
+    device_health_battery_threshold: Optional[int] = Field(default=None, ge=0, le=100)
+    device_health_stale_hours: Optional[int] = Field(default=None, ge=1, le=168)
+    security_summary_hours: Optional[int] = Field(default=None, ge=1, le=168)
 
 
 def _current_daily_settings() -> DailySettings:
@@ -914,15 +914,15 @@ class IntelligenceSettingsUpdate(BaseModel):
     topics: Optional[str] = None
     regions: Optional[str] = None
     languages: Optional[str] = None
-    lookback_days: Optional[int] = None
-    pressure_velocity_threshold: Optional[float] = None
-    signal_min_articles: Optional[int] = None
+    lookback_days: Optional[int] = Field(default=None, ge=2, le=30)
+    pressure_velocity_threshold: Optional[float] = Field(default=None, ge=1.0, le=10.0)
+    signal_min_articles: Optional[int] = Field(default=None, ge=1, le=20)
     sentiment_enabled: Optional[bool] = None
     source_diversity_enabled: Optional[bool] = None
-    composite_score_threshold: Optional[float] = None
-    max_articles_per_topic: Optional[int] = None
+    composite_score_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    max_articles_per_topic: Optional[int] = Field(default=None, ge=5, le=100)
     llm_model: Optional[str] = None
-    schedule_hour: Optional[int] = None
+    schedule_hour: Optional[int] = Field(default=None, ge=0, le=23)
     notify_on_signal: Optional[bool] = None
     notify_all_runs: Optional[bool] = None
     include_in_morning_briefing: Optional[bool] = None
@@ -950,9 +950,9 @@ class IntelligenceSettingsUpdate(BaseModel):
     bls_enabled: Optional[bool] = None
     # Streak / correlation
     signal_streak_enabled: Optional[bool] = None
-    signal_streak_threshold: Optional[int] = None
+    signal_streak_threshold: Optional[int] = Field(default=None, ge=2, le=14)
     cross_entity_correlation_enabled: Optional[bool] = None
-    cross_entity_min_signals: Optional[int] = None
+    cross_entity_min_signals: Optional[int] = Field(default=None, ge=2, le=10)
 
 
 def _current_intelligence_settings() -> IntelligenceSettings:
@@ -1323,7 +1323,7 @@ class NotificationSettingsUpdate(BaseModel):
     """Partial update payload for notification settings (all fields optional)."""
 
     alerts_enabled: Optional[bool] = None
-    alerts_cooldown_seconds: Optional[int] = None
+    alerts_cooldown_seconds: Optional[int] = Field(default=None, ge=0, le=3600)
     alerts_tts_enabled: Optional[bool] = None
     alerts_persist: Optional[bool] = None
     ntfy_enabled: Optional[bool] = None
@@ -1331,9 +1331,9 @@ class NotificationSettingsUpdate(BaseModel):
     ntfy_topic: Optional[str] = None
     reminders_enabled: Optional[bool] = None
     reminder_timezone: Optional[str] = None
-    reminder_max_per_user: Optional[int] = None
+    reminder_max_per_user: Optional[int] = Field(default=None, ge=1, le=1000)
     call_intel_enabled: Optional[bool] = None
-    call_min_duration_seconds: Optional[int] = None
+    call_min_duration_seconds: Optional[int] = Field(default=None, ge=0)
     call_notify_enabled: Optional[bool] = None
 
 
