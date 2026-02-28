@@ -14,6 +14,8 @@ import { fallbackService } from '../service/fallback-service';
 import { temporalClassifier } from '../utils/temporal-classifier';
 import { expandQuery, shouldExpandQuery, getBestVariant } from '../utils/query-expansion';
 
+const MAX_FACT_LOG_LENGTH = 120;
+
 // ============================================================================
 // Search Service
 // ============================================================================
@@ -103,37 +105,51 @@ export class SearchService {
     });
 
     const graphitiResult = await this.client.search(params);
+    const edges = graphitiResult.edges ?? [];
+
+    const threshold = graphragConfig.search.threshold;
+    const initialTopScore = this.getMaxScore(edges);
+    let edgesForFiltering = edges;
+    let rescoreApplied = false;
 
     log.debug('GraphRAG', 'Graphiti search returned', {
-      edgesCount: graphitiResult.edges?.length || 0,
-      firstEdgeScore: graphitiResult.edges?.[0]?.score
+      edgesCount: edges.length,
+      firstEdgeScore: edges[0]?.score,
+      topScore: initialTopScore,
     });
 
+    if (this.reranker && edges.length > 0 && initialTopScore < threshold) {
+      try {
+        edgesForFiltering = await this.rescoreEdges(query, edges);
+        rescoreApplied = true;
+        log.debug('GraphRAG', 'Rescore loop applied', {
+          threshold,
+          initialTopScore,
+          rescoredTopScore: this.getMaxScore(edgesForFiltering),
+        });
+      } catch (rescoreError) {
+        log.error('GraphRAG', 'Rescore loop failed, using original scores', { error: rescoreError });
+        edgesForFiltering = edges;
+      }
+    }
+
     // Apply threshold filtering from config
-    const threshold = graphragConfig.search.threshold;
-    const filteredEdges = graphitiResult.edges.filter(
+    const filteredEdges = edgesForFiltering.filter(
       edge => (edge.score || 0) >= threshold
     );
 
     log.debug('GraphRAG', 'Threshold filtering applied', {
       threshold,
-      beforeCount: graphitiResult.edges.length,
-      afterCount: filteredEdges.length
+      beforeCount: edgesForFiltering.length,
+      afterCount: filteredEdges.length,
+      rescoreApplied,
     });
 
-    // Apply reranking if enabled
+    // Apply reranking if enabled (skip if rescore already used reranker output)
     let finalEdges = filteredEdges;
-    if (this.reranker && filteredEdges.length > 0) {
+    if (this.reranker && filteredEdges.length > 0 && !rescoreApplied) {
       try {
-        const candidates = filteredEdges.map(edge => ({
-          text: edge.fact,
-          score: edge.score || 0,
-          metadata: {
-            uuid: edge.uuid,
-            sourceDescription: edge.source_description,
-            createdAt: edge.created_at,
-          },
-        }));
+        const candidates = this.buildRerankCandidates(filteredEdges);
 
         const reranked = await this.reranker.rerank(query, candidates);
 
@@ -190,7 +206,7 @@ export class SearchService {
             })),
             5
           ),
-          totalCandidates: graphitiResult.edges.length, // Original count before filtering
+          totalCandidates: edges.length, // Original count before filtering
           avgConfidence: avgRelevance,
         };
 
@@ -255,7 +271,7 @@ export class SearchService {
 
     // Apply threshold filtering (use option or config default)
     const threshold = options?.threshold ?? graphragConfig.search.threshold;
-    const filteredEdges = graphitiResult.edges.filter(
+    const filteredEdges = (graphitiResult.edges ?? []).filter(
       edge => (edge.score || 0) >= threshold
     );
 
@@ -386,6 +402,73 @@ export class SearchService {
     }
 
     return unique;
+  }
+
+  private getMaxScore(edges: GraphitiSearchResult['edges']): number {
+    let maxScore = 0;
+    for (const edge of edges) {
+      const score = edge.score || 0;
+      if (score > maxScore) {
+        maxScore = score;
+      }
+    }
+    return maxScore;
+  }
+
+  /**
+   * Normalize reranker scores into a 0-1 range, defaulting to 0 for non-finite values.
+   */
+  private normalizeScore(score: number, edge?: GraphitiSearchResult['edges'][number]): number {
+    if (!Number.isFinite(score)) {
+      log.warn('GraphRAG', 'Non-finite rescore value, defaulting to 0', {
+        score,
+        edgeUuid: edge?.uuid ?? 'unknown',
+        edgeFact: edge?.fact?.slice(0, MAX_FACT_LOG_LENGTH) ?? 'unknown',
+      });
+      return 0;
+    }
+    return Math.min(1, Math.max(0, score));
+  }
+
+  private buildRerankCandidates(edges: GraphitiSearchResult['edges']) {
+    return edges.map(edge => ({
+      text: edge.fact,
+      score: edge.score || 0,
+      metadata: {
+        uuid: edge.uuid,
+        sourceDescription: edge.source_description,
+        createdAt: edge.created_at,
+      },
+    }));
+  }
+
+  private async rescoreEdges(
+    query: string,
+    edges: GraphitiSearchResult['edges']
+  ): Promise<GraphitiSearchResult['edges']> {
+    if (!this.reranker || edges.length === 0) {
+      return edges;
+    }
+
+    const candidates = this.buildRerankCandidates(edges);
+
+    const rescored = await this.reranker.rerank(query, candidates);
+
+    return rescored.reduce<GraphitiSearchResult['edges']>((acc, result) => {
+      const edge = edges[result.originalIndex];
+      if (!edge) {
+        log.warn('GraphRAG', 'Rescore result index out of bounds', {
+          originalIndex: result.originalIndex,
+          edgeCount: edges.length,
+        });
+        return acc;
+      }
+      acc.push({
+        ...edge,
+        score: this.normalizeScore(result.score, edge),
+      });
+      return acc;
+    }, []);
   }
 
   /**
