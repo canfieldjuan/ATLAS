@@ -62,6 +62,9 @@ async def generate_report(
     if not pressure and not articles and not journal:
         return {"error": f"No data found for entity '{entity_name}'"}
 
+    # Run behavioral risk sensors on article text
+    sensor_summary = _run_sensors_on_articles(articles)
+
     # Build signals and evidence from articles
     signals = _extract_signals(articles)
     evidence = _extract_evidence(articles)
@@ -90,6 +93,10 @@ async def generate_report(
             "opportunities": opportunities,
             "audience": audience,
         }
+
+    # Inject sensor analysis into payload
+    if sensor_summary:
+        payload["behavioral_sensor_analysis"] = sensor_summary
 
     # Inject pressure context into the payload
     if pressure:
@@ -634,3 +641,62 @@ def _format_relationships(
         })
 
     return rels
+
+
+def _run_sensors_on_articles(articles: list[dict]) -> dict[str, Any]:
+    """Run behavioral risk sensors on article text and return aggregate summary."""
+    try:
+        from ..tools.risk_sensors import (
+            alignment_sensor_tool,
+            operational_urgency_tool,
+            negotiation_rigidity_tool,
+            correlate,
+        )
+    except Exception:
+        return {}
+
+    triggered_counts = {"alignment": 0, "urgency": 0, "rigidity": 0}
+    risk_levels: list[str] = []
+    patterns_seen: list[str] = []
+    analyzed = 0
+
+    for a in articles:
+        text = a.get("content_preview") or a.get("summary") or ""
+        if not text or len(text) < 50:
+            continue
+
+        try:
+            al = alignment_sensor_tool.analyze(text)
+            ur = operational_urgency_tool.analyze(text)
+            ri = negotiation_rigidity_tool.analyze(text)
+            cross = correlate(al, ur, ri)
+
+            analyzed += 1
+            if al["triggered"]:
+                triggered_counts["alignment"] += 1
+            if ur["triggered"]:
+                triggered_counts["urgency"] += 1
+            if ri["triggered"]:
+                triggered_counts["rigidity"] += 1
+            risk_levels.append(cross["composite_risk_level"])
+            for rel in cross["relationships"]:
+                if rel["label"] not in patterns_seen:
+                    patterns_seen.append(rel["label"])
+        except Exception:
+            continue
+
+    if not analyzed:
+        return {}
+
+    # Find dominant risk level
+    from collections import Counter
+    level_counts = Counter(risk_levels)
+    dominant_level = level_counts.most_common(1)[0][0] if level_counts else "LOW"
+
+    return {
+        "articles_analyzed": analyzed,
+        "triggered_counts": triggered_counts,
+        "dominant_risk_level": dominant_level,
+        "risk_level_distribution": dict(level_counts),
+        "cross_sensor_patterns": patterns_seen,
+    }

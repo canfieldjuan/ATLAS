@@ -77,6 +77,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         logger.warning("Pressure baselines fetch failed: %s", pressure_baselines)
         pressure_baselines = []
 
+    # Run behavioral risk sensors on article text (secondary signal)
+    if news_articles and isinstance(news_articles, list):
+        news_articles = _run_risk_sensors(news_articles)
+
     # Check if there's enough data to analyze
     total_data_points = len(market_data) + len(news_articles)
     if total_data_points == 0 and not business_ctx and not prior_reasoning:
@@ -251,6 +255,48 @@ async def _fetch_news_articles(pool, window_days: int) -> list[dict[str, Any]]:
             article["pressure_direction"] = r["pressure_direction"]
         result.append(article)
     return result
+
+
+def _run_risk_sensors(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Run behavioral risk sensors on article text as secondary signal.
+
+    Adds sensor_analysis dict to each article that has content,
+    including per-sensor results and cross-correlation.
+    """
+    try:
+        from ...tools.risk_sensors import (
+            alignment_sensor_tool,
+            operational_urgency_tool,
+            negotiation_rigidity_tool,
+            correlate,
+        )
+    except Exception:
+        logger.debug("Risk sensors not available, skipping", exc_info=True)
+        return articles
+
+    for article in articles:
+        text = article.get("content") or article.get("summary") or ""
+        if not text or len(text) < 50:
+            continue
+
+        try:
+            alignment = alignment_sensor_tool.analyze(text)
+            urgency = operational_urgency_tool.analyze(text)
+            rigidity = negotiation_rigidity_tool.analyze(text)
+            cross = correlate(alignment, urgency, rigidity)
+
+            article["sensor_analysis"] = {
+                "alignment_triggered": alignment["triggered"],
+                "urgency_triggered": urgency["triggered"],
+                "rigidity_triggered": rigidity["triggered"],
+                "composite_risk_level": cross["composite_risk_level"],
+                "sensor_count": cross["sensor_count"],
+                "patterns": [r["label"] for r in cross["relationships"]],
+            }
+        except Exception:
+            logger.debug("Sensor analysis failed for article: %s", article.get("title", ""), exc_info=True)
+
+    return articles
 
 
 async def _fetch_business_context(pool, window_days: int) -> dict[str, Any]:
