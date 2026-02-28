@@ -201,6 +201,22 @@
 - Workflows: Router(10ms) -> Workflow(LLM calls) = ~5-15s
 - Everything else: Router -> LLM Parse(14s) -> Execute -> LLM Respond = ~20s+
 
+## Intelligence Systems Inventory (Strengths, Weaknesses, Time Aggregation)
+
+| System | Primary Files | Strengths | Weaknesses | Aggregates Data Over Time? |
+|-------|---------------|-----------|------------|-----------------------------|
+| Semantic Intent Router | `atlas_brain/services/intent_router.py` | Fast embedding-based route classification with optional LLM fallback | Depends on exemplar coverage; can overlap on ambiguous phrasing | No (stateless per-query classification) |
+| LLM Router (Local/Cloud/Triage) | `atlas_brain/services/llm_router.py` | Uses specialized models per workflow type | Route logic is static workflow mapping, not adaptive learning | No (routing is configuration-driven) |
+| MemoryService (Unified Context) | `atlas_brain/memory/service.py` | Merges session history, entity context, physical context, and RAG into one prompt context | Quality depends on upstream DB/RAG availability and token budget trimming | Yes (conversation history + cross-session entities) |
+| GraphRAG + Temporal Retrieval | `atlas_brain/memory/rag_client.py`, `lib/graphrag/utils/temporal-classifier.ts` | Long-term fact retrieval with temporal filtering (`is_historical`, `date_from`, `date_to`) | Requires healthy graph service and high-quality ingested facts | Yes (knowledge graph stores facts and timestamps) |
+| RAG Feedback Loop | `atlas_brain/memory/feedback.py` | Tracks source usage and helpful/not-helpful signals for retrieval quality | Feedback is only as good as user/implicit signal quality | Yes (persists source usage and feedback history) |
+| Pattern Learning + Anomaly Detection | `atlas_brain/autonomous/tasks/pattern_learning.py`, `atlas_brain/autonomous/tasks/anomaly_detection.py` | Learns temporal norms from events and flags deviations | Requires sufficient samples; can underperform with sparse data | Yes (learns from 30-day lookback and updates temporal patterns) |
+| Preference Learning | `atlas_brain/autonomous/tasks/preference_learning.py` | Auto-tunes response style/expertise from conversation behavior | Heuristic/regex approach can miss nuanced preferences | Yes (analyzes recent user turns over lookback window) |
+| Call Intelligence Pipeline | `atlas_brain/comms/call_intelligence.py` | End-to-end extraction from recordings to CRM/action planning | Multi-step dependency chain (ASR, LLM, CRM) can fail partially | Yes (stores transcripts, extracted data, and contact linkage) |
+| Network Traffic Analyzer | `atlas_brain/security/network/traffic_analyzer.py` | Real-time spike detection against established traffic baseline | In-memory baseline window can be coarse for long-horizon trends | Yes (builds and compares against baseline from traffic history) |
+
+**Answer to aggregation question:** Yes. Multiple systems aggregate historical data over time to improve reasoning/decision quality, especially MemoryService + GraphRAG, pattern/anomaly learning, preference learning, call intelligence persistence, and traffic baseline analysis.
+
 ---
 
 ## File Reference
