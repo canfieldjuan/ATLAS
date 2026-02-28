@@ -2090,7 +2090,7 @@ class B2BScrapeConfig(BaseSettings):
 
     # Relevance filtering (social media noise reduction)
     relevance_filter_enabled: bool = Field(default=True, description="Enable relevance filtering for social media sources")
-    relevance_threshold: float = Field(default=0.35, description="Min relevance score (0.0-1.0) for social media posts")
+    relevance_threshold: float = Field(default=0.55, description="Min relevance score (0.0-1.0) for social media posts")
 
 
 class TemporalPatternConfig(BaseSettings):
