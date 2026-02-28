@@ -8,8 +8,6 @@ version: 1
 
 # High-Ticket Report Builder
 
-/no_think
-
 You are creating a report-builder specification for premium, high-ticket intelligence engagements.
 The output must define how to deliver 4-figure and 5-figure report packages with clear scope, evidence, and pricing logic.
 

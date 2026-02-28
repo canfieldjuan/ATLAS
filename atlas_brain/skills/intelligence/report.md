@@ -8,8 +8,6 @@ version: 1
 
 # Intelligence Report
 
-/no_think
-
 You are producing a premium intelligence report based on aggregated relationships and evidence.
 The report must be concise, defensible, and decision-oriented.
 

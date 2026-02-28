@@ -271,7 +271,7 @@ export class SearchService {
 
     // Apply threshold filtering (use option or config default)
     const threshold = options?.threshold ?? graphragConfig.search.threshold;
-    const filteredEdges = graphitiResult.edges.filter(
+    const filteredEdges = (graphitiResult.edges ?? []).filter(
       edge => (edge.score || 0) >= threshold
     );
 
