@@ -8,6 +8,7 @@ import Reviews from './pages/Reviews'
 import ReviewDetail from './pages/ReviewDetail'
 import Reports from './pages/Reports'
 import ReportDetail from './pages/ReportDetail'
+import Affiliates from './pages/Affiliates'
 
 export default function App() {
   const location = useLocation()
@@ -23,6 +24,7 @@ export default function App() {
           <Route path="/reviews/:id" element={<ReviewDetail />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/reports/:id" element={<ReportDetail />} />
+          <Route path="/affiliates" element={<Affiliates />} />
         </Routes>
       </ErrorBoundary>
     </Layout>

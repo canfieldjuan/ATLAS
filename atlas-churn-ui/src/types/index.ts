@@ -141,3 +141,49 @@ export interface PipelineStatus {
   active_scrape_targets: number
   last_scrape_at: string | null
 }
+
+export interface AffiliatePartner {
+  id: string
+  name: string
+  product_name: string
+  product_aliases: string[]
+  category: string | null
+  affiliate_url: string
+  commission_type: string
+  commission_value: string | null
+  notes: string | null
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface AffiliateOpportunity {
+  review_id: string
+  vendor_name: string
+  reviewer_company: string | null
+  product_category: string | null
+  urgency: number
+  is_dm: boolean | null
+  role_type: string | null
+  buying_stage: string | null
+  seat_count: number | null
+  contract_end: string | null
+  decision_timeline: string | null
+  competitor_name: string
+  mention_context: string | null
+  mention_reason: string | null
+  partner_id: string
+  partner_name: string
+  affiliate_url: string
+  commission_type: string
+  commission_value: string | null
+  partner_category: string | null
+  opportunity_score: number
+}
+
+export interface ClickSummary {
+  id: string
+  name: string
+  product_name: string
+  click_count: number
+}
