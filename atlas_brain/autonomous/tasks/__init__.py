@@ -32,6 +32,7 @@ _BUILTIN_TASKS = [
     ("reasoning_tick", "run", "reasoning_tick"),
     ("reasoning_reflection", "run", "reasoning_reflection"),
     ("weather_traffic_alerts", "run", "weather_traffic_alerts"),
+    ("news_intelligence", "run", "news_intelligence"),
 ]
 
 

@@ -29,11 +29,13 @@ from .invoicing import router as invoicing_router
 from .contacts import router as contacts_router
 from .reasoning import router as reasoning_router
 from .security import router as security_router
+from .settings import router as settings_router
 from .system import router as system_router
 from .b2b_reviews import router as b2b_reviews_router
 from .b2b_scrape import router as b2b_scrape_router
 from .intelligence import router as intelligence_router
 from .b2b_dashboard import router as b2b_dashboard_router
+from .consumer_dashboard import router as consumer_dashboard_router
 
 # Main router that aggregates all sub-routers
 router = APIRouter()
@@ -64,7 +66,9 @@ router.include_router(contacts_router)
 router.include_router(reasoning_router)
 router.include_router(security_router)
 router.include_router(system_router)
+router.include_router(settings_router)
 router.include_router(b2b_reviews_router)
 router.include_router(b2b_scrape_router)
 router.include_router(intelligence_router)
 router.include_router(b2b_dashboard_router)
+router.include_router(consumer_dashboard_router)
