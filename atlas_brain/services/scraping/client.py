@@ -62,6 +62,7 @@ class AntiDetectionClient:
         referer: str | None = None,
         sticky_session: bool = False,
         prefer_residential: bool = False,
+        extra_headers: dict[str, str] | None = None,
     ) -> Response:
         """Fetch a URL with anti-detection measures.
 
@@ -71,6 +72,7 @@ class AntiDetectionClient:
             referer: Referer header (e.g. Google search URL or previous page).
             sticky_session: Reuse same proxy across calls for this domain.
             prefer_residential: Use residential proxy (for Cloudflare sites).
+            extra_headers: Additional headers merged on top of the browser profile.
 
         Returns:
             curl_cffi Response object.
@@ -112,6 +114,8 @@ class AntiDetectionClient:
                 )
                 if override_ua:
                     headers["User-Agent"] = override_ua
+                if extra_headers:
+                    headers.update(extra_headers)
 
                 # 5. Random delay (human-like)
                 delay = random.uniform(self._min_delay, self._max_delay)

@@ -21,6 +21,9 @@ _DEFAULT_RPM: dict[str, int] = {
     "capterra.com": 8,
     "trustradius.com": 10,
     "reddit.com": 30,
+    "hn.algolia.com": 100,
+    "api.github.com": 25,
+    "news.google.com": 10,
 }
 
 
@@ -66,6 +69,9 @@ class DomainRateLimiter:
         rpm_map["capterra.com"] = cfg.capterra_rpm
         rpm_map["trustradius.com"] = cfg.trustradius_rpm
         rpm_map["reddit.com"] = cfg.reddit_rpm
+        rpm_map["hn.algolia.com"] = cfg.hackernews_rpm
+        rpm_map["api.github.com"] = cfg.github_rpm
+        rpm_map["news.google.com"] = cfg.rss_rpm
         return cls(rpm_map)
 
     async def acquire(self, domain: str) -> None:

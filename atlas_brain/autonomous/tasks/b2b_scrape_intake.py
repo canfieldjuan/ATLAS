@@ -1,7 +1,7 @@
 """
 B2B review scrape intake: poll configured scrape targets, fetch reviews
-from G2, Capterra, TrustRadius, and Reddit, and insert into b2b_reviews
-for automatic enrichment pickup.
+from G2, Capterra, TrustRadius, Reddit, HackerNews, GitHub, and RSS feeds,
+and insert into b2b_reviews for automatic enrichment pickup.
 
 Runs as an autonomous task on a configurable interval (default 1 hour).
 """

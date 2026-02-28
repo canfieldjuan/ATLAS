@@ -2048,6 +2048,12 @@ class B2BScrapeConfig(BaseSettings):
     trustradius_rpm: int = Field(default=10, description="TrustRadius requests per minute")
     reddit_rpm: int = Field(default=30, description="Reddit requests per minute")
 
+    # Phase 1 API sources
+    hackernews_rpm: int = Field(default=100, description="HN Algolia requests per minute")
+    github_rpm: int = Field(default=25, description="GitHub API requests per minute")
+    rss_rpm: int = Field(default=10, description="RSS feed requests per minute")
+    github_token: str = Field(default="", description="GitHub personal access token for higher rate limits")
+
     # Behavioral delays
     min_delay_seconds: float = Field(default=2.0, description="Min delay between requests")
     max_delay_seconds: float = Field(default=8.0, description="Max delay between requests")
