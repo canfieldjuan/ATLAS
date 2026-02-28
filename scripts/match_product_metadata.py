@@ -1,13 +1,18 @@
 """
 Match our product_reviews ASINs against the McAuley Amazon-Reviews-2023
-Electronics metadata (Parquet shards on Hugging Face).
+metadata and write matches to the product_metadata table in PostgreSQL.
 
-Downloads all 10 shards, scans for matching parent_asin values, and writes
-matches to the product_metadata table in PostgreSQL.
+Two input modes:
+  - Parquet shards from Hugging Face (default for electronics)
+  - Local JSONL metadata file (--meta-file, faster when you have it locally)
 
 Usage:
-    python scripts/match_product_metadata.py
-    python scripts/match_product_metadata.py --dry-run   # preview only
+    python scripts/match_product_metadata.py                       # electronics (HF shards)
+    python scripts/match_product_metadata.py --category all_beauty # beauty (HF shards)
+    python scripts/match_product_metadata.py \
+        --meta-file /path/to/meta_All_Beauty.jsonl \
+        --source-filter beauty                                     # local JSONL
+    python scripts/match_product_metadata.py --dry-run             # preview only
 """
 
 import argparse
@@ -26,9 +31,21 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("match_product_metadata")
 
 REPO_ID = "McAuley-Lab/Amazon-Reviews-2023"
-SHARD_PATTERN = "raw_meta_Electronics/full-{:05d}-of-00010.parquet"
-NUM_SHARDS = 10
 CACHE_DIR = Path("/home/juan-canfield/Desktop/Atlas/data/hf_cache")
+
+# Category -> (shard_pattern, num_shards, source_category_filter)
+CATEGORY_CONFIG = {
+    "electronics": {
+        "shard_pattern": "raw_meta_Electronics/full-{{:05d}}-of-{num:05d}.parquet",
+        "num_shards": 10,
+        "source_filter": None,  # match all source_category values
+    },
+    "all_beauty": {
+        "shard_pattern": "raw_meta_All_Beauty/full-{{:05d}}-of-{num:05d}.parquet",
+        "num_shards": 1,
+        "source_filter": "beauty",
+    },
+}
 
 # Columns we need from the parquet files
 COLUMNS = [
@@ -75,9 +92,9 @@ def extract_brand(details) -> str:
     )
 
 
-def download_shard(shard_idx: int) -> Path:
+def download_shard(shard_idx: int, shard_pattern: str) -> Path:
     """Download a single parquet shard, return local path."""
-    filename = SHARD_PATTERN.format(shard_idx)
+    filename = shard_pattern.format(shard_idx)
     path = hf_hub_download(
         REPO_ID, filename, repo_type="dataset", cache_dir=str(CACHE_DIR)
     )
@@ -99,6 +116,30 @@ def scan_shard(shard_path: Path, target_asins: set[str]) -> list[dict]:
                 row[col] = table.column(col)[i].as_py()
             matches.append(row)
 
+    return matches
+
+
+def scan_jsonl(meta_path: Path, target_asins: set[str]) -> list[dict]:
+    """Scan a JSONL metadata file for matching ASINs. Returns list of metadata dicts."""
+    matches = []
+    total = 0
+    with open(meta_path) as f:
+        for line in f:
+            total += 1
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            asin = record.get("parent_asin", "")
+            if asin in target_asins:
+                matches.append(record)
+            if total % 50000 == 0:
+                logger.info("  Scanned %dk lines, %d matches so far...",
+                            total // 1000, len(matches))
+    logger.info("  Scanned %d lines total, %d matches", total, len(matches))
     return matches
 
 
@@ -194,55 +235,99 @@ async def write_to_db(matches: list[dict]) -> int:
     return len(rows)
 
 
-async def get_our_asins() -> set[str]:
-    """Fetch distinct ASINs from product_reviews."""
+async def get_our_asins(source_filter: str | None = None) -> set[str]:
+    """Fetch distinct ASINs from product_reviews, optionally filtered by source_category."""
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from atlas_brain.storage.database import get_db_pool
 
     pool = get_db_pool()
     await pool.initialize()
 
-    rows = await pool.fetch("SELECT DISTINCT asin FROM product_reviews")
+    if source_filter:
+        rows = await pool.fetch(
+            "SELECT DISTINCT asin FROM product_reviews WHERE source_category = $1",
+            source_filter,
+        )
+    else:
+        rows = await pool.fetch("SELECT DISTINCT asin FROM product_reviews")
     return {r["asin"] for r in rows}
 
 
 async def main():
     parser = argparse.ArgumentParser(description="Match product ASINs to Amazon metadata")
+    parser.add_argument("--category", type=str, default="electronics",
+                        choices=list(CATEGORY_CONFIG.keys()),
+                        help="Metadata category to fetch from HF (default: electronics)")
+    parser.add_argument("--meta-file", type=Path, default=None,
+                        help="Local JSONL metadata file (skips HF download)")
+    parser.add_argument("--source-filter", type=str, default=None,
+                        help="Filter product_reviews by source_category (e.g. 'beauty')")
     parser.add_argument("--dry-run", action="store_true", help="Preview matches without writing to DB")
     args = parser.parse_args()
 
+    use_local = args.meta_file is not None
+    if use_local and not args.meta_file.exists():
+        logger.error("File not found: %s", args.meta_file)
+        sys.exit(1)
+
+    # Determine source filter: explicit flag > category config > None
+    if args.source_filter:
+        source_filter = args.source_filter
+    elif not use_local:
+        source_filter = CATEGORY_CONFIG[args.category]["source_filter"]
+    else:
+        source_filter = None
+
     start = time.monotonic()
+
+    if use_local:
+        logger.info("Mode: local JSONL (%s, source_filter=%s)",
+                     args.meta_file, source_filter or "all")
+    else:
+        config = CATEGORY_CONFIG[args.category]
+        num_shards = config["num_shards"]
+        shard_pattern = config["shard_pattern"].format(num=num_shards)
+        logger.info("Mode: HF shards, category=%s (%d shards, source_filter=%s)",
+                     args.category, num_shards, source_filter or "all")
 
     # Step 1: Get our ASINs
     logger.info("Fetching distinct ASINs from product_reviews...")
-    our_asins = await get_our_asins()
+    our_asins = await get_our_asins(source_filter)
     logger.info("Found %d distinct ASINs to match", len(our_asins))
 
-    # Step 2: Download and scan all shards
+    # Step 2: Scan metadata
     all_matches = []
     matched_asins = set()
 
-    for shard_idx in range(NUM_SHARDS):
-        logger.info("Downloading shard %d/%d...", shard_idx + 1, NUM_SHARDS)
-        shard_path = download_shard(shard_idx)
-        shard_size = os.path.getsize(shard_path) / 1024 / 1024
-
-        remaining = our_asins - matched_asins
-        if not remaining:
-            logger.info("All ASINs matched! Skipping remaining shards.")
-            break
-
-        logger.info("Scanning shard %d (%.1f MB) for %d remaining ASINs...",
-                     shard_idx, shard_size, len(remaining))
-        matches = scan_shard(shard_path, remaining)
-
-        for m in matches:
+    if use_local:
+        # Local JSONL scan
+        logger.info("Scanning local JSONL for %d ASINs...", len(our_asins))
+        all_matches = scan_jsonl(args.meta_file, our_asins)
+        for m in all_matches:
             matched_asins.add(m["parent_asin"])
-        all_matches.extend(matches)
+    else:
+        # HF parquet shards
+        for shard_idx in range(num_shards):
+            logger.info("Downloading shard %d/%d...", shard_idx + 1, num_shards)
+            shard_path = download_shard(shard_idx, shard_pattern)
+            shard_size = os.path.getsize(shard_path) / 1024 / 1024
 
-        logger.info("  Found %d matches (total: %d/%d = %.1f%%)",
-                     len(matches), len(matched_asins), len(our_asins),
-                     100 * len(matched_asins) / len(our_asins))
+            remaining = our_asins - matched_asins
+            if not remaining:
+                logger.info("All ASINs matched! Skipping remaining shards.")
+                break
+
+            logger.info("Scanning shard %d (%.1f MB) for %d remaining ASINs...",
+                         shard_idx, shard_size, len(remaining))
+            matches = scan_shard(shard_path, remaining)
+
+            for m in matches:
+                matched_asins.add(m["parent_asin"])
+            all_matches.extend(matches)
+
+            logger.info("  Found %d matches (total: %d/%d = %.1f%%)",
+                         len(matches), len(matched_asins), len(our_asins),
+                         100 * len(matched_asins) / len(our_asins))
 
     elapsed = time.monotonic() - start
 

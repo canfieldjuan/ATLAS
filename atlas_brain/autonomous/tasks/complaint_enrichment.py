@@ -1,6 +1,9 @@
 """
-Complaint enrichment pipeline: classify pending product reviews via LLM
-using the complaint_classification skill.
+Review enrichment pipeline: classify pending product reviews via LLM.
+
+Routes by rating:
+  - 1-3 star: complaint_classification skill (root_cause, severity, pain_score...)
+  - 4-5 star: praise_classification skill (praise category, loyalty score...)
 
 Single phase (review text already stored -- no HTTP fetch needed).
 Polls product_reviews WHERE enrichment_status = 'pending', calls LLM,
@@ -228,6 +231,13 @@ def _get_llm(local_only: bool):
     )
 
 
+def _skill_for_rating(rating: float) -> str:
+    """Return the skill name to use based on review rating."""
+    if rating <= 3.0:
+        return "digest/complaint_classification"
+    return "digest/praise_classification"
+
+
 async def _classify_review(
     asin: str,
     rating: float,
@@ -237,13 +247,14 @@ async def _classify_review(
     issue_types: list[str],
     local_only: bool = False,
 ) -> dict[str, Any] | None:
-    """Classify a single product review via LLM."""
+    """Classify a single product review via LLM (complaint or praise by rating)."""
     from ...skills import get_skill_registry
     from ...services.protocols import Message
 
-    skill = get_skill_registry().get("digest/complaint_classification")
+    skill_name = _skill_for_rating(rating)
+    skill = get_skill_registry().get(skill_name)
     if not skill:
-        logger.warning("Skill 'digest/complaint_classification' not found")
+        logger.warning("Skill '%s' not found", skill_name)
         return None
 
     llm = _get_llm(local_only)
@@ -286,40 +297,65 @@ Return ONLY the JSON array -- no prose, no markdown fencing."""
 
 
 async def _classify_batch(rows, local_only: bool) -> list[dict[str, Any]] | None:
-    """Classify multiple reviews in a single LLM call. Returns list or None on failure."""
+    """Classify multiple reviews in a single LLM call. Returns list or None on failure.
+
+    Splits rows by rating band (complaint vs praise) and calls the appropriate
+    skill for each sub-batch, then reassembles results in original order.
+    """
     from ...skills import get_skill_registry
     from ...services.protocols import Message
 
-    skill = get_skill_registry().get("digest/complaint_classification")
-    if not skill:
-        return None
-
+    registry = get_skill_registry()
     llm = _get_llm(local_only)
     if llm is None:
         return None
 
-    reviews = []
-    for row in rows:
-        reviews.append({
-            "asin": row["asin"],
-            "rating": float(row["rating"]),
-            "summary": row["summary"] or "",
-            "review_text": (row["review_text"] or "")[:2000],
-            "hardware_category": list(row["hardware_category"] or []),
-            "issue_types": list(row["issue_types"] or []),
-        })
+    # Split rows into complaint (<=3) and praise (>3) with original indices
+    complaint_idx, praise_idx = [], []
+    for i, row in enumerate(rows):
+        if float(row["rating"]) <= 3.0:
+            complaint_idx.append(i)
+        else:
+            praise_idx.append(i)
 
-    messages = [
-        Message(role="system", content=skill.content + _BATCH_SYSTEM_SUFFIX),
-        Message(role="user", content=json.dumps(reviews)),
-    ]
+    results: list[dict[str, Any] | None] = [None] * len(rows)
 
-    # More tokens for batch (256 per review + overhead)
-    max_tokens = 300 * len(rows)
-    result = _call_and_parse_array(llm, messages, max_tokens=max_tokens)
-    if result and len(result) == len(rows):
-        return result
-    return None
+    for indices, skill_name in [
+        (complaint_idx, "digest/complaint_classification"),
+        (praise_idx, "digest/praise_classification"),
+    ]:
+        if not indices:
+            continue
+        skill = registry.get(skill_name)
+        if not skill:
+            return None
+
+        sub_rows = [rows[i] for i in indices]
+        reviews = []
+        for row in sub_rows:
+            reviews.append({
+                "asin": row["asin"],
+                "rating": float(row["rating"]),
+                "summary": row["summary"] or "",
+                "review_text": (row["review_text"] or "")[:2000],
+                "hardware_category": list(row["hardware_category"] or []),
+                "issue_types": list(row["issue_types"] or []),
+            })
+
+        messages = [
+            Message(role="system", content=skill.content + _BATCH_SYSTEM_SUFFIX),
+            Message(role="user", content=json.dumps(reviews)),
+        ]
+
+        max_tokens = 300 * len(reviews)
+        sub_results = _call_and_parse_array(llm, messages, max_tokens=max_tokens)
+        if not sub_results or len(sub_results) != len(indices):
+            return None  # batch parse failed, caller falls back to single mode
+
+        for idx, classification in zip(indices, sub_results):
+            results[idx] = classification
+
+    return results
 
 
 # ------------------------------------------------------------------

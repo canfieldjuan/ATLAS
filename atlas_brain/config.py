@@ -1981,6 +1981,8 @@ class ExternalDataConfig(BaseSettings):
     deep_enrichment_max_per_batch: int = Field(default=5, description="Max reviews to deep-enrich per autonomous batch")
     deep_enrichment_max_attempts: int = Field(default=3, description="Max attempts before marking deep_failed")
     deep_enrichment_max_tokens: int = Field(default=2048, description="Max LLM output tokens for deep extraction (32 fields)")
+    deep_enrichment_blast_workers: int = Field(default=80, description="Concurrent workers for blast_deep_enrichment script")
+    deep_enrichment_blast_batch_size: int = Field(default=30, description="Reviews claimed per worker per round in blast script")
     # Competitive intelligence (cross-brand analysis from deep_extraction)
     competitive_intelligence_enabled: bool = Field(default=True, description="Enable competitive intelligence analysis")
     competitive_intelligence_cron: str = Field(default="30 21 * * *", description="Cron for competitive intelligence (default 9:30 PM)")
