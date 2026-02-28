@@ -34,14 +34,15 @@ class _MockPool:
 
 class TestVulnerabilityScore:
     def test_worst_case(self):
-        """No repurchase, max pain, lowest rating -> near max vulnerability."""
+        """No repurchase, max pain, lowest rating, no safety -> near max vulnerability."""
         score = _compute_vulnerability_score({
             "repurchase_yes": 0,
             "repurchase_no": 100,
             "avg_pain_score": 10.0,
             "avg_rating": 1.0,
         })
-        assert score == 96.0
+        # (1-0)*30 + 10/10*30 + (5-1)/5*15 + 1*10 + 0*15 = 30+30+12+10+0 = 82
+        assert score == 82.0
 
     def test_best_case(self):
         """All repurchase, no pain, perfect rating -> 0 vulnerability."""
@@ -61,13 +62,13 @@ class TestVulnerabilityScore:
             "avg_pain_score": 5.0,
             "avg_rating": 3.0,
         })
-        # (1-0.5)*35 + 5/10*35 + (5-3)/5*20 + 0.5*10 = 17.5 + 17.5 + 8 + 5 = 48
-        assert score == 48.0
+        # (1-0.5)*30 + 5/10*30 + (5-3)/5*15 + 0.5*10 + 0*15 = 15+15+6+5+0 = 41
+        assert score == 41.0
 
     def test_missing_keys_use_defaults(self):
-        """Empty dict uses all defaults (pain=5, rating=3, signal=0.5)."""
+        """Empty dict uses all defaults (pain=5, rating=3, signal=0.5, safety=0)."""
         score = _compute_vulnerability_score({})
-        assert score == 48.0
+        assert score == 41.0
 
     def test_clamped_to_range(self):
         """Score is always between 0 and 100."""
@@ -87,8 +88,38 @@ class TestVulnerabilityScore:
             "avg_pain_score": 7.5,
             "avg_rating": 2.0,
         })
-        # (1-0.2)*35 + 7.5/10*35 + (5-2)/5*20 + 0.8*10 = 28+26.25+12+8 = 74.25
-        assert score == 74.25
+        # (1-0.2)*30 + 7.5/10*30 + (5-2)/5*15 + 0.8*10 + 0*15 = 24+22.5+9+8+0 = 63.5
+        assert score == 63.5
+
+    def test_safety_rate_increases_score(self):
+        """Safety-flagged reviews should increase vulnerability."""
+        base = {
+            "repurchase_yes": 10,
+            "repurchase_no": 10,
+            "avg_pain_score": 5.0,
+            "avg_rating": 3.0,
+            "total_reviews": 100,
+        }
+        no_safety = _compute_vulnerability_score({**base, "safety_flagged_count": 0})
+        some_safety = _compute_vulnerability_score({**base, "safety_flagged_count": 50})
+        all_safety = _compute_vulnerability_score({**base, "safety_flagged_count": 100})
+        assert some_safety > no_safety
+        assert all_safety > some_safety
+        # 100% safety rate adds full 15 points
+        assert all_safety - no_safety == 15.0
+
+    def test_worst_case_with_safety(self):
+        """Full vulnerability including safety -> max score."""
+        score = _compute_vulnerability_score({
+            "repurchase_yes": 0,
+            "repurchase_no": 100,
+            "avg_pain_score": 10.0,
+            "avg_rating": 1.0,
+            "total_reviews": 100,
+            "safety_flagged_count": 100,
+        })
+        # 30+30+12+10+15 = 97
+        assert score == 97.0
 
     def test_higher_pain_means_higher_score(self):
         """Increasing pain should increase vulnerability."""

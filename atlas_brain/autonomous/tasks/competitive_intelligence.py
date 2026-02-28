@@ -68,13 +68,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not has_metadata or not has_metadata["ok"]:
         return {"_skip_synthesis": "product_metadata table not found (run match_product_metadata first)"}
 
-    # Gather 6 data sources in parallel
+    # Gather 8 data sources in parallel
     (
         brand_health,
         competitive_flows,
         feature_gaps,
         buyer_personas,
         sentiment_landscape,
+        safety_signals,
+        loyalty_churn,
         prior_reports,
     ) = await asyncio.gather(
         _fetch_brand_health(pool),
@@ -82,6 +84,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _fetch_feature_gaps(pool),
         _fetch_buyer_personas(pool),
         _fetch_sentiment_landscape(pool),
+        _fetch_safety_signals(pool),
+        _fetch_loyalty_churn(pool),
         _fetch_prior_reports(pool),
         return_exceptions=True,
     )
@@ -93,6 +97,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "feature_gaps": feature_gaps,
         "buyer_personas": buyer_personas,
         "sentiment_landscape": sentiment_landscape,
+        "safety_signals": safety_signals,
+        "loyalty_churn": loyalty_churn,
         "prior_reports": prior_reports,
     }
     for key, val in fetchers.items():
@@ -156,7 +162,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     # Upsert brand_intelligence scorecards (only if report stored successfully)
     if report_stored:
-        await _upsert_brand_intelligence(pool, fetchers["brand_health"], parsed)
+        await _upsert_brand_intelligence(
+            pool, fetchers["brand_health"], parsed,
+            safety_signals=fetchers["safety_signals"],
+            loyalty_churn=fetchers["loyalty_churn"],
+        )
 
     # Send ntfy notification
     from ...pipelines.notify import send_pipeline_notification
@@ -185,7 +195,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
 
 async def _fetch_brand_health(pool) -> list[dict[str, Any]]:
-    """Per-brand health: reviews, rating, pain, severity, repurchase."""
+    """Per-brand health: reviews, rating, pain, severity, repurchase, safety."""
     rows = await pool.fetch(
         """
         SELECT
@@ -201,7 +211,10 @@ async def _fetch_brand_health(pool) -> list[dict[str, Any]]:
             ) AS repurchase_yes,
             count(*) FILTER (
                 WHERE (pr.deep_extraction->>'would_repurchase')::boolean IS FALSE
-            ) AS repurchase_no
+            ) AS repurchase_no,
+            count(*) FILTER (
+                WHERE (pr.deep_extraction->'safety_flag'->>'flagged')::boolean IS TRUE
+            ) AS safety_flagged_count
         FROM product_reviews pr
         JOIN product_metadata pm ON pm.asin = pr.asin
         WHERE pr.deep_enrichment_status = 'enriched'
@@ -225,6 +238,7 @@ async def _fetch_brand_health(pool) -> list[dict[str, Any]]:
             },
             "repurchase_yes": r["repurchase_yes"],
             "repurchase_no": r["repurchase_no"],
+            "safety_flagged_count": r["safety_flagged_count"],
         }
         for r in rows
     ]
@@ -298,7 +312,7 @@ async def _fetch_feature_gaps(pool) -> list[dict[str, Any]]:
 
 
 async def _fetch_buyer_personas(pool) -> list[dict[str, Any]]:
-    """Buyer segment clusters from buyer_context."""
+    """Buyer segment clusters from buyer_context + expertise/budget."""
     rows = await pool.fetch(
         """
         SELECT
@@ -310,6 +324,8 @@ async def _fetch_buyer_personas(pool) -> list[dict[str, Any]]:
             pr.deep_extraction->'buyer_context'->>'buyer_type' AS buyer_type,
             pr.deep_extraction->'buyer_context'->>'use_case' AS use_case,
             pr.deep_extraction->'buyer_context'->>'price_sentiment' AS price_sentiment,
+            pr.deep_extraction->>'expertise_level' AS expertise_level,
+            pr.deep_extraction->>'budget_type' AS budget_type,
             count(*) AS review_count,
             avg(pr.rating) AS avg_rating,
             avg(pr.pain_score) AS avg_pain
@@ -321,7 +337,9 @@ async def _fetch_buyer_personas(pool) -> list[dict[str, Any]]:
             category,
             pr.deep_extraction->'buyer_context'->>'buyer_type',
             pr.deep_extraction->'buyer_context'->>'use_case',
-            pr.deep_extraction->'buyer_context'->>'price_sentiment'
+            pr.deep_extraction->'buyer_context'->>'price_sentiment',
+            pr.deep_extraction->>'expertise_level',
+            pr.deep_extraction->>'budget_type'
         HAVING count(*) >= 3
         ORDER BY count(*) DESC
         LIMIT 100
@@ -333,6 +351,8 @@ async def _fetch_buyer_personas(pool) -> list[dict[str, Any]]:
             "buyer_type": r["buyer_type"],
             "use_case": r["use_case"],
             "price_sentiment": r["price_sentiment"],
+            "expertise_level": r["expertise_level"],
+            "budget_type": r["budget_type"],
             "review_count": r["review_count"],
             "avg_rating": round(float(r["avg_rating"]), 2) if r["avg_rating"] else 0.0,
             "avg_pain": round(float(r["avg_pain"]), 1) if r["avg_pain"] else 0.0,
@@ -366,6 +386,66 @@ async def _fetch_sentiment_landscape(pool) -> list[dict[str, Any]]:
             "brand": r["brand"],
             "aspect": r["aspect"],
             "sentiment": r["sentiment"],
+            "count": r["cnt"],
+        }
+        for r in rows
+    ]
+
+
+async def _fetch_safety_signals(pool) -> list[dict[str, Any]]:
+    """Per-brand safety-flagged reviews with consequence_severity breakdown."""
+    rows = await pool.fetch(
+        """
+        SELECT
+            pm.brand,
+            pr.deep_extraction->>'consequence_severity' AS consequence,
+            count(*) AS cnt
+        FROM product_reviews pr
+        JOIN product_metadata pm ON pm.asin = pr.asin
+        WHERE pr.deep_enrichment_status = 'enriched'
+          AND (pr.deep_extraction->'safety_flag'->>'flagged')::boolean IS TRUE
+          AND pm.brand IS NOT NULL AND pm.brand != ''
+        GROUP BY pm.brand, pr.deep_extraction->>'consequence_severity'
+        ORDER BY count(*) DESC
+        LIMIT 100
+        """
+    )
+    return [
+        {
+            "brand": r["brand"],
+            "consequence": r["consequence"],
+            "count": r["cnt"],
+        }
+        for r in rows
+    ]
+
+
+async def _fetch_loyalty_churn(pool) -> list[dict[str, Any]]:
+    """Per-brand loyalty depth x replacement behavior cross-tab."""
+    rows = await pool.fetch(
+        """
+        SELECT
+            pm.brand,
+            pr.deep_extraction->>'brand_loyalty_depth' AS loyalty,
+            pr.deep_extraction->>'replacement_behavior' AS replacement,
+            count(*) AS cnt
+        FROM product_reviews pr
+        JOIN product_metadata pm ON pm.asin = pr.asin
+        WHERE pr.deep_enrichment_status = 'enriched'
+          AND pm.brand IS NOT NULL AND pm.brand != ''
+        GROUP BY pm.brand,
+            pr.deep_extraction->>'brand_loyalty_depth',
+            pr.deep_extraction->>'replacement_behavior'
+        HAVING count(*) >= 2
+        ORDER BY count(*) DESC
+        LIMIT 200
+        """
+    )
+    return [
+        {
+            "brand": r["brand"],
+            "loyalty": r["loyalty"],
+            "replacement": r["replacement"],
             "count": r["cnt"],
         }
         for r in rows
@@ -514,8 +594,11 @@ def _normalize_feature_requests(gaps: list[dict[str, Any]]) -> list[dict[str, An
 def _compute_vulnerability_score(brand_data: dict) -> float:
     """Composite vulnerability score 0-100. Higher = more vulnerable.
 
-    Formula: (1 - repurchase_rate) * 35 + pain/10 * 35 + (5 - rating)/5 * 20 + churn_signal * 10
-    Where churn_signal = proportion of reviews with would_repurchase=false out of total with any signal.
+    Formula: (1 - repurchase_rate) * 30 + pain/10 * 30 + (5 - rating)/5 * 15
+             + churn_signal * 10 + safety_rate * 15
+    Where churn_signal = proportion of reviews with would_repurchase=false out of
+    total with any signal, and safety_rate = safety_flagged_count / total_reviews.
+    Weights: 30 + 30 + 15 + 10 + 15 = 100.
     """
     yes = brand_data.get("repurchase_yes", 0)
     no = brand_data.get("repurchase_no", 0)
@@ -526,11 +609,16 @@ def _compute_vulnerability_score(brand_data: dict) -> float:
     pain = brand_data.get("avg_pain_score", 5.0)
     rating = brand_data.get("avg_rating", 3.0)
 
+    total_reviews = brand_data.get("total_reviews", 0)
+    safety_flagged = brand_data.get("safety_flagged_count", 0)
+    safety_rate = safety_flagged / total_reviews if total_reviews > 0 else 0.0
+
     score = (
-        (1 - repurchase_rate) * 35
-        + pain / 10 * 35
-        + (5 - rating) / 5 * 20
+        (1 - repurchase_rate) * 30
+        + pain / 10 * 30
+        + (5 - rating) / 5 * 15
         + churn_signal * 10
+        + safety_rate * 15
     )
     return max(0.0, min(100.0, round(score, 2)))
 
@@ -539,6 +627,8 @@ async def _upsert_brand_intelligence(
     pool,
     brand_health: list[dict[str, Any]],
     parsed: dict[str, Any],
+    safety_signals: list[dict[str, Any]] | None = None,
+    loyalty_churn: list[dict[str, Any]] | None = None,
 ) -> None:
     """Upsert brand_intelligence from aggregated brand stats + LLM scorecards."""
     now = datetime.now(timezone.utc)
@@ -552,14 +642,35 @@ async def _upsert_brand_intelligence(
         if isinstance(sc, dict) and sc.get("brand")
     }
 
-    # Build sentiment breakdown from parsed data (if available)
-    # and competitive flows per brand
+    # Build competitive flows per brand
     flows_by_brand: dict[str, list] = {}
     for flow in parsed.get("competitive_flows", []):
         if isinstance(flow, dict):
             brand = flow.get("source_brand", "")
             if brand:
                 flows_by_brand.setdefault(brand, []).append(flow)
+
+    # Build brand-keyed safety signal lookups
+    safety_by_brand: dict[str, dict[str, int]] = {}
+    for sig in (safety_signals or []):
+        b = sig.get("brand", "")
+        if b:
+            safety_by_brand.setdefault(b, {})[sig.get("consequence") or "unknown"] = sig.get("count", 0)
+
+    # Build brand-keyed loyalty/replacement lookups
+    loyalty_by_brand: dict[str, dict[str, int]] = {}
+    replacement_by_brand: dict[str, dict[str, int]] = {}
+    for row in (loyalty_churn or []):
+        b = row.get("brand", "")
+        if not b:
+            continue
+        cnt = row.get("count", 0)
+        loy = row.get("loyalty") or "unknown"
+        rep = row.get("replacement") or "unknown"
+        loyalty_by_brand.setdefault(b, {})
+        loyalty_by_brand[b][loy] = loyalty_by_brand[b].get(loy, 0) + cnt
+        replacement_by_brand.setdefault(b, {})
+        replacement_by_brand[b][rep] = replacement_by_brand[b].get(rep, 0) + cnt
 
     for brand_data in brand_health:
         brand = brand_data.get("brand")
@@ -568,6 +679,21 @@ async def _upsert_brand_intelligence(
 
         scorecard = scorecards.get(brand, {})
         health = _compute_vulnerability_score(brand_data)
+
+        # Merge safety signals into sentiment_breakdown
+        sentiment = dict(scorecard.get("sentiment_breakdown", {}))
+        brand_safety = safety_by_brand.get(brand)
+        if brand_safety:
+            sentiment["safety_signals"] = brand_safety
+
+        # Merge loyalty/replacement into buyer_profile
+        buyer = dict(scorecard.get("buyer_profile", {}))
+        brand_loyalty = loyalty_by_brand.get(brand)
+        if brand_loyalty:
+            buyer["loyalty_distribution"] = brand_loyalty
+        brand_replacement = replacement_by_brand.get(brand)
+        if brand_replacement:
+            buyer["replacement_distribution"] = brand_replacement
 
         try:
             await pool.execute(
@@ -601,11 +727,11 @@ async def _upsert_brand_intelligence(
                 brand_data.get("avg_pain_score"),
                 brand_data.get("repurchase_yes", 0),
                 brand_data.get("repurchase_no", 0),
-                json.dumps(scorecard.get("sentiment_breakdown", {})),
+                json.dumps(sentiment),
                 json.dumps(scorecard.get("top_feature_requests", [])),
                 json.dumps(scorecard.get("top_complaints", [])),
                 json.dumps(flows_by_brand.get(brand, [])),
-                json.dumps(scorecard.get("buyer_profile", {})),
+                json.dumps(buyer),
                 json.dumps(scorecard.get("positive_aspects", [])),
                 health,
                 now,

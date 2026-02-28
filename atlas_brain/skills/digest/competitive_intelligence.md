@@ -21,14 +21,19 @@ You will receive a JSON object with these sections:
   - `brand`, `total_reviews`, `avg_rating`, `avg_pain_score`
   - `severity_distribution` (critical/major/minor counts)
   - `repurchase_yes`, `repurchase_no` (would_repurchase counts)
+  - `safety_flagged_count` (reviews where safety_flag.flagged is true)
 - `competitive_flows`: Array of brand-to-brand customer migration signals, each with:
   - `source_brand` (the reviewing brand), `competitor` (product/brand mentioned), `direction` (switched_to/considered/switched_from), `mentions` (count)
 - `feature_gaps`: Array of most-requested features across all products, each with:
   - `category`, `feature`, `mentions`, `avg_pain_score`
 - `buyer_personas`: Array of buyer segment clusters, each with:
-  - `category`, `buyer_type`, `use_case`, `price_sentiment`, `review_count`, `avg_rating`, `avg_pain`
+  - `category`, `buyer_type`, `use_case`, `price_sentiment`, `expertise_level` (novice/intermediate/expert/null), `budget_type` (budget_constrained/value_seeker/premium_willing/null), `review_count`, `avg_rating`, `avg_pain`
 - `sentiment_landscape`: Array of per-brand sentiment on specific aspects, each with:
   - `brand`, `aspect`, `sentiment` (positive/negative/mixed), `count`
+- `safety_signals`: Array of per-brand safety-flagged review consequence distributions, each with:
+  - `brand`, `consequence` (consequence_severity value: safety_concern/financial_loss/inconvenience/null), `count`
+- `loyalty_churn`: Array of per-brand loyalty depth x replacement behavior cross-tabs, each with:
+  - `brand`, `loyalty` (brand_loyalty_depth: first_time/occasional/loyal/long_term_loyal/null), `replacement` (replacement_behavior: returned/replaced_same/switched_brand/kept_broken/null), `count`
 - `prior_reports`: Array of previous reports (most recent first, up to 3)
 
 ## Analysis Process
@@ -37,16 +42,22 @@ You will receive a JSON object with these sections:
 
 2. **Feature Gaps**: What does the market want that nobody offers well? Rank feature requests by frequency weighted by pain_score. Group by theme (durability, performance, compatibility, value, etc.).
 
-3. **Buyer Personas**: Who is complaining and what do they care about? Cluster buyer segments by type + use_case. Note price sensitivity patterns per segment.
+3. **Buyer Personas**: Who is complaining and what do they care about? Cluster buyer segments by type + use_case. Note price sensitivity patterns per segment. Use `expertise_level` and `budget_type` to produce finer clusters (e.g. "novice + budget_constrained" vs "expert + premium_willing").
 
-4. **Brand Vulnerability**: For each major brand, synthesize:
-   - Vulnerability score (higher = worse): `(1 - repurchase_rate) * 35 + avg_pain/10 * 35 + (5 - avg_rating)/5 * 20 + churn_rate * 10`
+4. **Safety Signals**: Which brands have products flagged for safety concerns? What consequence severities dominate? Identify brands with disproportionate safety_concern or financial_loss consequences relative to their review volume.
+
+5. **Loyalty & Churn Patterns**: Which brands are losing loyal/long-term customers? Where do "switched_brand" replacements concentrate? Cross-reference loyalty depth with replacement behavior to find brands hemorrhaging their most committed customers.
+
+6. **Brand Vulnerability**: For each major brand, synthesize:
+   - Vulnerability score (higher = worse): `(1 - repurchase_rate) * 30 + avg_pain/10 * 30 + (5 - avg_rating)/5 * 15 + churn_rate * 10 + safety_rate * 15`
    - Churn rate = repurchase_no / (repurchase_yes + repurchase_no)
+   - Safety rate = safety_flagged_count / total_reviews
    - Complaint volume and severity mix
    - Competitive position (net customer flow: gains minus losses)
    - Top weakness from sentiment data
+   - Loyalty breakdown and replacement patterns
 
-5. **Trend Detection**: If prior_reports exist, identify movement:
+7. **Trend Detection**: If prior_reports exist, identify movement:
    - Brands becoming more or less vulnerable
    - Feature requests gaining momentum
    - Shifting buyer demographics
@@ -100,6 +111,11 @@ Respond with a JSON object containing these fields:
       "top_weakness": "Build quality fails within 6 months",
       "customer_exodus": "Net -12 customers switching to Brand Y",
       "one_liner": "High churn from durability complaints, losing premium buyers to Brand Y",
+      "safety_flagged_count": 5,
+      "safety_rate": 0.11,
+      "top_consequence": "safety_concern",
+      "loyalty_breakdown": {"first_time": 8, "occasional": 12, "loyal": 15, "long_term_loyal": 10},
+      "replacement_breakdown": {"returned": 6, "replaced_same": 3, "switched_brand": 20, "kept_broken": 2},
       "sentiment_breakdown": {"quality": {"positive": 2, "negative": 18}, "durability": {"positive": 1, "negative": 15}},
       "top_feature_requests": ["Better build quality", "Longer warranty"],
       "top_complaints": ["Breaks after 3 months", "Poor customer service"],
@@ -132,7 +148,7 @@ Respond with a JSON object containing these fields:
 - Limit: competitive_flows to 15, feature_gaps to 15, buyer_personas to 8, brand_vulnerability to 20, insights to 8, recommendations to 5
 - Focus on CROSS-BRAND patterns, not per-product details (complaint_analysis handles that)
 - If prior_reports exist, reference trends: "Brand X vulnerability increased from 65 to 72 since last report"
-- vulnerability_score formula: (1 - repurchase_rate) * 35 + avg_pain/10 * 35 + (5 - avg_rating)/5 * 20 + churn_rate * 10 (clamped 0-100)
+- vulnerability_score formula: (1 - repurchase_rate) * 30 + avg_pain/10 * 30 + (5 - avg_rating)/5 * 15 + churn_rate * 10 + safety_rate * 15 (clamped 0-100)
 - Frame ALL analysis as vulnerability/risk -- never use "health score", "brand health", or "positive ratio"
 - Remember: low repurchase rate, high pain, low rating = HIGH vulnerability (bad)
 - If data is sparse, note the limitation and focus on what is available
