@@ -1792,6 +1792,301 @@ class MCPConfig(BaseSettings):
     calendar_port: int = Field(default=8059, description="Port for Calendar MCP server (SSE transport)")
 
 
+class NewsIntelligenceConfig(BaseSettings):
+    """News intelligence configuration — entity-level pressure signal detection.
+
+    Monitors a watchlist of entities (public companies, sports teams, markets,
+    crypto, or custom topics) via the NewsAPI and identifies which ones are
+    building *pre-movement pressure* before the story breaks as mainstream news.
+
+    The core insight: article velocity, sentiment shifts, and source diversity
+    all tend to accelerate *before* a meaningful price, odds, or sentiment
+    movement is publicly reported.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_NEWS_", env_file=".env", extra="ignore"
+    )
+
+    enabled: bool = Field(default=False, description="Enable daily news intelligence analysis")
+    api_key: str | None = Field(default=None, description="NewsAPI.org API key (newsapi.org/register)")
+
+    # Watchlist — primary entity configuration
+    watchlist: str = Field(
+        default=(
+            '[{"name":"Apple Inc","type":"company","query":"Apple AAPL supply chain earnings","ticker":"AAPL"},'
+            '{"name":"Bitcoin","type":"crypto","query":"Bitcoin BTC price regulation","ticker":"BTC"},'
+            '{"name":"S&P 500","type":"market","query":"S&P 500 SPX market outlook","ticker":"SPX"}]'
+        ),
+        description=(
+            "JSON array of watched entities. Each entry: "
+            '{"name": "...", "type": "company|sports_team|market|crypto|custom", '
+            '"query": "NewsAPI search query", "ticker": "optional ticker/symbol"}'
+        ),
+    )
+
+    # Legacy simple-mode fallback
+    topics: str = Field(
+        default="",
+        description=(
+            "Comma-separated plain-text topics (simple mode — used only when watchlist is empty). "
+            "Prefer the watchlist for entity-specific tracking."
+        ),
+    )
+    regions: str = Field(
+        default="US",
+        description="Comma-separated regions prepended to simple-mode topic queries",
+    )
+    languages: str = Field(
+        default="en",
+        description="Comma-separated language codes for article filtering (e.g. en,es)",
+    )
+
+    # Pressure signal detection
+    lookback_days: int = Field(
+        default=7, ge=2, le=30,
+        description="Days of history used to establish the baseline article volume for each entity",
+    )
+    pressure_velocity_threshold: float = Field(
+        default=1.5, ge=1.0, le=10.0,
+        description=(
+            "Minimum volume growth multiplier to flag a pressure signal — "
+            "1.5 means 50% more articles than the recent daily average"
+        ),
+    )
+    signal_min_articles: int = Field(
+        default=3, ge=1, le=20,
+        description="Minimum articles in the most-recent day to confirm a signal (filters single-source noise)",
+    )
+
+    # Multi-dimensional scoring
+    sentiment_enabled: bool = Field(
+        default=True,
+        description=(
+            "Score sentiment shift per entity — a sudden increase in negative (or positive) "
+            "tone often precedes a meaningful movement"
+        ),
+    )
+    source_diversity_enabled: bool = Field(
+        default=True,
+        description=(
+            "Score source diversity — when a story spreads from niche outlets to mainstream "
+            "the diversity score rises, strengthening the pressure signal"
+        ),
+    )
+    composite_score_threshold: float = Field(
+        default=1.3, ge=1.0, le=10.0,
+        description=(
+            "Minimum composite pressure score to flag a signal. "
+            "Composite = velocity × sentiment_factor × diversity_factor × linguistic_factor. "
+            "Lower than velocity_threshold because extra dimensions add confirmation."
+        ),
+    )
+
+    # Linguistic pre-indicator analysis (behavioral stacking)
+    linguistic_analysis_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable linguistic pre-indicator pattern analysis. "
+            "Detects language patterns that statistically appear before major movements — "
+            "hedging, deflection, insider sourcing, and escalation language."
+        ),
+    )
+    linguistic_hedge_enabled: bool = Field(
+        default=True,
+        description=(
+            "Detect hedging/uncertainty language ('reportedly', 'could', 'may', 'sources say') — "
+            "builds before unconfirmed information goes mainstream"
+        ),
+    )
+    linguistic_deflection_enabled: bool = Field(
+        default=True,
+        description=(
+            "Detect deflection/denial language ('denies', 'dismisses', 'refuses to comment') — "
+            "denial clusters often appear immediately before a story breaks"
+        ),
+    )
+    linguistic_insider_enabled: bool = Field(
+        default=True,
+        description=(
+            "Detect insider/source language ('people familiar with the matter', 'anonymous sources') — "
+            "indicates information leakage before official disclosure"
+        ),
+    )
+    linguistic_escalation_enabled: bool = Field(
+        default=True,
+        description=(
+            "Detect escalation/urgency language ('breaking', 'crisis', 'urgent', 'imminent') — "
+            "urgency words in trade press before mainstream indicates accelerating pressure"
+        ),
+    )
+    linguistic_permission_enabled: bool = Field(
+        default=True,
+        description=(
+            "Detect moral permission language ('must be stopped', 'for the greater good', "
+            "'no option but') — grants readers permission to act against prior values, "
+            "often appears before coordinated pressure campaigns"
+        ),
+    )
+    linguistic_certainty_enabled: bool = Field(
+        default=True,
+        description=(
+            "Detect certainty/moral panic language ('undeniable', 'settled', 'always', 'never') — "
+            "absolute language combined with emotional triggers precedes coordinated narratives"
+        ),
+    )
+    linguistic_dissociation_enabled: bool = Field(
+        default=True,
+        description=(
+            "Detect we/us → they/them language shifts and label-based framing ('these people', "
+            "'their kind', 'outsiders') — group identity dissociation builds before major events"
+        ),
+    )
+
+    # SORAM Framework (Chase Hughes) — 5 societal pressure channels
+    soram_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable SORAM framework analysis. Scores five societal pressure channels "
+            "(Societal / Operational / Regulatory / Alignment / Media Novelty) that "
+            "Hughes identifies as the levers pulled simultaneously before major events."
+        ),
+    )
+    soram_societal_enabled: bool = Field(
+        default=True,
+        description=(
+            "SORAM Societal: detect coordinated threat/fear framing across outlets — "
+            "a sudden obsession with a specific 'threat' or 'misinformation' topic across "
+            "unrelated platforms signals a coordinated pressure campaign"
+        ),
+    )
+    soram_operational_enabled: bool = Field(
+        default=True,
+        description=(
+            "SORAM Operational: detect drills, simulations, and readiness exercises in coverage — "
+            "an increase in 'exercise' and 'preparedness' language often precedes actual events"
+        ),
+    )
+    soram_regulatory_enabled: bool = Field(
+        default=True,
+        description=(
+            "SORAM Regulatory: detect new emergency powers, executive orders, or rule changes — "
+            "quietly introduced regulations that are only useful if a certain crisis occurs"
+        ),
+    )
+    soram_alignment_enabled: bool = Field(
+        default=True,
+        description=(
+            "SORAM Alignment: detect scripted consensus — when government, media, and tech "
+            "begin using the exact same phrasing simultaneously (coordinated messaging)"
+        ),
+    )
+    soram_media_novelty_enabled: bool = Field(
+        default=True,
+        description=(
+            "SORAM Media Novelty: detect novelty hijacking — a constant stream of 'breaking' "
+            "and unrelated urgent news keeps the brain in high suggestibility, often preceding "
+            "a major coordinated narrative push"
+        ),
+    )
+
+    # Alternative data sources
+    sec_edgar_enabled: bool = Field(
+        default=False,
+        description=(
+            "Fetch recent SEC 8-K filings for company/crypto entities via EDGAR free API. "
+            "Elevated 8-K activity indicates undisclosed material events. Requires no API key."
+        ),
+    )
+    usaspending_enabled: bool = Field(
+        default=False,
+        description=(
+            "Fetch recent USAspending.gov contract awards for watched entities. "
+            "Sudden government contracts indicate business momentum or regulatory attention. "
+            "No API key required."
+        ),
+    )
+    state_sos_enabled: bool = Field(
+        default=False,
+        description=(
+            "Monitor State Secretary of State filings for new business formations near watched entities. "
+            "Requires custom regional integration — see docs for setup."
+        ),
+    )
+    county_recorder_enabled: bool = Field(
+        default=False,
+        description=(
+            "Monitor county recorder / building permit data for commercial development signals. "
+            "Requires custom regional integration — see docs for setup."
+        ),
+    )
+    bls_enabled: bool = Field(
+        default=False,
+        description=(
+            "Fetch BLS/Census employment and industry trend data for watched sectors. "
+            "Useful for macro context on company and market entities."
+        ),
+    )
+
+    # Signal streak and cross-entity correlation
+    signal_streak_enabled: bool = Field(
+        default=True,
+        description=(
+            "Track consecutive days with elevated signals per entity. "
+            "A streak of N days is significantly more predictive than a single-day spike."
+        ),
+    )
+    signal_streak_threshold: int = Field(
+        default=3, ge=2, le=14,
+        description=(
+            "Number of consecutive elevated-signal days that triggers a 'building pressure' alert. "
+            "Streaks indicate sustained pre-movement accumulation, not noise."
+        ),
+    )
+    cross_entity_correlation_enabled: bool = Field(
+        default=True,
+        description=(
+            "Detect macro signals when multiple entities of the same type spike simultaneously. "
+            "Correlated spikes across companies/markets indicate sector-wide events."
+        ),
+    )
+    cross_entity_min_signals: int = Field(
+        default=3, ge=2, le=10,
+        description=(
+            "Minimum number of same-type entities that must signal simultaneously "
+            "to flag a cross-entity macro correlation."
+        ),
+    )
+
+    # Operations
+    max_articles_per_topic: int = Field(
+        default=20, ge=5, le=100,
+        description="Maximum articles fetched per entity per run (controls NewsAPI quota usage)",
+    )
+    llm_model: str = Field(
+        default="qwen3:14b",
+        description="Ollama model used to synthesise the intelligence briefing",
+    )
+    schedule_hour: int = Field(
+        default=5, ge=0, le=23,
+        description="Hour of day (0–23, local time) to run the daily intelligence analysis",
+    )
+
+    # Output
+    notify_on_signal: bool = Field(
+        default=True,
+        description="Send a push notification when new pressure signals are detected",
+    )
+    notify_all_runs: bool = Field(
+        default=False,
+        description="Send a push notification after every run, even when no new signals are found",
+    )
+    include_in_morning_briefing: bool = Field(
+        default=True,
+        description="Include active pressure signals in the morning briefing summary",
+    )
+
+
 class Settings(BaseSettings):
     """Application-wide settings."""
 
@@ -1865,6 +2160,7 @@ class Settings(BaseSettings):
     openai_compat: OpenAICompatConfig = Field(default_factory=OpenAICompatConfig)
     ftl_tracing: FTLTracingConfig = Field(default_factory=FTLTracingConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
+    news_intel: NewsIntelligenceConfig = Field(default_factory=NewsIntelligenceConfig)
 
     # Presence tracking - imported from presence module
     @property

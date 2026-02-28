@@ -375,6 +375,22 @@ class TaskScheduler:
                 "mailbox": "[Gmail]/Sent Mail",
             },
         },
+        {
+            "name": "news_intelligence",
+            "description": (
+                "Daily news pressure signal detection — identifies topics accelerating "
+                "in article volume before they become mainstream headline news"
+            ),
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": None,  # filled at seed time from settings.news_intel.schedule_hour
+            "timeout_seconds": 300,
+            "enabled": False,  # opt-in: requires ATLAS_NEWS_API_KEY
+            "metadata": {
+                "builtin_handler": "news_intelligence",
+                "synthesis_skill": "digest/news_intelligence",
+            },
+        },
     ]
 
     async def _ensure_default_tasks(self) -> None:
@@ -395,7 +411,15 @@ class TaskScheduler:
                 "email_intake": settings.email_intake.interval_seconds,
             }
 
+            # Resolve configurable cron expressions at runtime
+            _cron_overrides = {
+                "news_intelligence": f"0 {settings.news_intel.schedule_hour} * * *",
+            }
+
             for task_def in self._DEFAULT_TASKS:
+                # Apply runtime cron override if the definition left cron_expression as None
+                if task_def.get("cron_expression") is None and task_def["name"] in _cron_overrides:
+                    task_def = {**task_def, "cron_expression": _cron_overrides[task_def["name"]]}
                 # Apply runtime interval override if the definition left it as None
                 if task_def.get("interval_seconds") is None and task_def["name"] in _interval_overrides:
                     task_def = {**task_def, "interval_seconds": _interval_overrides[task_def["name"]]}
