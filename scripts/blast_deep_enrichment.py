@@ -446,7 +446,7 @@ async def dry_run(pool):
 
 async def main():
     parser = argparse.ArgumentParser(description="Deep enrichment blast script")
-    parser.add_argument("--workers", type=int, default=2, help="Number of concurrent workers (default: 2)")
+    parser.add_argument("--workers", type=int, default=3, help="Number of concurrent workers (default: 3)")
     parser.add_argument("--batch", type=int, default=30, help="Reviews claimed per worker per round (default: 30)")
     parser.add_argument("--tier", type=str, default="all", choices=["1", "2", "3", "all"],
                         help="ASIN tier filter: 1=50+, 2=20-49, 3=10-19, all=no filter")
@@ -456,7 +456,10 @@ async def main():
     parser.add_argument("--validate", type=int, default=0, metavar="N",
                         help="Process N reviews, print formatted results, exit")
     parser.add_argument("--dry-run", action="store_true", help="Show tier counts and exit")
-    parser.add_argument("--model", type=str, default=None, help="Ollama model override")
+    parser.add_argument("--model", type=str, default=None, help="Model override (HuggingFace format for vllm, e.g. Qwen/Qwen3-14B)")
+    parser.add_argument("--provider", type=str, default="ollama", choices=["ollama", "vllm"],
+                        help="LLM provider: ollama (default) or vllm (continuous batching)")
+    parser.add_argument("--base-url", type=str, default=None, help="Override server URL for the chosen provider")
     args = parser.parse_args()
 
     from atlas_brain.config import settings
@@ -471,9 +474,15 @@ async def main():
         await dry_run(pool)
         return
 
-    # Activate LLM (local only)
-    model = args.model or settings.llm.ollama_model
-    llm_registry.activate("ollama", model=model, base_url=settings.llm.ollama_url)
+    # Activate LLM
+    if args.provider == "vllm":
+        model = args.model or "Qwen/Qwen3-14B"
+        base_url = args.base_url or "http://localhost:8000"
+        llm_registry.activate("vllm", model=model, base_url=base_url, timeout=settings.llm.ollama_timeout)
+    else:
+        model = args.model or settings.llm.ollama_model
+        base_url = args.base_url or settings.llm.ollama_url
+        llm_registry.activate("ollama", model=model, base_url=base_url, timeout=settings.llm.ollama_timeout)
     llm = llm_registry.get_active()
     if not llm:
         print("ERROR: No LLM available")
@@ -505,7 +514,7 @@ async def main():
     pending = row["pending"]
 
     print(
-        f"Starting {args.workers} workers | model={model} | "
+        f"Starting {args.workers} workers | provider={args.provider} | model={model} | "
         f"batch={args.batch} | tier={args.tier} | max_tokens={args.max_tokens} | "
         f"pending={pending:,}" + (f" | limit={args.limit}" if args.limit else ""),
         flush=True,

@@ -4,6 +4,7 @@ from .llama_cpp import LlamaCppLLM
 from .ollama import OllamaLLM
 from .together import TogetherLLM
 from .groq import GroqLLM
+from .vllm import VLLMLLM
 from .openrouter import OpenRouterLLM
 from .cloud import CloudLLM
 from .hybrid import HybridLLM
@@ -24,7 +25,7 @@ except ImportError:
 
 __all__ = [
     "LlamaCppLLM", "OllamaLLM", "TogetherLLM",
-    "GroqLLM", "OpenRouterLLM", "CloudLLM", "HybridLLM",
+    "GroqLLM", "VLLMLLM", "OpenRouterLLM", "CloudLLM", "HybridLLM",
 ]
 if _has_anthropic:
     __all__.append("AnthropicLLM")
