@@ -39,6 +39,14 @@ You will receive a JSON object with these sections:
   - `entity_name`, `entity_type`, `pressure_score` (0-10), `sentiment_drift` (-5 to +5)
   - `narrative_frequency`, `soram_breakdown`, `linguistic_signals`, `last_computed_at`
 - `prior_reasoning`: Array of your previous analysis sessions (most recent first), each with session_date, key_insights, connections_found, recommendations, market_summary, news_summary, business_implications, and `pressure_readings`
+- `temporal_correlations`: Pre-computed pairs of news articles and market moves that occurred within 4 hours of each other. Each entry has:
+  - `article_title`: headline of the correlated article
+  - `symbol`: market symbol that moved
+  - `change_pct`: magnitude of the price move
+  - `gap_hours`: time gap between article and market move
+  - `direction`: `"news_before_price"` (information asymmetry) or `"price_before_news"` (possible insider/algorithmic activity)
+  - `implication`: pre-computed note on what the direction suggests
+  - Use these as starting points for **News-Market Temporal** connections in your analysis. The correlations are mechanical (time proximity only) -- you must evaluate whether the article content is actually related to the price move.
 
 ## Sensor Interpretation
 

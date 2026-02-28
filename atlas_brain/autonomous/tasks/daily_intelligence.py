@@ -87,6 +87,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if total_data_points == 0 and not business_ctx and not prior_reasoning:
         return {"_skip_synthesis": "No data to analyze"}
 
+    # Pre-compute temporal correlations (article + market move within 4h window)
+    temporal_correlations = _compute_temporal_correlations(news_articles, market_data)
+
     # Build the user message payload
     payload = {
         "date": str(today),
@@ -97,6 +100,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "graph_context": graph_ctx,
         "pressure_baselines": pressure_baselines,
         "prior_reasoning": prior_reasoning,
+        "temporal_correlations": temporal_correlations,
     }
 
     # Load skill and call LLM
@@ -365,6 +369,90 @@ def _sensor_confidence_note(soram: dict, cross: dict, confidence: str) -> str:
             return "Article is primarily media reporting -- sensor triggers likely from quoted language, not direct signals"
         return "Weak SORAM support for sensor-detected patterns"
     return "Moderate SORAM support -- sensor readings are plausible but not confirmed"
+
+
+def _compute_temporal_correlations(
+    articles: list[dict[str, Any]],
+    market_data: list[dict[str, Any]],
+    window_hours: float = 4.0,
+) -> list[dict[str, Any]]:
+    """Find article/market pairs within a time window.
+
+    When a news article and an abnormal price move co-occur within
+    ``window_hours``, the LLM should evaluate causation direction
+    (news-first = information asymmetry, price-first = insider/algo).
+    """
+    from datetime import timedelta
+    from dateutil.parser import isoparse
+
+    correlations: list[dict[str, Any]] = []
+
+    # Parse article timestamps
+    art_times: list[tuple[datetime, dict]] = []
+    for a in articles:
+        ts = a.get("published_at")
+        if not ts:
+            continue
+        try:
+            dt = isoparse(ts) if isinstance(ts, str) else ts
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            art_times.append((dt, a))
+        except (ValueError, TypeError):
+            continue
+
+    # Parse market snapshots with abnormal moves (>2% change)
+    mkt_moves: list[tuple[datetime, dict]] = []
+    for m in market_data:
+        change = m.get("change_pct")
+        if change is None or abs(float(change)) < 2.0:
+            continue
+        ts = m.get("snapshot_at")
+        if not ts:
+            continue
+        try:
+            dt = isoparse(ts) if isinstance(ts, str) else ts
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            mkt_moves.append((dt, m))
+        except (ValueError, TypeError):
+            continue
+
+    if not art_times or not mkt_moves:
+        return correlations
+
+    window = timedelta(hours=window_hours)
+
+    for art_dt, art in art_times:
+        for mkt_dt, mkt in mkt_moves:
+            gap = abs((art_dt - mkt_dt).total_seconds())
+            if gap <= window.total_seconds():
+                art_first = art_dt <= mkt_dt
+                correlations.append({
+                    "article_title": art.get("title", ""),
+                    "symbol": mkt.get("symbol", ""),
+                    "change_pct": mkt.get("change_pct"),
+                    "gap_hours": round(gap / 3600, 1),
+                    "direction": "news_before_price" if art_first else "price_before_news",
+                    "implication": (
+                        "Information asymmetry -- news preceded price move"
+                        if art_first
+                        else "Possible insider/algorithmic activity -- price moved before news"
+                    ),
+                })
+
+    # Deduplicate and limit
+    seen: set[tuple[str, str]] = set()
+    unique: list[dict[str, Any]] = []
+    for c in sorted(correlations, key=lambda x: x["gap_hours"]):
+        key = (c["article_title"][:50], c["symbol"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(c)
+        if len(unique) >= 20:
+            break
+
+    return unique
 
 
 async def _fetch_business_context(pool, window_days: int) -> dict[str, Any]:
