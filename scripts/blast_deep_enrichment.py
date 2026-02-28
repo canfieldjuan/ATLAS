@@ -29,8 +29,21 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import os
+
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent.parent / ".env")
+_root = Path(__file__).parent.parent
+load_dotenv(_root / ".env", override=True)
+load_dotenv(_root / ".env.local", override=True)
+
+
+def _resolve_vllm_url() -> str:
+    explicit = os.getenv("VLLM_BASE_URL")
+    if explicit:
+        return explicit
+    host = os.getenv("VLLM_HOST", "localhost")
+    port = os.getenv("VLLM_PORT", "8080")
+    return f"http://{host}:{port}"
 
 logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("blast_deep_enrichment")
@@ -591,7 +604,7 @@ async def main():
     # Activate LLM
     if args.provider == "vllm":
         model = args.model or "Qwen/Qwen3-14B"
-        base_url = args.base_url or "http://localhost:8000"
+        base_url = args.base_url or _resolve_vllm_url()
         llm_registry.activate("vllm", model=model, base_url=base_url, timeout=settings.llm.ollama_timeout)
     else:
         model = args.model or settings.llm.ollama_model
