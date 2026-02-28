@@ -64,7 +64,7 @@ INSERT INTO b2b_scrape_targets (source, vendor_name, product_name, product_slug,
 VALUES
     ('g2',          'Copper', 'Copper CRM', 'copper',           'CRM', 10, 5, '{}'),
     ('capterra',    'Copper', 'Copper CRM', '166248/copper',    'CRM', 10, 5, '{}'),
-    ('trustradius', 'Copper', 'Copper CRM', 'copper-crm',       'CRM', 10, 5, '{}'),
+    ('trustradius', 'Copper', 'Copper CRM', 'copper',            'CRM', 10, 5, '{}'),
     ('reddit',      'Copper', 'Copper CRM', 'copper-reddit',    'CRM', 10, 3, '{"subreddits": "sysadmin,smallbusiness"}')
 ON CONFLICT (source, product_slug) DO NOTHING;
 
