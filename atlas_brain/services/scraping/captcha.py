@@ -81,12 +81,13 @@ def _extract_datadome_params(html: str) -> dict[str, str]:
     raw = m.group(1)
     params: dict[str, str] = {}
     for key in ("cid", "hsh", "host", "t", "s", "e", "rt", "qp", "cookie"):
-        km = re.search(rf"['\"]?{key}['\"]?\s*:\s*['\"]([^'\"]*)['\"]", raw)
+        # Negative lookbehind prevents 't' matching inside 'rt'
+        km = re.search(rf"(?<![a-zA-Z])['\"]?{key}['\"]?\s*:\s*['\"]([^'\"]*)['\"]", raw)
         if km:
             params[key] = km.group(1)
         else:
             # Try numeric values (s is an integer in the JS object)
-            km = re.search(rf"['\"]?{key}['\"]?\s*:\s*(\d+)", raw)
+            km = re.search(rf"(?<![a-zA-Z])['\"]?{key}['\"]?\s*:\s*(\d+)", raw)
             if km:
                 params[key] = km.group(1)
     return params

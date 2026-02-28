@@ -148,9 +148,9 @@ class AntiDetectionClient:
                                 attempt + 1, max_retries + 1,
                             )
                             try:
-                                # Use sticky captcha proxy if configured,
-                                # otherwise fall back to the current rotating proxy.
-                                captcha_proxy = get_captcha_proxy()
+                                # Use sticky captcha proxy for Cloudflare (cf_clearance is IP-bound).
+                                # DataDome cookies aren't IP-bound, so use the rotating proxy.
+                                captcha_proxy = get_captcha_proxy() if captcha_type == CaptchaType.CLOUDFLARE else None
                                 solve_proxy = captcha_proxy or (proxy.url if proxy else None)
                                 solution = await solver.solve(
                                     captcha_type=captcha_type,
