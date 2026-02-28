@@ -526,12 +526,17 @@ class SafetyGate:
             },
         )
 
+        if approval_id:
+            reason = f"Human approval required (risk: {risk['risk_level']}). Approval ID: {approval_id}"
+        else:
+            reason = f"Human approval required (risk: {risk['risk_level']}), but approval system unavailable"
+
         return {
             "allowed": False,
             "content_check": content_check,
             "risk_assessment": risk,
             "approval_id": approval_id,
-            "reason": f"Human approval required (risk: {risk['risk_level']}). Approval ID: {approval_id}",
+            "reason": reason,
         }
 
 

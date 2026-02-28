@@ -267,9 +267,12 @@ async def run_intervention_pipeline(
     entity_type: str = "company",
     time_window_days: int = 7,
     objectives: str = "de-escalate, stabilize",
+    constraints: str = "",
+    audience: str = "executive",
     risk_tolerance: str = "moderate",
     simulation_horizon: str = "7 days",
     hours_before_event: int = 48,
+    channels: str = "internal comms",
     allow_narrative_architect: bool = False,
 ) -> str:
     """
@@ -283,9 +286,12 @@ async def run_intervention_pipeline(
     entity_type: "company", "person", or "sector"
     time_window_days: How far back to look (1-90 days, default 7)
     objectives: Comma-separated goals (de-escalate, stabilize, capitalize)
+    constraints: Comma-separated legal, ethical, or operational constraints
+    audience: Target reader -- "executive", "ops lead", or "negotiator"
     risk_tolerance: "low", "moderate", or "high"
     simulation_horizon: Time window for projections (e.g. "7 days", "2 weeks")
     hours_before_event: T-minus hours for calibration checkpoints (default 48)
+    channels: Comma-separated communication channels for interventions
     allow_narrative_architect: Enable stage 3 (blocked by default until safety layer exists)
     """
     try:
@@ -298,9 +304,12 @@ async def run_intervention_pipeline(
             entity_type=entity_type,
             time_window_days=max(1, min(90, time_window_days)),
             objectives=[o.strip() for o in objectives.split(",")],
+            constraints=[c.strip() for c in constraints.split(",") if c.strip()] if constraints else None,
+            audience=audience if audience in ("executive", "ops lead", "negotiator") else "executive",
             risk_tolerance=risk_tolerance if risk_tolerance in ("low", "moderate", "high") else "moderate",
             simulation_horizon=simulation_horizon,
             hours_before_event=max(1, min(720, hours_before_event)),
+            channels=[c.strip() for c in channels.split(",") if c.strip()] if channels else None,
             allow_narrative_architect=allow_narrative_architect,
             requested_by="mcp",
         )

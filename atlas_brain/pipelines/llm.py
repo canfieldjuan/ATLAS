@@ -124,6 +124,10 @@ def parse_json_response(
     4. Truncation recovery (if ``recover_truncated``)
     5. Fallback ``{"analysis_text": text}``
     """
+    if not text:
+        logger.warning("parse_json_response received empty/None input")
+        return {"analysis_text": "", "_parse_fallback": True}
+
     # 1. Fenced JSON block
     json_match = re.search(r"```json\s*(.*?)```", text, re.DOTALL)
     if json_match:
