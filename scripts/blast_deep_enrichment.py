@@ -21,6 +21,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sys
 import time
 from datetime import datetime, timezone
@@ -28,8 +29,6 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import os
 
 from dotenv import load_dotenv
 _root = Path(__file__).parent.parent
@@ -102,11 +101,22 @@ _VALID_RESEARCH = {"impulse", "light", "moderate", "deep"}
 _VALID_CONSEQUENCE = {"inconvenience", "workflow_impact", "financial_loss", "safety_concern"}
 _VALID_REPLACEMENT = {"returned", "replaced_same", "switched_brand", "kept_broken", "unknown"}
 
+# Enum sets for Section A sub-objects
+_VALID_SENTIMENT = {"positive", "negative", "mixed"}
+_VALID_DIRECTION = {"switched_to", "switched_from", "considered", "compared"}
+_VALID_PRICE_SENTIMENT = {"expensive", "fair", "cheap", "not_mentioned"}
+
 # Enum sets for Section C
 _VALID_LOYALTY = {"first_time", "occasional", "loyal", "long_term_loyal"}
 _VALID_DELAY = {"immediate", "days", "weeks", "months", "unknown"}
 _VALID_TRAJECTORY = {"always_bad", "degraded", "mixed_then_bad", "initially_positive", "unknown"}
 _VALID_OCCASION = {"none", "gift", "replacement", "upgrade", "first_in_category", "seasonal"}
+
+# Enum sets for Section C sub-objects
+_VALID_ECOSYSTEM_LEVEL = {"free", "partially", "fully"}
+_VALID_BARRIER_LEVEL = {"none", "low", "medium", "high"}
+_VALID_AMPLIFICATION = {"quiet", "private", "social"}
+_VALID_BULK_TYPE = {"single", "multi"}
 
 # Tier definitions: (min_reviews, max_reviews_or_none)
 _TIERS = {
@@ -151,6 +161,23 @@ def _validate_extraction(data: dict) -> bool:
         for field in ("use_case", "buyer_type", "price_sentiment"):
             if field not in bc:
                 return False
+        ps = bc.get("price_sentiment")
+        if ps is not None and ps not in _VALID_PRICE_SENTIMENT:
+            return False
+
+    # Section A sub-object: sentiment_aspects enum values
+    aspects = data.get("sentiment_aspects")
+    if isinstance(aspects, list):
+        for a in aspects:
+            if isinstance(a, dict) and a.get("sentiment") not in _VALID_SENTIMENT:
+                return False
+
+    # Section A sub-object: product_comparisons enum values
+    comparisons = data.get("product_comparisons")
+    if isinstance(comparisons, list):
+        for c in comparisons:
+            if isinstance(c, dict) and c.get("direction") not in _VALID_DIRECTION:
+                return False
 
     # Section B enum validation
     if data.get("expertise_level") not in _VALID_EXPERTISE:
@@ -182,9 +209,11 @@ def _validate_extraction(data: dict) -> bool:
     if data.get("occasion_context") not in _VALID_OCCASION:
         return False
 
-    # Section C sub-object key checks
+    # Section C sub-object key + enum checks
     eco = data.get("ecosystem_lock_in", {})
     if not isinstance(eco, dict) or "level" not in eco or "ecosystem" not in eco:
+        return False
+    if eco["level"] not in _VALID_ECOSYSTEM_LEVEL:
         return False
     safety = data.get("safety_flag", {})
     if not isinstance(safety, dict) or "flagged" not in safety or "description" not in safety:
@@ -192,11 +221,17 @@ def _validate_extraction(data: dict) -> bool:
     bulk = data.get("bulk_purchase_signal", {})
     if not isinstance(bulk, dict) or "type" not in bulk or "estimated_qty" not in bulk:
         return False
+    if bulk["type"] not in _VALID_BULK_TYPE:
+        return False
     barrier = data.get("switching_barrier", {})
     if not isinstance(barrier, dict) or "level" not in barrier or "reason" not in barrier:
         return False
+    if barrier["level"] not in _VALID_BARRIER_LEVEL:
+        return False
     amp = data.get("amplification_intent", {})
     if not isinstance(amp, dict) or "intent" not in amp or "context" not in amp:
+        return False
+    if amp["intent"] not in _VALID_AMPLIFICATION:
         return False
     openness = data.get("review_sentiment_openness", {})
     if not isinstance(openness, dict) or "open" not in openness or "condition" not in openness:
