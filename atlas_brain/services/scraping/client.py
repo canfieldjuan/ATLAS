@@ -159,11 +159,14 @@ class AntiDetectionClient:
                                     user_agent=profile.user_agent,
                                     proxy_url=solve_proxy,
                                 )
-                                # Store solved cookies and pin profile
+                                # Store solved cookies and pin profile with matching TLS fingerprint
                                 self._get_domain_cookies(domain).update(solution.cookies)
-                                pinned_profile = profile
                                 if solution.user_agent:
+                                    # Solver used a different UA — match impersonate to it
+                                    pinned_profile = self._profiles.match_profile(solution.user_agent)
                                     override_ua = solution.user_agent
+                                else:
+                                    pinned_profile = profile
                                 # Pin proxy so retry uses same IP as the solve
                                 if solution.sticky_proxy:
                                     override_proxy = solution.sticky_proxy

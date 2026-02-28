@@ -9,6 +9,7 @@ and header set. Ensures UA always matches TLS fingerprint.
 from __future__ import annotations
 
 import random
+import re
 from dataclasses import dataclass
 
 
@@ -92,6 +93,13 @@ _PROFILES: list[BrowserProfile] = [
         sec_ch_ua_platform='"macOS"',
     ),
     BrowserProfile(
+        impersonate="chrome142",
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+        platform="Windows",
+        sec_ch_ua='"Chromium";v="142", "Google Chrome";v="142", "Not-A.Brand";v="99"',
+        sec_ch_ua_platform='"Windows"',
+    ),
+    BrowserProfile(
         impersonate="firefox133",
         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
         platform="Windows",
@@ -116,3 +124,22 @@ class BrowserProfileManager:
         if self._firefox and random.random() < 0.2:
             return random.choice(self._firefox)
         return random.choice(self._chrome)
+
+    def match_profile(self, user_agent: str) -> BrowserProfile:
+        """Find the closest Chrome profile matching a User-Agent string.
+
+        Used after CAPTCHA solving to match the TLS fingerprint (impersonate)
+        to the Chrome version the solver used. Cloudflare binds cf_clearance
+        to the exact TLS fingerprint, so the impersonate must be close.
+        """
+        m = re.search(r"Chrome/(\d+)", user_agent)
+        if not m:
+            return self._chrome[-1]  # default to newest Chrome
+
+        target_ver = int(m.group(1))
+
+        def _chrome_ver(p: BrowserProfile) -> int:
+            vm = re.search(r"chrome(\d+)", p.impersonate)
+            return int(vm.group(1)) if vm else 0
+
+        return min(self._chrome, key=lambda p: abs(_chrome_ver(p) - target_ver))

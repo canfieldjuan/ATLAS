@@ -49,7 +49,9 @@ def detect_captcha(response_text: str, status_code: int) -> CaptchaType:
         return CaptchaType.DATADOME
 
     # Cloudflare managed challenge / JS challenge
-    if "cloudflare" in body and ("attention required" in body or "just a moment" in body):
+    if ("attention required" in body or "just a moment" in body) and (
+        "cloudflare" in body or "_cf_chl_opt" in body or "challenge-platform" in body
+    ):
         return CaptchaType.CLOUDFLARE
 
     return CaptchaType.NONE
@@ -183,8 +185,9 @@ class CaptchaSolver:
         if self._provider == "capsolver" and captcha_type == CaptchaType.DATADOME:
             solve_ua, ua_swapped = _ensure_capsolver_ua(user_agent)
 
+        solver_ua: str | None = None
         if self._provider == "capsolver":
-            cookies = await self._solve_capsolver(
+            cookies, solver_ua = await self._solve_capsolver(
                 captcha_type, page_url, page_html, solve_ua, proxy_url,
             )
         else:
@@ -192,16 +195,21 @@ class CaptchaSolver:
                 captcha_type, page_url, page_html, user_agent, proxy_url,
             )
 
+        # Determine the effective UA to return:
+        # 1. If CapSolver returned a specific UA, use it (Cloudflare binds cf_clearance to UA)
+        # 2. If we swapped UA for DataDome compatibility, return the swapped one
+        effective_ua = solver_ua or (solve_ua if ua_swapped else None)
+
         elapsed = int((time.monotonic() - t0) * 1000)
         logger.info(
-            "CAPTCHA solved: type=%s provider=%s time=%dms ua_swapped=%s proxy=%s",
-            captcha_type.value, self._provider, elapsed, ua_swapped,
+            "CAPTCHA solved: type=%s provider=%s time=%dms ua_override=%s proxy=%s",
+            captcha_type.value, self._provider, elapsed, bool(effective_ua),
             bool(proxy_url),
         )
         return CaptchaSolution(
             cookies=cookies,
             solve_time_ms=elapsed,
-            user_agent=solve_ua if ua_swapped else None,
+            user_agent=effective_ua,
             sticky_proxy=proxy_url,
         )
 
@@ -214,7 +222,7 @@ class CaptchaSolver:
         page_html: str,
         user_agent: str,
         proxy_url: str | None,
-    ) -> dict[str, str]:
+    ) -> tuple[dict[str, str], str | None]:
         base = "https://api.capsolver.com"
 
         if captcha_type == CaptchaType.DATADOME:
@@ -281,9 +289,15 @@ class CaptchaSolver:
             )
 
         task_id = data["taskId"]
-        return await self._poll_capsolver(base, task_id)
+        solution = await self._poll_capsolver(base, task_id)
+        cookies = _extract_cookies(solution)
+        solver_ua = solution.get("userAgent")
+        if solver_ua:
+            logger.info("CapSolver returned userAgent: %s", solver_ua[:60])
+        return cookies, solver_ua
 
-    async def _poll_capsolver(self, base: str, task_id: str) -> dict[str, str]:
+    async def _poll_capsolver(self, base: str, task_id: str) -> dict:
+        """Poll CapSolver for task result. Returns the raw solution dict."""
         async with httpx.AsyncClient(timeout=30) as client:
             for _ in range(_MAX_POLL_ATTEMPTS):
                 await asyncio.sleep(_POLL_INTERVAL_S)
@@ -296,8 +310,7 @@ class CaptchaSolver:
 
                 status = data.get("status", "")
                 if status == "ready":
-                    solution = data.get("solution", {})
-                    return _extract_cookies(solution)
+                    return data.get("solution", {})
                 if status == "failed":
                     raise RuntimeError(f"CapSolver task failed: {data.get('errorDescription', data)}")
 
