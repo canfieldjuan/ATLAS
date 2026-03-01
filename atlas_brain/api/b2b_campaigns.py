@@ -5,15 +5,19 @@ Provides CRUD, manual campaign generation trigger, approve/reject workflow,
 and KPI stats for the campaign engine.
 """
 
+import json
 import logging
 import uuid as _uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from ..config import settings
 from ..storage.database import get_db_pool
+from ..autonomous.tasks.campaign_audit import log_campaign_event
 
 logger = logging.getLogger("atlas.api.b2b_campaigns")
 
@@ -95,7 +99,8 @@ async def list_campaigns(
         SELECT id, company_name, vendor_name, product_category,
                opportunity_score, urgency_score, channel, subject,
                body, cta,
-               status, batch_id, llm_model, created_at, approved_at, sent_at
+               status, batch_id, llm_model, created_at, approved_at, sent_at,
+               partner_id, industry
         FROM b2b_campaigns
         {where}
         ORDER BY created_at DESC
@@ -122,6 +127,8 @@ async def list_campaigns(
             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
             "approved_at": r["approved_at"].isoformat() if r["approved_at"] else None,
             "sent_at": r["sent_at"].isoformat() if r["sent_at"] else None,
+            "partner_id": str(r["partner_id"]) if r["partner_id"] else None,
+            "industry": r["industry"],
         }
         for r in rows
     ]
@@ -183,6 +190,8 @@ async def get_campaign(campaign_id: str):
     r = dict(row)
     # Serialize UUID and datetime fields
     r["id"] = str(r["id"])
+    if r.get("partner_id"):
+        r["partner_id"] = str(r["partner_id"])
     for ts_field in ("created_at", "approved_at", "sent_at", "opened_at", "clicked_at"):
         if r.get(ts_field):
             r[ts_field] = r[ts_field].isoformat()
@@ -326,3 +335,377 @@ async def _send_campaign_notification(
         logger.info("Campaign notification sent (batch=%s)", batch_id)
     except Exception as e:
         logger.warning("Failed to send campaign notification: %s", e)
+
+
+# ---------------------------------------------------------------------------
+# Sequence endpoints (stateful B2B campaign email sequences)
+# ---------------------------------------------------------------------------
+
+
+class SetRecipientBody(BaseModel):
+    recipient_email: str
+
+
+class ApproveQueueBody(BaseModel):
+    recipient_email: str | None = None
+
+
+def _row_to_dict(row) -> dict:
+    d = {}
+    for key in row.keys():
+        val = row[key]
+        if isinstance(val, UUID):
+            d[key] = str(val)
+        elif isinstance(val, datetime):
+            d[key] = val.isoformat()
+        else:
+            d[key] = val
+    return d
+
+
+def _affected_rows(result: str) -> int:
+    try:
+        return int(result.split()[-1])
+    except (ValueError, IndexError, AttributeError):
+        return -1
+
+
+@router.get("/sequences")
+async def list_sequences(
+    status: str = Query(default="all", description="Filter: active, paused, completed, replied, bounced, unsubscribed, all"),
+    company: str = Query(default="", description="Filter by company name (case-insensitive substring)"),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    """List campaign sequences with optional filters."""
+    pool = _pool_or_503()
+
+    conditions = []
+    params: list = []
+    param_idx = 1
+
+    if status != "all":
+        conditions.append(f"cs.status = ${param_idx}")
+        params.append(status)
+        param_idx += 1
+
+    if company:
+        conditions.append(f"LOWER(cs.company_name) LIKE ${param_idx}")
+        params.append(f"%{company.lower()}%")
+        param_idx += 1
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+    params.extend([limit, offset])
+    rows = await pool.fetch(
+        f"""
+        SELECT cs.*,
+               (SELECT COUNT(*) FROM b2b_campaigns bc WHERE bc.sequence_id = cs.id) AS campaign_count
+        FROM campaign_sequences cs
+        {where}
+        ORDER BY cs.created_at DESC
+        LIMIT ${param_idx} OFFSET ${param_idx + 1}
+        """,
+        *params,
+    )
+
+    return {
+        "count": len(rows),
+        "sequences": [_row_to_dict(r) for r in rows],
+    }
+
+
+@router.get("/sequences/{sequence_id}")
+async def get_sequence(sequence_id: UUID):
+    """Get a single sequence with full campaign history."""
+    pool = _pool_or_503()
+
+    seq = await pool.fetchrow(
+        "SELECT * FROM campaign_sequences WHERE id = $1", sequence_id
+    )
+    if not seq:
+        raise HTTPException(status_code=404, detail="Sequence not found")
+
+    campaigns = await pool.fetch(
+        """
+        SELECT * FROM b2b_campaigns
+        WHERE sequence_id = $1
+        ORDER BY step_number ASC
+        """,
+        sequence_id,
+    )
+
+    recent_audit = await pool.fetch(
+        """
+        SELECT * FROM campaign_audit_log
+        WHERE sequence_id = $1
+        ORDER BY created_at DESC LIMIT 50
+        """,
+        sequence_id,
+    )
+
+    return {
+        "sequence": _row_to_dict(seq),
+        "campaigns": [_row_to_dict(c) for c in campaigns],
+        "audit_log": [_row_to_dict(a) for a in recent_audit],
+    }
+
+
+@router.post("/sequences/{sequence_id}/set-recipient")
+async def set_recipient(sequence_id: UUID, body: SetRecipientBody):
+    """Set the recipient email for a sequence."""
+    pool = _pool_or_503()
+
+    result = await pool.execute(
+        """
+        UPDATE campaign_sequences
+        SET recipient_email = $1, updated_at = NOW()
+        WHERE id = $2
+        """,
+        body.recipient_email, sequence_id,
+    )
+
+    if _affected_rows(result) == 0:
+        raise HTTPException(status_code=404, detail="Sequence not found")
+
+    await pool.execute(
+        """
+        UPDATE b2b_campaigns
+        SET recipient_email = $1
+        WHERE sequence_id = $2 AND recipient_email IS NULL
+        """,
+        body.recipient_email, sequence_id,
+    )
+
+    return {"status": "ok", "recipient_email": body.recipient_email}
+
+
+@router.post("/sequences/{sequence_id}/pause")
+async def pause_sequence(sequence_id: UUID):
+    """Pause an active sequence."""
+    pool = _pool_or_503()
+
+    result = await pool.execute(
+        """
+        UPDATE campaign_sequences
+        SET status = 'paused', updated_at = NOW()
+        WHERE id = $1 AND status = 'active'
+        """,
+        sequence_id,
+    )
+
+    if _affected_rows(result) == 0:
+        raise HTTPException(status_code=404, detail="Sequence not found or not active")
+
+    await log_campaign_event(
+        pool, event_type="paused", source="api", sequence_id=sequence_id
+    )
+    return {"status": "paused"}
+
+
+@router.post("/sequences/{sequence_id}/resume")
+async def resume_sequence(sequence_id: UUID):
+    """Resume a paused sequence."""
+    pool = _pool_or_503()
+
+    result = await pool.execute(
+        """
+        UPDATE campaign_sequences
+        SET status = 'active', updated_at = NOW()
+        WHERE id = $1 AND status = 'paused'
+        """,
+        sequence_id,
+    )
+
+    if _affected_rows(result) == 0:
+        raise HTTPException(status_code=404, detail="Sequence not found or not paused")
+
+    await log_campaign_event(
+        pool, event_type="resumed", source="api", sequence_id=sequence_id
+    )
+    return {"status": "active"}
+
+
+@router.post("/{campaign_id}/queue-send")
+async def queue_campaign_for_send(campaign_id: str, body: ApproveQueueBody | None = None):
+    """Queue a campaign for auto-send with a cancel window.
+
+    Used for sequence campaigns. Sets status to 'queued' with approved_at
+    for the cancel window. The campaign_send task picks it up after the
+    window expires.
+    """
+    try:
+        cid = _uuid.UUID(campaign_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid campaign_id")
+
+    pool = _pool_or_503()
+
+    campaign = await pool.fetchrow(
+        "SELECT * FROM b2b_campaigns WHERE id = $1", cid
+    )
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    if campaign["status"] not in ("draft",):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot queue campaign with status '{campaign['status']}'"
+        )
+
+    now = datetime.now(timezone.utc)
+    sequence_id = campaign.get("sequence_id")
+
+    recipient = campaign.get("recipient_email")
+    if body and body.recipient_email:
+        recipient = body.recipient_email
+    elif not recipient and sequence_id:
+        recipient = await pool.fetchval(
+            "SELECT recipient_email FROM campaign_sequences WHERE id = $1",
+            sequence_id,
+        )
+
+    if not recipient:
+        raise HTTPException(
+            status_code=400,
+            detail="recipient_email is required (set on sequence or provide in body)"
+        )
+
+    await pool.execute(
+        """
+        UPDATE b2b_campaigns
+        SET status = 'queued',
+            approved_at = $1,
+            recipient_email = $2,
+            updated_at = $1
+        WHERE id = $3
+        """,
+        now, recipient, cid,
+    )
+
+    await log_campaign_event(
+        pool, event_type="queued", source="api",
+        campaign_id=cid, sequence_id=sequence_id,
+        step_number=campaign.get("step_number"),
+        recipient_email=recipient,
+        subject=campaign.get("subject"),
+    )
+
+    # ntfy notification with cancel button
+    if settings.alerts.ntfy_enabled:
+        import httpx
+
+        api_url = settings.email_draft.atlas_api_url.rstrip("/")
+        ntfy_url = f"{settings.alerts.ntfy_url.rstrip('/')}/{settings.alerts.ntfy_topic}"
+        delay_min = settings.campaign_sequence.auto_send_delay_seconds // 60
+
+        cancel_url = f"{api_url}/api/v1/b2b/campaigns/{campaign_id}/cancel"
+        message = (
+            f"To: {recipient}\n"
+            f"Subject: {campaign['subject']}\n"
+            f"Auto-sending in {delay_min} min."
+        )
+        headers = {
+            "Title": f"Campaign Queued: {campaign['company_name']}",
+            "Priority": "default",
+            "Tags": "outbox,campaign",
+            "Actions": f"http, Cancel Auto-Send, {cancel_url}, method=POST, clear=true",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                await client.post(ntfy_url, content=message, headers=headers)
+        except Exception as exc:
+            logger.warning("ntfy notification failed: %s", exc)
+
+    return {
+        "status": "queued",
+        "campaign_id": str(cid),
+        "recipient_email": recipient,
+        "auto_send_in_seconds": settings.campaign_sequence.auto_send_delay_seconds,
+    }
+
+
+@router.post("/{campaign_id}/cancel")
+async def cancel_campaign(campaign_id: str):
+    """Cancel a queued campaign before it sends."""
+    try:
+        cid = _uuid.UUID(campaign_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid campaign_id")
+
+    pool = _pool_or_503()
+
+    campaign = await pool.fetchrow(
+        "SELECT id, sequence_id, step_number, status FROM b2b_campaigns WHERE id = $1",
+        cid,
+    )
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    if campaign["status"] != "queued":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot cancel campaign with status '{campaign['status']}'"
+        )
+
+    now = datetime.now(timezone.utc)
+    await pool.execute(
+        "UPDATE b2b_campaigns SET status = 'cancelled', updated_at = $1 WHERE id = $2",
+        now, cid,
+    )
+
+    await log_campaign_event(
+        pool, event_type="cancelled", source="api",
+        campaign_id=cid,
+        sequence_id=campaign.get("sequence_id"),
+        step_number=campaign.get("step_number"),
+    )
+
+    return {"status": "cancelled", "campaign_id": str(cid)}
+
+
+@router.get("/{campaign_id}/audit-log")
+async def campaign_audit_log(
+    campaign_id: str,
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    """Get the full audit trail for a campaign."""
+    try:
+        cid = _uuid.UUID(campaign_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid campaign_id")
+
+    pool = _pool_or_503()
+
+    rows = await pool.fetch(
+        """
+        SELECT * FROM campaign_audit_log
+        WHERE campaign_id = $1
+        ORDER BY created_at DESC
+        LIMIT $2
+        """,
+        cid, limit,
+    )
+
+    return {"count": len(rows), "audit_log": [_row_to_dict(r) for r in rows]}
+
+
+@router.get("/sequences/{sequence_id}/audit-log")
+async def sequence_audit_log(
+    sequence_id: UUID,
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    """Get the full audit trail for a sequence."""
+    pool = _pool_or_503()
+
+    rows = await pool.fetch(
+        """
+        SELECT * FROM campaign_audit_log
+        WHERE sequence_id = $1
+        ORDER BY created_at DESC
+        LIMIT $2
+        """,
+        sequence_id, limit,
+    )
+
+    return {"count": len(rows), "audit_log": [_row_to_dict(r) for r in rows]}

@@ -492,6 +492,24 @@ class TaskScheduler:
                 "notify_tags": "briefcase,campaign",
             },
         },
+        {
+            "name": "campaign_sequence_progression",
+            "description": "Check active campaign sequences due for next step and generate follow-ups",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": None,  # resolved from settings.campaign_sequence.check_interval_seconds
+            "timeout_seconds": 600,
+            "metadata": {"builtin_handler": "campaign_sequence_progression"},
+        },
+        {
+            "name": "campaign_send",
+            "description": "Send queued campaign emails past the cancel window via Resend",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": 120,
+            "timeout_seconds": 120,
+            "metadata": {"builtin_handler": "campaign_send"},
+        },
     ]
 
     async def _ensure_default_tasks(self) -> None:
@@ -512,6 +530,7 @@ class TaskScheduler:
                 "email_intake": settings.email_intake.interval_seconds,
                 "email_stale_check": settings.email_stale_check.interval_seconds,
                 "weather_traffic_alerts": settings.alert_monitor.check_interval_seconds,
+                "campaign_sequence_progression": settings.campaign_sequence.check_interval_seconds,
             }
 
             # Resolve configurable cron expressions at runtime
@@ -618,6 +637,7 @@ class TaskScheduler:
                 "email_intake": settings.email_intake.interval_seconds,
                 "email_stale_check": settings.email_stale_check.interval_seconds,
                 "weather_traffic_alerts": settings.alert_monitor.check_interval_seconds,
+                "campaign_sequence_progression": settings.campaign_sequence.check_interval_seconds,
             }
 
             # Merge pipeline interval overrides

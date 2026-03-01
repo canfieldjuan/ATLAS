@@ -11,12 +11,14 @@ Returns _skip_synthesis.
 
 import json
 import logging
+import uuid as _uuid
 from datetime import datetime, timezone
 from typing import Any
 
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from .campaign_audit import log_campaign_event
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_campaign_generation")
 
@@ -117,6 +119,94 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     return {"_skip_synthesis": "Campaign generation complete", **result}
 
 
+async def _create_sequence_for_cold_email(
+    pool,
+    *,
+    company_name: str,
+    batch_id: str,
+    partner_id: str | None,
+    context: dict[str, Any],
+    cold_email_subject: str,
+    cold_email_body: str,
+) -> _uuid.UUID | None:
+    """Create a campaign_sequences row and link the cold email to it.
+
+    Returns the sequence ID if created, None on conflict (already exists).
+    """
+    cfg = settings.campaign_sequence
+
+    seq_id = await pool.fetchval(
+        """
+        INSERT INTO campaign_sequences (
+            company_name, batch_id, partner_id,
+            company_context, selling_context, max_steps
+        ) VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT ((LOWER(company_name)), batch_id) DO NOTHING
+        RETURNING id
+        """,
+        company_name,
+        batch_id,
+        _uuid.UUID(partner_id) if partner_id else None,
+        json.dumps(context, default=str),
+        json.dumps(context.get("selling", {}), default=str),
+        cfg.max_steps,
+    )
+
+    if not seq_id:
+        logger.debug("Sequence already exists for %s / %s", company_name, batch_id)
+        return None
+
+    # Link the cold email campaign row to this sequence
+    await pool.execute(
+        """
+        UPDATE b2b_campaigns
+        SET sequence_id = $1, step_number = 1
+        WHERE company_name = $2 AND batch_id = $3 AND channel = 'email_cold'
+        """,
+        seq_id,
+        company_name,
+        batch_id,
+    )
+
+    # Audit log
+    await log_campaign_event(
+        pool,
+        event_type="generated",
+        sequence_id=seq_id,
+        step_number=1,
+        source="system",
+        subject=cold_email_subject,
+        body=cold_email_body,
+    )
+
+    # Best-effort CRM recipient lookup
+    try:
+        contact_email = await pool.fetchval(
+            """
+            SELECT email FROM contacts
+            WHERE LOWER(full_name) LIKE '%' || LOWER($1) || '%'
+              AND email IS NOT NULL
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            company_name,
+        )
+        if contact_email:
+            await pool.execute(
+                "UPDATE campaign_sequences SET recipient_email = $1 WHERE id = $2",
+                contact_email,
+                seq_id,
+            )
+            logger.info(
+                "Auto-populated recipient %s for sequence %s (%s)",
+                contact_email, seq_id, company_name,
+            )
+    except Exception:
+        logger.debug("CRM recipient lookup failed for %s, skipping", company_name)
+
+    logger.info("Created campaign sequence %s for %s (batch %s)", seq_id, company_name, batch_id)
+    return seq_id
+
+
 async def generate_campaigns(
     pool,
     min_score: int = 70,
@@ -191,20 +281,55 @@ async def generate_campaigns(
     batch_id = f"batch_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
     generated = 0
     failed = 0
+    skipped_no_partner = 0
+    sequences_created = 0
+
+    # Fetch affiliate partners for sender identity matching
+    partner_index = await _fetch_affiliate_partners(pool)
 
     for company_name, opps in companies_to_process:
         # Build context from best opportunity in the group
         best = max(opps, key=lambda o: o["opportunity_score"])
         context = _build_company_context(best, opps)
 
+        # Match to an affiliate partner (Gap 4: sender identity)
+        partner = _match_partner(context, partner_index)
+        if not partner:
+            logger.debug("No partner match for %s, skipping", company_name)
+            skipped_no_partner += 1
+            continue
+
+        # Inject selling context
+        context["selling"] = {
+            "product_name": partner["product_name"],
+            "affiliate_url": partner["affiliate_url"],
+            "sender_name": cfg.default_sender_name,
+            "sender_company": cfg.default_sender_company,
+        }
+        partner_id = partner["id"]
+
+        # Channel chaining: track cold email output for follow-up context (Gap 1)
+        cold_email_content: dict[str, str] | None = None
+
         for channel in cfg.channels:
             payload = {**context, "channel": channel}
+
+            # Inject cold email context for follow-up (Gap 1)
+            if channel == "email_followup" and cold_email_content:
+                payload["cold_email_context"] = cold_email_content
 
             content = await _generate_content(
                 llm, skill.content, payload, cfg.max_tokens, cfg.temperature,
             )
 
             if content:
+                # Capture cold email output for chaining
+                if channel == "email_cold":
+                    cold_email_content = {
+                        "subject": content.get("subject", ""),
+                        "body": content.get("body", ""),
+                    }
+
                 try:
                     review_ids = [o["review_id"] for o in opps if o.get("review_id")]
                     await pool.execute(
@@ -216,11 +341,12 @@ async def generate_campaigns(
                             decision_timeline, buying_stage, role_type,
                             key_quotes, source_review_ids,
                             channel, subject, body, cta,
-                            status, batch_id, llm_model
+                            status, batch_id, llm_model,
+                            partner_id, industry
                         ) VALUES (
                             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                             $11, $12, $13, $14, $15, $16, $17, $18,
-                            $19, $20, $21
+                            $19, $20, $21, $22, $23
                         )
                         """,
                         company_name,
@@ -244,6 +370,8 @@ async def generate_campaigns(
                         "draft",
                         batch_id,
                         llm_model_name,
+                        _uuid.UUID(partner_id),
+                        context.get("industry"),
                     )
                     generated += 1
                 except Exception:
@@ -254,15 +382,36 @@ async def generate_campaigns(
             else:
                 failed += 1
 
+        # Create campaign sequence for the cold email (if sequences enabled)
+        if cold_email_content and settings.campaign_sequence.enabled:
+            try:
+                seq_id = await _create_sequence_for_cold_email(
+                    pool,
+                    company_name=company_name,
+                    batch_id=batch_id,
+                    partner_id=partner_id,
+                    context=context,
+                    cold_email_subject=cold_email_content.get("subject", ""),
+                    cold_email_body=cold_email_content.get("body", ""),
+                )
+                if seq_id:
+                    sequences_created += 1
+            except Exception as exc:
+                logger.warning(
+                    "Failed to create sequence for %s: %s", company_name, exc
+                )
+
     logger.info(
-        "Campaign generation: %d pieces generated, %d failed (from %d companies)",
-        generated, failed, len(companies_to_process),
+        "Campaign generation: %d generated, %d failed, %d skipped (no partner), %d sequences from %d companies",
+        generated, failed, skipped_no_partner, sequences_created, len(companies_to_process),
     )
 
     return {
         "generated": generated,
         "failed": failed,
         "skipped": len(by_company) - len(companies_to_process),
+        "skipped_no_partner": skipped_no_partner,
+        "sequences_created": sequences_created,
         "companies": len(companies_to_process),
         "batch_id": batch_id,
     }
@@ -312,7 +461,12 @@ async def _fetch_opportunities(
                r.enrichment->'timeline'->>'decision_timeline' AS decision_timeline,
                r.enrichment->'competitors_mentioned' AS competitors_json,
                r.enrichment->'pain_categories' AS pain_json,
-               r.review_text
+               r.enrichment->'quotable_phrases' AS quotable_phrases,
+               r.enrichment->'feature_gaps' AS feature_gaps,
+               r.enrichment->'use_case'->>'primary_workflow' AS primary_workflow,
+               r.enrichment->'use_case'->'integration_stack' AS integration_stack,
+               r.enrichment->'sentiment_trajectory'->>'direction' AS sentiment_direction,
+               COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry
         FROM b2b_reviews r
         WHERE r.enrichment_status = 'enriched'
           AND r.enriched_at > NOW() - make_interval(days => $1)
@@ -357,25 +511,35 @@ async def _fetch_opportunities(
     return opportunities[:limit]
 
 
+def _parse_json_field(val) -> list:
+    """Safely parse a JSONB field that may be a str, list, or None."""
+    if val is None:
+        return []
+    if isinstance(val, list):
+        return val
+    if isinstance(val, str):
+        try:
+            parsed = json.loads(val)
+            return parsed if isinstance(parsed, list) else []
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return []
+
+
 def _build_company_context(best: dict, all_opps: list[dict]) -> dict[str, Any]:
     """Build rich context dict for LLM from grouped opportunities."""
-    # Aggregate pain categories across all reviews for this company
     pain_cats: dict[str, str] = {}
     competitors_considering: list[dict] = []
     key_quotes: list[str] = []
+    all_feature_gaps: list[str] = []
+    all_integrations: list[str] = []
 
     for opp in all_opps:
         # Pain categories
-        pain = opp.get("pain_json")
-        if isinstance(pain, str):
-            try:
-                pain = json.loads(pain)
-            except (json.JSONDecodeError, TypeError):
-                pain = []
-        if isinstance(pain, list):
-            for p in pain:
-                if isinstance(p, dict) and p.get("category"):
-                    pain_cats[p["category"]] = p.get("severity", "mentioned")
+        pain = _parse_json_field(opp.get("pain_json"))
+        for p in pain:
+            if isinstance(p, dict) and p.get("category"):
+                pain_cats[p["category"]] = p.get("severity", "mentioned")
 
         # Competitors
         comps = opp.get("competitors", [])
@@ -387,13 +551,25 @@ def _build_company_context(best: dict, all_opps: list[dict]) -> dict[str, Any]:
                         "reason": c.get("reason", ""),
                     })
 
-        # Quotes (snippets from review text)
-        review_text = opp.get("review_text", "")
-        if review_text and len(review_text) > 20:
-            # Take first 200 chars as a quote snippet
-            snippet = review_text[:200].strip()
-            if snippet and snippet not in key_quotes:
-                key_quotes.append(snippet)
+        # Curated quotes from enrichment (replaces raw review_text truncation)
+        phrases = _parse_json_field(opp.get("quotable_phrases"))
+        for phrase in phrases:
+            text = phrase if isinstance(phrase, str) else (phrase.get("text", "") if isinstance(phrase, dict) else "")
+            if text and text not in key_quotes:
+                key_quotes.append(text)
+
+        # Feature gaps
+        gaps = _parse_json_field(opp.get("feature_gaps"))
+        for g in gaps:
+            label = g if isinstance(g, str) else (g.get("feature", "") if isinstance(g, dict) else "")
+            if label and label not in all_feature_gaps:
+                all_feature_gaps.append(label)
+
+        # Integration stack
+        stacks = _parse_json_field(opp.get("integration_stack"))
+        for s in stacks:
+            if isinstance(s, str) and s not in all_integrations:
+                all_integrations.append(s)
 
     return {
         "company": best.get("reviewer_company") or best["vendor_name"],
@@ -408,9 +584,67 @@ def _build_company_context(best: dict, all_opps: list[dict]) -> dict[str, Any]:
         "contract_end": best.get("contract_end"),
         "decision_timeline": best.get("decision_timeline"),
         "role_type": best.get("role_type"),
-        "industry": None,
+        "industry": best.get("industry"),
         "key_quotes": key_quotes[:5],
+        "feature_gaps": all_feature_gaps[:5],
+        "primary_workflow": best.get("primary_workflow"),
+        "integration_stack": all_integrations[:5],
+        "sentiment_direction": best.get("sentiment_direction"),
     }
+
+
+# ------------------------------------------------------------------
+# Partner matching
+# ------------------------------------------------------------------
+
+
+async def _fetch_affiliate_partners(pool) -> dict[str, Any]:
+    """Fetch enabled affiliate partners, indexed by product name and category."""
+    rows = await pool.fetch(
+        "SELECT id, name, product_name, product_aliases, category, affiliate_url "
+        "FROM affiliate_partners WHERE enabled = true"
+    )
+    by_product: dict[str, dict] = {}
+    by_category: dict[str, list[dict]] = {}
+
+    for r in rows:
+        partner = dict(r)
+        partner["id"] = str(partner["id"])
+        # Index by lowercase product name + aliases
+        by_product[partner["product_name"].lower()] = partner
+        for alias in (partner.get("product_aliases") or []):
+            by_product[alias.lower()] = partner
+        # Index by lowercase category
+        cat = (partner.get("category") or "").lower()
+        if cat:
+            by_category.setdefault(cat, []).append(partner)
+
+    return {"by_product": by_product, "by_category": by_category}
+
+
+def _match_partner(
+    context: dict,
+    partner_index: dict[str, Any],
+) -> dict | None:
+    """Match a company context to the best affiliate partner.
+
+    Priority: (1) exact product match against competitors, (2) category fallback.
+    """
+    by_product = partner_index["by_product"]
+    by_category = partner_index["by_category"]
+
+    # Try exact match on competitor names
+    for comp in context.get("competitors_considering", []):
+        name = (comp.get("name") or "").lower()
+        if name and name in by_product:
+            return by_product[name]
+
+    # Fallback: match by product category
+    category = (context.get("category") or "").lower()
+    if category and category in by_category:
+        return by_category[category][0]
+
+    return None
 
 
 # ------------------------------------------------------------------

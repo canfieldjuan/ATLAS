@@ -684,6 +684,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Campaign email webhook receiver (Resend ESP events) at root /webhooks/*
+from .api.campaign_webhooks import router as campaign_webhook_router
+app.include_router(campaign_webhook_router)
+
 # Include API routers with /api/v1 prefix
 app.include_router(api_router, prefix="/api/v1")
 

@@ -2117,6 +2117,37 @@ class B2BCampaignConfig(BaseSettings):
     retention_days: int = Field(default=90, ge=1, description="Days to retain expired/sent campaigns before cleanup")
     max_tokens: int = Field(default=2048, description="Max tokens per LLM generation call")
     temperature: float = Field(default=0.7, description="LLM sampling temperature")
+    default_sender_name: str = Field(default="", description="Sender name for outreach")
+    default_sender_company: str = Field(default="", description="Sender company name for outreach")
+
+
+class CampaignSequenceConfig(BaseSettings):
+    """B2B campaign email sequence configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_CAMPAIGN_SEQ_", env_file=".env", extra="ignore",
+    )
+
+    enabled: bool = Field(default=False, description="Enable stateful campaign sequences")
+    max_steps: int = Field(default=4, ge=2, le=8, description="Max emails per sequence")
+    step_delay_days: list[int] = Field(
+        default=[3, 5, 7],
+        description="Days between steps 1->2, 2->3, 3->4",
+    )
+    auto_send_enabled: bool = Field(
+        default=False, description="Auto-send queued campaign emails after cancel window"
+    )
+    auto_send_delay_seconds: int = Field(
+        default=300, ge=60, description="Cancel window before auto-send (seconds)"
+    )
+    check_interval_seconds: int = Field(
+        default=3600, ge=600, description="How often to check for due sequence steps"
+    )
+    resend_api_key: str = Field(default="", description="Resend ESP API key")
+    resend_from_email: str = Field(default="", description="Resend sender email address")
+    resend_webhook_signing_secret: str = Field(
+        default="", description="Resend webhook signature verification secret"
+    )
 
 
 class TemporalPatternConfig(BaseSettings):
@@ -2561,6 +2592,7 @@ class Settings(BaseSettings):
     b2b_churn: B2BChurnConfig = Field(default_factory=B2BChurnConfig)
     b2b_scrape: B2BScrapeConfig = Field(default_factory=B2BScrapeConfig)
     b2b_campaign: B2BCampaignConfig = Field(default_factory=B2BCampaignConfig)
+    campaign_sequence: CampaignSequenceConfig = Field(default_factory=CampaignSequenceConfig)
     openai_compat: OpenAICompatConfig = Field(default_factory=OpenAICompatConfig)
     ftl_tracing: FTLTracingConfig = Field(default_factory=FTLTracingConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
