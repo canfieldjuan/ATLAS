@@ -17,7 +17,8 @@ from typing import Any
 
 _CHURN_PATTERNS: list[tuple[re.Pattern[str], float]] = [
     # Strong churn / evaluation signals (+0.15)
-    (re.compile(r"switch(?:ed|ing)\s+(?:from|to)", re.I), 0.15),
+    (re.compile(r"(?:we|I|our\s+(?:team|company))\s+switch(?:ed|ing)\s+(?:from|to)", re.I), 0.15),
+    (re.compile(r"switch(?:ed|ing)\s+(?:from|to)", re.I), 0.05),
     (re.compile(r"migrat(?:ed|ing)\s+away", re.I), 0.15),
     (re.compile(r"looking\s+for\s+alternative", re.I), 0.15),
     (re.compile(r"not\s+renewing", re.I), 0.15),
@@ -55,10 +56,23 @@ _NOISE_PATTERNS: list[tuple[re.Pattern[str], float]] = [
     # Press / announcements (-0.10)
     (re.compile(r"press\s+release|according\s+to|spokesperson", re.I), -0.10),
     (re.compile(r"announced|partnership\b", re.I), -0.05),
+    # Career / jobs (not product evaluation)
+    (re.compile(r"career|job\s+(?:market|safe|opening|hunt)|interview\s+(?:prep|question)", re.I), -0.10),
+    (re.compile(r"resume|linkedin|recruiter|are\s+\w+\s+jobs?\s+safe", re.I), -0.10),
+    # Executive / corporate news (not customer experience)
+    (re.compile(r"\bCEO\b|\bCFO\b|\bCTO\b|executive|leadership\s+churn", re.I), -0.10),
+    (re.compile(r"revenue|billion|workforce|lays?\s+off|headcount\s+reduction", re.I), -0.10),
+    # Bug report / issue template (developer noise)
+    (re.compile(r"steps?\s+to\s+reproduce|expected\s+(?:result|behavior)|actual\s+(?:result|behavior)", re.I), -0.15),
+    (re.compile(r"stack\s+trace|traceback|exception|error\s+code|status\s+code", re.I), -0.10),
+    (re.compile(r"\bCLI\b|command\s+line|terraform|provider\s+version", re.I), -0.10),
+    # IT admin / infrastructure (not product evaluation)
+    (re.compile(r"\bSSO\b|\bSAML\b|\bMFA\b|oauth|single\s+sign[- ]on", re.I), -0.10),
+    (re.compile(r"\bDMARC\b|\bSPF\b|\bDKIM\b|dns\s+record", re.I), -0.10),
 ]
 
 _CHURN_CAP = 0.35
-_NOISE_CAP = -0.35
+_NOISE_CAP = -0.45
 
 # Structured review sources that bypass the filter entirely
 STRUCTURED_SOURCES = frozenset({"g2", "capterra", "trustradius"})
@@ -104,8 +118,8 @@ def score_relevance(review: dict[str, Any], vendor_name: str) -> tuple[float, st
     # --- Signal 3: Vendor name prominence ---
     vendor_lower = vendor_name.lower()
     if vendor_lower in title.lower():
-        score += 0.10
-        reasons.append("vendor_in_title=+0.10")
+        score += 0.05
+        reasons.append("vendor_in_title=+0.05")
 
     body_mentions = len(re.findall(re.escape(vendor_lower), body.lower()))
     if body_mentions >= 3:
@@ -133,6 +147,14 @@ def score_relevance(review: dict[str, Any], vendor_name: str) -> tuple[float, st
             reasons.append("low_hn_points=-0.10")
 
     elif source == "github":
+        # Bug report template detection
+        template_markers = ("steps to reproduce", "expected result", "expected behavior",
+                            "actual result", "actual behavior", "affected resource",
+                            "terraform core version", "provider version")
+        text_lower = text.lower()
+        if any(marker in text_lower for marker in template_markers):
+            score -= 0.20
+            reasons.append("github_issue_template=-0.20")
         # Distinguish issues vs repos
         stars = meta.get("stars", meta.get("stargazers_count"))
         reactions = meta.get("reactions", meta.get("reaction_count"))
@@ -146,7 +168,13 @@ def score_relevance(review: dict[str, Any], vendor_name: str) -> tuple[float, st
                 reasons.append("low_github_reactions=-0.05")
 
     elif source == "rss":
-        if len(body) < 400:
+        if len(body) < 100:
+            score -= 0.25
+            reasons.append("short_rss_content=-0.25")
+        elif len(body) < 200:
+            score -= 0.15
+            reasons.append("short_rss_content=-0.15")
+        elif len(body) < 400:
             score -= 0.05
             reasons.append("short_rss_content=-0.05")
 

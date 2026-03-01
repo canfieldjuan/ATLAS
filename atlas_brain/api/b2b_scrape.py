@@ -253,6 +253,16 @@ async def trigger_scrape(target_id: UUID) -> dict:
         )
         raise HTTPException(status_code=502, detail=f"Scrape failed: {exc}")
 
+    # Relevance filter: drop noise from social media sources
+    filtered_count = 0
+    if result.reviews:
+        from ..services.scraping.relevance import STRUCTURED_SOURCES, filter_reviews
+        if target.source not in STRUCTURED_SOURCES:
+            original_count = len(result.reviews)
+            result.reviews, filtered_count = filter_reviews(
+                result.reviews, target.vendor_name, 0.55,
+            )
+
     # Insert reviews
     inserted = 0
     if result.reviews:
@@ -283,11 +293,132 @@ async def trigger_scrape(target_id: UUID) -> dict:
         "source": target.source,
         "vendor": target.vendor_name,
         "status": result.status,
-        "reviews_found": len(result.reviews),
+        "reviews_found": len(result.reviews) + filtered_count,
         "reviews_inserted": inserted,
+        "reviews_filtered": filtered_count,
         "pages_scraped": result.pages_scraped,
         "duration_ms": duration_ms,
         "errors": result.errors,
+    }
+
+
+@router.post("/run-all")
+async def trigger_scrape_all(
+    source: Optional[str] = None,
+) -> dict:
+    """Trigger scrape for all enabled targets (optionally filtered by source).
+
+    Runs sequentially with a 1s delay between targets. Returns summary.
+    """
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(status_code=503, detail="Database not ready")
+
+    query = """
+        SELECT id, source, vendor_name, product_name, product_slug,
+               product_category, max_pages, metadata
+        FROM b2b_scrape_targets
+        WHERE enabled = true
+    """
+    params: list = []
+    if source:
+        query += " AND source = $1"
+        params.append(source)
+    query += " ORDER BY priority DESC, source, vendor_name"
+
+    rows = await pool.fetch(query, *params)
+    if not rows:
+        return {"targets": 0, "message": "No enabled targets found"}
+
+    from ..autonomous.tasks.b2b_scrape_intake import _insert_reviews
+    from ..services.scraping.client import get_scrape_client
+    from ..services.scraping.parsers import ScrapeTarget, get_parser
+    from ..services.scraping.relevance import STRUCTURED_SOURCES, filter_reviews
+
+    import asyncio
+
+    client = get_scrape_client()
+    results = []
+    total_inserted = 0
+    total_filtered = 0
+
+    for row in rows:
+        raw_meta = row["metadata"] or "{}"
+        target = ScrapeTarget(
+            id=str(row["id"]),
+            source=row["source"],
+            vendor_name=row["vendor_name"],
+            product_name=row["product_name"],
+            product_slug=row["product_slug"],
+            product_category=row["product_category"],
+            max_pages=row["max_pages"],
+            metadata=json.loads(raw_meta) if isinstance(raw_meta, str) else raw_meta,
+        )
+
+        parser = get_parser(target.source)
+        if not parser:
+            results.append({"source": target.source, "vendor": target.vendor_name, "status": "no_parser"})
+            continue
+
+        started_at = _time.monotonic()
+        try:
+            result = await parser.scrape(target, client)
+        except Exception as exc:
+            duration_ms = int((_time.monotonic() - started_at) * 1000)
+            await _write_scrape_log(pool, row["id"], target.source, "failed", 0, 0, 0,
+                                    [str(exc)], duration_ms, parser)
+            await pool.execute(
+                "UPDATE b2b_scrape_targets SET last_scraped_at = NOW(), last_scrape_status = 'failed', last_scrape_reviews = 0, updated_at = NOW() WHERE id = $1",
+                row["id"],
+            )
+            results.append({"source": target.source, "vendor": target.vendor_name, "status": "failed", "error": str(exc)[:200]})
+            logger.warning("Scrape failed for %s/%s: %s", target.source, target.vendor_name, exc)
+            await asyncio.sleep(1)
+            continue
+
+        # Relevance filter
+        filtered_count = 0
+        if result.reviews and target.source not in STRUCTURED_SOURCES:
+            result.reviews, filtered_count = filter_reviews(result.reviews, target.vendor_name, 0.55)
+            total_filtered += filtered_count
+
+        inserted = 0
+        if result.reviews:
+            batch_id = f"bulk_{target.source}_{target.product_slug}_{int(_time.time())}"
+            inserted = await _insert_reviews(pool, result.reviews, batch_id)
+            total_inserted += inserted
+
+        duration_ms = int((_time.monotonic() - started_at) * 1000)
+        scrape_errors = list(result.errors)
+        if filtered_count:
+            scrape_errors.append(f"relevance_filtered={filtered_count}")
+        await _write_scrape_log(pool, row["id"], target.source, result.status,
+                                len(result.reviews) + filtered_count, inserted, result.pages_scraped,
+                                scrape_errors, duration_ms, parser)
+        await pool.execute(
+            "UPDATE b2b_scrape_targets SET last_scraped_at = NOW(), last_scrape_status = $2, last_scrape_reviews = $3, updated_at = NOW() WHERE id = $1",
+            row["id"], result.status, inserted,
+        )
+
+        results.append({
+            "source": target.source,
+            "vendor": target.vendor_name,
+            "status": result.status,
+            "found": len(result.reviews) + filtered_count,
+            "inserted": inserted,
+            "filtered": filtered_count,
+        })
+        logger.info("Scraped %s/%s: found=%d inserted=%d filtered=%d",
+                     target.source, target.vendor_name,
+                     len(result.reviews) + filtered_count, inserted, filtered_count)
+
+        await asyncio.sleep(1)
+
+    return {
+        "targets_scraped": len(results),
+        "total_inserted": total_inserted,
+        "total_filtered": total_filtered,
+        "results": results,
     }
 
 
