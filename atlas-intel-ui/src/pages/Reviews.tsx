@@ -1,58 +1,83 @@
-import { useState, useEffect, useRef } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
-import { RefreshCw, Search, X } from 'lucide-react'
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react'
 import { clsx } from 'clsx'
 import DataTable, { type Column } from '../components/DataTable'
+import FilterBar, { FilterSearch, FilterSelect } from '../components/FilterBar'
 import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
+import useFilterParams from '../hooks/useFilterParams'
+import useCategories from '../hooks/useCategories'
 import { fetchReviews, type ReviewSummary } from '../api/client'
+
+const PAGE_SIZE = 100
+
+const FILTER_CONFIG = {
+  brand: { type: 'string' as const, label: 'Brand' },
+  asin: { type: 'string' as const, label: 'ASIN' },
+  source_category: { type: 'string' as const, label: 'Category' },
+  sort_by: { type: 'string' as const, label: 'Sort', default: 'imported_at' },
+  root_cause: { type: 'string' as const, label: 'Root Cause' },
+  search: { type: 'string' as const, label: 'Search' },
+  severity: { type: 'string' as const, label: 'Severity' },
+  enrichment_status: { type: 'string' as const, label: 'Status' },
+  imported_after: { type: 'string' as const, label: 'From' },
+  imported_before: { type: 'string' as const, label: 'To' },
+  min_rating: { type: 'number' as const, label: 'Min Rating', default: 0 },
+  max_rating: { type: 'number' as const, label: 'Max Rating', default: 5 },
+  has_comparisons: { type: 'string' as const, label: 'Comparisons' },
+  has_feature_requests: { type: 'string' as const, label: 'Features' },
+}
+
+type Filters = {
+  brand: string
+  asin: string
+  source_category: string
+  sort_by: string
+  root_cause: string
+  search: string
+  severity: string
+  enrichment_status: string
+  imported_after: string
+  imported_before: string
+  min_rating: number
+  max_rating: number
+  has_comparisons: string
+  has_feature_requests: string
+}
 
 export default function Reviews() {
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
-
-  const [brand, setBrand] = useState(searchParams.get('brand') ?? '')
-  const [debouncedBrand, setDebouncedBrand] = useState(brand)
-  const [asin, setAsin] = useState(searchParams.get('asin') ?? '')
-  const [searchText, setSearchText] = useState('')
-  const [debouncedSearch, setDebouncedSearch] = useState('')
-  const [minRating, setMinRating] = useState(0)
-  const [maxRating, setMaxRating] = useState(5)
-  const [rootCause, setRootCause] = useState('')
-  const [hasComparisons, setHasComparisons] = useState<boolean | undefined>(
-    searchParams.get('has_comparisons') === 'true' ? true : undefined
-  )
-  const [hasFeatures, setHasFeatures] = useState<boolean | undefined>(undefined)
-  const [sortBy, setSortBy] = useState('imported_at')
-  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
-
-  useEffect(() => {
-    clearTimeout(timerRef.current)
-    timerRef.current = setTimeout(() => {
-      setDebouncedBrand(brand)
-      setDebouncedSearch(searchText)
-    }, 300)
-    return () => clearTimeout(timerRef.current)
-  }, [brand, searchText])
+  const { categories } = useCategories()
+  const { filters, setFilter, clearFilter, clearAll, activeFilterEntries } =
+    useFilterParams<Filters>(FILTER_CONFIG)
+  const [page, setPage] = useState(0)
 
   const { data, loading, error, refresh, refreshing } = useApiData(
-    () => fetchReviews({
-      brand: debouncedBrand || undefined,
-      asin: asin || undefined,
-      search: debouncedSearch || undefined,
-      min_rating: minRating > 0 ? minRating : undefined,
-      max_rating: maxRating < 5 ? maxRating : undefined,
-      root_cause: rootCause || undefined,
-      has_comparisons: hasComparisons,
-      has_feature_requests: hasFeatures,
-      sort_by: sortBy,
-      limit: 100,
-    }),
-    [debouncedBrand, asin, debouncedSearch, minRating, maxRating, rootCause, hasComparisons, hasFeatures, sortBy],
+    () =>
+      fetchReviews({
+        brand: filters.brand || undefined,
+        asin: filters.asin || undefined,
+        source_category: filters.source_category || undefined,
+        search: filters.search || undefined,
+        root_cause: filters.root_cause || undefined,
+        severity: filters.severity || undefined,
+        enrichment_status: filters.enrichment_status || undefined,
+        imported_after: filters.imported_after || undefined,
+        imported_before: filters.imported_before || undefined,
+        min_rating: filters.min_rating > 0 ? filters.min_rating : undefined,
+        max_rating: filters.max_rating < 5 ? filters.max_rating : undefined,
+        has_comparisons: filters.has_comparisons === 'true' ? true : undefined,
+        has_feature_requests: filters.has_feature_requests === 'true' ? true : undefined,
+        sort_by: filters.sort_by || 'imported_at',
+        limit: PAGE_SIZE,
+        offset: page * PAGE_SIZE,
+      }),
+    [JSON.stringify(filters), page],
   )
 
   const reviews = data?.reviews ?? []
-  const hasFilters = brand || asin || searchText || minRating > 0 || maxRating < 5 || rootCause || hasComparisons !== undefined || hasFeatures !== undefined
+  const count = data?.count ?? 0
 
   const columns: Column<ReviewSummary>[] = [
     {
@@ -70,7 +95,8 @@ export default function Reviews() {
       header: 'Rating',
       render: (r) => {
         if (r.rating == null) return <span className="text-slate-500">--</span>
-        const color = r.rating >= 4 ? 'text-green-400' : r.rating >= 3 ? 'text-yellow-400' : 'text-red-400'
+        const color =
+          r.rating >= 4 ? 'text-green-400' : r.rating >= 3 ? 'text-yellow-400' : 'text-red-400'
         return <span className={color}>{r.rating.toFixed(1)}</span>
       },
       sortable: true,
@@ -89,10 +115,23 @@ export default function Reviews() {
         if (score == null) return <span className="text-slate-500">--</span>
         const isPraise = (r.rating ?? 0) > 3
         const color = isPraise
-          ? (score >= 7 ? 'text-green-400' : score >= 4 ? 'text-cyan-400' : 'text-slate-400')
-          : (score >= 7 ? 'text-red-400' : score >= 4 ? 'text-yellow-400' : 'text-green-400')
+          ? score >= 7
+            ? 'text-green-400'
+            : score >= 4
+              ? 'text-cyan-400'
+              : 'text-slate-400'
+          : score >= 7
+            ? 'text-red-400'
+            : score >= 4
+              ? 'text-yellow-400'
+              : 'text-green-400'
         const label = isPraise ? 'L' : 'P'
-        return <span className={color}>{score.toFixed(1)} <span className="text-[10px] opacity-60">{label}</span></span>
+        return (
+          <span className={color}>
+            {score.toFixed(1)}{' '}
+            <span className="text-[10px] opacity-60">{label}</span>
+          </span>
+        )
       },
       sortable: true,
       sortValue: (r) => r.pain_score ?? 0,
@@ -106,15 +145,9 @@ export default function Reviews() {
     },
   ]
 
-  const clearFilters = () => {
-    setBrand('')
-    setAsin('')
-    setSearchText('')
-    setMinRating(0)
-    setMaxRating(5)
-    setRootCause('')
-    setHasComparisons(undefined)
-    setHasFeatures(undefined)
+  const handleClearAll = () => {
+    clearAll()
+    setPage(0)
   }
 
   if (error) return <PageError error={error} onRetry={refresh} />
@@ -133,123 +166,153 @@ export default function Reviews() {
         </button>
       </div>
 
-      {/* Filters */}
-      <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-4 space-y-3">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          <div>
-            <label className="block text-xs text-slate-400 mb-1">Brand</label>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
-              <input
-                type="text"
-                value={brand}
-                onChange={(e) => setBrand(e.target.value)}
-                placeholder="Brand..."
-                className="w-full pl-9 pr-3 py-1.5 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
-              />
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs text-slate-400 mb-1">ASIN</label>
-            <input
-              type="text"
-              value={asin}
-              onChange={(e) => setAsin(e.target.value)}
-              placeholder="ASIN..."
-              className="w-full px-3 py-1.5 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-slate-400 mb-1">Root Cause</label>
-            <input
-              type="text"
-              value={rootCause}
-              onChange={(e) => setRootCause(e.target.value)}
+      <FilterBar
+        activeFilters={activeFilterEntries.map((e) => ({
+          key: e.key,
+          label: e.label,
+          onClear: () => clearFilter(e.key),
+        }))}
+        onClearAll={handleClearAll}
+        expanded={
+          <>
+            <FilterSearch
+              label="Root cause"
+              value={filters.root_cause}
+              onChange={(v) => setFilter('root_cause', v)}
               placeholder="e.g. quality, design..."
-              className="w-full px-3 py-1.5 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+              icon={false}
             />
-          </div>
-          <div>
-            <label className="block text-xs text-slate-400 mb-1">Search text</label>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
+            <FilterSearch
+              label="Text search"
+              value={filters.search}
+              onChange={(v) => setFilter('search', v)}
+              placeholder="Full text..."
+            />
+            <div className="w-36">
+              <label className="block text-xs text-slate-400 mb-1">
+                Min rating: {filters.min_rating}
+              </label>
               <input
-                type="text"
-                value={searchText}
-                onChange={(e) => setSearchText(e.target.value)}
-                placeholder="Full text..."
-                className="w-full pl-9 pr-3 py-1.5 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+                type="range"
+                min={0}
+                max={5}
+                step={0.5}
+                value={filters.min_rating}
+                onChange={(e) => setFilter('min_rating', Number(e.target.value))}
+                className="w-full accent-cyan-500"
               />
             </div>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-end gap-4">
-          <div className="w-36">
-            <label className="block text-xs text-slate-400 mb-1">Min rating: {minRating}</label>
-            <input
-              type="range"
-              min={0}
-              max={5}
-              step={0.5}
-              value={minRating}
-              onChange={(e) => setMinRating(Number(e.target.value))}
-              className="w-full accent-cyan-500"
+            <div className="w-36">
+              <label className="block text-xs text-slate-400 mb-1">
+                Max rating: {filters.max_rating}
+              </label>
+              <input
+                type="range"
+                min={0}
+                max={5}
+                step={0.5}
+                value={filters.max_rating}
+                onChange={(e) => setFilter('max_rating', Number(e.target.value))}
+                className="w-full accent-cyan-500"
+              />
+            </div>
+            <FilterSelect
+              label="Severity"
+              value={filters.severity}
+              onChange={(v) => setFilter('severity', v)}
+              options={[
+                { value: 'critical', label: 'Critical' },
+                { value: 'high', label: 'High' },
+                { value: 'medium', label: 'Medium' },
+                { value: 'low', label: 'Low' },
+              ]}
+              placeholder="All Severities"
             />
-          </div>
-          <div className="w-36">
-            <label className="block text-xs text-slate-400 mb-1">Max rating: {maxRating}</label>
-            <input
-              type="range"
-              min={0}
-              max={5}
-              step={0.5}
-              value={maxRating}
-              onChange={(e) => setMaxRating(Number(e.target.value))}
-              className="w-full accent-cyan-500"
+            <FilterSelect
+              label="Status"
+              value={filters.enrichment_status}
+              onChange={(v) => setFilter('enrichment_status', v)}
+              options={[
+                { value: 'pending', label: 'Pending' },
+                { value: 'enriched', label: 'Enriched' },
+                { value: 'failed', label: 'Failed' },
+              ]}
+              placeholder="All Statuses"
             />
-          </div>
-          <label className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={hasComparisons === true}
-              onChange={(e) => setHasComparisons(e.target.checked ? true : undefined)}
-              className="accent-cyan-500"
-            />
-            Has comparisons
-          </label>
-          <label className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={hasFeatures === true}
-              onChange={(e) => setHasFeatures(e.target.checked ? true : undefined)}
-              className="accent-cyan-500"
-            />
-            Has feature requests
-          </label>
-          <div className="w-36">
-            <label className="block text-xs text-slate-400 mb-1">Sort by</label>
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value)}
-              className="w-full px-3 py-1.5 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white focus:outline-none focus:border-cyan-500/50"
-            >
-              <option value="imported_at">Newest</option>
-              <option value="rating">Rating</option>
-              <option value="pain_score">Score</option>
-            </select>
-          </div>
-          {hasFilters && (
-            <button
-              onClick={clearFilters}
-              className="flex items-center gap-1 px-3 py-1.5 text-sm text-slate-400 hover:text-white transition-colors"
-            >
-              <X className="h-3 w-3" />
-              Clear all
-            </button>
-          )}
-        </div>
-      </div>
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">Imported after</label>
+              <input
+                type="date"
+                value={filters.imported_after}
+                onChange={(e) => setFilter('imported_after', e.target.value)}
+                className="w-full px-3 py-1.5 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white focus:outline-none focus:border-cyan-500/50"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">Imported before</label>
+              <input
+                type="date"
+                value={filters.imported_before}
+                onChange={(e) => setFilter('imported_before', e.target.value)}
+                className="w-full px-3 py-1.5 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white focus:outline-none focus:border-cyan-500/50"
+              />
+            </div>
+            <label className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer self-end pb-1">
+              <input
+                type="checkbox"
+                checked={filters.has_comparisons === 'true'}
+                onChange={(e) =>
+                  setFilter('has_comparisons', e.target.checked ? 'true' : '')
+                }
+                className="accent-cyan-500"
+              />
+              Has comparisons
+            </label>
+            <label className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer self-end pb-1">
+              <input
+                type="checkbox"
+                checked={filters.has_feature_requests === 'true'}
+                onChange={(e) =>
+                  setFilter('has_feature_requests', e.target.checked ? 'true' : '')
+                }
+                className="accent-cyan-500"
+              />
+              Has feature requests
+            </label>
+          </>
+        }
+      >
+        <FilterSearch
+          label="Brand"
+          value={filters.brand}
+          onChange={(v) => setFilter('brand', v)}
+          placeholder="Brand..."
+        />
+        <FilterSearch
+          label="ASIN"
+          value={filters.asin}
+          onChange={(v) => setFilter('asin', v)}
+          placeholder="ASIN..."
+          icon={false}
+        />
+        <FilterSelect
+          label="Category"
+          value={filters.source_category}
+          onChange={(v) => setFilter('source_category', v)}
+          options={categories.map((c) => ({ value: c, label: c }))}
+          placeholder="All Categories"
+        />
+        <FilterSelect
+          label="Sort by"
+          value={filters.sort_by || 'imported_at'}
+          onChange={(v) => setFilter('sort_by', v)}
+          options={[
+            { value: 'imported_at', label: 'Newest' },
+            { value: 'rating', label: 'Rating' },
+            { value: 'pain_score', label: 'Score' },
+          ]}
+        />
+      </FilterBar>
 
       {/* Table */}
       <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl overflow-hidden">
@@ -264,6 +327,29 @@ export default function Reviews() {
           />
         )}
       </div>
+
+      {/* Pagination */}
+      {(page > 0 || count === PAGE_SIZE) && (
+        <div className="flex items-center justify-between">
+          <button
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+            disabled={page === 0 || loading}
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            <ChevronLeft className="h-4 w-4" />
+            Previous
+          </button>
+          <span className="text-sm text-slate-400">Page {page + 1}</span>
+          <button
+            onClick={() => setPage((p) => p + 1)}
+            disabled={count < PAGE_SIZE || loading}
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            Next
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+      )}
     </div>
   )
 }

@@ -1,36 +1,49 @@
-import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ShieldAlert, RefreshCw, Search, X } from 'lucide-react'
+import { ShieldAlert, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 import StatCard from '../components/StatCard'
 import DataTable, { type Column } from '../components/DataTable'
+import FilterBar, { FilterSearch, FilterSelect } from '../components/FilterBar'
 import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
+import useFilterParams from '../hooks/useFilterParams'
+import useCategories from '../hooks/useCategories'
 import { fetchSafety, type SafetySignal } from '../api/client'
+
+const FILTER_CONFIG = {
+  brand: { type: 'string' as const, label: 'Brand' },
+  source_category: { type: 'string' as const, label: 'Category' },
+  min_rating: { type: 'number' as const, label: 'Min Rating', default: 0 },
+  max_rating: { type: 'number' as const, label: 'Max Rating', default: 5 },
+}
+
+type Filters = {
+  brand: string
+  source_category: string
+  min_rating: number
+  max_rating: number
+}
 
 export default function Safety() {
   const navigate = useNavigate()
-  const [brand, setBrand] = useState('')
-  const [debouncedBrand, setDebouncedBrand] = useState('')
-  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
-
-  useEffect(() => {
-    clearTimeout(timerRef.current)
-    timerRef.current = setTimeout(() => setDebouncedBrand(brand), 300)
-    return () => clearTimeout(timerRef.current)
-  }, [brand])
+  const { categories } = useCategories()
+  const { filters, setFilter, clearFilter, clearAll, activeFilterEntries } =
+    useFilterParams<Filters>(FILTER_CONFIG)
 
   const { data, loading, error, refresh, refreshing } = useApiData(
-    () => fetchSafety({
-      brand: debouncedBrand || undefined,
-      limit: 100,
-    }),
-    [debouncedBrand],
+    () =>
+      fetchSafety({
+        brand: filters.brand || undefined,
+        source_category: filters.source_category || undefined,
+        min_rating: filters.min_rating > 0 ? filters.min_rating : undefined,
+        max_rating: filters.max_rating < 5 ? filters.max_rating : undefined,
+        limit: 100,
+      }),
+    [JSON.stringify(filters)],
   )
 
   const signals = data?.signals ?? []
   const totalFlagged = data?.total_flagged ?? 0
-  // Note: safety_flag schema only has {flagged, description} -- no category field
 
   const columns: Column<SafetySignal>[] = [
     {
@@ -41,7 +54,9 @@ export default function Safety() {
     {
       key: 'title',
       header: 'Product',
-      render: (r) => <span className="text-slate-300 truncate max-w-[250px] block">{r.title}</span>,
+      render: (r) => (
+        <span className="text-slate-300 truncate max-w-[250px] block">{r.title}</span>
+      ),
     },
     {
       key: 'rating',
@@ -54,7 +69,9 @@ export default function Safety() {
       render: (r) => {
         const flag = r.safety_flag
         const desc = (flag?.description as string) || 'Flagged'
-        return <span className="text-red-400 text-sm max-w-[300px] truncate block">{desc}</span>
+        return (
+          <span className="text-red-400 text-sm max-w-[300px] truncate block">{desc}</span>
+        )
       },
     },
     {
@@ -94,31 +111,60 @@ export default function Safety() {
         />
       </div>
 
-      {/* Filter */}
-      <div className="flex flex-wrap items-end gap-4">
-        <div className="flex-1 min-w-[200px]">
-          <label className="block text-xs text-slate-400 mb-1">Filter by brand</label>
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
-            <input
-              type="text"
-              value={brand}
-              onChange={(e) => setBrand(e.target.value)}
-              placeholder="Brand name..."
-              className="w-full pl-9 pr-3 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
-            />
-          </div>
-        </div>
-        {brand && (
-          <button
-            onClick={() => setBrand('')}
-            className="flex items-center gap-1 px-3 py-2 text-sm text-slate-400 hover:text-white transition-colors"
-          >
-            <X className="h-3 w-3" />
-            Clear
-          </button>
-        )}
-      </div>
+      <FilterBar
+        activeFilters={activeFilterEntries.map((e) => ({
+          key: e.key,
+          label: e.label,
+          onClear: () => clearFilter(e.key),
+        }))}
+        onClearAll={clearAll}
+        expanded={
+          <>
+            <div className="w-36">
+              <label className="block text-xs text-slate-400 mb-1">
+                Min rating: {filters.min_rating}
+              </label>
+              <input
+                type="range"
+                min={0}
+                max={5}
+                step={0.5}
+                value={filters.min_rating}
+                onChange={(e) => setFilter('min_rating', Number(e.target.value))}
+                className="w-full accent-cyan-500"
+              />
+            </div>
+            <div className="w-36">
+              <label className="block text-xs text-slate-400 mb-1">
+                Max rating: {filters.max_rating}
+              </label>
+              <input
+                type="range"
+                min={0}
+                max={5}
+                step={0.5}
+                value={filters.max_rating}
+                onChange={(e) => setFilter('max_rating', Number(e.target.value))}
+                className="w-full accent-cyan-500"
+              />
+            </div>
+          </>
+        }
+      >
+        <FilterSearch
+          label="Filter by brand"
+          value={filters.brand}
+          onChange={(v) => setFilter('brand', v)}
+          placeholder="Brand name..."
+        />
+        <FilterSelect
+          label="Category"
+          value={filters.source_category}
+          onChange={(v) => setFilter('source_category', v)}
+          options={categories.map((c) => ({ value: c, label: c }))}
+          placeholder="All Categories"
+        />
+      </FilterBar>
 
       {/* Table */}
       <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl overflow-hidden">

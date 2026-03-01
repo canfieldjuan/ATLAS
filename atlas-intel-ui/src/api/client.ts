@@ -292,6 +292,10 @@ export interface ReviewDetail {
 
 // -- Fetchers --
 
+export function fetchCategories() {
+  return get<{ categories: string[] }>('/categories')
+}
+
 export function fetchPipeline(params?: { source_category?: string }) {
   return get<PipelineStatus>('/pipeline', params as Record<string, string>)
 }
@@ -318,6 +322,7 @@ export function fetchBrandComparison(brands: string[]) {
 export function fetchFlows(params?: {
   source_category?: string
   brand?: string
+  direction?: string
   min_count?: number
   limit?: number
 }) {
@@ -327,6 +332,7 @@ export function fetchFlows(params?: {
 export function fetchFeatures(params?: {
   source_category?: string
   brand?: string
+  min_count?: number
   limit?: number
 }) {
   return get<{ feature_requests: FeatureGapEntry[]; negative_aspects: NegativeAspect[] }>('/features', params as Record<string, string | number>)
@@ -335,6 +341,8 @@ export function fetchFeatures(params?: {
 export function fetchSafety(params?: {
   source_category?: string
   brand?: string
+  min_rating?: number
+  max_rating?: number
   limit?: number
 }) {
   return get<{ signals: SafetySignal[]; count: number; total_flagged: number }>('/safety', params as Record<string, string | number>)
@@ -350,6 +358,10 @@ export function fetchReviews(params?: {
   has_comparisons?: boolean
   has_feature_requests?: boolean
   search?: string
+  severity?: string
+  enrichment_status?: string
+  imported_after?: string
+  imported_before?: string
   sort_by?: string
   limit?: number
   offset?: number

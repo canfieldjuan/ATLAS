@@ -205,6 +205,22 @@ async def get_pipeline_status(
 
 
 # ---------------------------------------------------------------------------
+# GET /categories
+# ---------------------------------------------------------------------------
+
+
+@router.get("/categories")
+async def list_categories():
+    pool = _pool_or_503()
+    rows = await pool.fetch("""
+        SELECT DISTINCT source_category FROM product_reviews
+        WHERE source_category IS NOT NULL AND source_category != ''
+        ORDER BY source_category
+    """)
+    return {"categories": [r["source_category"] for r in rows]}
+
+
+# ---------------------------------------------------------------------------
 # GET /brands
 # ---------------------------------------------------------------------------
 
@@ -1214,6 +1230,7 @@ async def get_brand_detail(brand_name: str):
 async def get_competitive_flows(
     source_category: Optional[str] = Query(None),
     brand: Optional[str] = Query(None),
+    direction: Optional[str] = Query(None),
     min_count: int = Query(2),
     limit: int = Query(100, le=500),
 ):
@@ -1280,8 +1297,8 @@ async def get_competitive_flows(
             for comp in comps:
                 if isinstance(comp, dict):
                     to_brand = comp.get("product_name") or comp.get("product", "Unknown")
-                    direction = comp.get("direction", "compared")
-                    _add_flow(from_brand, to_brand, direction, row["rating"])
+                    comp_direction = comp.get("direction", "compared")
+                    _add_flow(from_brand, to_brand, comp_direction, row["rating"])
 
         # consideration_set (rejected alternatives)
         cset = _safe_json(row["considerations"])
@@ -1302,6 +1319,7 @@ async def get_competitive_flows(
             }
             for v in flow_map.values()
             if v["count"] >= min_count
+            and (not direction or v["direction"] == direction)
         ],
         key=lambda x: x["count"],
         reverse=True,
@@ -1319,6 +1337,7 @@ async def get_competitive_flows(
 async def get_feature_gaps(
     source_category: Optional[str] = Query(None),
     brand: Optional[str] = Query(None),
+    min_count: int = Query(1),
     limit: int = Query(50, le=200),
 ):
     pool = _pool_or_503()
@@ -1381,6 +1400,7 @@ async def get_feature_gaps(
                 "avg_rating": round(sum(v["ratings"]) / len(v["ratings"]), 2) if v["ratings"] else None,
             }
             for v in feature_map.values()
+            if v["count"] >= min_count
         ],
         key=lambda x: x["count"],
         reverse=True,
@@ -1435,6 +1455,8 @@ async def get_feature_gaps(
 async def get_safety_signals(
     source_category: Optional[str] = Query(None),
     brand: Optional[str] = Query(None),
+    min_rating: Optional[float] = Query(None),
+    max_rating: Optional[float] = Query(None),
     limit: int = Query(50, le=200),
 ):
     pool = _pool_or_503()
@@ -1452,6 +1474,16 @@ async def get_safety_signals(
     if brand:
         conditions.append(f"pm.brand ILIKE '%' || ${idx} || '%'")
         params.append(brand)
+        idx += 1
+
+    if min_rating is not None:
+        conditions.append(f"pr.rating >= ${idx}")
+        params.append(min_rating)
+        idx += 1
+
+    if max_rating is not None:
+        conditions.append(f"pr.rating <= ${idx}")
+        params.append(max_rating)
         idx += 1
 
     where = " AND ".join(conditions)
@@ -1522,6 +1554,10 @@ async def search_reviews(
     has_comparisons: Optional[bool] = Query(None),
     has_feature_requests: Optional[bool] = Query(None),
     search: Optional[str] = Query(None),
+    severity: Optional[str] = Query(None),
+    enrichment_status: Optional[str] = Query(None),
+    imported_after: Optional[str] = Query(None),
+    imported_before: Optional[str] = Query(None),
     sort_by: str = Query("imported_at"),
     limit: int = Query(50, le=200),
     offset: int = Query(0),
@@ -1586,6 +1622,26 @@ async def search_reviews(
     if search:
         conditions.append(f"pr.review_text ILIKE '%' || ${idx} || '%'")
         params.append(search)
+        idx += 1
+
+    if severity:
+        conditions.append(f"pr.severity = ${idx}")
+        params.append(severity)
+        idx += 1
+
+    if enrichment_status:
+        conditions.append(f"pr.enrichment_status = ${idx}")
+        params.append(enrichment_status)
+        idx += 1
+
+    if imported_after:
+        conditions.append(f"pr.imported_at >= ${idx}::timestamptz")
+        params.append(imported_after)
+        idx += 1
+
+    if imported_before:
+        conditions.append(f"pr.imported_at < (${idx}::date + interval '1 day')")
+        params.append(imported_before)
         idx += 1
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""

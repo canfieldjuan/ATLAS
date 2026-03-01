@@ -1,48 +1,60 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { RefreshCw, Search, X, ChevronLeft, ChevronRight, Scale } from 'lucide-react'
+import { RefreshCw, ChevronLeft, ChevronRight, Scale } from 'lucide-react'
 import { clsx } from 'clsx'
 import DataTable, { type Column } from '../components/DataTable'
+import FilterBar, { FilterSearch, FilterSelect } from '../components/FilterBar'
 import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
+import useFilterParams from '../hooks/useFilterParams'
+import useCategories from '../hooks/useCategories'
 import { fetchBrands, type BrandSummary } from '../api/client'
 
 const PAGE_SIZE = 50
 
+const FILTER_CONFIG = {
+  search: { type: 'string' as const, label: 'Brand' },
+  source_category: { type: 'string' as const, label: 'Category' },
+  sort_by: { type: 'string' as const, label: 'Sort', default: 'review_count' },
+  min_reviews: { type: 'number' as const, label: 'Min Reviews', default: 0 },
+}
+
+type Filters = {
+  search: string
+  source_category: string
+  sort_by: string
+  min_reviews: number
+}
+
 export default function Brands() {
   const navigate = useNavigate()
-  const [search, setSearch] = useState('')
-  const [debouncedSearch, setDebouncedSearch] = useState('')
-  const [minReviews, setMinReviews] = useState(0)
-  const [sortBy, setSortBy] = useState('review_count')
+  const { categories } = useCategories()
+  const { filters, setFilter, clearFilter, clearAll, activeFilterEntries } =
+    useFilterParams<Filters>(FILTER_CONFIG)
   const [page, setPage] = useState(0)
   const [selected, setSelected] = useState<Set<string>>(new Set())
-  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
-
-  useEffect(() => {
-    clearTimeout(timerRef.current)
-    timerRef.current = setTimeout(() => setDebouncedSearch(search), 300)
-    return () => clearTimeout(timerRef.current)
-  }, [search])
 
   // Reset page when filters change
-  useEffect(() => { setPage(0) }, [debouncedSearch, minReviews, sortBy])
+  useEffect(() => {
+    setPage(0)
+  }, [filters.search, filters.source_category, filters.min_reviews, filters.sort_by])
 
   const { data, loading, error, refresh, refreshing } = useApiData(
-    () => fetchBrands({
-      search: debouncedSearch || undefined,
-      min_reviews: minReviews || undefined,
-      sort_by: sortBy,
-      limit: PAGE_SIZE,
-      offset: page * PAGE_SIZE,
-    }),
-    [debouncedSearch, minReviews, sortBy, page],
+    () =>
+      fetchBrands({
+        search: filters.search || undefined,
+        source_category: filters.source_category || undefined,
+        min_reviews: filters.min_reviews || undefined,
+        sort_by: filters.sort_by || 'review_count',
+        limit: PAGE_SIZE,
+        offset: page * PAGE_SIZE,
+      }),
+    [JSON.stringify(filters), page],
   )
 
   const brands = data?.brands ?? []
   const totalCount = data?.total_count ?? 0
   const totalPages = Math.ceil(totalCount / PAGE_SIZE)
-  const hasFilters = search || minReviews > 0
 
   const toggleSelected = (brand: string, e: React.MouseEvent) => {
     e.stopPropagation()
@@ -162,7 +174,9 @@ export default function Brands() {
           <h1 className="text-2xl font-bold text-white">Brands</h1>
           {!loading && totalCount > 0 && (
             <p className="text-xs text-slate-400 mt-0.5">
-              Showing {(page * PAGE_SIZE + 1).toLocaleString()}-{Math.min((page + 1) * PAGE_SIZE, totalCount).toLocaleString()} of {totalCount.toLocaleString()}
+              Showing {(page * PAGE_SIZE + 1).toLocaleString()}-
+              {Math.min((page + 1) * PAGE_SIZE, totalCount).toLocaleString()} of{' '}
+              {totalCount.toLocaleString()}
             </p>
           )}
         </div>
@@ -180,7 +194,11 @@ export default function Brands() {
           )}
           {selected.size >= 2 && (
             <button
-              onClick={() => navigate(`/compare?brands=${Array.from(selected).map(encodeURIComponent).join(',')}`)}
+              onClick={() =>
+                navigate(
+                  `/compare?brands=${Array.from(selected).map(encodeURIComponent).join(',')}`,
+                )
+              }
               className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 transition-colors"
             >
               <Scale className="h-4 w-4" />
@@ -198,61 +216,55 @@ export default function Brands() {
         </div>
       </div>
 
-      {/* Filters */}
-      <div className="flex flex-wrap items-end gap-4">
-        <div className="flex-1 min-w-[200px]">
-          <label className="block text-xs text-slate-400 mb-1">Search brands</label>
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Brand name..."
-              className="w-full pl-9 pr-3 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
-            />
-          </div>
-        </div>
+      <FilterBar
+        activeFilters={activeFilterEntries.map((e) => ({
+          key: e.key,
+          label: e.label,
+          onClear: () => clearFilter(e.key),
+        }))}
+        onClearAll={clearAll}
+      >
+        <FilterSearch
+          label="Search brands"
+          value={filters.search}
+          onChange={(v) => setFilter('search', v)}
+          placeholder="Brand name..."
+        />
+        <FilterSelect
+          label="Category"
+          value={filters.source_category}
+          onChange={(v) => setFilter('source_category', v)}
+          options={categories.map((c) => ({ value: c, label: c }))}
+          placeholder="All Categories"
+        />
+        <FilterSelect
+          label="Sort by"
+          value={filters.sort_by || 'review_count'}
+          onChange={(v) => setFilter('sort_by', v)}
+          options={[
+            { value: 'review_count', label: 'Review Count' },
+            { value: 'avg_rating', label: 'Avg Rating' },
+            { value: 'avg_complaint_score', label: 'Pain Score' },
+            { value: 'avg_praise_score', label: 'Loyalty Score' },
+            { value: 'brand_health', label: 'Brand Health' },
+            { value: 'safety_count', label: 'Safety Flags' },
+            { value: 'brand', label: 'Brand Name' },
+          ]}
+        />
         <div className="w-40">
-          <label className="block text-xs text-slate-400 mb-1">Min reviews: {minReviews}</label>
+          <label className="block text-xs text-slate-400 mb-1">
+            Min reviews: {filters.min_reviews}
+          </label>
           <input
             type="range"
             min={0}
             max={100}
-            value={minReviews}
-            onChange={(e) => setMinReviews(Number(e.target.value))}
+            value={filters.min_reviews}
+            onChange={(e) => setFilter('min_reviews', Number(e.target.value))}
             className="w-full accent-cyan-500"
           />
         </div>
-        <div className="w-40">
-          <label className="block text-xs text-slate-400 mb-1">Sort by</label>
-          <select
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white focus:outline-none focus:border-cyan-500/50"
-          >
-            <option value="review_count">Review Count</option>
-            <option value="avg_rating">Avg Rating</option>
-            <option value="avg_complaint_score">Pain Score</option>
-            <option value="avg_praise_score">Loyalty Score</option>
-            <option value="brand_health">Brand Health</option>
-            <option value="safety_count">Safety Flags</option>
-            <option value="brand">Brand Name</option>
-          </select>
-        </div>
-        {hasFilters && (
-          <button
-            onClick={() => {
-              setSearch('')
-              setMinReviews(0)
-            }}
-            className="flex items-center gap-1 px-3 py-2 text-sm text-slate-400 hover:text-white transition-colors"
-          >
-            <X className="h-3 w-3" />
-            Clear
-          </button>
-        )}
-      </div>
+      </FilterBar>
 
       {/* Table */}
       <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl overflow-hidden">

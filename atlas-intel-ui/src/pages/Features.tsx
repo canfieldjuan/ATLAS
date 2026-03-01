@@ -1,29 +1,41 @@
-import { useState, useEffect, useRef } from 'react'
-import { RefreshCw, Search, X } from 'lucide-react'
+import { useState } from 'react'
+import { RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 import DataTable, { type Column } from '../components/DataTable'
+import FilterBar, { FilterSearch, FilterSelect } from '../components/FilterBar'
 import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
+import useFilterParams from '../hooks/useFilterParams'
+import useCategories from '../hooks/useCategories'
 import { fetchFeatures, type FeatureGapEntry, type NegativeAspect } from '../api/client'
 
-export default function Features() {
-  const [brand, setBrand] = useState('')
-  const [debouncedBrand, setDebouncedBrand] = useState('')
-  const [tab, setTab] = useState<'requests' | 'aspects'>('requests')
-  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
+const FILTER_CONFIG = {
+  brand: { type: 'string' as const, label: 'Brand' },
+  source_category: { type: 'string' as const, label: 'Category' },
+  min_count: { type: 'number' as const, label: 'Min Count', default: 1 },
+}
 
-  useEffect(() => {
-    clearTimeout(timerRef.current)
-    timerRef.current = setTimeout(() => setDebouncedBrand(brand), 300)
-    return () => clearTimeout(timerRef.current)
-  }, [brand])
+type Filters = {
+  brand: string
+  source_category: string
+  min_count: number
+}
+
+export default function Features() {
+  const { categories } = useCategories()
+  const { filters, setFilter, clearFilter, clearAll, activeFilterEntries } =
+    useFilterParams<Filters>(FILTER_CONFIG)
+  const [tab, setTab] = useState<'requests' | 'aspects'>('requests')
 
   const { data, loading, error, refresh, refreshing } = useApiData(
-    () => fetchFeatures({
-      brand: debouncedBrand || undefined,
-      limit: 100,
-    }),
-    [debouncedBrand],
+    () =>
+      fetchFeatures({
+        brand: filters.brand || undefined,
+        source_category: filters.source_category || undefined,
+        min_count: filters.min_count > 1 ? filters.min_count : undefined,
+        limit: 100,
+      }),
+    [JSON.stringify(filters)],
   )
 
   const features = data?.feature_requests ?? []
@@ -133,31 +145,43 @@ export default function Features() {
         </button>
       </div>
 
-      {/* Filter */}
-      <div className="flex flex-wrap items-end gap-4">
-        <div className="flex-1 min-w-[200px]">
-          <label className="block text-xs text-slate-400 mb-1">Filter by brand</label>
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
+      <FilterBar
+        activeFilters={activeFilterEntries.map((e) => ({
+          key: e.key,
+          label: e.label,
+          onClear: () => clearFilter(e.key),
+        }))}
+        onClearAll={clearAll}
+        expanded={
+          <div className="w-44">
+            <label className="block text-xs text-slate-400 mb-1">
+              Min count: {filters.min_count}
+            </label>
             <input
-              type="text"
-              value={brand}
-              onChange={(e) => setBrand(e.target.value)}
-              placeholder="Brand name..."
-              className="w-full pl-9 pr-3 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+              type="range"
+              min={1}
+              max={20}
+              value={filters.min_count}
+              onChange={(e) => setFilter('min_count', Number(e.target.value))}
+              className="w-full accent-cyan-500"
             />
           </div>
-        </div>
-        {brand && (
-          <button
-            onClick={() => setBrand('')}
-            className="flex items-center gap-1 px-3 py-2 text-sm text-slate-400 hover:text-white transition-colors"
-          >
-            <X className="h-3 w-3" />
-            Clear
-          </button>
-        )}
-      </div>
+        }
+      >
+        <FilterSearch
+          label="Filter by brand"
+          value={filters.brand}
+          onChange={(v) => setFilter('brand', v)}
+          placeholder="Brand name..."
+        />
+        <FilterSelect
+          label="Category"
+          value={filters.source_category}
+          onChange={(v) => setFilter('source_category', v)}
+          options={categories.map((c) => ({ value: c, label: c }))}
+          placeholder="All Categories"
+        />
+      </FilterBar>
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-slate-700/50">
@@ -185,8 +209,8 @@ export default function Features() {
 
       {/* Tables */}
       <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl overflow-hidden">
-        {tab === 'requests' && (
-          loading ? (
+        {tab === 'requests' &&
+          (loading ? (
             <DataTable columns={featureColumns} data={[]} skeletonRows={10} />
           ) : (
             <DataTable
@@ -194,10 +218,9 @@ export default function Features() {
               data={features}
               emptyMessage="No feature requests found"
             />
-          )
-        )}
-        {tab === 'aspects' && (
-          loading ? (
+          ))}
+        {tab === 'aspects' &&
+          (loading ? (
             <DataTable columns={aspectColumns} data={[]} skeletonRows={10} />
           ) : (
             <DataTable
@@ -205,8 +228,7 @@ export default function Features() {
               data={aspects}
               emptyMessage="No negative aspects found"
             />
-          )
-        )}
+          ))}
       </div>
     </div>
   )

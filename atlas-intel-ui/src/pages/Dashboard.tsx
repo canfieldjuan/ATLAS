@@ -22,8 +22,10 @@ import {
 } from 'recharts'
 import StatCard from '../components/StatCard'
 import DataTable, { type Column } from '../components/DataTable'
+import { FilterSelect } from '../components/FilterBar'
 import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
+import useCategories from '../hooks/useCategories'
 import {
   fetchPipeline,
   fetchBrands,
@@ -45,6 +47,7 @@ interface DashboardData {
 export default function Dashboard() {
   const navigate = useNavigate()
   const [category, setCategory] = useState('')
+  const { categories: categoryList } = useCategories()
 
   const { data, loading, error, refresh, refreshing } = useApiData<DashboardData>(
     async () => {
@@ -123,16 +126,14 @@ export default function Dashboard() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-white">Consumer Intelligence Overview</h1>
         <div className="flex items-center gap-3">
-          <select
+          <FilterSelect
+            label=""
             value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            className="px-3 py-1.5 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white focus:outline-none focus:border-cyan-500/50"
-          >
-            <option value="">All Categories</option>
-            {categoryData.map((d) => (
-              <option key={d.name} value={d.name}>{d.name}</option>
-            ))}
-          </select>
+            onChange={setCategory}
+            options={categoryList.map((c) => ({ value: c, label: c }))}
+            placeholder="All Categories"
+            className="w-48"
+          />
           <button
             onClick={refresh}
             disabled={refreshing}
