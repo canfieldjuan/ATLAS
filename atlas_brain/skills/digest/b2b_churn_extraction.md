@@ -60,7 +60,7 @@ You are a B2B software intelligence analyst. Given a single software review, ext
   "feature_gaps": ["Better reporting", "Simpler workflow builder"],
 
   "competitors_mentioned": [
-    {"name": "HubSpot", "context": "considering", "reason": "Lower cost, simpler UI"}
+    {"name": "HubSpot", "context": "considering", "reason": "Lower cost, simpler UI", "features": ["workflow builder", "free tier"]}
   ],
 
   "contract_context": {
@@ -164,6 +164,9 @@ Only include ACTUAL product/vendor names explicitly mentioned in the review text
 
 ### competitors_mentioned[].reason
 WHY this specific competitor was mentioned. Extract the stated reason from the review text. Null if no reason given. Examples: "Lower cost", "Better API", "Simpler onboarding". Must be from the review, never inferred.
+
+### competitors_mentioned[].features
+Array of specific product features or capabilities of this competitor that the reviewer cited as attractive. Extract only features explicitly mentioned in the review text (e.g., "workflow builder", "free tier", "better API docs"). Empty array if no specific features mentioned. Never invent features.
 
 ### pain_categories
 Array of `{category, severity}` objects ranking ALL pains mentioned in the review. Categories use the same values as `pain_category`. Set `pain_category` (singular) to `pain_categories[0].category` for backward compatibility.
