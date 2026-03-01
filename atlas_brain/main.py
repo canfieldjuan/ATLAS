@@ -192,6 +192,15 @@ async def lifespan(app: FastAPI):
                     kwargs["cloud_kwargs"]["together_api_key"] = settings.llm.together_api_key
                 logger.info("Hybrid LLM: local=%s (%s), cloud=Groq+Together",
                            settings.llm.ollama_model, settings.llm.ollama_url)
+            elif backend == "vllm":
+                # vLLM OpenAI-compatible backend
+                kwargs = {
+                    "model": settings.llm.vllm_model,
+                    "base_url": settings.llm.vllm_url,
+                }
+                logger.info("vLLM model: %s, url: %s",
+                           settings.llm.vllm_model,
+                           settings.llm.vllm_url)
             else:
                 # llama-cpp (GGUF models)
                 kwargs = {}
@@ -690,7 +699,7 @@ app.include_router(ollama_compat_router)
 from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5174", "http://localhost:5173"],
+    allow_origins=["http://localhost:5174", "http://localhost:5173", "http://localhost:5175"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["*"],

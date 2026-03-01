@@ -80,6 +80,24 @@ class VLLMLLM(BaseModelService):
     def _convert_messages(self, messages: list[Message]) -> list[dict]:
         return [{"role": msg.role, "content": msg.content} for msg in messages]
 
+    def _build_payload(
+        self, messages: list[Message], max_tokens: int, temperature: float,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": self._convert_messages(messages),
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if self._supports_thinking:
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
+        return payload
+
+    @property
+    def _supports_thinking(self) -> bool:
+        model_lower = self.model.lower()
+        return "qwen3" in model_lower and "instruct" not in model_lower
+
     def chat(
         self,
         messages: list[Message],
@@ -90,13 +108,7 @@ class VLLMLLM(BaseModelService):
         if not self._sync_client:
             raise RuntimeError("vLLM not loaded")
 
-        payload = {
-            "model": self.model,
-            "messages": self._convert_messages(messages),
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "chat_template_kwargs": {"enable_thinking": False},
-        }
+        payload = self._build_payload(messages, max_tokens, temperature)
 
         try:
             response = self._sync_client.post(
@@ -134,13 +146,7 @@ class VLLMLLM(BaseModelService):
         if not self._client:
             raise RuntimeError("vLLM not loaded")
 
-        payload = {
-            "model": self.model,
-            "messages": self._convert_messages(messages),
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "chat_template_kwargs": {"enable_thinking": False},
-        }
+        payload = self._build_payload(messages, max_tokens, temperature)
 
         try:
             response = await self._client.post(

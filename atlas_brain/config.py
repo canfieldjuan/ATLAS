@@ -77,6 +77,10 @@ class LLMConfig(BaseSettings):
     ollama_url: str = Field(default="http://localhost:11434", description="Ollama API URL (override: ATLAS_LLM__OLLAMA_URL)")
     ollama_timeout: int = Field(default=120, description="Ollama HTTP timeout in seconds (increase for cloud relay models)")
 
+    # vllm settings (OpenAI-compatible vLLM server)
+    vllm_model: str = Field(default="Qwen/Qwen3-14B-AWQ", description="vLLM model name")
+    vllm_url: str = Field(default="http://localhost:8082", description="vLLM API base URL")
+
     # transformers-flash settings (HuggingFace models)
     hf_model_id: str = Field(
         default="meta-llama/Llama-3.1-8B-Instruct",
