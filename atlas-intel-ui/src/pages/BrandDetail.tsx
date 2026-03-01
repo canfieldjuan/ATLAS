@@ -628,6 +628,129 @@ export default function BrandDetail() {
               </div>
             )}
           </Card>
+
+          {/* ── First-Pass Enrichment ── */}
+          {data.first_pass.enriched_count > 0 && (
+            <div className="space-y-6">
+              <h3 className="text-xs uppercase tracking-wider text-slate-500 border-b border-slate-700/50 pb-2">
+                First-Pass Analysis ({data.first_pass.enriched_count.toLocaleString()} reviews)
+              </h3>
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                {/* Severity */}
+                <Card title="Issue Severity">
+                  {data.first_pass.severity_breakdown.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {data.first_pass.severity_breakdown.map((s) => (
+                        <div key={s.label} className="flex items-center gap-2 text-xs">
+                          <span className={clsx('w-2 h-2 rounded-full shrink-0',
+                            s.label === 'critical' ? 'bg-red-500' :
+                            s.label === 'major' ? 'bg-amber-500' :
+                            'bg-slate-500'
+                          )} />
+                          <span className="text-slate-400 flex-1">{s.label}</span>
+                          <span className="text-slate-300 font-mono">{s.count.toLocaleString()}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-slate-500 text-sm">No data</p>
+                  )}
+                </Card>
+
+                {/* Time to Failure */}
+                <Card title="Time to Failure">
+                  {data.first_pass.time_to_failure.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {data.first_pass.time_to_failure.map((t) => (
+                        <div key={t.label} className="flex items-center gap-2 text-xs">
+                          <span className={clsx('w-2 h-2 rounded-full shrink-0',
+                            t.label === 'immediate' ? 'bg-red-500' :
+                            t.label === 'days' || t.label === 'hours' ? 'bg-amber-500' :
+                            t.label === 'weeks' ? 'bg-yellow-500' :
+                            t.label === 'months' ? 'bg-cyan-500' :
+                            t.label === 'years' ? 'bg-emerald-500' :
+                            'bg-slate-500'
+                          )} />
+                          <span className="text-slate-400 flex-1">{t.label}</span>
+                          <span className="text-slate-300 font-mono">{t.count.toLocaleString()}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-slate-500 text-sm">No data</p>
+                  )}
+                </Card>
+
+                {/* Workaround Rate */}
+                <Card title="Workaround Found">
+                  <div className="text-center">
+                    {data.first_pass.workaround_rate != null ? (
+                      <>
+                        <span className={clsx(
+                          'text-3xl font-bold',
+                          data.first_pass.workaround_rate >= 40 ? 'text-amber-400' :
+                          data.first_pass.workaround_rate >= 20 ? 'text-slate-300' :
+                          'text-slate-500',
+                        )}>
+                          {data.first_pass.workaround_rate}%
+                        </span>
+                        <p className="text-xs text-slate-500 mt-1">
+                          {data.first_pass.workaround_count.toLocaleString()} reviews mention workarounds
+                        </p>
+                      </>
+                    ) : (
+                      <p className="text-slate-500 text-sm">No data</p>
+                    )}
+                  </div>
+                </Card>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* Root Causes */}
+                {data.first_pass.top_root_causes.length > 0 && (
+                  <Card title="Top Root Causes">
+                    <ul className="space-y-1.5 max-h-48 overflow-y-auto">
+                      {data.first_pass.top_root_causes.map((r) => (
+                        <li key={r.cause} className="flex items-center justify-between text-xs">
+                          <span className="text-slate-300 truncate mr-2">{r.cause}</span>
+                          <span className="text-cyan-400 font-mono shrink-0">{r.count}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </Card>
+                )}
+
+                {/* Manufacturing Suggestions */}
+                {data.first_pass.top_manufacturing_suggestions.length > 0 && (
+                  <Card title="Manufacturing Suggestions">
+                    <ul className="space-y-1.5 max-h-48 overflow-y-auto">
+                      {data.first_pass.top_manufacturing_suggestions.map((m) => (
+                        <li key={m.suggestion} className="flex items-center justify-between text-xs">
+                          <span className="text-slate-300 truncate mr-2">{m.suggestion}</span>
+                          <span className="text-cyan-400 font-mono shrink-0">{m.count}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </Card>
+                )}
+
+                {/* Alternatives Mentioned */}
+                {data.first_pass.top_alternatives_mentioned.length > 0 && (
+                  <Card title="Alternatives Mentioned">
+                    <ul className="space-y-1.5 max-h-48 overflow-y-auto">
+                      {data.first_pass.top_alternatives_mentioned.map((a) => (
+                        <li key={a.product} className="flex items-center justify-between text-xs">
+                          <span className="text-slate-300 truncate mr-2">{a.product}</span>
+                          <span className="text-cyan-400 font-mono shrink-0">{a.count}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </Card>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -709,6 +709,52 @@ async def get_brand_detail(brand_name: str):
         _scores.append(max(0.0, 1.0 - (safety_flagged / deep_review_count) * 10))
         detail_health = round(sum(_scores) / len(_scores) * 100)
 
+    # ------------------------------------------------------------------
+    # First-pass enrichment fields (severity, time_to_failure, etc.)
+    # ------------------------------------------------------------------
+    fp_rows = await pool.fetch(
+        """
+        SELECT severity,
+               time_to_failure,
+               root_cause,
+               workaround_found,
+               manufacturing_suggestion,
+               alternative_name
+        FROM product_reviews pr
+        JOIN product_metadata pm ON pm.asin = pr.asin
+        WHERE pm.brand ILIKE $1
+          AND pr.enrichment_status = 'enriched'
+        """,
+        bname,
+    )
+
+    severity_counter: dict[str, int] = defaultdict(int)
+    ttf_counter: dict[str, int] = defaultdict(int)
+    root_cause_counter: dict[str, int] = defaultdict(int)
+    mfg_counter: dict[str, int] = defaultdict(int)
+    alt_counter: dict[str, int] = defaultdict(int)
+    workaround_count = 0
+    fp_total = len(fp_rows)
+
+    for row in fp_rows:
+        sev = row["severity"]
+        if sev and sev not in ("", "none"):
+            severity_counter[sev] += 1
+        ttf = row["time_to_failure"]
+        if ttf and ttf not in ("", "not_mentioned"):
+            ttf_counter[ttf] += 1
+        rc = row["root_cause"]
+        if rc and rc.strip():
+            root_cause_counter[rc.strip().lower()] += 1
+        if row["workaround_found"]:
+            workaround_count += 1
+        mfg = row["manufacturing_suggestion"]
+        if mfg and mfg.strip():
+            mfg_counter[mfg.strip().lower()] += 1
+        alt = row["alternative_name"]
+        if alt and alt.strip():
+            alt_counter[alt.strip()] += 1
+
     return {
         "brand": bname,
         "product_count": len(products),
@@ -780,6 +826,26 @@ async def get_brand_detail(brand_name: str):
         "amplification_intent": _dist(amplification_counter),
         "openness_breakdown": _dist(openness_counter),
         "safety_flagged_count": safety_flagged,
+        # First-pass enrichment
+        "first_pass": {
+            "enriched_count": fp_total,
+            "severity_breakdown": _dist(severity_counter),
+            "time_to_failure": _dist(ttf_counter),
+            "workaround_rate": round(workaround_count / fp_total * 100) if fp_total else None,
+            "workaround_count": workaround_count,
+            "top_root_causes": [
+                {"cause": k, "count": v}
+                for k, v in sorted(root_cause_counter.items(), key=lambda x: x[1], reverse=True)[:10]
+            ],
+            "top_manufacturing_suggestions": [
+                {"suggestion": k, "count": v}
+                for k, v in sorted(mfg_counter.items(), key=lambda x: x[1], reverse=True)[:10]
+            ],
+            "top_alternatives_mentioned": [
+                {"product": k, "count": v}
+                for k, v in sorted(alt_counter.items(), key=lambda x: x[1], reverse=True)[:10]
+            ],
+        },
     }
 
 

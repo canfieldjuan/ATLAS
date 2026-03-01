@@ -146,6 +146,17 @@ export interface BrandDetail {
   amplification_intent: LabelCount[]
   openness_breakdown: LabelCount[]
   safety_flagged_count: number
+  // First-pass enrichment
+  first_pass: {
+    enriched_count: number
+    severity_breakdown: LabelCount[]
+    time_to_failure: LabelCount[]
+    workaround_rate: number | null
+    workaround_count: number
+    top_root_causes: { cause: string; count: number }[]
+    top_manufacturing_suggestions: { suggestion: string; count: number }[]
+    top_alternatives_mentioned: { product: string; count: number }[]
+  }
 }
 
 export interface FlowEntry {
