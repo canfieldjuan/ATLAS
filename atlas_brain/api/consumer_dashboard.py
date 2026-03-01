@@ -234,8 +234,8 @@ async def list_brands(
         "avg_rating": "pm_avg_rating DESC NULLS LAST",
         "safety_count": "safety_count DESC",
         "brand": "brand ASC",
-        "brand_health": "deep_count DESC",  # sort by deep count as proxy; real sort in Python
     }
+    health_sort = sort_by == "brand_health"
     order = sort_map.get(sort_by, "review_count DESC")
 
     if min_reviews > 0:
@@ -245,9 +245,15 @@ async def list_brands(
     else:
         having = ""
 
-    params.extend([limit, offset])
-    limit_idx = idx
-    offset_idx = idx + 1
+    # For brand_health sort, fetch all rows and paginate in Python
+    # (health is computed after SQL, can't ORDER BY it in SQL)
+    if health_sort:
+        sql_limit_clause = ""
+    else:
+        params.extend([limit, offset])
+        limit_idx = idx
+        offset_idx = idx + 1
+        sql_limit_clause = f"LIMIT ${limit_idx} OFFSET ${offset_idx}"
 
     rows = await pool.fetch(
         f"""
@@ -298,7 +304,7 @@ async def list_brands(
         GROUP BY pm.brand
         {having}
         ORDER BY {order}
-        LIMIT ${limit_idx} OFFSET ${offset_idx}
+        {sql_limit_clause}
         """,
         *params,
     )
@@ -320,23 +326,29 @@ async def list_brands(
             "brand_health": health,
         })
 
-    # Total count (without LIMIT/OFFSET) for pagination
-    count_params = params[:-2]  # strip limit & offset
-    total_count = await pool.fetchval(
-        f"""
-        SELECT COUNT(*) FROM (
-            SELECT pm.brand
-            FROM product_metadata pm
-            JOIN product_reviews pr ON pr.asin = pm.asin
-            WHERE {where}
-            GROUP BY pm.brand
-            {having}
-        ) sub
-        """,
-        *count_params,
-    )
+    if health_sort:
+        brands.sort(key=lambda b: (b["brand_health"] is not None, b["brand_health"] or 0), reverse=True)
+        total_count = len(brands)
+        brands = brands[offset : offset + limit]
+    else:
+        # Total count (without LIMIT/OFFSET) for pagination
+        count_params = params[:-2]  # strip limit & offset
+        total_count = await pool.fetchval(
+            f"""
+            SELECT COUNT(*) FROM (
+                SELECT pm.brand
+                FROM product_metadata pm
+                JOIN product_reviews pr ON pr.asin = pm.asin
+                WHERE {where}
+                GROUP BY pm.brand
+                {having}
+            ) sub
+            """,
+            *count_params,
+        )
+        total_count = total_count or 0
 
-    return {"brands": brands, "count": len(brands), "total_count": total_count or 0}
+    return {"brands": brands, "count": len(brands), "total_count": total_count}
 
 
 # ---------------------------------------------------------------------------
@@ -1131,8 +1143,16 @@ async def get_safety_signals(
         for r in rows
     ]
 
+    # Count uses same filters (minus LIMIT) so total_flagged reflects active filters
+    count_params = params[:-1]  # strip the limit param
     total_flagged = await pool.fetchval(
-        "SELECT COUNT(*) FROM product_reviews WHERE deep_extraction->'safety_flag'->>'flagged' = 'true'"
+        f"""
+        SELECT COUNT(*)
+        FROM product_reviews pr
+        JOIN product_metadata pm ON pm.asin = pr.asin
+        WHERE {where}
+        """,
+        *count_params,
     )
 
     return {

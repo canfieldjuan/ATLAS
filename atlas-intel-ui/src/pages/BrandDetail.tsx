@@ -392,18 +392,20 @@ export default function BrandDetail() {
             <Card title="Consequence Severity">
               {data.consequence_breakdown.length > 0 ? (
                 <div className="space-y-1.5">
-                  {data.consequence_breakdown.map((c) => {
+                  {(() => {
                     const total = data.consequence_breakdown.reduce((s, i) => s + i.count, 0)
-                    const pct = Math.round((c.count / total) * 100)
-                    const color = CHURN_COLORS[c.label] ?? 'bg-slate-600'
-                    return (
-                      <div key={c.label} className="flex items-center gap-2 text-xs">
-                        <span className={clsx('w-2 h-2 rounded-full shrink-0', color)} />
-                        <span className="text-slate-400 flex-1">{c.label.replaceAll('_', ' ')}</span>
-                        <span className="text-slate-300 font-mono">{pct}%</span>
-                      </div>
-                    )
-                  })}
+                    return data.consequence_breakdown.map((c) => {
+                      const pct = total > 0 ? Math.round((c.count / total) * 100) : 0
+                      const color = CHURN_COLORS[c.label] ?? 'bg-slate-600'
+                      return (
+                        <div key={c.label} className="flex items-center gap-2 text-xs">
+                          <span className={clsx('w-2 h-2 rounded-full shrink-0', color)} />
+                          <span className="text-slate-400 flex-1">{c.label.replaceAll('_', ' ')}</span>
+                          <span className="text-slate-300 font-mono">{pct}%</span>
+                        </div>
+                      )
+                    })
+                  })()}
                 </div>
               ) : (
                 <p className="text-slate-500 text-sm text-center">No data</p>
