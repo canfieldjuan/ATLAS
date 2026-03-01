@@ -25,7 +25,7 @@ router = APIRouter(prefix="/b2b/scrape", tags=["b2b-scrape"])
 # ---------------------------------------------------------------------------
 
 class ScrapeTargetCreate(BaseModel):
-    source: str = Field(description="Source: g2, capterra, trustradius, reddit")
+    source: str = Field(description="Source: g2, capterra, trustradius, reddit, hackernews, github, rss")
     vendor_name: str
     product_name: Optional[str] = None
     product_slug: str
@@ -94,7 +94,9 @@ async def create_target(body: ScrapeTargetCreate) -> dict:
     if not pool.is_initialized:
         raise HTTPException(status_code=503, detail="Database not ready")
 
-    valid_sources = {"g2", "capterra", "trustradius", "reddit"}
+    from ..services.scraping.parsers import get_all_parsers
+
+    valid_sources = set(get_all_parsers().keys())
     if body.source not in valid_sources:
         raise HTTPException(status_code=400, detail=f"Invalid source. Must be one of: {valid_sources}")
 
