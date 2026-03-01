@@ -187,3 +187,31 @@ export interface ClickSummary {
   product_name: string
   click_count: number
 }
+
+export type CampaignStatus = 'draft' | 'approved' | 'sent' | 'expired'
+
+export interface Campaign {
+  id: string
+  company_name: string
+  vendor_name: string
+  product_category: string | null
+  opportunity_score: number | null
+  urgency_score: number | null
+  channel: string
+  subject: string | null
+  body: string | null
+  cta: string | null
+  status: CampaignStatus
+  batch_id: string | null
+  llm_model: string | null
+  created_at: string | null
+  approved_at: string | null
+  sent_at: string | null
+}
+
+export interface CampaignStats {
+  by_status: Record<string, number>
+  by_channel: Record<string, number>
+  top_vendors: { vendor_name: string; count: number }[]
+  total: number
+}

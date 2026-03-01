@@ -2097,6 +2097,26 @@ class B2BScrapeConfig(BaseSettings):
     relevance_threshold: float = Field(default=0.55, description="Min relevance score (0.0-1.0) for social media posts")
 
 
+class B2BCampaignConfig(BaseSettings):
+    """B2B ABM campaign generation configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_B2B_CAMPAIGN_", env_file=".env", extra="ignore",
+    )
+
+    enabled: bool = Field(default=False, description="Enable B2B campaign engine")
+    min_opportunity_score: int = Field(default=70, ge=0, le=100, description="Min opportunity score to target")
+    require_decision_maker: bool = Field(default=True, description="Only target decision makers")
+    max_campaigns_per_run: int = Field(default=20, ge=1, description="Max campaigns per generation run")
+    channels: list[str] = Field(
+        default=["email_cold", "linkedin", "email_followup"],
+        description="Channels to generate content for",
+    )
+    dedup_days: int = Field(default=30, ge=1, description="Days before re-targeting same company")
+    max_tokens: int = Field(default=2048, description="Max tokens per LLM generation call")
+    temperature: float = Field(default=0.7, description="LLM sampling temperature")
+
+
 class TemporalPatternConfig(BaseSettings):
     """Temporal pattern context configuration."""
 
@@ -2538,6 +2558,7 @@ class Settings(BaseSettings):
     external_data: ExternalDataConfig = Field(default_factory=ExternalDataConfig)
     b2b_churn: B2BChurnConfig = Field(default_factory=B2BChurnConfig)
     b2b_scrape: B2BScrapeConfig = Field(default_factory=B2BScrapeConfig)
+    b2b_campaign: B2BCampaignConfig = Field(default_factory=B2BCampaignConfig)
     openai_compat: OpenAICompatConfig = Field(default_factory=OpenAICompatConfig)
     ftl_tracing: FTLTracingConfig = Field(default_factory=FTLTracingConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)

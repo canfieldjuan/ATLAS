@@ -33,6 +33,7 @@ _BUILTIN_TASKS = [
     ("reasoning_reflection", "run", "reasoning_reflection"),
     ("weather_traffic_alerts", "run", "weather_traffic_alerts"),
     ("news_intelligence", "run", "news_intelligence"),
+    ("b2b_campaign_generation", "run", "b2b_campaign_generation"),
 ]
 
 

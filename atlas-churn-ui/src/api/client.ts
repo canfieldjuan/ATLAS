@@ -11,6 +11,8 @@ import type {
   AffiliateOpportunity,
   AffiliatePartner,
   ClickSummary,
+  Campaign,
+  CampaignStats,
 } from '../types'
 
 const BASE = '/api/v1/b2b/dashboard'
@@ -146,6 +148,75 @@ export async function recordAffiliateClick(partnerId: string, reviewId?: string)
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ partner_id: partnerId, review_id: reviewId, referrer: 'dashboard' }),
+  })
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  return res.json()
+}
+
+// ---------------------------------------------------------------------------
+// Campaigns
+// ---------------------------------------------------------------------------
+
+const CAMPAIGNS_BASE = '/api/v1/b2b/campaigns'
+
+async function campaignGet<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
+  const url = new URL(CAMPAIGNS_BASE + path, window.location.origin)
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null && v !== '') {
+        url.searchParams.set(k, String(v))
+      }
+    }
+  }
+  const res = await fetch(url.toString())
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  return res.json()
+}
+
+export async function fetchCampaigns(params?: {
+  status?: string
+  company?: string
+  vendor?: string
+  channel?: string
+  limit?: number
+}) {
+  return campaignGet<{ campaigns: Campaign[]; count: number }>('', params)
+}
+
+export async function fetchCampaign(id: string) {
+  return campaignGet<Campaign>(`/${id}`)
+}
+
+export async function fetchCampaignStats() {
+  return campaignGet<CampaignStats>('/stats')
+}
+
+export async function generateCampaigns(body?: {
+  vendor_name?: string
+  company_name?: string
+  min_score?: number
+  limit?: number
+}) {
+  const res = await fetch(CAMPAIGNS_BASE + '/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+  })
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  return res.json()
+}
+
+export async function approveCampaign(id: string) {
+  const res = await fetch(CAMPAIGNS_BASE + `/${id}/approve`, { method: 'POST' })
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  return res.json()
+}
+
+export async function updateCampaign(id: string, body: Partial<Pick<Campaign, 'subject' | 'body' | 'cta' | 'status'>>) {
+  const res = await fetch(CAMPAIGNS_BASE + `/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
   })
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
   return res.json()
