@@ -213,7 +213,8 @@ async def update_vendor_target(target_id: UUID, body: VendorTargetUpdate):
     """Update a vendor/challenger target."""
     pool = _pool_or_503()
 
-    # Build dynamic SET clause
+    # Build dynamic SET clause — model_fields_set tracks which fields were
+    # explicitly provided in the request body (including explicit nulls).
     updates = []
     params: list = []
     idx = 1
@@ -223,10 +224,9 @@ async def update_vendor_target(target_id: UUID, body: VendorTargetUpdate):
         "contact_role", "products_tracked", "competitors_tracked",
         "tier", "status", "notes",
     ]:
-        val = getattr(body, field, None)
-        if val is not None:
+        if field in body.model_fields_set:
             updates.append(f"{field} = ${idx}")
-            params.append(val)
+            params.append(getattr(body, field))
             idx += 1
 
     if not updates:
