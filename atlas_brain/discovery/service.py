@@ -12,7 +12,6 @@ from typing import Optional
 from uuid import uuid4
 
 from ..config import settings
-from ..storage.database import get_db_pool
 from ..storage.models import DiscoveredDevice
 from ..storage.repositories.device import get_device_repo
 from .scanners import SSDPScanner, MDNSScanner, ScanResult
@@ -67,15 +66,6 @@ class DiscoveryService:
             return
 
         logger.info("Initializing discovery service")
-
-        # Run migrations if database is available
-        pool = get_db_pool()
-        if pool.is_initialized:
-            try:
-                from ..storage.migrations import run_migrations
-                await run_migrations(pool)
-            except Exception as e:
-                logger.warning("Migration check failed (may already exist): %s", e)
 
         self._initialized = True
         logger.info("Discovery service initialized with %d scanners", len(self._scanners))
