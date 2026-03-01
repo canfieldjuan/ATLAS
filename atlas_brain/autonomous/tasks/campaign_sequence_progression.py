@@ -309,6 +309,14 @@ async def run(task: ScheduledTask) -> dict:
             logger.warning("Failed to generate step %d for sequence %s", next_step, seq_id)
             continue
 
+        # Determine target_mode from sequence context
+        company_context = seq_dict.get("company_context") or {}
+        if isinstance(company_context, str):
+            company_context = json.loads(company_context)
+        is_seller = company_context.get("recipient_type") == "amazon_seller"
+        target_mode = "amazon_seller" if is_seller else "churning_company"
+        product_category = company_context.get("category") if is_seller else None
+
         # Insert new campaign row as queued
         campaign_id = await pool.fetchval(
             """
@@ -316,10 +324,10 @@ async def run(task: ScheduledTask) -> dict:
                 (company_name, batch_id, partner_id, channel,
                  subject, body, status, approved_at,
                  sequence_id, step_number, recipient_email, from_email,
-                 metadata)
+                 metadata, target_mode, product_category)
             VALUES ($1, $2, $3, 'email_followup',
                     $4, $5, 'queued', $6,
-                    $7, $8, $9, $10, $11)
+                    $7, $8, $9, $10, $11, $12, $13)
             RETURNING id
             """,
             seq_dict["company_name"],
@@ -336,6 +344,8 @@ async def run(task: ScheduledTask) -> dict:
                 "cta": content.get("cta", ""),
                 "angle_reasoning": content.get("angle_reasoning", ""),
             }),
+            target_mode,
+            product_category,
         )
 
         # Update sequence step count (but NOT next_step_after -- set after actual send)

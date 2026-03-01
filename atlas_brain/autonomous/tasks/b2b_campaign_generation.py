@@ -533,9 +533,63 @@ def _build_vendor_context(vendor_name: str, signals: list[dict]) -> dict[str, An
                 gap_counts.keys(), key=lambda k: gap_counts[k], reverse=True,
             )[:10],
             "timeline_signals": timeline_count,
-            "trend_vs_last_month": None,  # TODO: compute from historical data
+            "trend_vs_last_month": None,  # overridden by caller with _compute_vendor_trend()
         },
     }
+
+
+async def _compute_vendor_trend(
+    pool,
+    vendor_name: str,
+    products: list[str] | None = None,
+) -> str | None:
+    """Compare signal count in last 30d vs previous 30d for a vendor.
+
+    Returns 'increasing', 'stable', 'decreasing', or None on error.
+    """
+    try:
+        # Build vendor name match condition
+        names = [vendor_name]
+        if products:
+            names.extend(products)
+        name_conditions = " OR ".join(
+            f"r.vendor_name ILIKE '%' || ${i + 1} || '%'" for i in range(len(names))
+        )
+        base_idx = len(names) + 1
+
+        current = await pool.fetchval(
+            f"""
+            SELECT COUNT(*) FROM b2b_reviews r
+            WHERE r.enrichment_status = 'enriched'
+              AND r.enriched_at > NOW() - INTERVAL '30 days'
+              AND (r.enrichment->>'urgency_score')::numeric >= ${base_idx}
+              AND ({name_conditions})
+            """,
+            *names, 3.0,
+        )
+        previous = await pool.fetchval(
+            f"""
+            SELECT COUNT(*) FROM b2b_reviews r
+            WHERE r.enrichment_status = 'enriched'
+              AND r.enriched_at BETWEEN NOW() - INTERVAL '60 days' AND NOW() - INTERVAL '30 days'
+              AND (r.enrichment->>'urgency_score')::numeric >= ${base_idx}
+              AND ({name_conditions})
+            """,
+            *names, 3.0,
+        )
+        if previous == 0 and current == 0:
+            return None
+        if previous == 0:
+            return "increasing"
+        ratio = current / previous
+        if ratio >= 1.2:
+            return "increasing"
+        elif ratio <= 0.8:
+            return "decreasing"
+        return "stable"
+    except Exception:
+        logger.debug("Failed to compute trend for %s", vendor_name)
+        return None
 
 
 async def _generate_vendor_campaigns(
@@ -578,6 +632,7 @@ async def _generate_vendor_campaigns(
     generated = 0
     failed = 0
     skipped = 0
+    sequences_created = 0
 
     for target in targets[:limit]:
         vendor_name = target["company_name"]
@@ -611,6 +666,9 @@ async def _generate_vendor_campaigns(
 
         # Build vendor-scoped context
         vendor_ctx = _build_vendor_context(vendor_name, vendor_signals)
+        vendor_ctx["signal_summary"]["trend_vs_last_month"] = await _compute_vendor_trend(
+            pool, vendor_name, products,
+        )
         best = max(vendor_signals, key=lambda o: o["opportunity_score"])
         review_ids = [o["review_id"] for o in vendor_signals if o.get("review_id")]
 
@@ -690,15 +748,40 @@ async def _generate_vendor_campaigns(
             else:
                 failed += 1
 
+        # Create campaign sequence for the cold email (if sequences enabled)
+        if cold_email_content and settings.campaign_sequence.enabled:
+            try:
+                seq_id = await _create_sequence_for_cold_email(
+                    pool,
+                    company_name=vendor_name,
+                    batch_id=batch_id,
+                    partner_id=None,
+                    context=vendor_ctx,
+                    cold_email_subject=cold_email_content.get("subject", ""),
+                    cold_email_body=cold_email_content.get("body", ""),
+                )
+                if seq_id:
+                    sequences_created += 1
+                    # Set recipient from target contact_email (more reliable than CRM lookup)
+                    contact_email = target.get("contact_email")
+                    if contact_email:
+                        await pool.execute(
+                            "UPDATE campaign_sequences SET recipient_email = $1 WHERE id = $2",
+                            contact_email, seq_id,
+                        )
+            except Exception as exc:
+                logger.warning("Failed to create vendor sequence for %s: %s", vendor_name, exc)
+
     logger.info(
-        "Campaign generation (vendor_retention): %d generated, %d failed, %d skipped from %d targets",
-        generated, failed, skipped, len(targets),
+        "Campaign generation (vendor_retention): %d generated, %d failed, %d skipped, %d sequences from %d targets",
+        generated, failed, skipped, sequences_created, len(targets),
     )
 
     return {
         "generated": generated,
         "failed": failed,
         "skipped": skipped,
+        "sequences_created": sequences_created,
         "companies": len(targets) - skipped,
         "batch_id": batch_id,
         "target_mode": "vendor_retention",
@@ -852,6 +935,7 @@ async def _generate_challenger_campaigns(
     generated = 0
     failed = 0
     skipped = 0
+    sequences_created = 0
 
     for target in targets[:limit]:
         challenger_name = target["company_name"]
@@ -969,15 +1053,39 @@ async def _generate_challenger_campaigns(
             else:
                 failed += 1
 
+        # Create campaign sequence for the cold email (if sequences enabled)
+        if cold_email_content and settings.campaign_sequence.enabled:
+            try:
+                seq_id = await _create_sequence_for_cold_email(
+                    pool,
+                    company_name=challenger_name,
+                    batch_id=batch_id,
+                    partner_id=None,
+                    context=challenger_ctx,
+                    cold_email_subject=cold_email_content.get("subject", ""),
+                    cold_email_body=cold_email_content.get("body", ""),
+                )
+                if seq_id:
+                    sequences_created += 1
+                    contact_email = target.get("contact_email")
+                    if contact_email:
+                        await pool.execute(
+                            "UPDATE campaign_sequences SET recipient_email = $1 WHERE id = $2",
+                            contact_email, seq_id,
+                        )
+            except Exception as exc:
+                logger.warning("Failed to create challenger sequence for %s: %s", challenger_name, exc)
+
     logger.info(
-        "Campaign generation (challenger_intel): %d generated, %d failed, %d skipped from %d targets",
-        generated, failed, skipped, len(targets),
+        "Campaign generation (challenger_intel): %d generated, %d failed, %d skipped, %d sequences from %d targets",
+        generated, failed, skipped, sequences_created, len(targets),
     )
 
     return {
         "generated": generated,
         "failed": failed,
         "skipped": skipped,
+        "sequences_created": sequences_created,
         "companies": len(targets) - skipped,
         "batch_id": batch_id,
         "target_mode": "challenger_intel",
