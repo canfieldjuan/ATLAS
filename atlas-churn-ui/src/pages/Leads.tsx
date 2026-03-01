@@ -80,6 +80,101 @@ function CampaignStatusBadge({ status }: { status: string }) {
   )
 }
 
+function CampaignModal({
+  campaign,
+  onClose,
+  onApprove,
+  onReject,
+}: {
+  campaign: Campaign
+  onClose: () => void
+  onApprove: (id: string) => void
+  onReject: (id: string) => void
+}) {
+  useEffect(() => {
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = '' }
+  }, [])
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      className="fixed top-0 right-0 bottom-0 left-0 lg:left-56 flex items-center justify-center p-8"
+      style={{ zIndex: 40, backgroundColor: 'rgba(0,0,0,0.7)' }}
+      onClick={onClose}
+    >
+      <div
+        className="bg-slate-800 border-2 border-slate-500 rounded-xl flex flex-col"
+        style={{ maxWidth: '500px', width: '100%', maxHeight: '80vh', boxShadow: '0 0 40px rgba(0,0,0,0.8)' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between p-5 pb-3 border-b border-slate-700/50 shrink-0">
+          <div>
+            <h2 className="text-base font-semibold text-white">
+              {campaign.company_name} &mdash; {campaign.channel.replace(/_/g, ' ')}
+            </h2>
+            <div className="flex items-center gap-2 mt-1">
+              <CampaignStatusBadge status={campaign.status} />
+              <span className="text-xs text-slate-400">
+                Churning from {campaign.vendor_name}
+              </span>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="overflow-y-auto p-5 space-y-3 flex-1">
+          {campaign.subject && (
+            <div>
+              <span className="text-xs text-slate-400 uppercase tracking-wider">Subject</span>
+              <p className="text-white mt-1 text-sm font-medium">{campaign.subject}</p>
+            </div>
+          )}
+          <div>
+            <span className="text-xs text-slate-400 uppercase tracking-wider">Body</span>
+            <div className="mt-1 text-slate-200 whitespace-pre-wrap text-sm leading-relaxed">
+              {campaign.body}
+            </div>
+          </div>
+          {campaign.cta && (
+            <div>
+              <span className="text-xs text-slate-400 uppercase tracking-wider">CTA</span>
+              <p className="text-cyan-400 mt-1 text-sm">{campaign.cta}</p>
+            </div>
+          )}
+        </div>
+        {campaign.status === 'draft' && (
+          <div className="flex items-center gap-3 p-5 pt-3 border-t border-slate-700/50 shrink-0">
+            <button
+              onClick={() => onApprove(campaign.id)}
+              className="px-4 py-1.5 rounded-lg text-sm bg-green-500/10 text-green-400 hover:bg-green-500/20 transition-colors"
+            >
+              Approve
+            </button>
+            <button
+              onClick={() => onReject(campaign.id)}
+              className="px-4 py-1.5 rounded-lg text-sm bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors"
+            >
+              Reject
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 const EMPTY_PARTNER = {
   name: '',
   product_name: '',
@@ -661,67 +756,12 @@ export default function Leads() {
 
       {/* Campaign Detail Modal */}
       {viewingCampaign && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setViewingCampaign(null)}>
-          <div
-            className="bg-slate-900 border border-slate-700/50 rounded-xl max-w-2xl w-full max-h-[80vh] overflow-y-auto p-6 space-y-4"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-white">
-                {viewingCampaign.company_name} &mdash; {viewingCampaign.channel.replace(/_/g, ' ')}
-              </h2>
-              <button onClick={() => setViewingCampaign(null)} className="text-slate-400 hover:text-white">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            <div className="flex items-center gap-2">
-              <CampaignStatusBadge status={viewingCampaign.status} />
-              <span className="text-xs text-slate-500">
-                Churning from {viewingCampaign.vendor_name}
-              </span>
-            </div>
-            {viewingCampaign.subject && (
-              <div>
-                <span className="text-xs text-slate-500 uppercase tracking-wider">Subject</span>
-                <p className="text-white mt-1">{viewingCampaign.subject}</p>
-              </div>
-            )}
-            <div>
-              <span className="text-xs text-slate-500 uppercase tracking-wider">Body</span>
-              <div className="mt-1 text-slate-300 whitespace-pre-wrap text-sm bg-slate-800/50 rounded-lg p-4">
-                {viewingCampaign.body}
-              </div>
-            </div>
-            {viewingCampaign.cta && (
-              <div>
-                <span className="text-xs text-slate-500 uppercase tracking-wider">CTA</span>
-                <p className="text-cyan-400 mt-1 text-sm">{viewingCampaign.cta}</p>
-              </div>
-            )}
-            {viewingCampaign.status === 'draft' && (
-              <div className="flex items-center gap-3 pt-2 border-t border-slate-700/50">
-                <button
-                  onClick={() => {
-                    handleApprove(viewingCampaign.id)
-                    setViewingCampaign(null)
-                  }}
-                  className="px-4 py-1.5 rounded-lg text-sm bg-green-500/10 text-green-400 hover:bg-green-500/20 transition-colors"
-                >
-                  Approve
-                </button>
-                <button
-                  onClick={() => {
-                    handleReject(viewingCampaign.id)
-                    setViewingCampaign(null)
-                  }}
-                  className="px-4 py-1.5 rounded-lg text-sm bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors"
-                >
-                  Reject
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
+        <CampaignModal
+          campaign={viewingCampaign}
+          onClose={() => setViewingCampaign(null)}
+          onApprove={(id) => { handleApprove(id); setViewingCampaign(null) }}
+          onReject={(id) => { handleReject(id); setViewingCampaign(null) }}
+        />
       )}
 
       {/* Partner Management */}
