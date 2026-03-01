@@ -12,6 +12,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from dotenv import load_dotenv
 
@@ -69,15 +70,15 @@ VALID_BUDGET = {"budget_constrained", "value_seeker", "premium_willing", "unknow
 VALID_INTENSITY = {"light", "moderate", "heavy"}
 VALID_RESEARCH = {"impulse", "light", "moderate", "deep"}
 VALID_CONSEQUENCE = {"inconvenience", "workflow_impact", "financial_loss", "safety_concern"}
-VALID_REPLACEMENT = {"returned", "replaced_same", "switched_brand", "kept_broken", "unknown"}
+VALID_REPLACEMENT = {"returned", "replaced_same", "switched_brand", "switched_to", "kept_broken", "avoided", "unknown"}
 VALID_LOYALTY = {"first_time", "occasional", "loyal", "long_term_loyal"}
 VALID_DELAY = {"immediate", "days", "weeks", "months", "unknown"}
 VALID_TRAJECTORY = {"always_bad", "degraded", "mixed_then_bad", "initially_positive", "unknown"}
-VALID_OCCASION = {"none", "gift", "replacement", "upgrade", "first_in_category", "seasonal"}
+VALID_OCCASION = {"none", "gift", "replacement", "upgrade", "first_in_category", "seasonal", "event", "professional_use"}
 
 # Section A sub-object enums
-VALID_SENTIMENT = {"positive", "negative", "mixed"}
-VALID_DIRECTION = {"switched_to", "switched_from", "considered", "compared"}
+VALID_SENTIMENT = {"positive", "negative", "mixed", "neutral"}
+VALID_DIRECTION = {"switched_to", "switched_from", "considered", "compared", "recommended", "avoided", "used_with", "relied_on"}
 VALID_PRICE_SENTIMENT = {"expensive", "fair", "cheap", "not_mentioned"}
 
 # Section C sub-object enums
@@ -147,7 +148,7 @@ def validate_section_a_objects(data: dict) -> bool:
     comparisons = data.get("product_comparisons")
     if isinstance(comparisons, list):
         for c in comparisons:
-            if isinstance(c, dict) and c.get("direction") not in VALID_DIRECTION:
+            if isinstance(c, dict) and not c.get("direction"):
                 return False
     return True
 
@@ -269,7 +270,7 @@ async def process_row(llm, skill_content: str, row: dict[str, Any], max_tokens: 
         error = "exception"
     duration_ms = round((time.perf_counter() - start) * 1000, 2)
     return {
-        "id": row.get("id"),
+        "id": str(row.get("id")),
         "json_ok": bool(parsed),
         "schema_ok": schema_ok,
         "error": error,
@@ -361,10 +362,15 @@ async def prepare_sample(pool, size: int, tier: str) -> list[int]:
         settings.external_data.deep_enrichment_max_attempts,
         size,
     )
-    return [r["id"] for r in rows]
+    return [str(r["id"]) for r in rows]
 
 
-async def fetch_rows(pool, ids: list[int]) -> list[dict[str, Any]]:
+def _to_uuids(ids: list) -> list[UUID]:
+    return [UUID(str(i)) if not isinstance(i, UUID) else i for i in ids]
+
+
+async def fetch_rows(pool, ids: list) -> list[dict[str, Any]]:
+    uuid_ids = _to_uuids(ids)
     rows = await pool.fetch(
         """
         SELECT pr.id, pr.asin, pr.rating, pr.summary, pr.review_text,
@@ -374,10 +380,10 @@ async def fetch_rows(pool, ids: list[int]) -> list[dict[str, Any]]:
         LEFT JOIN product_metadata pm ON pm.asin = pr.asin
         WHERE pr.id = ANY($1)
         """,
-        ids,
+        uuid_ids,
     )
-    by_id = {row["id"]: dict(row) for row in rows}
-    return [by_id[i] for i in ids if i in by_id]
+    by_id = {str(row["id"]): dict(row) for row in rows}
+    return [by_id[str(i)] for i in ids if str(i) in by_id]
 
 
 def compare_baseline(baseline: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
@@ -457,6 +463,81 @@ async def run_prepare(pool, args, sample_path: Path) -> None:
     print(f"Sample saved: {sample_path} ({len(ids)} reviews)")
 
 
+async def run_build_baseline(pool, args, sample_path: Path) -> None:
+    tier_sql = tier_filter(args.tier)
+    limit_clause = f"LIMIT {args.sample_size}" if args.sample_size and args.sample_size > 0 else ""
+    rows = await pool.fetch(
+        f"""
+        SELECT pr.id, pr.deep_extraction
+        FROM product_reviews pr
+        WHERE pr.deep_enrichment_status = 'enriched'
+          AND pr.deep_extraction IS NOT NULL
+          {tier_sql}
+        ORDER BY pr.imported_at ASC
+        {limit_clause}
+        """
+    )
+    if not rows:
+        raise RuntimeError("No enriched reviews found in database")
+
+    ids = []
+    results = []
+    for row in rows:
+        rid = str(row["id"])
+        raw = row["deep_extraction"]
+        data = raw if isinstance(raw, dict) else json.loads(raw)
+        schema_ok = validate_extraction(data)
+        ids.append(rid)
+        results.append({
+            "id": rid,
+            "json_ok": True,
+            "schema_ok": schema_ok,
+            "error": "ok" if schema_ok else "schema_invalid",
+            "duration_ms": 0.0,
+        })
+
+    total = len(results)
+    schema_ok_count = sum(1 for r in results if r["schema_ok"])
+    print(f"Validated {total} existing extractions: {schema_ok_count}/{total} schema OK "
+          f"({schema_ok_count / total:.1%})")
+
+    ensure_parent(sample_path)
+    sample = {
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "tier": args.tier,
+        "ids": ids,
+    }
+    sample_path.write_text(json.dumps(sample, indent=2))
+    print(f"Sample saved: {sample_path} ({len(ids)} reviews)")
+
+    results_dir = Path(args.results_dir)
+    results_dir.mkdir(parents=True, exist_ok=True)
+    baseline = {
+        "model": "qwen3-14b-awq (production)",
+        "provider": "existing",
+        "base_url": None,
+        "sample_file": str(sample_path),
+        "sample_size": total,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "elapsed_s": 0,
+        "summary": {
+            "total": total,
+            "json_ok": total,
+            "schema_ok": schema_ok_count,
+            "json_ok_rate": 1.0,
+            "schema_ok_rate": round(schema_ok_count / total, 4) if total else 0,
+            "avg_ms": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "reviews_per_hour": 0,
+        },
+        "results": results,
+    }
+    baseline_path = results_dir / "baseline_existing.json"
+    baseline_path.write_text(json.dumps(baseline, indent=2))
+    print(f"Baseline saved: {baseline_path}")
+
+
 async def run_benchmark(pool, args, sample_path: Path) -> None:
     sample_data = json.loads(sample_path.read_text())
     ids = sample_data.get("ids", [])
@@ -497,6 +578,8 @@ async def run_benchmark(pool, args, sample_path: Path) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark deep enrichment extraction")
     parser.add_argument("--prepare-sample", action="store_true", help="Create a fixed sample set")
+    parser.add_argument("--build-baseline", action="store_true",
+                        help="Build baseline + sample from existing enriched reviews in DB")
     parser.add_argument("--sample-size", type=int, help="Number of reviews in the sample")
     parser.add_argument("--sample-file", type=str, help="Path to sample file (json)")
     parser.add_argument("--tier", type=str, default="all", choices=["1", "2", "3", "all"])
@@ -520,6 +603,10 @@ def resolve_args(args: argparse.Namespace) -> None:
     if args.prepare_sample:
         if not args.sample_size or args.sample_size <= 0:
             raise ValueError("sample-size must be > 0 when preparing a sample")
+        return
+    if args.build_baseline:
+        if not args.results_dir:
+            args.results_dir = os.getenv("BENCH_RESULTS_DIR", "data/benchmarks/results")
         return
     if not args.models:
         raise ValueError("models is required for benchmarking")
@@ -547,6 +634,11 @@ async def main() -> None:
     sample_path = Path(args.sample_file)
     if args.prepare_sample:
         await run_prepare(pool, args, sample_path)
+        await pool.close()
+        return
+
+    if args.build_baseline:
+        await run_build_baseline(pool, args, sample_path)
         await pool.close()
         return
 

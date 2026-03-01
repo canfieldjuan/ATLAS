@@ -29,7 +29,7 @@ You are a product review analyst performing deep extraction. Given a product rev
 
 ### sentiment_aspects (required, array)
 What specific aspects does the reviewer feel strongly about? Max 6.
-Each element: `{"aspect": string, "sentiment": "positive"|"negative"|"mixed", "detail": string}`
+Each element: `{"aspect": string, "sentiment": "positive"|"negative"|"mixed"|"neutral", "detail": string}`
 Aspects: quality, durability, noise, value, design, ease_of_use, performance, packaging, size, weight, appearance, smell, temperature, compatibility, customer_service, warranty, other.
 
 ### feature_requests (required, array of strings)
@@ -43,7 +43,7 @@ If the review describes a product failure, extract: `{"timeline": string, "faile
 - dollar_amount_lost: total cost if mentioned (product price + shipping + replacement cost)
 
 ### product_comparisons (required, array)
-Other products the reviewer mentions. Each element: `{"product_name": string, "direction": "switched_to"|"switched_from"|"considered"|"compared", "context": string}`. Empty array if none mentioned.
+Other products the reviewer mentions. Each element: `{"product_name": string, "direction": "switched_to"|"switched_from"|"considered"|"compared"|"recommended"|"avoided"|"used_with"|"relied_on", "context": string}`. Empty array if none mentioned.
 
 ### product_name_mentioned (required, string)
 The actual product name as used in the review text. If the reviewer names the product, use their exact words. If not explicitly named, use the product_name from input. Empty string only if completely unknown.
@@ -123,7 +123,7 @@ Values: `"inconvenience"` | `"workflow_impact"` | `"financial_loss"` | `"safety_
 
 ### replacement_behavior (required, string)
 What did the reviewer do after the disappointment?
-Values: `"returned"` | `"replaced_same"` | `"switched_brand"` | `"kept_broken"` | `"unknown"`
+Values: `"returned"` | `"replaced_same"` | `"switched_brand"` | `"switched_to"` | `"avoided"` | `"kept_broken"` | `"unknown"`
 
 ## Section C: Extended Context (10 fields)
 
@@ -148,7 +148,7 @@ Values: `"immediate"` | `"days"` | `"weeks"` | `"months"` | `"unknown"`
 Values: `"always_bad"` | `"degraded"` | `"mixed_then_bad"` | `"initially_positive"` | `"unknown"`
 
 ### occasion_context (required, string)
-Values: `"none"` | `"gift"` | `"replacement"` | `"upgrade"` | `"first_in_category"` | `"seasonal"`
+Values: `"none"` | `"gift"` | `"replacement"` | `"upgrade"` | `"first_in_category"` | `"seasonal"` | `"event"` | `"professional_use"`
 
 ### switching_barrier (required, object)
 `{"level": "none"|"low"|"medium"|"high", "reason": string|null}`
