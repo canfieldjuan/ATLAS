@@ -30,9 +30,15 @@ import requests
 import sounddevice as sd
 import soundfile as sf
 import webrtcvad
-from openwakeword.model import Model as WakeWordModel
 
 from .vad import SileroVAD
+
+OPENWAKEWORD_IMPORT_ERROR: Exception | None = None
+try:
+    from openwakeword.model import Model as WakeWordModel
+except Exception as exc:  # pragma: no cover - environment dependent
+    WakeWordModel = None  # type: ignore[assignment]
+    OPENWAKEWORD_IMPORT_ERROR = exc
 
 try:
     import websockets
@@ -906,6 +912,11 @@ class VoicePipeline:
         else:
             logger.info("Using WebRTC VAD with aggressiveness=%d", vad_aggressiveness)
             self.vad = webrtcvad.Vad(vad_aggressiveness)
+
+        if WakeWordModel is None:
+            raise ImportError(
+                "openwakeword is unavailable; install runtime voice dependencies to use VoicePipeline."
+            ) from OPENWAKEWORD_IMPORT_ERROR
 
         logger.info("Initializing wake word model with paths: %s", wakeword_model_paths)
         self.model = WakeWordModel(wakeword_model_paths=wakeword_model_paths)

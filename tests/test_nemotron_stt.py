@@ -3,10 +3,13 @@
 Test Nemotron Speech Streaming model for Atlas STT.
 NVIDIA Nemotron 0.6B - Fast, streaming ASR model.
 """
-import torch
-import soundfile as sf
-import nemo.collections.asr as nemo_asr
 from pathlib import Path
+
+import pytest
+
+torch = pytest.importorskip("torch")
+sf = pytest.importorskip("soundfile")
+nemo_asr = pytest.importorskip("nemo.collections.asr")
 
 def test_nemotron_stt():
     """Test Nemotron speech model for keyword detection."""
