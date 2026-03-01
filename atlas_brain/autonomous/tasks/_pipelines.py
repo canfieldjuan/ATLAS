@@ -233,6 +233,12 @@ register_pipeline(PipelineConfig(
             retention_config_key="b2b_churn.intelligence_window_days",
             result_key="b2b_intelligence_cleaned",
         ),
+        CleanupRule(
+            table="b2b_campaigns",
+            where_clause="DELETE FROM b2b_campaigns WHERE status IN ('expired', 'sent') AND created_at < CURRENT_TIMESTAMP - make_interval(days => $1)",
+            retention_config_key="b2b_campaign.retention_days",
+            result_key="b2b_campaigns_cleaned",
+        ),
     ],
 ))
 

@@ -2114,6 +2114,7 @@ class B2BCampaignConfig(BaseSettings):
     )
     schedule_cron: str = Field(default="0 22 * * *", description="Campaign generation schedule (daily 10 PM)")
     dedup_days: int = Field(default=7, ge=1, description="Days before re-targeting same company")
+    retention_days: int = Field(default=90, ge=1, description="Days to retain expired/sent campaigns before cleanup")
     max_tokens: int = Field(default=2048, description="Max tokens per LLM generation call")
     temperature: float = Field(default=0.7, description="LLM sampling temperature")
 

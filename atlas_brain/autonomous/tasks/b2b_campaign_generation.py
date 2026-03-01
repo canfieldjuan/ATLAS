@@ -3,7 +3,7 @@ B2B ABM Campaign Generation: uses Claude (draft LLM) to produce personalized
 outreach content -- cold emails, LinkedIn messages, follow-up emails -- from
 the highest-scoring churn intelligence opportunities.
 
-Runs weekly after b2b_churn_intelligence. Reads enriched b2b_reviews, scores
+Runs daily after b2b_churn_intelligence. Reads enriched b2b_reviews, scores
 opportunities, groups by company, and generates multi-channel campaigns.
 
 Returns _skip_synthesis.
@@ -187,6 +187,7 @@ async def generate_campaigns(
         logger.warning("Skill 'digest/b2b_campaign_generation' not found")
         return {"generated": 0, "skipped": 0, "failed": 0, "companies": 0, "error": "Skill not found"}
 
+    llm_model_name = getattr(llm, "model_id", None) or getattr(llm, "model", "unknown")
     batch_id = f"batch_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
     generated = 0
     failed = 0
@@ -242,7 +243,7 @@ async def generate_campaigns(
                         content.get("cta", ""),
                         "draft",
                         batch_id,
-                        "claude",
+                        llm_model_name,
                     )
                     generated += 1
                 except Exception:
