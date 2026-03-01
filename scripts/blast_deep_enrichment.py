@@ -41,7 +41,7 @@ def _resolve_vllm_url() -> str:
     if explicit:
         return explicit
     host = os.getenv("VLLM_HOST", "localhost")
-    port = os.getenv("VLLM_PORT", "8080")
+    port = os.getenv("VLLM_PORT", "8082")
     return f"http://{host}:{port}"
 
 logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")
@@ -619,8 +619,8 @@ async def main():
                         help="Process N reviews, print formatted results, exit")
     parser.add_argument("--dry-run", action="store_true", help="Show tier counts and exit")
     parser.add_argument("--model", type=str, default=None, help="Model override (HuggingFace format for vllm, e.g. Qwen/Qwen3-14B)")
-    parser.add_argument("--provider", type=str, default="ollama", choices=["ollama", "vllm"],
-                        help="LLM provider: ollama (default) or vllm (continuous batching)")
+    parser.add_argument("--provider", type=str, default="vllm", choices=["vllm", "ollama"],
+                        help="LLM provider: vllm (default, continuous batching) or ollama")
     parser.add_argument("--base-url", type=str, default=None, help="Override server URL for the chosen provider")
     args = parser.parse_args()
 
@@ -638,7 +638,7 @@ async def main():
 
     # Activate LLM
     if args.provider == "vllm":
-        model = args.model or "Qwen/Qwen3-14B"
+        model = args.model or "stelterlab/Qwen3-30B-A3B-Instruct-2507-AWQ"
         base_url = args.base_url or _resolve_vllm_url()
         llm_registry.activate("vllm", model=model, base_url=base_url, timeout=settings.llm.ollama_timeout)
     else:
