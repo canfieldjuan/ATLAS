@@ -78,7 +78,8 @@ async def _generate_next_step(
 ) -> dict | None:
     """Generate the next email in the sequence via LLM.
 
-    Returns {subject, body, cta, angle_reasoning} or None on failure.
+    Returns {subject, body, cta, angle_reasoning, _recipient_type, _category}
+    or None on failure. Keys prefixed with _ are internal metadata.
     """
     from ...skills import get_skill_registry
     from ...services.llm_router import get_triage_llm
@@ -100,6 +101,10 @@ async def _generate_next_step(
 
     # Select skill based on sequence type
     is_seller_seq = company_context.get("recipient_type") == "amazon_seller"
+    _meta = {
+        "_recipient_type": company_context.get("recipient_type"),
+        "_category": company_context.get("category"),
+    }
     skill_name = (
         "digest/amazon_seller_campaign_sequence"
         if is_seller_seq
@@ -179,11 +184,11 @@ async def _generate_next_step(
         try:
             parsed = json.loads(text)
             if isinstance(parsed, dict) and "subject" in parsed:
-                return parsed
+                return {**parsed, **_meta}
         except json.JSONDecodeError:
             pass
 
-        # Fallback: find outermost { ... } block (handles nested braces)
+        # Fallback: find outermost { ... } block (handles LLM prose around JSON)
         depth = 0
         start = -1
         for i, ch in enumerate(text):
@@ -197,7 +202,7 @@ async def _generate_next_step(
                     try:
                         parsed = json.loads(text[start : i + 1])
                         if isinstance(parsed, dict) and "subject" in parsed:
-                            return parsed
+                            return {**parsed, **_meta}
                     except json.JSONDecodeError:
                         pass
                     start = -1
@@ -309,13 +314,10 @@ async def run(task: ScheduledTask) -> dict:
             logger.warning("Failed to generate step %d for sequence %s", next_step, seq_id)
             continue
 
-        # Determine target_mode from sequence context
-        company_context = seq_dict.get("company_context") or {}
-        if isinstance(company_context, str):
-            company_context = json.loads(company_context)
-        is_seller = company_context.get("recipient_type") == "amazon_seller"
+        # Derive target_mode from metadata returned by _generate_next_step
+        is_seller = content.get("_recipient_type") == "amazon_seller"
         target_mode = "amazon_seller" if is_seller else "churning_company"
-        product_category = company_context.get("category") if is_seller else None
+        product_category = content.get("_category") if is_seller else None
 
         # Insert new campaign row as queued
         campaign_id = await pool.fetchval(

@@ -26,7 +26,7 @@ You receive a JSON object with:
   - `total_reviews`: Number of reviews analyzed in this category
   - `total_brands`: Number of brands tracked
   - `total_products`: Number of ASINs tracked
-  - `date_range`: Period covered (e.g., "last 90 days")
+  - `date_range`: Period covered (e.g., "all available data" or "last 90 days")
 - `top_pain_points`: Array of `{complaint, count, severity, affected_brands}` -- top customer complaints in the category
 - `feature_gaps`: Array of `{request, count, brand_count, avg_rating}` -- features customers want that nobody builds
 - `competitive_flows`: Array of `{from_brand, to_brand, direction, count}` -- brand switching patterns

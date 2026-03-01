@@ -89,15 +89,17 @@ async def _aggregate_category_intelligence(pool, category: str) -> dict[str, Any
     # Top pain points: root_cause aggregation from enriched reviews
     pain_rows = await pool.fetch(
         """
-        SELECT root_cause AS complaint,
+        SELECT pr.root_cause AS complaint,
                COUNT(*) AS count,
-               MAX(severity) AS severity
-        FROM product_reviews
-        WHERE source_category = $1
-          AND enrichment_status = 'enriched'
-          AND root_cause IS NOT NULL AND root_cause != ''
-          AND rating <= 3
-        GROUP BY root_cause
+               MAX(pr.severity) AS severity,
+               COUNT(DISTINCT pm.brand) AS affected_brands
+        FROM product_reviews pr
+        LEFT JOIN product_metadata pm ON pm.asin = pr.asin
+        WHERE pr.source_category = $1
+          AND pr.enrichment_status = 'enriched'
+          AND pr.root_cause IS NOT NULL AND pr.root_cause != ''
+          AND pr.rating <= 3
+        GROUP BY pr.root_cause
         ORDER BY COUNT(*) DESC
         LIMIT 10
         """,
@@ -108,7 +110,7 @@ async def _aggregate_category_intelligence(pool, category: str) -> dict[str, Any
             "complaint": r["complaint"],
             "count": r["count"],
             "severity": r["severity"] or "medium",
-            "affected_brands": 0,
+            "affected_brands": r["affected_brands"] or 0,
         }
         for r in pain_rows
     ]
@@ -119,25 +121,26 @@ async def _aggregate_category_intelligence(pool, category: str) -> dict[str, Any
         """
         SELECT req AS request,
                COUNT(*) AS count,
-               COUNT(DISTINCT asin) AS brand_count,
+               COUNT(DISTINCT brand) AS brand_count,
                ROUND(AVG(rating), 1) AS avg_rating
         FROM (
-            SELECT asin, rating,
+            SELECT pr.asin, pr.rating, pm.brand,
                    CASE jsonb_typeof(elem)
                         WHEN 'string' THEN elem #>> '{}'
                         WHEN 'object' THEN elem ->> 'request'
                         ELSE elem #>> '{}'
                    END AS req
-            FROM product_reviews,
+            FROM product_reviews pr
+            LEFT JOIN product_metadata pm ON pm.asin = pr.asin,
                  jsonb_array_elements(
-                     CASE jsonb_typeof(deep_extraction->'feature_requests')
-                          WHEN 'array' THEN deep_extraction->'feature_requests'
+                     CASE jsonb_typeof(pr.deep_extraction->'feature_requests')
+                          WHEN 'array' THEN pr.deep_extraction->'feature_requests'
                           ELSE '[]'::jsonb
                      END
                  ) AS elem
-            WHERE source_category = $1
-              AND deep_enrichment_status = 'enriched'
-              AND deep_extraction->'feature_requests' IS NOT NULL
+            WHERE pr.source_category = $1
+              AND pr.deep_enrichment_status = 'enriched'
+              AND pr.deep_extraction->'feature_requests' IS NOT NULL
         ) sub
         WHERE req IS NOT NULL AND req != '' AND req != 'null'
         GROUP BY req
@@ -294,7 +297,7 @@ async def _aggregate_category_intelligence(pool, category: str) -> dict[str, Any
         "category": category,
         "category_stats": {
             "total_reviews": stats["total_reviews"],
-            "total_brands": len(brand_health) or stats["total_brands"],
+            "total_brands": stats["total_brands"],
             "total_products": stats["total_products"],
             "date_range": "all available data",
         },
@@ -357,6 +360,8 @@ async def _generate_content(
     temperature: float,
 ) -> dict[str, Any] | None:
     """Call LLM with campaign generation skill and parse JSON response."""
+    import asyncio
+
     from ...pipelines.llm import clean_llm_output
     from ...services.protocols import Message
 
@@ -367,26 +372,55 @@ async def _generate_content(
 
     text = ""
     try:
-        result = llm.chat(
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
+        loop = asyncio.get_running_loop()
+        result = await asyncio.wait_for(
+            loop.run_in_executor(
+                None,
+                lambda: llm.chat(
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                ),
+            ),
+            timeout=90,
         )
         text = result.get("response", "").strip()
         if not text:
             return None
 
         text = clean_llm_output(text)
-        parsed = json.loads(text)
 
-        if not isinstance(parsed, dict) or "body" not in parsed:
-            logger.debug("Campaign generation missing 'body' field")
-            return None
+        # Try direct parse first (most reliable)
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict) and "body" in parsed:
+                return parsed
+        except json.JSONDecodeError:
+            pass
 
-        return parsed
+        # Fallback: extract outermost { ... } block (handles LLM prose around JSON)
+        depth = 0
+        start = -1
+        for i, ch in enumerate(text):
+            if ch == "{":
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    try:
+                        parsed = json.loads(text[start : i + 1])
+                        if isinstance(parsed, dict) and "body" in parsed:
+                            return parsed
+                    except json.JSONDecodeError:
+                        pass
+                    start = -1
 
-    except json.JSONDecodeError:
         logger.debug("Failed to parse campaign JSON: %.200s", text)
+        return None
+    except asyncio.TimeoutError:
+        logger.warning("Campaign generation LLM call timed out (90s)")
         return None
     except Exception:
         logger.exception("Campaign generation LLM call failed")
@@ -538,6 +572,10 @@ async def generate_campaigns(
         for target in targets:
             seller_email = target.get("email")
             seller_name = target.get("seller_name") or target.get("company_name") or ""
+
+            if not seller_name:
+                logger.debug("Skipping target %s with no name", target.get("id"))
+                continue
 
             # Dedup: skip if recently targeted
             existing = await pool.fetchval(

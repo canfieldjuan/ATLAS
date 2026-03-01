@@ -31,6 +31,13 @@ def _pool_or_503():
     return pool
 
 
+def _parse_uuid(val: str) -> UUID:
+    try:
+        return UUID(val)
+    except ValueError:
+        raise HTTPException(400, "Invalid UUID format")
+
+
 def _row_to_dict(row) -> dict:
     d = {}
     for key in row.keys():
@@ -138,6 +145,9 @@ async def list_seller_targets(
 @router.post("/targets")
 async def create_seller_target(body: SellerTargetCreate):
     """Create a new seller target."""
+    if not body.seller_name and not body.company_name:
+        raise HTTPException(400, "At least one of seller_name or company_name is required")
+
     pool = _pool_or_503()
 
     row = await pool.fetchrow(
@@ -166,7 +176,7 @@ async def get_seller_target(target_id: str):
     pool = _pool_or_503()
     row = await pool.fetchrow(
         "SELECT * FROM seller_targets WHERE id = $1",
-        UUID(target_id),
+        _parse_uuid(target_id),
     )
     if not row:
         raise HTTPException(404, "Seller target not found")
@@ -199,7 +209,7 @@ async def update_seller_target(target_id: str, body: SellerTargetUpdate):
         raise HTTPException(400, "No fields to update")
 
     updates.append(f"updated_at = NOW()")
-    params.append(UUID(target_id))
+    params.append(_parse_uuid(target_id))
 
     result = await pool.execute(
         f"UPDATE seller_targets SET {', '.join(updates)} WHERE id = ${idx}",
@@ -211,7 +221,7 @@ async def update_seller_target(target_id: str, body: SellerTargetUpdate):
 
     row = await pool.fetchrow(
         "SELECT * FROM seller_targets WHERE id = $1",
-        UUID(target_id),
+        _parse_uuid(target_id),
     )
     return _row_to_dict(row)
 
@@ -222,7 +232,7 @@ async def delete_seller_target(target_id: str):
     pool = _pool_or_503()
     result = await pool.execute(
         "DELETE FROM seller_targets WHERE id = $1",
-        UUID(target_id),
+        _parse_uuid(target_id),
     )
     if result.split()[-1] == "0":
         raise HTTPException(404, "Seller target not found")
@@ -382,10 +392,15 @@ async def refresh_category_intelligence(
         categories = [r["source_category"] for r in cat_rows]
 
     refreshed = 0
+    errors = 0
     for cat in categories:
-        intel = await _aggregate_category_intelligence(pool, cat)
-        if intel:
-            await _save_intelligence_snapshot(pool, intel)
-            refreshed += 1
+        try:
+            intel = await _aggregate_category_intelligence(pool, cat)
+            if intel:
+                await _save_intelligence_snapshot(pool, intel)
+                refreshed += 1
+        except Exception:
+            logger.warning("Failed to refresh intelligence for category %s", cat, exc_info=True)
+            errors += 1
 
-    return {"refreshed": refreshed, "categories": len(categories)}
+    return {"refreshed": refreshed, "categories": len(categories), "errors": errors}
