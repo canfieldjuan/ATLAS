@@ -10,6 +10,7 @@ Runs on an interval (default 5 min). Returns _skip_synthesis so the
 runner does not double-synthesize.
 """
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -58,10 +59,25 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     enriched = 0
     failed = 0
 
-    for row in rows:
-        ok = await _enrich_single(pool, row, max_attempts, cfg.enrichment_local_only,
-                                  cfg.enrichment_max_tokens, cfg.review_truncate_length)
-        if ok:
+    # Concurrent enrichment -- vLLM batches parallel requests efficiently
+    sem = asyncio.Semaphore(10)
+
+    async def _bounded_enrich(row):
+        async with sem:
+            return await _enrich_single(pool, row, max_attempts, cfg.enrichment_local_only,
+                                        cfg.enrichment_max_tokens, cfg.review_truncate_length)
+
+    results = await asyncio.gather(
+        *[_bounded_enrich(row) for row in rows],
+        return_exceptions=True,
+    )
+
+    for row, result in zip(rows, results):
+        if isinstance(result, Exception):
+            logger.exception("Unexpected enrichment error for %s: %s", row["id"], result)
+            if (row["enrichment_attempts"] + 1) >= max_attempts:
+                failed += 1
+        elif result:
             enriched += 1
         elif (row["enrichment_attempts"] + 1) >= max_attempts:
             failed += 1
@@ -85,7 +101,10 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
     review_id = row["id"]
 
     try:
-        result = _classify_review(row, local_only, max_tokens, truncate_length)
+        # Run blocking LLM call in thread pool for true concurrency
+        result = await asyncio.to_thread(
+            _classify_review, row, local_only, max_tokens, truncate_length
+        )
 
         if result and _validate_enrichment(result):
             await pool.execute(
@@ -299,9 +318,10 @@ def _validate_enrichment(result: dict) -> bool:
     if "would_recommend" in result:
         coerced = _coerce_bool(result["would_recommend"])
         if coerced is None:
-            logger.warning("would_recommend unrecognizable bool: %r -- rejecting", result["would_recommend"])
-            return False
-        result["would_recommend"] = coerced
+            # null/None is valid (reviewer didn't express preference) -- keep as null
+            result["would_recommend"] = None
+        else:
+            result["would_recommend"] = coerced
 
     # Type check: competitors_mentioned must be list; items must be dicts with "name"
     competitors = result.get("competitors_mentioned")
