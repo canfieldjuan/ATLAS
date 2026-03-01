@@ -291,54 +291,70 @@ async def worker(
         # OR already first-pass enriched but not yet deep enriched.
         # We handle both cases: the review might already have first-pass from
         # a previous run, or it might be completely fresh.
-        async with pool.transaction() as conn:
-            if target_asins is not None:
-                # Use a temp approach: claim from the pre-built target set
-                rows = await conn.fetch(
-                    """
-                    UPDATE product_reviews
-                    SET deep_enrichment_status = 'processing'
-                    WHERE id IN (
-                        SELECT pr.id FROM product_reviews pr
-                        WHERE pr.deep_enrichment_status = 'pending'
-                          AND pr.deep_enrichment_attempts < $1
-                          AND pr.asin = ANY($2::text[])
-                        ORDER BY pr.imported_at ASC
-                        LIMIT $3
-                        FOR UPDATE SKIP LOCKED
-                    )
-                    RETURNING id, asin, rating, summary, review_text,
-                              root_cause, severity, pain_score,
-                              hardware_category, issue_types,
-                              enrichment_status, enrichment_attempts,
-                              deep_enrichment_attempts
-                    """,
-                    max_attempts,
-                    list(target_asins),
-                    batch_size,
-                )
-            else:
-                rows = await conn.fetch(
-                    """
-                    UPDATE product_reviews
-                    SET deep_enrichment_status = 'processing'
-                    WHERE id IN (
-                        SELECT pr.id FROM product_reviews pr
-                        WHERE pr.deep_enrichment_status = 'pending'
-                          AND pr.deep_enrichment_attempts < $1
-                        ORDER BY pr.imported_at ASC
-                        LIMIT $2
-                        FOR UPDATE SKIP LOCKED
-                    )
-                    RETURNING id, asin, rating, summary, review_text,
-                              root_cause, severity, pain_score,
-                              hardware_category, issue_types,
-                              enrichment_status, enrichment_attempts,
-                              deep_enrichment_attempts
-                    """,
-                    max_attempts,
-                    batch_size,
-                )
+        rows = None
+        for attempt in range(4):
+            try:
+                async with pool.transaction() as conn:
+                    if target_asins is not None:
+                        rows = await conn.fetch(
+                            """
+                            UPDATE product_reviews
+                            SET deep_enrichment_status = 'processing'
+                            WHERE id IN (
+                                SELECT pr.id FROM product_reviews pr
+                                WHERE pr.deep_enrichment_status = 'pending'
+                                  AND pr.deep_enrichment_attempts < $1
+                                  AND pr.asin = ANY($2::text[])
+                                ORDER BY pr.imported_at ASC
+                                LIMIT $3
+                                FOR UPDATE SKIP LOCKED
+                            )
+                            RETURNING id, asin, rating, summary, review_text,
+                                      root_cause, severity, pain_score,
+                                      hardware_category, issue_types,
+                                      enrichment_status, enrichment_attempts,
+                                      deep_enrichment_attempts
+                            """,
+                            max_attempts,
+                            list(target_asins),
+                            batch_size,
+                            timeout=120,
+                        )
+                    else:
+                        rows = await conn.fetch(
+                            """
+                            UPDATE product_reviews
+                            SET deep_enrichment_status = 'processing'
+                            WHERE id IN (
+                                SELECT pr.id FROM product_reviews pr
+                                WHERE pr.deep_enrichment_status = 'pending'
+                                  AND pr.deep_enrichment_attempts < $1
+                                ORDER BY pr.imported_at ASC
+                                LIMIT $2
+                                FOR UPDATE SKIP LOCKED
+                            )
+                            RETURNING id, asin, rating, summary, review_text,
+                                      root_cause, severity, pain_score,
+                                      hardware_category, issue_types,
+                                      enrichment_status, enrichment_attempts,
+                                      deep_enrichment_attempts
+                            """,
+                            max_attempts,
+                            batch_size,
+                            timeout=120,
+                        )
+                break
+            except (TimeoutError, asyncio.TimeoutError):
+                wait = 2 ** attempt
+                logger.warning("Worker %d: claim query timed out (attempt %d/4), retrying in %ds", worker_id, attempt + 1, wait)
+                await asyncio.sleep(wait)
+            except Exception as exc:
+                if "QueryCanceled" in type(exc).__name__:
+                    wait = 2 ** attempt
+                    logger.warning("Worker %d: claim query cancelled (attempt %d/4), retrying in %ds", worker_id, attempt + 1, wait)
+                    await asyncio.sleep(wait)
+                else:
+                    raise
 
         if not rows:
             return
