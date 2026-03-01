@@ -6,6 +6,7 @@ Swap providers by implementing the protocol and updating the factory.
 """
 
 import logging
+import re
 from typing import Any, Protocol, runtime_checkable
 
 import httpx
@@ -15,6 +16,7 @@ from ..config import settings
 logger = logging.getLogger("atlas.services.campaign_sender")
 
 _RESEND_API_URL = "https://api.resend.com/emails"
+_TAG_SANITIZE_RE = re.compile(r"[^A-Za-z0-9_-]")
 
 
 @runtime_checkable
@@ -69,7 +71,10 @@ class ResendCampaignSender:
         if headers:
             payload["headers"] = headers
         if tags:
-            payload["tags"] = tags
+            payload["tags"] = [
+                {"name": t["name"], "value": _TAG_SANITIZE_RE.sub("_", t["value"])}
+                for t in tags
+            ]
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
@@ -80,6 +85,10 @@ class ResendCampaignSender:
                     "Content-Type": "application/json",
                 },
             )
+            if resp.status_code >= 400:
+                logger.error(
+                    "Resend API error %s: %s", resp.status_code, resp.text,
+                )
             resp.raise_for_status()
             data = resp.json()
             logger.info("Resend email sent: id=%s to=%s", data.get("id"), to)
