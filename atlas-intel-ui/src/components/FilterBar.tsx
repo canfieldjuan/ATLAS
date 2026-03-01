@@ -14,7 +14,7 @@ export function FilterChip({ label, onClear }: FilterChipProps) {
   return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-cyan-500/10 text-cyan-400 text-xs rounded-full">
       {label}
-      <button onClick={onClear} className="hover:text-white transition-colors">
+      <button onClick={onClear} aria-label="Remove filter" className="hover:text-white transition-colors">
         <X className="h-3 w-3" />
       </button>
     </span>

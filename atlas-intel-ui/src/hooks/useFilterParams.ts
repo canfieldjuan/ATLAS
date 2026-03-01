@@ -1,4 +1,4 @@
-import { useMemo, useCallback } from 'react'
+import { useMemo, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
 type FilterType = 'string' | 'number' | 'boolean'
@@ -34,13 +34,16 @@ function hasValue(v: unknown, cfg: FilterFieldConfig): boolean {
 export default function useFilterParams<T extends Record<string, unknown>>(config: FilterConfig) {
   const [searchParams, setSearchParams] = useSearchParams()
   const searchString = searchParams.toString()
+  const configRef = useRef(config)
+  configRef.current = config
 
   const filters = useMemo(() => {
+    const cfg = configRef.current
     const result: Record<string, unknown> = {}
-    for (const [key, cfg] of Object.entries(config)) {
+    for (const [key, fieldCfg] of Object.entries(cfg)) {
       const raw = searchParams.get(key)
-      const val = coerce(raw, cfg)
-      result[key] = val !== undefined ? val : (cfg.default ?? (cfg.type === 'string' ? '' : undefined))
+      const val = coerce(raw, fieldCfg)
+      result[key] = val !== undefined ? val : (fieldCfg.default ?? (fieldCfg.type === 'string' ? '' : undefined))
     }
     return result as T
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -51,8 +54,8 @@ export default function useFilterParams<T extends Record<string, unknown>>(confi
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev)
-          const cfg = config[key]
-          if (value === undefined || value === null || value === '' || (cfg && value === cfg.default)) {
+          const fieldCfg = configRef.current[key]
+          if (value === undefined || value === null || value === '' || (fieldCfg && value === fieldCfg.default)) {
             next.delete(key)
           } else {
             next.set(key, String(value))
@@ -62,7 +65,6 @@ export default function useFilterParams<T extends Record<string, unknown>>(confi
         { replace: true },
       )
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [setSearchParams],
   )
 
@@ -85,11 +87,12 @@ export default function useFilterParams<T extends Record<string, unknown>>(confi
   }, [setSearchParams])
 
   const activeFilterEntries = useMemo(() => {
+    const cfg = configRef.current
     const entries: { key: string; label: string; value: string }[] = []
-    for (const [key, cfg] of Object.entries(config)) {
+    for (const [key, fieldCfg] of Object.entries(cfg)) {
       const v = filters[key as keyof T]
-      if (hasValue(v, cfg)) {
-        entries.push({ key, label: `${cfg.label}: ${v}`, value: String(v) })
+      if (hasValue(v, fieldCfg)) {
+        entries.push({ key, label: `${fieldCfg.label}: ${v}`, value: String(v) })
       }
     }
     return entries

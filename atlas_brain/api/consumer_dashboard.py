@@ -1274,13 +1274,13 @@ async def get_competitive_flows(
     # Build flow graph: {from_brand -> to_brand -> direction -> stats}
     flow_map: dict[str, dict] = {}
 
-    def _add_flow(from_b: str, to_b: str, direction: str, rating):
-        key = f"{from_b}|{to_b}|{direction}"
+    def _add_flow(from_b: str, to_b: str, flow_direction: str, rating):
+        key = f"{from_b}|{to_b}|{flow_direction}"
         if key not in flow_map:
             flow_map[key] = {
                 "from_brand": from_b,
                 "to_brand": to_b,
-                "direction": direction,
+                "direction": flow_direction,
                 "count": 0,
                 "ratings": [],
             }
