@@ -141,7 +141,8 @@ async def list_brands(
 
     sort_map = {
         "review_count": "review_count DESC",
-        "avg_pain_score": "avg_pain_score DESC NULLS LAST",
+        "avg_complaint_score": "avg_complaint_score DESC NULLS LAST",
+        "avg_praise_score": "avg_praise_score DESC NULLS LAST",
         "avg_rating": "pm_avg_rating DESC NULLS LAST",
         "safety_count": "safety_count DESC",
         "brand": "brand ASC",
@@ -166,7 +167,10 @@ async def list_brands(
                COUNT(pr.id) AS review_count,
                AVG(pm.average_rating) AS pm_avg_rating,
                SUM(pm.rating_number) AS total_ratings,
-               AVG(pr.pain_score) AS avg_pain_score,
+               AVG(pr.pain_score) FILTER (WHERE pr.rating <= 3) AS avg_complaint_score,
+               AVG(pr.pain_score) FILTER (WHERE pr.rating > 3)  AS avg_praise_score,
+               COUNT(*) FILTER (WHERE pr.rating <= 3) AS complaint_count,
+               COUNT(*) FILTER (WHERE pr.rating > 3)  AS praise_count,
                COUNT(*) FILTER (
                    WHERE pr.deep_extraction IS NOT NULL
                      AND pr.deep_extraction != '{{}}'::jsonb
@@ -190,7 +194,10 @@ async def list_brands(
             "review_count": r["review_count"],
             "avg_rating": _safe_float(r["pm_avg_rating"]),
             "total_ratings": r["total_ratings"],
-            "avg_pain_score": _safe_float(r["avg_pain_score"]),
+            "avg_complaint_score": _safe_float(r["avg_complaint_score"]),
+            "avg_praise_score": _safe_float(r["avg_praise_score"]),
+            "complaint_count": r["complaint_count"],
+            "praise_count": r["praise_count"],
             "safety_count": r["safety_count"],
         }
         for r in rows
@@ -214,7 +221,10 @@ async def get_brand_detail(brand_name: str):
         """
         SELECT pm.asin, pm.title, pm.average_rating, pm.rating_number, pm.price,
                COUNT(pr.id) AS review_count,
-               AVG(pr.pain_score) AS avg_pain_score
+               AVG(pr.pain_score) FILTER (WHERE pr.rating <= 3) AS avg_complaint_score,
+               AVG(pr.pain_score) FILTER (WHERE pr.rating > 3)  AS avg_praise_score,
+               COUNT(*) FILTER (WHERE pr.rating <= 3) AS complaint_count,
+               COUNT(*) FILTER (WHERE pr.rating > 3)  AS praise_count
         FROM product_metadata pm
         LEFT JOIN product_reviews pr ON pr.asin = pm.asin
         WHERE pm.brand ILIKE $1
@@ -392,7 +402,10 @@ async def get_brand_detail(brand_name: str):
                 "rating_number": r["rating_number"],
                 "price": r["price"],
                 "review_count": r["review_count"],
-                "avg_pain_score": _safe_float(r["avg_pain_score"]),
+                "avg_complaint_score": _safe_float(r["avg_complaint_score"]),
+                "avg_praise_score": _safe_float(r["avg_praise_score"]),
+                "complaint_count": r["complaint_count"],
+                "praise_count": r["praise_count"],
             }
             for r in products
         ],

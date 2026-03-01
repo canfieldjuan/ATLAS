@@ -124,16 +124,20 @@ export default function ReviewDetail() {
               </p>
             </div>
           )}
-          {review.pain_score !== null && (
-            <div className="text-right">
-              <p className="text-xs text-slate-400">Pain</p>
-              <p className={`text-2xl font-bold ${
-                review.pain_score >= 7 ? 'text-red-400' : review.pain_score >= 4 ? 'text-yellow-400' : 'text-green-400'
-              }`}>
-                {review.pain_score.toFixed(1)}
-              </p>
-            </div>
-          )}
+          {review.pain_score !== null && (() => {
+            const isPraise = (review.rating ?? 0) > 3
+            const color = isPraise
+              ? (review.pain_score >= 7 ? 'text-green-400' : review.pain_score >= 4 ? 'text-cyan-400' : 'text-slate-400')
+              : (review.pain_score >= 7 ? 'text-red-400' : review.pain_score >= 4 ? 'text-yellow-400' : 'text-green-400')
+            return (
+              <div className="text-right">
+                <p className="text-xs text-slate-400">{isPraise ? 'Loyalty' : 'Pain'}</p>
+                <p className={`text-2xl font-bold ${color}`}>
+                  {review.pain_score.toFixed(1)}
+                </p>
+              </div>
+            )
+          })()}
         </div>
       </div>
 
@@ -179,7 +183,7 @@ export default function ReviewDetail() {
             <dl className="space-y-1">
               <DL label="Root Cause" value={review.root_cause} />
               <DL label="Severity" value={review.severity} />
-              <DL label="Pain Score" value={review.pain_score?.toFixed(1)} />
+              <DL label={(review.rating ?? 0) > 3 ? 'Loyalty Score' : 'Pain Score'} value={review.pain_score?.toFixed(1)} />
               <DL label="Time to Failure" value={review.time_to_failure} />
               <DL label="Workaround Found" value={review.workaround_found} />
               <DL label="Workaround" value={review.workaround_text} />

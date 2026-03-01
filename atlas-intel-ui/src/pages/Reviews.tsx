@@ -82,13 +82,17 @@ export default function Reviews() {
       render: (r) => <span className="text-slate-300">{r.root_cause ?? '--'}</span>,
     },
     {
-      key: 'pain',
-      header: 'Pain',
+      key: 'score',
+      header: 'Score',
       render: (r) => {
         const score = r.pain_score
         if (score == null) return <span className="text-slate-500">--</span>
-        const color = score >= 7 ? 'text-red-400' : score >= 4 ? 'text-yellow-400' : 'text-green-400'
-        return <span className={color}>{score.toFixed(1)}</span>
+        const isPraise = (r.rating ?? 0) > 3
+        const color = isPraise
+          ? (score >= 7 ? 'text-green-400' : score >= 4 ? 'text-cyan-400' : 'text-slate-400')
+          : (score >= 7 ? 'text-red-400' : score >= 4 ? 'text-yellow-400' : 'text-green-400')
+        const label = isPraise ? 'L' : 'P'
+        return <span className={color}>{score.toFixed(1)} <span className="text-[10px] opacity-60">{label}</span></span>
       },
       sortable: true,
       sortValue: (r) => r.pain_score ?? 0,
@@ -232,7 +236,7 @@ export default function Reviews() {
             >
               <option value="imported_at">Newest</option>
               <option value="rating">Rating</option>
-              <option value="pain_score">Pain Score</option>
+              <option value="pain_score">Score</option>
             </select>
           </div>
           {hasFilters && (

@@ -83,16 +83,28 @@ export default function BrandDetail() {
       render: (r) => <span className="text-slate-300">{r.price ?? '--'}</span>,
     },
     {
-      key: 'pain',
+      key: 'complaint',
       header: 'Pain',
       render: (r) => {
-        const score = r.avg_pain_score
+        const score = r.avg_complaint_score
         if (score == null) return <span className="text-slate-500">--</span>
         const color = score >= 7 ? 'text-red-400' : score >= 4 ? 'text-yellow-400' : 'text-green-400'
         return <span className={color}>{score.toFixed(1)}</span>
       },
       sortable: true,
-      sortValue: (r) => r.avg_pain_score ?? 0,
+      sortValue: (r) => r.avg_complaint_score ?? 0,
+    },
+    {
+      key: 'praise',
+      header: 'Loyalty',
+      render: (r) => {
+        const score = r.avg_praise_score
+        if (score == null) return <span className="text-slate-500">--</span>
+        const color = score >= 7 ? 'text-green-400' : score >= 4 ? 'text-cyan-400' : 'text-slate-400'
+        return <span className={color}>{score.toFixed(1)}</span>
+      },
+      sortable: true,
+      sortValue: (r) => r.avg_praise_score ?? 0,
     },
   ]
 

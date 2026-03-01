@@ -36,7 +36,10 @@ export interface BrandSummary {
   review_count: number
   avg_rating: number | null
   total_ratings: number | null
-  avg_pain_score: number | null
+  avg_complaint_score: number | null
+  avg_praise_score: number | null
+  complaint_count: number
+  praise_count: number
   safety_count: number
 }
 
@@ -47,7 +50,10 @@ export interface BrandProduct {
   rating_number: number
   price: string | null
   review_count: number
-  avg_pain_score: number | null
+  avg_complaint_score: number | null
+  avg_praise_score: number | null
+  complaint_count: number
+  praise_count: number
 }
 
 export interface SentimentAspect {

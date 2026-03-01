@@ -64,16 +64,28 @@ export default function Brands() {
       sortValue: (r) => r.avg_rating ?? 0,
     },
     {
-      key: 'pain',
-      header: 'Avg Pain',
+      key: 'complaint',
+      header: 'Pain',
       render: (r) => {
-        const score = r.avg_pain_score
+        const score = r.avg_complaint_score
         if (score == null) return <span className="text-slate-500">--</span>
         const color = score >= 7 ? 'text-red-400' : score >= 4 ? 'text-yellow-400' : 'text-green-400'
         return <span className={color}>{score.toFixed(1)}</span>
       },
       sortable: true,
-      sortValue: (r) => r.avg_pain_score ?? 0,
+      sortValue: (r) => r.avg_complaint_score ?? 0,
+    },
+    {
+      key: 'praise',
+      header: 'Loyalty',
+      render: (r) => {
+        const score = r.avg_praise_score
+        if (score == null) return <span className="text-slate-500">--</span>
+        const color = score >= 7 ? 'text-green-400' : score >= 4 ? 'text-cyan-400' : 'text-slate-400'
+        return <span className={color}>{score.toFixed(1)}</span>
+      },
+      sortable: true,
+      sortValue: (r) => r.avg_praise_score ?? 0,
     },
     {
       key: 'safety',
@@ -142,7 +154,8 @@ export default function Brands() {
           >
             <option value="review_count">Review Count</option>
             <option value="avg_rating">Avg Rating</option>
-            <option value="avg_pain_score">Avg Pain</option>
+            <option value="avg_complaint_score">Pain Score</option>
+            <option value="avg_praise_score">Loyalty Score</option>
             <option value="safety_count">Safety Flags</option>
             <option value="brand">Brand Name</option>
           </select>
