@@ -710,11 +710,12 @@ async def _generate_vendor_campaigns(
                             decision_timeline, buying_stage, role_type,
                             key_quotes, source_review_ids,
                             channel, subject, body, cta,
-                            status, batch_id, llm_model, industry, target_mode
+                            status, batch_id, llm_model, industry, target_mode,
+                            recipient_email
                         ) VALUES (
                             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                             $11, $12, $13, $14, $15, $16, $17, $18,
-                            $19, $20, $21, $22, $23
+                            $19, $20, $21, $22, $23, $24
                         )
                         """,
                         vendor_name,  # company_name = the vendor we're targeting
@@ -740,6 +741,7 @@ async def _generate_vendor_campaigns(
                         llm_model_name,
                         best.get("industry"),
                         "vendor_retention",
+                        target.get("contact_email"),
                     )
                     generated += 1
                 except Exception:
@@ -1015,11 +1017,12 @@ async def _generate_challenger_campaigns(
                             decision_timeline, buying_stage, role_type,
                             key_quotes, source_review_ids,
                             channel, subject, body, cta,
-                            status, batch_id, llm_model, industry, target_mode
+                            status, batch_id, llm_model, industry, target_mode,
+                            recipient_email
                         ) VALUES (
                             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                             $11, $12, $13, $14, $15, $16, $17, $18,
-                            $19, $20, $21, $22, $23
+                            $19, $20, $21, $22, $23, $24
                         )
                         """,
                         challenger_name,  # company_name = the challenger we're targeting
@@ -1045,6 +1048,7 @@ async def _generate_challenger_campaigns(
                         llm_model_name,
                         best.get("industry"),
                         "challenger_intel",
+                        target.get("contact_email"),
                     )
                     generated += 1
                 except Exception:
