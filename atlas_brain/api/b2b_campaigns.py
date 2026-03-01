@@ -601,7 +601,7 @@ async def review_queue(
                bc.recipient_email, bc.partner_id, bc.created_at,
                cs.recipient_email AS seq_recipient, cs.open_count, cs.click_count,
                cs.status AS seq_status, cs.current_step, cs.max_steps,
-               ap.name, ap.product_name,
+               ap.name AS partner_name, ap.product_name,
                (SELECT COUNT(*) FROM campaign_suppressions sup
                 WHERE (sup.expires_at IS NULL OR sup.expires_at > NOW())
                 AND (
@@ -634,7 +634,7 @@ async def bulk_approve(body: BulkApproveBody):
 
     from ..autonomous.tasks.campaign_suppression import is_suppressed
 
-    approved = 0
+    processed = 0
     failed: list[dict] = []
 
     for cid_str in body.campaign_ids:
@@ -674,7 +674,7 @@ async def bulk_approve(body: BulkApproveBody):
                 campaign_id=cid, sequence_id=campaign.get("sequence_id"),
                 step_number=campaign.get("step_number"),
             )
-            approved += 1
+            processed += 1
             continue
 
         if body.action == "approve":
@@ -682,7 +682,12 @@ async def bulk_approve(body: BulkApproveBody):
                 "UPDATE b2b_campaigns SET status = 'approved', approved_at = $1 WHERE id = $2",
                 now, cid,
             )
-            approved += 1
+            await log_campaign_event(
+                pool, event_type="approved", source="api",
+                campaign_id=cid, sequence_id=campaign.get("sequence_id"),
+                step_number=campaign.get("step_number"),
+            )
+            processed += 1
             continue
 
         # queue-send: needs recipient + suppression check
@@ -711,9 +716,9 @@ async def bulk_approve(body: BulkApproveBody):
             recipient_email=recipient,
             subject=campaign.get("subject"),
         )
-        approved += 1
+        processed += 1
 
-    return {"approved": approved, "failed": failed}
+    return {"processed": processed, "failed": failed}
 
 
 @router.post("/bulk-reject")
@@ -742,7 +747,6 @@ async def bulk_reject(body: BulkRejectBody):
             failed.append({"id": cid_str, "reason": f"cannot reject '{campaign['status']}'"})
             continue
 
-        now = datetime.now(timezone.utc)
         await pool.execute(
             "UPDATE b2b_campaigns SET status = 'cancelled' WHERE id = $1",
             cid,
@@ -774,6 +778,14 @@ async def review_queue_summary():
             COUNT(*) FILTER (
                 WHERE bc.status = 'draft'
                 AND COALESCE(bc.recipient_email, cs.recipient_email) IS NOT NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM campaign_suppressions sup
+                    WHERE (sup.expires_at IS NULL OR sup.expires_at > NOW())
+                    AND (
+                        LOWER(sup.email) = LOWER(COALESCE(bc.recipient_email, cs.recipient_email))
+                        OR LOWER(sup.domain) = LOWER(SPLIT_PART(COALESCE(bc.recipient_email, cs.recipient_email), '@', 2))
+                    )
+                )
             ) AS ready_to_send,
             COUNT(*) FILTER (
                 WHERE bc.status = 'draft'
@@ -1118,10 +1130,12 @@ async def update_campaign(campaign_id: str, body: CampaignUpdate):
         raise HTTPException(status_code=400, detail="No fields to update")
 
     params.append(cid)
-    await pool.execute(
+    result = await pool.execute(
         f"UPDATE b2b_campaigns SET {', '.join(updates)} WHERE id = ${idx}",
         *params,
     )
+    if _affected_rows(result) == 0:
+        raise HTTPException(status_code=404, detail="Campaign not found")
     return {"ok": True}
 
 
@@ -1154,6 +1168,10 @@ async def approve_campaign(campaign_id: str):
     await pool.execute(
         "UPDATE b2b_campaigns SET status = 'approved', approved_at = $1 WHERE id = $2",
         now, cid,
+    )
+    await log_campaign_event(
+        pool, event_type="approved", source="api",
+        campaign_id=cid,
     )
     return {"ok": True, "approved_at": now.isoformat()}
 
@@ -1201,6 +1219,15 @@ async def queue_campaign_for_send(campaign_id: str, body: ApproveQueueBody | Non
         raise HTTPException(
             status_code=400,
             detail="recipient_email is required (set on sequence or provide in body)"
+        )
+
+    from ..autonomous.tasks.campaign_suppression import is_suppressed
+
+    sup = await is_suppressed(pool, email=recipient)
+    if sup:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Recipient is suppressed ({sup['reason']})"
         )
 
     await pool.execute(

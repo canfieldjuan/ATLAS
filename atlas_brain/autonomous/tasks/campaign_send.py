@@ -124,8 +124,7 @@ async def run(task: ScheduledTask) -> dict:
         """
         SELECT bc.id, bc.sequence_id, bc.step_number,
                bc.recipient_email, bc.from_email,
-               bc.subject, bc.body, bc.company_name,
-               bc.metadata
+               bc.subject, bc.body, bc.company_name
         FROM b2b_campaigns bc
         WHERE bc.status = 'queued'
           AND bc.approved_at <= $1

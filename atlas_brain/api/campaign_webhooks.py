@@ -181,6 +181,19 @@ async def campaign_email_webhook(request: Request):
             metadata={"bounce_type": bounce_type},
         )
 
+        # Mark campaign as cancelled (bounced emails are not valid sends)
+        await pool.execute(
+            "UPDATE b2b_campaigns SET status = 'cancelled' WHERE id = $1",
+            campaign_id,
+        )
+
+        # Cancel any remaining queued campaigns in the sequence
+        if sequence_id:
+            await pool.execute(
+                "UPDATE b2b_campaigns SET status = 'cancelled' WHERE sequence_id = $1 AND status = 'queued'",
+                sequence_id,
+            )
+
         # Global suppression: prevent future campaigns to this address
         from ..autonomous.tasks.campaign_suppression import add_suppression
         from datetime import timedelta
@@ -204,6 +217,17 @@ async def campaign_email_webhook(request: Request):
             esp_message_id=esp_message_id,
             step_number=campaign["step_number"],
         )
+
+        # Mark campaign as cancelled and cancel remaining queued campaigns
+        await pool.execute(
+            "UPDATE b2b_campaigns SET status = 'cancelled' WHERE id = $1",
+            campaign_id,
+        )
+        if sequence_id:
+            await pool.execute(
+                "UPDATE b2b_campaigns SET status = 'cancelled' WHERE sequence_id = $1 AND status = 'queued'",
+                sequence_id,
+            )
 
         # Global suppression: permanent block on complaint
         from ..autonomous.tasks.campaign_suppression import add_suppression

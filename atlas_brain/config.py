@@ -2155,6 +2155,24 @@ class CampaignSequenceConfig(BaseSettings):
     send_timezone: str = Field(default="America/Chicago", description="Timezone for send window")
     skip_weekends: bool = Field(default=True, description="Don't send on Sat/Sun")
 
+    @field_validator("send_window_start", "send_window_end", mode="after")
+    @classmethod
+    def _validate_hhmm(cls, v: str) -> str:
+        import re
+        if not re.match(r"^\d{2}:\d{2}$", v):
+            raise ValueError(f"Must be HH:MM format, got '{v}'")
+        h, m = int(v[:2]), int(v[3:])
+        if not (0 <= h <= 23 and 0 <= m <= 59):
+            raise ValueError(f"Invalid time '{v}': hour 0-23, minute 0-59")
+        return v
+
+    @field_validator("send_timezone", mode="after")
+    @classmethod
+    def _validate_tz(cls, v: str) -> str:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(v)
+        return v
+
 
 class TemporalPatternConfig(BaseSettings):
     """Temporal pattern context configuration."""

@@ -32,16 +32,31 @@ async def add_suppression(
         cid = campaign_id if isinstance(campaign_id, UUID) else UUID(str(campaign_id))
 
     try:
+        email_val = email.lower().strip() if email else None
+        domain_val = domain.lower().strip() if domain else None
+
         row = await pool.fetchrow(
             """
             INSERT INTO campaign_suppressions
                 (email, domain, reason, source, campaign_id, notes, expires_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT DO NOTHING
+            ON CONFLICT ((LOWER(email))) WHERE email IS NOT NULL
+            DO UPDATE SET
+                reason = EXCLUDED.reason,
+                source = EXCLUDED.source,
+                campaign_id = COALESCE(EXCLUDED.campaign_id, campaign_suppressions.campaign_id),
+                notes = COALESCE(EXCLUDED.notes, campaign_suppressions.notes),
+                expires_at = CASE
+                    WHEN EXCLUDED.expires_at IS NULL THEN NULL
+                    WHEN campaign_suppressions.expires_at IS NULL THEN NULL
+                    ELSE GREATEST(EXCLUDED.expires_at, campaign_suppressions.expires_at)
+                END
+            WHERE EXCLUDED.expires_at IS NULL
+               OR campaign_suppressions.expires_at IS NOT NULL
             RETURNING id
             """,
-            email.lower().strip() if email else None,
-            domain.lower().strip() if domain else None,
+            email_val,
+            domain_val,
             reason,
             source,
             cid,
@@ -50,7 +65,7 @@ async def add_suppression(
         )
         if row:
             logger.info(
-                "Suppression added: email=%s domain=%s reason=%s source=%s",
+                "Suppression added/updated: email=%s domain=%s reason=%s source=%s",
                 email, domain, reason, source,
             )
             return row["id"]
