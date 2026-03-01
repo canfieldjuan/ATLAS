@@ -366,7 +366,7 @@ export function fetchReviews(params?: {
   limit?: number
   offset?: number
 }) {
-  return get<{ reviews: ReviewSummary[]; count: number }>('/reviews', params as Record<string, string | number | boolean>)
+  return get<{ reviews: ReviewSummary[]; count: number; total_count: number }>('/reviews', params as Record<string, string | number | boolean>)
 }
 
 export function fetchReview(id: string) {

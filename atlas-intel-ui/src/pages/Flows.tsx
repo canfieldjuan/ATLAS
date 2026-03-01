@@ -35,7 +35,7 @@ export default function Flows() {
         brand: filters.brand || undefined,
         source_category: filters.source_category || undefined,
         direction: filters.direction || undefined,
-        min_count: filters.min_count || 2,
+        min_count: filters.min_count !== 2 ? filters.min_count : undefined,
         limit: 200,
       }),
     [JSON.stringify(filters)],

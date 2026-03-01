@@ -33,11 +33,12 @@ export default function Brands() {
     useFilterParams<Filters>(FILTER_CONFIG)
   const [page, setPage] = useState(0)
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const filtersKey = JSON.stringify(filters)
 
   // Reset page when filters change
   useEffect(() => {
     setPage(0)
-  }, [filters.search, filters.source_category, filters.min_reviews, filters.sort_by])
+  }, [filtersKey])
 
   const { data, loading, error, refresh, refreshing } = useApiData(
     () =>
@@ -49,7 +50,7 @@ export default function Brands() {
         limit: PAGE_SIZE,
         offset: page * PAGE_SIZE,
       }),
-    [JSON.stringify(filters), page],
+    [filtersKey, page],
   )
 
   const brands = data?.brands ?? []

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -52,6 +52,12 @@ export default function Reviews() {
   const { filters, setFilter, clearFilter, clearAll, activeFilterEntries } =
     useFilterParams<Filters>(FILTER_CONFIG)
   const [page, setPage] = useState(0)
+  const filtersKey = JSON.stringify(filters)
+
+  // Reset to page 0 when any filter changes
+  useEffect(() => {
+    setPage(0)
+  }, [filtersKey])
 
   const { data, loading, error, refresh, refreshing } = useApiData(
     () =>
@@ -73,11 +79,12 @@ export default function Reviews() {
         limit: PAGE_SIZE,
         offset: page * PAGE_SIZE,
       }),
-    [JSON.stringify(filters), page],
+    [filtersKey, page],
   )
 
   const reviews = data?.reviews ?? []
-  const count = data?.count ?? 0
+  const totalCount = data?.total_count ?? 0
+  const totalPages = Math.ceil(totalCount / PAGE_SIZE)
 
   const columns: Column<ReviewSummary>[] = [
     {
@@ -145,17 +152,21 @@ export default function Reviews() {
     },
   ]
 
-  const handleClearAll = () => {
-    clearAll()
-    setPage(0)
-  }
-
   if (error) return <PageError error={error} onRetry={refresh} />
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-white">Reviews</h1>
+        <div>
+          <h1 className="text-2xl font-bold text-white">Reviews</h1>
+          {!loading && totalCount > 0 && (
+            <p className="text-xs text-slate-400 mt-0.5">
+              Showing {(page * PAGE_SIZE + 1).toLocaleString()}-
+              {Math.min((page + 1) * PAGE_SIZE, totalCount).toLocaleString()} of{' '}
+              {totalCount.toLocaleString()}
+            </p>
+          )}
+        </div>
         <button
           onClick={refresh}
           disabled={refreshing}
@@ -172,7 +183,7 @@ export default function Reviews() {
           label: e.label,
           onClear: () => clearFilter(e.key),
         }))}
-        onClearAll={handleClearAll}
+        onClearAll={clearAll}
         expanded={
           <>
             <FilterSearch
@@ -329,7 +340,7 @@ export default function Reviews() {
       </div>
 
       {/* Pagination */}
-      {(page > 0 || count === PAGE_SIZE) && (
+      {totalPages > 1 && (
         <div className="flex items-center justify-between">
           <button
             onClick={() => setPage((p) => Math.max(0, p - 1))}
@@ -339,10 +350,12 @@ export default function Reviews() {
             <ChevronLeft className="h-4 w-4" />
             Previous
           </button>
-          <span className="text-sm text-slate-400">Page {page + 1}</span>
+          <span className="text-sm text-slate-400">
+            Page {page + 1} of {totalPages}
+          </span>
           <button
-            onClick={() => setPage((p) => p + 1)}
-            disabled={count < PAGE_SIZE || loading}
+            onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+            disabled={page >= totalPages - 1 || loading}
             className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
           >
             Next

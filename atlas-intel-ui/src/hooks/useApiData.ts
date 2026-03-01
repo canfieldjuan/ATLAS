@@ -16,10 +16,12 @@ export default function useApiData<T>(
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<Error | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const requestIdRef = useRef(0)
   const mountedRef = useRef(true)
 
   const load = useCallback(
     async (isRefresh: boolean) => {
+      const id = ++requestIdRef.current
       if (isRefresh) {
         setRefreshing(true)
       } else {
@@ -28,15 +30,15 @@ export default function useApiData<T>(
       setError(null)
       try {
         const result = await fetcher()
-        if (mountedRef.current) {
+        if (mountedRef.current && id === requestIdRef.current) {
           setData(result)
         }
       } catch (err) {
-        if (mountedRef.current) {
+        if (mountedRef.current && id === requestIdRef.current) {
           setError(err instanceof Error ? err : new Error(String(err)))
         }
       } finally {
-        if (mountedRef.current) {
+        if (mountedRef.current && id === requestIdRef.current) {
           setLoading(false)
           setRefreshing(false)
         }

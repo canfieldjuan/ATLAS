@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   MessageSquareText,
@@ -25,6 +24,7 @@ import DataTable, { type Column } from '../components/DataTable'
 import { FilterSelect } from '../components/FilterBar'
 import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
+import useFilterParams from '../hooks/useFilterParams'
 import useCategories from '../hooks/useCategories'
 import {
   fetchPipeline,
@@ -44,10 +44,19 @@ interface DashboardData {
   safetyTotal: number
 }
 
+const FILTER_CONFIG = {
+  source_category: { type: 'string' as const, label: 'Category' },
+}
+
+type Filters = {
+  source_category: string
+}
+
 export default function Dashboard() {
   const navigate = useNavigate()
-  const [category, setCategory] = useState('')
   const { categories: categoryList } = useCategories()
+  const { filters, setFilter } = useFilterParams<Filters>(FILTER_CONFIG)
+  const category = filters.source_category
 
   const { data, loading, error, refresh, refreshing } = useApiData<DashboardData>(
     async () => {
@@ -129,7 +138,7 @@ export default function Dashboard() {
           <FilterSelect
             label=""
             value={category}
-            onChange={setCategory}
+            onChange={(v) => setFilter('source_category', v)}
             options={categoryList.map((c) => ({ value: c, label: c }))}
             placeholder="All Categories"
             className="w-48"

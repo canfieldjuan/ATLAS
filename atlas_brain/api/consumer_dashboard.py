@@ -1691,7 +1691,19 @@ async def search_reviews(
         for r in rows
     ]
 
-    return {"reviews": reviews, "count": len(reviews)}
+    # Total count (without LIMIT/OFFSET) for pagination
+    count_params = params[:-2]  # strip limit & offset
+    total_count = await pool.fetchval(
+        f"""
+        SELECT COUNT(*)
+        FROM product_reviews pr
+        LEFT JOIN product_metadata pm ON pm.asin = pr.asin
+        {where}
+        """,
+        *count_params,
+    )
+
+    return {"reviews": reviews, "count": len(reviews), "total_count": total_count or 0}
 
 
 # ---------------------------------------------------------------------------
