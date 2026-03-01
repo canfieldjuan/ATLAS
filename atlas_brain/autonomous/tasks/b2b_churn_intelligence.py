@@ -1266,3 +1266,213 @@ async def generate_vendor_report(
         logger.exception("Failed to store vendor report for %s", vendor_name)
 
     return report_data
+
+
+# ------------------------------------------------------------------
+# Challenger-scoped intelligence report (P2: Challenger Intel)
+# ------------------------------------------------------------------
+
+
+async def generate_challenger_report(
+    pool,
+    challenger_name: str,
+    window_days: int = 90,
+) -> dict[str, Any] | None:
+    """Generate a structured intelligence report for a challenger target.
+
+    Queries reviews where *challenger_name* appears in the enrichment
+    ``competitors_mentioned`` array (i.e. reviewers of *other* vendors
+    who are considering switching to this challenger).
+
+    Returns the report dict (also stored in b2b_intelligence) or None
+    when no matching signals exist.
+    """
+    today = date.today()
+
+    rows = await pool.fetch(
+        """
+        SELECT r.id AS review_id, r.vendor_name, r.reviewer_company, r.product_category,
+               (r.enrichment->>'urgency_score')::numeric AS urgency,
+               (r.enrichment->'reviewer_context'->>'decision_maker')::boolean AS is_dm,
+               r.enrichment->'buyer_authority'->>'role_type' AS role_type,
+               r.enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
+               CASE WHEN r.enrichment->'budget_signals'->>'seat_count' ~ '^\\d+$'
+                    THEN (r.enrichment->'budget_signals'->>'seat_count')::int END AS seat_count,
+               r.enrichment->'competitors_mentioned' AS competitors_json,
+               r.enrichment->'pain_categories' AS pain_json,
+               r.enrichment->'quotable_phrases' AS quotable_phrases,
+               r.enrichment->'feature_gaps' AS feature_gaps
+        FROM b2b_reviews r
+        WHERE r.enrichment_status = 'enriched'
+          AND r.enriched_at > NOW() - make_interval(days => $1)
+          AND (r.enrichment->>'urgency_score')::numeric >= 3
+          AND EXISTS (
+                SELECT 1 FROM jsonb_array_elements(r.enrichment->'competitors_mentioned') AS comp(value)
+                WHERE comp.value->>'name' ILIKE '%' || $2 || '%'
+              )
+        ORDER BY (r.enrichment->>'urgency_score')::numeric DESC
+        LIMIT 500
+        """,
+        window_days,
+        challenger_name,
+    )
+
+    if not rows:
+        return None
+
+    signals = []
+    for r in rows:
+        d = dict(r)
+        d["urgency"] = float(d.get("urgency") or 0)
+        comps = d.get("competitors_json")
+        if isinstance(comps, str):
+            try:
+                comps = json.loads(comps)
+            except (json.JSONDecodeError, TypeError):
+                comps = []
+        d["competitors"] = comps if isinstance(comps, list) else []
+        signals.append(d)
+
+    total = len(signals)
+    high_urgency = [s for s in signals if s["urgency"] >= 8]
+    medium_urgency = [s for s in signals if 5 <= s["urgency"] < 8]
+
+    # Buying stage distribution
+    stage_counts: dict[str, int] = {}
+    for s in signals:
+        stage = s.get("buying_stage")
+        if stage:
+            stage_counts[stage] = stage_counts.get(stage, 0) + 1
+
+    by_buying_stage = {
+        "active_purchase": stage_counts.get("active_purchase", 0),
+        "evaluation": stage_counts.get("evaluation", 0),
+        "renewal_decision": stage_counts.get("renewal_decision", 0),
+    }
+
+    # Role distribution
+    role_counts: dict[str, int] = {}
+    for s in signals:
+        role = s.get("role_type")
+        if role:
+            role_counts[role] = role_counts.get(role, 0) + 1
+
+    # Pain driving switch
+    pain_counts: dict[str, int] = {}
+    for s in signals:
+        pain = _safe_json(s.get("pain_json"))
+        for p in pain:
+            if isinstance(p, dict) and p.get("category"):
+                pain_counts[p["category"]] = pain_counts.get(p["category"], 0) + 1
+
+    # Incumbents losing (the vendor_name on each review is the incumbent)
+    incumbent_counts: dict[str, int] = {}
+    for s in signals:
+        vname = s.get("vendor_name")
+        if vname:
+            incumbent_counts[vname] = incumbent_counts.get(vname, 0) + 1
+
+    # Seat count distribution
+    large = mid = small = 0
+    for s in signals:
+        sc = s.get("seat_count")
+        if sc is not None:
+            if sc >= 500:
+                large += 1
+            elif sc >= 100:
+                mid += 1
+            else:
+                small += 1
+
+    # Incumbent feature gaps (what incumbents are missing)
+    gap_counts: dict[str, int] = {}
+    for s in signals:
+        gaps = _safe_json(s.get("feature_gaps"))
+        for g in gaps:
+            label = g if isinstance(g, str) else (g.get("feature", "") if isinstance(g, dict) else "")
+            if label:
+                gap_counts[label] = gap_counts.get(label, 0) + 1
+
+    # Feature mentions (challenger features reviewers cite)
+    feature_set: list[str] = []
+    for s in signals:
+        for c in s["competitors"]:
+            if isinstance(c, dict):
+                cname = (c.get("name") or "").lower()
+                if cname and challenger_name.lower() in cname:
+                    for feat in c.get("features", []):
+                        if isinstance(feat, str) and feat not in feature_set:
+                            feature_set.append(feat)
+
+    # Anonymized quotes (high-urgency only)
+    anon_quotes: list[str] = []
+    for s in high_urgency[:20]:
+        phrases = _safe_json(s.get("quotable_phrases"))
+        for phrase in phrases:
+            text = phrase if isinstance(phrase, str) else (phrase.get("text", "") if isinstance(phrase, dict) else "")
+            if text and text not in anon_quotes:
+                anon_quotes.append(text)
+            if len(anon_quotes) >= 10:
+                break
+
+    report_data = {
+        "challenger_name": challenger_name,
+        "report_date": str(today),
+        "window_days": window_days,
+        "signal_count": total,
+        "high_urgency_count": len(high_urgency),
+        "medium_urgency_count": len(medium_urgency),
+        "by_buying_stage": by_buying_stage,
+        "role_distribution": sorted(
+            [{"role": k, "count": v} for k, v in role_counts.items()],
+            key=lambda x: x["count"], reverse=True,
+        ),
+        "pain_driving_switch": sorted(
+            [{"category": k, "count": v} for k, v in pain_counts.items()],
+            key=lambda x: x["count"], reverse=True,
+        )[:10],
+        "incumbents_losing": sorted(
+            [{"name": k, "count": v} for k, v in incumbent_counts.items()],
+            key=lambda x: x["count"], reverse=True,
+        )[:10],
+        "seat_count_signals": {
+            "large_500plus": large,
+            "mid_100_499": mid,
+            "small_under_100": small,
+        },
+        "incumbent_feature_gaps": sorted(
+            [{"feature": k, "count": v} for k, v in gap_counts.items()],
+            key=lambda x: x["count"], reverse=True,
+        )[:10],
+        "feature_mentions": feature_set[:20],
+        "anonymized_quotes": anon_quotes[:10],
+    }
+
+    # Persist to b2b_intelligence
+    try:
+        await pool.execute(
+            """
+            INSERT INTO b2b_intelligence (
+                report_date, report_type, vendor_filter,
+                intelligence_data, executive_summary, data_density, status, llm_model
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            """,
+            today,
+            "challenger_intel",
+            challenger_name,
+            json.dumps(report_data, default=str),
+            f"{total} accounts mentioning {challenger_name} as alternative. "
+            f"{len(high_urgency)} at critical urgency.",
+            json.dumps({
+                "signal_count": total,
+                "buying_stages": len(stage_counts),
+                "incumbents": len(incumbent_counts),
+                "feature_gaps": len(gap_counts),
+            }),
+            "published",
+            "pipeline_aggregation",
+        )
+    except Exception:
+        logger.exception("Failed to store challenger report for %s", challenger_name)
+
+    return report_data

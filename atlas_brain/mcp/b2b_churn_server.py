@@ -38,6 +38,8 @@ VALID_REPORT_TYPES = (
     "vendor_scorecard",
     "displacement_report",
     "category_overview",
+    "vendor_retention",
+    "challenger_intel",
 )
 
 VALID_SOURCES = ("g2", "capterra", "trustradius", "reddit")
@@ -488,7 +490,8 @@ async def list_reports(
     List B2B intelligence reports.
 
     report_type: Filter by type (weekly_churn_feed, vendor_scorecard,
-                 displacement_report, category_overview)
+                 displacement_report, category_overview, vendor_retention,
+                 challenger_intel)
     vendor_filter: Filter by vendor name in report (partial match)
     limit: Maximum results (default 10, cap 50)
     """

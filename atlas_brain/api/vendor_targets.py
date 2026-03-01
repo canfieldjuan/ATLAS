@@ -190,22 +190,21 @@ async def get_vendor_target(target_id: UUID):
     )
     target["campaign_stats"] = dict(campaign_stats) if campaign_stats else {}
 
-    # Fetch recent reports (only for vendor_retention; no reports exist for challenger_intel yet)
-    if target["target_mode"] == "vendor_retention":
-        reports = await pool.fetch(
-            """
-            SELECT id, report_date, report_type, executive_summary, created_at
-            FROM b2b_intelligence
-            WHERE vendor_filter ILIKE '%' || $1 || '%'
-              AND report_type = 'vendor_retention'
-            ORDER BY report_date DESC
-            LIMIT 5
-            """,
-            target["company_name"],
-        )
-        target["recent_reports"] = [dict(r) for r in reports]
-    else:
-        target["recent_reports"] = []
+    # Fetch recent reports for this target
+    report_type = "vendor_retention" if target["target_mode"] == "vendor_retention" else "challenger_intel"
+    reports = await pool.fetch(
+        """
+        SELECT id, report_date, report_type, executive_summary, created_at
+        FROM b2b_intelligence
+        WHERE vendor_filter ILIKE '%' || $1 || '%'
+          AND report_type = $2
+        ORDER BY report_date DESC
+        LIMIT 5
+        """,
+        target["company_name"],
+        report_type,
+    )
+    target["recent_reports"] = [dict(r) for r in reports]
 
     return target
 
@@ -278,7 +277,7 @@ async def delete_vendor_target(target_id: UUID):
 
 @router.post("/{target_id}/generate-report")
 async def generate_target_report(target_id: UUID):
-    """Generate a vendor intelligence report for this target."""
+    """Generate an intelligence report for this target (vendor or challenger)."""
     pool = _pool_or_503()
 
     row = await pool.fetchrow(
@@ -288,13 +287,19 @@ async def generate_target_report(target_id: UUID):
     if not row:
         raise HTTPException(status_code=404, detail="Target not found")
 
-    if row["target_mode"] != "vendor_retention":
-        raise HTTPException(status_code=400, detail="Reports only available for vendor_retention targets")
+    if row["target_mode"] == "vendor_retention":
+        from ..autonomous.tasks.b2b_churn_intelligence import generate_vendor_report
 
-    from ..autonomous.tasks.b2b_churn_intelligence import generate_vendor_report
+        report = await generate_vendor_report(pool, row["company_name"])
+        if not report:
+            raise HTTPException(status_code=404, detail="No churn signals found for this vendor")
+    elif row["target_mode"] == "challenger_intel":
+        from ..autonomous.tasks.b2b_churn_intelligence import generate_challenger_report
 
-    report = await generate_vendor_report(pool, row["company_name"])
-    if not report:
-        raise HTTPException(status_code=404, detail="No churn signals found for this vendor")
+        report = await generate_challenger_report(pool, row["company_name"])
+        if not report:
+            raise HTTPException(status_code=404, detail="No competitor mentions found for this challenger")
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown target_mode: {row['target_mode']}")
 
     return report

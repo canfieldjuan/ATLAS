@@ -373,6 +373,8 @@ VALID_REPORT_TYPES = (
     "vendor_scorecard",
     "displacement_report",
     "category_overview",
+    "vendor_retention",
+    "challenger_intel",
 )
 
 
