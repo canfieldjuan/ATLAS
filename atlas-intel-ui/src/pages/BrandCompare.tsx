@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { useSearchParams } from 'react-router-dom'
-import { RefreshCw, X, Search, ArrowRight } from 'lucide-react'
+import { useSearchParams, Link } from 'react-router-dom'
+import { RefreshCw, X, Search, ArrowRight, Scale } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PageError } from '../components/ErrorBoundary'
 import { CHURN_COLORS, DistBar, Card } from '../components/BrandComponents'
@@ -170,10 +170,28 @@ export default function BrandCompare() {
             )}
           </div>
         )}
-        {!canFetch && (
-          <p className="text-xs text-slate-500 mt-2">Select at least 2 brands to compare (max 4)</p>
+        {!canFetch && brands.length > 0 && (
+          <p className="text-xs text-slate-500 mt-2">Add at least one more brand to start comparing</p>
         )}
       </div>
+
+      {/* Empty state when no brands selected */}
+      {brands.length === 0 && (
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+          <Scale className="h-12 w-12 text-slate-600 mb-4" />
+          <h2 className="text-lg font-medium text-slate-300 mb-2">Compare brands side-by-side</h2>
+          <p className="text-sm text-slate-500 max-w-md mb-4">
+            Search for 2-4 brands above to compare health scores, repurchase rates, failure signals,
+            competitive flows, and more.
+          </p>
+          <Link
+            to="/brands"
+            className="text-sm text-cyan-400 hover:text-cyan-300 transition-colors"
+          >
+            Or select brands from the Brands page →
+          </Link>
+        </div>
+      )}
 
       {canFetch && loading && <ComparisonSkeleton />}
 
