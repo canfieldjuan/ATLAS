@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { RefreshCw, Search, X } from 'lucide-react'
+import { RefreshCw, Search, X, ChevronLeft, ChevronRight } from 'lucide-react'
 import { clsx } from 'clsx'
 import DataTable, { type Column } from '../components/DataTable'
 import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
 import { fetchBrands, type BrandSummary } from '../api/client'
+
+const PAGE_SIZE = 50
 
 export default function Brands() {
   const navigate = useNavigate()
@@ -13,6 +15,7 @@ export default function Brands() {
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [minReviews, setMinReviews] = useState(0)
   const [sortBy, setSortBy] = useState('review_count')
+  const [page, setPage] = useState(0)
   const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
 
   useEffect(() => {
@@ -21,18 +24,23 @@ export default function Brands() {
     return () => clearTimeout(timerRef.current)
   }, [search])
 
+  // Reset page when filters change
+  useEffect(() => { setPage(0) }, [debouncedSearch, minReviews, sortBy])
+
   const { data, loading, error, refresh, refreshing } = useApiData(
     () => fetchBrands({
       search: debouncedSearch || undefined,
       min_reviews: minReviews || undefined,
       sort_by: sortBy,
-      limit: 100,
+      limit: PAGE_SIZE,
+      offset: page * PAGE_SIZE,
     }),
-    [debouncedSearch, minReviews, sortBy],
+    [debouncedSearch, minReviews, sortBy, page],
   )
 
   const brands = data?.brands ?? []
   const totalCount = data?.total_count ?? 0
+  const totalPages = Math.ceil(totalCount / PAGE_SIZE)
   const hasFilters = search || minReviews > 0
 
   const columns: Column<BrandSummary>[] = [
@@ -113,7 +121,7 @@ export default function Brands() {
           <h1 className="text-2xl font-bold text-white">Brands</h1>
           {!loading && totalCount > 0 && (
             <p className="text-xs text-slate-400 mt-0.5">
-              Showing {brands.length} of {totalCount.toLocaleString()}
+              Showing {(page * PAGE_SIZE + 1).toLocaleString()}-{Math.min((page + 1) * PAGE_SIZE, totalCount).toLocaleString()} of {totalCount.toLocaleString()}
             </p>
           )}
         </div>
@@ -195,6 +203,31 @@ export default function Brands() {
           />
         )}
       </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between">
+          <button
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+            disabled={page === 0 || loading}
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            <ChevronLeft className="h-4 w-4" />
+            Previous
+          </button>
+          <span className="text-sm text-slate-400">
+            Page {page + 1} of {totalPages}
+          </span>
+          <button
+            onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+            disabled={page >= totalPages - 1 || loading}
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            Next
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+      )}
     </div>
   )
 }

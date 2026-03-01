@@ -694,59 +694,78 @@ async def get_competitive_flows(
     limit: int = Query(100, le=500),
 ):
     pool = _pool_or_503()
-    conditions = [
+    base_conditions = [
         "pr.deep_extraction IS NOT NULL",
         "pr.deep_extraction != '{}'::jsonb",
-        "jsonb_array_length(COALESCE(pr.deep_extraction->'product_comparisons', '[]'::jsonb)) > 0",
     ]
     params: list = []
     idx = 1
 
     if source_category:
-        conditions.append(f"pr.source_category = ${idx}")
+        base_conditions.append(f"pr.source_category = ${idx}")
         params.append(source_category)
         idx += 1
 
     if brand:
-        conditions.append(f"pm.brand ILIKE '%' || ${idx} || '%'")
+        base_conditions.append(f"pm.brand ILIKE '%' || ${idx} || '%'")
         params.append(brand)
         idx += 1
 
-    where = " AND ".join(conditions)
+    base_where = " AND ".join(base_conditions)
 
+    # Fetch both product_comparisons and consideration_set in one query
     rows = await pool.fetch(
         f"""
         SELECT deep_extraction->'product_comparisons' AS comparisons,
+               deep_extraction->'consideration_set' AS considerations,
                pm.brand, pr.asin, pr.rating
         FROM product_reviews pr
         JOIN product_metadata pm ON pm.asin = pr.asin
-        WHERE {where}
+        WHERE {base_where}
+          AND (
+            jsonb_array_length(COALESCE(pr.deep_extraction->'product_comparisons', '[]'::jsonb)) > 0
+            OR jsonb_array_length(COALESCE(pr.deep_extraction->'consideration_set', '[]'::jsonb)) > 0
+          )
         """,
         *params,
     )
 
     # Build flow graph: {from_brand -> to_brand -> direction -> stats}
     flow_map: dict[str, dict] = {}
+
+    def _add_flow(from_b: str, to_b: str, direction: str, rating):
+        key = f"{from_b}|{to_b}|{direction}"
+        if key not in flow_map:
+            flow_map[key] = {
+                "from_brand": from_b,
+                "to_brand": to_b,
+                "direction": direction,
+                "count": 0,
+                "ratings": [],
+            }
+        flow_map[key]["count"] += 1
+        if rating is not None:
+            flow_map[key]["ratings"].append(float(rating))
+
     for row in rows:
-        comps = _safe_json(row["comparisons"])
         from_brand = row["brand"] or "Unknown"
+
+        # product_comparisons
+        comps = _safe_json(row["comparisons"])
         if isinstance(comps, list):
             for comp in comps:
                 if isinstance(comp, dict):
                     to_brand = comp.get("product_name") or comp.get("product", "Unknown")
                     direction = comp.get("direction", "compared")
-                    key = f"{from_brand}|{to_brand}|{direction}"
-                    if key not in flow_map:
-                        flow_map[key] = {
-                            "from_brand": from_brand,
-                            "to_brand": to_brand,
-                            "direction": direction,
-                            "count": 0,
-                            "ratings": [],
-                        }
-                    flow_map[key]["count"] += 1
-                    if row["rating"] is not None:
-                        flow_map[key]["ratings"].append(float(row["rating"]))
+                    _add_flow(from_brand, to_brand, direction, row["rating"])
+
+        # consideration_set (rejected alternatives)
+        cset = _safe_json(row["considerations"])
+        if isinstance(cset, list):
+            for item in cset:
+                if isinstance(item, dict):
+                    to_brand = item.get("product", "Unknown")
+                    _add_flow(from_brand, to_brand, "considered", row["rating"])
 
     flows = sorted(
         [
