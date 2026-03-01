@@ -66,12 +66,9 @@ Return a JSON object:
 
 4. **Never reveal exact review sources.** Don't mention G2, Capterra, Reddit, or any specific platform. Frame data as "market intelligence", "customer signal monitoring", or "competitive intelligence."
 
-5. **DO reveal aggregated intelligence** to demonstrate value:
-   - Signal counts ("47 accounts showed churn signals this month")
-   - Pain category distribution ("38% cite pricing, 24% cite missing features")
-   - Competitor mention frequency ("HubSpot mentioned in 15 evaluations")
-   - Urgency distribution ("12 accounts at critical urgency")
-   - Feature gap themes ("API limitations and reporting gaps are the top drivers")
+5. **DO reveal aggregated intelligence** to demonstrate value — but **layer it across emails**:
+   - **email_cold** reveals: signal counts, pain category distribution, urgency distribution, feature gap themes. Do NOT name specific competitors in the cold email — save that for the follow-up.
+   - **email_followup** reveals: competitor names and displacement patterns (who they're losing to, how often, why). This is the NEW information that justifies the follow-up.
 
 6. **Match tone to contact_role:**
    - VP CS / Customer Success: Focus on retention, save rate, early warning
@@ -92,7 +89,7 @@ Return a JSON object:
 
 10. **Keep it consultative, not salesy.** You're a peer sharing data, not a vendor pushing a product. No "synergy," no "leverage," no "unlock."
 
-11. **email_followup**: Must take a completely different angle. If cold focused on signal count, follow-up should focus on competitive displacement or feature gaps.
+11. **email_followup**: Must add NEW value the cold email didn't have. The cold email hooks with aggregate churn signals and pain categories. The follow-up drills into competitive displacement — now name the specific competitors, show the breakdown, explain the pattern. Reference the cold email context provided in `cold_email_context` and build on it — don't repeat the same data points.
 
 12. **Sign off** with `selling.sender_name` if provided. Include `selling.booking_url` in the CTA.
 

@@ -65,12 +65,9 @@ Return a JSON object:
 
 4. **Never reveal exact data sources.** Don't mention G2, Capterra, Reddit. Frame as "market intelligence", "intent monitoring", "competitive signal tracking."
 
-5. **DO reveal aggregated intelligence** to demonstrate value:
-   - Lead counts ("12 companies actively evaluating your product this quarter")
-   - Buying stage distribution ("5 in active purchase, 4 in evaluation")
-   - Deal size indicators ("7 accounts with 100+ seats")
-   - Pain categories driving the switch ("pricing and support gaps at incumbents")
-   - Which incumbents are losing ("companies leaving Salesforce and Zendesk")
+5. **DO reveal aggregated intelligence** — but **layer it across emails**:
+   - **email_cold** reveals: lead count, buying stage distribution, deal size indicators, and the pain categories driving the switch. Do NOT name specific incumbents in the cold email — say "leaving their current platform" not "leaving Salesforce." Save incumbent names for the follow-up.
+   - **email_followup** reveals: which specific incumbents are losing accounts (now name them), the displacement pattern, and why those accounts are vulnerable. This is the NEW information that justifies the follow-up.
 
 6. **Match tone to contact_role:**
    - VP Sales / Head of Outbound: Focus on pipeline, quota attainment, warm leads
@@ -90,7 +87,7 @@ Return a JSON object:
 
 11. **Keep it peer-to-peer.** Consultative, data-backed, no hype. You're sharing market intelligence, not pitching software.
 
-12. **email_followup**: Completely different angle. If cold focused on lead count, follow-up should focus on competitive displacement patterns or deal size signals.
+12. **email_followup**: Must add NEW value the cold email didn't have. The cold email hooks with lead count, buying stages, and pain categories. The follow-up drills into which specific incumbents are losing accounts, the displacement pattern, and why — now name the competitors. Reference the cold email context provided in `cold_email_context` and build on it — don't repeat the same data.
 
 13. **Sign off** with `selling.sender_name` if provided. Include `selling.booking_url` in the CTA.
 
