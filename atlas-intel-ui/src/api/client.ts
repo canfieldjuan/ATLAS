@@ -191,8 +191,8 @@ export interface ReviewDetail {
 
 // -- Fetchers --
 
-export function fetchPipeline() {
-  return get<PipelineStatus>('/pipeline')
+export function fetchPipeline(params?: { source_category?: string }) {
+  return get<PipelineStatus>('/pipeline', params as Record<string, string>)
 }
 
 export function fetchBrands(params?: {

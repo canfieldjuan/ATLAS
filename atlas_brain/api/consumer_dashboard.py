@@ -55,24 +55,36 @@ def _pool_or_503():
 
 
 @router.get("/pipeline")
-async def get_pipeline_status():
+async def get_pipeline_status(
+    source_category: Optional[str] = Query(None),
+):
     pool = _pool_or_503()
 
+    cat_filter = ""
+    cat_params: list = []
+    if source_category:
+        cat_filter = "WHERE source_category = $1"
+        cat_params = [source_category]
+
     enrichment_rows = await pool.fetch(
-        """
+        f"""
         SELECT enrichment_status, COUNT(*) AS cnt
         FROM product_reviews
+        {cat_filter}
         GROUP BY enrichment_status
-        """
+        """,
+        *cat_params,
     )
     enrichment_counts = {r["enrichment_status"]: r["cnt"] for r in enrichment_rows}
 
     deep_rows = await pool.fetch(
-        """
+        f"""
         SELECT deep_enrichment_status, COUNT(*) AS cnt
         FROM product_reviews
+        {cat_filter}
         GROUP BY deep_enrichment_status
-        """
+        """,
+        *cat_params,
     )
     deep_counts = {r["deep_enrichment_status"]: r["cnt"] for r in deep_rows}
 
@@ -86,7 +98,7 @@ async def get_pipeline_status():
     category_counts = {r["source_category"]: r["cnt"] for r in category_rows}
 
     totals = await pool.fetchrow(
-        """
+        f"""
         SELECT COUNT(*) AS total,
                COUNT(*) FILTER (WHERE enrichment_status = 'enriched') AS enriched,
                COUNT(*) FILTER (WHERE deep_enrichment_status = 'enriched') AS deep_enriched,
@@ -94,16 +106,30 @@ async def get_pipeline_status():
                MAX(enriched_at) AS last_enrichment_at,
                MAX(deep_enriched_at) AS last_deep_enrichment_at
         FROM product_reviews
-        """
+        {cat_filter}
+        """,
+        *cat_params,
     )
 
-    meta_totals = await pool.fetchrow(
-        """
-        SELECT COUNT(DISTINCT brand) FILTER (WHERE brand IS NOT NULL AND brand != '') AS total_brands,
-               COUNT(DISTINCT asin) AS total_asins
-        FROM product_metadata
-        """
-    )
+    if source_category:
+        meta_totals = await pool.fetchrow(
+            """
+            SELECT COUNT(DISTINCT pm.brand) FILTER (WHERE pm.brand IS NOT NULL AND pm.brand != '') AS total_brands,
+                   COUNT(DISTINCT pm.asin) AS total_asins
+            FROM product_metadata pm
+            JOIN product_reviews pr ON pr.asin = pm.asin
+            WHERE pr.source_category = $1
+            """,
+            source_category,
+        )
+    else:
+        meta_totals = await pool.fetchrow(
+            """
+            SELECT COUNT(DISTINCT brand) FILTER (WHERE brand IS NOT NULL AND brand != '') AS total_brands,
+                   COUNT(DISTINCT asin) AS total_asins
+            FROM product_metadata
+            """
+        )
 
     return {
         "enrichment_counts": enrichment_counts,

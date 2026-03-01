@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   MessageSquareText,
@@ -43,13 +44,15 @@ interface DashboardData {
 
 export default function Dashboard() {
   const navigate = useNavigate()
+  const [category, setCategory] = useState('')
 
   const { data, loading, error, refresh, refreshing } = useApiData<DashboardData>(
     async () => {
+      const cat = category || undefined
       const [pipeline, brandsRes, safetyRes] = await Promise.all([
-        fetchPipeline(),
-        fetchBrands({ limit: 10, sort_by: 'review_count' }),
-        fetchSafety({ limit: 5 }),
+        fetchPipeline({ source_category: cat }),
+        fetchBrands({ limit: 10, sort_by: 'review_count', source_category: cat }),
+        fetchSafety({ limit: 5, source_category: cat }),
       ])
       return {
         pipeline,
@@ -58,7 +61,7 @@ export default function Dashboard() {
         safetyTotal: safetyRes.total_flagged,
       }
     },
-    [],
+    [category],
   )
 
   const pipeline = data?.pipeline
@@ -119,14 +122,26 @@ export default function Dashboard() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-white">Consumer Intelligence Overview</h1>
-        <button
-          onClick={refresh}
-          disabled={refreshing}
-          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
-        >
-          <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-3">
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            className="px-3 py-1.5 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white focus:outline-none focus:border-cyan-500/50"
+          >
+            <option value="">All Categories</option>
+            {categoryData.map((d) => (
+              <option key={d.name} value={d.name}>{d.name}</option>
+            ))}
+          </select>
+          <button
+            onClick={refresh}
+            disabled={refreshing}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Stat Cards */}
