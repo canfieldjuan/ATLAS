@@ -391,54 +391,219 @@ async def get_brand_detail(brand_name: str):
         reverse=True,
     )[:15]
 
-    # Loyalty breakdown
-    loyalty_rows = await pool.fetch(
+    # ------------------------------------------------------------------
+    # All enum/scalar deep fields in a single pass
+    # ------------------------------------------------------------------
+    enum_rows = await pool.fetch(
         """
-        SELECT deep_extraction->>'brand_loyalty_depth' AS loyalty
+        SELECT deep_extraction->>'brand_loyalty_depth'   AS loyalty,
+               deep_extraction->>'expertise_level'       AS expertise,
+               deep_extraction->>'budget_type'           AS budget,
+               deep_extraction->>'discovery_channel'     AS channel,
+               deep_extraction->>'would_repurchase'      AS repurchase,
+               deep_extraction->>'replacement_behavior'  AS replacement,
+               deep_extraction->>'sentiment_trajectory'  AS trajectory,
+               deep_extraction->>'consequence_severity'  AS consequence,
+               deep_extraction->>'frustration_threshold' AS frustration,
+               deep_extraction->>'use_intensity'         AS intensity,
+               deep_extraction->>'research_depth'        AS research,
+               deep_extraction->>'occasion_context'      AS occasion,
+               deep_extraction->>'review_delay_signal'   AS delay,
+               deep_extraction->>'buyer_household'       AS household,
+               deep_extraction->>'profession_hint'       AS profession,
+               deep_extraction->'switching_barrier'      AS barrier,
+               deep_extraction->'ecosystem_lock_in'      AS ecosystem,
+               deep_extraction->'amplification_intent'   AS amplification,
+               deep_extraction->'review_sentiment_openness' AS openness,
+               deep_extraction->'failure_details'        AS failure,
+               deep_extraction->'safety_flag'            AS safety,
+               deep_extraction->'bulk_purchase_signal'   AS bulk,
+               deep_extraction->'buyer_context'          AS buyer_ctx
         FROM product_reviews pr
         JOIN product_metadata pm ON pm.asin = pr.asin
         WHERE pm.brand ILIKE $1
           AND pr.deep_extraction IS NOT NULL
           AND pr.deep_extraction != '{}'::jsonb
-          AND pr.deep_extraction->>'brand_loyalty_depth' IS NOT NULL
         """,
         bname,
     )
 
-    loyalty_counter: dict[str, int] = defaultdict(int)
-    for row in loyalty_rows:
-        loyalty_counter[row["loyalty"]] += 1
+    # Enum distribution counters
+    _enum_fields = [
+        "loyalty", "expertise", "budget", "channel", "repurchase",
+        "replacement", "trajectory", "consequence", "frustration",
+        "intensity", "research", "occasion", "delay", "household",
+    ]
+    counters: dict[str, dict[str, int]] = {f: defaultdict(int) for f in _enum_fields}
 
-    loyalty_list = [{"level": k, "count": v} for k, v in loyalty_counter.items()]
+    # Structured object counters
+    barrier_counter: dict[str, int] = defaultdict(int)
+    barrier_reasons: dict[str, list[str]] = defaultdict(list)
+    ecosystem_counter: dict[str, int] = defaultdict(int)
+    amplification_counter: dict[str, int] = defaultdict(int)
+    openness_counter: dict[str, int] = defaultdict(int)
+    buyer_type_counter: dict[str, int] = defaultdict(int)
+    price_sentiment_counter: dict[str, int] = defaultdict(int)
 
-    # Buyer profile distributions
-    buyer_rows = await pool.fetch(
+    # Failure aggregation
+    failure_modes: dict[str, int] = defaultdict(int)
+    failed_components: dict[str, int] = defaultdict(int)
+    total_dollar_lost = 0.0
+    dollar_lost_count = 0
+    failure_count = 0
+
+    # Safety aggregation
+    safety_flagged = 0
+
+    # Profession collection
+    professions: dict[str, int] = defaultdict(int)
+
+    for row in enum_rows:
+        # Enum fields
+        for f in _enum_fields:
+            val = row[f]
+            if val and val != "none" and val != "unknown" and val != "not_mentioned":
+                counters[f][val] += 1
+
+        # Switching barrier
+        barrier = _safe_json(row["barrier"])
+        if isinstance(barrier, dict) and barrier.get("level"):
+            lvl = barrier["level"]
+            barrier_counter[lvl] += 1
+            reason = barrier.get("reason")
+            if reason and lvl not in ("none",):
+                barrier_reasons[lvl].append(reason)
+
+        # Ecosystem lock-in
+        eco = _safe_json(row["ecosystem"])
+        if isinstance(eco, dict) and eco.get("level"):
+            ecosystem_counter[eco["level"]] += 1
+
+        # Amplification intent
+        amp = _safe_json(row["amplification"])
+        if isinstance(amp, dict) and amp.get("intent"):
+            amplification_counter[amp["intent"]] += 1
+
+        # Sentiment openness
+        opn = _safe_json(row["openness"])
+        if isinstance(opn, dict) and opn.get("open") is not None:
+            openness_counter["open" if opn["open"] else "closed"] += 1
+
+        # Buyer context
+        ctx = _safe_json(row["buyer_ctx"])
+        if isinstance(ctx, dict):
+            bt = ctx.get("buyer_type")
+            if bt:
+                buyer_type_counter[bt] += 1
+            ps = ctx.get("price_sentiment")
+            if ps and ps != "not_mentioned":
+                price_sentiment_counter[ps] += 1
+
+        # Failure details
+        fail = _safe_json(row["failure"])
+        if isinstance(fail, dict) and fail.get("failure_mode"):
+            failure_count += 1
+            fm = fail["failure_mode"].strip().lower()
+            failure_modes[fm] += 1
+            fc = fail.get("failed_component")
+            if fc:
+                failed_components[fc.strip().lower()] += 1
+            dl = fail.get("dollar_amount_lost")
+            if dl is not None:
+                try:
+                    total_dollar_lost += float(dl)
+                    dollar_lost_count += 1
+                except (ValueError, TypeError):
+                    pass
+
+        # Safety flag
+        sf = _safe_json(row["safety"])
+        if isinstance(sf, dict) and sf.get("flagged"):
+            safety_flagged += 1
+
+        # Profession hints
+        prof = row["profession"]
+        if prof:
+            professions[prof.strip().lower()] += 1
+
+    def _dist(counter: dict[str, int]) -> list[dict]:
+        return sorted(
+            [{"label": k, "count": v} for k, v in counter.items()],
+            key=lambda x: x["count"], reverse=True,
+        )
+
+    # ------------------------------------------------------------------
+    # Positive aspects (top terms across reviews)
+    # ------------------------------------------------------------------
+    pos_rows = await pool.fetch(
         """
-        SELECT deep_extraction->>'expertise_level' AS expertise,
-               deep_extraction->>'budget_type' AS budget,
-               deep_extraction->>'discovery_channel' AS channel
+        SELECT deep_extraction->'positive_aspects' AS aspects
         FROM product_reviews pr
         JOIN product_metadata pm ON pm.asin = pr.asin
         WHERE pm.brand ILIKE $1
           AND pr.deep_extraction IS NOT NULL
           AND pr.deep_extraction != '{}'::jsonb
+          AND jsonb_array_length(COALESCE(pr.deep_extraction->'positive_aspects', '[]'::jsonb)) > 0
         """,
         bname,
     )
+    positive_counter: dict[str, int] = defaultdict(int)
+    for row in pos_rows:
+        items = _safe_json(row["aspects"])
+        if isinstance(items, list):
+            for item in items:
+                if isinstance(item, str) and item.strip():
+                    positive_counter[item.strip().lower()] += 1
 
-    expertise_counter: dict[str, int] = defaultdict(int)
-    budget_counter: dict[str, int] = defaultdict(int)
-    channel_counter: dict[str, int] = defaultdict(int)
-    for row in buyer_rows:
-        if row["expertise"]:
-            expertise_counter[row["expertise"]] += 1
-        if row["budget"]:
-            budget_counter[row["budget"]] += 1
-        if row["channel"]:
-            channel_counter[row["channel"]] += 1
+    top_positives = [
+        {"aspect": k, "count": v}
+        for k, v in sorted(positive_counter.items(), key=lambda x: x[1], reverse=True)[:20]
+    ]
 
+    # ------------------------------------------------------------------
+    # Consideration set (what buyers considered and rejected)
+    # ------------------------------------------------------------------
+    cons_rows = await pool.fetch(
+        """
+        SELECT deep_extraction->'consideration_set' AS cset
+        FROM product_reviews pr
+        JOIN product_metadata pm ON pm.asin = pr.asin
+        WHERE pm.brand ILIKE $1
+          AND pr.deep_extraction IS NOT NULL
+          AND pr.deep_extraction != '{}'::jsonb
+          AND jsonb_array_length(COALESCE(pr.deep_extraction->'consideration_set', '[]'::jsonb)) > 0
+        """,
+        bname,
+    )
+    consideration_counter: dict[str, dict] = {}
+    for row in cons_rows:
+        items = _safe_json(row["cset"])
+        if isinstance(items, list):
+            for item in items:
+                if isinstance(item, dict):
+                    prod = item.get("product", "Unknown")
+                    key = prod.strip().lower()
+                    if key not in consideration_counter:
+                        consideration_counter[key] = {"product": prod, "count": 0, "reasons": []}
+                    consideration_counter[key]["count"] += 1
+                    why = item.get("why_not")
+                    if why:
+                        consideration_counter[key]["reasons"].append(why)
+
+    top_considerations = sorted(
+        [
+            {"product": v["product"], "count": v["count"],
+             "top_reason": max(set(v["reasons"]), key=v["reasons"].count) if v["reasons"] else None}
+            for v in consideration_counter.values()
+        ],
+        key=lambda x: x["count"], reverse=True,
+    )[:15]
+
+    # ------------------------------------------------------------------
     # Totals
+    # ------------------------------------------------------------------
     total_reviews = sum(r["review_count"] for r in products)
+    deep_review_count = len(enum_rows)
     avg_rating_all = await pool.fetchval(
         "SELECT AVG(average_rating) FROM product_metadata WHERE brand ILIKE $1", bname
     )
@@ -447,6 +612,7 @@ async def get_brand_detail(brand_name: str):
         "brand": bname,
         "product_count": len(products),
         "total_reviews": total_reviews,
+        "deep_review_count": deep_review_count,
         "avg_rating": _safe_float(avg_rating_all),
         "products": [
             {
@@ -466,12 +632,52 @@ async def get_brand_detail(brand_name: str):
         "sentiment_aspects": sentiment_list,
         "top_features": top_features,
         "competitive_flows": flows,
-        "loyalty_breakdown": loyalty_list,
-        "buyer_profile": {
-            "expertise": [{"level": k, "count": v} for k, v in expertise_counter.items()],
-            "budget": [{"type": k, "count": v} for k, v in budget_counter.items()],
-            "discovery_channel": [{"channel": k, "count": v} for k, v in channel_counter.items()],
+        "top_positives": top_positives,
+        "consideration_set": top_considerations,
+        # Churn signals
+        "loyalty_breakdown": _dist(counters["loyalty"]),
+        "repurchase_breakdown": _dist(counters["repurchase"]),
+        "replacement_breakdown": _dist(counters["replacement"]),
+        "trajectory_breakdown": _dist(counters["trajectory"]),
+        "switching_barrier": _dist(barrier_counter),
+        # Failure analysis
+        "failure_analysis": {
+            "failure_count": failure_count,
+            "top_failure_modes": [
+                {"mode": k, "count": v}
+                for k, v in sorted(failure_modes.items(), key=lambda x: x[1], reverse=True)[:10]
+            ],
+            "top_failed_components": [
+                {"component": k, "count": v}
+                for k, v in sorted(failed_components.items(), key=lambda x: x[1], reverse=True)[:10]
+            ],
+            "avg_dollar_lost": round(total_dollar_lost / dollar_lost_count, 2) if dollar_lost_count else None,
+            "total_dollar_lost": round(total_dollar_lost, 2) if dollar_lost_count else None,
         },
+        # Buyer psychology
+        "buyer_profile": {
+            "expertise": _dist(counters["expertise"]),
+            "budget": _dist(counters["budget"]),
+            "discovery_channel": _dist(counters["channel"]),
+            "frustration": _dist(counters["frustration"]),
+            "intensity": _dist(counters["intensity"]),
+            "research_depth": _dist(counters["research"]),
+            "occasion": _dist(counters["occasion"]),
+            "household": _dist(counters["household"]),
+            "buyer_type": _dist(buyer_type_counter),
+            "price_sentiment": _dist(price_sentiment_counter),
+            "professions": [
+                {"profession": k, "count": v}
+                for k, v in sorted(professions.items(), key=lambda x: x[1], reverse=True)[:10]
+            ],
+        },
+        # Engagement signals
+        "consequence_breakdown": _dist(counters["consequence"]),
+        "delay_breakdown": _dist(counters["delay"]),
+        "ecosystem_lock_in": _dist(ecosystem_counter),
+        "amplification_intent": _dist(amplification_counter),
+        "openness_breakdown": _dist(openness_counter),
+        "safety_flagged_count": safety_flagged,
     }
 
 

@@ -79,15 +79,27 @@ export interface CompetitiveFlow {
   avg_rating: number | null
 }
 
-export interface LoyaltyBreakdown {
-  level: string
+export interface LabelCount {
+  label: string
   count: number
 }
 
-export interface DistributionItem {
-  level?: string
-  type?: string
-  channel?: string
+export interface FailureAnalysis {
+  failure_count: number
+  top_failure_modes: { mode: string; count: number }[]
+  top_failed_components: { component: string; count: number }[]
+  avg_dollar_lost: number | null
+  total_dollar_lost: number | null
+}
+
+export interface ConsiderationEntry {
+  product: string
+  count: number
+  top_reason: string | null
+}
+
+export interface PositiveAspect {
+  aspect: string
   count: number
 }
 
@@ -95,17 +107,43 @@ export interface BrandDetail {
   brand: string
   product_count: number
   total_reviews: number
+  deep_review_count: number
   avg_rating: number | null
   products: BrandProduct[]
   sentiment_aspects: SentimentAspect[]
   top_features: FeatureRequest[]
   competitive_flows: CompetitiveFlow[]
-  loyalty_breakdown: LoyaltyBreakdown[]
+  top_positives: PositiveAspect[]
+  consideration_set: ConsiderationEntry[]
+  // Churn signals
+  loyalty_breakdown: LabelCount[]
+  repurchase_breakdown: LabelCount[]
+  replacement_breakdown: LabelCount[]
+  trajectory_breakdown: LabelCount[]
+  switching_barrier: LabelCount[]
+  // Failure analysis
+  failure_analysis: FailureAnalysis
+  // Buyer psychology
   buyer_profile: {
-    expertise: DistributionItem[]
-    budget: DistributionItem[]
-    discovery_channel: DistributionItem[]
+    expertise: LabelCount[]
+    budget: LabelCount[]
+    discovery_channel: LabelCount[]
+    frustration: LabelCount[]
+    intensity: LabelCount[]
+    research_depth: LabelCount[]
+    occasion: LabelCount[]
+    household: LabelCount[]
+    buyer_type: LabelCount[]
+    price_sentiment: LabelCount[]
+    professions: { profession: string; count: number }[]
   }
+  // Engagement signals
+  consequence_breakdown: LabelCount[]
+  delay_breakdown: LabelCount[]
+  ecosystem_lock_in: LabelCount[]
+  amplification_intent: LabelCount[]
+  openness_breakdown: LabelCount[]
+  safety_flagged_count: number
 }
 
 export interface FlowEntry {
