@@ -7,18 +7,24 @@ Mirrors atlas_brain configuration pattern.
 
 import logging
 from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
+from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger("atlas.vision.config")
 
+_env_root = Path(__file__).resolve().parents[3]
+load_dotenv(_env_root / ".env", override=True)
+load_dotenv(_env_root / ".env.local", override=True)
+
 
 class ServerConfig(BaseSettings):
     """Server configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_VISION_")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_VISION_", extra="ignore")
 
     host: str = Field(default="0.0.0.0", description="Server host")
     port: int = Field(default=5002, description="Server port")
@@ -45,6 +51,10 @@ class CameraConfig(BaseSettings):
     discovery_enabled: bool = Field(default=True, description="Auto-discover cameras")
     default_timeout: float = Field(default=10.0, description="Camera timeout")
     snapshot_quality: int = Field(default=85, description="JPEG quality 1-100")
+    register_mock_cameras: bool = Field(
+        default=False,
+        description="Register built-in mock cameras at startup (dev-only)",
+    )
 
 
 class DiscoveryConfig(BaseSettings):
@@ -105,7 +115,7 @@ class PresenceConfig(BaseSettings):
 class Settings(BaseSettings):
     """Main settings aggregator."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_VISION_")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_VISION_", extra="ignore")
 
     # Sub-configurations
     server: ServerConfig = Field(default_factory=ServerConfig)
