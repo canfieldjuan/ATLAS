@@ -215,3 +215,36 @@ export interface CampaignStats {
   top_vendors: { vendor_name: string; count: number }[]
   total: number
 }
+
+export type TargetMode = 'vendor_retention' | 'challenger_intel'
+export type TargetTier = 'report' | 'dashboard' | 'api'
+
+export interface VendorTarget {
+  id: string
+  company_name: string
+  target_mode: TargetMode
+  contact_name: string | null
+  contact_email: string | null
+  contact_role: string | null
+  products_tracked: string[] | null
+  competitors_tracked: string[] | null
+  tier: TargetTier
+  status: string
+  notes: string | null
+  created_at: string
+  updated_at: string
+  campaign_stats?: {
+    total_campaigns: number
+    drafts: number
+    sent: number
+    approved: number
+    last_campaign_at: string | null
+  }
+  recent_reports?: {
+    id: string
+    report_date: string | null
+    report_type: string
+    executive_summary: string | null
+    created_at: string | null
+  }[]
+}

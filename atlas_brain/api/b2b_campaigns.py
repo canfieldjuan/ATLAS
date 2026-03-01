@@ -47,6 +47,7 @@ class GenerateRequest(BaseModel):
     company_name: str | None = None
     min_score: int = 70
     limit: int = 20
+    target_mode: str | None = None  # vendor_retention | challenger_intel | churning_company
 
 
 class SetRecipientBody(BaseModel):
@@ -1028,6 +1029,7 @@ async def generate_campaigns_endpoint(body: GenerateRequest):
         limit=body.limit,
         vendor_filter=body.vendor_name,
         company_filter=body.company_name,
+        target_mode=body.target_mode,
     )
 
     generated = result.get("generated", 0)

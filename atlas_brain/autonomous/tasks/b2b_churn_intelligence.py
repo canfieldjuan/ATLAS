@@ -1113,3 +1113,156 @@ async def _send_notification(task: ScheduledTask, parsed: dict, high_intent: lis
         title=title,
         default_tags="brain,chart_with_downwards_trend",
     )
+
+
+# ------------------------------------------------------------------
+# Vendor-scoped intelligence report (P1: Vendor Retention)
+# ------------------------------------------------------------------
+
+
+async def generate_vendor_report(
+    pool,
+    vendor_name: str,
+    window_days: int = 90,
+) -> dict[str, Any] | None:
+    """Generate a structured intelligence report for a specific vendor.
+
+    Returns the report dict (also stored in b2b_intelligence) or None on failure.
+    Called by the vendor_targets API or campaign generation pipeline.
+    """
+    today = date.today()
+
+    # Fetch signals for this vendor
+    rows = await pool.fetch(
+        """
+        SELECT r.id AS review_id, r.vendor_name, r.reviewer_company, r.product_category,
+               (r.enrichment->>'urgency_score')::numeric AS urgency,
+               (r.enrichment->'reviewer_context'->>'decision_maker')::boolean AS is_dm,
+               r.enrichment->'buyer_authority'->>'role_type' AS role_type,
+               r.enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
+               CASE WHEN r.enrichment->'budget_signals'->>'seat_count' ~ '^\\d+$'
+                    THEN (r.enrichment->'budget_signals'->>'seat_count')::int END AS seat_count,
+               r.enrichment->'timeline'->>'contract_end' AS contract_end,
+               r.enrichment->'timeline'->>'decision_timeline' AS decision_timeline,
+               r.enrichment->'competitors_mentioned' AS competitors_json,
+               r.enrichment->'pain_categories' AS pain_json,
+               r.enrichment->'quotable_phrases' AS quotable_phrases,
+               r.enrichment->'feature_gaps' AS feature_gaps,
+               r.enrichment->'sentiment_trajectory'->>'direction' AS sentiment_direction
+        FROM b2b_reviews r
+        WHERE r.enrichment_status = 'enriched'
+          AND r.enriched_at > NOW() - make_interval(days => $1)
+          AND r.vendor_name ILIKE '%' || $2 || '%'
+          AND (r.enrichment->>'urgency_score')::numeric >= 3
+        ORDER BY (r.enrichment->>'urgency_score')::numeric DESC
+        LIMIT 500
+        """,
+        window_days,
+        vendor_name,
+    )
+
+    if not rows:
+        return None
+
+    signals = []
+    for r in rows:
+        d = dict(r)
+        d["urgency"] = float(d.get("urgency") or 0)
+        comps = d.get("competitors_json")
+        if isinstance(comps, str):
+            try:
+                comps = json.loads(comps)
+            except (json.JSONDecodeError, TypeError):
+                comps = []
+        d["competitors"] = comps if isinstance(comps, list) else []
+        signals.append(d)
+
+    total = len(signals)
+    high_urgency = [s for s in signals if s["urgency"] >= 8]
+    medium_urgency = [s for s in signals if 5 <= s["urgency"] < 8]
+
+    # Pain distribution
+    pain_counts: dict[str, int] = {}
+    for s in signals:
+        pain = _safe_json(s.get("pain_json"))
+        for p in pain:
+            if isinstance(p, dict) and p.get("category"):
+                pain_counts[p["category"]] = pain_counts.get(p["category"], 0) + 1
+
+    # Competitive displacement
+    comp_counts: dict[str, int] = {}
+    for s in signals:
+        for c in s["competitors"]:
+            if isinstance(c, dict) and c.get("name"):
+                comp_counts[c["name"]] = comp_counts.get(c["name"], 0) + 1
+
+    # Feature gaps
+    gap_counts: dict[str, int] = {}
+    for s in signals:
+        gaps = _safe_json(s.get("feature_gaps"))
+        for g in gaps:
+            label = g if isinstance(g, str) else (g.get("feature", "") if isinstance(g, dict) else "")
+            if label:
+                gap_counts[label] = gap_counts.get(label, 0) + 1
+
+    # Anonymized quotes (high-urgency only)
+    anon_quotes: list[str] = []
+    for s in high_urgency[:20]:
+        phrases = _safe_json(s.get("quotable_phrases"))
+        for phrase in phrases:
+            text = phrase if isinstance(phrase, str) else (phrase.get("text", "") if isinstance(phrase, dict) else "")
+            if text and text not in anon_quotes:
+                anon_quotes.append(text)
+            if len(anon_quotes) >= 10:
+                break
+
+    report_data = {
+        "vendor_name": vendor_name,
+        "report_date": str(today),
+        "window_days": window_days,
+        "signal_count": total,
+        "high_urgency_count": len(high_urgency),
+        "medium_urgency_count": len(medium_urgency),
+        "pain_categories": sorted(
+            [{"category": k, "count": v} for k, v in pain_counts.items()],
+            key=lambda x: x["count"], reverse=True,
+        )[:10],
+        "competitive_displacement": sorted(
+            [{"competitor": k, "count": v} for k, v in comp_counts.items()],
+            key=lambda x: x["count"], reverse=True,
+        )[:10],
+        "top_feature_gaps": sorted(
+            [{"feature": k, "count": v} for k, v in gap_counts.items()],
+            key=lambda x: x["count"], reverse=True,
+        )[:10],
+        "anonymized_quotes": anon_quotes[:10],
+    }
+
+    # Persist to b2b_intelligence
+    try:
+        await pool.execute(
+            """
+            INSERT INTO b2b_intelligence (
+                report_date, report_type, vendor_filter,
+                intelligence_data, executive_summary, data_density, status, llm_model
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            """,
+            today,
+            "vendor_retention",
+            vendor_name,
+            json.dumps(report_data, default=str),
+            f"{total} accounts showing churn signals for {vendor_name}. "
+            f"{len(high_urgency)} at critical urgency.",
+            json.dumps({
+                "signal_count": total,
+                "pain_categories": len(pain_counts),
+                "competitors": len(comp_counts),
+                "feature_gaps": len(gap_counts),
+            }),
+            "published",
+            "pipeline_aggregation",
+        )
+    except Exception:
+        logger.exception("Failed to store vendor report for %s", vendor_name)
+
+    return report_data

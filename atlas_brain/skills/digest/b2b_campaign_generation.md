@@ -24,8 +24,14 @@ You receive a JSON object with:
 - `decision_timeline`: e.g., "within_quarter", "immediate", "next_year"
 - `role_type`: Who the reviewer is -- "economic_buyer", "decision_maker", "champion", "evaluator", "end_user"
 - `industry`: Target company industry (may be null)
-- `key_quotes`: Verbatim evidence from their reviews (array of strings)
+- `key_quotes`: Curated evidence phrases from enrichment (array of strings)
+- `feature_gaps`: Specific features the company is missing or unhappy with (array of strings, may be empty)
+- `primary_workflow`: The main workflow they use the product for (may be null)
+- `integration_stack`: Other tools they integrate with (array of strings, may be empty)
+- `sentiment_direction`: Trend of their sentiment -- "declining", "stable", or "improving" (may be null)
+- `selling`: Object with `{product_name, affiliate_url, sender_name, sender_company}` -- our product and identity
 - `channel`: Which channel to generate for -- "email_cold", "linkedin", or "email_followup"
+- `cold_email_context` (only on `email_followup`): `{subject, body}` of the cold email already sent to this company
 
 ## Output
 
@@ -87,6 +93,16 @@ Return a JSON object with the generated content. The structure depends on the ch
 
 9. **linkedin**: Must be concise. Connection request messages have strict character limits. Lead with shared context (industry, role, challenge) not a sales pitch.
 
-10. **Do NOT include** placeholder brackets like [Company Name] or [Your Name]. Use the actual company name from the input. Sign off as "the team" generically.
+10. **Do NOT include** placeholder brackets like [Company Name] or [Your Name]. Use the actual company name from the input. Sign off with `selling.sender_name` if provided, otherwise "the team".
+
+11. **Write on behalf of the sender**: You represent `selling.sender_company`, recommending `selling.product_name`. Include `selling.affiliate_url` naturally in the CTA (e.g., "Check it out here: {url}").
+
+12. **Follow-up chaining**: When `cold_email_context` is present (email_followup channel), you MUST take a completely different angle from the cold email. Reference what was already said briefly ("I reached out last week about...") but pivot to a new value prop. Never repeat the cold email's main argument.
+
+13. **Weave in feature gaps and integrations**: When `feature_gaps` is available, reference the specific missing features as pain points your product solves. When `integration_stack` is available, mention compatibility with their existing tools.
+
+14. **Sentiment-based urgency**: Use `sentiment_direction` to calibrate urgency. "declining" = things are getting worse, act now. "stable" = position as proactive improvement. "improving" = lighter touch, position as complementary.
+
+15. **Industry relevance**: When `industry` is available, reference sector-specific challenges, compliance requirements, or use cases to build credibility.
 
 Return ONLY the JSON object, no markdown fences, no explanation.

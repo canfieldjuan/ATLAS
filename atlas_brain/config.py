@@ -2119,6 +2119,11 @@ class B2BCampaignConfig(BaseSettings):
     temperature: float = Field(default=0.7, description="LLM sampling temperature")
     default_sender_name: str = Field(default="", description="Sender name for outreach")
     default_sender_company: str = Field(default="", description="Sender company name for outreach")
+    default_booking_url: str = Field(default="", description="Default booking/calendar URL for outreach CTAs")
+    target_mode: str = Field(
+        default="vendor_retention",
+        description="Campaign target mode: vendor_retention | challenger_intel | churning_company",
+    )
 
 
 class CampaignSequenceConfig(BaseSettings):
@@ -2172,6 +2177,31 @@ class CampaignSequenceConfig(BaseSettings):
         from zoneinfo import ZoneInfo
         ZoneInfo(v)
         return v
+
+
+class AmazonSellerCampaignConfig(BaseSettings):
+    """Amazon Seller Intelligence campaign outreach configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_SELLER_CAMPAIGN_", env_file=".env", extra="ignore",
+    )
+
+    enabled: bool = Field(default=False, description="Enable Amazon seller campaign engine")
+    max_campaigns_per_run: int = Field(default=10, ge=1, description="Max categories to generate campaigns for per run")
+    channels: list[str] = Field(
+        default=["email_cold", "email_followup"],
+        description="Channels to generate content for",
+    )
+    schedule_cron: str = Field(default="0 21 * * *", description="Campaign generation schedule (daily 9 PM)")
+    dedup_days: int = Field(default=14, ge=1, description="Days before re-targeting same seller+category")
+    min_reviews_per_category: int = Field(default=50, ge=10, description="Min reviews in category before generating campaigns")
+    max_tokens: int = Field(default=2048, description="Max tokens per LLM generation call")
+    temperature: float = Field(default=0.7, description="LLM sampling temperature")
+    default_sender_name: str = Field(default="", description="Sender name for outreach")
+    default_sender_title: str = Field(default="", description="Sender title for outreach")
+    product_name: str = Field(default="Atlas Seller Intelligence", description="Product name used in outreach")
+    landing_url: str = Field(default="", description="Dashboard landing page URL")
+    free_report_url: str = Field(default="", description="Free category report URL template")
 
 
 class TemporalPatternConfig(BaseSettings):
@@ -2617,6 +2647,7 @@ class Settings(BaseSettings):
     b2b_scrape: B2BScrapeConfig = Field(default_factory=B2BScrapeConfig)
     b2b_campaign: B2BCampaignConfig = Field(default_factory=B2BCampaignConfig)
     campaign_sequence: CampaignSequenceConfig = Field(default_factory=CampaignSequenceConfig)
+    seller_campaign: AmazonSellerCampaignConfig = Field(default_factory=AmazonSellerCampaignConfig)
     openai_compat: OpenAICompatConfig = Field(default_factory=OpenAICompatConfig)
     ftl_tracing: FTLTracingConfig = Field(default_factory=FTLTracingConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)

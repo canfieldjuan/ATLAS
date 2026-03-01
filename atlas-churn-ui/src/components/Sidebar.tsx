@@ -5,6 +5,8 @@ import {
   MessageSquareText,
   FileBarChart,
   Crosshair,
+  Shield,
+  Swords,
   Activity,
   X,
 } from 'lucide-react'
@@ -16,6 +18,8 @@ const links = [
   { to: '/reviews', icon: MessageSquareText, label: 'Reviews' },
   { to: '/reports', icon: FileBarChart, label: 'Reports' },
   { to: '/leads', icon: Crosshair, label: 'Leads' },
+  { to: '/vendor-targets', icon: Shield, label: 'Targets' },
+  { to: '/challengers', icon: Swords, label: 'Challengers' },
 ]
 
 interface SidebarProps {

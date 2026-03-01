@@ -90,18 +90,25 @@ async def _generate_next_step(
         logger.warning("No LLM available for sequence progression")
         return None
 
-    skill = get_skill_registry().get("digest/b2b_campaign_sequence")
-    if not skill:
-        logger.error("Skill digest/b2b_campaign_sequence not found")
-        return None
-
-    # Parse context from JSONB
+    # Parse context from JSONB (needed early for skill selection)
     company_context = seq.get("company_context") or {}
     selling_context = seq.get("selling_context") or {}
     if isinstance(company_context, str):
         company_context = json.loads(company_context)
     if isinstance(selling_context, str):
         selling_context = json.loads(selling_context)
+
+    # Select skill based on sequence type
+    is_seller_seq = company_context.get("recipient_type") == "amazon_seller"
+    skill_name = (
+        "digest/amazon_seller_campaign_sequence"
+        if is_seller_seq
+        else "digest/b2b_campaign_sequence"
+    )
+    skill = get_skill_registry().get(skill_name)
+    if not skill:
+        logger.error("Skill %s not found", skill_name)
+        return None
 
     # Days since last email
     days_since = "N/A"
@@ -112,17 +119,30 @@ async def _generate_next_step(
     engagement = _build_engagement_summary(seq)
     prev_emails = _build_previous_emails(previous_campaigns)
 
-    system_prompt = (
-        skill.content
-        .replace("{company_name}", seq.get("company_name", ""))
-        .replace("{company_context}", json.dumps(company_context, indent=2, default=str))
-        .replace("{selling_context}", json.dumps(selling_context, indent=2, default=str))
-        .replace("{current_step}", str(seq.get("current_step", 1) + 1))
-        .replace("{max_steps}", str(seq.get("max_steps", 4)))
-        .replace("{days_since_last}", days_since)
-        .replace("{engagement_summary}", engagement)
-        .replace("{previous_emails}", prev_emails)
-    )
+    # Build template replacements (shared + skill-specific)
+    replacements = {
+        "{company_name}": seq.get("company_name", ""),
+        "{company_context}": json.dumps(company_context, indent=2, default=str),
+        "{selling_context}": json.dumps(selling_context, indent=2, default=str),
+        "{current_step}": str(seq.get("current_step", 1) + 1),
+        "{max_steps}": str(seq.get("max_steps", 4)),
+        "{days_since_last}": days_since,
+        "{engagement_summary}": engagement,
+        "{previous_emails}": prev_emails,
+    }
+
+    # Extra placeholders for Amazon seller sequence skill
+    if is_seller_seq:
+        cat_intel = company_context.get("category_intelligence", {})
+        replacements["{recipient_name}"] = company_context.get("seller_name", "")
+        replacements["{recipient_company}"] = company_context.get("seller_name", "")
+        replacements["{recipient_type}"] = "amazon_seller"
+        replacements["{category}"] = company_context.get("category", "")
+        replacements["{category_intelligence}"] = json.dumps(cat_intel, indent=2, default=str)
+
+    system_prompt = skill.content
+    for placeholder, value in replacements.items():
+        system_prompt = system_prompt.replace(placeholder, value)
 
     messages = [
         Message(role="system", content=system_prompt),

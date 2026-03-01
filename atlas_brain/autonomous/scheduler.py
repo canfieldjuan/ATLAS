@@ -519,6 +519,18 @@ class TaskScheduler:
             "timeout_seconds": 60,
             "metadata": {"builtin_handler": "campaign_analytics_refresh"},
         },
+        {
+            "name": "amazon_seller_campaign_generation",
+            "description": "Generate outreach campaigns targeting Amazon sellers with category intelligence",
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": "0 21 * * *",
+            "timeout_seconds": 600,
+            "metadata": {
+                "builtin_handler": "amazon_seller_campaign_generation",
+                "notify_tags": "briefcase,campaign",
+            },
+        },
     ]
 
     async def _ensure_default_tasks(self) -> None:
@@ -546,6 +558,7 @@ class TaskScheduler:
             _cron_overrides = {
                 "news_intelligence": f"0 {settings.news_intel.schedule_hour} * * *",
                 "b2b_campaign_generation": settings.b2b_campaign.schedule_cron,
+                "amazon_seller_campaign_generation": settings.seller_campaign.schedule_cron,
             }
 
             # Merge pipeline interval overrides from registry
@@ -681,6 +694,7 @@ class TaskScheduler:
                 "email_graph_sync": "0 1 * * *",
                 "reasoning_reflection": settings.reasoning.reflection_cron,
                 "b2b_campaign_generation": settings.b2b_campaign.schedule_cron,
+                "amazon_seller_campaign_generation": settings.seller_campaign.schedule_cron,
             }
 
             # Merge pipeline cron overrides

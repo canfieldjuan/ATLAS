@@ -37,7 +37,9 @@ from .intelligence import router as intelligence_router
 from .b2b_affiliates import router as b2b_affiliates_router
 from .b2b_campaigns import router as b2b_campaigns_router
 from .b2b_dashboard import router as b2b_dashboard_router
+from .vendor_targets import router as vendor_targets_router
 from .consumer_dashboard import router as consumer_dashboard_router
+from .seller_campaigns import router as seller_campaigns_router
 
 # Main router that aggregates all sub-routers
 router = APIRouter()
@@ -75,4 +77,6 @@ router.include_router(intelligence_router)
 router.include_router(b2b_affiliates_router)
 router.include_router(b2b_campaigns_router)
 router.include_router(b2b_dashboard_router)
+router.include_router(vendor_targets_router)
 router.include_router(consumer_dashboard_router)
+router.include_router(seller_campaigns_router)

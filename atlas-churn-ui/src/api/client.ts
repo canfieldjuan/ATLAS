@@ -13,6 +13,7 @@ import type {
   ClickSummary,
   Campaign,
   CampaignStats,
+  VendorTarget,
 } from '../types'
 
 const BASE = '/api/v1/b2b/dashboard'
@@ -196,6 +197,7 @@ export async function generateCampaigns(body?: {
   company_name?: string
   min_score?: number
   limit?: number
+  target_mode?: string
 }) {
   const res = await fetch(CAMPAIGNS_BASE + '/generate', {
     method: 'POST',
@@ -218,6 +220,71 @@ export async function updateCampaign(id: string, body: Partial<Pick<Campaign, 's
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  return res.json()
+}
+
+// ---------------------------------------------------------------------------
+// Vendor Targets
+// ---------------------------------------------------------------------------
+
+const TARGETS_BASE = '/api/v1/b2b/vendor-targets'
+
+async function targetGet<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
+  const url = new URL(TARGETS_BASE + path, window.location.origin)
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null && v !== '') {
+        url.searchParams.set(k, String(v))
+      }
+    }
+  }
+  const res = await fetch(url.toString())
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  return res.json()
+}
+
+export async function fetchVendorTargets(params?: {
+  target_mode?: string
+  status?: string
+  search?: string
+  limit?: number
+}) {
+  return targetGet<{ targets: VendorTarget[]; count: number }>('', params)
+}
+
+export async function fetchVendorTarget(id: string) {
+  return targetGet<VendorTarget>(`/${id}`)
+}
+
+export async function createVendorTarget(body: Partial<VendorTarget>) {
+  const res = await fetch(TARGETS_BASE, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  return res.json()
+}
+
+export async function updateVendorTarget(id: string, body: Partial<VendorTarget>) {
+  const res = await fetch(TARGETS_BASE + `/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  return res.json()
+}
+
+export async function deleteVendorTarget(id: string) {
+  const res = await fetch(TARGETS_BASE + `/${id}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  return res.json()
+}
+
+export async function generateVendorReport(id: string) {
+  const res = await fetch(TARGETS_BASE + `/${id}/generate-report`, { method: 'POST' })
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
   return res.json()
 }

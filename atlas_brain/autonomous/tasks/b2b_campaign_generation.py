@@ -100,14 +100,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         pool=pool,
         min_score=cfg.min_opportunity_score,
         limit=cfg.max_campaigns_per_run,
+        target_mode=cfg.target_mode,
     )
 
     # Send notification
     if result.get("generated", 0) > 0:
         from ...pipelines.notify import send_pipeline_notification
 
+        mode_label = result.get("target_mode", cfg.target_mode).replace("_", " ").title()
         msg = (
-            f"Generated {result['generated']} campaign(s) for "
+            f"[{mode_label}] Generated {result['generated']} campaign(s) for "
             f"{result['companies']} company/companies. "
             f"Review drafts in the Leads dashboard."
         )
@@ -213,8 +215,37 @@ async def generate_campaigns(
     limit: int = 20,
     vendor_filter: str | None = None,
     company_filter: str | None = None,
+    target_mode: str | None = None,
 ) -> dict[str, Any]:
-    """Core generation logic, shared by autonomous task and manual API trigger."""
+    """Core generation logic, shared by autonomous task and manual API trigger.
+
+    Dispatches to the appropriate generation path based on target_mode:
+      - churning_company: original behavior (outreach to the churning company)
+      - vendor_retention: sell churn intelligence to the vendor losing customers
+      - challenger_intel: sell intent leads to the challenger gaining customers
+    """
+    cfg = settings.b2b_campaign
+    mode = target_mode or cfg.target_mode
+
+    if mode == "vendor_retention":
+        return await _generate_vendor_campaigns(pool, min_score, limit, vendor_filter)
+    elif mode == "challenger_intel":
+        return await _generate_challenger_campaigns(pool, min_score, limit, vendor_filter)
+
+    # Default: churning_company (original behavior)
+    return await _generate_churning_company_campaigns(
+        pool, min_score, limit, vendor_filter, company_filter,
+    )
+
+
+async def _generate_churning_company_campaigns(
+    pool,
+    min_score: int,
+    limit: int,
+    vendor_filter: str | None,
+    company_filter: str | None,
+) -> dict[str, Any]:
+    """Original generation path: outreach to the churning company."""
     cfg = settings.b2b_campaign
 
     # 1. Fetch top opportunities from enriched reviews
@@ -342,11 +373,11 @@ async def generate_campaigns(
                             key_quotes, source_review_ids,
                             channel, subject, body, cta,
                             status, batch_id, llm_model,
-                            partner_id, industry
+                            partner_id, industry, target_mode
                         ) VALUES (
                             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                             $11, $12, $13, $14, $15, $16, $17, $18,
-                            $19, $20, $21, $22, $23
+                            $19, $20, $21, $22, $23, $24
                         )
                         """,
                         company_name,
@@ -372,6 +403,7 @@ async def generate_campaigns(
                         llm_model_name,
                         _uuid.UUID(partner_id),
                         context.get("industry"),
+                        "churning_company",
                     )
                     generated += 1
                 except Exception:
@@ -402,7 +434,7 @@ async def generate_campaigns(
                 )
 
     logger.info(
-        "Campaign generation: %d generated, %d failed, %d skipped (no partner), %d sequences from %d companies",
+        "Campaign generation (churning_company): %d generated, %d failed, %d skipped (no partner), %d sequences from %d companies",
         generated, failed, skipped_no_partner, sequences_created, len(companies_to_process),
     )
 
@@ -414,6 +446,541 @@ async def generate_campaigns(
         "sequences_created": sequences_created,
         "companies": len(companies_to_process),
         "batch_id": batch_id,
+        "target_mode": "churning_company",
+    }
+
+
+# ------------------------------------------------------------------
+# Vendor retention campaign generation (P1)
+# ------------------------------------------------------------------
+
+
+async def _fetch_vendor_targets(pool, vendor_name: str | None = None) -> list[dict]:
+    """Fetch active vendor targets, optionally filtered by vendor name."""
+    if vendor_name:
+        rows = await pool.fetch(
+            """
+            SELECT id, company_name, target_mode, contact_name, contact_email,
+                   contact_role, products_tracked, competitors_tracked, tier, status, notes
+            FROM vendor_targets
+            WHERE status = 'active' AND target_mode = 'vendor_retention'
+              AND company_name ILIKE '%' || $1 || '%'
+            """,
+            vendor_name,
+        )
+    else:
+        rows = await pool.fetch(
+            """
+            SELECT id, company_name, target_mode, contact_name, contact_email,
+                   contact_role, products_tracked, competitors_tracked, tier, status, notes
+            FROM vendor_targets
+            WHERE status = 'active' AND target_mode = 'vendor_retention'
+            """
+        )
+    return [dict(r) for r in rows]
+
+
+def _build_vendor_context(vendor_name: str, signals: list[dict]) -> dict[str, Any]:
+    """Aggregate churn signals into a vendor-scoped intelligence summary."""
+    total = len(signals)
+    high_urgency = sum(1 for s in signals if _safe_float(s.get("urgency"), 0) >= 8)
+    medium_urgency = sum(1 for s in signals if 5 <= _safe_float(s.get("urgency"), 0) < 8)
+
+    # Pain distribution
+    pain_counts: dict[str, int] = {}
+    for s in signals:
+        pain = _parse_json_field(s.get("pain_json"))
+        for p in pain:
+            if isinstance(p, dict) and p.get("category"):
+                pain_counts[p["category"]] = pain_counts.get(p["category"], 0) + 1
+
+    # Competitor distribution (who they're losing to)
+    comp_counts: dict[str, int] = {}
+    for s in signals:
+        comps = s.get("competitors", [])
+        for c in comps:
+            if isinstance(c, dict) and c.get("name"):
+                name = c["name"]
+                comp_counts[name] = comp_counts.get(name, 0) + 1
+
+    # Feature gaps
+    gap_counts: dict[str, int] = {}
+    for s in signals:
+        gaps = _parse_json_field(s.get("feature_gaps"))
+        for g in gaps:
+            label = g if isinstance(g, str) else (g.get("feature", "") if isinstance(g, dict) else "")
+            if label:
+                gap_counts[label] = gap_counts.get(label, 0) + 1
+
+    # Timeline signals
+    timeline_count = sum(1 for s in signals if s.get("contract_end"))
+
+    return {
+        "vendor_name": vendor_name,
+        "signal_summary": {
+            "total_signals": total,
+            "high_urgency_count": high_urgency,
+            "medium_urgency_count": medium_urgency,
+            "pain_distribution": sorted(
+                [{"category": k, "count": v} for k, v in pain_counts.items()],
+                key=lambda x: x["count"], reverse=True,
+            )[:10],
+            "competitor_distribution": sorted(
+                [{"name": k, "count": v} for k, v in comp_counts.items()],
+                key=lambda x: x["count"], reverse=True,
+            )[:10],
+            "feature_gaps": sorted(
+                gap_counts.keys(), key=lambda k: gap_counts[k], reverse=True,
+            )[:10],
+            "timeline_signals": timeline_count,
+            "trend_vs_last_month": None,  # TODO: compute from historical data
+        },
+    }
+
+
+async def _generate_vendor_campaigns(
+    pool,
+    min_score: int,
+    limit: int,
+    vendor_filter: str | None,
+) -> dict[str, Any]:
+    """Generate campaigns targeting vendor CS/Product leaders with churn intelligence."""
+    cfg = settings.b2b_campaign
+
+    # 1. Fetch vendor targets (our customers)
+    targets = await _fetch_vendor_targets(pool, vendor_filter)
+    if not targets:
+        return {"generated": 0, "skipped": 0, "failed": 0, "companies": 0,
+                "target_mode": "vendor_retention", "error": "No active vendor targets"}
+
+    # 2. Fetch all enriched opportunities
+    opportunities = await _fetch_opportunities(pool, min_score, limit * 5, dm_only=False)
+
+    # 3. Get LLM + skill
+    from ...services.llm_router import get_llm
+    llm = get_llm("campaign")
+    if llm is None:
+        from ...services import llm_registry
+        llm = llm_registry.get_active()
+    if llm is None:
+        return {"generated": 0, "skipped": 0, "failed": 0, "companies": 0,
+                "target_mode": "vendor_retention", "error": "No LLM available"}
+
+    from ...skills import get_skill_registry
+    skill = get_skill_registry().get("digest/b2b_vendor_outreach")
+    if not skill:
+        logger.warning("Skill 'digest/b2b_vendor_outreach' not found")
+        return {"generated": 0, "skipped": 0, "failed": 0, "companies": 0,
+                "target_mode": "vendor_retention", "error": "Skill not found"}
+
+    llm_model_name = getattr(llm, "model_id", None) or getattr(llm, "model", "unknown")
+    batch_id = f"batch_vr_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+    generated = 0
+    failed = 0
+    skipped = 0
+
+    for target in targets[:limit]:
+        vendor_name = target["company_name"]
+
+        # Dedup: skip vendor if campaign sent within dedup_days
+        existing = await pool.fetchval(
+            """
+            SELECT COUNT(*) FROM b2b_campaigns
+            WHERE LOWER(company_name) = $1
+              AND target_mode = 'vendor_retention'
+              AND created_at > NOW() - make_interval(days => $2)
+            """,
+            vendor_name.lower(), cfg.dedup_days,
+        )
+        if existing > 0:
+            skipped += 1
+            continue
+
+        # Group signals: opportunities where vendor_name matches this target
+        products = target.get("products_tracked") or []
+        vendor_signals = [
+            opp for opp in opportunities
+            if opp["vendor_name"].lower() == vendor_name.lower()
+            or (products and opp["vendor_name"].lower() in [p.lower() for p in products])
+        ]
+
+        if not vendor_signals:
+            logger.debug("No churn signals found for vendor %s, skipping", vendor_name)
+            skipped += 1
+            continue
+
+        # Build vendor-scoped context
+        vendor_ctx = _build_vendor_context(vendor_name, vendor_signals)
+        best = max(vendor_signals, key=lambda o: o["opportunity_score"])
+        review_ids = [o["review_id"] for o in vendor_signals if o.get("review_id")]
+
+        # Generate for email_cold and email_followup
+        cold_email_content: dict[str, str] | None = None
+        for channel in ["email_cold", "email_followup"]:
+            payload = {
+                **vendor_ctx,
+                "contact_name": target.get("contact_name"),
+                "contact_role": target.get("contact_role"),
+                "tier": target.get("tier", "report"),
+                "selling": {
+                    "sender_name": cfg.default_sender_name,
+                    "sender_company": cfg.default_sender_company,
+                    "booking_url": cfg.default_booking_url,
+                },
+                "channel": channel,
+            }
+            if channel == "email_followup" and cold_email_content:
+                payload["cold_email_context"] = cold_email_content
+
+            content = await _generate_content(
+                llm, skill.content, payload, cfg.max_tokens, cfg.temperature,
+            )
+
+            if content:
+                if channel == "email_cold":
+                    cold_email_content = {
+                        "subject": content.get("subject", ""),
+                        "body": content.get("body", ""),
+                    }
+                try:
+                    await pool.execute(
+                        """
+                        INSERT INTO b2b_campaigns (
+                            company_name, vendor_name, product_category,
+                            opportunity_score, urgency_score, pain_categories,
+                            competitors_considering, seat_count, contract_end,
+                            decision_timeline, buying_stage, role_type,
+                            key_quotes, source_review_ids,
+                            channel, subject, body, cta,
+                            status, batch_id, llm_model, industry, target_mode
+                        ) VALUES (
+                            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                            $11, $12, $13, $14, $15, $16, $17, $18,
+                            $19, $20, $21, $22, $23
+                        )
+                        """,
+                        vendor_name,  # company_name = the vendor we're targeting
+                        vendor_name,  # vendor_name = same (they're the vendor)
+                        best.get("product_category"),
+                        best["opportunity_score"],
+                        best.get("urgency"),
+                        json.dumps(vendor_ctx["signal_summary"]["pain_distribution"]),
+                        json.dumps(vendor_ctx["signal_summary"]["competitor_distribution"]),
+                        best.get("seat_count"),
+                        best.get("contract_end"),
+                        best.get("decision_timeline"),
+                        best.get("buying_stage"),
+                        target.get("contact_role"),
+                        json.dumps([]),
+                        review_ids[:20] or None,
+                        channel,
+                        content.get("subject", ""),
+                        content.get("body", ""),
+                        content.get("cta", ""),
+                        "draft",
+                        batch_id,
+                        llm_model_name,
+                        best.get("industry"),
+                        "vendor_retention",
+                    )
+                    generated += 1
+                except Exception:
+                    logger.exception("Failed to store vendor campaign for %s/%s", vendor_name, channel)
+                    failed += 1
+            else:
+                failed += 1
+
+    logger.info(
+        "Campaign generation (vendor_retention): %d generated, %d failed, %d skipped from %d targets",
+        generated, failed, skipped, len(targets),
+    )
+
+    return {
+        "generated": generated,
+        "failed": failed,
+        "skipped": skipped,
+        "companies": len(targets) - skipped,
+        "batch_id": batch_id,
+        "target_mode": "vendor_retention",
+    }
+
+
+# ------------------------------------------------------------------
+# Challenger intel campaign generation (P2)
+# ------------------------------------------------------------------
+
+
+async def _fetch_challenger_targets(pool, vendor_filter: str | None = None) -> list[dict]:
+    """Fetch active challenger targets."""
+    if vendor_filter:
+        rows = await pool.fetch(
+            """
+            SELECT id, company_name, target_mode, contact_name, contact_email,
+                   contact_role, products_tracked, competitors_tracked, tier, status, notes
+            FROM vendor_targets
+            WHERE status = 'active' AND target_mode = 'challenger_intel'
+              AND company_name ILIKE '%' || $1 || '%'
+            """,
+            vendor_filter,
+        )
+    else:
+        rows = await pool.fetch(
+            """
+            SELECT id, company_name, target_mode, contact_name, contact_email,
+                   contact_role, products_tracked, competitors_tracked, tier, status, notes
+            FROM vendor_targets
+            WHERE status = 'active' AND target_mode = 'challenger_intel'
+            """
+        )
+    return [dict(r) for r in rows]
+
+
+def _build_challenger_context(challenger_name: str, signals: list[dict]) -> dict[str, Any]:
+    """Aggregate signals where a specific product is mentioned as the alternative."""
+    total = len(signals)
+
+    # Buying stage distribution
+    by_stage: dict[str, int] = {}
+    for s in signals:
+        stage = s.get("buying_stage") or "unknown"
+        by_stage[stage] = by_stage.get(stage, 0) + 1
+
+    # Role distribution
+    role_counts: dict[str, int] = {}
+    for s in signals:
+        role = s.get("role_type") or "unknown"
+        role_counts[role] = role_counts.get(role, 0) + 1
+
+    # Pain categories driving the switch (from incumbent)
+    pain_counts: dict[str, int] = {}
+    for s in signals:
+        pain = _parse_json_field(s.get("pain_json"))
+        for p in pain:
+            if isinstance(p, dict) and p.get("category"):
+                pain_counts[p["category"]] = pain_counts.get(p["category"], 0) + 1
+
+    # Incumbents losing customers
+    incumbent_counts: dict[str, int] = {}
+    for s in signals:
+        vendor = s.get("vendor_name", "")
+        if vendor:
+            incumbent_counts[vendor] = incumbent_counts.get(vendor, 0) + 1
+
+    # Seat count buckets
+    large = sum(1 for s in signals if (s.get("seat_count") or 0) >= 500)
+    mid = sum(1 for s in signals if 100 <= (s.get("seat_count") or 0) < 500)
+    small = sum(1 for s in signals if 0 < (s.get("seat_count") or 0) < 100)
+
+    # Feature mentions (positive mentions of challenger from competitor context)
+    feature_mentions: list[str] = []
+    for s in signals:
+        comps = s.get("competitors", [])
+        for c in comps:
+            if isinstance(c, dict) and c.get("name", "").lower() == challenger_name.lower():
+                reason = c.get("reason", "")
+                if reason and reason not in feature_mentions:
+                    feature_mentions.append(reason)
+
+    return {
+        "challenger_name": challenger_name,
+        "signal_summary": {
+            "total_leads": total,
+            "by_buying_stage": {
+                "active_purchase": by_stage.get("active_purchase", 0),
+                "evaluation": by_stage.get("evaluation", 0),
+                "renewal_decision": by_stage.get("renewal_decision", 0),
+            },
+            "role_distribution": sorted(
+                [{"role": k, "count": v} for k, v in role_counts.items()],
+                key=lambda x: x["count"], reverse=True,
+            )[:5],
+            "pain_driving_switch": sorted(
+                [{"category": k, "count": v} for k, v in pain_counts.items()],
+                key=lambda x: x["count"], reverse=True,
+            )[:10],
+            "incumbents_losing": sorted(
+                [{"name": k, "count": v} for k, v in incumbent_counts.items()],
+                key=lambda x: x["count"], reverse=True,
+            )[:10],
+            "seat_count_signals": {
+                "large_500plus": large,
+                "mid_100_499": mid,
+                "small_under_100": small,
+            },
+            "feature_mentions": feature_mentions[:10],
+        },
+    }
+
+
+async def _generate_challenger_campaigns(
+    pool,
+    min_score: int,
+    limit: int,
+    vendor_filter: str | None,
+) -> dict[str, Any]:
+    """Generate campaigns targeting challenger Sales/Competitive Intel leaders."""
+    cfg = settings.b2b_campaign
+
+    # 1. Fetch challenger targets
+    targets = await _fetch_challenger_targets(pool, vendor_filter)
+    if not targets:
+        return {"generated": 0, "skipped": 0, "failed": 0, "companies": 0,
+                "target_mode": "challenger_intel", "error": "No active challenger targets"}
+
+    # 2. Fetch all enriched opportunities
+    opportunities = await _fetch_opportunities(pool, min_score, limit * 5, dm_only=False)
+
+    # 3. Get LLM + skill
+    from ...services.llm_router import get_llm
+    llm = get_llm("campaign")
+    if llm is None:
+        from ...services import llm_registry
+        llm = llm_registry.get_active()
+    if llm is None:
+        return {"generated": 0, "skipped": 0, "failed": 0, "companies": 0,
+                "target_mode": "challenger_intel", "error": "No LLM available"}
+
+    from ...skills import get_skill_registry
+    skill = get_skill_registry().get("digest/b2b_challenger_outreach")
+    if not skill:
+        logger.warning("Skill 'digest/b2b_challenger_outreach' not found")
+        return {"generated": 0, "skipped": 0, "failed": 0, "companies": 0,
+                "target_mode": "challenger_intel", "error": "Skill not found"}
+
+    llm_model_name = getattr(llm, "model_id", None) or getattr(llm, "model", "unknown")
+    batch_id = f"batch_ci_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+    generated = 0
+    failed = 0
+    skipped = 0
+
+    for target in targets[:limit]:
+        challenger_name = target["company_name"]
+
+        # Dedup
+        existing = await pool.fetchval(
+            """
+            SELECT COUNT(*) FROM b2b_campaigns
+            WHERE LOWER(company_name) = $1
+              AND target_mode = 'challenger_intel'
+              AND created_at > NOW() - make_interval(days => $2)
+            """,
+            challenger_name.lower(), cfg.dedup_days,
+        )
+        if existing > 0:
+            skipped += 1
+            continue
+
+        # Find signals where this challenger is mentioned as a competitor being considered
+        challenger_signals = []
+        for opp in opportunities:
+            comps = opp.get("competitors", [])
+            for c in comps:
+                if isinstance(c, dict) and c.get("name", "").lower() == challenger_name.lower():
+                    challenger_signals.append(opp)
+                    break
+            # Also match against products_tracked / competitors_tracked
+            if not any(opp is s for s in challenger_signals):
+                products = target.get("competitors_tracked") or []
+                if opp["vendor_name"].lower() in [p.lower() for p in products]:
+                    challenger_signals.append(opp)
+
+        if not challenger_signals:
+            logger.debug("No intent signals found for challenger %s, skipping", challenger_name)
+            skipped += 1
+            continue
+
+        # Build challenger-scoped context
+        challenger_ctx = _build_challenger_context(challenger_name, challenger_signals)
+        best = max(challenger_signals, key=lambda o: o["opportunity_score"])
+        review_ids = [o["review_id"] for o in challenger_signals if o.get("review_id")]
+
+        cold_email_content: dict[str, str] | None = None
+        for channel in ["email_cold", "email_followup"]:
+            payload = {
+                **challenger_ctx,
+                "contact_name": target.get("contact_name"),
+                "contact_role": target.get("contact_role"),
+                "tier": target.get("tier", "report"),
+                "selling": {
+                    "sender_name": cfg.default_sender_name,
+                    "sender_company": cfg.default_sender_company,
+                    "booking_url": cfg.default_booking_url,
+                },
+                "channel": channel,
+            }
+            if channel == "email_followup" and cold_email_content:
+                payload["cold_email_context"] = cold_email_content
+
+            content = await _generate_content(
+                llm, skill.content, payload, cfg.max_tokens, cfg.temperature,
+            )
+
+            if content:
+                if channel == "email_cold":
+                    cold_email_content = {
+                        "subject": content.get("subject", ""),
+                        "body": content.get("body", ""),
+                    }
+                try:
+                    await pool.execute(
+                        """
+                        INSERT INTO b2b_campaigns (
+                            company_name, vendor_name, product_category,
+                            opportunity_score, urgency_score, pain_categories,
+                            competitors_considering, seat_count, contract_end,
+                            decision_timeline, buying_stage, role_type,
+                            key_quotes, source_review_ids,
+                            channel, subject, body, cta,
+                            status, batch_id, llm_model, industry, target_mode
+                        ) VALUES (
+                            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                            $11, $12, $13, $14, $15, $16, $17, $18,
+                            $19, $20, $21, $22, $23
+                        )
+                        """,
+                        challenger_name,  # company_name = the challenger we're targeting
+                        best["vendor_name"],  # vendor_name = the incumbent losing
+                        best.get("product_category"),
+                        best["opportunity_score"],
+                        best.get("urgency"),
+                        json.dumps(challenger_ctx["signal_summary"]["pain_driving_switch"]),
+                        json.dumps(challenger_ctx["signal_summary"]["incumbents_losing"]),
+                        best.get("seat_count"),
+                        best.get("contract_end"),
+                        best.get("decision_timeline"),
+                        best.get("buying_stage"),
+                        target.get("contact_role"),
+                        json.dumps([]),
+                        review_ids[:20] or None,
+                        channel,
+                        content.get("subject", ""),
+                        content.get("body", ""),
+                        content.get("cta", ""),
+                        "draft",
+                        batch_id,
+                        llm_model_name,
+                        best.get("industry"),
+                        "challenger_intel",
+                    )
+                    generated += 1
+                except Exception:
+                    logger.exception("Failed to store challenger campaign for %s/%s", challenger_name, channel)
+                    failed += 1
+            else:
+                failed += 1
+
+    logger.info(
+        "Campaign generation (challenger_intel): %d generated, %d failed, %d skipped from %d targets",
+        generated, failed, skipped, len(targets),
+    )
+
+    return {
+        "generated": generated,
+        "failed": failed,
+        "skipped": skipped,
+        "companies": len(targets) - skipped,
+        "batch_id": batch_id,
+        "target_mode": "challenger_intel",
     }
 
 
