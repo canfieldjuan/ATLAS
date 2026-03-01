@@ -41,8 +41,8 @@ export type BuyerHousehold = 'single' | 'family' | 'professional' | 'gift' | 'bu
 export type BudgetType = 'budget_constrained' | 'value_seeker' | 'premium_willing' | 'unknown'
 export type UseIntensity = 'light' | 'moderate' | 'heavy'
 export type ResearchDepth = 'impulse' | 'light' | 'moderate' | 'deep'
-export type ConsequenceSeverity = 'inconvenience' | 'workflow_impact' | 'financial_loss' | 'safety_concern'
-export type ReplacementBehavior = 'returned' | 'replaced_same' | 'switched_brand' | 'switched_to' | 'avoided' | 'kept_broken' | 'unknown'
+export type ConsequenceSeverity = 'none' | 'positive_impact' | 'inconvenience' | 'workflow_impact' | 'financial_loss' | 'safety_concern'
+export type ReplacementBehavior = 'returned' | 'replaced_same' | 'switched_brand' | 'switched_to' | 'avoided' | 'kept_broken' | 'kept_using' | 'repurchased' | 'unknown'
 
 export interface ConsiderationSetItem {
   product: string
@@ -58,7 +58,7 @@ export interface CommunityMention {
 
 export type BrandLoyaltyDepth = 'first_time' | 'occasional' | 'loyal' | 'long_term_loyal'
 export type ReviewDelaySignal = 'immediate' | 'days' | 'weeks' | 'months' | 'unknown'
-export type SentimentTrajectory = 'always_bad' | 'degraded' | 'mixed_then_bad' | 'initially_positive' | 'unknown'
+export type SentimentTrajectory = 'always_negative' | 'degraded' | 'mixed_then_negative' | 'mixed_then_positive' | 'improved' | 'always_positive' | 'unknown'
 export type OccasionContext = 'none' | 'gift' | 'replacement' | 'upgrade' | 'first_in_category' | 'seasonal' | 'event' | 'professional_use'
 
 export interface EcosystemLockIn {

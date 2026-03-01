@@ -98,8 +98,8 @@ _VALID_HOUSEHOLD = {"single", "family", "professional", "gift", "bulk"}
 _VALID_BUDGET = {"budget_constrained", "value_seeker", "premium_willing", "unknown"}
 _VALID_INTENSITY = {"light", "moderate", "heavy"}
 _VALID_RESEARCH = {"impulse", "light", "moderate", "deep"}
-_VALID_CONSEQUENCE = {"inconvenience", "workflow_impact", "financial_loss", "safety_concern"}
-_VALID_REPLACEMENT = {"returned", "replaced_same", "switched_brand", "switched_to", "kept_broken", "avoided", "unknown"}
+_VALID_CONSEQUENCE = {"none", "positive_impact", "inconvenience", "workflow_impact", "financial_loss", "safety_concern"}
+_VALID_REPLACEMENT = {"returned", "replaced_same", "switched_brand", "switched_to", "avoided", "kept_broken", "kept_using", "repurchased", "unknown"}
 
 # Enum sets for Section A sub-objects
 _VALID_SENTIMENT = {"positive", "negative", "mixed", "neutral"}
@@ -109,7 +109,7 @@ _VALID_PRICE_SENTIMENT = {"expensive", "fair", "cheap", "not_mentioned"}
 # Enum sets for Section C
 _VALID_LOYALTY = {"first_time", "occasional", "loyal", "long_term_loyal"}
 _VALID_DELAY = {"immediate", "days", "weeks", "months", "unknown"}
-_VALID_TRAJECTORY = {"always_bad", "degraded", "mixed_then_bad", "initially_positive", "unknown"}
+_VALID_TRAJECTORY = {"always_negative", "degraded", "mixed_then_negative", "mixed_then_positive", "improved", "always_positive", "unknown"}
 _VALID_OCCASION = {"none", "gift", "replacement", "upgrade", "first_in_category", "seasonal", "event", "professional_use"}
 
 # Enum sets for Section C sub-objects

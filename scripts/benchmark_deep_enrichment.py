@@ -69,11 +69,11 @@ VALID_HOUSEHOLD = {"single", "family", "professional", "gift", "bulk"}
 VALID_BUDGET = {"budget_constrained", "value_seeker", "premium_willing", "unknown"}
 VALID_INTENSITY = {"light", "moderate", "heavy"}
 VALID_RESEARCH = {"impulse", "light", "moderate", "deep"}
-VALID_CONSEQUENCE = {"inconvenience", "workflow_impact", "financial_loss", "safety_concern"}
-VALID_REPLACEMENT = {"returned", "replaced_same", "switched_brand", "switched_to", "kept_broken", "avoided", "unknown"}
+VALID_CONSEQUENCE = {"none", "positive_impact", "inconvenience", "workflow_impact", "financial_loss", "safety_concern"}
+VALID_REPLACEMENT = {"returned", "replaced_same", "switched_brand", "switched_to", "avoided", "kept_broken", "kept_using", "repurchased", "unknown"}
 VALID_LOYALTY = {"first_time", "occasional", "loyal", "long_term_loyal"}
 VALID_DELAY = {"immediate", "days", "weeks", "months", "unknown"}
-VALID_TRAJECTORY = {"always_bad", "degraded", "mixed_then_bad", "initially_positive", "unknown"}
+VALID_TRAJECTORY = {"always_negative", "degraded", "mixed_then_negative", "mixed_then_positive", "improved", "always_positive", "unknown"}
 VALID_OCCASION = {"none", "gift", "replacement", "upgrade", "first_in_category", "seasonal", "event", "professional_use"}
 
 # Section A sub-object enums

@@ -90,10 +90,12 @@ const researchDepth: Record<string, ColorPair> = {
 }
 
 const consequenceSeverity: Record<string, ColorPair> = {
-  inconvenience:   ['bg-slate-500/10',  'text-slate-400'],
-  workflow_impact: ['bg-amber-500/10',  'text-amber-400'],
-  financial_loss:  ['bg-orange-500/10', 'text-orange-400'],
-  safety_concern:  ['bg-red-500/10',    'text-red-400'],
+  none:            ['bg-slate-500/10',   'text-slate-400'],
+  positive_impact: ['bg-green-500/10',   'text-green-400'],
+  inconvenience:   ['bg-amber-500/10',   'text-amber-400'],
+  workflow_impact: ['bg-orange-500/10',  'text-orange-400'],
+  financial_loss:  ['bg-red-500/10',     'text-red-400'],
+  safety_concern:  ['bg-red-500/10',     'text-red-400'],
 }
 
 const replacementBehavior: Record<string, ColorPair> = {
@@ -103,6 +105,8 @@ const replacementBehavior: Record<string, ColorPair> = {
   switched_to:    ['bg-red-500/10',    'text-red-400'],
   avoided:        ['bg-orange-500/10', 'text-orange-400'],
   kept_broken:    ['bg-slate-500/10',  'text-slate-400'],
+  kept_using:     ['bg-green-500/10',  'text-green-400'],
+  repurchased:    ['bg-emerald-500/10','text-emerald-400'],
   unknown:        ['bg-slate-500/10',  'text-slate-400'],
 }
 
@@ -124,11 +128,13 @@ const reviewDelaySignal: Record<string, ColorPair> = {
 }
 
 const sentimentTrajectory: Record<string, ColorPair> = {
-  always_bad:         ['bg-red-500/10',    'text-red-400'],
-  degraded:           ['bg-orange-500/10', 'text-orange-400'],
-  mixed_then_bad:     ['bg-amber-500/10',  'text-amber-400'],
-  initially_positive: ['bg-blue-500/10',   'text-blue-400'],
-  unknown:            ['bg-slate-500/10',  'text-slate-400'],
+  always_negative:    ['bg-red-500/10',     'text-red-400'],
+  degraded:           ['bg-orange-500/10',  'text-orange-400'],
+  mixed_then_negative:['bg-amber-500/10',   'text-amber-400'],
+  mixed_then_positive:['bg-blue-500/10',    'text-blue-400'],
+  improved:           ['bg-cyan-500/10',    'text-cyan-400'],
+  always_positive:    ['bg-green-500/10',   'text-green-400'],
+  unknown:            ['bg-slate-500/10',   'text-slate-400'],
 }
 
 const occasionContext: Record<string, ColorPair> = {
