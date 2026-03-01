@@ -57,7 +57,6 @@ export default function BrandCompare() {
   const [suggestions, setSuggestions] = useState<BrandSummary[]>([])
   const [showSuggestions, setShowSuggestions] = useState(false)
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined)
-  const inputRef = useRef<HTMLInputElement>(null)
 
   // Sync brands -> URL
   useEffect(() => {
@@ -133,7 +132,7 @@ export default function BrandCompare() {
             <span
               key={b}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium text-white"
-              style={{ backgroundColor: `${BRAND_COLORS[i % BRAND_COLORS.length]}20`, borderColor: BRAND_COLORS[i % BRAND_COLORS.length], borderWidth: 1 }}
+              style={{ backgroundColor: `${BRAND_COLORS[i % BRAND_COLORS.length]}20`, border: `1px solid ${BRAND_COLORS[i % BRAND_COLORS.length]}` }}
             >
               <span className="w-2 h-2 rounded-full" style={{ backgroundColor: BRAND_COLORS[i % BRAND_COLORS.length] }} />
               {b}
@@ -147,7 +146,6 @@ export default function BrandCompare() {
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
             <input
-              ref={inputRef}
               type="text"
               value={brandInput}
               onChange={(e) => setBrandInput(e.target.value)}
@@ -177,10 +175,9 @@ export default function BrandCompare() {
         )}
       </div>
 
-      {!canFetch && !loading && null}
       {canFetch && loading && <ComparisonSkeleton />}
 
-      {data && brandKeys.length > 0 && (
+      {canFetch && data && brandKeys.length > 0 && (
         <>
           {/* ── Scorecard Table ── */}
           <Card title="Scorecard">

@@ -379,7 +379,7 @@ async def compare_brands(
     brand_clauses = " OR ".join(f"pm.brand ILIKE ${i+1}" for i in range(len(brand_list)))
     brand_params = list(brand_list)
 
-    # ── Query 1: Summary stats per brand ──
+    # -- Query 1: Summary stats per brand --
     summary_rows = await pool.fetch(
         f"""
         SELECT pm.brand,
@@ -455,7 +455,7 @@ async def compare_brands(
             "safety_flagged_count": r["safety_count"] or 0,
         }
 
-    # ── Query 2: Deep enum fields (single scan for all brands) ──
+    # -- Query 2: Deep enum fields (single scan for all brands) --
     enum_rows = await pool.fetch(
         f"""
         SELECT pm.brand,
@@ -486,8 +486,6 @@ async def compare_brands(
     all_feature_requests: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))  # request -> {brand: count}
     all_comparisons: list[dict] = []
     all_considerations: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))  # product -> {brand: count}
-
-    brand_names_lower = {b.lower() for b in brand_list}
 
     for row in enum_rows:
         brand = row["brand"]
@@ -562,7 +560,7 @@ async def compare_brands(
                     prod = item.get("product", "Unknown")
                     all_considerations[prod.strip().lower()][brand] += 1
 
-    # ── Query 3: First-pass enrichment (severity, workaround) per brand ──
+    # -- Query 3: First-pass enrichment (severity, workaround) per brand --
     fp_rows = await pool.fetch(
         f"""
         SELECT pm.brand,
@@ -590,7 +588,7 @@ async def compare_brands(
         if row["workaround_found"]:
             fpc["workaround_count"] += 1
 
-    # ── Assemble per-brand metrics ──
+    # -- Assemble per-brand metrics --
     per_brand: dict[str, dict] = {}
     for bname in brand_list:
         # Find the actual brand key (case-insensitive match)
@@ -631,7 +629,7 @@ async def compare_brands(
             "workaround_rate": round(fpc["workaround_count"] / fp_total * 100) if fp_total > 0 else None,
         }
 
-    # ── Cross-brand computations ──
+    # -- Cross-brand computations --
 
     # Competitive flows: only between compared brands
     flow_agg: dict[str, dict] = {}

@@ -35,7 +35,7 @@ export function DistBar({ items, label }: { items: LabelCount[]; label: string }
   const total = items.reduce((s, i) => s + i.count, 0)
   return (
     <div>
-      <h4 className="text-xs text-slate-400 mb-1.5">{label}</h4>
+      {label && <h4 className="text-xs text-slate-400 mb-1.5">{label}</h4>}
       <div className="flex h-5 rounded-full overflow-hidden">
         {items.map((item) => {
           const pct = (item.count / total) * 100
