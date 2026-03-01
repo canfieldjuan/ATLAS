@@ -480,6 +480,18 @@ class TaskScheduler:
                 "synthesis_skill": "digest/news_intelligence",
             },
         },
+        {
+            "name": "b2b_campaign_generation",
+            "description": "Weekly ABM campaign generation from churn intelligence opportunities",
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": "0 22 * * 0",
+            "timeout_seconds": 600,
+            "metadata": {
+                "builtin_handler": "b2b_campaign_generation",
+                "notify_tags": "briefcase,campaign",
+            },
+        },
     ]
 
     async def _ensure_default_tasks(self) -> None:
