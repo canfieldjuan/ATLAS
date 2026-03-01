@@ -44,6 +44,7 @@ export interface BrandSummary {
   complaint_count: number
   praise_count: number
   safety_count: number
+  brand_health: number | null
 }
 
 export interface BrandProduct {
@@ -109,6 +110,7 @@ export interface BrandDetail {
   total_reviews: number
   deep_review_count: number
   avg_rating: number | null
+  brand_health: number | null
   products: BrandProduct[]
   sentiment_aspects: SentimentAspect[]
   top_features: FeatureRequest[]

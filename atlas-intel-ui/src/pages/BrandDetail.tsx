@@ -240,17 +240,30 @@ export default function BrandDetail() {
       </button>
 
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-white">{data.brand}</h1>
-          <p className="text-sm text-slate-400 mt-1">
-            {data.product_count} products, {data.total_reviews.toLocaleString()} reviews
-            {data.avg_rating != null && ` | Avg ${data.avg_rating.toFixed(1)}`}
-            {data.deep_review_count > 0 && (
-              <span className="text-purple-400 ml-2">
-                {data.deep_review_count.toLocaleString()} deep-enriched
+        <div className="flex items-center gap-4">
+          <div>
+            <h1 className="text-2xl font-bold text-white">{data.brand}</h1>
+            <p className="text-sm text-slate-400 mt-1">
+              {data.product_count} products, {data.total_reviews.toLocaleString()} reviews
+              {data.avg_rating != null && ` | Avg ${data.avg_rating.toFixed(1)}`}
+              {data.deep_review_count > 0 && (
+                <span className="text-purple-400 ml-2">
+                  {data.deep_review_count.toLocaleString()} deep-enriched
+                </span>
+              )}
+            </p>
+          </div>
+          {data.brand_health != null && (
+            <div className="flex flex-col items-center px-4 py-2 bg-slate-900/50 border border-slate-700/50 rounded-xl">
+              <span className={clsx(
+                'text-2xl font-bold',
+                data.brand_health >= 60 ? 'text-emerald-400' : data.brand_health >= 40 ? 'text-amber-400' : 'text-red-400',
+              )}>
+                {data.brand_health}
               </span>
-            )}
-          </p>
+              <span className="text-[10px] text-slate-500 uppercase tracking-wider">Health</span>
+            </div>
+          )}
         </div>
         <button
           onClick={refresh}

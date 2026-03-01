@@ -97,6 +97,18 @@ export default function Brands() {
       sortValue: (r) => r.avg_praise_score ?? 0,
     },
     {
+      key: 'health',
+      header: 'Health',
+      render: (r) => {
+        const h = r.brand_health
+        if (h == null) return <span className="text-slate-500">--</span>
+        const color = h >= 60 ? 'text-emerald-400' : h >= 40 ? 'text-amber-400' : 'text-red-400'
+        return <span className={`font-mono font-medium ${color}`}>{h}</span>
+      },
+      sortable: true,
+      sortValue: (r) => r.brand_health ?? -1,
+    },
+    {
       key: 'safety',
       header: 'Safety',
       render: (r) =>
@@ -172,6 +184,7 @@ export default function Brands() {
             <option value="avg_rating">Avg Rating</option>
             <option value="avg_complaint_score">Pain Score</option>
             <option value="avg_praise_score">Loyalty Score</option>
+            <option value="brand_health">Brand Health</option>
             <option value="safety_count">Safety Flags</option>
             <option value="brand">Brand Name</option>
           </select>

@@ -49,6 +49,56 @@ def _pool_or_503():
     return pool
 
 
+def _compute_brand_health(r) -> int | None:
+    """Composite brand health score (0-100) from deep enrichment signals.
+
+    Components (equal weight, 25 pts each):
+      1. Repurchase rate: % of reviewers who would repurchase
+      2. Retention rate: positive replacement / (positive + negative)
+      3. Trajectory rate: positive trajectory / (positive + negative)
+      4. Safety rate: inverted -- fewer safety flags = higher score
+
+    Returns None if fewer than 5 deep-enriched reviews.
+    """
+    deep = r["deep_count"]
+    if deep < 5:
+        return None
+
+    scores: list[float] = []
+
+    # 1. Repurchase
+    rp_total = r["repurchase_total"]
+    if rp_total > 0:
+        scores.append(r["repurchase_yes"] / rp_total)
+    else:
+        scores.append(0.5)  # neutral if no data
+
+    # 2. Retention
+    ret_pos = r["retention_pos"]
+    ret_neg = r["retention_neg"]
+    ret_total = ret_pos + ret_neg
+    if ret_total > 0:
+        scores.append(ret_pos / ret_total)
+    else:
+        scores.append(0.5)
+
+    # 3. Trajectory
+    traj_pos = r["trajectory_pos"]
+    traj_neg = r["trajectory_neg"]
+    traj_total = traj_pos + traj_neg
+    if traj_total > 0:
+        scores.append(traj_pos / traj_total)
+    else:
+        scores.append(0.5)
+
+    # 4. Safety (inverted: 0 flags = 1.0, lots of flags relative to deep count = 0.0)
+    safety = r["safety_count"]
+    safety_rate = max(0.0, 1.0 - (safety / deep) * 10)  # 10% flagged = score 0
+    scores.append(safety_rate)
+
+    return round(sum(scores) / len(scores) * 100)
+
+
 # ---------------------------------------------------------------------------
 # GET /pipeline
 # ---------------------------------------------------------------------------
@@ -184,6 +234,7 @@ async def list_brands(
         "avg_rating": "pm_avg_rating DESC NULLS LAST",
         "safety_count": "safety_count DESC",
         "brand": "brand ASC",
+        "brand_health": "deep_count DESC",  # sort by deep count as proxy; real sort in Python
     }
     order = sort_map.get(sort_by, "review_count DESC")
 
@@ -213,7 +264,34 @@ async def list_brands(
                    WHERE pr.deep_extraction IS NOT NULL
                      AND pr.deep_extraction != '{{}}'::jsonb
                      AND pr.deep_extraction->'safety_flag'->>'flagged' = 'true'
-               ) AS safety_count
+               ) AS safety_count,
+               -- Brand health score components
+               COUNT(*) FILTER (
+                   WHERE pr.deep_extraction IS NOT NULL
+                     AND pr.deep_extraction != '{{}}'::jsonb
+               ) AS deep_count,
+               COUNT(*) FILTER (
+                   WHERE pr.deep_extraction->>'would_repurchase' = 'true'
+               ) AS repurchase_yes,
+               COUNT(*) FILTER (
+                   WHERE pr.deep_extraction->>'would_repurchase' IN ('true','false')
+               ) AS repurchase_total,
+               COUNT(*) FILTER (
+                   WHERE pr.deep_extraction->>'replacement_behavior'
+                         IN ('kept_using','repurchased','replaced_same')
+               ) AS retention_pos,
+               COUNT(*) FILTER (
+                   WHERE pr.deep_extraction->>'replacement_behavior'
+                         IN ('switched_to','switched_brand','returned','avoided')
+               ) AS retention_neg,
+               COUNT(*) FILTER (
+                   WHERE pr.deep_extraction->>'sentiment_trajectory'
+                         IN ('always_positive','improved','mixed_then_positive')
+               ) AS trajectory_pos,
+               COUNT(*) FILTER (
+                   WHERE pr.deep_extraction->>'sentiment_trajectory'
+                         IN ('always_negative','degraded','mixed_then_negative','mixed_then_bad','always_bad')
+               ) AS trajectory_neg
         FROM product_metadata pm
         JOIN product_reviews pr ON pr.asin = pm.asin
         WHERE {where}
@@ -225,8 +303,10 @@ async def list_brands(
         *params,
     )
 
-    brands = [
-        {
+    brands = []
+    for r in rows:
+        health = _compute_brand_health(r)
+        brands.append({
             "brand": r["brand"],
             "product_count": r["product_count"],
             "review_count": r["review_count"],
@@ -237,9 +317,8 @@ async def list_brands(
             "complaint_count": r["complaint_count"],
             "praise_count": r["praise_count"],
             "safety_count": r["safety_count"],
-        }
-        for r in rows
-    ]
+            "brand_health": health,
+        })
 
     # Total count (without LIMIT/OFFSET) for pagination
     count_params = params[:-2]  # strip limit & offset
@@ -600,7 +679,7 @@ async def get_brand_detail(brand_name: str):
     )[:15]
 
     # ------------------------------------------------------------------
-    # Totals
+    # Totals & brand health score
     # ------------------------------------------------------------------
     total_reviews = sum(r["review_count"] for r in products)
     deep_review_count = len(enum_rows)
@@ -608,12 +687,35 @@ async def get_brand_detail(brand_name: str):
         "SELECT AVG(average_rating) FROM product_metadata WHERE brand ILIKE $1", bname
     )
 
+    # Compute brand health from already-aggregated counters
+    detail_health: int | None = None
+    if deep_review_count >= 5:
+        _scores: list[float] = []
+        # Repurchase
+        rp_yes = counters["repurchase"].get("true", 0)
+        rp_total = rp_yes + counters["repurchase"].get("false", 0)
+        _scores.append(rp_yes / rp_total if rp_total > 0 else 0.5)
+        # Retention
+        ret_pos = sum(counters["replacement"].get(k, 0) for k in ("kept_using", "repurchased", "replaced_same"))
+        ret_neg = sum(counters["replacement"].get(k, 0) for k in ("switched_to", "switched_brand", "returned", "avoided"))
+        ret_total = ret_pos + ret_neg
+        _scores.append(ret_pos / ret_total if ret_total > 0 else 0.5)
+        # Trajectory
+        traj_pos = sum(counters["trajectory"].get(k, 0) for k in ("always_positive", "improved", "mixed_then_positive"))
+        traj_neg = sum(counters["trajectory"].get(k, 0) for k in ("always_negative", "degraded", "mixed_then_negative", "mixed_then_bad", "always_bad"))
+        traj_total = traj_pos + traj_neg
+        _scores.append(traj_pos / traj_total if traj_total > 0 else 0.5)
+        # Safety (inverted)
+        _scores.append(max(0.0, 1.0 - (safety_flagged / deep_review_count) * 10))
+        detail_health = round(sum(_scores) / len(_scores) * 100)
+
     return {
         "brand": bname,
         "product_count": len(products),
         "total_reviews": total_reviews,
         "deep_review_count": deep_review_count,
         "avg_rating": _safe_float(avg_rating_all),
+        "brand_health": detail_health,
         "products": [
             {
                 "asin": r["asin"],
