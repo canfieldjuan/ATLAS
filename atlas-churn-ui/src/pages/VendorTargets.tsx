@@ -158,6 +158,9 @@ export default function VendorTargets() {
     const competitors = competitorsInput.split(',').map(s => s.trim()).filter(Boolean)
     const payload = {
       ...form,
+      contact_name: form.contact_name || null,
+      contact_email: form.contact_email || null,
+      contact_role: form.contact_role || null,
       products_tracked: products.length ? products : null,
       competitors_tracked: competitors.length ? competitors : null,
       notes: form.notes || null,

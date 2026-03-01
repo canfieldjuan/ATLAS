@@ -67,7 +67,7 @@ export default function Challengers() {
         companies: hiRes.companies,
       }
     },
-    [debouncedSearch],
+    [],
   )
 
   const targets = data?.targets ?? []
@@ -112,6 +112,16 @@ export default function Challengers() {
       .slice(0, 3)
       .map(([incumbentName]) => incumbentName)
 
+    // Top pain categories driving the switch
+    const painCounts: Record<string, number> = {}
+    for (const c of relevantCompanies) {
+      if (c.pain) painCounts[c.pain] = (painCounts[c.pain] ?? 0) + 1
+    }
+    const topPainCategories = Object.entries(painCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([cat]) => cat)
+
     const avgUrg = relevantCompanies.length > 0
       ? relevantCompanies.reduce((s, c) => s + c.urgency, 0) / relevantCompanies.length
       : 0
@@ -123,7 +133,7 @@ export default function Challengers() {
       evaluation: stages.eval,
       renewal: stages.renewal,
       topIncumbents,
-      topPainCategories: [],
+      topPainCategories,
       avgUrgency: Math.round(avgUrg * 10) / 10,
     }
   })

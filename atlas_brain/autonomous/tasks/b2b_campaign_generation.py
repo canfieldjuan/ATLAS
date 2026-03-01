@@ -181,29 +181,32 @@ async def _create_sequence_for_cold_email(
         body=cold_email_body,
     )
 
-    # Best-effort CRM recipient lookup
-    try:
-        contact_email = await pool.fetchval(
-            """
-            SELECT email FROM contacts
-            WHERE LOWER(full_name) LIKE '%' || LOWER($1) || '%'
-              AND email IS NOT NULL
-            ORDER BY created_at DESC LIMIT 1
-            """,
-            company_name,
-        )
-        if contact_email:
-            await pool.execute(
-                "UPDATE campaign_sequences SET recipient_email = $1 WHERE id = $2",
-                contact_email,
-                seq_id,
+    # Best-effort CRM recipient lookup (only for churning_company mode where
+    # company_name is a person/company name; vendor/challenger modes set
+    # recipient_email from the target contact directly after this function).
+    if partner_id:
+        try:
+            contact_email = await pool.fetchval(
+                """
+                SELECT email FROM contacts
+                WHERE LOWER(full_name) LIKE '%' || LOWER($1) || '%'
+                  AND email IS NOT NULL
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                company_name,
             )
-            logger.info(
-                "Auto-populated recipient %s for sequence %s (%s)",
-                contact_email, seq_id, company_name,
-            )
-    except Exception:
-        logger.debug("CRM recipient lookup failed for %s, skipping", company_name)
+            if contact_email:
+                await pool.execute(
+                    "UPDATE campaign_sequences SET recipient_email = $1 WHERE id = $2",
+                    contact_email,
+                    seq_id,
+                )
+                logger.info(
+                    "Auto-populated recipient %s for sequence %s (%s)",
+                    contact_email, seq_id, company_name,
+                )
+        except Exception:
+            logger.debug("CRM recipient lookup failed for %s, skipping", company_name)
 
     logger.info("Created campaign sequence %s for %s (batch %s)", seq_id, company_name, batch_id)
     return seq_id
@@ -641,11 +644,11 @@ async def _generate_vendor_campaigns(
         existing = await pool.fetchval(
             """
             SELECT COUNT(*) FROM b2b_campaigns
-            WHERE LOWER(company_name) = $1
+            WHERE company_name ILIKE $1
               AND target_mode = 'vendor_retention'
               AND created_at > NOW() - make_interval(days => $2)
             """,
-            vendor_name.lower(), cfg.dedup_days,
+            vendor_name, cfg.dedup_days,
         )
         if existing > 0:
             skipped += 1
@@ -946,11 +949,11 @@ async def _generate_challenger_campaigns(
         existing = await pool.fetchval(
             """
             SELECT COUNT(*) FROM b2b_campaigns
-            WHERE LOWER(company_name) = $1
+            WHERE company_name ILIKE $1
               AND target_mode = 'challenger_intel'
               AND created_at > NOW() - make_interval(days => $2)
             """,
-            challenger_name.lower(), cfg.dedup_days,
+            challenger_name, cfg.dedup_days,
         )
         if existing > 0:
             skipped += 1
@@ -958,17 +961,24 @@ async def _generate_challenger_campaigns(
 
         # Find signals where this challenger is mentioned as a competitor being considered
         challenger_signals = []
+        seen_ids: set[str] = set()
+        tracked_vendors = {p.lower() for p in (target.get("competitors_tracked") or [])}
         for opp in opportunities:
+            opp_id = opp.get("review_id", id(opp))
+            if opp_id in seen_ids:
+                continue
+            matched = False
             comps = opp.get("competitors", [])
             for c in comps:
                 if isinstance(c, dict) and c.get("name", "").lower() == challenger_name.lower():
-                    challenger_signals.append(opp)
+                    matched = True
                     break
-            # Also match against products_tracked / competitors_tracked
-            if not any(opp is s for s in challenger_signals):
-                products = target.get("competitors_tracked") or []
-                if opp["vendor_name"].lower() in [p.lower() for p in products]:
-                    challenger_signals.append(opp)
+            # Also match against competitors_tracked (incumbents the challenger cares about)
+            if not matched and opp["vendor_name"].lower() in tracked_vendors:
+                matched = True
+            if matched:
+                challenger_signals.append(opp)
+                seen_ids.add(opp_id)
 
         if not challenger_signals:
             logger.debug("No intent signals found for challenger %s, skipping", challenger_name)
@@ -1349,12 +1359,21 @@ async def _generate_content(
 
     text = ""
     try:
-        result = llm.chat(
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
-        text = result.get("response", "").strip()
+        if hasattr(llm, "chat_async"):
+            text = (await llm.chat_async(
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )).strip()
+        else:
+            import asyncio
+            result = await asyncio.to_thread(
+                llm.chat,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            text = result.get("response", "").strip()
         if not text:
             return None
 

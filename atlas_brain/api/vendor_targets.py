@@ -190,20 +190,22 @@ async def get_vendor_target(target_id: UUID):
     )
     target["campaign_stats"] = dict(campaign_stats) if campaign_stats else {}
 
-    # Fetch recent reports
-    reports = await pool.fetch(
-        """
-        SELECT id, report_date, report_type, executive_summary, created_at
-        FROM b2b_intelligence
-        WHERE vendor_filter ILIKE '%' || $1 || '%'
-          AND report_type = $2
-        ORDER BY report_date DESC
-        LIMIT 5
-        """,
-        target["company_name"],
-        target["target_mode"],
-    )
-    target["recent_reports"] = [dict(r) for r in reports]
+    # Fetch recent reports (only for vendor_retention; no reports exist for challenger_intel yet)
+    if target["target_mode"] == "vendor_retention":
+        reports = await pool.fetch(
+            """
+            SELECT id, report_date, report_type, executive_summary, created_at
+            FROM b2b_intelligence
+            WHERE vendor_filter ILIKE '%' || $1 || '%'
+              AND report_type = 'vendor_retention'
+            ORDER BY report_date DESC
+            LIMIT 5
+            """,
+            target["company_name"],
+        )
+        target["recent_reports"] = [dict(r) for r in reports]
+    else:
+        target["recent_reports"] = []
 
     return target
 
@@ -232,8 +234,11 @@ async def update_vendor_target(target_id: UUID, body: VendorTargetUpdate):
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    if body.target_mode and body.target_mode not in ("vendor_retention", "challenger_intel"):
-        raise HTTPException(status_code=400, detail="target_mode must be 'vendor_retention' or 'challenger_intel'")
+    if "target_mode" in body.model_fields_set:
+        if body.target_mode is None:
+            raise HTTPException(status_code=400, detail="target_mode cannot be null")
+        if body.target_mode not in ("vendor_retention", "challenger_intel"):
+            raise HTTPException(status_code=400, detail="target_mode must be 'vendor_retention' or 'challenger_intel'")
 
     updates.append(f"updated_at = NOW()")
 
