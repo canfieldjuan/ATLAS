@@ -235,7 +235,7 @@ def _handle_analytics_error(exc: Exception) -> None:
             status_code=503,
             detail="Analytics view not ready. Run migration 069 and refresh.",
         )
-    if "invalid input syntax" in err:
+    if "invalid input syntax" in err or "invalid input for query argument" in err:
         raise HTTPException(status_code=400, detail=f"Invalid query parameter: {err}")
     raise
 
@@ -666,8 +666,8 @@ async def bulk_approve(body: BulkApproveBody):
 
         if body.action == "reject":
             await pool.execute(
-                "UPDATE b2b_campaigns SET status = 'cancelled', updated_at = $1 WHERE id = $2",
-                now, cid,
+                "UPDATE b2b_campaigns SET status = 'cancelled' WHERE id = $1",
+                cid,
             )
             await log_campaign_event(
                 pool, event_type="cancelled", source="api",
@@ -679,7 +679,7 @@ async def bulk_approve(body: BulkApproveBody):
 
         if body.action == "approve":
             await pool.execute(
-                "UPDATE b2b_campaigns SET status = 'approved', approved_at = $1, updated_at = $1 WHERE id = $2",
+                "UPDATE b2b_campaigns SET status = 'approved', approved_at = $1 WHERE id = $2",
                 now, cid,
             )
             approved += 1
@@ -699,7 +699,7 @@ async def bulk_approve(body: BulkApproveBody):
         await pool.execute(
             """
             UPDATE b2b_campaigns
-            SET status = 'queued', approved_at = $1, recipient_email = $2, updated_at = $1
+            SET status = 'queued', approved_at = $1, recipient_email = $2
             WHERE id = $3
             """,
             now, recipient, cid,
@@ -744,8 +744,8 @@ async def bulk_reject(body: BulkRejectBody):
 
         now = datetime.now(timezone.utc)
         await pool.execute(
-            "UPDATE b2b_campaigns SET status = 'cancelled', updated_at = $1 WHERE id = $2",
-            now, cid,
+            "UPDATE b2b_campaigns SET status = 'cancelled' WHERE id = $1",
+            cid,
         )
         await log_campaign_event(
             pool, event_type="cancelled", source="api",
@@ -1208,8 +1208,7 @@ async def queue_campaign_for_send(campaign_id: str, body: ApproveQueueBody | Non
         UPDATE b2b_campaigns
         SET status = 'queued',
             approved_at = $1,
-            recipient_email = $2,
-            updated_at = $1
+            recipient_email = $2
         WHERE id = $3
         """,
         now, recipient, cid,
@@ -1282,8 +1281,8 @@ async def cancel_campaign(campaign_id: str):
 
     now = datetime.now(timezone.utc)
     await pool.execute(
-        "UPDATE b2b_campaigns SET status = 'cancelled', updated_at = $1 WHERE id = $2",
-        now, cid,
+        "UPDATE b2b_campaigns SET status = 'cancelled' WHERE id = $1",
+        cid,
     )
 
     await log_campaign_event(

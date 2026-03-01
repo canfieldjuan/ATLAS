@@ -159,8 +159,8 @@ async def run(task: ScheduledTask) -> dict:
         suppression = await is_suppressed(pool, email=c["recipient_email"])
         if suppression:
             await pool.execute(
-                "UPDATE b2b_campaigns SET status = 'cancelled', updated_at = $1 WHERE id = $2",
-                now, campaign_id,
+                "UPDATE b2b_campaigns SET status = 'cancelled' WHERE id = $1",
+                campaign_id,
             )
             await log_campaign_event(
                 pool, event_type="suppressed", source="system",
@@ -196,8 +196,7 @@ async def run(task: ScheduledTask) -> dict:
                 UPDATE b2b_campaigns
                 SET status = 'sent',
                     sent_at = $1,
-                    esp_message_id = $2,
-                    updated_at = $1
+                    esp_message_id = $2
                 WHERE id = $3
                 """,
                 now, esp_message_id, campaign_id,
@@ -288,8 +287,8 @@ async def run(task: ScheduledTask) -> dict:
             )
             if fail_count >= _MAX_SEND_ATTEMPTS:
                 await pool.execute(
-                    "UPDATE b2b_campaigns SET status = 'draft', updated_at = $1 WHERE id = $2",
-                    now, campaign_id,
+                    "UPDATE b2b_campaigns SET status = 'draft' WHERE id = $1",
+                    campaign_id,
                 )
                 logger.error(
                     "Campaign %s reverted to draft after %d send failures",
