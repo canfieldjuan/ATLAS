@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { RefreshCw, Search, X, ChevronLeft, ChevronRight } from 'lucide-react'
+import { RefreshCw, Search, X, ChevronLeft, ChevronRight, Scale } from 'lucide-react'
 import { clsx } from 'clsx'
 import DataTable, { type Column } from '../components/DataTable'
 import { PageError } from '../components/ErrorBoundary'
@@ -16,6 +16,7 @@ export default function Brands() {
   const [minReviews, setMinReviews] = useState(0)
   const [sortBy, setSortBy] = useState('review_count')
   const [page, setPage] = useState(0)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
   const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
 
   useEffect(() => {
@@ -43,7 +44,35 @@ export default function Brands() {
   const totalPages = Math.ceil(totalCount / PAGE_SIZE)
   const hasFilters = search || minReviews > 0
 
+  const toggleSelected = (brand: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(brand)) {
+        next.delete(brand)
+      } else if (next.size < 4) {
+        next.add(brand)
+      }
+      return next
+    })
+  }
+
   const columns: Column<BrandSummary>[] = [
+    {
+      key: 'select',
+      header: '',
+      render: (r) => (
+        <div onClick={(e) => toggleSelected(r.brand, e)} className="flex items-center justify-center">
+          <input
+            type="checkbox"
+            checked={selected.has(r.brand)}
+            readOnly
+            disabled={!selected.has(r.brand) && selected.size >= 4}
+            className="h-4 w-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500/30 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed accent-cyan-500"
+          />
+        </div>
+      ),
+    },
     {
       key: 'brand',
       header: 'Brand',
@@ -137,14 +166,36 @@ export default function Brands() {
             </p>
           )}
         </div>
-        <button
-          onClick={refresh}
-          disabled={refreshing}
-          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
-        >
-          <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          {selected.size > 0 && (
+            <>
+              <span className="text-xs text-slate-400">{selected.size}/4 selected</span>
+              <button
+                onClick={() => setSelected(new Set())}
+                className="text-xs text-slate-500 hover:text-white transition-colors"
+              >
+                Clear
+              </button>
+            </>
+          )}
+          {selected.size >= 2 && (
+            <button
+              onClick={() => navigate(`/compare?brands=${Array.from(selected).map(encodeURIComponent).join(',')}`)}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 transition-colors"
+            >
+              <Scale className="h-4 w-4" />
+              Compare ({selected.size})
+            </button>
+          )}
+          <button
+            onClick={refresh}
+            disabled={refreshing}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Filters */}

@@ -2,6 +2,7 @@ import { NavLink } from 'react-router-dom'
 import {
   LayoutDashboard,
   Tag,
+  Scale,
   GitCompareArrows,
   Lightbulb,
   ShieldAlert,
@@ -14,6 +15,7 @@ import { clsx } from 'clsx'
 const links = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/brands', icon: Tag, label: 'Brands' },
+  { to: '/compare', icon: Scale, label: 'Compare' },
   { to: '/flows', icon: GitCompareArrows, label: 'Competitive Flows' },
   { to: '/features', icon: Lightbulb, label: 'Feature Gaps' },
   { to: '/safety', icon: ShieldAlert, label: 'Safety Signals' },

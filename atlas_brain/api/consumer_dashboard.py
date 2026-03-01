@@ -49,6 +49,14 @@ def _pool_or_503():
     return pool
 
 
+def _dist(counter: dict[str, int]) -> list[dict]:
+    """Convert a {label: count} dict to sorted [{label, count}] list."""
+    return sorted(
+        [{"label": k, "count": v} for k, v in counter.items()],
+        key=lambda x: x["count"], reverse=True,
+    )
+
+
 def _compute_brand_health(r) -> int | None:
     """Composite brand health score (0-100) from deep enrichment signals.
 
@@ -352,6 +360,350 @@ async def list_brands(
 
 
 # ---------------------------------------------------------------------------
+# GET /brands/compare
+# ---------------------------------------------------------------------------
+
+
+@router.get("/brands/compare")
+async def compare_brands(
+    brands: str = Query(..., description="Comma-separated brand names (2-4)"),
+):
+    """Side-by-side comparison of 2-4 brands on core signals + cross-brand intelligence."""
+    pool = _pool_or_503()
+
+    brand_list = [b.strip() for b in brands.split(",") if b.strip()]
+    if len(brand_list) < 2 or len(brand_list) > 4:
+        raise HTTPException(status_code=400, detail="Provide 2-4 comma-separated brand names")
+
+    # Build parameterized brand filter: (pm.brand ILIKE $1 OR pm.brand ILIKE $2 ...)
+    brand_clauses = " OR ".join(f"pm.brand ILIKE ${i+1}" for i in range(len(brand_list)))
+    brand_params = list(brand_list)
+
+    # ── Query 1: Summary stats per brand ──
+    summary_rows = await pool.fetch(
+        f"""
+        SELECT pm.brand,
+               COUNT(DISTINCT pm.asin) AS product_count,
+               COUNT(pr.id) AS review_count,
+               AVG(pm.average_rating) AS pm_avg_rating,
+               COUNT(*) FILTER (
+                   WHERE pr.deep_extraction IS NOT NULL
+                     AND pr.deep_extraction != '{{}}'::jsonb
+               ) AS deep_count,
+               COUNT(*) FILTER (
+                   WHERE pr.deep_extraction->>'would_repurchase' = 'true'
+               ) AS repurchase_yes,
+               COUNT(*) FILTER (
+                   WHERE pr.deep_extraction->>'would_repurchase' IN ('true','false')
+               ) AS repurchase_total,
+               COUNT(*) FILTER (
+                   WHERE pr.deep_extraction IS NOT NULL
+                     AND pr.deep_extraction != '{{}}'::jsonb
+                     AND pr.deep_extraction->'safety_flag'->>'flagged' = 'true'
+               ) AS safety_count,
+               -- Health components
+               COUNT(*) FILTER (
+                   WHERE pr.deep_extraction->>'replacement_behavior'
+                         IN ('kept_using','repurchased','replaced_same')
+               ) AS retention_pos,
+               COUNT(*) FILTER (
+                   WHERE pr.deep_extraction->>'replacement_behavior'
+                         IN ('switched_to','switched_brand','returned','avoided')
+               ) AS retention_neg,
+               COUNT(*) FILTER (
+                   WHERE pr.deep_extraction->>'sentiment_trajectory'
+                         IN ('always_positive','improved','mixed_then_positive')
+               ) AS trajectory_pos,
+               COUNT(*) FILTER (
+                   WHERE pr.deep_extraction->>'sentiment_trajectory'
+                         IN ('always_negative','degraded','mixed_then_negative','mixed_then_bad','always_bad')
+               ) AS trajectory_neg
+        FROM product_metadata pm
+        JOIN product_reviews pr ON pr.asin = pm.asin
+        WHERE pm.brand IS NOT NULL AND pm.brand != ''
+          AND ({brand_clauses})
+        GROUP BY pm.brand
+        """,
+        *brand_params,
+    )
+
+    # Map brand name (lowered) -> summary row
+    summary_map: dict[str, dict] = {}
+    for r in summary_rows:
+        bkey = r["brand"]
+        deep = r["deep_count"] or 0
+        # Compute brand health
+        health: int | None = None
+        if deep >= 5:
+            scores: list[float] = []
+            rp_total = r["repurchase_total"] or 0
+            scores.append((r["repurchase_yes"] or 0) / rp_total if rp_total > 0 else 0.5)
+            ret_total = (r["retention_pos"] or 0) + (r["retention_neg"] or 0)
+            scores.append((r["retention_pos"] or 0) / ret_total if ret_total > 0 else 0.5)
+            traj_total = (r["trajectory_pos"] or 0) + (r["trajectory_neg"] or 0)
+            scores.append((r["trajectory_pos"] or 0) / traj_total if traj_total > 0 else 0.5)
+            safety_cnt = r["safety_count"] or 0
+            scores.append(max(0.0, 1.0 - (safety_cnt / deep) * 10))
+            health = round(sum(scores) / len(scores) * 100)
+
+        summary_map[bkey] = {
+            "product_count": r["product_count"],
+            "total_reviews": r["review_count"],
+            "deep_review_count": deep,
+            "avg_rating": _safe_float(r["pm_avg_rating"]),
+            "brand_health": health,
+            "safety_flagged_count": r["safety_count"] or 0,
+        }
+
+    # ── Query 2: Deep enum fields (single scan for all brands) ──
+    enum_rows = await pool.fetch(
+        f"""
+        SELECT pm.brand,
+               deep_extraction->>'would_repurchase'      AS repurchase,
+               deep_extraction->>'replacement_behavior'   AS replacement,
+               deep_extraction->>'sentiment_trajectory'   AS trajectory,
+               deep_extraction->>'consequence_severity'   AS consequence,
+               deep_extraction->'switching_barrier'       AS barrier,
+               deep_extraction->'failure_details'         AS failure,
+               deep_extraction->'safety_flag'             AS safety,
+               deep_extraction->'feature_requests'        AS feature_requests,
+               deep_extraction->'product_comparisons'     AS comparisons,
+               deep_extraction->'consideration_set'       AS consideration,
+               pr.rating
+        FROM product_reviews pr
+        JOIN product_metadata pm ON pm.asin = pr.asin
+        WHERE pm.brand IS NOT NULL AND pm.brand != ''
+          AND ({brand_clauses})
+          AND pr.deep_extraction IS NOT NULL
+          AND pr.deep_extraction != '{{}}'::jsonb
+        """,
+        *brand_params,
+    )
+
+    # Per-brand counters
+    brand_counters: dict[str, dict] = {}
+    # Cross-brand data accumulators
+    all_feature_requests: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))  # request -> {brand: count}
+    all_comparisons: list[dict] = []
+    all_considerations: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))  # product -> {brand: count}
+
+    brand_names_lower = {b.lower() for b in brand_list}
+
+    for row in enum_rows:
+        brand = row["brand"]
+        if brand not in brand_counters:
+            brand_counters[brand] = {
+                "repurchase": defaultdict(int),
+                "replacement": defaultdict(int),
+                "trajectory": defaultdict(int),
+                "consequence": defaultdict(int),
+                "barrier": defaultdict(int),
+                "failure_count": 0,
+                "dollar_lost_total": 0.0,
+                "dollar_lost_n": 0,
+                "safety_flagged": 0,
+            }
+        bc = brand_counters[brand]
+
+        # Enums
+        for field in ("repurchase", "replacement", "trajectory", "consequence"):
+            val = row[field]
+            if val and val not in ("none", "unknown", "not_mentioned"):
+                bc[field][val] += 1
+
+        # Switching barrier
+        barrier = _safe_json(row["barrier"])
+        if isinstance(barrier, dict) and barrier.get("level"):
+            bc["barrier"][barrier["level"]] += 1
+
+        # Failure details
+        fail = _safe_json(row["failure"])
+        if isinstance(fail, dict) and fail.get("failure_mode"):
+            bc["failure_count"] += 1
+            dl = fail.get("dollar_amount_lost")
+            if dl is not None:
+                try:
+                    bc["dollar_lost_total"] += float(dl)
+                    bc["dollar_lost_n"] += 1
+                except (ValueError, TypeError):
+                    pass
+
+        # Safety flag
+        sf = _safe_json(row["safety"])
+        if isinstance(sf, dict) and sf.get("flagged"):
+            bc["safety_flagged"] += 1
+
+        # Feature requests (for cross-brand)
+        reqs = _safe_json(row["feature_requests"])
+        if isinstance(reqs, list):
+            for req in reqs:
+                text = req if isinstance(req, str) else (req.get("request", str(req)) if isinstance(req, dict) else str(req))
+                all_feature_requests[text.strip().lower()][brand] += 1
+
+        # Product comparisons (for cross-brand flows)
+        comps = _safe_json(row["comparisons"])
+        if isinstance(comps, list):
+            for comp in comps:
+                if isinstance(comp, dict):
+                    other = comp.get("product_name") or comp.get("product", "")
+                    direction = comp.get("direction", "compared")
+                    all_comparisons.append({
+                        "from_brand": brand,
+                        "to_brand": other,
+                        "direction": direction,
+                        "rating": float(row["rating"]) if row["rating"] is not None else None,
+                    })
+
+        # Consideration set (for cross-brand overlap)
+        cset = _safe_json(row["consideration"])
+        if isinstance(cset, list):
+            for item in cset:
+                if isinstance(item, dict):
+                    prod = item.get("product", "Unknown")
+                    all_considerations[prod.strip().lower()][brand] += 1
+
+    # ── Query 3: First-pass enrichment (severity, workaround) per brand ──
+    fp_rows = await pool.fetch(
+        f"""
+        SELECT pm.brand,
+               severity,
+               workaround_found
+        FROM product_reviews pr
+        JOIN product_metadata pm ON pm.asin = pr.asin
+        WHERE pm.brand IS NOT NULL AND pm.brand != ''
+          AND ({brand_clauses})
+          AND pr.enrichment_status = 'enriched'
+        """,
+        *brand_params,
+    )
+
+    fp_counters: dict[str, dict] = {}
+    for row in fp_rows:
+        brand = row["brand"]
+        if brand not in fp_counters:
+            fp_counters[brand] = {"severity": defaultdict(int), "workaround_count": 0, "total": 0}
+        fpc = fp_counters[brand]
+        fpc["total"] += 1
+        sev = row["severity"]
+        if sev and sev not in ("", "none"):
+            fpc["severity"][sev] += 1
+        if row["workaround_found"]:
+            fpc["workaround_count"] += 1
+
+    # ── Assemble per-brand metrics ──
+    per_brand: dict[str, dict] = {}
+    for bname in brand_list:
+        # Find the actual brand key (case-insensitive match)
+        actual_key = None
+        for k in summary_map:
+            if k.lower() == bname.lower():
+                actual_key = k
+                break
+        if not actual_key:
+            continue
+
+        sm = summary_map.get(actual_key, {})
+        bc = brand_counters.get(actual_key, {})
+        fpc = fp_counters.get(actual_key, {})
+
+        # Repurchase pct
+        rp_yes = bc.get("repurchase", {}).get("true", 0) if bc else 0
+        rp_total = rp_yes + (bc.get("repurchase", {}).get("false", 0) if bc else 0)
+        repurchase_pct = round(rp_yes / rp_total * 100) if rp_total > 0 else None
+
+        fp_total = fpc.get("total", 0) if fpc else 0
+
+        per_brand[actual_key] = {
+            "product_count": sm.get("product_count", 0),
+            "total_reviews": sm.get("total_reviews", 0),
+            "deep_review_count": sm.get("deep_review_count", 0),
+            "avg_rating": sm.get("avg_rating"),
+            "brand_health": sm.get("brand_health"),
+            "repurchase_pct": repurchase_pct,
+            "safety_flagged_count": sm.get("safety_flagged_count", 0),
+            "failure_count": bc.get("failure_count", 0) if bc else 0,
+            "avg_dollar_lost": round(bc["dollar_lost_total"] / bc["dollar_lost_n"], 2) if bc and bc.get("dollar_lost_n") else None,
+            "replacement_breakdown": _dist(bc.get("replacement", {})) if bc else [],
+            "trajectory_breakdown": _dist(bc.get("trajectory", {})) if bc else [],
+            "switching_barrier": _dist(bc.get("barrier", {})) if bc else [],
+            "consequence_breakdown": _dist(bc.get("consequence", {})) if bc else [],
+            "severity_breakdown": _dist(fpc.get("severity", {})) if fpc else [],
+            "workaround_rate": round(fpc["workaround_count"] / fp_total * 100) if fp_total > 0 else None,
+        }
+
+    # ── Cross-brand computations ──
+
+    # Competitive flows: only between compared brands
+    flow_agg: dict[str, dict] = {}
+    for c in all_comparisons:
+        to_brand_lower = c["to_brand"].lower()
+        from_brand_lower = c["from_brand"].lower()
+        # Check if to_brand matches any of our compared brands (and not same brand)
+        matched_to = None
+        for bname in per_brand:
+            if bname.lower() == to_brand_lower and bname.lower() != from_brand_lower:
+                matched_to = bname
+                break
+        if not matched_to:
+            continue
+        key = f"{c['from_brand']}|{matched_to}|{c['direction']}"
+        if key not in flow_agg:
+            flow_agg[key] = {"from_brand": c["from_brand"], "to_brand": matched_to, "direction": c["direction"], "count": 0, "ratings": []}
+        flow_agg[key]["count"] += 1
+        if c["rating"] is not None:
+            flow_agg[key]["ratings"].append(c["rating"])
+
+    competitive_flows = sorted(
+        [
+            {
+                "from_brand": v["from_brand"],
+                "to_brand": v["to_brand"],
+                "direction": v["direction"],
+                "count": v["count"],
+                "avg_rating": round(sum(v["ratings"]) / len(v["ratings"]), 2) if v["ratings"] else None,
+            }
+            for v in flow_agg.values()
+        ],
+        key=lambda x: x["count"],
+        reverse=True,
+    )
+
+    # Shared feature requests: appearing in 2+ brands
+    shared_features = []
+    for req, brand_counts in all_feature_requests.items():
+        if len(brand_counts) >= 2:
+            shared_features.append({
+                "request": req,
+                "brands": list(brand_counts.keys()),
+                "total_count": sum(brand_counts.values()),
+            })
+    shared_features.sort(key=lambda x: x["total_count"], reverse=True)
+    shared_features = shared_features[:20]
+
+    # Consideration overlap: products mentioned by 2+ brands' reviewers
+    consideration_overlap = []
+    for prod, brand_counts in all_considerations.items():
+        if len(brand_counts) >= 2:
+            consideration_overlap.append({
+                "product": prod,
+                "mentioned_by_brands": list(brand_counts.keys()),
+                "total_count": sum(brand_counts.values()),
+            })
+    consideration_overlap.sort(key=lambda x: x["total_count"], reverse=True)
+    consideration_overlap = consideration_overlap[:20]
+
+    return {
+        "brands": list(per_brand.keys()),
+        "per_brand": per_brand,
+        "cross_brand": {
+            "competitive_flows": competitive_flows,
+            "shared_feature_requests": shared_features,
+            "consideration_overlap": consideration_overlap,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
 # GET /brands/{brand_name}
 # ---------------------------------------------------------------------------
 
@@ -616,12 +968,6 @@ async def get_brand_detail(brand_name: str):
         prof = row["profession"]
         if prof:
             professions[prof.strip().lower()] += 1
-
-    def _dist(counter: dict[str, int]) -> list[dict]:
-        return sorted(
-            [{"label": k, "count": v} for k, v in counter.items()],
-            key=lambda x: x["count"], reverse=True,
-        )
 
     # ------------------------------------------------------------------
     # Positive aspects (top terms across reviews)

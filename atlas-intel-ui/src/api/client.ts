@@ -159,6 +159,56 @@ export interface BrandDetail {
   }
 }
 
+// -- Brand Comparison Types --
+
+export interface BrandCompareMetrics {
+  product_count: number
+  total_reviews: number
+  deep_review_count: number
+  avg_rating: number | null
+  brand_health: number | null
+  repurchase_pct: number | null
+  safety_flagged_count: number
+  failure_count: number
+  avg_dollar_lost: number | null
+  replacement_breakdown: LabelCount[]
+  trajectory_breakdown: LabelCount[]
+  switching_barrier: LabelCount[]
+  consequence_breakdown: LabelCount[]
+  severity_breakdown: LabelCount[]
+  workaround_rate: number | null
+}
+
+export interface CrossBrandFlow {
+  from_brand: string
+  to_brand: string
+  direction: string
+  count: number
+  avg_rating: number | null
+}
+
+export interface SharedFeatureRequest {
+  request: string
+  brands: string[]
+  total_count: number
+}
+
+export interface ConsiderationOverlap {
+  product: string
+  mentioned_by_brands: string[]
+  total_count: number
+}
+
+export interface BrandComparison {
+  brands: string[]
+  per_brand: Record<string, BrandCompareMetrics>
+  cross_brand: {
+    competitive_flows: CrossBrandFlow[]
+    shared_feature_requests: SharedFeatureRequest[]
+    consideration_overlap: ConsiderationOverlap[]
+  }
+}
+
 export interface FlowEntry {
   from_brand: string
   to_brand: string
@@ -259,6 +309,10 @@ export function fetchBrands(params?: {
 
 export function fetchBrandDetail(name: string) {
   return get<BrandDetail>(`/brands/${encodeURIComponent(name)}`)
+}
+
+export function fetchBrandComparison(brands: string[]) {
+  return get<BrandComparison>('/brands/compare', { brands: brands.join(',') })
 }
 
 export function fetchFlows(params?: {

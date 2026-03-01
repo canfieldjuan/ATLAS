@@ -4,6 +4,7 @@ import ErrorBoundary from './components/ErrorBoundary'
 import Dashboard from './pages/Dashboard'
 import Brands from './pages/Brands'
 import BrandDetail from './pages/BrandDetail'
+import BrandCompare from './pages/BrandCompare'
 import Flows from './pages/Flows'
 import Features from './pages/Features'
 import Safety from './pages/Safety'
@@ -18,6 +19,7 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/brands" element={<Brands />} />
           <Route path="/brands/:name" element={<BrandDetail />} />
+          <Route path="/compare" element={<BrandCompare />} />
           <Route path="/flows" element={<Flows />} />
           <Route path="/features" element={<Features />} />
           <Route path="/safety" element={<Safety />} />
