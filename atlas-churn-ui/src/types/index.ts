@@ -35,7 +35,7 @@ export interface HighIntentCompany {
   decision_maker: boolean | null
   urgency: number
   pain: string | null
-  alternatives: string[] | null
+  alternatives: { name: string; context?: string; reason?: string }[] | null
   contract_signal: string | null
   seat_count: number | null
   lock_in_level: string | null

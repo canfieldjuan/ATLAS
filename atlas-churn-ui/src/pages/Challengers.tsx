@@ -14,10 +14,10 @@ import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
 import {
   fetchVendorTargets,
-  fetchAffiliateOpportunities,
+  fetchHighIntent,
   generateCampaigns,
 } from '../api/client'
-import type { VendorTarget, AffiliateOpportunity } from '../types'
+import type { VendorTarget, HighIntentCompany } from '../types'
 
 function StageBadge({ stage }: { stage: string }) {
   if (!stage || stage === 'unknown') return <span className="text-slate-500 text-xs">--</span>
@@ -58,36 +58,41 @@ export default function Challengers() {
 
   const { data, loading, error, refresh, refreshing } = useApiData(
     async () => {
-      const [targetsRes, oppsRes] = await Promise.all([
+      const [targetsRes, hiRes] = await Promise.all([
         fetchVendorTargets({ target_mode: 'challenger_intel', limit: 200 }),
-        fetchAffiliateOpportunities({ min_urgency: 3, min_score: 0, limit: 500 }),
+        fetchHighIntent({ min_urgency: 3, limit: 100 }),
       ])
       return {
         targets: targetsRes.targets,
-        opportunities: oppsRes.opportunities,
+        companies: hiRes.companies,
       }
     },
     [debouncedSearch],
   )
 
   const targets = data?.targets ?? []
-  const opportunities = data?.opportunities ?? []
+  const companies = data?.companies ?? []
 
-  // Build challenger summaries by aggregating opportunities where competitor matches a target
+  // Build challenger summaries by aggregating high-intent signals where competitor matches a target
   const challengerSummaries: ChallengerSummary[] = targets.map(target => {
     const name = target.company_name.toLowerCase()
     const competitorsTracked = (target.competitors_tracked ?? []).map(c => c.toLowerCase())
 
-    // Find opportunities mentioning this challenger as a competitor being considered
-    const relevantOpps = opportunities.filter(opp => {
-      if (opp.competitor_name?.toLowerCase() === name) return true
-      if (competitorsTracked.includes(opp.vendor_name?.toLowerCase())) return true
+    // Find high-intent companies mentioning this challenger in alternatives
+    const relevantCompanies = companies.filter(c => {
+      // Check if challenger is listed in alternatives (competitors being considered)
+      const mentionsChallenger = (c.alternatives ?? []).some(
+        alt => alt.name?.toLowerCase() === name,
+      )
+      if (mentionsChallenger) return true
+      // Also match if the incumbent vendor is one the challenger tracks
+      if (competitorsTracked.includes(c.vendor?.toLowerCase())) return true
       return false
     })
 
-    const stages = relevantOpps.reduce(
-      (acc, o) => {
-        const s = o.buying_stage ?? 'unknown'
+    const stages = relevantCompanies.reduce(
+      (acc, c) => {
+        const s = c.buying_stage ?? 'unknown'
         if (s === 'active_purchase') acc.active++
         else if (s === 'evaluation') acc.eval++
         else if (s === 'renewal_decision') acc.renewal++
@@ -98,22 +103,22 @@ export default function Challengers() {
 
     // Top incumbents (vendors losing to this challenger)
     const incumbentCounts: Record<string, number> = {}
-    for (const o of relevantOpps) {
-      const v = o.vendor_name
+    for (const c of relevantCompanies) {
+      const v = c.vendor
       if (v) incumbentCounts[v] = (incumbentCounts[v] ?? 0) + 1
     }
     const topIncumbents = Object.entries(incumbentCounts)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 3)
-      .map(([name]) => name)
+      .map(([incumbentName]) => incumbentName)
 
-    const avgUrg = relevantOpps.length > 0
-      ? relevantOpps.reduce((s, o) => s + o.urgency, 0) / relevantOpps.length
+    const avgUrg = relevantCompanies.length > 0
+      ? relevantCompanies.reduce((s, c) => s + c.urgency, 0) / relevantCompanies.length
       : 0
 
     return {
       name: target.company_name,
-      totalLeads: relevantOpps.length,
+      totalLeads: relevantCompanies.length,
       activePurchase: stages.active,
       evaluation: stages.eval,
       renewal: stages.renewal,
