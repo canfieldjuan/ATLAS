@@ -482,10 +482,10 @@ class TaskScheduler:
         },
         {
             "name": "b2b_campaign_generation",
-            "description": "Weekly ABM campaign generation from churn intelligence opportunities",
+            "description": "Daily ABM campaign generation from churn intelligence opportunities",
             "task_type": "builtin",
             "schedule_type": "cron",
-            "cron_expression": "0 22 * * 0",
+            "cron_expression": "0 22 * * *",
             "timeout_seconds": 600,
             "metadata": {
                 "builtin_handler": "b2b_campaign_generation",
@@ -517,6 +517,7 @@ class TaskScheduler:
             # Resolve configurable cron expressions at runtime
             _cron_overrides = {
                 "news_intelligence": f"0 {settings.news_intel.schedule_hour} * * *",
+                "b2b_campaign_generation": settings.b2b_campaign.schedule_cron,
             }
 
             # Merge pipeline interval overrides from registry
@@ -650,6 +651,7 @@ class TaskScheduler:
                 "model_swap_night": settings.llm.model_swap_night_cron,
                 "email_graph_sync": "0 1 * * *",
                 "reasoning_reflection": settings.reasoning.reflection_cron,
+                "b2b_campaign_generation": settings.b2b_campaign.schedule_cron,
             }
 
             # Merge pipeline cron overrides

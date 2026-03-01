@@ -2012,7 +2012,7 @@ class B2BChurnConfig(BaseSettings):
 
     # Intelligence aggregation
     intelligence_enabled: bool = Field(default=True, description="Enable churn intelligence aggregation")
-    intelligence_cron: str = Field(default="0 21 * * 0", description="Weekly churn intelligence (Sunday 9 PM)")
+    intelligence_cron: str = Field(default="0 21 * * *", description="Daily churn intelligence (9 PM)")
     intelligence_max_tokens: int = Field(default=16384, description="Max tokens for intelligence LLM call")
     intelligence_window_days: int = Field(default=30, description="Days of enriched reviews to analyze")
     intelligence_min_reviews: int = Field(default=3, description="Min reviews per vendor to include")
@@ -2112,7 +2112,8 @@ class B2BCampaignConfig(BaseSettings):
         default=["email_cold", "linkedin", "email_followup"],
         description="Channels to generate content for",
     )
-    dedup_days: int = Field(default=30, ge=1, description="Days before re-targeting same company")
+    schedule_cron: str = Field(default="0 22 * * *", description="Campaign generation schedule (daily 10 PM)")
+    dedup_days: int = Field(default=7, ge=1, description="Days before re-targeting same company")
     max_tokens: int = Field(default=2048, description="Max tokens per LLM generation call")
     temperature: float = Field(default=0.7, description="LLM sampling temperature")
 

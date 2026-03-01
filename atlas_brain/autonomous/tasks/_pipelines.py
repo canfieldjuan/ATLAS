@@ -215,9 +215,9 @@ register_pipeline(PipelineConfig(
             name="b2b_churn_intelligence",
             module="b2b_churn_intelligence",
             schedule_type="cron",
-            cron_expression="0 21 * * 0",
+            cron_expression="0 21 * * *",
             timeout_seconds=600,
-            description="Weekly churn intelligence aggregation and feed generation",
+            description="Daily churn intelligence aggregation and feed generation",
             metadata={
                 "builtin_handler": "b2b_churn_intelligence",
                 "notify_priority": "high",

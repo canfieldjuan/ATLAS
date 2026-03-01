@@ -302,8 +302,8 @@ async def main():
     parser.add_argument("--reviews-per-call", type=int, default=10)
     parser.add_argument("--max-attempts", type=int, default=3)
     parser.add_argument("--model", type=str, default=None, help="Model name (e.g. qwen3:14b, anthropic/claude-haiku)")
-    parser.add_argument("--provider", type=str, default="ollama", choices=["ollama", "openrouter", "groq", "together"],
-                        help="LLM provider (default: ollama)")
+    parser.add_argument("--provider", type=str, default="vllm", choices=["vllm", "ollama", "openrouter", "groq", "together"],
+                        help="LLM provider (default: vllm)")
     parser.add_argument("--api-key", type=str, default=None, help="API key override (reads env var by default)")
     parser.add_argument("--max-tokens-single", type=int, default=256, help="Max tokens for single-review calls")
     parser.add_argument("--max-tokens-batch-mult", type=int, default=300, help="Tokens per review in batch calls")
@@ -318,7 +318,11 @@ async def main():
     await pool.initialize()
 
     provider = args.provider
-    if provider == "ollama":
+    if provider == "vllm":
+        model = args.model or "stelterlab/Qwen3-30B-A3B-Instruct-2507-AWQ"
+        base_url = "http://localhost:8082"
+        llm_registry.activate("vllm", model=model, base_url=base_url)
+    elif provider == "ollama":
         model = args.model or settings.llm.ollama_model
         llm_registry.activate("ollama", model=model, base_url=settings.llm.ollama_url)
     elif provider == "openrouter":
