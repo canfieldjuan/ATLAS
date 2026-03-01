@@ -21,11 +21,12 @@ fi
 : "${VLLM_GPU_MEMORY_UTILIZATION:?}"
 : "${VLLM_MAX_NUM_BATCHED_TOKENS:?}"
 : "${VLLM_MAX_NUM_SEQS:?}"
+: "${VLLM_MAX_MODEL_LEN:?}"
 : "${VLLM_ENABLE_PREFIX_CACHING:?}"
 
 "$VLLM_PYTHON" -c "import vllm" >/dev/null 2>&1 || { echo "vllm not available in VLLM_PYTHON"; exit 1; }
 
-ARGS=(--model "$VLLM_MODEL" --host "$VLLM_HOST" --port "$VLLM_PORT" --quantization "$VLLM_QUANTIZATION" --dtype "$VLLM_DTYPE" --gpu-memory-utilization "$VLLM_GPU_MEMORY_UTILIZATION" --max-num-batched-tokens "$VLLM_MAX_NUM_BATCHED_TOKENS" --max-num-seqs "$VLLM_MAX_NUM_SEQS")
+ARGS=(--model "$VLLM_MODEL" --host "$VLLM_HOST" --port "$VLLM_PORT" --quantization "$VLLM_QUANTIZATION" --dtype "$VLLM_DTYPE" --gpu-memory-utilization "$VLLM_GPU_MEMORY_UTILIZATION" --max-num-batched-tokens "$VLLM_MAX_NUM_BATCHED_TOKENS" --max-num-seqs "$VLLM_MAX_NUM_SEQS" --max-model-len "$VLLM_MAX_MODEL_LEN")
 if [[ "$VLLM_ENABLE_PREFIX_CACHING" == "true" ]]; then
   ARGS+=(--enable-prefix-caching)
 fi
