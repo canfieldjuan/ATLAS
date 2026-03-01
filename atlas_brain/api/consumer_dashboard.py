@@ -90,9 +90,18 @@ async def get_pipeline_status():
         SELECT COUNT(*) AS total,
                COUNT(*) FILTER (WHERE enrichment_status = 'enriched') AS enriched,
                COUNT(*) FILTER (WHERE deep_enrichment_status = 'enriched') AS deep_enriched,
+               COUNT(*) FILTER (WHERE deep_enrichment_status IS NOT NULL AND deep_enrichment_status != 'not_applicable') AS targeted_for_deep,
                MAX(enriched_at) AS last_enrichment_at,
                MAX(deep_enriched_at) AS last_deep_enrichment_at
         FROM product_reviews
+        """
+    )
+
+    meta_totals = await pool.fetchrow(
+        """
+        SELECT COUNT(DISTINCT brand) FILTER (WHERE brand IS NOT NULL AND brand != '') AS total_brands,
+               COUNT(DISTINCT asin) AS total_asins
+        FROM product_metadata
         """
     )
 
@@ -103,6 +112,9 @@ async def get_pipeline_status():
         "total_reviews": totals["total"] if totals else 0,
         "enriched": totals["enriched"] if totals else 0,
         "deep_enriched": totals["deep_enriched"] if totals else 0,
+        "targeted_for_deep": totals["targeted_for_deep"] if totals else 0,
+        "total_brands": meta_totals["total_brands"] if meta_totals else 0,
+        "total_asins": meta_totals["total_asins"] if meta_totals else 0,
         "last_enrichment_at": str(totals["last_enrichment_at"]) if totals and totals["last_enrichment_at"] else None,
         "last_deep_enrichment_at": str(totals["last_deep_enrichment_at"]) if totals and totals["last_deep_enrichment_at"] else None,
     }
@@ -203,7 +215,23 @@ async def list_brands(
         for r in rows
     ]
 
-    return {"brands": brands, "count": len(brands)}
+    # Total count (without LIMIT/OFFSET) for pagination
+    count_params = params[:-2]  # strip limit & offset
+    total_count = await pool.fetchval(
+        f"""
+        SELECT COUNT(*) FROM (
+            SELECT pm.brand
+            FROM product_metadata pm
+            JOIN product_reviews pr ON pr.asin = pm.asin
+            WHERE {where}
+            GROUP BY pm.brand
+            {having}
+        ) sub
+        """,
+        *count_params,
+    )
+
+    return {"brands": brands, "count": len(brands), "total_count": total_count or 0}
 
 
 # ---------------------------------------------------------------------------

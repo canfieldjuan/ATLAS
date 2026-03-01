@@ -5,6 +5,7 @@ import {
   ShieldAlert,
   Zap,
   RefreshCw,
+  Package,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
@@ -65,18 +66,18 @@ export default function Dashboard() {
   const safety = data?.safety ?? []
 
   const totalReviews = pipeline?.total_reviews ?? 0
-  const brandCount = brands.length
+  const brandCount = pipeline?.total_brands ?? 0
+  const asinCount = pipeline?.total_asins ?? 0
   const safetyTotal = data?.safetyTotal ?? 0
-  const enrichRate = pipeline && totalReviews > 0
-    ? Math.round((pipeline.deep_enriched / totalReviews) * 100)
-    : 0
+  const targetedForDeep = pipeline?.targeted_for_deep ?? 0
+  const deepEnriched = pipeline?.deep_enriched ?? 0
 
   // Pipeline progress bars
   const enrichedPct = pipeline && totalReviews > 0
     ? Math.round((pipeline.enriched / totalReviews) * 100)
     : 0
-  const deepPct = pipeline && totalReviews > 0
-    ? Math.round((pipeline.deep_enriched / totalReviews) * 100)
+  const deepPct = targetedForDeep > 0
+    ? Math.round((deepEnriched / targetedForDeep) * 100)
     : 0
 
   // Category pie chart data
@@ -129,7 +130,7 @@ export default function Dashboard() {
       </div>
 
       {/* Stat Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         <StatCard
           label="Total Reviews"
           value={totalReviews.toLocaleString()}
@@ -138,8 +139,9 @@ export default function Dashboard() {
         />
         <StatCard
           label="Brands Tracked"
-          value={brandCount}
+          value={brandCount.toLocaleString()}
           icon={<Tag className="h-5 w-5" />}
+          sub={`${asinCount.toLocaleString()} products`}
           skeleton={loading}
         />
         <StatCard
@@ -149,10 +151,17 @@ export default function Dashboard() {
           skeleton={loading}
         />
         <StatCard
+          label="First-Pass"
+          value={`${enrichedPct}%`}
+          icon={<Package className="h-5 w-5" />}
+          sub={pipeline ? `${pipeline.enriched.toLocaleString()} of ${totalReviews.toLocaleString()}` : undefined}
+          skeleton={loading}
+        />
+        <StatCard
           label="Deep Enrichment"
-          value={`${enrichRate}%`}
+          value={`${deepPct}%`}
           icon={<Zap className="h-5 w-5" />}
-          sub={pipeline ? `${pipeline.deep_enriched.toLocaleString()} of ${totalReviews.toLocaleString()}` : undefined}
+          sub={targetedForDeep > 0 ? `${deepEnriched.toLocaleString()} of ${targetedForDeep.toLocaleString()} targeted` : undefined}
           skeleton={loading}
         />
       </div>
@@ -172,7 +181,7 @@ export default function Dashboard() {
               <div>
                 <div className="flex justify-between text-xs text-slate-400 mb-1">
                   <span>First-pass Enrichment</span>
-                  <span>{enrichedPct}% ({pipeline?.enriched.toLocaleString()})</span>
+                  <span>{enrichedPct}% ({pipeline?.enriched.toLocaleString()} of {totalReviews.toLocaleString()})</span>
                 </div>
                 <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
                   <div
@@ -184,7 +193,7 @@ export default function Dashboard() {
               <div>
                 <div className="flex justify-between text-xs text-slate-400 mb-1">
                   <span>Deep Enrichment</span>
-                  <span>{deepPct}% ({pipeline?.deep_enriched.toLocaleString()})</span>
+                  <span>{deepPct}% ({deepEnriched.toLocaleString()} of {targetedForDeep.toLocaleString()} targeted)</span>
                 </div>
                 <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
                   <div
@@ -193,6 +202,27 @@ export default function Dashboard() {
                   />
                 </div>
               </div>
+              {/* Status breakdown (targeted pool only) */}
+              {pipeline && (
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+                  {Object.entries(pipeline.deep_enrichment_counts)
+                    .filter(([status]) => status !== 'not_applicable')
+                    .sort(([, a], [, b]) => b - a)
+                    .map(([status, count]) => (
+                      <span key={status}>
+                        <span className={
+                          status === 'enriched' ? 'text-purple-400' :
+                          status === 'pending' ? 'text-amber-400' :
+                          status === 'processing' ? 'text-cyan-400' :
+                          status.includes('fail') ? 'text-red-400' :
+                          'text-slate-500'
+                        }>{count.toLocaleString()}</span>
+                        {' '}{status.replace('deep_', '').replaceAll('_', ' ')}
+                      </span>
+                    ))
+                  }
+                </div>
+              )}
               {pipeline?.last_deep_enrichment_at && (
                 <p className="text-xs text-slate-500">
                   Last deep enrichment: {new Date(pipeline.last_deep_enrichment_at).toLocaleString()}

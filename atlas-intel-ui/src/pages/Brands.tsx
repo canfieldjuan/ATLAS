@@ -32,6 +32,7 @@ export default function Brands() {
   )
 
   const brands = data?.brands ?? []
+  const totalCount = data?.total_count ?? 0
   const hasFilters = search || minReviews > 0
 
   const columns: Column<BrandSummary>[] = [
@@ -108,7 +109,14 @@ export default function Brands() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-white">Brands</h1>
+        <div>
+          <h1 className="text-2xl font-bold text-white">Brands</h1>
+          {!loading && totalCount > 0 && (
+            <p className="text-xs text-slate-400 mt-0.5">
+              Showing {brands.length} of {totalCount.toLocaleString()}
+            </p>
+          )}
+        </div>
         <button
           onClick={refresh}
           disabled={refreshing}

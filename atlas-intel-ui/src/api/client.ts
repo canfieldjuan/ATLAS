@@ -26,6 +26,9 @@ export interface PipelineStatus {
   total_reviews: number
   enriched: number
   deep_enriched: number
+  targeted_for_deep: number
+  total_brands: number
+  total_asins: number
   last_enrichment_at: string | null
   last_deep_enrichment_at: string | null
 }
@@ -200,7 +203,7 @@ export function fetchBrands(params?: {
   limit?: number
   offset?: number
 }) {
-  return get<{ brands: BrandSummary[]; count: number }>('/brands', params as Record<string, string | number>)
+  return get<{ brands: BrandSummary[]; count: number; total_count: number }>('/brands', params as Record<string, string | number>)
 }
 
 export function fetchBrandDetail(name: string) {
