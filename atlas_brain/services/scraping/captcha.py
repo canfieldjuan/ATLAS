@@ -94,6 +94,61 @@ def _extract_datadome_params(html: str) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Cloudflare Turnstile parameter extraction
+# ---------------------------------------------------------------------------
+
+_CF_SITEKEY_ATTR = re.compile(r'data-sitekey=["\']([0-9a-zA-Z_-]+)["\']')
+_CF_SITEKEY_JS = re.compile(r'turnstileOptions\s*[=:]\s*\{[^}]*sitekey\s*:\s*["\']([0-9a-zA-Z_-]+)["\']', re.DOTALL)
+_CF_CHL_OPT = re.compile(r'window\._cf_chl_opt\s*=\s*\{([^}]+)\}', re.DOTALL)
+
+
+def _extract_cloudflare_params(html: str) -> dict[str, str]:
+    """Extract Turnstile sitekey + managed challenge params from Cloudflare HTML.
+
+    Returns dict with keys: sitekey, pagedata, action, cdata (all optional).
+    """
+    params: dict[str, str] = {}
+
+    # Sitekey: data-sitekey attribute or turnstileOptions JS block
+    m = _CF_SITEKEY_ATTR.search(html)
+    if m:
+        params["sitekey"] = m.group(1)
+    else:
+        m = _CF_SITEKEY_JS.search(html)
+        if m:
+            params["sitekey"] = m.group(1)
+
+    # _cf_chl_opt block: chlPageData, cFPWv (action), cData
+    m = _CF_CHL_OPT.search(html)
+    if m:
+        block = m.group(1)
+        for js_key, param_key in (
+            ("chlPageData", "pagedata"),
+            ("cFPWv", "action"),
+            ("cData", "cdata"),
+        ):
+            km = re.search(rf'["\']?{js_key}["\']?\s*:\s*["\']([^"\']+)["\']', block)
+            if km:
+                params[param_key] = km.group(1)
+
+    # Fallback: action from turnstile.render() call
+    if "action" not in params:
+        m = re.search(r'turnstile\.render\s*\([^)]*action\s*:\s*["\']([^"\']+)["\']', html, re.DOTALL)
+        if m:
+            params["action"] = m.group(1)
+
+    if params:
+        logger.info(
+            "Extracted CF params: sitekey=%s, pagedata=%s, action=%s, cdata=%s",
+            params.get("sitekey", "?")[:20],
+            bool(params.get("pagedata")),
+            params.get("action", "?"),
+            bool(params.get("cdata")),
+        )
+    return params
+
+
+# ---------------------------------------------------------------------------
 # Solution model
 # ---------------------------------------------------------------------------
 
@@ -376,12 +431,26 @@ class CaptchaSolver:
             }
 
         elif captcha_type == CaptchaType.CLOUDFLARE:
+            cf = _extract_cloudflare_params(page_html)
+            if not cf.get("sitekey"):
+                raise RuntimeError(
+                    "Could not extract Turnstile sitekey from Cloudflare challenge"
+                )
             task = {
                 "type": "TurnstileTask",
                 "websiteURL": page_url,
+                "websiteKey": cf["sitekey"],
                 "userAgent": user_agent,
                 **proxy_fields,
             }
+            # Challenge page params -- when present, 2Captcha solves the full
+            # managed challenge and returns cf_clearance cookie
+            if cf.get("action"):
+                task["action"] = cf["action"]
+            if cf.get("cdata"):
+                task["data"] = cf["cdata"]
+            if cf.get("pagedata"):
+                task["pagedata"] = cf["pagedata"]
         else:
             raise ValueError(f"Unsupported captcha type for 2Captcha: {captcha_type}")
 
@@ -416,6 +485,10 @@ class CaptchaSolver:
                 status = data.get("status", "")
                 if status == "ready":
                     solution = data.get("solution", {})
+                    logger.info(
+                        "2Captcha raw solution: %s",
+                        {k: v[:40] if isinstance(v, str) else v for k, v in solution.items()},
+                    )
                     return _parse_2captcha_cookies(solution)
                 if data.get("errorId", 0) != 0:
                     raise RuntimeError(
@@ -480,7 +553,18 @@ def _parse_2captcha_cookies(solution: dict) -> dict[str, str]:
                     cookies[k] = v.strip()
 
     if not cookies:
-        logger.warning("No cookies parsed from 2Captcha solution: %s", solution)
+        # TurnstileTask may return {"token": "..."} instead of {"cookie": "..."}
+        # when challenge params are missing or 2Captcha only solved the widget.
+        # Store it so logs reveal what happened -- the retry will likely fail
+        # without cf_clearance, but at least we'll know why.
+        token = solution.get("token")
+        if token:
+            logger.warning(
+                "2Captcha returned token (not cookies) -- challenge params may be incomplete"
+            )
+            cookies["cf_turnstile_response"] = token
+        else:
+            logger.warning("No cookies parsed from 2Captcha solution: %s", solution)
     return cookies
 
 
