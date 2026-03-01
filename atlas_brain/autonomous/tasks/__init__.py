@@ -36,6 +36,7 @@ _BUILTIN_TASKS = [
     ("b2b_campaign_generation", "run", "b2b_campaign_generation"),
     ("campaign_sequence_progression", "run", "campaign_sequence_progression"),
     ("campaign_send", "run", "campaign_send"),
+    ("campaign_analytics_refresh", "run", "campaign_analytics_refresh"),
 ]
 
 

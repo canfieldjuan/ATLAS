@@ -8,6 +8,7 @@ Updates campaign + sequence state on success/failure.
 
 import logging
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from ...config import settings
 from ...storage.database import get_db_pool
@@ -21,6 +22,75 @@ logger = logging.getLogger("atlas.autonomous.tasks.campaign_send")
 _MAX_SEND_ATTEMPTS = 3
 
 
+def _parse_window(cfg) -> tuple[int, int]:
+    """Parse send window start/end into minutes-since-midnight."""
+    start_h, start_m = map(int, cfg.send_window_start.split(":"))
+    end_h, end_m = map(int, cfg.send_window_end.split(":"))
+    return start_h * 60 + start_m, end_h * 60 + end_m
+
+
+def _minutes_in_window(current: int, start: int, end: int) -> bool:
+    """Check if current minute-of-day is within [start, end]. Handles midnight crossing."""
+    if start <= end:
+        # Normal window: e.g., 09:00-17:00
+        return start <= current <= end
+    else:
+        # Midnight-crossing window: e.g., 22:00-06:00
+        return current >= start or current <= end
+
+
+def _in_send_window(cfg) -> bool:
+    """Check if current time is within the configured send window."""
+    tz = ZoneInfo(cfg.send_timezone)
+    now = datetime.now(tz)
+
+    if cfg.skip_weekends and now.weekday() >= 5:
+        return False
+
+    start, end = _parse_window(cfg)
+    current = now.hour * 60 + now.minute
+    return _minutes_in_window(current, start, end)
+
+
+def _snap_to_business_hours(dt: datetime, cfg) -> datetime:
+    """Push datetime to next business-hours window if it falls outside."""
+    tz = ZoneInfo(cfg.send_timezone)
+    local = dt.astimezone(tz)
+    start_h, start_m = map(int, cfg.send_window_start.split(":"))
+    start_minutes, end_minutes = _parse_window(cfg)
+
+    def _set_start(d: datetime) -> datetime:
+        return d.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+
+    def _skip_weekends(d: datetime) -> datetime:
+        while cfg.skip_weekends and d.weekday() >= 5:
+            d += timedelta(days=1)
+            d = _set_start(d)
+        return d
+
+    local = _skip_weekends(local)
+
+    current = local.hour * 60 + local.minute
+    if not _minutes_in_window(current, start_minutes, end_minutes):
+        if start_minutes <= end_minutes:
+            # Normal window
+            if current < start_minutes:
+                local = _set_start(local)
+            else:
+                local = _set_start(local + timedelta(days=1))
+        else:
+            # Midnight-crossing window: outside means between end and start
+            # e.g., window 22:00-06:00, outside is 06:01-21:59
+            # Push to start (same day if before midnight, else next day)
+            if current < start_minutes:
+                local = _set_start(local)
+            else:
+                local = _set_start(local + timedelta(days=1))
+        local = _skip_weekends(local)
+
+    return local.astimezone(timezone.utc)
+
+
 async def run(task: ScheduledTask) -> dict:
     """Send queued campaign emails past the cancel window."""
     cfg = settings.campaign_sequence
@@ -28,6 +98,9 @@ async def run(task: ScheduledTask) -> dict:
         return {"_skip_synthesis": "Campaign sequences disabled"}
     if not cfg.auto_send_enabled:
         return {"_skip_synthesis": "Auto-send disabled"}
+
+    if not _in_send_window(cfg):
+        return {"_skip_synthesis": True, "sent": 0, "reason": "outside_send_window"}
 
     pool = get_db_pool()
     if not pool.is_initialized:
@@ -66,8 +139,11 @@ async def run(task: ScheduledTask) -> dict:
     if not campaigns:
         return {"_skip_synthesis": True, "sent": 0}
 
+    from .campaign_suppression import is_suppressed
+
     sent_count = 0
     failed_count = 0
+    suppressed_count = 0
 
     for campaign in campaigns:
         c = dict(campaign)
@@ -77,6 +153,27 @@ async def run(task: ScheduledTask) -> dict:
 
         if not from_email:
             logger.warning("No from_email for campaign %s, skipping", campaign_id)
+            continue
+
+        # Pre-send suppression check
+        suppression = await is_suppressed(pool, email=c["recipient_email"])
+        if suppression:
+            await pool.execute(
+                "UPDATE b2b_campaigns SET status = 'cancelled', updated_at = $1 WHERE id = $2",
+                now, campaign_id,
+            )
+            await log_campaign_event(
+                pool, event_type="suppressed", source="system",
+                campaign_id=campaign_id, sequence_id=sequence_id,
+                step_number=c.get("step_number"),
+                recipient_email=c["recipient_email"],
+                metadata={"reason": suppression["reason"]},
+            )
+            suppressed_count += 1
+            logger.info(
+                "Campaign %s suppressed: %s (%s)",
+                campaign_id, c["recipient_email"], suppression["reason"],
+            )
             continue
 
         try:
@@ -137,7 +234,9 @@ async def run(task: ScheduledTask) -> dict:
                     delays = cfg.step_delay_days
                     delay_idx = min(step - 1, len(delays) - 1)
                     delay_days = delays[delay_idx] if delays else 3
-                    next_step_time = now + timedelta(days=delay_days)
+                    next_step_time = _snap_to_business_hours(
+                        now + timedelta(days=delay_days), cfg
+                    )
 
                     await pool.execute(
                         """
@@ -206,4 +305,5 @@ async def run(task: ScheduledTask) -> dict:
         "_skip_synthesis": True,
         "sent": sent_count,
         "failed": failed_count,
+        "suppressed": suppressed_count,
     }

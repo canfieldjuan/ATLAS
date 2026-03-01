@@ -181,6 +181,17 @@ async def campaign_email_webhook(request: Request):
             metadata={"bounce_type": bounce_type},
         )
 
+        # Global suppression: prevent future campaigns to this address
+        from ..autonomous.tasks.campaign_suppression import add_suppression
+        from datetime import timedelta
+
+        await add_suppression(
+            pool, email=campaign["recipient_email"],
+            reason="bounce_hard" if bounce_type == "hard" else "bounce_soft",
+            source="webhook", campaign_id=campaign_id,
+            expires_at=now + timedelta(days=30) if bounce_type != "hard" else None,
+        )
+
     elif event_type == "email.complained":
         if sequence_id:
             await pool.execute(
@@ -192,6 +203,14 @@ async def campaign_email_webhook(request: Request):
             campaign_id=campaign_id, sequence_id=sequence_id,
             esp_message_id=esp_message_id,
             step_number=campaign["step_number"],
+        )
+
+        # Global suppression: permanent block on complaint
+        from ..autonomous.tasks.campaign_suppression import add_suppression
+
+        await add_suppression(
+            pool, email=campaign["recipient_email"],
+            reason="complaint", source="webhook", campaign_id=campaign_id,
         )
 
     elif event_type == "email.delivered":

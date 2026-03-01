@@ -2149,6 +2149,12 @@ class CampaignSequenceConfig(BaseSettings):
         default="", description="Resend webhook signature verification secret"
     )
 
+    # Smart send scheduling
+    send_window_start: str = Field(default="09:00", description="Earliest send time (HH:MM)")
+    send_window_end: str = Field(default="17:00", description="Latest send time (HH:MM)")
+    send_timezone: str = Field(default="America/Chicago", description="Timezone for send window")
+    skip_weekends: bool = Field(default=True, description="Don't send on Sat/Sun")
+
 
 class TemporalPatternConfig(BaseSettings):
     """Temporal pattern context configuration."""

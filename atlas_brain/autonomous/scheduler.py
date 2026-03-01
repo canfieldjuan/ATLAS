@@ -510,6 +510,15 @@ class TaskScheduler:
             "timeout_seconds": 120,
             "metadata": {"builtin_handler": "campaign_send"},
         },
+        {
+            "name": "campaign_analytics_refresh",
+            "description": "Refresh campaign funnel stats materialized view for analytics endpoints",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": 21600,  # 6 hours
+            "timeout_seconds": 60,
+            "metadata": {"builtin_handler": "campaign_analytics_refresh"},
+        },
     ]
 
     async def _ensure_default_tasks(self) -> None:
