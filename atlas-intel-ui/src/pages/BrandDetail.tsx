@@ -185,6 +185,7 @@ export default function BrandDetail() {
                   />
                   <Bar dataKey="positive" stackId="a" fill="#34d399" name="Positive" />
                   <Bar dataKey="negative" stackId="a" fill="#f87171" name="Negative" />
+                  <Bar dataKey="mixed" stackId="a" fill="#fbbf24" name="Mixed" />
                   <Bar dataKey="neutral" stackId="a" fill="#64748b" name="Neutral" />
                 </BarChart>
               </ResponsiveContainer>

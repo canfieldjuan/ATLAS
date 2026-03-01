@@ -241,7 +241,7 @@ async def get_brand_detail(brand_name: str):
         bname,
     )
 
-    sentiment: dict[str, dict[str, int]] = defaultdict(lambda: {"positive": 0, "negative": 0, "neutral": 0})
+    sentiment: dict[str, dict[str, int]] = defaultdict(lambda: {"positive": 0, "negative": 0, "mixed": 0, "neutral": 0})
     for row in aspect_rows:
         aspects = _safe_json(row["aspects"])
         if isinstance(aspects, list):
@@ -249,7 +249,7 @@ async def get_brand_detail(brand_name: str):
                 if isinstance(asp, dict):
                     name = asp.get("aspect", "unknown")
                     s = asp.get("sentiment", "neutral")
-                    if s in ("positive", "negative", "neutral"):
+                    if s in ("positive", "negative", "mixed", "neutral"):
                         sentiment[name][s] += 1
 
     sentiment_list = [
@@ -304,7 +304,7 @@ async def get_brand_detail(brand_name: str):
         if isinstance(comps, list):
             for comp in comps:
                 if isinstance(comp, dict):
-                    other = comp.get("compared_brand") or comp.get("brand") or comp.get("product", "Unknown")
+                    other = comp.get("product_name") or comp.get("product", "Unknown")
                     direction = comp.get("direction", "compared")
                     key = f"{other}|{direction}"
                     if key not in comp_counter:
@@ -460,7 +460,7 @@ async def get_competitive_flows(
         if isinstance(comps, list):
             for comp in comps:
                 if isinstance(comp, dict):
-                    to_brand = comp.get("compared_brand") or comp.get("brand") or comp.get("product", "Unknown")
+                    to_brand = comp.get("product_name") or comp.get("product", "Unknown")
                     direction = comp.get("direction", "compared")
                     key = f"{from_brand}|{to_brand}|{direction}"
                     if key not in flow_map:
@@ -582,8 +582,8 @@ async def get_feature_gaps(
                         continue
                     s = asp.get("sentiment", "neutral")
                     if name not in aspect_map:
-                        aspect_map[name] = {"aspect": name, "positive": 0, "negative": 0, "neutral": 0, "brands": set()}
-                    if s in ("positive", "negative", "neutral"):
+                        aspect_map[name] = {"aspect": name, "positive": 0, "negative": 0, "mixed": 0, "neutral": 0, "brands": set()}
+                    if s in ("positive", "negative", "mixed", "neutral"):
                         aspect_map[name][s] += 1
                     if row["brand"]:
                         aspect_map[name]["brands"].add(row["brand"])
@@ -593,8 +593,8 @@ async def get_feature_gaps(
             {
                 "aspect": v["aspect"],
                 "negative": v["negative"],
-                "total": v["positive"] + v["negative"] + v["neutral"],
-                "pct_negative": round(v["negative"] / max(v["positive"] + v["negative"] + v["neutral"], 1) * 100, 1),
+                "total": v["positive"] + v["negative"] + v["mixed"] + v["neutral"],
+                "pct_negative": round(v["negative"] / max(v["positive"] + v["negative"] + v["mixed"] + v["neutral"], 1) * 100, 1),
                 "top_brands": sorted(v["brands"])[:5],
             }
             for v in aspect_map.values()
@@ -671,18 +671,6 @@ async def get_safety_signals(
         for r in rows
     ]
 
-    # Category breakdown
-    cat_rows = await pool.fetch(
-        """
-        SELECT pr.deep_extraction->'safety_flag'->>'category' AS category, COUNT(*) AS cnt
-        FROM product_reviews pr
-        WHERE pr.deep_extraction->'safety_flag'->>'flagged' = 'true'
-          AND pr.deep_extraction->'safety_flag'->>'category' IS NOT NULL
-        GROUP BY pr.deep_extraction->'safety_flag'->>'category'
-        ORDER BY cnt DESC
-        """
-    )
-
     total_flagged = await pool.fetchval(
         "SELECT COUNT(*) FROM product_reviews WHERE deep_extraction->'safety_flag'->>'flagged' = 'true'"
     )
@@ -691,7 +679,6 @@ async def get_safety_signals(
         "signals": signals,
         "count": len(signals),
         "total_flagged": total_flagged or 0,
-        "categories": [{"category": r["category"], "count": r["cnt"]} for r in cat_rows],
     }
 
 

@@ -30,7 +30,7 @@ export default function Safety() {
 
   const signals = data?.signals ?? []
   const totalFlagged = data?.total_flagged ?? 0
-  const categories = data?.categories ?? []
+  // Note: safety_flag schema only has {flagged, description} -- no category field
 
   const columns: Column<SafetySignal>[] = [
     {
@@ -53,7 +53,7 @@ export default function Safety() {
       header: 'Safety Issue',
       render: (r) => {
         const flag = r.safety_flag
-        const desc = (flag?.description as string) || (flag?.reason as string) || (flag?.category as string) || 'Flagged'
+        const desc = (flag?.description as string) || 'Flagged'
         return <span className="text-red-400 text-sm max-w-[300px] truncate block">{desc}</span>
       },
     },
@@ -92,15 +92,6 @@ export default function Safety() {
           icon={<ShieldAlert className="h-5 w-5" />}
           skeleton={loading}
         />
-        {categories.slice(0, 3).map((cat) => (
-          <StatCard
-            key={cat.category}
-            label={cat.category}
-            value={cat.count}
-            icon={<ShieldAlert className="h-5 w-5" />}
-            skeleton={loading}
-          />
-        ))}
       </div>
 
       {/* Filter */}

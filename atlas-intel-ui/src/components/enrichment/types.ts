@@ -4,7 +4,7 @@
 
 export interface SentimentAspect {
   aspect: string
-  sentiment: 'positive' | 'negative' | 'mixed'
+  sentiment: 'positive' | 'negative' | 'mixed' | 'neutral'
   detail: string
 }
 
@@ -17,7 +17,7 @@ export interface FailureDetails {
 
 export interface ProductComparison {
   product_name: string
-  direction: 'switched_to' | 'switched_from' | 'considered' | 'compared'
+  direction: string
   context: string
 }
 
@@ -42,7 +42,7 @@ export type BudgetType = 'budget_constrained' | 'value_seeker' | 'premium_willin
 export type UseIntensity = 'light' | 'moderate' | 'heavy'
 export type ResearchDepth = 'impulse' | 'light' | 'moderate' | 'deep'
 export type ConsequenceSeverity = 'inconvenience' | 'workflow_impact' | 'financial_loss' | 'safety_concern'
-export type ReplacementBehavior = 'returned' | 'replaced_same' | 'switched_brand' | 'kept_broken' | 'unknown'
+export type ReplacementBehavior = 'returned' | 'replaced_same' | 'switched_brand' | 'switched_to' | 'avoided' | 'kept_broken' | 'unknown'
 
 export interface ConsiderationSetItem {
   product: string
@@ -59,7 +59,7 @@ export interface CommunityMention {
 export type BrandLoyaltyDepth = 'first_time' | 'occasional' | 'loyal' | 'long_term_loyal'
 export type ReviewDelaySignal = 'immediate' | 'days' | 'weeks' | 'months' | 'unknown'
 export type SentimentTrajectory = 'always_bad' | 'degraded' | 'mixed_then_bad' | 'initially_positive' | 'unknown'
-export type OccasionContext = 'none' | 'gift' | 'replacement' | 'upgrade' | 'first_in_category' | 'seasonal'
+export type OccasionContext = 'none' | 'gift' | 'replacement' | 'upgrade' | 'first_in_category' | 'seasonal' | 'event' | 'professional_use'
 
 export interface EcosystemLockIn {
   level: 'free' | 'partially' | 'fully'

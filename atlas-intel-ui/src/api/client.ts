@@ -54,6 +54,7 @@ export interface SentimentAspect {
   aspect: string
   positive: number
   negative: number
+  mixed: number
   neutral: number
 }
 
@@ -132,11 +133,6 @@ export interface SafetySignal {
   brand: string
   title: string
   imported_at: string | null
-}
-
-export interface SafetyCategory {
-  category: string
-  count: number
 }
 
 export interface ReviewSummary {
@@ -227,7 +223,7 @@ export function fetchSafety(params?: {
   brand?: string
   limit?: number
 }) {
-  return get<{ signals: SafetySignal[]; count: number; total_flagged: number; categories: SafetyCategory[] }>('/safety', params as Record<string, string | number>)
+  return get<{ signals: SafetySignal[]; count: number; total_flagged: number }>('/safety', params as Record<string, string | number>)
 }
 
 export function fetchReviews(params?: {

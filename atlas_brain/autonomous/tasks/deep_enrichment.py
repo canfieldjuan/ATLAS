@@ -72,13 +72,13 @@ _VALID_BUDGET = {"budget_constrained", "value_seeker", "premium_willing", "unkno
 _VALID_INTENSITY = {"light", "moderate", "heavy"}
 _VALID_RESEARCH = {"impulse", "light", "moderate", "deep"}
 _VALID_CONSEQUENCE = {"inconvenience", "workflow_impact", "financial_loss", "safety_concern"}
-_VALID_REPLACEMENT = {"returned", "replaced_same", "switched_brand", "kept_broken", "unknown"}
+_VALID_REPLACEMENT = {"returned", "replaced_same", "switched_brand", "switched_to", "avoided", "kept_broken", "unknown"}
 
 # Enum sets for Section C
 _VALID_LOYALTY = {"first_time", "occasional", "loyal", "long_term_loyal"}
 _VALID_DELAY = {"immediate", "days", "weeks", "months", "unknown"}
 _VALID_TRAJECTORY = {"always_bad", "degraded", "mixed_then_bad", "initially_positive", "unknown"}
-_VALID_OCCASION = {"none", "gift", "replacement", "upgrade", "first_in_category", "seasonal"}
+_VALID_OCCASION = {"none", "gift", "replacement", "upgrade", "first_in_category", "seasonal", "event", "professional_use"}
 
 
 def _validate_extraction(data: dict) -> bool:

@@ -24,12 +24,17 @@ const comparisonDirection: Record<string, ColorPair> = {
   switched_from: ['bg-red-500/10',    'text-red-400'],
   considered:    ['bg-amber-500/10',  'text-amber-400'],
   compared:      ['bg-blue-500/10',   'text-blue-400'],
+  recommended:   ['bg-cyan-500/10',   'text-cyan-400'],
+  avoided:       ['bg-orange-500/10', 'text-orange-400'],
+  used_with:     ['bg-purple-500/10', 'text-purple-400'],
+  relied_on:     ['bg-emerald-500/10','text-emerald-400'],
 }
 
 const sentimentDot: Record<string, string> = {
   positive: 'bg-green-400',
   negative: 'bg-red-400',
   mixed:    'bg-amber-400',
+  neutral:  'bg-slate-400',
 }
 
 // --- Section B ---
@@ -95,6 +100,8 @@ const replacementBehavior: Record<string, ColorPair> = {
   returned:       ['bg-amber-500/10',  'text-amber-400'],
   replaced_same:  ['bg-blue-500/10',   'text-blue-400'],
   switched_brand: ['bg-red-500/10',    'text-red-400'],
+  switched_to:    ['bg-red-500/10',    'text-red-400'],
+  avoided:        ['bg-orange-500/10', 'text-orange-400'],
   kept_broken:    ['bg-slate-500/10',  'text-slate-400'],
   unknown:        ['bg-slate-500/10',  'text-slate-400'],
 }
@@ -131,6 +138,8 @@ const occasionContext: Record<string, ColorPair> = {
   upgrade:           ['bg-blue-500/10',   'text-blue-400'],
   first_in_category: ['bg-green-500/10',  'text-green-400'],
   seasonal:          ['bg-purple-500/10', 'text-purple-400'],
+  event:             ['bg-cyan-500/10',   'text-cyan-400'],
+  professional_use:  ['bg-indigo-500/10', 'text-indigo-400'],
 }
 
 const ecosystemLevel: Record<string, ColorPair> = {
