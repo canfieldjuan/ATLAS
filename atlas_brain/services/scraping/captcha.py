@@ -197,7 +197,7 @@ def _ensure_capsolver_ua(user_agent: str) -> tuple[str, bool]:
         ver = int(m.group(1))
         if _CAPSOLVER_MIN_CHROME <= ver <= _CAPSOLVER_MAX_CHROME:
             return user_agent, False
-    # UA not supported — swap to a known-good one
+    # UA not supported -- swap to a known-good one
     logger.info("Swapping UA for CapSolver (original not in Chrome %d-%d range)",
                 _CAPSOLVER_MIN_CHROME, _CAPSOLVER_MAX_CHROME)
     return _CAPSOLVER_SUPPORTED_UA, True
@@ -286,10 +286,10 @@ class CaptchaSolver:
             if not dd or "cid" not in dd:
                 logger.warning("Failed to extract DataDome params from challenge page")
 
-            # t=bv means IP is banned by DataDome — solver cannot help
+            # t=bv means IP is banned by DataDome -- solver cannot help
             if dd.get("t") == "bv":
                 raise RuntimeError(
-                    "DataDome returned t=bv (IP banned) — rotate proxy before solving"
+                    "DataDome returned t=bv (IP banned) -- rotate proxy before solving"
                 )
 
             # Build full captchaUrl with all params CapSolver requires
@@ -332,16 +332,16 @@ class CaptchaSolver:
                 f"{base}/createTask",
                 json={"clientKey": self._api_key, "task": task},
             )
+            resp.raise_for_status()
             try:
                 data = resp.json()
-            except Exception:
-                resp.raise_for_status()
+            except (ValueError, TypeError):
                 raise RuntimeError(f"CapSolver returned non-JSON response: {resp.status_code}")
 
         if data.get("errorId", 0) != 0:
             raise RuntimeError(
                 f"CapSolver createTask error ({resp.status_code}): "
-                f"{data.get('errorCode', '?')} — {data.get('errorDescription', data)}"
+                f"{data.get('errorCode', '?')} -- {data.get('errorDescription', data)}"
             )
 
         task_id = data["taskId"]
@@ -406,7 +406,7 @@ class CaptchaSolver:
 
             if dd.get("t") == "bv":
                 raise RuntimeError(
-                    "DataDome returned t=bv (IP banned) — rotate proxy before solving"
+                    "DataDome returned t=bv (IP banned) -- rotate proxy before solving"
                 )
 
             from urllib.parse import quote, urlencode
@@ -460,12 +460,16 @@ class CaptchaSolver:
                 f"{base}/createTask",
                 json={"clientKey": self._api_key, "task": task},
             )
-            data = resp.json()
+            resp.raise_for_status()
+            try:
+                data = resp.json()
+            except (ValueError, TypeError):
+                raise RuntimeError(f"2Captcha returned non-JSON response: {resp.status_code}")
 
         if data.get("errorId", 0) != 0:
             raise RuntimeError(
                 f"2Captcha createTask error: "
-                f"{data.get('errorCode', '?')} — {data.get('errorDescription', data)}"
+                f"{data.get('errorCode', '?')} -- {data.get('errorDescription', data)}"
             )
 
         task_id = str(data["taskId"])
@@ -493,7 +497,7 @@ class CaptchaSolver:
                 if data.get("errorId", 0) != 0:
                     raise RuntimeError(
                         f"2Captcha task failed: "
-                        f"{data.get('errorCode', '?')} — {data.get('errorDescription', data)}"
+                        f"{data.get('errorCode', '?')} -- {data.get('errorDescription', data)}"
                     )
 
         raise TimeoutError(f"2Captcha task {task_id} timed out after {(_POLL_INTERVAL_S + 2) * _MAX_POLL_ATTEMPTS}s")
@@ -534,7 +538,7 @@ def _parse_2captcha_cookies(solution: dict) -> dict[str, str]:
     """Parse 2Captcha solution into cookies dict.
 
     New API returns ``{"cookie": "*datadome=abc; expires=...; domain=.g2.com"}``.
-    The ``*`` prefix on the cookie name is a 2Captcha convention — strip it.
+    The ``*`` prefix on the cookie name is a 2Captcha convention -- strip it.
     Cookie attributes (expires, domain, path, secure, samesite) are filtered out.
     """
     _COOKIE_ATTRS = {"path", "secure", "samesite", "domain", "httponly", "max-age", "expires"}
@@ -577,6 +581,7 @@ _solver_2captcha: CaptchaSolver | None = None
 _2captcha_domains: set[str] = set()
 _enabled_domains: set[str] = set()
 _checked: bool = False
+_init_lock = __import__("threading").Lock()
 
 
 def get_captcha_solver(domain: str | None = None) -> CaptchaSolver | None:
@@ -587,7 +592,9 @@ def get_captcha_solver(domain: str | None = None) -> CaptchaSolver | None:
     """
     global _solver, _solver_2captcha, _2captcha_domains, _enabled_domains, _checked
     if not _checked:
-        _init_solvers()
+        with _init_lock:
+            if not _checked:
+                _init_solvers()
     if _solver is None:
         return None
 

@@ -62,6 +62,7 @@ class HackerNewsParser:
 
         for tag in tag_passes:
             for term in search_terms:
+                consecutive_empty = 0
                 for page in range(target.max_pages):
                     url = (
                         f"{_BASE_URL}"
@@ -72,6 +73,7 @@ class HackerNewsParser:
                     )
 
                     try:
+                        before = len(reviews)
                         resp = await client.get(
                             url,
                             domain=_DOMAIN,
@@ -85,7 +87,11 @@ class HackerNewsParser:
                             errors.append(f"HN {tag} search '{term}' page {page}: HTTP {resp.status_code}")
                             break  # Stop paginating on error
 
-                        data = resp.json()
+                        try:
+                            data = resp.json()
+                        except (ValueError, TypeError):
+                            errors.append(f"HN {tag} search '{term}' page {page}: non-parseable JSON")
+                            break
                         hits = data.get("hits", [])
 
                         if not hits:
@@ -146,6 +152,13 @@ class HackerNewsParser:
                                     "search_term": term,
                                 },
                             })
+
+                        if len(reviews) == before:
+                            consecutive_empty += 1
+                            if consecutive_empty >= 2:
+                                break
+                        else:
+                            consecutive_empty = 0
 
                     except Exception as exc:
                         errors.append(f"HN {tag} search '{term}' page {page}: {exc}")

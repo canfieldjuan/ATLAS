@@ -5,7 +5,7 @@ Uses Reddit's public JSON search endpoints (no API key needed).
 
 Reddit blocked subreddit-scoped search.json in late 2025.  The working
 approach is the global search endpoint with a ``subreddit:`` qualifier:
-``www.reddit.com/search.json?q=<term>+subreddit:<sub>&…``
+``www.reddit.com/search.json?q=<term>+subreddit:<sub>&...``
 
 Fallback: ``old.reddit.com/r/<sub>/search.json`` still works intermittently.
 
@@ -99,7 +99,11 @@ class RedditParser:
                     errors.append(f"r/{sub}: non-JSON response ({ct[:40]})")
                     continue
 
-                data = resp.json()
+                try:
+                    data = resp.json()
+                except (ValueError, TypeError):
+                    errors.append(f"r/{sub}: non-parseable JSON body")
+                    continue
                 posts = data.get("data", {}).get("children", [])
 
                 for post_wrapper in posts:

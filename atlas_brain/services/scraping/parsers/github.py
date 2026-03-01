@@ -64,6 +64,7 @@ class GitHubParser:
         if search_mode in ("issues", "both"):
             labels = [lbl.strip() for lbl in issue_labels.split(",") if lbl.strip()]
             for label in labels:
+                consecutive_empty = 0
                 for page in range(1, target.max_pages + 1):
                     url = (
                         f"{_BASE_URL}/search/issues"
@@ -72,6 +73,7 @@ class GitHubParser:
                     )
 
                     try:
+                        before = len(reviews)
                         resp = await client.get(
                             url,
                             domain=_DOMAIN,
@@ -89,7 +91,11 @@ class GitHubParser:
                             errors.append(f"GitHub issue search label:{label} page {page}: HTTP {resp.status_code}")
                             break
 
-                        data = resp.json()
+                        try:
+                            data = resp.json()
+                        except (ValueError, TypeError):
+                            errors.append(f"GitHub issue search label:{label} page {page}: non-parseable JSON")
+                            break
                         items = data.get("items", [])
 
                         if not items:
@@ -143,6 +149,13 @@ class GitHubParser:
                                 },
                             })
 
+                        if len(reviews) == before:
+                            consecutive_empty += 1
+                            if consecutive_empty >= 2:
+                                break
+                        else:
+                            consecutive_empty = 0
+
                     except Exception as exc:
                         errors.append(f"GitHub issue search label:{label} page {page}: {exc}")
                         logger.warning("GitHub issue search failed label:%s page %d: %s", label, page, exc)
@@ -150,6 +163,7 @@ class GitHubParser:
 
         # --- Repository search ---
         if search_mode in ("repos", "both"):
+            consecutive_empty = 0
             for page in range(1, target.max_pages + 1):
                 url = (
                     f"{_BASE_URL}/search/repositories"
@@ -159,6 +173,7 @@ class GitHubParser:
                 )
 
                 try:
+                    before = len(reviews)
                     resp = await client.get(
                         url,
                         domain=_DOMAIN,
@@ -176,7 +191,11 @@ class GitHubParser:
                         errors.append(f"GitHub repo search page {page}: HTTP {resp.status_code}")
                         break
 
-                    data = resp.json()
+                    try:
+                        data = resp.json()
+                    except (ValueError, TypeError):
+                        errors.append(f"GitHub repo search page {page}: non-parseable JSON")
+                        break
                     items = data.get("items", [])
 
                     if not items:
@@ -229,6 +248,13 @@ class GitHubParser:
                                 "updated_at": item.get("updated_at"),
                             },
                         })
+
+                    if len(reviews) == before:
+                        consecutive_empty += 1
+                        if consecutive_empty >= 2:
+                            break
+                    else:
+                        consecutive_empty = 0
 
                 except Exception as exc:
                     errors.append(f"GitHub repo search page {page}: {exc}")

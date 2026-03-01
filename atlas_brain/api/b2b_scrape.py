@@ -30,18 +30,18 @@ class ScrapeTargetCreate(BaseModel):
     product_name: Optional[str] = None
     product_slug: str
     product_category: Optional[str] = None
-    max_pages: int = 5
+    max_pages: int = Field(default=5, ge=1, le=100)
     enabled: bool = True
-    priority: int = 0
-    scrape_interval_hours: int = 168
+    priority: int = Field(default=0, ge=0, le=100)
+    scrape_interval_hours: int = Field(default=168, ge=1, le=8760)
     metadata: dict = Field(default_factory=dict)
 
 
 class ScrapeTargetUpdate(BaseModel):
     enabled: Optional[bool] = None
-    priority: Optional[int] = None
-    max_pages: Optional[int] = None
-    scrape_interval_hours: Optional[int] = None
+    priority: Optional[int] = Field(default=None, ge=0, le=100)
+    max_pages: Optional[int] = Field(default=None, ge=1, le=100)
+    scrape_interval_hours: Optional[int] = Field(default=None, ge=1, le=8760)
     metadata: Optional[dict] = None
 
 

@@ -26,16 +26,26 @@ _DEFAULT_RPM: dict[str, int] = {
     "news.google.com": 10,
 }
 
+_MIN_RPM = 1
+_MAX_RPM = 1000
+
+
+def _clamp_rpm(value: int) -> int:
+    """Clamp RPM to safe range to prevent hangs (0) or abuse (huge)."""
+    return max(_MIN_RPM, min(_MAX_RPM, value))
+
 
 @dataclass
 class _TokenBucket:
     rpm: int
     tokens: float = field(init=False)
     last_refill: float = field(init=False)
+    _lock: asyncio.Lock = field(init=False)
 
     def __post_init__(self) -> None:
         self.tokens = float(self.rpm)
         self.last_refill = time.monotonic()
+        self._lock = asyncio.Lock()
 
     def _refill(self) -> None:
         now = time.monotonic()
@@ -45,14 +55,20 @@ class _TokenBucket:
 
     async def acquire(self) -> None:
         """Wait until a token is available, then consume it."""
-        while True:
-            self._refill()
-            if self.tokens >= 1.0:
-                self.tokens -= 1.0
-                return
-            # Sleep until approximately 1 token is available
-            wait = (1.0 - self.tokens) / (self.rpm / 60.0)
-            await asyncio.sleep(wait)
+        async with self._lock:
+            while True:
+                self._refill()
+                if self.tokens >= 1.0:
+                    self.tokens -= 1.0
+                    return
+                # Sleep until approximately 1 token is available
+                wait = (1.0 - self.tokens) / (self.rpm / 60.0)
+                # Release lock while sleeping so other waiters can check
+                self._lock.release()
+                try:
+                    await asyncio.sleep(wait)
+                finally:
+                    await self._lock.acquire()
 
 
 class DomainRateLimiter:
@@ -65,18 +81,18 @@ class DomainRateLimiter:
     @classmethod
     def from_config(cls, cfg: B2BScrapeConfig) -> DomainRateLimiter:
         rpm_map = dict(_DEFAULT_RPM)
-        rpm_map["g2.com"] = cfg.g2_rpm
-        rpm_map["capterra.com"] = cfg.capterra_rpm
-        rpm_map["trustradius.com"] = cfg.trustradius_rpm
-        rpm_map["reddit.com"] = cfg.reddit_rpm
-        rpm_map["hn.algolia.com"] = cfg.hackernews_rpm
-        rpm_map["api.github.com"] = cfg.github_rpm
-        rpm_map["news.google.com"] = cfg.rss_rpm
+        rpm_map["g2.com"] = _clamp_rpm(cfg.g2_rpm)
+        rpm_map["capterra.com"] = _clamp_rpm(cfg.capterra_rpm)
+        rpm_map["trustradius.com"] = _clamp_rpm(cfg.trustradius_rpm)
+        rpm_map["reddit.com"] = _clamp_rpm(cfg.reddit_rpm)
+        rpm_map["hn.algolia.com"] = _clamp_rpm(cfg.hackernews_rpm)
+        rpm_map["api.github.com"] = _clamp_rpm(cfg.github_rpm)
+        rpm_map["news.google.com"] = _clamp_rpm(cfg.rss_rpm)
         return cls(rpm_map)
 
     async def acquire(self, domain: str) -> None:
         """Acquire a rate-limit token for the given domain."""
         if domain not in self._buckets:
-            rpm = self._rpm_map.get(domain, 30)  # default 30 RPM for unknown domains
-            self._buckets[domain] = _TokenBucket(rpm=rpm)
+            rpm = self._rpm_map.get(domain, 30)
+            self._buckets[domain] = _TokenBucket(rpm=_clamp_rpm(rpm))
         await self._buckets[domain].acquire()
