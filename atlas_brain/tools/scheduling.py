@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 import dateparser
 
 from ..config import settings
-from ..comms import EFFINGHAM_MAIDS_CONTEXT, BusinessContext, get_context_router
+from ..comms import BusinessContext, comms_settings, get_context_router
 from ..storage.repositories.appointment import get_appointment_repo
 from ..storage.exceptions import DatabaseUnavailableError, DatabaseOperationError
 from .base import ToolParameter, ToolResult
@@ -36,25 +36,17 @@ def _get_time_slot_class():
 def _get_default_context() -> Optional[BusinessContext]:
     """Get the default business context for scheduling."""
     router = get_context_router()
+    preferred_context_id = comms_settings.default_context
 
-    # Try effingham_maids first
-    ctx = router.get_context("effingham_maids")
-    if ctx:
+    ctx = router.get_context(preferred_context_id)
+    if ctx and ctx.scheduling.enabled:
         return ctx
 
-    # If not registered, try to register it (for standalone tool usage)
-    try:
-        from ..comms import EFFINGHAM_MAIDS_CONTEXT
-        if EFFINGHAM_MAIDS_CONTEXT.scheduling.enabled:
-            router.register_context(EFFINGHAM_MAIDS_CONTEXT)
-            logger.info("Auto-registered effingham_maids context for scheduling")
-            return EFFINGHAM_MAIDS_CONTEXT
-    except Exception as e:
-        logger.debug("Could not auto-register effingham_maids: %s", e)
-
-    # Fall back to first registered context
-    contexts = router.list_contexts()
-    return contexts[0] if contexts else None
+    # Fall back to first scheduling-enabled registered context.
+    for context in router.list_contexts():
+        if context.scheduling.enabled:
+            return context
+    return None
 
 
 def _parse_datetime(text: str, timezone: str = settings.reminder.default_timezone) -> Optional[datetime]:

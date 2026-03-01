@@ -197,8 +197,10 @@ Best regards,
 class SignalWireSMSService(SMSService):
     """SMS service using SignalWire via CommsService."""
 
-    def __init__(self, context_id: str = "effingham_maids"):
-        self._context_id = context_id
+    def __init__(self, context_id: Optional[str] = None):
+        from atlas_comms.core import comms_settings
+
+        self._context_id = context_id or comms_settings.default_context
         self._comms_service = None
 
     def _get_comms_service(self):
@@ -481,27 +483,157 @@ class GoogleCalendarService(CalendarService):
             return False
 
 
+class DisabledEmailService(EmailService):
+    """Fail-closed email service used when integration is disabled."""
+
+    def __init__(self, reason: str):
+        self._reason = reason
+
+    def _warn(self, operation: str) -> None:
+        logger.error("Email operation blocked (%s): %s", operation, self._reason)
+
+    async def send_email(self, message: EmailMessage) -> bool:
+        self._warn("send_email")
+        return False
+
+    async def send_appointment_confirmation(
+        self,
+        appointment: Appointment,
+        business_name: str,
+        business_phone: Optional[str] = None,
+    ) -> bool:
+        self._warn("send_appointment_confirmation")
+        return False
+
+    async def send_appointment_reminder(
+        self,
+        appointment: Appointment,
+        business_name: str,
+        hours_before: int = 24,
+    ) -> bool:
+        self._warn("send_appointment_reminder")
+        return False
+
+    async def send_cancellation_notice(
+        self,
+        appointment: Appointment,
+        business_name: str,
+        reason: Optional[str] = None,
+    ) -> bool:
+        self._warn("send_cancellation_notice")
+        return False
+
+
+class DisabledSMSService(SMSService):
+    """Fail-closed SMS service used when comms integration is disabled."""
+
+    def __init__(self, reason: str):
+        self._reason = reason
+
+    def _warn(self, operation: str) -> None:
+        logger.error("SMS operation blocked (%s): %s", operation, self._reason)
+
+    async def send_sms(
+        self,
+        to_number: str,
+        message: str,
+        from_number: Optional[str] = None,
+    ) -> bool:
+        self._warn("send_sms")
+        return False
+
+    async def send_appointment_confirmation_sms(
+        self,
+        appointment: Appointment,
+        business_name: str,
+        from_number: Optional[str] = None,
+    ) -> bool:
+        self._warn("send_appointment_confirmation_sms")
+        return False
+
+
+class DisabledCalendarService(CalendarService):
+    """Fail-closed calendar service used when calendar integration is disabled."""
+
+    def __init__(self, reason: str):
+        self._reason = reason
+
+    def _warn(self, operation: str) -> None:
+        logger.error("Calendar operation blocked (%s): %s", operation, self._reason)
+
+    async def get_available_slots(
+        self,
+        date_start: datetime,
+        date_end: datetime,
+        duration_minutes: int = 60,
+        buffer_minutes: int = 15,
+        calendar_id: Optional[str] = None,
+    ) -> list[TimeSlot]:
+        self._warn("get_available_slots")
+        return []
+
+    async def create_event(
+        self,
+        appointment: Appointment,
+        calendar_id: Optional[str] = None,
+    ) -> str:
+        self._warn("create_event")
+        return ""
+
+    async def update_event(
+        self,
+        event_id: str,
+        appointment: Appointment,
+        calendar_id: Optional[str] = None,
+    ) -> bool:
+        self._warn("update_event")
+        return False
+
+    async def delete_event(
+        self,
+        event_id: str,
+        calendar_id: Optional[str] = None,
+    ) -> bool:
+        self._warn("delete_event")
+        return False
+
+    async def check_conflicts(
+        self,
+        start: datetime,
+        end: datetime,
+        calendar_id: Optional[str] = None,
+    ) -> bool:
+        self._warn("check_conflicts")
+        # Treat disabled calendars as unavailable so scheduling does not
+        # produce false-positive "booked" outcomes.
+        return True
+
+
 # Factory functions
 def get_email_service() -> EmailService:
     """Get the real email service."""
     if settings.email.enabled:
         return ResendEmailService()
-    from .services import StubEmailService
-    return StubEmailService()
+    return DisabledEmailService(
+        "ATLAS_EMAIL_ENABLED is false; configure Resend credentials before sending email."
+    )
 
 
-def get_sms_service(context_id: str = "effingham_maids") -> SMSService:
+def get_sms_service(context_id: Optional[str] = None) -> SMSService:
     """Get the real SMS service."""
-    from .config import comms_settings
+    from atlas_comms.core import comms_settings
+
     if comms_settings.enabled:
         return SignalWireSMSService(context_id)
-    from .services import StubSMSService
-    return StubSMSService()
+    return DisabledSMSService(
+        "ATLAS_COMMS_ENABLED is false; enable comms provider settings before sending SMS."
+    )
 
 
 def get_calendar_service() -> CalendarService:
     """Get the real calendar service."""
     if settings.tools.calendar_enabled:
         return GoogleCalendarService()
-    from .services import StubCalendarService
-    return StubCalendarService()
+    return DisabledCalendarService(
+        "ATLAS_TOOLS_CALENDAR_ENABLED is false; enable calendar integration before scheduling."
+    )
