@@ -71,7 +71,7 @@ async def add_suppression(
             return row["id"]
         return None
     except Exception as exc:
-        logger.warning("Failed to add suppression: %s", exc)
+        logger.error("Failed to add suppression (address may remain eligible): %s", exc)
         return None
 
 

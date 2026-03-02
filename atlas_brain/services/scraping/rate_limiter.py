@@ -92,7 +92,8 @@ class DomainRateLimiter:
 
     async def acquire(self, domain: str) -> None:
         """Acquire a rate-limit token for the given domain."""
-        if domain not in self._buckets:
+        bucket = self._buckets.get(domain)
+        if bucket is None:
             rpm = self._rpm_map.get(domain, 30)
-            self._buckets[domain] = _TokenBucket(rpm=_clamp_rpm(rpm))
-        await self._buckets[domain].acquire()
+            bucket = self._buckets.setdefault(domain, _TokenBucket(rpm=_clamp_rpm(rpm)))
+        await bucket.acquire()

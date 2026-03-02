@@ -13,6 +13,7 @@ Covers all three extraction sections in one LLM call:
 Returns _skip_synthesis always -- results go to DB, not to ntfy.
 """
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -246,7 +247,7 @@ async def _enrich_single(pool, row, max_attempts: int, max_tokens: int) -> bool:
                 review_id,
             )
         except Exception:
-            pass
+            logger.warning("Failed to increment deep_enrichment_attempts for review %s", review_id)
         return False
 
 
@@ -302,15 +303,23 @@ async def _extract_review(row, max_tokens: int) -> dict[str, Any] | None:
     ]
 
     try:
-        result = llm.chat(messages=messages, max_tokens=max_tokens, temperature=0.1)
+        result = await asyncio.wait_for(
+            asyncio.to_thread(
+                llm.chat, messages=messages,
+                max_tokens=max_tokens, temperature=0.1,
+            ),
+            timeout=120,
+        )
         text = clean_llm_output(result.get("response", ""))
         if not text:
             return None
         parsed = json.loads(text)
         if isinstance(parsed, dict):
             return parsed
+    except asyncio.TimeoutError:
+        logger.error("Deep extraction LLM call timed out after 120s")
     except json.JSONDecodeError:
-        logger.debug("Failed to parse deep extraction JSON")
+        logger.warning("Failed to parse deep extraction JSON")
     except Exception:
         logger.exception("Deep extraction LLM call failed")
     return None

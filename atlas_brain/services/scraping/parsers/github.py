@@ -40,7 +40,10 @@ class GitHubParser:
 
         search_mode = target.metadata.get("search_mode", "both")
         issue_labels = target.metadata.get("issue_labels", "bug,migration")
-        min_stars = target.metadata.get("min_stars", 10)
+        try:
+            min_stars = int(target.metadata.get("min_stars", 10))
+        except (ValueError, TypeError):
+            min_stars = 10
 
         # Auth token: target metadata > env var > config > unauthenticated
         token = target.metadata.get("github_token") or os.environ.get(
@@ -68,7 +71,7 @@ class GitHubParser:
                 for page in range(1, target.max_pages + 1):
                     url = (
                         f"{_BASE_URL}/search/issues"
-                        f"?q={vendor_encoded}+label:{label}"
+                        f"?q={vendor_encoded}+label:{quote_plus(label)}"
                         f"&sort=reactions&per_page={_PER_PAGE}&page={page}"
                     )
 

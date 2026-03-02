@@ -47,13 +47,16 @@ class HackerNewsParser:
         seen_ids: set[str] = set()
 
         include_comments = target.metadata.get("include_comments", True)
-        min_points = target.metadata.get("min_points", 5)
+        try:
+            min_points = int(target.metadata.get("min_points", 5))
+        except (ValueError, TypeError):
+            min_points = 5
 
         # Build search terms: vendor name + any custom terms from metadata
         search_terms = [target.vendor_name]
         extra_terms = target.metadata.get("search_terms")
         if extra_terms and isinstance(extra_terms, list):
-            search_terms.extend(extra_terms)
+            search_terms.extend(extra_terms[:4])
 
         # Determine tag passes: always stories, optionally comments
         tag_passes = ["story"]

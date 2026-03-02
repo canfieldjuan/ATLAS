@@ -144,7 +144,10 @@ def _extract_jsonld_product(
                 parts.append(f"Users praise: {', '.join(pros_list)}.")
             if cons_list:
                 parts.append(f"Users criticize: {', '.join(cons_list)}.")
-            rating_count = agg.get("ratingCount", 0)
+            try:
+                rating_count = int(agg.get("ratingCount", 0))
+            except (ValueError, TypeError):
+                rating_count = 0
             rating_val = agg.get("ratingValue")
             best = agg.get("bestRating", 10)
             parts.append(

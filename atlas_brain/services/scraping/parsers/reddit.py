@@ -56,9 +56,10 @@ class RedditParser:
         for sub in subreddits[:target.max_pages]:
             # Primary: global search with subreddit qualifier
             # (subreddit-scoped /r/{sub}/search.json returns 403 since late 2025)
+            sub_encoded = quote_plus(sub)
             url = (
                 f"https://www.reddit.com/search.json"
-                f"?q={vendor_encoded}+subreddit:{sub}&sort=new&limit=25&t=year"
+                f"?q={vendor_encoded}+subreddit:{sub_encoded}&sort=new&limit=25&t=year"
             )
 
             try:

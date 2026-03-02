@@ -229,7 +229,7 @@ def _parse_html(
                 seen_ids.add(review["source_review_id"])
                 reviews.append(review)
         except Exception:
-            logger.debug("Failed to parse Capterra review card", exc_info=True)
+            logger.warning("Failed to parse Capterra review card", exc_info=True)
 
     return reviews
 

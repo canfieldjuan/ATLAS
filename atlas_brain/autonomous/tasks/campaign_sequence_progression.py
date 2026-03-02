@@ -303,6 +303,7 @@ async def run(task: ScheduledTask) -> dict:
             FROM b2b_campaigns
             WHERE sequence_id = $1
             ORDER BY step_number ASC
+            LIMIT 20
             """,
             seq_id,
         )

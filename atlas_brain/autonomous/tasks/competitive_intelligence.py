@@ -123,12 +123,20 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # Load skill and call LLM
     from ...pipelines.llm import call_llm_with_skill, parse_json_response
 
-    analysis = call_llm_with_skill(
-        "digest/competitive_intelligence",
-        payload,
-        max_tokens=cfg.competitive_intelligence_max_tokens,
-        temperature=0.4,
-    )
+    try:
+        analysis = await asyncio.wait_for(
+            asyncio.to_thread(
+                call_llm_with_skill,
+                "digest/competitive_intelligence",
+                payload,
+                max_tokens=cfg.competitive_intelligence_max_tokens,
+                temperature=0.4,
+            ),
+            timeout=300,
+        )
+    except asyncio.TimeoutError:
+        logger.error("LLM call timed out after 300s for competitive_intelligence")
+        return {"_skip_synthesis": "LLM analysis timed out"}
     if not analysis:
         return {"_skip_synthesis": "LLM analysis failed"}
 
@@ -738,7 +746,7 @@ async def _upsert_brand_intelligence(
             )
             upserted += 1
         except Exception:
-            logger.debug("Failed to upsert brand intelligence for %s", brand, exc_info=True)
+            logger.warning("Failed to upsert brand intelligence for %s", brand, exc_info=True)
 
     if upserted:
         logger.info("Upserted %d brand intelligence scorecards", upserted)

@@ -132,7 +132,7 @@ def _parse_page(
                 seen_ids.add(review["source_review_id"])
                 reviews.append(review)
         except Exception:
-            logger.debug("Failed to parse G2 review card", exc_info=True)
+            logger.warning("Failed to parse G2 review card", exc_info=True)
 
     return reviews
 

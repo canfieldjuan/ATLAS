@@ -24,9 +24,13 @@ _MAX_SEND_ATTEMPTS = 3
 
 def _parse_window(cfg) -> tuple[int, int]:
     """Parse send window start/end into minutes-since-midnight."""
-    start_h, start_m = map(int, cfg.send_window_start.split(":"))
-    end_h, end_m = map(int, cfg.send_window_end.split(":"))
-    return start_h * 60 + start_m, end_h * 60 + end_m
+    try:
+        start_h, start_m = map(int, cfg.send_window_start.split(":"))
+        end_h, end_m = map(int, cfg.send_window_end.split(":"))
+        return start_h * 60 + start_m, end_h * 60 + end_m
+    except (ValueError, AttributeError):
+        # Fallback: 9:00-17:00 business hours
+        return 540, 1020
 
 
 def _minutes_in_window(current: int, start: int, end: int) -> bool:
