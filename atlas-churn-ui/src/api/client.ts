@@ -283,6 +283,25 @@ export async function deleteVendorTarget(id: string) {
   return res.json()
 }
 
+// ---------------------------------------------------------------------------
+// CSV Export
+// ---------------------------------------------------------------------------
+
+export function downloadCsv(
+  path: string,
+  params?: Record<string, string | number | boolean | undefined>,
+) {
+  const url = new URL(BASE + path, window.location.origin)
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null && v !== '') {
+        url.searchParams.set(k, String(v))
+      }
+    }
+  }
+  window.open(url.toString(), '_blank')
+}
+
 export async function generateVendorReport(id: string) {
   const res = await fetch(TARGETS_BASE + `/${id}/generate-report`, { method: 'POST' })
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)

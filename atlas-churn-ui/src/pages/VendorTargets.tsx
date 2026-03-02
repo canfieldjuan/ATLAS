@@ -274,16 +274,14 @@ export default function VendorTargets() {
       header: '',
       render: (r) => (
         <div className="flex items-center gap-1">
-          {r.target_mode === 'vendor_retention' && (
-            <button
-              onClick={(e) => { e.stopPropagation(); handleGenerateReport(r) }}
-              disabled={generatingReport === r.id}
-              className="p-1 text-slate-400 hover:text-cyan-400 transition-colors disabled:opacity-50"
-              title="Generate Report"
-            >
-              <FileBarChart className={clsx('h-3.5 w-3.5', generatingReport === r.id && 'animate-pulse')} />
-            </button>
-          )}
+          <button
+            onClick={(e) => { e.stopPropagation(); handleGenerateReport(r) }}
+            disabled={generatingReport === r.id}
+            className="p-1 text-slate-400 hover:text-cyan-400 transition-colors disabled:opacity-50"
+            title="Generate Report"
+          >
+            <FileBarChart className={clsx('h-3.5 w-3.5', generatingReport === r.id && 'animate-pulse')} />
+          </button>
           <button
             onClick={(e) => { e.stopPropagation(); handleGenerateCampaign(r) }}
             disabled={generatingCampaign === r.id}

@@ -7,11 +7,13 @@ import { fetchReports } from '../api/client'
 import { useState } from 'react'
 import type { Report } from '../types'
 
-const REPORT_TYPE_COLORS: Record<string, string> = {
+export const REPORT_TYPE_COLORS: Record<string, string> = {
   weekly_churn_feed: 'bg-cyan-500/20 text-cyan-400',
   vendor_scorecard: 'bg-violet-500/20 text-violet-400',
   displacement_report: 'bg-amber-500/20 text-amber-400',
   category_overview: 'bg-emerald-500/20 text-emerald-400',
+  vendor_retention: 'bg-orange-500/20 text-orange-400',
+  challenger_intel: 'bg-purple-500/20 text-purple-400',
 }
 
 function CardSkeleton() {
@@ -57,6 +59,8 @@ export default function Reports() {
             <option value="vendor_scorecard">Vendor Scorecard</option>
             <option value="displacement_report">Displacement Report</option>
             <option value="category_overview">Category Overview</option>
+            <option value="vendor_retention">Vendor Retention</option>
+            <option value="challenger_intel">Challenger Intel</option>
           </select>
           <button
             onClick={refresh}
@@ -99,7 +103,7 @@ export default function Reports() {
               <div className="flex items-start justify-between mb-3">
                 <span
                   className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                    REPORT_TYPE_COLORS[r.report_type] ?? 'bg-slate-700 text-slate-300'
+                    REPORT_TYPE_COLORS[r.report_type] ?? 'bg-slate-500/20 text-slate-400'
                   }`}
                 >
                   {r.report_type.replace(/_/g, ' ')}
