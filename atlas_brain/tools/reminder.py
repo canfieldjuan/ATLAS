@@ -254,7 +254,7 @@ class ReminderTool:
             return ToolResult(
                 success=False,
                 error="EXECUTION_ERROR",
-                message=str(e),
+                message="Reminder operation failed.",
             )
 
     def _format_time(self, due_at: datetime) -> str:
@@ -388,7 +388,7 @@ class ListRemindersTool:
             return ToolResult(
                 success=False,
                 error="EXECUTION_ERROR",
-                message=str(e),
+                message="Reminder operation failed.",
             )
 
 
@@ -488,7 +488,7 @@ class CompleteReminderTool:
                 return ToolResult(
                     success=False,
                     error="EXECUTION_ERROR",
-                    message=str(e),
+                    message="Reminder operation failed.",
                 )
 
         # Complete specific reminder by ID
@@ -536,7 +536,7 @@ class CompleteReminderTool:
                 return ToolResult(
                     success=False,
                     error="EXECUTION_ERROR",
-                    message=str(e),
+                    message="Reminder operation failed.",
                 )
 
         return ToolResult(

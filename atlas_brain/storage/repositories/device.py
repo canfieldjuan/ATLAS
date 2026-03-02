@@ -6,7 +6,7 @@ Provides CRUD operations for the discovered_devices table.
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 
@@ -147,6 +147,7 @@ class DeviceRepository:
                    discovered_at, last_seen_at, is_active, auto_registered, metadata
             FROM discovered_devices
             ORDER BY last_seen_at DESC
+            LIMIT 500
             """
         )
 
@@ -166,6 +167,7 @@ class DeviceRepository:
             FROM discovered_devices
             WHERE is_active = TRUE
             ORDER BY last_seen_at DESC
+            LIMIT 500
             """
         )
 
@@ -185,6 +187,7 @@ class DeviceRepository:
             FROM discovered_devices
             WHERE device_type = $1 AND is_active = TRUE
             ORDER BY last_seen_at DESC
+            LIMIT 500
             """,
             device_type,
         )
@@ -205,7 +208,7 @@ class DeviceRepository:
             WHERE device_id = $1
             """,
             device_id,
-            datetime.utcnow(),
+            datetime.now(timezone.utc),
         )
         logger.debug("Updated last_seen for device: %s", device_id)
 
@@ -223,7 +226,7 @@ class DeviceRepository:
             WHERE device_id = $1
             """,
             device_id,
-            datetime.utcnow(),
+            datetime.now(timezone.utc),
         )
         logger.info("Marked device inactive: %s", device_id)
 

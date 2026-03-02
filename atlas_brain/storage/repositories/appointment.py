@@ -262,6 +262,7 @@ class AppointmentRepository:
                 SELECT * FROM appointments
                 WHERE {' AND '.join(conditions)}
                 ORDER BY start_time ASC
+                LIMIT 1000
                 """,
                 *params,
             )

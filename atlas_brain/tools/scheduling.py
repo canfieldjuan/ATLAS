@@ -242,7 +242,7 @@ class CheckAvailabilityTool:
             return ToolResult(
                 success=False,
                 error="AVAILABILITY_ERROR",
-                message=f"Failed to check availability: {e}",
+                message="Failed to check availability.",
             )
 
 
@@ -415,7 +415,7 @@ class BookAppointmentTool:
                 logger.warning("DB save failed but calendar event created: %s", e)
                 db_id = None
 
-            # Link appointment to CRM contact (fire-and-forget — never blocks the booking)
+            # Link appointment to CRM contact (fire-and-forget -- never blocks the booking)
             contact_id_str: Optional[str] = None
             if db_id:
                 try:
@@ -490,7 +490,7 @@ class BookAppointmentTool:
             return ToolResult(
                 success=False,
                 error="BOOKING_ERROR",
-                message=f"Failed to book appointment: {e}",
+                message="Failed to book appointment.",
             )
 
 
@@ -636,7 +636,7 @@ class CancelAppointmentTool:
             return ToolResult(
                 success=False,
                 error="CANCEL_ERROR",
-                message=f"Failed to cancel appointment: {e}",
+                message="Failed to cancel appointment.",
             )
 
 
@@ -809,7 +809,7 @@ class RescheduleAppointmentTool:
             return ToolResult(
                 success=False,
                 error="RESCHEDULE_ERROR",
-                message=f"Failed to reschedule: {e}",
+                message="Failed to reschedule.",
             )
 
 
@@ -864,8 +864,8 @@ class LookupCustomerTool:
         Look up a customer.
 
         Strategy (in order):
-          1. CRM contacts table — the single source of truth for customer data.
-          2. Appointment rows — fallback for legacy records not yet in the CRM.
+          1. CRM contacts table -- the single source of truth for customer data.
+          2. Appointment rows -- fallback for legacy records not yet in the CRM.
 
         When a match is found in the CRM the response includes full contact
         details plus linked appointments.  When found only via appointment rows
@@ -961,7 +961,7 @@ class LookupCustomerTool:
             logger.debug("CRM lookup failed, falling back to appointment rows: %s", crm_exc)
 
         # ------------------------------------------------------------------
-        # Step 2: Legacy fallback — scrape customer data from appointment rows
+        # Step 2: Legacy fallback -- scrape customer data from appointment rows
         # (covers contacts not yet in the CRM)
         # ------------------------------------------------------------------
         repo = get_appointment_repo()
@@ -1063,7 +1063,7 @@ class LookupCustomerTool:
             return ToolResult(
                 success=False,
                 error="LOOKUP_ERROR",
-                message=f"Failed to look up customer: {e}",
+                message="Failed to look up customer.",
             )
 
 

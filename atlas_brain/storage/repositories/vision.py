@@ -6,7 +6,7 @@ Provides storage and retrieval of vision detection events.
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 
@@ -241,6 +241,7 @@ class VisionEventRepository:
                 WHERE event_timestamp BETWEEN $1 AND $2
                   AND source_id = $3
                 ORDER BY event_timestamp ASC
+                LIMIT 5000
                 """,
                 start_time,
                 end_time,
@@ -255,6 +256,7 @@ class VisionEventRepository:
                 FROM vision_events
                 WHERE event_timestamp BETWEEN $1 AND $2
                 ORDER BY event_timestamp ASC
+                LIMIT 5000
                 """,
                 start_time,
                 end_time,
@@ -283,7 +285,7 @@ class VisionEventRepository:
             return {}
 
         if since is None:
-            since = datetime.utcnow() - timedelta(hours=1)
+            since = datetime.now(timezone.utc) - timedelta(hours=1)
 
         # Validate group_by to prevent SQL injection
         valid_fields = {"class_name", "source_id", "node_id", "event_type"}
@@ -343,7 +345,7 @@ class VisionEventRepository:
         if not pool.is_initialized:
             return []
 
-        since = datetime.utcnow() - timedelta(minutes=since_minutes)
+        since = datetime.now(timezone.utc) - timedelta(minutes=since_minutes)
 
         rows = await pool.fetch(
             """

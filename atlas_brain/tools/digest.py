@@ -99,7 +99,7 @@ class RunDigestTool:
             return ToolResult(
                 success=False,
                 error="HANDLER_ERROR",
-                message=f"Digest failed: {e}",
+                message="Digest failed.",
             )
 
         if not isinstance(raw_result, dict):
@@ -149,7 +149,7 @@ class RunDigestTool:
 
         except Exception as e:
             logger.exception("Digest synthesis failed for '%s'", digest_type)
-            summary = raw_result.get("summary", str(e))
+            summary = raw_result.get("summary", "Digest completed.")
             return ToolResult(success=True, data=raw_result, message=summary)
 
 

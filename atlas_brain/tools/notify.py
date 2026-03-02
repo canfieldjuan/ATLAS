@@ -123,7 +123,7 @@ class NotifyTool:
             return ToolResult(
                 success=False,
                 error="EXECUTION_ERROR",
-                message=str(e),
+                message="Notification failed.",
             )
 
     async def _send_notification(

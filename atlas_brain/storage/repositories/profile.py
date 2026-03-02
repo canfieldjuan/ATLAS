@@ -5,7 +5,7 @@ Manages user preferences and profile data.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 
@@ -103,7 +103,7 @@ class ProfileRepository:
         """
         pool = get_db_pool()
         profile_id = uuid4()
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         await pool.execute(
             """
@@ -206,7 +206,7 @@ class ProfileRepository:
             return await self.get_profile(user_id)
 
         updates.append(f"updated_at = ${param_idx}")
-        params.append(datetime.utcnow())
+        params.append(datetime.now(timezone.utc))
         param_idx += 1
 
         params.append(user_id)

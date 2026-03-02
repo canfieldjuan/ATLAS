@@ -91,7 +91,7 @@ class TimeTool:
             return ToolResult(
                 success=False,
                 error="EXECUTION_ERROR",
-                message=str(e),
+                message="Time lookup failed.",
             )
 
     async def close(self) -> None:
