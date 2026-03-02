@@ -12,8 +12,11 @@ import uuid as _uuid
 from collections import defaultdict
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 
+from ..auth.dependencies import AuthUser, require_auth, require_plan
+from ..config import settings
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.consumer_dashboard")
@@ -108,6 +111,153 @@ def _compute_brand_health(r) -> int | None:
 
 
 # ---------------------------------------------------------------------------
+# Tenant scoping helper
+# ---------------------------------------------------------------------------
+
+
+def _tenant_cond(alias: str, param_idx: int) -> str:
+    """Return a SQL condition that restricts to tracked ASINs for an account.
+
+    When SaaS auth is disabled, returns 'TRUE' so queries are unscoped.
+    """
+    if not settings.saas_auth.enabled:
+        return "TRUE"
+    return f"{alias}.asin IN (SELECT asin FROM tracked_asins WHERE account_id = ${param_idx})"
+
+
+def _tenant_params(user: AuthUser) -> list:
+    """Return [account_id] when auth is enabled, else empty (no param needed)."""
+    if not settings.saas_auth.enabled:
+        return []
+    return [user.account_id]
+
+
+# ---------------------------------------------------------------------------
+# ASIN management
+# ---------------------------------------------------------------------------
+
+
+class AddAsinRequest(BaseModel):
+    asin: str
+    label: str | None = None
+
+
+@router.get("/asins")
+async def list_tracked_asins(user: AuthUser = Depends(require_auth)):
+    """List ASINs tracked by the current account."""
+    pool = _pool_or_503()
+    rows = await pool.fetch(
+        """
+        SELECT ta.asin, ta.label, ta.added_at,
+               pm.title, pm.brand, pm.average_rating, pm.rating_number, pm.price
+        FROM tracked_asins ta
+        LEFT JOIN product_metadata pm ON pm.asin = ta.asin
+        WHERE ta.account_id = $1
+        ORDER BY ta.added_at DESC
+        """,
+        user.account_id,
+    )
+    return {
+        "asins": [
+            {
+                "asin": r["asin"],
+                "label": r["label"],
+                "added_at": r["added_at"].isoformat() if r["added_at"] else None,
+                "title": r["title"],
+                "brand": r["brand"],
+                "average_rating": _safe_float(r["average_rating"]),
+                "rating_number": r["rating_number"],
+                "price": r["price"],
+            }
+            for r in rows
+        ],
+        "count": len(rows),
+    }
+
+
+@router.post("/asins")
+async def add_tracked_asin(req: AddAsinRequest, user: AuthUser = Depends(require_auth)):
+    """Add an ASIN to track. Enforces plan limit."""
+    pool = _pool_or_503()
+
+    # Check limit
+    current_count = await pool.fetchval(
+        "SELECT COUNT(*) FROM tracked_asins WHERE account_id = $1",
+        user.account_id,
+    )
+    asin_limit = await pool.fetchval(
+        "SELECT asin_limit FROM saas_accounts WHERE id = $1",
+        user.account_id,
+    )
+    if current_count >= (asin_limit or 5):
+        raise HTTPException(status_code=403, detail="ASIN limit reached. Upgrade your plan for more.")
+
+    # Upsert
+    await pool.execute(
+        """
+        INSERT INTO tracked_asins (account_id, asin, label)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (account_id, asin) DO UPDATE SET label = EXCLUDED.label
+        """,
+        user.account_id,
+        req.asin.strip().upper(),
+        req.label,
+    )
+
+    return {"status": "ok", "asin": req.asin.strip().upper()}
+
+
+@router.delete("/asins/{asin}")
+async def remove_tracked_asin(asin: str, user: AuthUser = Depends(require_auth)):
+    """Remove a tracked ASIN."""
+    pool = _pool_or_503()
+    result = await pool.execute(
+        "DELETE FROM tracked_asins WHERE account_id = $1 AND asin = $2",
+        user.account_id,
+        asin.strip().upper(),
+    )
+    if result == "DELETE 0":
+        raise HTTPException(status_code=404, detail="ASIN not tracked")
+    return {"status": "ok"}
+
+
+@router.get("/asins/search")
+async def search_available_asins(
+    q: str = Query(..., min_length=1),
+    limit: int = Query(20, le=50),
+    user: AuthUser = Depends(require_auth),
+):
+    """Search available ASINs from product_metadata."""
+    pool = _pool_or_503()
+    rows = await pool.fetch(
+        """
+        SELECT asin, title, brand, average_rating, rating_number, price
+        FROM product_metadata
+        WHERE asin ILIKE '%' || $1 || '%'
+           OR title ILIKE '%' || $1 || '%'
+           OR brand ILIKE '%' || $1 || '%'
+        ORDER BY rating_number DESC NULLS LAST
+        LIMIT $2
+        """,
+        q,
+        limit,
+    )
+    return {
+        "results": [
+            {
+                "asin": r["asin"],
+                "title": r["title"],
+                "brand": r["brand"],
+                "average_rating": _safe_float(r["average_rating"]),
+                "rating_number": r["rating_number"],
+                "price": r["price"],
+            }
+            for r in rows
+        ]
+    }
+
+
+# ---------------------------------------------------------------------------
 # GET /pipeline
 # ---------------------------------------------------------------------------
 
@@ -115,23 +265,36 @@ def _compute_brand_health(r) -> int | None:
 @router.get("/pipeline")
 async def get_pipeline_status(
     source_category: Optional[str] = Query(None),
+    user: AuthUser = Depends(require_auth),
 ):
     pool = _pool_or_503()
 
-    cat_filter = ""
-    cat_params: list = []
+    conditions: list[str] = []
+    params: list = []
+    idx = 1
+
+    # Tenant scoping
+    t_cond = _tenant_cond("product_reviews", idx)
+    if t_cond != "TRUE":
+        conditions.append(t_cond)
+        params.extend(_tenant_params(user))
+        idx += 1
+
     if source_category:
-        cat_filter = "WHERE source_category = $1"
-        cat_params = [source_category]
+        conditions.append(f"source_category = ${idx}")
+        params.append(source_category)
+        idx += 1
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
     enrichment_rows = await pool.fetch(
         f"""
         SELECT enrichment_status, COUNT(*) AS cnt
         FROM product_reviews
-        {cat_filter}
+        {where}
         GROUP BY enrichment_status
         """,
-        *cat_params,
+        *params,
     )
     enrichment_counts = {r["enrichment_status"]: r["cnt"] for r in enrichment_rows}
 
@@ -139,19 +302,21 @@ async def get_pipeline_status(
         f"""
         SELECT deep_enrichment_status, COUNT(*) AS cnt
         FROM product_reviews
-        {cat_filter}
+        {where}
         GROUP BY deep_enrichment_status
         """,
-        *cat_params,
+        *params,
     )
     deep_counts = {r["deep_enrichment_status"]: r["cnt"] for r in deep_rows}
 
     category_rows = await pool.fetch(
-        """
+        f"""
         SELECT source_category, COUNT(*) AS cnt
         FROM product_reviews
+        {where}
         GROUP BY source_category
-        """
+        """,
+        *params,
     )
     category_counts = {r["source_category"]: r["cnt"] for r in category_rows}
 
@@ -164,21 +329,38 @@ async def get_pipeline_status(
                MAX(enriched_at) AS last_enrichment_at,
                MAX(deep_enriched_at) AS last_deep_enrichment_at
         FROM product_reviews
-        {cat_filter}
+        {where}
         """,
-        *cat_params,
+        *params,
     )
 
+    # Meta totals - scope by tracked ASINs
+    meta_conditions: list[str] = []
+    meta_params: list = []
+    meta_idx = 1
+
+    t_meta = _tenant_cond("pm", meta_idx)
+    if t_meta != "TRUE":
+        meta_conditions.append(t_meta)
+        meta_params.extend(_tenant_params(user))
+        meta_idx += 1
+
     if source_category:
+        meta_conditions.append(f"pr.source_category = ${meta_idx}")
+        meta_params.append(source_category)
+        meta_idx += 1
+
+    if meta_conditions:
+        meta_where = "WHERE " + " AND ".join(meta_conditions)
         meta_totals = await pool.fetchrow(
-            """
+            f"""
             SELECT COUNT(DISTINCT pm.brand) FILTER (WHERE pm.brand IS NOT NULL AND pm.brand != '') AS total_brands,
                    COUNT(DISTINCT pm.asin) AS total_asins
             FROM product_metadata pm
             JOIN product_reviews pr ON pr.asin = pm.asin
-            WHERE pr.source_category = $1
+            {meta_where}
             """,
-            source_category,
+            *meta_params,
         )
     else:
         meta_totals = await pool.fetchrow(
@@ -210,13 +392,15 @@ async def get_pipeline_status(
 
 
 @router.get("/categories")
-async def list_categories():
+async def list_categories(user: AuthUser = Depends(require_auth)):
     pool = _pool_or_503()
-    rows = await pool.fetch("""
-        SELECT DISTINCT source_category FROM product_reviews
-        WHERE source_category IS NOT NULL AND source_category != ''
-        ORDER BY source_category
-    """)
+    t_cond = _tenant_cond("product_reviews", 1)
+    t_params = _tenant_params(user)
+    where = f"WHERE source_category IS NOT NULL AND source_category != '' AND {t_cond}" if t_cond != "TRUE" else "WHERE source_category IS NOT NULL AND source_category != ''"
+    rows = await pool.fetch(
+        f"SELECT DISTINCT source_category FROM product_reviews {where} ORDER BY source_category",
+        *t_params,
+    )
     return {"categories": [r["source_category"] for r in rows]}
 
 
@@ -233,11 +417,19 @@ async def list_brands(
     sort_by: str = Query("review_count"),
     limit: int = Query(50, le=200),
     offset: int = Query(0),
+    user: AuthUser = Depends(require_auth),
 ):
     pool = _pool_or_503()
     conditions: list[str] = ["pm.brand IS NOT NULL", "pm.brand != ''"]
     params: list = []
     idx = 1
+
+    # Tenant scoping
+    t_cond = _tenant_cond("pr", idx)
+    if t_cond != "TRUE":
+        conditions.append(t_cond)
+        params.extend(_tenant_params(user))
+        idx += 1
 
     if source_category:
         conditions.append(f"pr.source_category = ${idx}")
@@ -383,6 +575,7 @@ async def list_brands(
 @router.get("/brands/compare")
 async def compare_brands(
     brands: str = Query(..., description="Comma-separated brand names (2-4)"),
+    user: AuthUser = require_plan("growth"),
 ):
     """Side-by-side comparison of 2-4 brands on core signals + cross-brand intelligence."""
     pool = _pool_or_503()
@@ -394,6 +587,12 @@ async def compare_brands(
     # Build parameterized brand filter: (pm.brand ILIKE $1 OR pm.brand ILIKE $2 ...)
     brand_clauses = " OR ".join(f"pm.brand ILIKE ${i+1}" for i in range(len(brand_list)))
     brand_params = list(brand_list)
+
+    # Tenant scoping
+    t_idx = len(brand_list) + 1
+    t_cond = _tenant_cond("pr", t_idx)
+    t_extra = _tenant_params(user)
+    t_sql = f"AND {t_cond}" if t_cond != "TRUE" else ""
 
     # -- Query 1: Summary stats per brand --
     summary_rows = await pool.fetch(
@@ -438,9 +637,10 @@ async def compare_brands(
         JOIN product_reviews pr ON pr.asin = pm.asin
         WHERE pm.brand IS NOT NULL AND pm.brand != ''
           AND ({brand_clauses})
+          {t_sql}
         GROUP BY pm.brand
         """,
-        *brand_params,
+        *brand_params, *t_extra,
     )
 
     # Map brand name (lowered) -> summary row
@@ -490,10 +690,11 @@ async def compare_brands(
         JOIN product_metadata pm ON pm.asin = pr.asin
         WHERE pm.brand IS NOT NULL AND pm.brand != ''
           AND ({brand_clauses})
+          {t_sql}
           AND pr.deep_extraction IS NOT NULL
           AND pr.deep_extraction != '{{}}'::jsonb
         """,
-        *brand_params,
+        *brand_params, *t_extra,
     )
 
     # Per-brand counters
@@ -723,13 +924,18 @@ async def compare_brands(
 
 
 @router.get("/brands/{brand_name}")
-async def get_brand_detail(brand_name: str):
+async def get_brand_detail(brand_name: str, user: AuthUser = Depends(require_auth)):
     pool = _pool_or_503()
     bname = brand_name.strip()
 
+    # Tenant scoping for brand detail queries
+    t_cond2 = _tenant_cond("pr", 2)
+    t_extra = _tenant_params(user)
+    t_and = f"AND {t_cond2}" if t_cond2 != "TRUE" else ""
+
     # Products for this brand
     products = await pool.fetch(
-        """
+        f"""
         SELECT pm.asin, pm.title, pm.average_rating, pm.rating_number, pm.price,
                COUNT(pr.id) AS review_count,
                AVG(pr.pain_score) FILTER (WHERE pr.rating <= 3) AS avg_complaint_score,
@@ -738,11 +944,11 @@ async def get_brand_detail(brand_name: str):
                COUNT(*) FILTER (WHERE pr.rating > 3)  AS praise_count
         FROM product_metadata pm
         LEFT JOIN product_reviews pr ON pr.asin = pm.asin
-        WHERE pm.brand ILIKE $1
+        WHERE pm.brand ILIKE $1 {t_and}
         GROUP BY pm.asin, pm.title, pm.average_rating, pm.rating_number, pm.price
         ORDER BY review_count DESC
         """,
-        bname,
+        bname, *t_extra,
     )
 
     if not products:
@@ -750,16 +956,17 @@ async def get_brand_detail(brand_name: str):
 
     # Aggregate sentiment aspects
     aspect_rows = await pool.fetch(
-        """
+        f"""
         SELECT deep_extraction->'sentiment_aspects' AS aspects
         FROM product_reviews pr
         JOIN product_metadata pm ON pm.asin = pr.asin
         WHERE pm.brand ILIKE $1
+          {t_and}
           AND pr.deep_extraction IS NOT NULL
-          AND pr.deep_extraction != '{}'::jsonb
+          AND pr.deep_extraction != '{{}}'::jsonb
           AND pr.deep_extraction->'sentiment_aspects' IS NOT NULL
         """,
-        bname,
+        bname, *t_extra,
     )
 
     sentiment: dict[str, dict[str, int]] = defaultdict(lambda: {"positive": 0, "negative": 0, "mixed": 0, "neutral": 0})
@@ -780,16 +987,17 @@ async def get_brand_detail(brand_name: str):
 
     # Feature requests
     feat_rows = await pool.fetch(
-        """
+        f"""
         SELECT deep_extraction->'feature_requests' AS requests
         FROM product_reviews pr
         JOIN product_metadata pm ON pm.asin = pr.asin
         WHERE pm.brand ILIKE $1
+          {t_and}
           AND pr.deep_extraction IS NOT NULL
-          AND pr.deep_extraction != '{}'::jsonb
+          AND pr.deep_extraction != '{{}}'::jsonb
           AND jsonb_array_length(COALESCE(pr.deep_extraction->'feature_requests', '[]'::jsonb)) > 0
         """,
-        bname,
+        bname, *t_extra,
     )
 
     feature_counter: dict[str, int] = defaultdict(int)
@@ -807,16 +1015,17 @@ async def get_brand_detail(brand_name: str):
 
     # Competitive flows
     flow_rows = await pool.fetch(
-        """
+        f"""
         SELECT deep_extraction->'product_comparisons' AS comparisons, pr.rating
         FROM product_reviews pr
         JOIN product_metadata pm ON pm.asin = pr.asin
         WHERE pm.brand ILIKE $1
+          {t_and}
           AND pr.deep_extraction IS NOT NULL
-          AND pr.deep_extraction != '{}'::jsonb
+          AND pr.deep_extraction != '{{}}'::jsonb
           AND jsonb_array_length(COALESCE(pr.deep_extraction->'product_comparisons', '[]'::jsonb)) > 0
         """,
-        bname,
+        bname, *t_extra,
     )
 
     comp_counter: dict[str, dict] = {}
@@ -879,10 +1088,11 @@ async def get_brand_detail(brand_name: str):
         FROM product_reviews pr
         JOIN product_metadata pm ON pm.asin = pr.asin
         WHERE pm.brand ILIKE $1
+          {t_and}
           AND pr.deep_extraction IS NOT NULL
-          AND pr.deep_extraction != '{}'::jsonb
+          AND pr.deep_extraction != '{{}}'::jsonb
         """,
-        bname,
+        bname, *t_extra,
     )
 
     # Enum distribution counters
@@ -987,16 +1197,17 @@ async def get_brand_detail(brand_name: str):
     # Positive aspects (top terms across reviews)
     # ------------------------------------------------------------------
     pos_rows = await pool.fetch(
-        """
+        f"""
         SELECT deep_extraction->'positive_aspects' AS aspects
         FROM product_reviews pr
         JOIN product_metadata pm ON pm.asin = pr.asin
         WHERE pm.brand ILIKE $1
+          {t_and}
           AND pr.deep_extraction IS NOT NULL
-          AND pr.deep_extraction != '{}'::jsonb
+          AND pr.deep_extraction != '{{}}'::jsonb
           AND jsonb_array_length(COALESCE(pr.deep_extraction->'positive_aspects', '[]'::jsonb)) > 0
         """,
-        bname,
+        bname, *t_extra,
     )
     positive_counter: dict[str, int] = defaultdict(int)
     for row in pos_rows:
@@ -1015,16 +1226,17 @@ async def get_brand_detail(brand_name: str):
     # Consideration set (what buyers considered and rejected)
     # ------------------------------------------------------------------
     cons_rows = await pool.fetch(
-        """
+        f"""
         SELECT deep_extraction->'consideration_set' AS cset
         FROM product_reviews pr
         JOIN product_metadata pm ON pm.asin = pr.asin
         WHERE pm.brand ILIKE $1
+          {t_and}
           AND pr.deep_extraction IS NOT NULL
-          AND pr.deep_extraction != '{}'::jsonb
+          AND pr.deep_extraction != '{{}}'::jsonb
           AND jsonb_array_length(COALESCE(pr.deep_extraction->'consideration_set', '[]'::jsonb)) > 0
         """,
-        bname,
+        bname, *t_extra,
     )
     consideration_counter: dict[str, dict] = {}
     for row in cons_rows:
@@ -1085,7 +1297,7 @@ async def get_brand_detail(brand_name: str):
     # First-pass enrichment fields (severity, time_to_failure, etc.)
     # ------------------------------------------------------------------
     fp_rows = await pool.fetch(
-        """
+        f"""
         SELECT severity,
                time_to_failure,
                root_cause,
@@ -1095,9 +1307,10 @@ async def get_brand_detail(brand_name: str):
         FROM product_reviews pr
         JOIN product_metadata pm ON pm.asin = pr.asin
         WHERE pm.brand ILIKE $1
+          {t_and}
           AND pr.enrichment_status = 'enriched'
         """,
-        bname,
+        bname, *t_extra,
     )
 
     severity_counter: dict[str, int] = defaultdict(int)
@@ -1233,6 +1446,7 @@ async def get_competitive_flows(
     direction: Optional[str] = Query(None),
     min_count: int = Query(2),
     limit: int = Query(100, le=500),
+    user: AuthUser = Depends(require_auth),
 ):
     pool = _pool_or_503()
     base_conditions = [
@@ -1241,6 +1455,13 @@ async def get_competitive_flows(
     ]
     params: list = []
     idx = 1
+
+    # Tenant scoping
+    t_cond = _tenant_cond("pr", idx)
+    if t_cond != "TRUE":
+        base_conditions.append(t_cond)
+        params.extend(_tenant_params(user))
+        idx += 1
 
     if source_category:
         base_conditions.append(f"pr.source_category = ${idx}")
@@ -1339,6 +1560,7 @@ async def get_feature_gaps(
     brand: Optional[str] = Query(None),
     min_count: int = Query(1),
     limit: int = Query(50, le=200),
+    user: AuthUser = Depends(require_auth),
 ):
     pool = _pool_or_503()
     conditions = [
@@ -1347,6 +1569,13 @@ async def get_feature_gaps(
     ]
     params: list = []
     idx = 1
+
+    # Tenant scoping
+    t_cond = _tenant_cond("pr", idx)
+    if t_cond != "TRUE":
+        conditions.append(t_cond)
+        params.extend(_tenant_params(user))
+        idx += 1
 
     if source_category:
         conditions.append(f"pr.source_category = ${idx}")
@@ -1458,6 +1687,7 @@ async def get_safety_signals(
     min_rating: Optional[float] = Query(None),
     max_rating: Optional[float] = Query(None),
     limit: int = Query(50, le=200),
+    user: AuthUser = Depends(require_auth),
 ):
     pool = _pool_or_503()
     conditions = [
@@ -1465,6 +1695,13 @@ async def get_safety_signals(
     ]
     params: list = []
     idx = 1
+
+    # Tenant scoping
+    t_cond = _tenant_cond("pr", idx)
+    if t_cond != "TRUE":
+        conditions.append(t_cond)
+        params.extend(_tenant_params(user))
+        idx += 1
 
     if source_category:
         conditions.append(f"pr.source_category = ${idx}")
@@ -1561,11 +1798,19 @@ async def search_reviews(
     sort_by: str = Query("imported_at"),
     limit: int = Query(50, le=200),
     offset: int = Query(0),
+    user: AuthUser = Depends(require_auth),
 ):
     pool = _pool_or_503()
     conditions: list[str] = []
     params: list = []
     idx = 1
+
+    # Tenant scoping
+    t_cond = _tenant_cond("pr", idx)
+    if t_cond != "TRUE":
+        conditions.append(t_cond)
+        params.extend(_tenant_params(user))
+        idx += 1
 
     if source_category:
         conditions.append(f"pr.source_category = ${idx}")
@@ -1712,7 +1957,7 @@ async def search_reviews(
 
 
 @router.get("/reviews/{review_id}")
-async def get_review(review_id: str):
+async def get_review(review_id: str, user: AuthUser = Depends(require_auth)):
     try:
         rid = _uuid.UUID(review_id)
     except (ValueError, AttributeError):

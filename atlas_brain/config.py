@@ -11,6 +11,26 @@ from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+class SaaSAuthConfig(BaseSettings):
+    """SaaS authentication and billing configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_SAAS_")
+
+    enabled: bool = Field(default=False, description="Enable SaaS auth (when off, dashboard works without auth)")
+    jwt_secret: str = Field(default="change-me-in-production", description="JWT signing secret")
+    jwt_algorithm: str = Field(default="HS256", description="JWT algorithm")
+    jwt_expiry_hours: int = Field(default=24, description="Access token expiry in hours")
+    jwt_refresh_expiry_days: int = Field(default=30, description="Refresh token expiry in days")
+    trial_days: int = Field(default=14, description="Trial period length in days")
+
+    # Stripe
+    stripe_secret_key: str = Field(default="", description="Stripe secret API key")
+    stripe_webhook_secret: str = Field(default="", description="Stripe webhook signing secret")
+    stripe_starter_price_id: str = Field(default="", description="Stripe Price ID for Starter plan")
+    stripe_growth_price_id: str = Field(default="", description="Stripe Price ID for Growth plan")
+    stripe_pro_price_id: str = Field(default="", description="Stripe Price ID for Pro plan")
+
+
 class STTConfig(BaseSettings):
     """STT-specific configuration."""
 
@@ -2653,6 +2673,7 @@ class Settings(BaseSettings):
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     alert_monitor: AlertMonitorConfig = Field(default_factory=AlertMonitorConfig)
     news_intel: NewsIntelligenceConfig = Field(default_factory=NewsIntelligenceConfig)
+    saas_auth: SaaSAuthConfig = Field(default_factory=SaaSAuthConfig)
 
     # Reasoning agent (cross-domain event-driven intelligence)
     @staticmethod

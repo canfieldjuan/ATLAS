@@ -4,6 +4,7 @@ import { RefreshCw, X, Search, ArrowRight, Scale } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PageError } from '../components/ErrorBoundary'
 import { CHURN_COLORS, DistBar, Card } from '../components/BrandComponents'
+import PlanGate from '../components/PlanGate'
 import useApiData from '../hooks/useApiData'
 import {
   fetchBrandComparison,
@@ -46,6 +47,14 @@ function MetricCell({ value, format, colorFn }: {
 }
 
 export default function BrandCompare() {
+  return (
+    <PlanGate minPlan="growth">
+      <BrandCompareInner />
+    </PlanGate>
+  )
+}
+
+function BrandCompareInner() {
   const [searchParams, setSearchParams] = useSearchParams()
   const initialBrands = useMemo(
     () => (searchParams.get('brands') || '').split(',').filter(Boolean).map(decodeURIComponent),

@@ -1,0 +1,359 @@
+"""Stripe billing endpoints: checkout, portal, status, webhook."""
+
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
+
+from ..auth.dependencies import AuthUser, require_auth
+from ..config import settings
+from ..storage.database import get_db_pool
+
+logger = logging.getLogger("atlas.api.billing")
+
+router = APIRouter(prefix="/billing", tags=["billing"])
+webhook_router = APIRouter(tags=["billing-webhook"])
+
+PLAN_LIMITS = {
+    "trial":   {"asins": 5,   "compare": False, "api": False},
+    "starter": {"asins": 5,   "compare": False, "api": False},
+    "growth":  {"asins": 25,  "compare": True,  "api": True},
+    "pro":     {"asins": 100, "compare": True,  "api": True},
+}
+
+PRICE_TO_PLAN = {}  # populated at module init from config
+
+
+def _init_price_map():
+    cfg = settings.saas_auth
+    if cfg.stripe_starter_price_id:
+        PRICE_TO_PLAN[cfg.stripe_starter_price_id] = "starter"
+    if cfg.stripe_growth_price_id:
+        PRICE_TO_PLAN[cfg.stripe_growth_price_id] = "growth"
+    if cfg.stripe_pro_price_id:
+        PRICE_TO_PLAN[cfg.stripe_pro_price_id] = "pro"
+
+
+def _get_stripe():
+    import stripe
+    cfg = settings.saas_auth
+    if not cfg.stripe_secret_key:
+        raise HTTPException(status_code=503, detail="Stripe not configured")
+    stripe.api_key = cfg.stripe_secret_key
+    return stripe
+
+
+# -- Request/Response schemas --
+
+class CheckoutRequest(BaseModel):
+    price_id: str
+    success_url: str = ""
+    cancel_url: str = ""
+
+
+class CheckoutResponse(BaseModel):
+    checkout_url: str
+
+
+class PortalResponse(BaseModel):
+    portal_url: str
+
+
+class BillingStatus(BaseModel):
+    plan: str
+    plan_status: str
+    asin_limit: int
+    trial_ends_at: str | None
+    stripe_customer_id: str | None
+
+
+# -- Endpoints --
+
+@router.post("/checkout", response_model=CheckoutResponse)
+async def create_checkout(req: CheckoutRequest, user: AuthUser = Depends(require_auth)):
+    """Create a Stripe Checkout session for plan upgrade."""
+    stripe = _get_stripe()
+    pool = get_db_pool()
+
+    # Get or create Stripe customer
+    account = await pool.fetchrow(
+        "SELECT stripe_customer_id, name FROM saas_accounts WHERE id = $1",
+        user.account_id,
+    )
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    customer_id = account["stripe_customer_id"]
+    if not customer_id:
+        # Create customer on the fly
+        user_row = await pool.fetchrow(
+            "SELECT email FROM saas_users WHERE id = $1", user.user_id
+        )
+        customer = stripe.Customer.create(
+            email=user_row["email"] if user_row else "",
+            name=account["name"],
+            metadata={"account_id": str(user.account_id)},
+        )
+        customer_id = customer.id
+        await pool.execute(
+            "UPDATE saas_accounts SET stripe_customer_id = $1 WHERE id = $2",
+            customer_id,
+            user.account_id,
+        )
+
+    success_url = req.success_url or "{CHECKOUT_SESSION_ID}"
+    cancel_url = req.cancel_url or ""
+
+    session = stripe.checkout.Session.create(
+        customer=customer_id,
+        mode="subscription",
+        line_items=[{"price": req.price_id, "quantity": 1}],
+        success_url=success_url,
+        cancel_url=cancel_url,
+        metadata={"account_id": str(user.account_id)},
+    )
+
+    return CheckoutResponse(checkout_url=session.url)
+
+
+@router.post("/portal", response_model=PortalResponse)
+async def create_portal(user: AuthUser = Depends(require_auth)):
+    """Create a Stripe Customer Portal session."""
+    if user.role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Only account owner/admin can manage billing")
+
+    stripe = _get_stripe()
+    pool = get_db_pool()
+
+    customer_id = await pool.fetchval(
+        "SELECT stripe_customer_id FROM saas_accounts WHERE id = $1",
+        user.account_id,
+    )
+    if not customer_id:
+        raise HTTPException(status_code=400, detail="No billing account found. Subscribe to a plan first.")
+
+    session = stripe.billing_portal.Session.create(
+        customer=customer_id,
+    )
+
+    return PortalResponse(portal_url=session.url)
+
+
+@router.get("/status", response_model=BillingStatus)
+async def billing_status(user: AuthUser = Depends(require_auth)):
+    """Get current billing status for the account."""
+    pool = get_db_pool()
+    row = await pool.fetchrow(
+        """
+        SELECT plan, plan_status, asin_limit, trial_ends_at, stripe_customer_id
+        FROM saas_accounts WHERE id = $1
+        """,
+        user.account_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    return BillingStatus(
+        plan=row["plan"],
+        plan_status=row["plan_status"],
+        asin_limit=row["asin_limit"],
+        trial_ends_at=row["trial_ends_at"].isoformat() if row["trial_ends_at"] else None,
+        stripe_customer_id=row["stripe_customer_id"],
+    )
+
+
+# -- Stripe Webhook --
+
+@webhook_router.post("/webhooks/stripe")
+async def stripe_webhook(request: Request):
+    """Handle Stripe webhook events."""
+    cfg = settings.saas_auth
+    if not cfg.stripe_secret_key:
+        raise HTTPException(status_code=503, detail="Stripe not configured")
+
+    import stripe
+    stripe.api_key = cfg.stripe_secret_key
+
+    body = await request.body()
+    sig = request.headers.get("stripe-signature", "")
+
+    try:
+        if cfg.stripe_webhook_secret:
+            event = stripe.Webhook.construct_event(body, sig, cfg.stripe_webhook_secret)
+        else:
+            import json
+            event = stripe.Event.construct_from(json.loads(body), stripe.api_key)
+    except Exception as e:
+        logger.warning("Stripe webhook signature verification failed: %s", e)
+        raise HTTPException(status_code=400, detail="Invalid signature")
+
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(status_code=503, detail="Database not ready")
+
+    # Idempotency check
+    existing = await pool.fetchval(
+        "SELECT id FROM billing_events WHERE stripe_event_id = $1", event.id
+    )
+    if existing:
+        return {"status": "already_processed"}
+
+    # Initialize price map if needed
+    if not PRICE_TO_PLAN:
+        _init_price_map()
+
+    event_type = event.type
+    obj = event.data.object
+
+    account_id = None
+
+    if event_type == "checkout.session.completed":
+        account_id = await _handle_checkout_completed(pool, obj)
+
+    elif event_type == "invoice.paid":
+        account_id = await _handle_invoice_paid(pool, obj)
+
+    elif event_type == "invoice.payment_failed":
+        account_id = await _handle_invoice_failed(pool, obj)
+
+    elif event_type == "customer.subscription.updated":
+        account_id = await _handle_subscription_updated(pool, obj)
+
+    elif event_type == "customer.subscription.deleted":
+        account_id = await _handle_subscription_deleted(pool, obj)
+
+    # Log event
+    import json
+    await pool.execute(
+        """
+        INSERT INTO billing_events (account_id, stripe_event_id, event_type, payload)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (stripe_event_id) DO NOTHING
+        """,
+        account_id,
+        event.id,
+        event_type,
+        json.dumps(event.data.object.to_dict() if hasattr(event.data.object, 'to_dict') else {}),
+    )
+
+    return {"status": "ok"}
+
+
+async def _find_account_by_customer(pool, customer_id: str):
+    """Find account ID by Stripe customer ID."""
+    return await pool.fetchval(
+        "SELECT id FROM saas_accounts WHERE stripe_customer_id = $1", customer_id
+    )
+
+
+async def _handle_checkout_completed(pool, session) -> str | None:
+    """Handle checkout.session.completed -- activate subscription."""
+    customer_id = session.customer
+    subscription_id = session.subscription
+    account_id = session.metadata.get("account_id") if session.metadata else None
+
+    if not account_id:
+        account_id = await _find_account_by_customer(pool, customer_id)
+
+    if not account_id:
+        logger.warning("Checkout completed but no account found for customer %s", customer_id)
+        return None
+
+    # Determine plan from line items via subscription
+    plan = "starter"
+    try:
+        import stripe
+        sub = stripe.Subscription.retrieve(subscription_id)
+        if sub.items and sub.items.data:
+            price_id = sub.items.data[0].price.id
+            plan = PRICE_TO_PLAN.get(price_id, "starter")
+    except Exception as e:
+        logger.warning("Failed to determine plan from subscription: %s", e)
+
+    limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["starter"])
+
+    await pool.execute(
+        """
+        UPDATE saas_accounts
+        SET plan = $1, plan_status = 'active',
+            stripe_customer_id = $2, stripe_subscription_id = $3,
+            asin_limit = $4, updated_at = NOW()
+        WHERE id = $5
+        """,
+        plan,
+        customer_id,
+        subscription_id,
+        limits["asins"],
+        account_id,
+    )
+
+    logger.info("Account %s upgraded to %s", account_id, plan)
+    return account_id
+
+
+async def _handle_invoice_paid(pool, invoice) -> str | None:
+    """Handle invoice.paid -- ensure plan_status is active."""
+    customer_id = invoice.customer
+    account_id = await _find_account_by_customer(pool, customer_id)
+    if account_id:
+        await pool.execute(
+            "UPDATE saas_accounts SET plan_status = 'active', updated_at = NOW() WHERE id = $1",
+            account_id,
+        )
+    return account_id
+
+
+async def _handle_invoice_failed(pool, invoice) -> str | None:
+    """Handle invoice.payment_failed -- set past_due."""
+    customer_id = invoice.customer
+    account_id = await _find_account_by_customer(pool, customer_id)
+    if account_id:
+        await pool.execute(
+            "UPDATE saas_accounts SET plan_status = 'past_due', updated_at = NOW() WHERE id = $1",
+            account_id,
+        )
+        logger.warning("Account %s payment failed, set to past_due", account_id)
+    return account_id
+
+
+async def _handle_subscription_updated(pool, subscription) -> str | None:
+    """Handle subscription changes (upgrades/downgrades)."""
+    customer_id = subscription.customer
+    account_id = await _find_account_by_customer(pool, customer_id)
+    if not account_id:
+        return None
+
+    plan = "starter"
+    if subscription.items and subscription.items.data:
+        price_id = subscription.items.data[0].price.id
+        plan = PRICE_TO_PLAN.get(price_id, "starter")
+
+    limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["starter"])
+
+    await pool.execute(
+        """
+        UPDATE saas_accounts
+        SET plan = $1, asin_limit = $2, stripe_subscription_id = $3, updated_at = NOW()
+        WHERE id = $4
+        """,
+        plan,
+        limits["asins"],
+        subscription.id,
+        account_id,
+    )
+
+    logger.info("Account %s subscription updated to %s", account_id, plan)
+    return account_id
+
+
+async def _handle_subscription_deleted(pool, subscription) -> str | None:
+    """Handle subscription cancellation."""
+    customer_id = subscription.customer
+    account_id = await _find_account_by_customer(pool, customer_id)
+    if account_id:
+        await pool.execute(
+            "UPDATE saas_accounts SET plan_status = 'canceled', updated_at = NOW() WHERE id = $1",
+            account_id,
+        )
+        logger.info("Account %s subscription canceled", account_id)
+    return account_id

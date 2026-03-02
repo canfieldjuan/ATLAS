@@ -1,5 +1,10 @@
 const BASE = '/api/v1/consumer/dashboard'
 
+function authHeaders(): Record<string, string> {
+  const token = localStorage.getItem('atlas_token')
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
 async function get<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
   const url = new URL(`${BASE}${path}`, window.location.origin)
   if (params) {
@@ -9,7 +14,44 @@ async function get<T>(path: string, params?: Record<string, string | number | bo
       }
     }
   }
-  const res = await fetch(url.toString())
+  const res = await fetch(url.toString(), { headers: authHeaders() })
+  if (res.status === 401) {
+    localStorage.removeItem('atlas_token')
+    localStorage.removeItem('atlas_refresh_token')
+    window.location.href = '/login'
+    throw new Error('Session expired')
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`API ${res.status}: ${body || res.statusText}`)
+  }
+  return res.json()
+}
+
+async function post<T>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  if (res.status === 401) {
+    localStorage.removeItem('atlas_token')
+    localStorage.removeItem('atlas_refresh_token')
+    window.location.href = '/login'
+    throw new Error('Session expired')
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`API ${res.status}: ${body || res.statusText}`)
+  }
+  return res.json()
+}
+
+async function del<T>(path: string): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  })
   if (!res.ok) {
     const body = await res.text().catch(() => '')
     throw new Error(`API ${res.status}: ${body || res.statusText}`)
@@ -371,4 +413,42 @@ export function fetchReviews(params?: {
 
 export function fetchReview(id: string) {
   return get<ReviewDetail>(`/reviews/${encodeURIComponent(id)}`)
+}
+
+// -- ASIN Tracking --
+
+export interface TrackedAsin {
+  asin: string
+  label: string | null
+  added_at: string | null
+  title: string | null
+  brand: string | null
+  average_rating: number | null
+  rating_number: number | null
+  price: string | null
+}
+
+export interface AsinSearchResult {
+  asin: string
+  title: string | null
+  brand: string | null
+  average_rating: number | null
+  rating_number: number | null
+  price: string | null
+}
+
+export function fetchTrackedAsins() {
+  return get<{ asins: TrackedAsin[]; count: number }>('/asins')
+}
+
+export function addTrackedAsin(asin: string, label?: string) {
+  return post<{ status: string; asin: string }>('/asins', { asin, label })
+}
+
+export function removeTrackedAsin(asin: string) {
+  return del<{ status: string }>(`/asins/${encodeURIComponent(asin)}`)
+}
+
+export function searchAvailableAsins(q: string, limit = 20) {
+  return get<{ results: AsinSearchResult[] }>('/asins/search', { q, limit })
 }

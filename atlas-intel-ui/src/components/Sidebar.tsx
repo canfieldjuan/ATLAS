@@ -9,13 +9,32 @@ import {
   MessageSquareText,
   Search,
   X,
+  User,
+  Lock,
 } from 'lucide-react'
 import { clsx } from 'clsx'
+import { useAuth } from '../auth/AuthContext'
 
-const links = [
+const PLAN_BADGES: Record<string, string> = {
+  trial: 'bg-slate-700 text-slate-300',
+  starter: 'bg-cyan-900/50 text-cyan-300',
+  growth: 'bg-violet-900/50 text-violet-300',
+  pro: 'bg-amber-900/50 text-amber-300',
+}
+
+interface NavItem {
+  to: string
+  icon: typeof LayoutDashboard
+  label: string
+  minPlan?: string
+}
+
+const PLAN_ORDER = ['trial', 'starter', 'growth', 'pro']
+
+const links: NavItem[] = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/brands', icon: Tag, label: 'Brands' },
-  { to: '/compare', icon: Scale, label: 'Compare' },
+  { to: '/compare', icon: Scale, label: 'Compare', minPlan: 'growth' },
   { to: '/flows', icon: GitCompareArrows, label: 'Competitive Flows' },
   { to: '/features', icon: Lightbulb, label: 'Feature Gaps' },
   { to: '/safety', icon: ShieldAlert, label: 'Safety Signals' },
@@ -28,6 +47,9 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ open, onClose }: SidebarProps) {
+  const { user, logout } = useAuth()
+  const userPlanIdx = user ? PLAN_ORDER.indexOf(user.plan) : -1
+
   return (
     <>
       {/* Backdrop (mobile) */}
@@ -59,11 +81,38 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
           </button>
         </div>
         <nav className="flex-1 p-3 space-y-1">
-          {links.map(({ to, icon: Icon, label }) => (
+          {links.map(({ to, icon: Icon, label, minPlan }) => {
+            const locked = minPlan && userPlanIdx < PLAN_ORDER.indexOf(minPlan)
+            return (
+              <NavLink
+                key={to}
+                to={locked ? '#' : to}
+                end={to === '/'}
+                onClick={e => { if (locked) e.preventDefault(); else onClose() }}
+                className={({ isActive }) =>
+                  clsx(
+                    'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors',
+                    locked
+                      ? 'text-slate-600 cursor-not-allowed'
+                      : isActive
+                        ? 'bg-cyan-500/10 text-cyan-400'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                  )
+                }
+              >
+                <Icon className="h-4 w-4" />
+                {label}
+                {locked && <Lock className="h-3 w-3 ml-auto text-slate-600" />}
+              </NavLink>
+            )
+          })}
+        </nav>
+
+        {/* User section */}
+        {user && (
+          <div className="p-3 border-t border-slate-700/50 space-y-2">
             <NavLink
-              key={to}
-              to={to}
-              end={to === '/'}
+              to="/account"
               onClick={onClose}
               className={({ isActive }) =>
                 clsx(
@@ -74,11 +123,20 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
                 )
               }
             >
-              <Icon className="h-4 w-4" />
-              {label}
+              <User className="h-4 w-4" />
+              <span className="truncate flex-1">{user.full_name || user.email}</span>
+              <span className={clsx('px-1.5 py-0.5 rounded text-[10px] font-medium', PLAN_BADGES[user.plan] || PLAN_BADGES.trial)}>
+                {user.plan.toUpperCase()}
+              </span>
             </NavLink>
-          ))}
-        </nav>
+            <button
+              onClick={logout}
+              className="w-full text-left px-3 py-2 text-xs text-slate-500 hover:text-red-400 transition-colors"
+            >
+              Sign out
+            </button>
+          </div>
+        )}
       </aside>
     </>
   )
