@@ -153,6 +153,7 @@ class EmailRepository:
             limit: Maximum number to return
             offset: Number of records to skip
         """
+        limit = min(limit, 500)
         pool = get_db_pool()
 
         if not pool.is_initialized:

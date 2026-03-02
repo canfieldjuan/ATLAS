@@ -63,8 +63,9 @@ class ResendEmailService(EmailService):
                 params["reply_to"] = message.reply_to
 
             loop = asyncio.get_running_loop()
-            response = await loop.run_in_executor(
-                None, lambda: client.Emails.send(params)
+            response = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: client.Emails.send(params)),
+                timeout=30.0,
             )
             logger.info("Email sent: %s to %s", response.get("id"), message.to)
             return True

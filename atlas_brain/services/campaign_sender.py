@@ -87,7 +87,7 @@ class ResendCampaignSender:
             )
             if resp.status_code >= 400:
                 logger.error(
-                    "Resend API error %s: %s", resp.status_code, resp.text,
+                    "Resend API error %s: %s", resp.status_code, resp.text[:500],
                 )
             resp.raise_for_status()
             data = resp.json()

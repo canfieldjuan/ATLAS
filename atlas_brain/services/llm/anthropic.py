@@ -61,10 +61,24 @@ class AnthropicLLM(BaseModelService):
         logger.info("Anthropic LLM initialized: model=%s", self.model)
 
     def unload(self) -> None:
-        """Close clients."""
+        """Close clients and release HTTP connections."""
         if self._sync_client:
+            try:
+                self._sync_client.close()
+            except Exception:
+                pass
             self._sync_client = None
         if self._async_client:
+            # AsyncAnthropic.close() is a coroutine -- best-effort from sync ctx
+            try:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self._async_client.close())
+                else:
+                    loop.run_until_complete(self._async_client.close())
+            except Exception:
+                pass
             self._async_client = None
         self._loaded = False
         logger.info("Anthropic LLM unloaded")

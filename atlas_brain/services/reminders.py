@@ -123,8 +123,8 @@ class ReminderScheduler:
                 await broadcast_system_event(
                     "reminder", "info", "Reminder: %s" % reminder.message
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to broadcast reminder event: %s", e)
         except Exception as e:
             logger.error("Failed to deliver reminder %s: %s", reminder.id, e)
 

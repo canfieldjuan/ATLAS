@@ -172,11 +172,11 @@ class MCPToolWrapper:
                 )
 
         except Exception as e:
-            logger.error("MCP tool %s execution failed: %s", self.name, e)
+            logger.error("MCP tool %s execution failed", self.name, exc_info=True)
             return ToolResult(
                 success=False,
                 error="MCP_EXECUTION_ERROR",
-                message=str(e),
+                message="Tool execution failed",
             )
 
 

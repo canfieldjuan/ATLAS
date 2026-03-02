@@ -68,6 +68,7 @@ class SpeakerIDService:
         self._min_samples = min_samples
         self._executor = ThreadPoolExecutor(max_workers=2)
         self._enrollment_sessions: dict[str, EnrollmentSession] = {}
+        self._max_enrollment_sessions = 50
         self._speaker_cache: dict[UUID, np.ndarray] = {}
         self._initialized = False
 
@@ -243,6 +244,12 @@ class SpeakerIDService:
         Returns:
             Session info dict
         """
+        if len(self._enrollment_sessions) >= self._max_enrollment_sessions:
+            oldest_key = next(iter(self._enrollment_sessions))
+            del self._enrollment_sessions[oldest_key]
+            logger.warning("Evicted stale enrollment session %s (cap=%d)",
+                           oldest_key, self._max_enrollment_sessions)
+
         self._enrollment_sessions[session_id] = EnrollmentSession(
             user_id=user_id,
             user_name=user_name,

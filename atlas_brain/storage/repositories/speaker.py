@@ -124,6 +124,7 @@ class SpeakerRepository:
             SELECT id, name, speaker_embedding
             FROM users
             WHERE speaker_embedding IS NOT NULL
+            LIMIT 500
             """
         )
 
@@ -155,6 +156,7 @@ class SpeakerRepository:
             FROM users
             WHERE speaker_embedding IS NOT NULL
             ORDER BY name
+            LIMIT 500
             """
         )
 
