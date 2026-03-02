@@ -254,7 +254,7 @@ class CustomerContextService:
                 })
             return results
         except Exception as e:
-            logger.debug("B2B churn signal lookup failed: %s", e)
+            logger.warning("B2B churn signal lookup failed: %s", e)
             return []
 
     async def _get_sent_emails(
@@ -295,7 +295,7 @@ class CustomerContextService:
             )
             return messages
         except Exception as exc:
-            logger.debug("_get_inbox_emails failed for %s: %s", email_addr, exc)
+            logger.warning("_get_inbox_emails failed for %s: %s", email_addr, exc)
             return []
 
     @staticmethod

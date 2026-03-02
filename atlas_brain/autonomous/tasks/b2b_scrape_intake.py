@@ -382,4 +382,4 @@ async def _log_scrape(
             proxy_type,
         )
     except Exception:
-        logger.debug("Failed to log scrape result", exc_info=True)
+        logger.warning("Failed to log scrape result", exc_info=True)

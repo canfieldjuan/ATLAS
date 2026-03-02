@@ -206,7 +206,7 @@ async def _create_sequence_for_cold_email(
                     contact_email, seq_id, company_name,
                 )
         except Exception:
-            logger.debug("CRM recipient lookup failed for %s, skipping", company_name)
+            logger.warning("CRM recipient lookup failed for %s, skipping", company_name)
 
     logger.info("Created campaign sequence %s for %s (batch %s)", seq_id, company_name, batch_id)
     return seq_id

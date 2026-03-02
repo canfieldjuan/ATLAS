@@ -775,7 +775,7 @@ async def _upsert_pressure_baselines(
             )
             upserted += 1
         except Exception:
-            logger.debug("Failed to upsert pressure baseline for %s", entity_name, exc_info=True)
+            logger.warning("Failed to upsert pressure baseline for %s", entity_name, exc_info=True)
 
     if upserted:
         logger.info("Upserted %d entity pressure baselines (%d clamped)", upserted, clamped)

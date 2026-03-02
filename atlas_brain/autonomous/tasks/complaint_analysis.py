@@ -389,7 +389,7 @@ async def _upsert_pain_points(
             )
             upserted += 1
         except Exception:
-            logger.debug("Failed to upsert pain point for %s", asin, exc_info=True)
+            logger.warning("Failed to upsert pain point for %s", asin, exc_info=True)
 
     if upserted:
         logger.info("Upserted %d product pain points", upserted)

@@ -791,7 +791,8 @@ async def _apply_inbox_rules(emails: list[dict[str, Any]]) -> int:
     rules = await pool.fetch(
         """SELECT * FROM email_inbox_rules
            WHERE enabled = true
-           ORDER BY position ASC""",
+           ORDER BY position ASC
+           LIMIT 200""",
     )
     if not rules:
         return 0
@@ -842,7 +843,7 @@ async def _record_with_action_plans(emails: list[dict[str, Any]]) -> None:
                         e.get("_contact_id"),
                         json.dumps({
                             "confidence": e.get("_confidence", 0.5),
-                            "actions": e["_action_plan"],
+                            "actions": e.get("_action_plan", []),
                         }) if e.get("_action_plan") else None,
                         e.get("_customer_summary"),
                         e.get("_intent"),
