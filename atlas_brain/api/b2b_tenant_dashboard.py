@@ -1003,7 +1003,7 @@ async def get_tenant_review(review_id: str, user: AuthUser = Depends(require_aut
 async def list_tenant_campaigns(
     status: Optional[str] = Query(None),
     limit: int = Query(20, ge=1, le=100),
-    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+    user: AuthUser = require_b2b_plan("b2b_growth"),
 ):
     """Campaigns scoped to tracked vendors. Requires b2b_growth+ plan."""
     pool = _pool_or_503()
@@ -1065,7 +1065,7 @@ async def list_tenant_campaigns(
 @router.post("/campaigns/generate")
 async def generate_campaigns(
     req: GenerateCampaignRequest,
-    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+    user: AuthUser = require_b2b_plan("b2b_growth"),
 ):
     """Generate campaign drafts for a tracked vendor's high-intent leads."""
     pool = _pool_or_503()
@@ -1144,7 +1144,7 @@ async def generate_campaigns(
 async def update_campaign(
     campaign_id: str,
     req: UpdateCampaignRequest,
-    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+    user: AuthUser = require_b2b_plan("b2b_growth"),
 ):
     """Approve or cancel a campaign draft."""
     try:
