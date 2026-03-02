@@ -38,6 +38,7 @@ def _safe_json(value: Any, default: Any = None) -> Any:
         try:
             return json.loads(value)
         except (json.JSONDecodeError, TypeError):
+            logger.warning("Malformed JSON in aggregation data: %.100r", value)
             return default
     return default
 
@@ -90,10 +91,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         return_exceptions=True,
     )
 
-    # Convert exceptions to empty values
+    # Convert exceptions to empty values, track failures
+    fetcher_failures = 0
+
     def _safe(val: Any, name: str) -> list:
+        nonlocal fetcher_failures
         if isinstance(val, Exception):
-            logger.warning("%s fetch failed: %s", name, val)
+            fetcher_failures += 1
+            logger.error("%s fetch failed: %s", name, val, exc_info=val)
             return []
         return val
 
@@ -142,13 +147,21 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "prior_reports": prior_reports,
     }
 
-    # Load skill and call LLM
+    # Load skill and call LLM (synchronous -- run in thread to avoid blocking)
     from ...pipelines.llm import call_llm_with_skill, parse_json_response
 
-    analysis = call_llm_with_skill(
-        "digest/b2b_churn_intelligence", payload,
-        max_tokens=cfg.intelligence_max_tokens, temperature=0.4,
-    )
+    try:
+        analysis = await asyncio.wait_for(
+            asyncio.to_thread(
+                call_llm_with_skill,
+                "digest/b2b_churn_intelligence", payload,
+                max_tokens=cfg.intelligence_max_tokens, temperature=0.4,
+            ),
+            timeout=300,
+        )
+    except asyncio.TimeoutError:
+        logger.error("LLM call timed out after 300s for b2b_churn_intelligence")
+        return {"_skip_synthesis": "LLM analysis timed out"}
     if not analysis:
         return {"_skip_synthesis": "LLM analysis failed"}
 
@@ -162,31 +175,35 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         ("category_overview", parsed.get("category_insights", [])),
     ]
 
-    for report_type, data in report_types:
-        try:
-            await pool.execute(
-                """
-                INSERT INTO b2b_intelligence (
-                    report_date, report_type, intelligence_data,
-                    executive_summary, data_density, status, llm_model
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-                """,
-                today,
-                report_type,
-                json.dumps(data, default=str),
-                parsed.get("executive_summary", ""),
-                json.dumps({
-                    "vendors_analyzed": len(vendor_scores),
-                    "high_intent_companies": len(high_intent),
-                    "competitive_flows": len(competitive_disp),
-                    "pain_categories": len(pain_dist),
-                    "feature_gaps": len(feature_gaps),
-                }),
-                "published",
-                "pipeline_default",
-            )
-        except Exception:
-            logger.exception("Failed to store %s report", report_type)
+    data_density = json.dumps({
+        "vendors_analyzed": len(vendor_scores),
+        "high_intent_companies": len(high_intent),
+        "competitive_flows": len(competitive_disp),
+        "pain_categories": len(pain_dist),
+        "feature_gaps": len(feature_gaps),
+    })
+    exec_summary = parsed.get("executive_summary", "")
+
+    try:
+        async with pool.transaction() as conn:
+            for report_type, data in report_types:
+                await conn.execute(
+                    """
+                    INSERT INTO b2b_intelligence (
+                        report_date, report_type, intelligence_data,
+                        executive_summary, data_density, status, llm_model
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    """,
+                    today,
+                    report_type,
+                    json.dumps(data, default=str),
+                    exec_summary,
+                    data_density,
+                    "published",
+                    "pipeline_default",
+                )
+    except Exception:
+        logger.exception("Failed to store intelligence reports (rolled back)")
 
     # Build lookups for upsert
     pain_lookup = _build_pain_lookup(pain_dist)
@@ -205,7 +222,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     timeline_lookup = _build_timeline_lookup(timeline_signals)
 
     # Upsert per-vendor churn signals
-    await _upsert_churn_signals(
+    upsert_failures = await _upsert_churn_signals(
         pool, vendor_scores,
         neg_lookup, pain_lookup, competitor_lookup, feature_gap_lookup,
         price_lookup, dm_lookup, company_lookup, quote_lookup,
@@ -226,6 +243,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "high_intent_companies": len(high_intent),
         "competitive_flows": len(competitive_disp),
         "report_types": len(report_types),
+        "fetcher_failures": fetcher_failures,
+        "upsert_failures": upsert_failures,
     }
 
 
@@ -982,8 +1001,8 @@ async def _upsert_churn_signals(
     sentiment_lookup: dict[str, dict[str, int]] | None = None,
     buyer_auth_lookup: dict[str, dict] | None = None,
     timeline_lookup: dict[str, list[dict]] | None = None,
-) -> None:
-    """Upsert b2b_churn_signals with all 21 columns from SQL-computed data."""
+) -> int:
+    """Upsert b2b_churn_signals with all 21 columns. Returns failure count."""
     now = datetime.now(timezone.utc)
     budget_lookup = budget_lookup or {}
     use_case_lookup = use_case_lookup or {}
@@ -991,6 +1010,7 @@ async def _upsert_churn_signals(
     sentiment_lookup = sentiment_lookup or {}
     buyer_auth_lookup = buyer_auth_lookup or {}
     timeline_lookup = timeline_lookup or {}
+    failures = 0
 
     for vs in vendor_scores:
         vendor = vs["vendor_name"]
@@ -1063,7 +1083,10 @@ async def _upsert_churn_signals(
                 now,
             )
         except Exception:
+            failures += 1
             logger.exception("Failed to upsert churn signal for %s", vendor)
+
+    return failures
 
 
 # ------------------------------------------------------------------
