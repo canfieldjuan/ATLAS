@@ -123,7 +123,11 @@ class BrowserProfileManager:
         """Get a random browser profile (80% Chrome, 20% Firefox)."""
         if self._firefox and random.random() < 0.2:
             return random.choice(self._firefox)
-        return random.choice(self._chrome)
+        if self._chrome:
+            return random.choice(self._chrome)
+        if self._firefox:
+            return random.choice(self._firefox)
+        raise RuntimeError("No browser profiles configured")
 
     def match_profile(self, user_agent: str) -> BrowserProfile:
         """Find the closest Chrome profile matching a User-Agent string.

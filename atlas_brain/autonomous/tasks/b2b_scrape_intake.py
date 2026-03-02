@@ -153,6 +153,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     for row in targets:
         raw_meta = row["metadata"] or "{}"
+        if isinstance(raw_meta, str):
+            try:
+                raw_meta = json.loads(raw_meta)
+            except (json.JSONDecodeError, TypeError):
+                logger.warning("Malformed metadata JSON for target %s, defaulting to empty", row["id"])
+                raw_meta = {}
         target = ScrapeTarget(
             id=str(row["id"]),
             source=row["source"],
@@ -161,7 +167,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             product_slug=row["product_slug"],
             product_category=row["product_category"],
             max_pages=row["max_pages"],
-            metadata=json.loads(raw_meta) if isinstance(raw_meta, str) else raw_meta,
+            metadata=raw_meta if isinstance(raw_meta, dict) else {},
         )
 
         parser = get_parser(target.source)
