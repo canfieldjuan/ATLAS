@@ -294,7 +294,7 @@ async def make_call(
         })
     except Exception as exc:
         logger.exception("make_call error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +329,7 @@ async def get_call(call_sid: str) -> str:
         }, default=str)
     except Exception as exc:
         logger.exception("get_call error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -374,7 +374,7 @@ async def list_calls(
         }, default=str)
     except Exception as exc:
         logger.exception("list_calls error")
-        return json.dumps({"success": False, "error": str(exc), "calls": []})
+        return json.dumps({"success": False, "error": "Internal error", "calls": []})
 
 @mcp.tool()
 async def hangup_call(call_sid: str) -> str:
@@ -391,7 +391,7 @@ async def hangup_call(call_sid: str) -> str:
         return json.dumps({"success": True, "call_sid": call_sid, "status": "completed"})
     except Exception as exc:
         logger.exception("hangup_call error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -443,7 +443,7 @@ async def start_recording(
         })
     except Exception as exc:
         logger.exception("start_recording error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -473,7 +473,7 @@ async def stop_recording(call_sid: str, recording_sid: str) -> str:
         })
     except Exception as exc:
         logger.exception("stop_recording error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -510,7 +510,7 @@ async def list_recordings(call_sid: str) -> str:
         }, default=str)
     except Exception as exc:
         logger.exception("list_recordings error")
-        return json.dumps({"success": False, "error": str(exc), "recordings": [], "call_sid": call_sid})
+        return json.dumps({"success": False, "error": "Internal error", "recordings": [], "call_sid": call_sid})
 
 
 # ---------------------------------------------------------------------------
@@ -543,7 +543,7 @@ async def get_recording(recording_sid: str) -> str:
         }, default=str)
     except Exception as exc:
         logger.exception("get_recording error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -616,7 +616,7 @@ async def send_sms(
         })
     except Exception as exc:
         logger.exception("send_sms error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -676,7 +676,7 @@ async def _lookup_signalwire(e164: str) -> str:
         return json.dumps(data, default=str)
     except Exception as exc:
         logger.exception("lookup_phone (signalwire) error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 def _lookup_twilio(e164: str) -> str:
@@ -699,7 +699,7 @@ def _lookup_twilio(e164: str) -> str:
         return json.dumps(data, default=str)
     except Exception as exc:
         logger.exception("lookup_phone (twilio) error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------

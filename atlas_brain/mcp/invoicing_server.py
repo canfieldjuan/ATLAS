@@ -189,7 +189,7 @@ async def create_invoice(
         return json.dumps({"success": True, "invoice": invoice}, default=str)
     except Exception as exc:
         logger.exception("create_invoice error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +216,7 @@ async def get_invoice(invoice_id: str) -> str:
         return json.dumps({"found": True, "invoice": inv}, default=str)
     except Exception as exc:
         logger.exception("get_invoice error")
-        return json.dumps({"error": str(exc), "found": False, "invoice": None})
+        return json.dumps({"error": "Internal error", "found": False, "invoice": None})
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +251,7 @@ async def list_invoices(
         return json.dumps({"invoices": invoices, "count": len(invoices)}, default=str)
     except Exception as exc:
         logger.exception("list_invoices error")
-        return json.dumps({"error": str(exc), "invoices": [], "count": 0})
+        return json.dumps({"error": "Internal error", "invoices": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +316,7 @@ async def update_invoice(
         return json.dumps({"success": True, "invoice": updated}, default=str)
     except Exception as exc:
         logger.exception("update_invoice error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -389,7 +389,7 @@ async def send_invoice(
         }, default=str)
     except Exception as exc:
         logger.exception("send_invoice error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -455,7 +455,7 @@ async def record_payment(
         }, default=str)
     except Exception as exc:
         logger.exception("record_payment error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -492,7 +492,7 @@ async def mark_void(invoice_id: str, reason: str = "") -> str:
         return json.dumps({"success": True, "invoice_number": inv["invoice_number"], "status": "void"})
     except Exception as exc:
         logger.exception("mark_void error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -519,7 +519,7 @@ async def customer_balance(
         return json.dumps({"found": True, "balance": balance}, default=str)
     except Exception as exc:
         logger.exception("customer_balance error")
-        return json.dumps({"error": str(exc), "found": False, "balance": None})
+        return json.dumps({"error": "Internal error", "found": False, "balance": None})
 
 
 # ---------------------------------------------------------------------------
@@ -547,7 +547,7 @@ async def payment_history(
         return json.dumps({"found": True, "behavior": behavior}, default=str)
     except Exception as exc:
         logger.exception("payment_history error")
-        return json.dumps({"error": str(exc), "found": False, "behavior": None})
+        return json.dumps({"error": "Internal error", "found": False, "behavior": None})
 
 
 # ---------------------------------------------------------------------------
@@ -615,7 +615,7 @@ async def create_service(
         return json.dumps({"success": True, "service": service}, default=str)
     except Exception as exc:
         logger.exception("create_service error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -649,7 +649,7 @@ async def list_services(
         return json.dumps({"services": services, "count": len(services)}, default=str)
     except Exception as exc:
         logger.exception("list_services error")
-        return json.dumps({"error": str(exc), "services": [], "count": 0})
+        return json.dumps({"error": "Internal error", "services": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -674,7 +674,7 @@ async def get_service(service_id: str) -> str:
         return json.dumps({"found": True, "service": svc}, default=str)
     except Exception as exc:
         logger.exception("get_service error")
-        return json.dumps({"error": str(exc), "found": False})
+        return json.dumps({"error": "Internal error", "found": False})
 
 
 # ---------------------------------------------------------------------------
@@ -733,7 +733,7 @@ async def update_service(
         return json.dumps({"success": True, "service": updated}, default=str)
     except Exception as exc:
         logger.exception("update_service error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -776,7 +776,7 @@ async def set_service_status(
         return json.dumps({"success": True, "service_id": service_id, "status": status})
     except Exception as exc:
         logger.exception("set_service_status error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -814,7 +814,7 @@ async def search_invoices(
         return json.dumps({"invoices": results, "count": len(results)}, default=str)
     except Exception as exc:
         logger.exception("search_invoices error")
-        return json.dumps({"error": str(exc), "invoices": [], "count": 0})
+        return json.dumps({"error": "Internal error", "invoices": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------

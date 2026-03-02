@@ -166,7 +166,7 @@ async def search_contacts(
     except Exception as fallback_exc:
         logger.exception("search_contacts fallback error")
         return json.dumps(
-            {"error": str(fallback_exc), "found": False, "contacts": [],
+            {"error": "Internal error", "found": False, "contacts": [],
              "count": 0}
         )
 
@@ -197,7 +197,7 @@ async def get_contact(contact_id: str) -> str:
         return json.dumps({"found": True, "contact": contact}, default=str)
     except Exception as exc:
         logger.exception("get_contact error")
-        return json.dumps({"error": str(exc), "found": False, "contact": None})
+        return json.dumps({"error": "Internal error", "found": False, "contact": None})
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +248,7 @@ async def create_contact(
         return json.dumps({"success": True, "contact": contact}, default=str)
     except Exception as exc:
         logger.exception("create_contact error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -302,7 +302,7 @@ async def update_contact(
         return json.dumps({"success": True, "contact": updated}, default=str)
     except Exception as exc:
         logger.exception("update_contact error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -325,7 +325,7 @@ async def delete_contact(contact_id: str) -> str:
         return json.dumps({"success": success})
     except Exception as exc:
         logger.exception("delete_contact error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -358,7 +358,7 @@ async def list_contacts(
         return json.dumps({"contacts": contacts, "count": len(contacts)}, default=str)
     except Exception as exc:
         logger.exception("list_contacts error")
-        return json.dumps({"error": str(exc), "contacts": [], "count": 0})
+        return json.dumps({"error": "Internal error", "contacts": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -398,7 +398,7 @@ async def log_interaction(
         return json.dumps({"success": True, "interaction": interaction}, default=str)
     except Exception as exc:
         logger.exception("log_interaction error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -423,7 +423,7 @@ async def get_interactions(contact_id: str, limit: int = 20) -> str:
         )
     except Exception as exc:
         logger.exception("get_interactions error")
-        return json.dumps({"error": str(exc), "interactions": [], "count": 0})
+        return json.dumps({"error": "Internal error", "interactions": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -449,7 +449,7 @@ async def get_contact_appointments(contact_id: str) -> str:
         )
     except Exception as exc:
         logger.exception("get_contact_appointments error")
-        return json.dumps({"error": str(exc), "appointments": [], "count": 0})
+        return json.dumps({"error": "Internal error", "appointments": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -532,7 +532,7 @@ async def get_customer_context(
         return json.dumps(result, default=str)
     except Exception as exc:
         logger.exception("get_customer_context error")
-        return json.dumps({"error": str(exc), "found": False})
+        return json.dumps({"error": "Internal error", "found": False})
 
 
 # ---------------------------------------------------------------------------

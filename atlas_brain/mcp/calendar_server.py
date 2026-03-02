@@ -113,7 +113,7 @@ async def list_calendars() -> str:
         return json.dumps({"calendars": result, "count": len(result)}, indent=2)
     except Exception as exc:
         logger.exception("list_calendars error")
-        return json.dumps({"error": str(exc), "calendars": [], "count": 0})
+        return json.dumps({"error": "Internal error", "calendars": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +158,7 @@ async def list_events(
         return json.dumps({"events": result, "count": len(result)}, indent=2)
     except Exception as exc:
         logger.exception("list_events error")
-        return json.dumps({"error": str(exc), "events": [], "count": 0})
+        return json.dumps({"error": "Internal error", "events": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +195,7 @@ async def get_event(event_id: str, calendar_id: Optional[str] = None) -> str:
         )
     except Exception as exc:
         logger.exception("get_event error")
-        return json.dumps({"error": str(exc)})
+        return json.dumps({"error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +255,7 @@ async def create_event(
         )
     except Exception as exc:
         logger.exception("create_event error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +316,7 @@ async def update_event(
         )
     except Exception as exc:
         logger.exception("update_event error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -337,7 +337,7 @@ async def delete_event(event_id: str, calendar_id: Optional[str] = None) -> str:
         return json.dumps({"success": success, "deleted": success, "event_id": event_id})
     except Exception as exc:
         logger.exception("delete_event error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -443,7 +443,7 @@ async def find_free_slots(
         )
     except Exception as exc:
         logger.exception("find_free_slots error")
-        return json.dumps({"error": str(exc), "free_slots": [], "total_found": 0, "duration_minutes": duration_minutes})
+        return json.dumps({"error": "Internal error", "free_slots": [], "total_found": 0, "duration_minutes": duration_minutes})
 
 
 # ---------------------------------------------------------------------------
@@ -537,7 +537,7 @@ async def sync_appointment(
         )
     except Exception as exc:
         logger.exception("sync_appointment error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------

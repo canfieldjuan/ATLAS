@@ -114,7 +114,7 @@ async def send_email(
         return json.dumps({"success": True, "result": result}, default=str)
     except Exception as exc:
         logger.exception("send_email error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +184,7 @@ async def send_estimate(
         }, default=str)
     except Exception as exc:
         logger.exception("send_estimate error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +288,7 @@ async def send_proposal(
         }, default=str)
     except Exception as exc:
         logger.exception("send_proposal error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +313,7 @@ async def list_folders() -> str:
         return json.dumps({"folders": folders, "count": len(folders)}, default=str)
     except Exception as exc:
         logger.exception("list_folders error")
-        return json.dumps({"error": str(exc), "folders": [], "count": 0})
+        return json.dumps({"error": "Internal error", "folders": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +350,7 @@ async def list_inbox(
         return json.dumps({"messages": messages, "count": len(messages)}, default=str)
     except Exception as exc:
         logger.exception("list_inbox error")
-        return json.dumps({"error": str(exc), "messages": [], "count": 0})
+        return json.dumps({"error": "Internal error", "messages": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -372,7 +372,7 @@ async def get_message(message_id: str, mailbox: Optional[str] = None) -> str:
         return json.dumps({"message": msg}, default=str)
     except Exception as exc:
         logger.exception("get_message error")
-        return json.dumps({"error": str(exc), "message": None})
+        return json.dumps({"error": "Internal error", "message": None})
 
 
 # ---------------------------------------------------------------------------
@@ -408,7 +408,7 @@ async def search_inbox(
         )
     except Exception as exc:
         logger.exception("search_inbox error")
-        return json.dumps({"error": str(exc), "messages": [], "count": 0})
+        return json.dumps({"error": "Internal error", "messages": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -430,7 +430,7 @@ async def get_thread(thread_id: str, mailbox: Optional[str] = None) -> str:
         return json.dumps({"thread": thread}, default=str)
     except Exception as exc:
         logger.exception("get_thread error")
-        return json.dumps({"error": str(exc), "thread": None})
+        return json.dumps({"error": "Internal error", "thread": None})
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
@@ -462,7 +462,7 @@ async def list_sent_history(
         )
     except Exception as exc:
         logger.exception("list_sent_history error")
-        return json.dumps({"success": False, "error": str(exc), "data": None, "message": None})
+        return json.dumps({"success": False, "error": "Internal error", "data": None, "message": None})
 
 
 # ---------------------------------------------------------------------------

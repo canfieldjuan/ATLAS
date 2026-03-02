@@ -171,7 +171,7 @@ async def list_churn_signals(
         return json.dumps({"signals": signals, "count": len(signals)}, default=str)
     except Exception as exc:
         logger.exception("list_churn_signals error")
-        return json.dumps({"error": str(exc), "signals": [], "count": 0})
+        return json.dumps({"error": "Internal error", "signals": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +253,7 @@ async def get_churn_signal(
         return json.dumps({"success": True, "signal": signal}, default=str)
     except Exception as exc:
         logger.exception("get_churn_signal error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +348,7 @@ async def list_high_intent_companies(
         return json.dumps({"companies": companies, "count": len(companies)}, default=str)
     except Exception as exc:
         logger.exception("list_high_intent_companies error")
-        return json.dumps({"error": str(exc), "companies": [], "count": 0})
+        return json.dumps({"error": "Internal error", "companies": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -477,7 +477,7 @@ async def get_vendor_profile(vendor_name: str) -> str:
         return json.dumps({"success": True, "profile": profile}, default=str)
     except Exception as exc:
         logger.exception("get_vendor_profile error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -554,7 +554,7 @@ async def list_reports(
         return json.dumps({"reports": reports, "count": len(reports)}, default=str)
     except Exception as exc:
         logger.exception("list_reports error")
-        return json.dumps({"error": str(exc), "reports": [], "count": 0})
+        return json.dumps({"error": "Internal error", "reports": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -601,7 +601,7 @@ async def get_report(report_id: str) -> str:
         return json.dumps({"success": True, "report": report}, default=str)
     except Exception as exc:
         logger.exception("get_report error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -712,7 +712,7 @@ async def search_reviews(
         return json.dumps({"reviews": reviews, "count": len(reviews)}, default=str)
     except Exception as exc:
         logger.exception("search_reviews error")
-        return json.dumps({"error": str(exc), "reviews": [], "count": 0})
+        return json.dumps({"error": "Internal error", "reviews": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -769,7 +769,7 @@ async def get_review(review_id: str) -> str:
         return json.dumps({"success": True, "review": review}, default=str)
     except Exception as exc:
         logger.exception("get_review error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -831,7 +831,7 @@ async def get_pipeline_status() -> str:
         return json.dumps({"success": True, **result}, default=str)
     except Exception as exc:
         logger.exception("get_pipeline_status error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -908,7 +908,7 @@ async def list_scrape_targets(
         return json.dumps({"targets": targets, "count": len(targets)}, default=str)
     except Exception as exc:
         logger.exception("list_scrape_targets error")
-        return json.dumps({"error": str(exc), "targets": [], "count": 0})
+        return json.dumps({"error": "Internal error", "targets": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------

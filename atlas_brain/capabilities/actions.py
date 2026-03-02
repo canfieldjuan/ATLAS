@@ -95,7 +95,7 @@ class ActionDispatcher:
             logger.exception("Error executing action %s on %s", request.action, request.capability_id)
             return ActionResult(
                 success=False,
-                message=f"Error executing action: {e}",
+                message="An error occurred executing the action",
                 error="EXECUTION_ERROR",
             )
 

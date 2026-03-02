@@ -177,7 +177,7 @@ async def run_email_query_workflow(
                 workflow_type=EMAIL_QUERY_WORKFLOW_TYPE,
                 current_step="conversation",
                 partial_state={"speaker_id": speaker_id},
-                conversation_context=context_turns,
+                conversation_context=context_turns[-40:],
             )
         return {
             "response": "Sorry, something went wrong checking your email. Could you try again?",

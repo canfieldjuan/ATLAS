@@ -359,8 +359,8 @@ async def _node_execute_actions(
             result = await _execute_single_action(tool, params, state)
             results.append({"tool": tool, "success": True, "result": str(result)[:500]})
         except Exception as exc:
-            logger.warning("Action %s failed: %s", tool, exc)
-            results.append({"tool": tool, "success": False, "error": str(exc)[:500]})
+            logger.warning("Action %s failed", tool, exc_info=True)
+            results.append({"tool": tool, "success": False, "error": type(exc).__name__})
 
     state["action_results"] = results
     return state
