@@ -5,7 +5,7 @@ import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 from ..auth.dependencies import AuthUser, require_auth
 from ..auth.jwt import create_access_token, create_refresh_token, decode_token
@@ -25,14 +25,14 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 class RegisterRequest(BaseModel):
     email: EmailStr
-    password: str
-    full_name: str
-    account_name: str
+    password: str = Field(..., min_length=8, max_length=72)
+    full_name: str = Field(..., max_length=200)
+    account_name: str = Field(..., max_length=200)
 
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(..., max_length=72)
 
 
 class RefreshRequest(BaseModel):
@@ -40,8 +40,8 @@ class RefreshRequest(BaseModel):
 
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str
+    current_password: str = Field(..., max_length=72)
+    new_password: str = Field(..., min_length=8, max_length=72)
 
 
 class TokenResponse(BaseModel):
@@ -70,9 +70,6 @@ async def register(req: RegisterRequest):
     """Create a new account and user, return JWT tokens."""
     if not settings.saas_auth.enabled:
         raise HTTPException(status_code=404, detail="Registration not available")
-
-    if len(req.password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
 
     pool = get_db_pool()
     if not pool.is_initialized:
@@ -126,6 +123,7 @@ async def register(req: RegisterRequest):
                 email=req.email,
                 name=req.account_name,
                 metadata={"account_id": str(account_id)},
+                timeout=10,
             )
             await pool.execute(
                 "UPDATE saas_accounts SET stripe_customer_id = $1 WHERE id = $2",
@@ -162,7 +160,12 @@ async def login(req: LoginRequest):
         req.email.lower(),
     )
 
-    if not row or not verify_password(req.password, row["password_hash"]):
+    # Constant-time check: always run verify_password to prevent timing oracle
+    _DUMMY_HASH = "$2b$12$LJ3m4ys3Lg3plcYKVxkqpuEXMQMGV/LGnsBvJLMFZJi.wkRYMxSKi"
+    if not row:
+        verify_password(req.password, _DUMMY_HASH)
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    if not verify_password(req.password, row["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     if not row["is_active"]:
@@ -269,9 +272,6 @@ async def change_password(req: ChangePasswordRequest, user: AuthUser = Depends(r
     """Change password for current user."""
     if not settings.saas_auth.enabled:
         raise HTTPException(status_code=404, detail="Password management not available in local dev mode")
-
-    if len(req.new_password) < 8:
-        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
 
     pool = get_db_pool()
     uid = _uuid.UUID(user.user_id)

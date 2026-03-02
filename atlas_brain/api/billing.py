@@ -98,6 +98,15 @@ async def create_checkout(req: CheckoutRequest, user: AuthUser = Depends(require
     if not price_id:
         raise HTTPException(status_code=400, detail="Either price_id or plan is required")
 
+    # Validate price_id against configured prices
+    _cfg = settings.saas_auth
+    valid_prices = {
+        v for v in [_cfg.stripe_starter_price_id, _cfg.stripe_growth_price_id, _cfg.stripe_pro_price_id]
+        if v
+    }
+    if valid_prices and price_id not in valid_prices:
+        raise HTTPException(status_code=400, detail="Invalid price ID")
+
     # Get or create Stripe customer
     account = await pool.fetchrow(
         "SELECT stripe_customer_id, name FROM saas_accounts WHERE id = $1",
@@ -116,6 +125,7 @@ async def create_checkout(req: CheckoutRequest, user: AuthUser = Depends(require
             email=user_row["email"] if user_row else "",
             name=account["name"],
             metadata={"account_id": str(user.account_id)},
+            timeout=10,
         )
         customer_id = customer.id
         await pool.execute(
@@ -136,6 +146,7 @@ async def create_checkout(req: CheckoutRequest, user: AuthUser = Depends(require
         success_url=req.success_url,
         cancel_url=req.cancel_url,
         metadata={"account_id": str(user.account_id)},
+        timeout=10,
     )
 
     return CheckoutResponse(checkout_url=session.url)
@@ -159,6 +170,7 @@ async def create_portal(user: AuthUser = Depends(require_auth)):
 
     session = stripe.billing_portal.Session.create(
         customer=customer_id,
+        timeout=10,
     )
 
     return PortalResponse(portal_url=session.url)
@@ -200,7 +212,12 @@ async def stripe_webhook(request: Request):
     stripe.api_key = cfg.stripe_secret_key
 
     body = await request.body()
+    if len(body) > 65536:
+        raise HTTPException(status_code=413, detail="Payload too large")
+
     sig = request.headers.get("stripe-signature", "")
+    if not sig:
+        raise HTTPException(status_code=400, detail="Missing stripe-signature header")
 
     if not cfg.stripe_webhook_secret:
         raise HTTPException(status_code=503, detail="Webhook secret not configured")
@@ -295,12 +312,12 @@ async def _handle_checkout_completed(pool, session) -> _uuid.UUID | None:
     plan = "starter"
     try:
         import stripe
-        sub = stripe.Subscription.retrieve(subscription_id)
+        sub = stripe.Subscription.retrieve(subscription_id, timeout=10)
         if sub.items and sub.items.data:
             price_id = sub.items.data[0].price.id
             plan = PRICE_TO_PLAN.get(price_id, "starter")
     except Exception as e:
-        logger.warning("Failed to determine plan from subscription: %s", e)
+        logger.error("Failed to determine plan from subscription %s: %s", subscription_id, e)
 
     limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["starter"])
 
