@@ -47,6 +47,8 @@ class EntityStateCache:
     - Change listeners for reactive updates
     """
 
+    _MAX_ENTRIES = 2000  # Safety cap; typical HA installs have <500 entities
+
     def __init__(self, default_ttl_seconds: int = 300):
         self._cache: dict[str, CachedState] = {}
         self._ttl = timedelta(seconds=default_ttl_seconds)
@@ -85,6 +87,10 @@ class EntityStateCache:
                 last_changed=last_changed,
                 last_updated=last_updated,
             )
+            # Evict oldest if at capacity (skip if updating existing key)
+            if entity_id not in self._cache and len(self._cache) >= self._MAX_ENTRIES:
+                oldest_key = next(iter(self._cache))
+                del self._cache[oldest_key]
             self._cache[entity_id] = cached
 
         # Notify listeners (outside lock to prevent deadlocks)

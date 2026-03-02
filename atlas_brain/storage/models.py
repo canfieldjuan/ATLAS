@@ -6,8 +6,13 @@ We use raw SQL with asyncpg for maximum performance.
 """
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Optional
+
+
+def _utcnow() -> datetime:
+    """Timezone-aware UTC now for dataclass defaults."""
+    return datetime.now(timezone.utc)
 from uuid import UUID
 
 
@@ -17,8 +22,8 @@ class User:
 
     id: UUID
     name: str
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=_utcnow)
+    updated_at: datetime = field(default_factory=_utcnow)
     speaker_embedding: Optional[bytes] = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -38,8 +43,8 @@ class Session:
     id: UUID
     user_id: Optional[UUID] = None
     terminal_id: Optional[str] = None
-    started_at: datetime = field(default_factory=datetime.utcnow)
-    last_activity_at: datetime = field(default_factory=datetime.utcnow)
+    started_at: datetime = field(default_factory=_utcnow)
+    last_activity_at: datetime = field(default_factory=_utcnow)
     is_active: bool = True
     session_date: date = field(default_factory=date.today)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -65,7 +70,7 @@ class ConversationTurn:
     session_id: UUID
     role: str  # "user" or "assistant"
     content: str
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=_utcnow)
     speaker_id: Optional[str] = None
     speaker_uuid: Optional[UUID] = None
     intent: Optional[str] = None
@@ -95,8 +100,8 @@ class Terminal:
     name: str
     location: Optional[str] = None
     capabilities: list[str] = field(default_factory=list)
-    registered_at: datetime = field(default_factory=datetime.utcnow)
-    last_seen_at: datetime = field(default_factory=datetime.utcnow)
+    registered_at: datetime = field(default_factory=_utcnow)
+    last_seen_at: datetime = field(default_factory=_utcnow)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -122,8 +127,8 @@ class DiscoveredDevice:
     protocol: str  # Discovery protocol: "ssdp", "mdns", "manual"
     host: str  # IP address or hostname
     port: Optional[int] = None  # Port if applicable
-    discovered_at: datetime = field(default_factory=datetime.utcnow)
-    last_seen_at: datetime = field(default_factory=datetime.utcnow)
+    discovered_at: datetime = field(default_factory=_utcnow)
+    last_seen_at: datetime = field(default_factory=_utcnow)
     is_active: bool = True  # Currently reachable
     auto_registered: bool = False  # Auto-added to capability registry
     metadata: dict[str, Any] = field(default_factory=dict)  # Protocol-specific data
@@ -157,8 +162,8 @@ class KnowledgeDocument:
     user_id: Optional[UUID] = None
     processed: bool = False
     chunk_count: int = 0
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=_utcnow)
+    updated_at: datetime = field(default_factory=_utcnow)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -186,7 +191,7 @@ class DocumentChunk:
     content: str
     embedding: Optional[bytes] = None
     token_count: Optional[int] = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=_utcnow)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -214,7 +219,7 @@ class Memory:
     importance: float = 0.5
     access_count: int = 0
     last_accessed_at: Optional[datetime] = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=_utcnow)
     expires_at: Optional[datetime] = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -246,7 +251,7 @@ class Entity:
     description: Optional[str] = None
     embedding: Optional[bytes] = None
     source_chunk_id: Optional[UUID] = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=_utcnow)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -277,8 +282,8 @@ class UserProfile:
     expertise_level: str = "intermediate"
     enable_rag: bool = True
     enable_context_injection: bool = True
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=_utcnow)
+    updated_at: datetime = field(default_factory=_utcnow)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -308,8 +313,8 @@ class RAGSourceUsage:
     confidence: float = 0.0
     was_helpful: Optional[bool] = None
     feedback_type: Optional[str] = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=_utcnow)
+    updated_at: datetime = field(default_factory=_utcnow)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -341,8 +346,8 @@ class VisionEventRecord:
     bbox_y1: Optional[float] = None
     bbox_x2: Optional[float] = None
     bbox_y2: Optional[float] = None
-    event_timestamp: datetime = field(default_factory=datetime.utcnow)
-    received_at: datetime = field(default_factory=datetime.utcnow)
+    event_timestamp: datetime = field(default_factory=_utcnow)
+    received_at: datetime = field(default_factory=_utcnow)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -377,8 +382,8 @@ class RAGSourceStats:
     times_not_helpful: int = 0
     avg_confidence: float = 0.0
     last_retrieved_at: Optional[datetime] = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=_utcnow)
+    updated_at: datetime = field(default_factory=_utcnow)
 
     @property
     def helpfulness_rate(self) -> float:
@@ -414,7 +419,7 @@ class Alert:
     event_type: str
     message: str
     source_id: str
-    triggered_at: datetime = field(default_factory=datetime.utcnow)
+    triggered_at: datetime = field(default_factory=_utcnow)
     acknowledged: bool = False
     acknowledged_at: Optional[datetime] = None
     acknowledged_by: Optional[str] = None
@@ -453,7 +458,7 @@ class SentEmail:
     cc_addresses: list[str] = field(default_factory=list)
     attachments: list[str] = field(default_factory=list)
     resend_message_id: Optional[str] = None
-    sent_at: datetime = field(default_factory=datetime.utcnow)
+    sent_at: datetime = field(default_factory=_utcnow)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -481,7 +486,7 @@ class Reminder:
     message: str
     due_at: datetime
     user_id: Optional[UUID] = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=_utcnow)
     completed: bool = False
     completed_at: Optional[datetime] = None
     delivered: bool = False
@@ -527,8 +532,8 @@ class ScheduledTask:
     retry_delay_seconds: int = 60
     timeout_seconds: int = 120
     metadata: dict[str, Any] = field(default_factory=dict)
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=_utcnow)
+    updated_at: datetime = field(default_factory=_utcnow)
     last_run_at: Optional[datetime] = None
     next_run_at: Optional[datetime] = None
 
@@ -564,7 +569,7 @@ class TaskExecution:
     id: UUID
     task_id: UUID
     status: str = "running"  # "running", "completed", "failed", "timeout"
-    started_at: datetime = field(default_factory=datetime.utcnow)
+    started_at: datetime = field(default_factory=_utcnow)
     completed_at: Optional[datetime] = None
     duration_ms: Optional[int] = None
     result_text: Optional[str] = None
@@ -599,7 +604,7 @@ class PresenceEvent:
     source_id: str = "system"
     arrival_times: dict[str, str] | None = None
     unknown_count: int = 0
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=_utcnow)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -626,7 +631,7 @@ class ProactiveAction:
     source_time: Optional[datetime] = None
     session_id: Optional[UUID] = None
     status: str = "pending"  # pending, done, dismissed
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=_utcnow)
     resolved_at: Optional[datetime] = None
 
     def to_dict(self) -> dict[str, Any]:
