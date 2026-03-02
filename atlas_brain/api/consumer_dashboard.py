@@ -467,7 +467,7 @@ async def list_brands(
     # For brand_health sort, fetch all rows and paginate in Python
     # (health is computed after SQL, can't ORDER BY it in SQL)
     if health_sort:
-        sql_limit_clause = ""
+        sql_limit_clause = "LIMIT 1000"
     else:
         params.extend([limit, offset])
         limit_idx = idx
@@ -476,11 +476,18 @@ async def list_brands(
 
     rows = await pool.fetch(
         f"""
+        WITH brand_products AS (
+            SELECT pm.brand, AVG(pm.average_rating) AS pm_avg_rating,
+                   SUM(pm.rating_number) AS total_ratings
+            FROM product_metadata pm
+            WHERE pm.brand IS NOT NULL AND pm.brand != ''
+            GROUP BY pm.brand
+        )
         SELECT pm.brand,
                COUNT(DISTINCT pm.asin) AS product_count,
                COUNT(pr.id) AS review_count,
-               AVG(pm.average_rating) AS pm_avg_rating,
-               SUM(pm.rating_number) AS total_ratings,
+               bp.pm_avg_rating,
+               bp.total_ratings,
                AVG(pr.pain_score) FILTER (WHERE pr.rating <= 3) AS avg_complaint_score,
                AVG(pr.pain_score) FILTER (WHERE pr.rating > 3)  AS avg_praise_score,
                COUNT(*) FILTER (WHERE pr.rating <= 3) AS complaint_count,
@@ -519,8 +526,9 @@ async def list_brands(
                ) AS trajectory_neg
         FROM product_metadata pm
         JOIN product_reviews pr ON pr.asin = pm.asin
+        JOIN brand_products bp ON bp.brand = pm.brand
         WHERE {where}
-        GROUP BY pm.brand
+        GROUP BY pm.brand, bp.pm_avg_rating, bp.total_ratings
         {having}
         ORDER BY {order}
         {sql_limit_clause}
@@ -600,10 +608,17 @@ async def compare_brands(
     # -- Query 1: Summary stats per brand --
     summary_rows = await pool.fetch(
         f"""
+        WITH brand_products AS (
+            SELECT pm.brand, AVG(pm.average_rating) AS pm_avg_rating
+            FROM product_metadata pm
+            WHERE pm.brand IS NOT NULL AND pm.brand != ''
+              AND ({brand_clauses})
+            GROUP BY pm.brand
+        )
         SELECT pm.brand,
                COUNT(DISTINCT pm.asin) AS product_count,
                COUNT(pr.id) AS review_count,
-               AVG(pm.average_rating) AS pm_avg_rating,
+               bp.pm_avg_rating,
                COUNT(*) FILTER (
                    WHERE pr.deep_extraction IS NOT NULL
                      AND pr.deep_extraction != '{{}}'::jsonb
@@ -638,10 +653,11 @@ async def compare_brands(
                ) AS trajectory_neg
         FROM product_metadata pm
         JOIN product_reviews pr ON pr.asin = pm.asin
+        JOIN brand_products bp ON bp.brand = pm.brand
         WHERE pm.brand IS NOT NULL AND pm.brand != ''
           AND ({brand_clauses})
           {t_sql}
-        GROUP BY pm.brand
+        GROUP BY pm.brand, bp.pm_avg_rating
         """,
         *brand_params, *t_extra,
     )
@@ -696,6 +712,7 @@ async def compare_brands(
           {t_sql}
           AND pr.deep_extraction IS NOT NULL
           AND pr.deep_extraction != '{{}}'::jsonb
+        LIMIT 5000
         """,
         *brand_params, *t_extra,
     )
@@ -792,6 +809,7 @@ async def compare_brands(
           AND ({brand_clauses})
           {t_sql}
           AND pr.enrichment_status = 'enriched'
+        LIMIT 5000
         """,
         *brand_params, *t_extra,
     )
@@ -972,6 +990,7 @@ async def get_brand_detail(brand_name: str, user: AuthUser = Depends(require_aut
           AND pr.deep_extraction IS NOT NULL
           AND pr.deep_extraction != '{{}}'::jsonb
           AND pr.deep_extraction->'sentiment_aspects' IS NOT NULL
+        LIMIT 5000
         """,
         bname, *t_extra,
     )
@@ -1003,6 +1022,7 @@ async def get_brand_detail(brand_name: str, user: AuthUser = Depends(require_aut
           AND pr.deep_extraction IS NOT NULL
           AND pr.deep_extraction != '{{}}'::jsonb
           AND jsonb_array_length(COALESCE(pr.deep_extraction->'feature_requests', '[]'::jsonb)) > 0
+        LIMIT 5000
         """,
         bname, *t_extra,
     )
@@ -1031,6 +1051,7 @@ async def get_brand_detail(brand_name: str, user: AuthUser = Depends(require_aut
           AND pr.deep_extraction IS NOT NULL
           AND pr.deep_extraction != '{{}}'::jsonb
           AND jsonb_array_length(COALESCE(pr.deep_extraction->'product_comparisons', '[]'::jsonb)) > 0
+        LIMIT 5000
         """,
         bname, *t_extra,
     )
@@ -1098,6 +1119,7 @@ async def get_brand_detail(brand_name: str, user: AuthUser = Depends(require_aut
           {t_and}
           AND pr.deep_extraction IS NOT NULL
           AND pr.deep_extraction != '{{}}'::jsonb
+        LIMIT 5000
         """,
         bname, *t_extra,
     )
@@ -1274,13 +1296,13 @@ async def get_brand_detail(brand_name: str, user: AuthUser = Depends(require_aut
     # ------------------------------------------------------------------
     total_reviews = sum(r["review_count"] for r in products)
     deep_review_count = len(enum_rows)
-    if t_and:
+    if t_cond2 != "TRUE":
+        # Query product_metadata directly with subquery filter — avoids JOIN fanout
         avg_rating_all = await pool.fetchval(
-            f"""
-            SELECT AVG(pm.average_rating)
-            FROM product_metadata pm
-            JOIN product_reviews pr ON pr.asin = pm.asin
-            WHERE pm.brand ILIKE $1 {t_and}
+            """
+            SELECT AVG(average_rating) FROM product_metadata
+            WHERE brand ILIKE $1
+              AND asin IN (SELECT asin FROM tracked_asins WHERE account_id = $2)
             """,
             bname, *t_extra,
         )
@@ -1327,6 +1349,7 @@ async def get_brand_detail(brand_name: str, user: AuthUser = Depends(require_aut
         WHERE pm.brand ILIKE $1
           {t_and}
           AND pr.enrichment_status = 'enriched'
+        LIMIT 5000
         """,
         bname, *t_extra,
     )
