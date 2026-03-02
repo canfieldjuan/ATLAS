@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Search, Plus, X, Star, Loader2 } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
@@ -6,6 +6,7 @@ import {
   searchAvailableAsins,
   addTrackedAsin,
   removeTrackedAsin,
+  fetchTrackedAsins,
   type AsinSearchResult,
 } from '../api/client'
 
@@ -17,8 +18,23 @@ export default function Onboarding() {
   const [added, setAdded] = useState<string[]>([])
   const [searching, setSearching] = useState(false)
   const [adding, setAdding] = useState<string | null>(null)
+  const [removing, setRemoving] = useState<string | null>(null)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const limit = user?.asin_limit ?? 5
+
+  // Load existing tracked ASINs on mount
+  useEffect(() => {
+    let cancelled = false
+    fetchTrackedAsins()
+      .then(data => {
+        if (!cancelled) {
+          setAdded(data.asins.map(a => a.asin))
+        }
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
 
   const doSearch = useCallback(async (q: string) => {
     if (q.length < 2) { setResults([]); return }
@@ -32,6 +48,16 @@ export default function Onboarding() {
       setSearching(false)
     }
   }, [])
+
+  function handleQueryChange(value: string) {
+    setQuery(value)
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    if (value.length < 2) {
+      setResults([])
+      return
+    }
+    debounceRef.current = setTimeout(() => doSearch(value), 300)
+  }
 
   async function handleAdd(asin: string) {
     if (added.length >= limit) return
@@ -47,11 +73,14 @@ export default function Onboarding() {
   }
 
   async function handleRemove(asin: string) {
-    setAdded(prev => prev.filter(a => a !== asin))
+    setRemoving(asin)
     try {
       await removeTrackedAsin(asin)
+      setAdded(prev => prev.filter(a => a !== asin))
     } catch {
-      // best-effort removal
+      // API failed -- don't remove from UI
+    } finally {
+      setRemoving(null)
     }
   }
 
@@ -74,7 +103,7 @@ export default function Onboarding() {
         <input
           type="text"
           value={query}
-          onChange={e => { setQuery(e.target.value); doSearch(e.target.value) }}
+          onChange={e => handleQueryChange(e.target.value)}
           placeholder="Search by ASIN, product name, or brand..."
           className="w-full pl-10 pr-4 py-2.5 bg-slate-800/60 border border-slate-700/50 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
         />
@@ -103,14 +132,14 @@ export default function Onboarding() {
                 </div>
                 <button
                   onClick={() => isAdded ? handleRemove(r.asin) : handleAdd(r.asin)}
-                  disabled={adding === r.asin || (!isAdded && added.length >= limit)}
+                  disabled={adding === r.asin || removing === r.asin || (!isAdded && added.length >= limit)}
                   className={
                     isAdded
-                      ? 'ml-3 p-1.5 rounded-lg bg-red-900/30 text-red-400 hover:bg-red-900/50'
+                      ? 'ml-3 p-1.5 rounded-lg bg-red-900/30 text-red-400 hover:bg-red-900/50 disabled:opacity-50'
                       : 'ml-3 p-1.5 rounded-lg bg-cyan-900/30 text-cyan-400 hover:bg-cyan-900/50 disabled:opacity-30'
                   }
                 >
-                  {adding === r.asin ? (
+                  {adding === r.asin || removing === r.asin ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : isAdded ? (
                     <X className="h-4 w-4" />
@@ -137,8 +166,16 @@ export default function Onboarding() {
                 className="inline-flex items-center gap-1.5 px-3 py-1 bg-cyan-900/30 text-cyan-300 text-sm rounded-full border border-cyan-700/50"
               >
                 {asin}
-                <button onClick={() => handleRemove(asin)} className="hover:text-white">
-                  <X className="h-3 w-3" />
+                <button
+                  onClick={() => handleRemove(asin)}
+                  disabled={removing === asin}
+                  className="hover:text-white disabled:opacity-50"
+                >
+                  {removing === asin ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <X className="h-3 w-3" />
+                  )}
                 </button>
               </span>
             ))}
