@@ -55,9 +55,9 @@ def _pool_or_503():
 @router.get("/signals")
 async def list_signals(
     vendor_name: Optional[str] = Query(None),
-    min_urgency: float = Query(0),
+    min_urgency: float = Query(0, ge=0, le=10),
     category: Optional[str] = Query(None),
-    limit: int = Query(20, le=100),
+    limit: int = Query(20, ge=1, le=100),
 ):
     pool = _pool_or_503()
     conditions: list[str] = []
@@ -189,9 +189,9 @@ async def get_signal(
 @router.get("/high-intent")
 async def list_high_intent(
     vendor_name: Optional[str] = Query(None),
-    min_urgency: float = Query(7),
-    window_days: int = Query(30),
-    limit: int = Query(20, le=100),
+    min_urgency: float = Query(7, ge=0, le=10),
+    window_days: int = Query(30, ge=1, le=3650),
+    limit: int = Query(20, ge=1, le=100),
 ):
     pool = _pool_or_503()
     conditions = [
@@ -382,7 +382,7 @@ VALID_REPORT_TYPES = (
 async def list_reports(
     report_type: Optional[str] = Query(None),
     vendor_filter: Optional[str] = Query(None),
-    limit: int = Query(10, le=50),
+    limit: int = Query(10, ge=1, le=50),
 ):
     if report_type and report_type not in VALID_REPORT_TYPES:
         raise HTTPException(status_code=400, detail=f"report_type must be one of {VALID_REPORT_TYPES}")
@@ -476,11 +476,11 @@ async def get_report(report_id: str):
 async def search_reviews(
     vendor_name: Optional[str] = Query(None),
     pain_category: Optional[str] = Query(None),
-    min_urgency: Optional[float] = Query(None),
+    min_urgency: Optional[float] = Query(None, ge=0, le=10),
     company: Optional[str] = Query(None),
     has_churn_intent: Optional[bool] = Query(None),
-    window_days: int = Query(30),
-    limit: int = Query(20, le=100),
+    window_days: int = Query(30, ge=1, le=3650),
+    limit: int = Query(20, ge=1, le=100),
 ):
     pool = _pool_or_503()
     conditions = [

@@ -109,6 +109,8 @@ async def list_churn_signals(
     category: Filter by product_category (exact match)
     limit: Maximum results (default 20, cap 100)
     """
+    limit = max(1, min(limit, 100))
+    min_urgency = max(0.0, min(min_urgency, 10.0))
     try:
         from ..storage.database import get_db_pool
 
@@ -274,6 +276,9 @@ async def list_high_intent_companies(
     window_days: How far back to look in days (default 30)
     limit: Maximum results (default 20, cap 100)
     """
+    limit = max(1, min(limit, 100))
+    min_urgency = max(0.0, min(min_urgency, 10.0))
+    window_days = max(1, min(window_days, 3650))
     try:
         from ..storage.database import get_db_pool
 
@@ -495,6 +500,7 @@ async def list_reports(
     vendor_filter: Filter by vendor name in report (partial match)
     limit: Maximum results (default 10, cap 50)
     """
+    limit = max(1, min(limit, 50))
     if report_type and report_type not in VALID_REPORT_TYPES:
         return json.dumps({"error": f"report_type must be one of {VALID_REPORT_TYPES}", "reports": [], "count": 0})
 
@@ -624,6 +630,10 @@ async def search_reviews(
     window_days: How far back to look in days (default 30)
     limit: Maximum results (default 20, cap 100)
     """
+    limit = max(1, min(limit, 100))
+    window_days = max(1, min(window_days, 3650))
+    if min_urgency is not None:
+        min_urgency = max(0.0, min(min_urgency, 10.0))
     try:
         from ..storage.database import get_db_pool
 
@@ -842,6 +852,7 @@ async def list_scrape_targets(
     enabled_only: Only show enabled targets (default true)
     limit: Maximum results (default 20, cap 100)
     """
+    limit = max(1, min(limit, 100))
     if source and source not in VALID_SOURCES:
         return json.dumps({"error": f"source must be one of {VALID_SOURCES}", "targets": [], "count": 0})
 
