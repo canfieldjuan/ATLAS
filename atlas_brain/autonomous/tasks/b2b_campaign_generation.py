@@ -365,7 +365,7 @@ async def _generate_churning_company_campaigns(
                     }
 
                 try:
-                    review_ids = [o["review_id"] for o in opps if o.get("review_id")]
+                    review_ids = [o["review_id"] for o in opps if o.get("review_id")][:20]
                     await pool.execute(
                         """
                         INSERT INTO b2b_campaigns (
@@ -1181,7 +1181,7 @@ async def _fetch_opportunities(
             competitors = []
 
         mention_context = ""
-        if competitors:
+        if competitors and isinstance(competitors[0], dict):
             mention_context = competitors[0].get("context", "")
 
         row_dict["mention_context"] = mention_context
@@ -1367,11 +1367,14 @@ async def _generate_content(
             )).strip()
         else:
             import asyncio
-            result = await asyncio.to_thread(
-                llm.chat,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    llm.chat,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                ),
+                timeout=120,
             )
             text = result.get("response", "").strip()
         if not text:
@@ -1381,13 +1384,13 @@ async def _generate_content(
         parsed = json.loads(text)
 
         if not isinstance(parsed, dict) or "body" not in parsed:
-            logger.debug("Campaign generation missing 'body' field")
+            logger.warning("Campaign generation missing 'body' field")
             return None
 
         return parsed
 
     except json.JSONDecodeError:
-        logger.debug("Failed to parse campaign generation JSON: %.200s", text)
+        logger.warning("Failed to parse campaign generation JSON: %.200s", text)
         return None
     except Exception:
         logger.exception("Campaign generation LLM call failed")

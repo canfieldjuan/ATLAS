@@ -98,6 +98,8 @@ def score_relevance(review: dict[str, Any], vendor_name: str) -> tuple[float, st
     # --- Signal 1: Churn / review language ---
     churn_boost = 0.0
     for pat, weight in _CHURN_PATTERNS:
+        if churn_boost >= _CHURN_CAP:
+            break
         if pat.search(text):
             churn_boost += weight
     churn_boost = min(churn_boost, _CHURN_CAP)
@@ -108,6 +110,8 @@ def score_relevance(review: dict[str, Any], vendor_name: str) -> tuple[float, st
     # --- Signal 2: Noise patterns ---
     noise_penalty = 0.0
     for pat, weight in _NOISE_PATTERNS:
+        if noise_penalty <= _NOISE_CAP:
+            break
         if pat.search(text):
             noise_penalty += weight
     noise_penalty = max(noise_penalty, _NOISE_CAP)
