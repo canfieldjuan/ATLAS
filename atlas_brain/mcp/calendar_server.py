@@ -374,12 +374,18 @@ async def find_free_slots(
         range_start = _parse_dt(start)
         range_end = _parse_dt(end)
 
+        # Cap date range to 90 days to avoid excessive iteration
+        max_range = timedelta(days=90)
+        if range_end - range_start > max_range:
+            range_end = range_start + max_range
+
         events = await _provider().list_events(
             start=range_start,
             end=range_end,
             calendar_id=calendar_id,
         )
 
+        duration_minutes = max(1, min(duration_minutes, 1440))
         slot_duration = timedelta(minutes=duration_minutes)
         free_slots: list[dict] = []
 

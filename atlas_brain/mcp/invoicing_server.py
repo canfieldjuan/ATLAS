@@ -150,10 +150,16 @@ async def create_invoice(
     except json.JSONDecodeError:
         return json.dumps({"success": False, "error": "Invalid line_items JSON"})
 
+    if isinstance(items, list) and len(items) > 100:
+        return json.dumps({"success": False, "error": "Max 100 line items per invoice"})
+
     # Resolve contact
     resolved_contact = await _resolve_contact_id(contact_id, customer_phone, customer_email)
     cid = _uuid.UUID(resolved_contact) if resolved_contact else None
 
+    due_days = max(0, min(due_days, 365))
+    tax_rate = max(0.0, min(tax_rate, 1.0))
+    discount_amount = max(0.0, discount_amount)
     due = date.today() + timedelta(days=due_days)
 
     try:
@@ -276,7 +282,14 @@ async def update_invoice(
     except json.JSONDecodeError:
         return json.dumps({"success": False, "error": "Invalid line_items JSON"})
 
+    if isinstance(items, list) and len(items) > 100:
+        return json.dumps({"success": False, "error": "Max 100 line items per invoice"})
+
     dd = date.fromisoformat(due_date) if due_date else None
+    if tax_rate is not None:
+        tax_rate = max(0.0, min(tax_rate, 1.0))
+    if discount_amount is not None:
+        discount_amount = max(0.0, discount_amount)
 
     try:
         repo = _repo()

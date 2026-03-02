@@ -255,6 +255,8 @@ async def analyze_risk_sensors(text: str) -> str:
     """
     if not text or len(text.strip()) < 10:
         return json.dumps({"success": False, "error": "Text too short for analysis (minimum 10 characters)"})
+    if len(text) > 50000:
+        return json.dumps({"success": False, "error": "Text too long for analysis (maximum 50000 characters)"})
 
     try:
         from ..tools.risk_sensors import (

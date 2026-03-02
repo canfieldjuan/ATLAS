@@ -488,10 +488,10 @@ async def get_customer_context(
 
         svc = get_customer_context_service()
         kwargs = {
-            "max_interactions": max_interactions,
-            "max_calls": max_calls,
-            "max_appointments": max_appointments,
-            "max_emails": max_emails,
+            "max_interactions": min(max_interactions, 50),
+            "max_calls": min(max_calls, 50),
+            "max_appointments": min(max_appointments, 50),
+            "max_emails": min(max_emails, 50),
         }
 
         # If contact_id doesn't look like a UUID, treat it as a name

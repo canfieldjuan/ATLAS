@@ -452,7 +452,7 @@ async def list_sent_history(
         from ..tools.email import query_email_history_tool
 
         result = await query_email_history_tool.execute({
-            "hours": hours,
+            "hours": min(hours, 8760),
             "template_type": template_type,
             "limit": min(limit, 100),
         })

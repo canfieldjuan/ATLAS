@@ -59,7 +59,10 @@ logger = logging.getLogger("atlas.mcp.twilio")
 async def _run_sync(fn, *args, **kwargs) -> Any:
     """Run a synchronous Twilio/SignalWire SDK call in a thread executor."""
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, partial(fn, *args, **kwargs))
+    return await asyncio.wait_for(
+        loop.run_in_executor(None, partial(fn, *args, **kwargs)),
+        timeout=30,
+    )
 
 
 @asynccontextmanager
@@ -581,7 +584,7 @@ async def send_sms(
         }
 
         if media_urls:
-            params["media_url"] = [u.strip() for u in media_urls.split(",") if u.strip()]
+            params["media_url"] = [u.strip() for u in media_urls.split(",") if u.strip()][:10]
 
         if cfg.webhook_base_url:
             params["status_callback"] = f"{cfg.webhook_base_url}/api/v1/comms/sms/status"
