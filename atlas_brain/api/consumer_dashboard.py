@@ -1499,7 +1499,7 @@ async def get_competitive_flows(
     direction: Optional[str] = Query(None),
     min_count: int = Query(2),
     limit: int = Query(100, le=500),
-    user: AuthUser = Depends(require_auth),
+    user: AuthUser = require_plan("growth"),
 ):
     pool = _pool_or_503()
     base_conditions = [

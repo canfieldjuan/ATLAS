@@ -4,6 +4,7 @@ import { clsx } from 'clsx'
 import DataTable, { type Column } from '../components/DataTable'
 import FilterBar, { FilterSearch, FilterSelect } from '../components/FilterBar'
 import { PageError } from '../components/ErrorBoundary'
+import PlanGate from '../components/PlanGate'
 import useApiData from '../hooks/useApiData'
 import useFilterParams from '../hooks/useFilterParams'
 import useCategories from '../hooks/useCategories'
@@ -24,6 +25,14 @@ type Filters = {
 }
 
 export default function Flows() {
+  return (
+    <PlanGate minPlan="growth">
+      <FlowsInner />
+    </PlanGate>
+  )
+}
+
+function FlowsInner() {
   const navigate = useNavigate()
   const { categories } = useCategories()
   const { filters, setFilter, clearFilter, clearAll, activeFilterEntries } =

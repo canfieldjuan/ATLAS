@@ -35,7 +35,7 @@ const links: NavItem[] = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/brands', icon: Tag, label: 'Brands' },
   { to: '/compare', icon: Scale, label: 'Compare', minPlan: 'growth' },
-  { to: '/flows', icon: GitCompareArrows, label: 'Competitive Flows' },
+  { to: '/flows', icon: GitCompareArrows, label: 'Competitive Flows', minPlan: 'growth' },
   { to: '/features', icon: Lightbulb, label: 'Feature Gaps' },
   { to: '/safety', icon: ShieldAlert, label: 'Safety Signals' },
   { to: '/reviews', icon: MessageSquareText, label: 'Reviews' },
