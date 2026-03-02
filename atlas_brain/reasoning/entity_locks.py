@@ -216,14 +216,21 @@ class EntityLockManager:
         pool = get_db_pool()
         rows = await pool.fetch(
             """
+            WITH to_drain AS (
+                SELECT rq.id AS rq_id, rq.event_id
+                FROM reasoning_queue rq
+                WHERE rq.entity_type = $1
+                  AND rq.entity_id = $2
+                  AND rq.drained_at IS NULL
+                LIMIT 200
+            )
             UPDATE reasoning_queue rq
             SET drained_at = NOW()
-            FROM atlas_events ae
-            WHERE rq.event_id = ae.id
-              AND rq.entity_type = $1
-              AND rq.entity_id = $2
-              AND rq.drained_at IS NULL
-            RETURNING ae.*
+            FROM to_drain
+            JOIN atlas_events ae ON ae.id = to_drain.event_id
+            WHERE rq.id = to_drain.rq_id
+            RETURNING ae.id, ae.event_type, ae.source, ae.entity_type,
+                      ae.entity_id, ae.payload, ae.created_at
             """,
             entity_type,
             entity_id,

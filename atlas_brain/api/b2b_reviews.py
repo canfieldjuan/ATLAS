@@ -24,8 +24,8 @@ router = APIRouter(prefix="/b2b/reviews", tags=["b2b-reviews"])
 
 class B2BReviewInput(BaseModel):
     source: str = Field(description="Review source: g2, capterra, trustradius, reddit, manual")
-    vendor_name: str = Field(description="Vendor/company name")
-    review_text: str = Field(description="Main review body text")
+    vendor_name: str = Field(max_length=500, description="Vendor/company name")
+    review_text: str = Field(max_length=10000, description="Main review body text")
 
     source_url: Optional[str] = None
     source_review_id: Optional[str] = None
@@ -33,9 +33,9 @@ class B2BReviewInput(BaseModel):
     product_category: Optional[str] = None
     rating: Optional[float] = None
     rating_max: int = 5
-    summary: Optional[str] = None
-    pros: Optional[str] = None
-    cons: Optional[str] = None
+    summary: Optional[str] = Field(default=None, max_length=500)
+    pros: Optional[str] = Field(default=None, max_length=5000)
+    cons: Optional[str] = Field(default=None, max_length=5000)
     reviewer_name: Optional[str] = None
     reviewer_title: Optional[str] = None
     reviewer_company: Optional[str] = None
@@ -75,6 +75,8 @@ async def import_b2b_reviews(reviews: list[B2BReviewInput]) -> dict:
     """Import B2B reviews from any source. Accepts JSON array."""
     if not reviews:
         raise HTTPException(status_code=400, detail="Empty review list")
+    if len(reviews) > 500:
+        raise HTTPException(status_code=400, detail="Max 500 reviews per request")
 
     pool = get_db_pool()
     if not pool.is_initialized:

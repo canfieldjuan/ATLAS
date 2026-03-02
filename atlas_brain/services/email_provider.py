@@ -4,17 +4,17 @@ Email provider abstraction for Atlas.
 Provider-agnostic interface for email send + read operations.
 
 Three concrete providers:
-  - IMAPEmailProvider    — IMAP (stdlib imaplib); works with any mail server.
-  - GmailEmailProvider   — Gmail API (OAuth2); read + send. Used as fallback
+  - IMAPEmailProvider    -- IMAP (stdlib imaplib); works with any mail server.
+  - GmailEmailProvider   -- Gmail API (OAuth2); read + send. Used as fallback
                            reader when IMAP is not configured.
-  - ResendEmailProvider  — Resend REST API; send-only fallback.
+  - ResendEmailProvider  -- Resend REST API; send-only fallback.
 
 CompositeEmailProvider (default):
   - Reading:  IMAPEmailProvider when configured; GmailEmailProvider otherwise.
   - Sending:  Gmail preferred; Resend fallback.
 
 IMAP configuration (env vars):
-  ATLAS_EMAIL_IMAP_HOST      imap.gmail.com | outlook.office365.com | …
+  ATLAS_EMAIL_IMAP_HOST      imap.gmail.com | outlook.office365.com | ...
   ATLAS_EMAIL_IMAP_PORT      993  (SSL)
   ATLAS_EMAIL_IMAP_USERNAME  your@email.com
   ATLAS_EMAIL_IMAP_PASSWORD  app-specific-password
@@ -42,11 +42,11 @@ logger = logging.getLogger("atlas.services.email_provider")
 
 
 # ---------------------------------------------------------------------------
-# IMAP helpers (stdlib — no extra dependencies)
+# IMAP helpers (stdlib -- no extra dependencies)
 # ---------------------------------------------------------------------------
 
 def _decode_mime_words(value: str) -> str:
-    """Decode RFC 2047 encoded words (=?utf-8?b?…?=) in headers."""
+    """Decode RFC 2047 encoded words (=?utf-8?b?...?=) in headers."""
     parts = []
     for raw, charset in _decode_header(value):
         if isinstance(raw, bytes):
@@ -61,15 +61,15 @@ def _imap_search_criteria(query: str) -> str:
     Convert a human-readable search query to IMAP SEARCH criteria string.
 
     Supports a subset of Gmail-style syntax:
-        is:unread          → UNSEEN
-        is:read            → SEEN
-        is:starred         → FLAGGED
-        from:alice@…       → FROM "alice@…"
-        to:bob@…           → TO "bob@…"
-        subject:foo        → SUBJECT "foo"
-        newer_than:Nd      → SINCE <date N days ago>
-        older_than:Nd      → BEFORE <date N days ago>
-        has:attachment     → (mapped to ALL — IMAP has no native test)
+        is:unread          -> UNSEEN
+        is:read            -> SEEN
+        is:starred         -> FLAGGED
+        from:alice@...       -> FROM "alice@..."
+        to:bob@...           -> TO "bob@..."
+        subject:foo        -> SUBJECT "foo"
+        newer_than:Nd      -> SINCE <date N days ago>
+        older_than:Nd      -> BEFORE <date N days ago>
+        has:attachment     -> (mapped to ALL -- IMAP has no native test)
 
     Multiple tokens are ANDed together.
     Unknown tokens are silently dropped; falls back to ALL.
@@ -116,11 +116,11 @@ def _imap_search_criteria(query: str) -> str:
             if m:
                 criteria.append(_before(int(m.group(1))))
         elif token_lower in ("has:attachment", "in:inbox", "in:sent"):
-            # Map to ALL — no direct IMAP equivalent for has:attachment
+            # Map to ALL -- no direct IMAP equivalent for has:attachment
             pass
-        # Unknown tokens (label:, OR, etc.) — silently skip
+        # Unknown tokens (label:, OR, etc.) -- silently skip
         else:
-            logger.debug("IMAP: unsupported search token %r — ignored", token)
+            logger.debug("IMAP: unsupported search token %r -- ignored", token)
 
     return " ".join(criteria) if criteria else "ALL"
 
@@ -172,11 +172,11 @@ class IMAPEmailProvider:
     """
     Provider-agnostic IMAP reader using Python's stdlib imaplib.
 
-    Works with any IMAP server — Gmail, Outlook, Yahoo, custom.
+    Works with any IMAP server -- Gmail, Outlook, Yahoo, custom.
     All blocking IMAP operations run in a thread executor so the
     async API stays non-blocking.
 
-    Configuration (atlas_brain/config.py → EmailConfig → IMAP fields):
+    Configuration (atlas_brain/config.py -> EmailConfig -> IMAP fields):
         ATLAS_EMAIL_IMAP_HOST      e.g. imap.gmail.com
         ATLAS_EMAIL_IMAP_PORT      993
         ATLAS_EMAIL_IMAP_USERNAME  your@email.com
@@ -214,7 +214,7 @@ class IMAPEmailProvider:
         if self._host:
             if not (1 <= self._port <= 65535):
                 logger.warning(
-                    "IMAP: invalid port %d (must be 1-65535) — IMAP will fail",
+                    "IMAP: invalid port %d (must be 1-65535) -- IMAP will fail",
                     self._port,
                 )
             if not self._username:
@@ -229,13 +229,15 @@ class IMAPEmailProvider:
         self._load_config()
         return bool(self._host and self._username and self._password)
 
+    _SOCKET_TIMEOUT = 30  # seconds
+
     def _connect(self) -> imaplib.IMAP4:
         """Open and authenticate a new IMAP connection (blocking)."""
         self._load_config()
         if self._ssl:
-            conn = imaplib.IMAP4_SSL(self._host, self._port)
+            conn = imaplib.IMAP4_SSL(self._host, self._port, timeout=self._SOCKET_TIMEOUT)
         else:
-            conn = imaplib.IMAP4(self._host, self._port)
+            conn = imaplib.IMAP4(self._host, self._port, timeout=self._SOCKET_TIMEOUT)
             conn.starttls()
         conn.login(self._username, self._password)
         return conn
@@ -243,7 +245,7 @@ class IMAPEmailProvider:
     def _get_conn(self) -> imaplib.IMAP4:
         """Return a cached IMAP connection, reconnecting if stale.
 
-        Caller MUST hold self._lock — all sync methods acquire the lock
+        Caller MUST hold self._lock -- all sync methods acquire the lock
         for their entire duration to prevent concurrent IMAP operations
         on the same connection (imaplib is not thread-safe).
         """
@@ -251,7 +253,8 @@ class IMAPEmailProvider:
             try:
                 self._cached_conn.noop()
                 return self._cached_conn
-            except Exception:
+            except Exception as e:
+                logger.debug("IMAP noop health check failed, reconnecting: %s", e)
                 try:
                     self._cached_conn.logout()
                 except Exception:
@@ -269,8 +272,8 @@ class IMAPEmailProvider:
         if discard:
             try:
                 conn.logout()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("IMAP logout on discard failed: %s", e)
             if self._cached_conn is conn:
                 self._cached_conn = None
         # Otherwise keep cached for reuse
@@ -431,7 +434,7 @@ class IMAPEmailProvider:
                 root = self._get_message_sync(thread_id)
                 return {"thread_id": thread_id, "messages": [root]}
             except imaplib.IMAP4.error:
-                # X-GM-THRID not supported — fall back to single message
+                # X-GM-THRID not supported -- fall back to single message
                 self._release_conn(conn, discard=True)
                 root = self._get_message_sync(thread_id)
                 return {"thread_id": thread_id, "messages": [root]}
@@ -462,7 +465,7 @@ class IMAPEmailProvider:
     async def get_thread(self, thread_id: str, mailbox: str | None = None) -> dict[str, Any]:
         return await self._run(self._get_thread_sync, thread_id, mailbox)
 
-    # IMAP is read-only in this provider — send is not supported
+    # IMAP is read-only in this provider -- send is not supported
     async def send(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
         raise NotImplementedError("IMAPEmailProvider does not support sending")
 
@@ -643,7 +646,7 @@ class CompositeEmailProvider:
 
     Reading:
       1. IMAPEmailProvider  (if ATLAS_EMAIL_IMAP_HOST / _USERNAME / _PASSWORD set)
-         → works with any mail server — Gmail, Outlook, Yahoo, custom IMAP.
+         -> works with any mail server -- Gmail, Outlook, Yahoo, custom IMAP.
       2. GmailEmailProvider (OAuth2 API fallback when IMAP is not configured)
 
     Sending:
@@ -697,7 +700,7 @@ class CompositeEmailProvider:
         except Exception as exc:
             if reader is self._imap:
                 logger.warning(
-                    "IMAP %s failed (%s) — falling back to Gmail API", method, exc
+                    "IMAP %s failed (%s) -- falling back to Gmail API", method, exc
                 )
                 return await getattr(self._gmail, method)(*args, **kwargs)
             raise

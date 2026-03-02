@@ -117,6 +117,7 @@ class CustomerServiceRepository:
                 SELECT * FROM customer_services
                 WHERE contact_id = $1
                 ORDER BY created_at DESC
+                LIMIT 500
                 """,
                 contact_id,
             )
@@ -139,6 +140,7 @@ class CustomerServiceRepository:
                     SELECT * FROM customer_services
                     WHERE status = 'active' AND auto_invoice = TRUE
                     ORDER BY created_at
+                    LIMIT 500
                     """
                 )
             else:
@@ -147,6 +149,7 @@ class CustomerServiceRepository:
                     SELECT * FROM customer_services
                     WHERE status = 'active'
                     ORDER BY created_at
+                    LIMIT 500
                     """
                 )
             return [self._row_to_dict(row) for row in rows]
@@ -167,6 +170,7 @@ class CustomerServiceRepository:
                 SELECT * FROM customer_services
                 WHERE status = $1
                 ORDER BY created_at
+                LIMIT 500
                 """,
                 status,
             )

@@ -278,7 +278,7 @@ async def _get_email_graph_context(action_emails: list[dict[str, Any]]) -> list[
         return facts
 
     except Exception as e:
-        logger.debug("Email graph context fetch failed: %s", e)
+        logger.warning("Email graph context fetch failed: %s", e)
         return []
 
 
@@ -588,6 +588,7 @@ async def _load_recent_processed_emails() -> list[dict[str, Any]]:
             FROM processed_emails
             WHERE processed_at > NOW() - INTERVAL '24 hours'
             ORDER BY processed_at DESC
+            LIMIT 500
             """,
         )
         return [dict(r) for r in rows]

@@ -413,6 +413,7 @@ class ScheduledTaskRepository:
         limit: int = 20,
     ) -> list[TaskExecution]:
         """Get execution history for a task."""
+        limit = min(limit, 200)
         pool = get_db_pool()
 
         if not pool.is_initialized:

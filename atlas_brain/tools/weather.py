@@ -134,7 +134,7 @@ class WeatherTool:
             return ToolResult(
                 success=False,
                 error="EXECUTION_ERROR",
-                message=str(e),
+                message="Weather lookup failed.",
             )
 
     async def _fetch_weather(self, lat: float, lon: float, days_ahead: int = 0) -> dict[str, Any]:

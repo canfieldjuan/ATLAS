@@ -21,6 +21,9 @@ from .rate_limiter import DomainRateLimiter
 
 logger = logging.getLogger("atlas.services.scraping.client")
 
+_MAX_COOKIE_DOMAINS = 50
+_MAX_RESPONSE_BYTES = 20 * 1024 * 1024  # 20 MB
+
 
 class AntiDetectionClient:
     """HTTP client with TLS fingerprint spoofing and anti-detection measures."""
@@ -45,7 +48,11 @@ class AntiDetectionClient:
         self._cookie_jars: dict[str, dict[str, str]] = {}
 
     def _get_domain_cookies(self, domain: str) -> dict[str, str]:
-        """Get the cookie jar for a domain."""
+        """Get the cookie jar for a domain, evicting oldest if over limit."""
+        if domain not in self._cookie_jars:
+            while len(self._cookie_jars) >= _MAX_COOKIE_DOMAINS:
+                oldest = next(iter(self._cookie_jars))
+                del self._cookie_jars[oldest]
         return self._cookie_jars.setdefault(domain, {})
 
     def _store_cookies_from_response(self, domain: str, resp: Response) -> None:
@@ -62,6 +69,7 @@ class AntiDetectionClient:
         referer: str | None = None,
         sticky_session: bool = False,
         prefer_residential: bool = False,
+        extra_headers: dict[str, str] | None = None,
     ) -> Response:
         """Fetch a URL with anti-detection measures.
 
@@ -71,6 +79,7 @@ class AntiDetectionClient:
             referer: Referer header (e.g. Google search URL or previous page).
             sticky_session: Reuse same proxy across calls for this domain.
             prefer_residential: Use residential proxy (for Cloudflare sites).
+            extra_headers: Additional headers merged on top of the browser profile.
 
         Returns:
             curl_cffi Response object.
@@ -112,12 +121,14 @@ class AntiDetectionClient:
                 )
                 if override_ua:
                     headers["User-Agent"] = override_ua
+                if extra_headers:
+                    headers.update(extra_headers)
 
                 # 5. Random delay (human-like)
                 delay = random.uniform(self._min_delay, self._max_delay)
                 if attempt > 0:
-                    # Exponential backoff on retries
-                    delay *= (2 ** attempt)
+                    # Exponential backoff on retries, capped at 60s
+                    delay = min(delay * (2 ** attempt), 60.0)
                 await asyncio.sleep(delay)
 
                 # 6. Execute via curl_cffi with matching TLS fingerprint
@@ -135,7 +146,19 @@ class AntiDetectionClient:
                 # Capture any Set-Cookie headers
                 self._store_cookies_from_response(domain, resp)
 
-                # 7. Check for CAPTCHA challenges on 403
+                # 7. Response size guard -- reject oversized payloads
+                content_len = len(resp.content) if resp.content else 0
+                if content_len > _MAX_RESPONSE_BYTES:
+                    logger.warning(
+                        "Response too large for %s: %d bytes (max %d)",
+                        domain, content_len, _MAX_RESPONSE_BYTES,
+                    )
+                    raise ValueError(
+                        f"Response from {domain} exceeds {_MAX_RESPONSE_BYTES} bytes"
+                        f" ({content_len} bytes)"
+                    )
+
+                # 8. Check for CAPTCHA challenges on 403
                 if resp.status_code == 403 and captcha_enabled:
                     captcha_type = detect_captcha(resp.text, resp.status_code)
 
@@ -162,7 +185,7 @@ class AntiDetectionClient:
                                 # Store solved cookies and pin profile with matching TLS fingerprint
                                 self._get_domain_cookies(domain).update(solution.cookies)
                                 if solution.user_agent:
-                                    # Solver used a different UA — match impersonate to it
+                                    # Solver used a different UA -- match impersonate to it
                                     pinned_profile = self._profiles.match_profile(solution.user_agent)
                                     override_ua = solution.user_agent
                                 else:
@@ -176,7 +199,7 @@ class AntiDetectionClient:
                                     bool(solution.user_agent), bool(override_proxy),
                                 )
                                 # Successful solve always gets one more attempt.
-                                # Don't increment attempt — the solve itself isn't a retry.
+                                # Don't increment attempt -- the solve itself isn't a retry.
                                 last_exc = None
                                 continue
                             except Exception as solve_exc:

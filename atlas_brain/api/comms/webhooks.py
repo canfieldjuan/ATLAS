@@ -80,8 +80,8 @@ def _fallback_outbound_caller_id() -> str:
                 normalized = _normalize_to_e164(number)
                 if normalized.startswith("+"):
                     return normalized
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Failed to resolve outbound caller ID: %s", e)
     return ""
 
 
@@ -104,8 +104,8 @@ async def _is_recording_already_started(call_sid: str) -> bool:
         if existing:
             _recording_started.add(call_sid)  # cache for future checks
             return True
-    except Exception:
-        pass  # DB unavailable -- rely on in-memory only
+    except Exception as e:
+        logger.warning("DB check for recording %s failed: %s", call_sid, e)
     return False
 
 
@@ -451,7 +451,10 @@ async def handle_inbound_call(request: Request):
         })
 
 
-# Store conversation history per call
+# Store conversation history per call.
+# Max 200 entries to prevent unbounded growth; evict oldest when exceeded.
+_MAX_CALL_CONVERSATIONS = 200
+_MAX_TURNS_PER_CALL = 100
 _call_conversations: dict[str, list[dict]] = {}
 
 
@@ -502,8 +505,12 @@ async def handle_conversation(request: Request):
                 ]
             })
 
-        # Get or create conversation history
+        # Get or create conversation history (with eviction cap)
         if call_id not in _call_conversations:
+            # Evict oldest entries if at capacity
+            if len(_call_conversations) >= _MAX_CALL_CONVERSATIONS:
+                oldest_key = next(iter(_call_conversations))
+                del _call_conversations[oldest_key]
             _call_conversations[call_id] = []
 
         # Get business context
@@ -539,15 +546,12 @@ async def handle_conversation(request: Request):
 
         logger.info("Agent response: %s", response_text)
 
-        # Store in conversation history
-        _call_conversations[call_id].append({
-            "role": "user",
-            "content": speech_text,
-        })
-        _call_conversations[call_id].append({
-            "role": "assistant",
-            "content": response_text,
-        })
+        # Store in conversation history (cap per-call turns)
+        conv = _call_conversations[call_id]
+        conv.append({"role": "user", "content": speech_text})
+        conv.append({"role": "assistant", "content": response_text})
+        if len(conv) > _MAX_TURNS_PER_CALL:
+            _call_conversations[call_id] = conv[-_MAX_TURNS_PER_CALL:]
 
         # Check for goodbye/end phrases
         goodbye_phrases = ["goodbye", "bye", "hang up", "end call", "that's all"]
@@ -678,7 +682,7 @@ async def handle_sip_outbound(request: Request):
 
     # Recording: use record= attribute on <Dial> instead of REST API.
     # SignalWire's recordings.create() REST endpoint returns HTTP 200 with
-    # an unparseable body for SIP-originated calls — the recording is never
+    # an unparseable body for SIP-originated calls -- the recording is never
     # actually created. The <Dial record=...> attribute works reliably and
     # fires recordingStatusCallback when the recording is ready.
     record_attr = ""
@@ -694,7 +698,7 @@ async def handle_sip_outbound(request: Request):
     # Answer the SIP leg immediately so Zoiper shows the call as active
     # and the user hears ringing while the customer's phone rings.
     # Without this, answerOnBridge keeps the SIP leg silent until the
-    # customer picks up — which feels like a dead call from Zoiper.
+    # customer picks up -- which feels like a dead call from Zoiper.
     return laml_response(f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="Polly.Joanna">Connecting your call.</Say>
@@ -759,7 +763,7 @@ async def handle_outbound_call(
     """
     Handle programmatic outbound calls (from make_call MCP tool).
 
-    This is NOT the primary outbound path — SIP outbound via Zoiper uses
+    This is NOT the primary outbound path -- SIP outbound via Zoiper uses
     /sip-outbound instead. This endpoint handles calls initiated via the
     REST API (e.g., the make_call MCP tool).
 
@@ -772,7 +776,7 @@ async def handle_outbound_call(
     try:
         bridge_to = comms_settings.forward_to_number
         if not bridge_to:
-            logger.error("No forward_to_number configured — cannot bridge outbound call %s", CallSid)
+            logger.error("No forward_to_number configured -- cannot bridge outbound call %s", CallSid)
             return laml_response("""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="Polly.Joanna">Sorry, we are unable to connect your call right now.</Say>
@@ -782,7 +786,7 @@ async def handle_outbound_call(
         dial_action = f"{comms_settings.webhook_base_url}/api/v1/comms/voice/dial-status"
 
         # Recording is started from /status when the call goes in-progress.
-        # No need to start it here — same pattern as inbound/SIP outbound.
+        # No need to start it here -- same pattern as inbound/SIP outbound.
 
         return laml_response(f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>

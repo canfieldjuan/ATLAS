@@ -4,13 +4,14 @@ REST API for B2B scrape target management.
 CRUD for scrape targets, manual trigger, and log viewing.
 """
 
+import asyncio
 import json
 import logging
 import time as _time
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ..storage.database import get_db_pool
@@ -25,23 +26,23 @@ router = APIRouter(prefix="/b2b/scrape", tags=["b2b-scrape"])
 # ---------------------------------------------------------------------------
 
 class ScrapeTargetCreate(BaseModel):
-    source: str = Field(description="Source: g2, capterra, trustradius, reddit")
+    source: str = Field(description="Source: g2, capterra, trustradius, reddit, hackernews, github, rss")
     vendor_name: str
     product_name: Optional[str] = None
     product_slug: str
     product_category: Optional[str] = None
-    max_pages: int = 5
+    max_pages: int = Field(default=5, ge=1, le=100)
     enabled: bool = True
-    priority: int = 0
-    scrape_interval_hours: int = 168
+    priority: int = Field(default=0, ge=0, le=100)
+    scrape_interval_hours: int = Field(default=168, ge=1, le=8760)
     metadata: dict = Field(default_factory=dict)
 
 
 class ScrapeTargetUpdate(BaseModel):
     enabled: Optional[bool] = None
-    priority: Optional[int] = None
-    max_pages: Optional[int] = None
-    scrape_interval_hours: Optional[int] = None
+    priority: Optional[int] = Field(default=None, ge=0, le=100)
+    max_pages: Optional[int] = Field(default=None, ge=1, le=100)
+    scrape_interval_hours: Optional[int] = Field(default=None, ge=1, le=8760)
     metadata: Optional[dict] = None
 
 
@@ -80,6 +81,7 @@ async def list_targets(
         FROM b2b_scrape_targets
         {where}
         ORDER BY priority DESC, vendor_name
+        LIMIT 500
         """,
         *args,
     )
@@ -94,7 +96,9 @@ async def create_target(body: ScrapeTargetCreate) -> dict:
     if not pool.is_initialized:
         raise HTTPException(status_code=503, detail="Database not ready")
 
-    valid_sources = {"g2", "capterra", "trustradius", "reddit"}
+    from ..services.scraping.parsers import get_all_parsers
+
+    valid_sources = set(get_all_parsers().keys())
     if body.source not in valid_sources:
         raise HTTPException(status_code=400, detail=f"Invalid source. Must be one of: {valid_sources}")
 
@@ -118,7 +122,8 @@ async def create_target(body: ScrapeTargetCreate) -> dict:
                 status_code=409,
                 detail=f"Target already exists for {body.source}/{body.product_slug}",
             )
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.error("Failed to create scrape target: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to create target")
 
     return dict(row)
 
@@ -234,7 +239,21 @@ async def trigger_scrape(target_id: UUID) -> dict:
     started_at = _time.monotonic()
 
     try:
-        result = await parser.scrape(target, client)
+        result = await asyncio.wait_for(parser.scrape(target, client), timeout=300)
+    except asyncio.TimeoutError:
+        duration_ms = int((_time.monotonic() - started_at) * 1000)
+        await _write_scrape_log(pool, target_id, target.source, "failed", 0, 0, 0,
+                                ["scrape timed out after 300s"], duration_ms, parser)
+        await pool.execute(
+            """
+            UPDATE b2b_scrape_targets
+            SET last_scraped_at = NOW(), last_scrape_status = 'failed',
+                last_scrape_reviews = 0, updated_at = NOW()
+            WHERE id = $1
+            """,
+            target_id,
+        )
+        raise HTTPException(status_code=504, detail="Scrape timed out after 300s")
     except Exception as exc:
         duration_ms = int((_time.monotonic() - started_at) * 1000)
         # Log failure
@@ -249,7 +268,18 @@ async def trigger_scrape(target_id: UUID) -> dict:
             """,
             target_id,
         )
-        raise HTTPException(status_code=502, detail=f"Scrape failed: {exc}")
+        logger.error("Scrape failed for target %s: %s", target_id, exc)
+        raise HTTPException(status_code=502, detail="Scrape failed")
+
+    # Relevance filter: drop noise from social media sources
+    filtered_count = 0
+    if result.reviews:
+        from ..services.scraping.relevance import STRUCTURED_SOURCES, filter_reviews
+        if target.source not in STRUCTURED_SOURCES:
+            original_count = len(result.reviews)
+            result.reviews, filtered_count = filter_reviews(
+                result.reviews, target.vendor_name, 0.55,
+            )
 
     # Insert reviews
     inserted = 0
@@ -281,11 +311,132 @@ async def trigger_scrape(target_id: UUID) -> dict:
         "source": target.source,
         "vendor": target.vendor_name,
         "status": result.status,
-        "reviews_found": len(result.reviews),
+        "reviews_found": len(result.reviews) + filtered_count,
         "reviews_inserted": inserted,
+        "reviews_filtered": filtered_count,
         "pages_scraped": result.pages_scraped,
         "duration_ms": duration_ms,
         "errors": result.errors,
+    }
+
+
+@router.post("/run-all")
+async def trigger_scrape_all(
+    source: Optional[str] = None,
+) -> dict:
+    """Trigger scrape for all enabled targets (optionally filtered by source).
+
+    Runs sequentially with a 1s delay between targets. Returns summary.
+    """
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(status_code=503, detail="Database not ready")
+
+    query = """
+        SELECT id, source, vendor_name, product_name, product_slug,
+               product_category, max_pages, metadata
+        FROM b2b_scrape_targets
+        WHERE enabled = true
+    """
+    params: list = []
+    if source:
+        query += " AND source = $1"
+        params.append(source)
+    query += " ORDER BY priority DESC, source, vendor_name"
+
+    rows = await pool.fetch(query, *params)
+    if not rows:
+        return {"targets": 0, "message": "No enabled targets found"}
+
+    from ..autonomous.tasks.b2b_scrape_intake import _insert_reviews
+    from ..services.scraping.client import get_scrape_client
+    from ..services.scraping.parsers import ScrapeTarget, get_parser
+    from ..services.scraping.relevance import STRUCTURED_SOURCES, filter_reviews
+
+    import asyncio
+
+    client = get_scrape_client()
+    results = []
+    total_inserted = 0
+    total_filtered = 0
+
+    for row in rows:
+        raw_meta = row["metadata"] or "{}"
+        target = ScrapeTarget(
+            id=str(row["id"]),
+            source=row["source"],
+            vendor_name=row["vendor_name"],
+            product_name=row["product_name"],
+            product_slug=row["product_slug"],
+            product_category=row["product_category"],
+            max_pages=row["max_pages"],
+            metadata=json.loads(raw_meta) if isinstance(raw_meta, str) else raw_meta,
+        )
+
+        parser = get_parser(target.source)
+        if not parser:
+            results.append({"source": target.source, "vendor": target.vendor_name, "status": "no_parser"})
+            continue
+
+        started_at = _time.monotonic()
+        try:
+            result = await parser.scrape(target, client)
+        except Exception as exc:
+            duration_ms = int((_time.monotonic() - started_at) * 1000)
+            await _write_scrape_log(pool, row["id"], target.source, "failed", 0, 0, 0,
+                                    [str(exc)], duration_ms, parser)
+            await pool.execute(
+                "UPDATE b2b_scrape_targets SET last_scraped_at = NOW(), last_scrape_status = 'failed', last_scrape_reviews = 0, updated_at = NOW() WHERE id = $1",
+                row["id"],
+            )
+            results.append({"source": target.source, "vendor": target.vendor_name, "status": "failed", "error": str(exc)[:200]})
+            logger.warning("Scrape failed for %s/%s: %s", target.source, target.vendor_name, exc)
+            await asyncio.sleep(1)
+            continue
+
+        # Relevance filter
+        filtered_count = 0
+        if result.reviews and target.source not in STRUCTURED_SOURCES:
+            result.reviews, filtered_count = filter_reviews(result.reviews, target.vendor_name, 0.55)
+            total_filtered += filtered_count
+
+        inserted = 0
+        if result.reviews:
+            batch_id = f"bulk_{target.source}_{target.product_slug}_{int(_time.time())}"
+            inserted = await _insert_reviews(pool, result.reviews, batch_id)
+            total_inserted += inserted
+
+        duration_ms = int((_time.monotonic() - started_at) * 1000)
+        scrape_errors = list(result.errors)
+        if filtered_count:
+            scrape_errors.append(f"relevance_filtered={filtered_count}")
+        await _write_scrape_log(pool, row["id"], target.source, result.status,
+                                len(result.reviews) + filtered_count, inserted, result.pages_scraped,
+                                scrape_errors, duration_ms, parser)
+        await pool.execute(
+            "UPDATE b2b_scrape_targets SET last_scraped_at = NOW(), last_scrape_status = $2, last_scrape_reviews = $3, updated_at = NOW() WHERE id = $1",
+            row["id"], result.status, inserted,
+        )
+
+        results.append({
+            "source": target.source,
+            "vendor": target.vendor_name,
+            "status": result.status,
+            "found": len(result.reviews) + filtered_count,
+            "inserted": inserted,
+            "filtered": filtered_count,
+        })
+        logger.info("Scraped %s/%s: found=%d inserted=%d filtered=%d",
+                     target.source, target.vendor_name,
+                     len(result.reviews) + filtered_count, inserted, filtered_count)
+
+        await asyncio.sleep(1)
+
+    return {
+        "targets_scraped": len(results),
+        "total_inserted": total_inserted,
+        "total_filtered": total_filtered,
+        "results": results,
     }
 
 
@@ -308,13 +459,13 @@ async def _write_scrape_log(
             pages_scraped, json.dumps(errors), duration_ms, proxy_type,
         )
     except Exception:
-        logger.debug("Failed to write scrape log", exc_info=True)
+        logger.warning("Failed to write scrape log", exc_info=True)
 
 
 @router.get("/logs")
 async def list_logs(
     target_id: Optional[UUID] = None,
-    limit: int = 50,
+    limit: int = Query(default=50, ge=1, le=500),
 ) -> list[dict]:
     """View scrape execution logs."""
     pool = get_db_pool()

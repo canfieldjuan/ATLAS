@@ -80,7 +80,7 @@ class IdentityRepository:
         """Get all embeddings for a modality. Returns {name: embedding}."""
         pool = get_db_pool()
         rows = await pool.fetch(
-            "SELECT name, embedding FROM identity_embeddings WHERE modality = $1",
+            "SELECT name, embedding FROM identity_embeddings WHERE modality = $1 LIMIT 500",
             modality,
         )
         result = {}
@@ -95,7 +95,7 @@ class IdentityRepository:
         """Get all identity names for a modality."""
         pool = get_db_pool()
         rows = await pool.fetch(
-            "SELECT name FROM identity_embeddings WHERE modality = $1 ORDER BY name",
+            "SELECT name FROM identity_embeddings WHERE modality = $1 ORDER BY name LIMIT 500",
             modality,
         )
         return [row["name"] for row in rows]
@@ -145,6 +145,7 @@ class IdentityRepository:
             SELECT name, modality, embedding_dim, source_node, created_at, updated_at
             FROM identity_embeddings
             ORDER BY name, modality
+            LIMIT 500
             """
         )
         return [

@@ -23,7 +23,7 @@ from .api import router as api_router
 from .config import settings
 from .services import llm_registry
 from .storage import db_settings
-from .storage.database import init_database, close_database
+from .storage.database import init_database, close_database, get_db_pool
 
 # Voice pipeline managed by voice.launcher module
 
@@ -116,6 +116,15 @@ async def lifespan(app: FastAPI):
         try:
             await init_database()
             logger.info("Database connection pool initialized")
+            try:
+                from .storage.migrations import run_migrations
+
+                pool = get_db_pool()
+                if pool.is_initialized:
+                    await run_migrations(pool)
+                    logger.info("Database migrations checked")
+            except Exception as e:
+                logger.warning("Database migration check failed: %s", e)
         except Exception as e:
             logger.error("Failed to initialize database: %s", e)
             # Continue without database - service can still function
@@ -192,6 +201,15 @@ async def lifespan(app: FastAPI):
                     kwargs["cloud_kwargs"]["together_api_key"] = settings.llm.together_api_key
                 logger.info("Hybrid LLM: local=%s (%s), cloud=Groq+Together",
                            settings.llm.ollama_model, settings.llm.ollama_url)
+            elif backend == "vllm":
+                # vLLM OpenAI-compatible backend
+                kwargs = {
+                    "model": settings.llm.vllm_model,
+                    "base_url": settings.llm.vllm_url,
+                }
+                logger.info("vLLM model: %s, url: %s",
+                           settings.llm.vllm_model,
+                           settings.llm.vllm_url)
             else:
                 # llama-cpp (GGUF models)
                 kwargs = {}
@@ -675,6 +693,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Campaign email webhook receiver (Resend ESP events) at root /webhooks/*
+from .api.campaign_webhooks import router as campaign_webhook_router
+app.include_router(campaign_webhook_router)
+
+# Stripe billing webhook at root /webhooks/stripe (must be outside /api/v1 prefix)
+from .api.billing import webhook_router as stripe_webhook_router
+app.include_router(stripe_webhook_router)
+
 # Include API routers with /api/v1 prefix
 app.include_router(api_router, prefix="/api/v1")
 
@@ -690,7 +716,7 @@ app.include_router(ollama_compat_router)
 from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5174", "http://localhost:5173"],
+    allow_origins=["http://localhost:5174", "http://localhost:5173", "http://localhost:5175"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["*"],
@@ -721,5 +747,4 @@ if _ui_dist.is_dir():
         return PlainTextResponse("Ollama is running")
 
     app.mount("/", StaticFiles(directory=str(_ui_dist)), name="ui")
-
 

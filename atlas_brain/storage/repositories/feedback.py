@@ -5,7 +5,7 @@ Tracks which RAG sources are retrieved and their effectiveness.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 
@@ -45,7 +45,7 @@ class FeedbackRepository:
         """
         pool = get_db_pool()
         usage_id = uuid4()
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         await pool.execute(
             """
@@ -98,7 +98,7 @@ class FeedbackRepository:
             Updated RAGSourceUsage if found, None otherwise
         """
         pool = get_db_pool()
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # Get the source_id for updating stats
         source_id = await pool.fetchval(
@@ -261,7 +261,7 @@ class FeedbackRepository:
             return
 
         pool = get_db_pool()
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # Upsert stats record
         await pool.execute(
@@ -297,7 +297,7 @@ class FeedbackRepository:
             return
 
         pool = get_db_pool()
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         if was_helpful:
             await pool.execute(

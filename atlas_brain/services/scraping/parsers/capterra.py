@@ -38,6 +38,7 @@ class CapterraParser:
         pages_scraped = 0
         seen_ids: set[str] = set()
 
+        consecutive_empty = 0
         for page in range(1, target.max_pages + 1):
             # Capterra URL: /p/{id}/{slug}/reviews/ or /p/{id}/{slug}/reviews/?page={n}
             base_path = f"{_BASE_URL}/{target.product_slug}/reviews/"
@@ -87,13 +88,22 @@ class CapterraParser:
                 if not page_reviews:
                     if page == 1:
                         logger.warning(
-                            "Capterra page 1 returned 0 reviews for %s — "
+                            "Capterra page 1 returned 0 reviews for %s -- "
                             "JSON-LD and HTML selectors may be stale",
                             target.product_slug,
                         )
                     break  # No more reviews
 
+                before = len(reviews)
                 reviews.extend(page_reviews)
+
+                if len(reviews) == before:
+                    consecutive_empty += 1
+                    if consecutive_empty >= 2:
+                        logger.info("Capterra: 2 consecutive pages with no new reviews, stopping")
+                        break
+                else:
+                    consecutive_empty = 0
 
             except Exception as exc:
                 errors.append(f"Page {page}: {exc}")
@@ -219,7 +229,7 @@ def _parse_html(
                 seen_ids.add(review["source_review_id"])
                 reviews.append(review)
         except Exception:
-            logger.debug("Failed to parse Capterra review card", exc_info=True)
+            logger.warning("Failed to parse Capterra review card", exc_info=True)
 
     return reviews
 

@@ -102,7 +102,7 @@ async def generate_intelligence_report(
         return json.dumps({"success": True, **result}, default=str)
     except Exception as exc:
         logger.exception("generate_intelligence_report error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +130,7 @@ async def list_intelligence_reports(
         return json.dumps({"reports": reports, "count": len(reports)}, default=str)
     except Exception as exc:
         logger.exception("list_intelligence_reports error")
-        return json.dumps({"error": str(exc), "reports": []})
+        return json.dumps({"error": "Internal error", "reports": []})
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +156,7 @@ async def get_intelligence_report(report_id: str) -> str:
         return json.dumps({"found": True, "report": report}, default=str)
     except Exception as exc:
         logger.exception("get_intelligence_report error")
-        return json.dumps({"error": str(exc), "found": False})
+        return json.dumps({"error": "Internal error", "found": False})
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +234,7 @@ async def list_pressure_baselines(
         return json.dumps({"baselines": baselines, "count": len(baselines)})
     except Exception as exc:
         logger.exception("list_pressure_baselines error")
-        return json.dumps({"error": str(exc), "baselines": []})
+        return json.dumps({"error": "Internal error", "baselines": []})
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +255,8 @@ async def analyze_risk_sensors(text: str) -> str:
     """
     if not text or len(text.strip()) < 10:
         return json.dumps({"success": False, "error": "Text too short for analysis (minimum 10 characters)"})
+    if len(text) > 50000:
+        return json.dumps({"success": False, "error": "Text too long for analysis (maximum 50000 characters)"})
 
     try:
         from ..tools.risk_sensors import (
@@ -278,7 +280,7 @@ async def analyze_risk_sensors(text: str) -> str:
         })
     except Exception as exc:
         logger.exception("analyze_risk_sensors error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +347,7 @@ async def run_intervention_pipeline(
         return json.dumps({"success": True, **result}, default=str)
     except Exception as exc:
         logger.exception("run_intervention_pipeline error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -374,7 +376,7 @@ async def list_pending_approvals(
         return json.dumps({"approvals": approvals, "count": len(approvals)}, default=str)
     except Exception as exc:
         logger.exception("list_pending_approvals error")
-        return json.dumps({"error": str(exc), "approvals": []})
+        return json.dumps({"error": "Internal error", "approvals": []})
 
 
 # ---------------------------------------------------------------------------
@@ -416,7 +418,7 @@ async def review_approval(
         return json.dumps({"success": False, "error": "Approval not found or already reviewed"})
     except Exception as exc:
         logger.exception("review_approval error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------

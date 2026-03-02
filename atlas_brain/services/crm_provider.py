@@ -201,7 +201,7 @@ class DatabaseCRMProvider:
             idx += 1
         if query:
             conditions.append(f"full_name ILIKE ${idx}")
-            params.append(f"%{query}%")
+            params.append(f"%{query[:200]}%")
             idx += 1
 
         params.append(limit)
@@ -289,7 +289,7 @@ class DatabaseCRMProvider:
             idx += 1
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        params.extend([limit, offset])
+        params.extend([limit, max(0, offset)])
         rows = await pool.fetch(
             f"""
             SELECT * FROM contacts {where}

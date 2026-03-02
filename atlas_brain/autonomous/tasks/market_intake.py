@@ -189,7 +189,7 @@ async def _fetch_alpha_vantage(
                     "volume": volume,
                 }
             except Exception:
-                logger.debug("Alpha Vantage fetch failed for %s", sym, exc_info=True)
+                logger.warning("Alpha Vantage fetch failed for %s", sym, exc_info=True)
 
     return results
 
@@ -225,6 +225,6 @@ async def _fetch_finnhub(
                         "volume": None,
                     }
             except Exception:
-                logger.debug("Finnhub fetch failed for %s", sym, exc_info=True)
+                logger.warning("Finnhub fetch failed for %s", sym, exc_info=True)
 
     return results

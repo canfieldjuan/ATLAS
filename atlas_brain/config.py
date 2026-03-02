@@ -7,8 +7,44 @@ Configuration is loaded from environment variables with sensible defaults.
 from pathlib import Path
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class SaaSAuthConfig(BaseSettings):
+    """SaaS authentication and billing configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="ATLAS_SAAS_")
+
+    enabled: bool = Field(default=False, description="Enable SaaS auth (when off, dashboard works without auth)")
+    jwt_secret: str = Field(default="change-me-in-production", description="JWT signing secret")
+    jwt_algorithm: str = Field(default="HS256", description="JWT algorithm")
+    jwt_expiry_hours: int = Field(default=24, description="Access token expiry in hours")
+    jwt_refresh_expiry_days: int = Field(default=30, description="Refresh token expiry in days")
+    trial_days: int = Field(default=14, description="Trial period length in days")
+
+    # Stripe
+    stripe_secret_key: str = Field(default="", description="Stripe secret API key")
+    stripe_webhook_secret: str = Field(default="", description="Stripe webhook signing secret")
+    stripe_starter_price_id: str = Field(default="", description="Stripe Price ID for Starter plan")
+    stripe_growth_price_id: str = Field(default="", description="Stripe Price ID for Growth plan")
+    stripe_pro_price_id: str = Field(default="", description="Stripe Price ID for Pro plan")
+    stripe_b2b_starter_price_id: str = Field(default="", description="Stripe Price ID for B2B Starter plan")
+    stripe_b2b_growth_price_id: str = Field(default="", description="Stripe Price ID for B2B Growth plan")
+    stripe_b2b_pro_price_id: str = Field(default="", description="Stripe Price ID for B2B Pro plan")
+
+    @model_validator(mode="after")
+    def _validate_secrets(self):
+        if self.enabled and self.jwt_secret == "change-me-in-production":
+            raise ValueError("ATLAS_SAAS_JWT_SECRET must be set when SaaS auth is enabled")
+        if self.stripe_secret_key and not self.stripe_webhook_secret:
+            import warnings
+            warnings.warn(
+                "ATLAS_SAAS_STRIPE_WEBHOOK_SECRET is empty while Stripe is configured. "
+                "Stripe webhook endpoint will return 503 until this is set.",
+                stacklevel=2,
+            )
+        return self
 
 
 class STTConfig(BaseSettings):
@@ -76,6 +112,10 @@ class LLMConfig(BaseSettings):
     ollama_model: str = Field(default="qwen3:14b", description="Ollama model name")
     ollama_url: str = Field(default="http://localhost:11434", description="Ollama API URL (override: ATLAS_LLM__OLLAMA_URL)")
     ollama_timeout: int = Field(default=120, description="Ollama HTTP timeout in seconds (increase for cloud relay models)")
+
+    # vllm settings (OpenAI-compatible vLLM server)
+    vllm_model: str = Field(default="Qwen/Qwen3-14B-AWQ", description="vLLM model name")
+    vllm_url: str = Field(default="http://localhost:8082", description="vLLM API base URL")
 
     # transformers-flash settings (HuggingFace models)
     hf_model_id: str = Field(
@@ -2003,12 +2043,12 @@ class B2BChurnConfig(BaseSettings):
     enrichment_interval_seconds: int = Field(default=300, description="Enrichment polling interval")
     enrichment_max_per_batch: int = Field(default=10, description="Max reviews to enrich per batch")
     enrichment_max_attempts: int = Field(default=3, description="Max enrichment attempts")
-    enrichment_max_tokens: int = Field(default=1024, description="Max LLM output tokens")
+    enrichment_max_tokens: int = Field(default=2048, description="Max LLM output tokens")
     enrichment_local_only: bool = Field(default=False, description="Force local LLM only")
 
     # Intelligence aggregation
     intelligence_enabled: bool = Field(default=True, description="Enable churn intelligence aggregation")
-    intelligence_cron: str = Field(default="0 21 * * 0", description="Weekly churn intelligence (Sunday 9 PM)")
+    intelligence_cron: str = Field(default="0 21 * * *", description="Daily churn intelligence (9 PM)")
     intelligence_max_tokens: int = Field(default=16384, description="Max tokens for intelligence LLM call")
     intelligence_window_days: int = Field(default=30, description="Days of enriched reviews to analyze")
     intelligence_min_reviews: int = Field(default=3, description="Min reviews per vendor to include")
@@ -2017,11 +2057,35 @@ class B2BChurnConfig(BaseSettings):
     high_churn_urgency_threshold: int = Field(default=7, description="Urgency score >= this = high churn risk")
     enterprise_only: bool = Field(default=False, description="Only include enterprise-segment reviews")
 
+    # Aggregation thresholds
+    negative_review_threshold: float = Field(default=0.5, description="Rating ratio below this is negative")
+    feature_gap_min_mentions: int = Field(default=2, description="Min mentions to include a feature gap")
+    quotable_phrase_min_urgency: float = Field(default=6, description="Min urgency for quotable phrases")
+    timeline_signals_limit: int = Field(default=50, description="Max timeline signal rows per run")
+    prior_reports_limit: int = Field(default=4, description="Prior reports for trend comparison")
+
+    # Enrichment tuning
+    review_truncate_length: int = Field(default=3000, description="Max review text length before truncation")
+
     # Customer context enrichment
     context_enrichment_enabled: bool = Field(
         default=True,
         description="Include B2B churn signals in customer context lookups",
     )
+
+
+class B2BAlertConfig(BaseSettings):
+    """B2B churn signal spike alert configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_B2B_ALERT_", env_file=".env", extra="ignore"
+    )
+
+    enabled: bool = Field(default=False, description="Enable churn signal spike alerts")
+    signal_count_threshold: int = Field(default=3, description="New signals to trigger alert")
+    urgency_spike_threshold: float = Field(default=1.5, description="Avg urgency increase to trigger alert")
+    cooldown_hours: int = Field(default=24, description="Min hours between alerts for same vendor")
+    interval_seconds: int = Field(default=3600, description="Alert check interval (1 hour)")
 
 
 class B2BScrapeConfig(BaseSettings):
@@ -2048,6 +2112,12 @@ class B2BScrapeConfig(BaseSettings):
     trustradius_rpm: int = Field(default=10, description="TrustRadius requests per minute")
     reddit_rpm: int = Field(default=30, description="Reddit requests per minute")
 
+    # Phase 1 API sources
+    hackernews_rpm: int = Field(default=100, description="HN Algolia requests per minute")
+    github_rpm: int = Field(default=25, description="GitHub API requests per minute")
+    rss_rpm: int = Field(default=10, description="RSS feed requests per minute")
+    github_token: str = Field(default="", description="GitHub personal access token for higher rate limits")
+
     # Behavioral delays
     min_delay_seconds: float = Field(default=2.0, description="Min delay between requests")
     max_delay_seconds: float = Field(default=8.0, description="Max delay between requests")
@@ -2071,6 +2141,117 @@ class B2BScrapeConfig(BaseSettings):
     captcha_proxy_url: str = Field(default="", description="Sticky/static proxy URL for CAPTCHA solving (same IP for solve + retry)")
     captcha_2captcha_api_key: str = Field(default="", description="2Captcha API key (used as fallback or per-domain override)")
     captcha_2captcha_domains: str = Field(default="", description="Domains that should use 2Captcha instead of primary provider (comma-separated)")
+
+    # Relevance filtering (social media noise reduction)
+    relevance_filter_enabled: bool = Field(default=True, description="Enable relevance filtering for social media sources")
+    relevance_threshold: float = Field(default=0.55, description="Min relevance score (0.0-1.0) for social media posts")
+
+
+class B2BCampaignConfig(BaseSettings):
+    """B2B ABM campaign generation configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_B2B_CAMPAIGN_", env_file=".env", extra="ignore",
+    )
+
+    enabled: bool = Field(default=False, description="Enable B2B campaign engine")
+    min_opportunity_score: int = Field(default=70, ge=0, le=100, description="Min opportunity score to target")
+    require_decision_maker: bool = Field(default=True, description="Only target decision makers")
+    max_campaigns_per_run: int = Field(default=20, ge=1, description="Max campaigns per generation run")
+    channels: list[str] = Field(
+        default=["email_cold", "linkedin", "email_followup"],
+        description="Channels to generate content for",
+    )
+    schedule_cron: str = Field(default="0 22 * * *", description="Campaign generation schedule (daily 10 PM)")
+    dedup_days: int = Field(default=7, ge=1, description="Days before re-targeting same company")
+    retention_days: int = Field(default=90, ge=1, description="Days to retain expired/sent campaigns before cleanup")
+    max_tokens: int = Field(default=2048, description="Max tokens per LLM generation call")
+    temperature: float = Field(default=0.7, description="LLM sampling temperature")
+    default_sender_name: str = Field(default="", description="Sender name for outreach")
+    default_sender_company: str = Field(default="", description="Sender company name for outreach")
+    default_booking_url: str = Field(default="", description="Default booking/calendar URL for outreach CTAs")
+    target_mode: str = Field(
+        default="vendor_retention",
+        description="Campaign target mode: vendor_retention | challenger_intel | churning_company",
+    )
+
+
+class CampaignSequenceConfig(BaseSettings):
+    """B2B campaign email sequence configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_CAMPAIGN_SEQ_", env_file=".env", extra="ignore",
+    )
+
+    enabled: bool = Field(default=False, description="Enable stateful campaign sequences")
+    max_steps: int = Field(default=4, ge=2, le=8, description="Max emails per sequence")
+    step_delay_days: list[int] = Field(
+        default=[3, 5, 7],
+        description="Days between steps 1->2, 2->3, 3->4",
+    )
+    auto_send_enabled: bool = Field(
+        default=False, description="Auto-send queued campaign emails after cancel window"
+    )
+    auto_send_delay_seconds: int = Field(
+        default=300, ge=60, description="Cancel window before auto-send (seconds)"
+    )
+    check_interval_seconds: int = Field(
+        default=3600, ge=600, description="How often to check for due sequence steps"
+    )
+    resend_api_key: str = Field(default="", description="Resend ESP API key")
+    resend_from_email: str = Field(default="", description="Resend sender email address")
+    resend_webhook_signing_secret: str = Field(
+        default="", description="Resend webhook signature verification secret"
+    )
+
+    # Smart send scheduling
+    send_window_start: str = Field(default="09:00", description="Earliest send time (HH:MM)")
+    send_window_end: str = Field(default="17:00", description="Latest send time (HH:MM)")
+    send_timezone: str = Field(default="America/Chicago", description="Timezone for send window")
+    skip_weekends: bool = Field(default=True, description="Don't send on Sat/Sun")
+
+    @field_validator("send_window_start", "send_window_end", mode="after")
+    @classmethod
+    def _validate_hhmm(cls, v: str) -> str:
+        import re
+        if not re.match(r"^\d{2}:\d{2}$", v):
+            raise ValueError(f"Must be HH:MM format, got '{v}'")
+        h, m = int(v[:2]), int(v[3:])
+        if not (0 <= h <= 23 and 0 <= m <= 59):
+            raise ValueError(f"Invalid time '{v}': hour 0-23, minute 0-59")
+        return v
+
+    @field_validator("send_timezone", mode="after")
+    @classmethod
+    def _validate_tz(cls, v: str) -> str:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(v)
+        return v
+
+
+class AmazonSellerCampaignConfig(BaseSettings):
+    """Amazon Seller Intelligence campaign outreach configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_SELLER_CAMPAIGN_", env_file=".env", extra="ignore",
+    )
+
+    enabled: bool = Field(default=False, description="Enable Amazon seller campaign engine")
+    max_campaigns_per_run: int = Field(default=10, ge=1, description="Max categories to generate campaigns for per run")
+    channels: list[str] = Field(
+        default=["email_cold", "email_followup"],
+        description="Channels to generate content for",
+    )
+    schedule_cron: str = Field(default="0 21 * * *", description="Campaign generation schedule (daily 9 PM)")
+    dedup_days: int = Field(default=14, ge=1, description="Days before re-targeting same seller+category")
+    min_reviews_per_category: int = Field(default=50, ge=10, description="Min reviews in category before generating campaigns")
+    max_tokens: int = Field(default=2048, description="Max tokens per LLM generation call")
+    temperature: float = Field(default=0.7, description="LLM sampling temperature")
+    default_sender_name: str = Field(default="", description="Sender name for outreach")
+    default_sender_title: str = Field(default="", description="Sender title for outreach")
+    product_name: str = Field(default="Atlas Seller Intelligence", description="Product name used in outreach")
+    landing_url: str = Field(default="", description="Dashboard landing page URL")
+    free_report_url: str = Field(default="", description="Free category report URL template")
 
 
 class TemporalPatternConfig(BaseSettings):
@@ -2513,12 +2694,17 @@ class Settings(BaseSettings):
     invoicing: InvoicingConfig = Field(default_factory=InvoicingConfig)
     external_data: ExternalDataConfig = Field(default_factory=ExternalDataConfig)
     b2b_churn: B2BChurnConfig = Field(default_factory=B2BChurnConfig)
+    b2b_alert: B2BAlertConfig = Field(default_factory=B2BAlertConfig)
     b2b_scrape: B2BScrapeConfig = Field(default_factory=B2BScrapeConfig)
+    b2b_campaign: B2BCampaignConfig = Field(default_factory=B2BCampaignConfig)
+    campaign_sequence: CampaignSequenceConfig = Field(default_factory=CampaignSequenceConfig)
+    seller_campaign: AmazonSellerCampaignConfig = Field(default_factory=AmazonSellerCampaignConfig)
     openai_compat: OpenAICompatConfig = Field(default_factory=OpenAICompatConfig)
     ftl_tracing: FTLTracingConfig = Field(default_factory=FTLTracingConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     alert_monitor: AlertMonitorConfig = Field(default_factory=AlertMonitorConfig)
     news_intel: NewsIntelligenceConfig = Field(default_factory=NewsIntelligenceConfig)
+    saas_auth: SaaSAuthConfig = Field(default_factory=SaaSAuthConfig)
 
     # Reasoning agent (cross-domain event-driven intelligence)
     @staticmethod

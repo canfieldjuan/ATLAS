@@ -7,7 +7,7 @@ Sessions are daily - a new session is created each day for each user.
 
 import json
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 
@@ -44,7 +44,7 @@ class SessionRepository:
         """
         pool = get_db_pool()
         session_id = uuid4()
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         today = date.today()
         metadata_json = json.dumps(metadata or {})
 
@@ -190,7 +190,7 @@ class SessionRepository:
             """,
             session_id,
             terminal_id,
-            datetime.utcnow(),
+            datetime.now(timezone.utc),
         )
         logger.debug("Updated session %s terminal to %s", session_id, terminal_id)
 
@@ -200,7 +200,7 @@ class SessionRepository:
         await pool.execute(
             "UPDATE sessions SET last_activity_at = $2 WHERE id = $1",
             session_id,
-            datetime.utcnow(),
+            datetime.now(timezone.utc),
         )
 
     async def update_metadata(
@@ -232,7 +232,7 @@ class SessionRepository:
             """,
             session_id,
             updates_json,
-            datetime.utcnow(),
+            datetime.now(timezone.utc),
         )
         updated = result and "UPDATE 1" in result
         if updated:
@@ -260,7 +260,7 @@ class SessionRepository:
             """,
             session_id,
             key,
-            datetime.utcnow(),
+            datetime.now(timezone.utc),
         )
         updated = result and "UPDATE 1" in result
         if updated:
@@ -273,7 +273,7 @@ class SessionRepository:
         await pool.execute(
             "UPDATE sessions SET is_active = false, last_activity_at = $2 WHERE id = $1",
             session_id,
-            datetime.utcnow(),
+            datetime.now(timezone.utc),
         )
         logger.info("Closed session %s", session_id)
 
@@ -287,14 +287,18 @@ class SessionRepository:
             WHERE user_id = $1 AND is_active = true
             """,
             user_id,
-            datetime.utcnow(),
+            datetime.now(timezone.utc),
         )
-        count = int(result.split()[-1]) if result else 0
+        try:
+            count = int(result.split()[-1]) if result else 0
+        except (ValueError, IndexError):
+            count = 0
         logger.info("Closed %d sessions for user %s", count, user_id)
         return count
 
     async def list_active_sessions(self, limit: int = 100) -> list[Session]:
         """List all active sessions."""
+        limit = min(limit, 500)
         pool = get_db_pool()
         rows = await pool.fetch(
             """

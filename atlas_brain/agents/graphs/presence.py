@@ -55,7 +55,7 @@ async def tool_get_presence_context(user_id: str = "primary") -> dict[str, Any]:
             return {"success": False, "error": "Could not determine location"}
         except Exception as e:
             logger.error("Presence error: %s", e)
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": "Operation failed"}
     else:
         return {
             "success": True,
@@ -79,7 +79,7 @@ async def tool_get_devices_near_user(
             return {"success": True, "devices": devices}
         except Exception as e:
             logger.error("Device lookup error: %s", e)
-            return {"success": False, "error": str(e), "devices": []}
+            return {"success": False, "error": "Operation failed", "devices": []}
     else:
         mock_devices = {
             "lights": ["light.living_room_main", "light.living_room_lamp"],
@@ -128,7 +128,7 @@ async def tool_control_lights(
             return {"success": True, "action": action, "entities": entity_ids}
         except Exception as e:
             logger.error("Light control error: %s", e)
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": "Operation failed"}
     else:
         return {"success": True, "action": action, "entities": entity_ids}
 
@@ -167,7 +167,7 @@ async def tool_control_media(
             return {"success": True, "action": action, "entities": entity_ids}
         except Exception as e:
             logger.error("Media control error: %s", e)
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": "Operation failed"}
     else:
         return {"success": True, "action": action, "entities": entity_ids}
 
@@ -217,7 +217,7 @@ async def tool_set_scene(
             return {"success": True, "scene": scene_name, "entities": entity_ids}
         except Exception as e:
             logger.error("Scene control error: %s", e)
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": "Operation failed"}
     else:
         return {"success": True, "scene": scene_name, "entities": entity_ids}
 

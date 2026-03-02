@@ -172,8 +172,9 @@ class DeviceResolver:
 
             for cap in caps:
                 aliases = _generate_aliases(cap.name)
-                embeddings = await loop.run_in_executor(
-                    None, embedder.embed_batch, aliases,
+                embeddings = await asyncio.wait_for(
+                    loop.run_in_executor(None, embedder.embed_batch, aliases),
+                    timeout=10.0,
                 )
                 # Centroid = mean of normalized alias embeddings, re-normalized
                 centroid = embeddings.mean(axis=0)
@@ -242,7 +243,10 @@ class DeviceResolver:
 
         # 5. Embed query and find best match
         loop = asyncio.get_running_loop()
-        query_vec = await loop.run_in_executor(None, embedder.embed, query)
+        query_vec = await asyncio.wait_for(
+            loop.run_in_executor(None, embedder.embed, query),
+            timeout=10.0,
+        )
 
         scores = []
         for cap_id, centroid in self._device_centroids.items():

@@ -1,5 +1,9 @@
 """
-Parallel complaint enrichment blaster.
+Parallel review enrichment blaster (complaints + praise).
+
+Routes reviews by rating:
+  - 1-3 stars -> complaint_classification skill
+  - 4-5 stars -> praise_classification skill
 
 Runs N concurrent workers. Each worker:
   1. Claims a batch (UPDATE ... SET enrichment_status='processing' ... SKIP LOCKED)
@@ -38,11 +42,16 @@ _failed = 0
 _lock = asyncio.Lock()
 
 
+def _skill_for_rating(rating: float) -> str:
+    """Return 'complaint' or 'praise' based on review rating."""
+    return "complaint" if rating <= 3.0 else "praise"
+
+
 async def worker(
     worker_id: int,
     pool,
     llm,
-    skill_content: str,
+    skills: dict[str, str],  # {"complaint": content, "praise": content}
     batch_size: int,
     max_attempts: int,
     reviews_per_call: int,
@@ -76,42 +85,50 @@ async def worker(
         if not rows:
             return  # Nothing left
 
-        # Step 2: Classify outside transaction (slow LLM calls, no locks)
-        for i in range(0, len(rows), reviews_per_call):
-            chunk = rows[i:i + reviews_per_call]
+        # Step 2: Group by skill type so batch calls use the same prompt
+        complaint_rows = [r for r in rows if r["rating"] <= 3.0]
+        praise_rows = [r for r in rows if r["rating"] > 3.0]
 
-            classifications = None
-            if len(chunk) > 1:
-                classifications = await asyncio.to_thread(
-                    _classify_batch, llm, skill_content, chunk, max_tokens_batch_mult
-                )
+        for skill_key, group in [("complaint", complaint_rows), ("praise", praise_rows)]:
+            if not group:
+                continue
+            skill_content = skills[skill_key]
 
-            if classifications and len(classifications) == len(chunk):
-                for row, cls in zip(chunk, classifications):
-                    if cls and cls.get("root_cause"):
-                        await _apply(pool, row, cls)
-                        async with _lock:
-                            _enriched += 1
-                    else:
-                        await _mark_failed_or_retry(pool, row, max_attempts)
-                        if row["enrichment_attempts"] + 1 >= max_attempts:
-                            async with _lock:
-                                _failed += 1
-            else:
-                # Single fallback (or single mode)
-                for row in chunk:
-                    cls = await asyncio.to_thread(
-                        _classify_single, llm, skill_content, row, max_tokens_single
+            for i in range(0, len(group), reviews_per_call):
+                chunk = group[i:i + reviews_per_call]
+
+                classifications = None
+                if len(chunk) > 1:
+                    classifications = await asyncio.to_thread(
+                        _classify_batch, llm, skill_content, chunk, max_tokens_batch_mult
                     )
-                    if cls:
-                        await _apply(pool, row, cls)
-                        async with _lock:
-                            _enriched += 1
-                    else:
-                        await _mark_failed_or_retry(pool, row, max_attempts)
-                        if row["enrichment_attempts"] + 1 >= max_attempts:
+
+                if classifications and len(classifications) == len(chunk):
+                    for row, cls in zip(chunk, classifications):
+                        if cls and cls.get("root_cause"):
+                            await _apply(pool, row, cls)
                             async with _lock:
-                                _failed += 1
+                                _enriched += 1
+                        else:
+                            await _mark_failed_or_retry(pool, row, max_attempts)
+                            if row["enrichment_attempts"] + 1 >= max_attempts:
+                                async with _lock:
+                                    _failed += 1
+                else:
+                    # Single fallback (or single mode)
+                    for row in chunk:
+                        cls = await asyncio.to_thread(
+                            _classify_single, llm, skill_content, row, max_tokens_single
+                        )
+                        if cls:
+                            await _apply(pool, row, cls)
+                            async with _lock:
+                                _enriched += 1
+                        else:
+                            await _mark_failed_or_retry(pool, row, max_attempts)
+                            if row["enrichment_attempts"] + 1 >= max_attempts:
+                                async with _lock:
+                                    _failed += 1
 
 
 async def _apply(pool, row, classification: dict) -> None:
@@ -285,8 +302,8 @@ async def main():
     parser.add_argument("--reviews-per-call", type=int, default=10)
     parser.add_argument("--max-attempts", type=int, default=3)
     parser.add_argument("--model", type=str, default=None, help="Model name (e.g. qwen3:14b, anthropic/claude-haiku)")
-    parser.add_argument("--provider", type=str, default="ollama", choices=["ollama", "openrouter", "groq", "together"],
-                        help="LLM provider (default: ollama)")
+    parser.add_argument("--provider", type=str, default="vllm", choices=["vllm", "ollama", "openrouter", "groq", "together"],
+                        help="LLM provider (default: vllm)")
     parser.add_argument("--api-key", type=str, default=None, help="API key override (reads env var by default)")
     parser.add_argument("--max-tokens-single", type=int, default=256, help="Max tokens for single-review calls")
     parser.add_argument("--max-tokens-batch-mult", type=int, default=300, help="Tokens per review in batch calls")
@@ -301,7 +318,11 @@ async def main():
     await pool.initialize()
 
     provider = args.provider
-    if provider == "ollama":
+    if provider == "vllm":
+        model = args.model or "stelterlab/Qwen3-30B-A3B-Instruct-2507-AWQ"
+        base_url = "http://localhost:8082"
+        llm_registry.activate("vllm", model=model, base_url=base_url)
+    elif provider == "ollama":
         model = args.model or settings.llm.ollama_model
         llm_registry.activate("ollama", model=model, base_url=settings.llm.ollama_url)
     elif provider == "openrouter":
@@ -328,10 +349,19 @@ async def main():
         print("ERROR: No LLM available")
         return
 
-    skill = get_skill_registry().get("digest/complaint_classification")
-    if not skill:
+    complaint_skill = get_skill_registry().get("digest/complaint_classification")
+    praise_skill = get_skill_registry().get("digest/praise_classification")
+    if not complaint_skill:
         print("ERROR: complaint_classification skill not found")
         return
+    if not praise_skill:
+        print("ERROR: praise_classification skill not found")
+        return
+
+    skills = {
+        "complaint": complaint_skill.content,
+        "praise": praise_skill.content,
+    }
 
     row = await pool.fetchrow(
         "SELECT count(*) FILTER (WHERE enrichment_status = 'enriched') AS done, "
@@ -357,7 +387,7 @@ async def main():
 
     workers = [
         asyncio.create_task(
-            worker(i, pool, llm, skill.content, args.batch,
+            worker(i, pool, llm, skills, args.batch,
                    args.max_attempts, args.reviews_per_call,
                    args.max_tokens_single, args.max_tokens_batch_mult)
         )

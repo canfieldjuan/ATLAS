@@ -1,7 +1,7 @@
 """
 B2B review scrape intake: poll configured scrape targets, fetch reviews
-from G2, Capterra, TrustRadius, and Reddit, and insert into b2b_reviews
-for automatic enrichment pickup.
+from G2, Capterra, TrustRadius, Reddit, HackerNews, GitHub, and RSS feeds,
+and insert into b2b_reviews for automatic enrichment pickup.
 
 Runs as an autonomous task on a configurable interval (default 1 hour).
 """
@@ -133,6 +133,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # Import here to avoid circular imports and lazy-load curl_cffi
     from ...services.scraping.client import get_scrape_client
     from ...services.scraping.parsers import ScrapeTarget, get_parser
+    from ...services.scraping.relevance import STRUCTURED_SOURCES, filter_reviews
 
     client = get_scrape_client()
 
@@ -152,6 +153,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     for row in targets:
         raw_meta = row["metadata"] or "{}"
+        if isinstance(raw_meta, str):
+            try:
+                raw_meta = json.loads(raw_meta)
+            except (json.JSONDecodeError, TypeError):
+                logger.warning("Malformed metadata JSON for target %s, defaulting to empty", row["id"])
+                raw_meta = {}
         target = ScrapeTarget(
             id=str(row["id"]),
             source=row["source"],
@@ -160,7 +167,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             product_slug=row["product_slug"],
             product_category=row["product_category"],
             max_pages=row["max_pages"],
-            metadata=json.loads(raw_meta) if isinstance(raw_meta, str) else raw_meta,
+            metadata=raw_meta if isinstance(raw_meta, dict) else {},
         )
 
         parser = get_parser(target.source)
@@ -198,6 +205,22 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             })
             continue
 
+        # Relevance filter: drop noise from social media sources
+        filtered_count = 0
+        if (cfg.relevance_filter_enabled
+                and target.source not in STRUCTURED_SOURCES
+                and result.reviews):
+            original_count = len(result.reviews)
+            result.reviews, filtered_count = filter_reviews(
+                result.reviews, target.vendor_name, cfg.relevance_threshold,
+            )
+            if filtered_count:
+                logger.info(
+                    "Relevance filter: kept %d/%d for %s/%s",
+                    len(result.reviews), original_count,
+                    target.source, target.vendor_name,
+                )
+
         # Insert reviews
         inserted = 0
         if result.reviews:
@@ -230,14 +253,17 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 )
 
         duration_ms = int((time.monotonic() - started_at) * 1000)
-        total_reviews += len(result.reviews)
+        total_reviews += len(result.reviews) + filtered_count
         total_inserted += inserted
 
         # Log to b2b_scrape_log
+        scrape_errors = list(result.errors)
+        if filtered_count:
+            scrape_errors.append(f"relevance_filtered={filtered_count}")
         await _log_scrape(
             pool, target, result.status,
-            len(result.reviews), inserted, result.pages_scraped,
-            result.errors, duration_ms, parser,
+            len(result.reviews) + filtered_count, inserted, result.pages_scraped,
+            scrape_errors, duration_ms, parser,
         )
 
         # Update target status
@@ -255,8 +281,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             "source": target.source,
             "vendor": target.vendor_name,
             "status": result.status,
-            "found": len(result.reviews),
+            "found": len(result.reviews) + filtered_count,
             "inserted": inserted,
+            "filtered": filtered_count,
             "pages": result.pages_scraped,
         })
 
@@ -355,4 +382,4 @@ async def _log_scrape(
             proxy_type,
         )
     except Exception:
-        logger.debug("Failed to log scrape result", exc_info=True)
+        logger.warning("Failed to log scrape result", exc_info=True)

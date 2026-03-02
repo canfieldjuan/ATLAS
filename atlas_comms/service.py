@@ -10,7 +10,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional, Callable, Awaitable
 
-from .core.config import comms_settings, BusinessContext, EFFINGHAM_MAIDS_CONTEXT
+from .core.config import comms_settings, BusinessContext, load_autoload_contexts
 from .context import get_context_router, ContextRouter
 from .core.protocols import (
     TelephonyProvider,
@@ -112,14 +112,18 @@ class CommsService:
     async def _register_contexts(self) -> None:
         """Register business contexts from configuration and database."""
         router = self.context_router
+        registered_ids = {context.id for context in router.list_contexts()}
 
-        # Always register the hardcoded Effingham context as baseline
-        if EFFINGHAM_MAIDS_CONTEXT.phone_numbers:
-            router.register_context(EFFINGHAM_MAIDS_CONTEXT)
+        # Register built-in contexts selected via ATLAS_COMMS_AUTOLOAD_CONTEXT_IDS.
+        for configured_context in load_autoload_contexts():
+            if configured_context.id in registered_ids:
+                continue
+            router.register_context(configured_context)
+            registered_ids.add(configured_context.id)
             logger.info(
-                "Registered context: %s with numbers %s",
-                EFFINGHAM_MAIDS_CONTEXT.id,
-                EFFINGHAM_MAIDS_CONTEXT.phone_numbers,
+                "Registered configured context: %s with numbers %s",
+                configured_context.id,
+                configured_context.phone_numbers,
             )
 
         # Load additional contexts from database (fail-open)
@@ -133,8 +137,8 @@ class CommsService:
             rows = await repo.list_enabled()
 
             for row in rows:
-                # Skip if already registered via hardcoded config
-                if row["id"] == EFFINGHAM_MAIDS_CONTEXT.id:
+                # Skip if already registered from startup configuration.
+                if row["id"] in registered_ids:
                     continue
 
                 ctx = BusinessContext(
@@ -182,6 +186,7 @@ class CommsService:
                     sms_auto_reply=row.get("sms_auto_reply", True),
                 )
                 router.register_context(ctx)
+                registered_ids.add(ctx.id)
                 logger.info(
                     "Registered DB context: %s with numbers %s",
                     ctx.id,

@@ -293,11 +293,11 @@ async def book_appointment(transcript_id: UUID):
         end_dt = start_dt + timedelta(hours=1)
 
         result = await calendar_tool.create_event(
-            summary=summary,
+            summary=summary[:256],
             start=start_dt,
             end=end_dt,
-            location=address or None,
-            description=description,
+            location=(address or None) and address[:500],
+            description=description[:4000],
             calendar_id=calendar_id,
         )
         logger.info("Calendar event created for transcript %s: %s", transcript_id, result)
@@ -310,8 +310,8 @@ async def book_appointment(transcript_id: UUID):
         return JSONResponse({"status": "ok", "event": result.data if result.success else result.message})
 
     except Exception as e:
-        logger.error("Failed to book appointment for %s: %s", transcript_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to book appointment for %s: %s", transcript_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to book appointment")
 
 
 @router.post("/{transcript_id}/sms")
@@ -339,10 +339,13 @@ async def send_sms(transcript_id: UUID):
         from ...comms import get_comms_service
         svc = get_comms_service()
         from_number = record.get("to_number", "")
-        msg = await svc.provider.send_sms(
-            to_number=to_number,
-            from_number=from_number,
-            body=body,
+        msg = await asyncio.wait_for(
+            svc.provider.send_sms(
+                to_number=to_number,
+                from_number=from_number,
+                body=body,
+            ),
+            timeout=30.0,
         )
         logger.info("SMS sent to %s for transcript %s", to_number, transcript_id)
 
@@ -367,8 +370,8 @@ async def send_sms(transcript_id: UUID):
         return JSONResponse({"status": "ok", "message_sid": msg.provider_message_id})
 
     except Exception as e:
-        logger.error("Failed to send SMS for %s: %s", transcript_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to send SMS for %s: %s", transcript_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to send SMS")
 
 
 @router.get("/{transcript_id}/view")
@@ -453,8 +456,8 @@ async def draft_email(transcript_id: UUID):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Failed to draft email for %s: %s", transcript_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to draft email for %s: %s", transcript_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to draft email")
 
 
 @router.post("/{transcript_id}/draft-sms")
@@ -479,8 +482,8 @@ async def draft_sms_confirmation(transcript_id: UUID):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Failed to draft SMS for %s: %s", transcript_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to draft SMS for %s: %s", transcript_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to draft SMS")
 
 
 @router.post("/{transcript_id}/send-email")
@@ -510,7 +513,7 @@ async def send_drafted_email(transcript_id: UUID):
         from ...comms import get_email_service, EmailMessage
         svc = get_email_service()
         msg = EmailMessage(to=to_email, subject=subject, body_text=body)
-        sent = await svc.send_email(msg)
+        sent = await asyncio.wait_for(svc.send_email(msg), timeout=30.0)
         if not sent:
             raise HTTPException(status_code=500, detail="Email service returned failure")
         logger.info("Drafted email sent to %s for transcript %s", to_email, transcript_id)
@@ -518,8 +521,8 @@ async def send_drafted_email(transcript_id: UUID):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Failed to send email for %s: %s", transcript_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to send email for %s: %s", transcript_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to send email")
 
 
 @router.post("/{transcript_id}/send-sms")
@@ -541,10 +544,13 @@ async def send_drafted_sms(transcript_id: UUID):
     try:
         from ...comms import get_comms_service
         svc = get_comms_service()
-        msg = await svc.provider.send_sms(
-            to_number=to_number,
-            from_number=from_number,
-            body=body,
+        msg = await asyncio.wait_for(
+            svc.provider.send_sms(
+                to_number=to_number,
+                from_number=from_number,
+                body=body,
+            ),
+            timeout=30.0,
         )
         logger.info("Drafted SMS sent to %s for transcript %s", to_number, transcript_id)
 
@@ -568,8 +574,8 @@ async def send_drafted_sms(transcript_id: UUID):
 
         return JSONResponse({"status": "ok", "message_sid": msg.provider_message_id})
     except Exception as e:
-        logger.error("Failed to send SMS for %s: %s", transcript_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to send SMS for %s: %s", transcript_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to send SMS")
 
 
 @router.post("/{transcript_id}/approve-plan")
@@ -797,7 +803,7 @@ async def _exec_email(
     from ...comms import get_email_service, EmailMessage
     svc = get_email_service()
     msg = EmailMessage(to=to_email, subject=subject, body_text=body)
-    sent = await svc.send_email(msg)
+    sent = await asyncio.wait_for(svc.send_email(msg), timeout=30.0)
     if not sent:
         return "Email send failed"
     return f"Email sent to {to_email}"
@@ -822,8 +828,11 @@ async def _exec_sms(
     from ...comms import get_comms_service
     svc = get_comms_service()
     from_number = record.get("to_number", "")
-    msg = await svc.provider.send_sms(
-        to_number=to_number, from_number=from_number, body=content,
+    msg = await asyncio.wait_for(
+        svc.provider.send_sms(
+            to_number=to_number, from_number=from_number, body=content,
+        ),
+        timeout=30.0,
     )
     return f"SMS sent to {to_number}"
 

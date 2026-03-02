@@ -33,6 +33,13 @@ _BUILTIN_TASKS = [
     ("reasoning_reflection", "run", "reasoning_reflection"),
     ("weather_traffic_alerts", "run", "weather_traffic_alerts"),
     ("news_intelligence", "run", "news_intelligence"),
+    ("b2b_campaign_generation", "run", "b2b_campaign_generation"),
+    ("campaign_sequence_progression", "run", "campaign_sequence_progression"),
+    ("campaign_send", "run", "campaign_send"),
+    ("campaign_analytics_refresh", "run", "campaign_analytics_refresh"),
+    ("amazon_seller_campaign_generation", "run", "amazon_seller_campaign_generation"),
+    ("b2b_churn_alert", "run", "b2b_churn_alert"),
+    ("b2b_tenant_report", "run", "b2b_tenant_report"),
 ]
 
 

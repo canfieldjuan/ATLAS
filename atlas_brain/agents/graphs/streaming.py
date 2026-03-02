@@ -82,7 +82,7 @@ class StreamingCallbackHandler(AsyncCallbackHandler):
             StreamingToken(
                 token="",
                 is_final=True,
-                metadata={"error": str(error)},
+                metadata={"error": type(error).__name__},
             )
         )
 

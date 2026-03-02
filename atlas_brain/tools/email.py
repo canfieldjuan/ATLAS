@@ -356,7 +356,7 @@ class EmailTool:
             return ToolResult(
                 success=False,
                 error="EXECUTION_ERROR",
-                message=str(e),
+                message="Email operation failed.",
             )
 
     async def _send_email(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -824,7 +824,7 @@ class QueryEmailHistoryTool:
             emails = await repo.query(
                 template_type=template_type,
                 since=since,
-                limit=int(limit),
+                limit=min(int(limit), 200),
             )
 
             email_list = [e.to_dict() for e in emails]
@@ -846,7 +846,7 @@ class QueryEmailHistoryTool:
             return ToolResult(
                 success=False,
                 error="QUERY_ERROR",
-                message=f"Failed to query email history: {e}",
+                message="Failed to query email history.",
             )
 
 

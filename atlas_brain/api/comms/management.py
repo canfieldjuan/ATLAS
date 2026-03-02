@@ -37,9 +37,9 @@ router = APIRouter()
 
 class MakeCallRequest(BaseModel):
     """Request to make an outbound call."""
-    to_number: str = Field(..., description="Phone number to call (E.164 format)")
-    from_number: Optional[str] = Field(None, description="Caller ID number")
-    context_id: Optional[str] = Field(None, description="Business context ID")
+    to_number: str = Field(..., max_length=20, description="Phone number to call (E.164 format)")
+    from_number: Optional[str] = Field(None, max_length=20, description="Caller ID number")
+    context_id: Optional[str] = Field(None, max_length=100, description="Business context ID")
 
 
 class MakeCallResponse(BaseModel):
@@ -53,11 +53,11 @@ class MakeCallResponse(BaseModel):
 
 class SendSMSRequest(BaseModel):
     """Request to send an SMS."""
-    to_number: str = Field(..., description="Phone number (E.164 format)")
-    from_number: Optional[str] = Field(None, description="Sender number")
-    body: str = Field(..., description="Message text")
-    media_urls: Optional[list[str]] = Field(None, description="MMS attachment URLs")
-    context_id: Optional[str] = Field(None, description="Business context ID")
+    to_number: str = Field(..., max_length=20, description="Phone number (E.164 format)")
+    from_number: Optional[str] = Field(None, max_length=20, description="Sender number")
+    body: str = Field(..., max_length=1600, description="Message text")
+    media_urls: Optional[list[str]] = Field(None, max_length=10, description="MMS attachment URLs")
+    context_id: Optional[str] = Field(None, max_length=100, description="Business context ID")
 
 
 class SendSMSResponse(BaseModel):
@@ -73,7 +73,7 @@ class AvailabilityRequest(BaseModel):
     context_id: str = Field(..., description="Business context ID")
     date: Optional[str] = Field(None, description="Specific date (YYYY-MM-DD)")
     duration_minutes: Optional[int] = Field(None, description="Appointment duration")
-    days_ahead: int = Field(7, description="Days to search ahead")
+    days_ahead: int = Field(7, ge=1, le=90, description="Days to search ahead")
 
 
 class TimeSlotResponse(BaseModel):
@@ -93,15 +93,15 @@ class AvailabilityResponse(BaseModel):
 
 class BookAppointmentRequest(BaseModel):
     """Request to book an appointment."""
-    context_id: str
-    start_time: str = Field(..., description="ISO format start time")
-    end_time: str = Field(..., description="ISO format end time")
-    customer_name: str
-    customer_phone: str
-    customer_email: Optional[str] = None
-    service_type: Optional[str] = None
-    location: Optional[str] = None
-    notes: Optional[str] = None
+    context_id: str = Field(..., max_length=100)
+    start_time: str = Field(..., max_length=40, description="ISO format start time")
+    end_time: str = Field(..., max_length=40, description="ISO format end time")
+    customer_name: str = Field(..., max_length=200)
+    customer_phone: str = Field(..., max_length=20)
+    customer_email: Optional[str] = Field(None, max_length=254)
+    service_type: Optional[str] = Field(None, max_length=200)
+    location: Optional[str] = Field(None, max_length=500)
+    notes: Optional[str] = Field(None, max_length=2000)
 
 
 class BookAppointmentResponse(BaseModel):
@@ -210,10 +210,13 @@ async def make_call(request: MakeCallRequest) -> MakeCallResponse:
                 detail="from_number required or context must have phone numbers"
             )
 
-        call = await provider.make_call(
-            to_number=request.to_number,
-            from_number=from_number,
-            context_id=request.context_id,
+        call = await asyncio.wait_for(
+            provider.make_call(
+                to_number=request.to_number,
+                from_number=from_number,
+                context_id=request.context_id,
+            ),
+            timeout=30.0,
         )
 
         return MakeCallResponse(
@@ -225,8 +228,8 @@ async def make_call(request: MakeCallRequest) -> MakeCallResponse:
         )
 
     except Exception as e:
-        logger.error("Failed to make call: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to make call: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to make call")
 
 
 @router.post("/sms")
@@ -255,12 +258,15 @@ async def send_sms(request: SendSMSRequest) -> SendSMSResponse:
                 detail="from_number required or context must have phone numbers"
             )
 
-        message = await provider.send_sms(
-            to_number=request.to_number,
-            from_number=from_number,
-            body=request.body,
-            media_urls=request.media_urls,
-            context_id=request.context_id,
+        message = await asyncio.wait_for(
+            provider.send_sms(
+                to_number=request.to_number,
+                from_number=from_number,
+                body=request.body,
+                media_urls=request.media_urls[:10] if request.media_urls else None,
+                context_id=request.context_id,
+            ),
+            timeout=30.0,
         )
 
         return SendSMSResponse(
@@ -271,8 +277,8 @@ async def send_sms(request: SendSMSRequest) -> SendSMSResponse:
         )
 
     except Exception as e:
-        logger.error("Failed to send SMS: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to send SMS: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to send SMS")
 
 
 @router.post("/availability")
@@ -322,8 +328,8 @@ async def check_availability(request: AvailabilityRequest) -> AvailabilityRespon
         )
 
     except Exception as e:
-        logger.error("Failed to check availability: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to check availability: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to check availability")
 
 
 @router.post("/appointments")
@@ -380,8 +386,8 @@ async def book_appointment(request: BookAppointmentRequest) -> BookAppointmentRe
         )
 
     except Exception as e:
-        logger.error("Failed to book appointment: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to book appointment: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to book appointment")
 
 
 @router.delete("/appointments/{appointment_id}")
@@ -405,8 +411,8 @@ async def cancel_appointment(
             raise HTTPException(status_code=500, detail="Failed to cancel appointment")
 
     except Exception as e:
-        logger.error("Failed to cancel appointment: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to cancel appointment: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to cancel appointment")
 
 
 @router.post("/recordings/reconcile")
@@ -427,7 +433,8 @@ async def reconcile_recordings(
         if not provider.is_connected:
             await provider.connect()
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Provider unavailable: {e}")
+        logger.error("Provider unavailable: %s", e)
+        raise HTTPException(status_code=503, detail="Provider unavailable")
 
     # List recent recordings from SignalWire (Twilio-compatible API)
     try:
@@ -451,7 +458,7 @@ async def reconcile_recordings(
                 "note": "SignalWire SDK parse error -- recordings API may be unavailable",
             }
         logger.error("Failed to list recordings from provider: %s", e)
-        raise HTTPException(status_code=500, detail=f"Failed to list recordings: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list recordings")
 
     from ...storage.repositories.call_transcript import get_call_transcript_repo
     repo = get_call_transcript_repo()
@@ -471,8 +478,9 @@ async def reconcile_recordings(
             if existing:
                 already_have += 1
                 continue
-        except Exception:
-            continue  # DB issue, skip
+        except Exception as e:
+            logger.warning("DB check failed for call_sid %s: %s", call_sid, e)
+            continue
 
         duration = int(getattr(rec, "duration", 0) or 0)
         recording_url = getattr(rec, "uri", "") or ""

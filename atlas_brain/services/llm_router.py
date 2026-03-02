@@ -6,7 +6,7 @@ Routes workflow types to the appropriate backend.
 Routing map:
     LOCAL     (Ollama qwen3:14b): conversation, reminder, calendar, intent
     CLOUD     (Ollama cloud minimax-m2): booking, email, security escalation
-    DRAFT     (Anthropic Sonnet): email_draft
+    DRAFT     (Anthropic Sonnet): email_draft, campaign
     TRIAGE    (Anthropic Haiku): email_triage, email_query, call
     REASONING (Anthropic Sonnet): reasoning agent deep analysis
     NO LLM    (unchanged): security workflow, presence workflow
@@ -38,7 +38,7 @@ _reasoning_llm: Optional[LLMService] = None
 CLOUD_WORKFLOWS = frozenset({"booking", "email"})
 
 # Workflows that use the draft LLM (Anthropic)
-DRAFT_WORKFLOWS = frozenset({"email_draft"})
+DRAFT_WORKFLOWS = frozenset({"email_draft", "campaign"})
 
 # Workflows that use the triage LLM (Anthropic Haiku)
 TRIAGE_WORKFLOWS = frozenset({"email_triage", "email_query", "call"})

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, Optional
@@ -69,7 +70,15 @@ class ReasoningAgentGraph:
         """
         results = []
         for event in events:
-            result = await self.process_event(event)
+            try:
+                result = await asyncio.wait_for(
+                    self.process_event(event), timeout=120.0,
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    "Drained event %s timed out after 120s", event.id,
+                )
+                result = {"status": "timeout", "event_id": str(event.id)}
             results.append(result)
         return results
 

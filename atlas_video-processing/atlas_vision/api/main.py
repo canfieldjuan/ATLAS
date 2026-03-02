@@ -27,13 +27,17 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning("Database initialization failed: %s", e)
 
-    # Initialize device registry with mock cameras
+    # Initialize device registry with optional dev-only mock cameras
     from ..devices.registry import device_registry
-    from ..devices.cameras.mock import create_mock_cameras
 
-    for camera in create_mock_cameras():
-        device_registry.register(camera)
-        logger.info("Registered camera: %s", camera.name)
+    if settings.camera.register_mock_cameras:
+        from ..devices.cameras.mock import create_mock_cameras
+
+        for camera in create_mock_cameras():
+            device_registry.register(camera)
+            logger.info("Registered mock camera: %s", camera.name)
+    else:
+        logger.info("Mock camera registration disabled")
 
     # Start mDNS announcer for discovery
     announcer = None

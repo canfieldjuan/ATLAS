@@ -6,7 +6,7 @@ Provides storage and retrieval of alerts from all event sources.
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
@@ -59,7 +59,7 @@ class UnifiedAlertRepository:
                 event_type,
                 message,
                 source_id,
-                datetime.utcnow(),
+                datetime.now(timezone.utc),
                 event_data_json,
                 metadata_json,
             )
@@ -189,7 +189,7 @@ class UnifiedAlertRepository:
             WHERE id = $1 AND acknowledged = FALSE
             """,
             alert_id,
-            datetime.utcnow(),
+            datetime.now(timezone.utc),
             acknowledged_by,
         )
 
@@ -212,7 +212,7 @@ class UnifiedAlertRepository:
             return 0
 
         conditions = ["acknowledged = FALSE"]
-        params = [datetime.utcnow(), acknowledged_by]
+        params = [datetime.now(timezone.utc), acknowledged_by]
         param_idx = 3
 
         if event_type:
@@ -265,7 +265,7 @@ class UnifiedAlertRepository:
             }
 
         if since is None:
-            since = datetime.utcnow() - timedelta(hours=24)
+            since = datetime.now(timezone.utc) - timedelta(hours=24)
         elif since.tzinfo is not None:
             # Convert to naive UTC for database comparison
             since = since.replace(tzinfo=None)

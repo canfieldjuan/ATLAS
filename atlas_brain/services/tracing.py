@@ -296,10 +296,9 @@ class FTLTracingClient:
             )
             if resp.status_code >= 400:
                 logger.warning(
-                    "FTL trace rejected (%d) span=%s: %s",
+                    "FTL trace rejected (%d) span=%s",
                     resp.status_code,
                     span_id,
-                    resp.text[:300],
                 )
             else:
                 logger.info(
@@ -311,7 +310,7 @@ class FTLTracingClient:
                     payload.get("model_name"),
                 )
         except Exception as e:
-            logger.warning("FTL trace send failed span=%s: %s", span_id, e)
+            logger.warning("FTL trace send failed span=%s: %s", span_id, type(e).__name__)
 
 
 def _truncate(data: Any, max_chars: int) -> Any:

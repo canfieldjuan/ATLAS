@@ -92,6 +92,7 @@ async def list_locks():
         FROM entity_locks
         WHERE released_at IS NULL
         ORDER BY acquired_at DESC
+        LIMIT 200
         """
     )
 

@@ -317,15 +317,19 @@ class SignalWireProvider(TelephonyProvider):
         """
         Stream TTS audio to the call.
 
-        SignalWire supports media streaming via WebSocket.
-        Audio should be base64-encoded mulaw at 8kHz.
+        This provider currently does not implement outbound media streaming.
+        Callers should route audio via supported telephony mechanisms instead.
         """
-        # TODO: Implement via SignalWire's Stream noun
-        # This requires bidirectional WebSocket to media stream
-        logger.warning("Audio streaming implementation pending")
-        async for chunk in audio_iterator:
-            # Will send to WebSocket when implemented
-            pass
+        # Consume one chunk if provided so async generators can cleanly close.
+        async for _ in audio_iterator:
+            break
+
+        message = (
+            "SignalWire stream_audio_to_call is not supported in this build. "
+            "Implement Stream/WebSocket media or use a different audio path."
+        )
+        logger.error(message)
+        raise NotImplementedError(message)
 
     def set_audio_callback(
         self,

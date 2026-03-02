@@ -10,6 +10,7 @@ Runs on an interval (default 5 min). Returns _skip_synthesis so the
 runner does not double-synthesize.
 """
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -32,21 +33,31 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not pool.is_initialized:
         return {"_skip_synthesis": "DB not ready"}
 
-    max_batch = cfg.enrichment_max_per_batch
+    max_batch = min(cfg.enrichment_max_per_batch, 500)
     max_attempts = cfg.enrichment_max_attempts
 
+    # Atomically claim rows: SET status='enriching' prevents concurrent runs
+    # from picking up the same rows. FOR UPDATE SKIP LOCKED avoids blocking.
     rows = await pool.fetch(
         """
-        SELECT id, vendor_name, product_name, product_category,
-               source, raw_metadata,
-               rating, rating_max, summary, review_text, pros, cons,
-               reviewer_title, reviewer_company, company_size_raw,
-               reviewer_industry, enrichment_attempts
-        FROM b2b_reviews
-        WHERE enrichment_status = 'pending'
-          AND enrichment_attempts < $1
-        ORDER BY imported_at ASC
-        LIMIT $2
+        WITH batch AS (
+            SELECT id
+            FROM b2b_reviews
+            WHERE enrichment_status = 'pending'
+              AND enrichment_attempts < $1
+            ORDER BY imported_at ASC
+            LIMIT $2
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE b2b_reviews r
+        SET enrichment_status = 'enriching'
+        FROM batch
+        WHERE r.id = batch.id
+        RETURNING r.id, r.vendor_name, r.product_name, r.product_category,
+                  r.source, r.raw_metadata,
+                  r.rating, r.rating_max, r.summary, r.review_text, r.pros, r.cons,
+                  r.reviewer_title, r.reviewer_company, r.company_size_raw,
+                  r.reviewer_industry, r.enrichment_attempts
         """,
         max_attempts,
         max_batch,
@@ -58,10 +69,25 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     enriched = 0
     failed = 0
 
-    for row in rows:
-        ok = await _enrich_single(pool, row, max_attempts, cfg.enrichment_local_only,
-                                  cfg.enrichment_max_tokens)
-        if ok:
+    # Concurrent enrichment -- vLLM batches parallel requests efficiently
+    sem = asyncio.Semaphore(10)
+
+    async def _bounded_enrich(row):
+        async with sem:
+            return await _enrich_single(pool, row, max_attempts, cfg.enrichment_local_only,
+                                        cfg.enrichment_max_tokens, cfg.review_truncate_length)
+
+    results = await asyncio.gather(
+        *[_bounded_enrich(row) for row in rows],
+        return_exceptions=True,
+    )
+
+    for row, result in zip(rows, results):
+        if isinstance(result, Exception):
+            logger.error("Unexpected enrichment error for %s: %s", row["id"], result, exc_info=result)
+            if (row["enrichment_attempts"] + 1) >= max_attempts:
+                failed += 1
+        elif result:
             enriched += 1
         elif (row["enrichment_attempts"] + 1) >= max_attempts:
             failed += 1
@@ -80,12 +106,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
 
 async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
-                         max_tokens: int) -> bool:
+                         max_tokens: int, truncate_length: int = 3000) -> bool:
     """Enrich a single B2B review with churn signals. Returns True on success."""
     review_id = row["id"]
 
     try:
-        result = _classify_review(row, local_only, max_tokens)
+        # Run blocking LLM call in thread pool with 120s timeout
+        result = await asyncio.wait_for(
+            asyncio.to_thread(
+                _classify_review, row, local_only, max_tokens, truncate_length
+            ),
+            timeout=120,
+        )
 
         if result and _validate_enrichment(result):
             await pool.execute(
@@ -109,9 +141,16 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
     except Exception:
         logger.exception("Failed to enrich B2B review %s", review_id)
         try:
+            # Reset from 'enriching' back to 'pending' (or 'failed' if exhausted)
+            new_status = "failed" if (row["enrichment_attempts"] + 1) >= max_attempts else "pending"
             await pool.execute(
-                "UPDATE b2b_reviews SET enrichment_attempts = enrichment_attempts + 1 WHERE id = $1",
-                review_id,
+                """
+                UPDATE b2b_reviews
+                SET enrichment_attempts = enrichment_attempts + 1,
+                    enrichment_status = $1
+                WHERE id = $2
+                """,
+                new_status, review_id,
             )
         except Exception:
             pass
@@ -130,7 +169,8 @@ def _smart_truncate(text: str, max_len: int = 3000) -> str:
     return text[:half] + "\n[...truncated...]\n" + text[-half:]
 
 
-def _classify_review(row, local_only: bool, max_tokens: int) -> dict[str, Any] | None:
+def _classify_review(row, local_only: bool, max_tokens: int,
+                     truncate_length: int = 3000) -> dict[str, Any] | None:
     """Call LLM with b2b_churn_extraction skill."""
     from ...skills import get_skill_registry
     from ...services.protocols import Message
@@ -150,7 +190,7 @@ def _classify_review(row, local_only: bool, max_tokens: int) -> dict[str, Any] |
         logger.warning("No LLM available for B2B churn extraction")
         return None
 
-    review_text = _smart_truncate(row["review_text"] or "")
+    review_text = _smart_truncate(row["review_text"] or "", max_len=truncate_length)
 
     # Extract source context from raw_metadata
     raw_meta = row.get("raw_metadata") or {}
@@ -158,6 +198,10 @@ def _classify_review(row, local_only: bool, max_tokens: int) -> dict[str, Any] |
         try:
             raw_meta = json.loads(raw_meta)
         except (json.JSONDecodeError, TypeError):
+            logger.warning(
+                "Malformed raw_metadata for review %s, defaulting to empty",
+                row["id"],
+            )
             raw_meta = {}
 
     payload = {
@@ -195,7 +239,10 @@ def _classify_review(row, local_only: bool, max_tokens: int) -> dict[str, Any] |
             return None
         return parsed
     except json.JSONDecodeError:
-        logger.debug("Failed to parse B2B enrichment JSON")
+        logger.warning(
+            "Failed to parse B2B enrichment JSON for review %s (vendor=%s)",
+            row["id"], row["vendor_name"],
+        )
         return None
     except Exception:
         logger.exception("B2B enrichment LLM call failed")
@@ -229,6 +276,14 @@ _CHURN_SIGNAL_BOOL_FIELDS = (
     "support_escalation",
     "contract_renewal_mentioned",
 )
+
+_KNOWN_SEVERITY_LEVELS = {"primary", "secondary", "minor"}
+_KNOWN_LOCK_IN_LEVELS = {"high", "medium", "low", "unknown"}
+_KNOWN_SENTIMENT_DIRECTIONS = {"declining", "consistently_negative", "improving", "stable_positive", "unknown"}
+_KNOWN_ROLE_TYPES = {"economic_buyer", "champion", "evaluator", "end_user", "unknown"}
+_KNOWN_BUYING_STAGES = {"active_purchase", "evaluation", "renewal_decision", "post_purchase", "unknown"}
+_KNOWN_DECISION_TIMELINES = {"immediate", "within_quarter", "within_year", "unknown"}
+_KNOWN_CONTRACT_VALUE_SIGNALS = {"enterprise_high", "enterprise_mid", "mid_market", "smb", "unknown"}
 
 
 def _validate_enrichment(result: dict) -> bool:
@@ -290,9 +345,10 @@ def _validate_enrichment(result: dict) -> bool:
     if "would_recommend" in result:
         coerced = _coerce_bool(result["would_recommend"])
         if coerced is None:
-            logger.warning("would_recommend unrecognizable bool: %r -- rejecting", result["would_recommend"])
-            return False
-        result["would_recommend"] = coerced
+            # null/None is valid (reviewer didn't express preference) -- keep as null
+            result["would_recommend"] = None
+        else:
+            result["would_recommend"] = coerced
 
     # Type check: competitors_mentioned must be list; items must be dicts with "name"
     competitors = result.get("competitors_mentioned")
@@ -323,18 +379,116 @@ def _validate_enrichment(result: dict) -> bool:
         logger.warning("Unknown pain_category: %r -- coercing to 'other'", pain)
         result["pain_category"] = "other"
 
+    # --- New expanded field validation (permissive: coerce, never reject) ---
+
+    # pain_categories: list of {category, severity}
+    pc = result.get("pain_categories")
+    if pc is not None:
+        if not isinstance(pc, list):
+            result["pain_categories"] = []
+        else:
+            cleaned = []
+            for item in pc:
+                if not isinstance(item, dict):
+                    continue
+                cat = item.get("category", "other")
+                if cat not in _KNOWN_PAIN_CATEGORIES:
+                    cat = "other"
+                sev = item.get("severity", "minor")
+                if sev not in _KNOWN_SEVERITY_LEVELS:
+                    sev = "minor"
+                cleaned.append({"category": cat, "severity": sev})
+            result["pain_categories"] = cleaned
+
+    # budget_signals: dict with known keys
+    bs = result.get("budget_signals")
+    if bs is not None:
+        if not isinstance(bs, dict):
+            result["budget_signals"] = {}
+        else:
+            if "seat_count" in bs and bs["seat_count"] is not None:
+                try:
+                    seat = int(bs["seat_count"])
+                    bs["seat_count"] = seat if 1 <= seat <= 1_000_000 else None
+                except (ValueError, TypeError):
+                    bs["seat_count"] = None
+            if "price_increase_mentioned" in bs:
+                coerced = _coerce_bool(bs["price_increase_mentioned"])
+                bs["price_increase_mentioned"] = coerced if coerced is not None else False
+
+    # use_case: dict with lists and lock_in_level
+    uc = result.get("use_case")
+    if uc is not None:
+        if not isinstance(uc, dict):
+            result["use_case"] = {}
+        else:
+            if "modules_mentioned" in uc and not isinstance(uc["modules_mentioned"], list):
+                uc["modules_mentioned"] = []
+            if "integration_stack" in uc and not isinstance(uc["integration_stack"], list):
+                uc["integration_stack"] = []
+            lil = uc.get("lock_in_level")
+            if lil and lil not in _KNOWN_LOCK_IN_LEVELS:
+                uc["lock_in_level"] = "unknown"
+
+    # sentiment_trajectory: dict with direction
+    st = result.get("sentiment_trajectory")
+    if st is not None:
+        if not isinstance(st, dict):
+            result["sentiment_trajectory"] = {}
+        else:
+            d = st.get("direction")
+            if d and d not in _KNOWN_SENTIMENT_DIRECTIONS:
+                st["direction"] = "unknown"
+
+    # buyer_authority: dict with role_type, booleans, buying_stage
+    ba = result.get("buyer_authority")
+    if ba is not None:
+        if not isinstance(ba, dict):
+            result["buyer_authority"] = {}
+        else:
+            rt = ba.get("role_type")
+            if rt and rt not in _KNOWN_ROLE_TYPES:
+                ba["role_type"] = "unknown"
+            for bool_field in ("has_budget_authority", "executive_sponsor_mentioned"):
+                if bool_field in ba:
+                    coerced = _coerce_bool(ba[bool_field])
+                    ba[bool_field] = coerced if coerced is not None else False
+            bstage = ba.get("buying_stage")
+            if bstage and bstage not in _KNOWN_BUYING_STAGES:
+                ba["buying_stage"] = "unknown"
+
+    # timeline: dict with decision_timeline
+    tl = result.get("timeline")
+    if tl is not None:
+        if not isinstance(tl, dict):
+            result["timeline"] = {}
+        else:
+            dt = tl.get("decision_timeline")
+            if dt and dt not in _KNOWN_DECISION_TIMELINES:
+                tl["decision_timeline"] = "unknown"
+
+    # contract_context: dict with contract_value_signal
+    cc = result.get("contract_context")
+    if cc is not None:
+        if not isinstance(cc, dict):
+            result["contract_context"] = {}
+        else:
+            cvs = cc.get("contract_value_signal")
+            if cvs and cvs not in _KNOWN_CONTRACT_VALUE_SIGNALS:
+                cc["contract_value_signal"] = "unknown"
+
     return True
 
 
 async def _increment_attempts(pool, review_id, current_attempts: int, max_attempts: int) -> None:
-    """Bump attempts; mark failed if exhausted."""
-    new_attempts = current_attempts + 1
+    """Bump attempts atomically; reset to pending or mark failed if exhausted."""
+    new_status = "failed" if (current_attempts + 1) >= max_attempts else "pending"
     await pool.execute(
-        "UPDATE b2b_reviews SET enrichment_attempts = $1 WHERE id = $2",
-        new_attempts, review_id,
+        """
+        UPDATE b2b_reviews
+        SET enrichment_attempts = enrichment_attempts + 1,
+            enrichment_status = $1
+        WHERE id = $2
+        """,
+        new_status, review_id,
     )
-    if new_attempts >= max_attempts:
-        await pool.execute(
-            "UPDATE b2b_reviews SET enrichment_status = 'failed' WHERE id = $1",
-            review_id,
-        )

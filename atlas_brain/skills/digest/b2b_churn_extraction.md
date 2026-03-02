@@ -60,7 +60,7 @@ You are a B2B software intelligence analyst. Given a single software review, ext
   "feature_gaps": ["Better reporting", "Simpler workflow builder"],
 
   "competitors_mentioned": [
-    {"name": "HubSpot", "context": "considering"}
+    {"name": "HubSpot", "context": "considering", "reason": "Lower cost, simpler UI", "features": ["workflow builder", "free tier"]}
   ],
 
   "contract_context": {
@@ -72,7 +72,46 @@ You are a B2B software intelligence analyst. Given a single software review, ext
 
   "quotable_phrases": ["We're actively looking at HubSpot for our renewal next quarter"],
   "positive_aspects": ["Large ecosystem", "Good integrations"],
-  "would_recommend": false
+  "would_recommend": false,
+
+  "pain_categories": [
+    {"category": "pricing", "severity": "primary"},
+    {"category": "ux", "severity": "secondary"}
+  ],
+
+  "budget_signals": {
+    "annual_spend_estimate": null,
+    "price_per_seat": "$150/mo",
+    "seat_count": 200,
+    "price_increase_mentioned": true,
+    "price_increase_detail": "30% increase at renewal"
+  },
+
+  "use_case": {
+    "primary_workflow": "Sales pipeline management",
+    "modules_mentioned": ["Sales Cloud", "Service Cloud"],
+    "integration_stack": ["Marketo", "Slack", "Jira"],
+    "lock_in_level": "high"
+  },
+
+  "sentiment_trajectory": {
+    "tenure": "3 years",
+    "direction": "declining",
+    "turning_point": "After the latest pricing update"
+  },
+
+  "buyer_authority": {
+    "role_type": "economic_buyer",
+    "has_budget_authority": true,
+    "executive_sponsor_mentioned": false,
+    "buying_stage": "renewal_decision"
+  },
+
+  "timeline": {
+    "contract_end": "Q2 2026",
+    "evaluation_deadline": null,
+    "decision_timeline": "within_quarter"
+  }
 }
 ```
 
@@ -123,6 +162,71 @@ EXACT text from the review. Must be verbatim. Pick 1-3 phrases that best demonst
 ### competitors_mentioned
 Only include ACTUAL product/vendor names explicitly mentioned in the review text. Never invent or assume competitors.
 
+### competitors_mentioned[].reason
+WHY this specific competitor was mentioned. Extract the stated reason from the review text. Null if no reason given. Examples: "Lower cost", "Better API", "Simpler onboarding". Must be from the review, never inferred.
+
+### competitors_mentioned[].features
+Array of specific product features or capabilities of this competitor that the reviewer cited as attractive. Extract only features explicitly mentioned in the review text (e.g., "workflow builder", "free tier", "better API docs"). Empty array if no specific features mentioned. Never invent features.
+
+### pain_categories
+Array of `{category, severity}` objects ranking ALL pains mentioned in the review. Categories use the same values as `pain_category`. Set `pain_category` (singular) to `pain_categories[0].category` for backward compatibility.
+- **severity "primary"**: Root cause of dissatisfaction, the thing that would make them leave
+- **severity "secondary"**: Contributing factor, mentioned alongside primary
+- **severity "minor"**: Mentioned in passing, not a driver of dissatisfaction
+
+### budget_signals
+ONLY extract explicitly stated figures. Never estimate or infer budgets.
+- `annual_spend_estimate`: Dollar figure only if explicitly stated (e.g., "$50k/year"). Null otherwise.
+- `price_per_seat`: Per-user/seat cost only if stated. Null otherwise.
+- `seat_count`: Integer number of users/seats only if stated. Null otherwise.
+- `price_increase_mentioned`: Boolean. True only if a price increase is explicitly mentioned.
+- `price_increase_detail`: The specific increase detail if stated (e.g., "30% increase"). Null otherwise.
+
+### use_case
+- `primary_workflow`: What the reviewer primarily uses the product for. Short phrase.
+- `modules_mentioned`: Array of specific product modules/features mentioned by name (e.g., ["Sales Cloud", "Einstein Analytics"]). Empty array if none.
+- `integration_stack`: Array of other tools/products explicitly mentioned as integrated or needed (e.g., ["Slack", "Jira"]). Empty array if none.
+- `lock_in_level`: Based on integration complexity:
+  - **"high"**: 3+ integrations mentioned, or explicit lock-in language ("too deep to switch")
+  - **"medium"**: 1-2 integrations
+  - **"low"**: No integrations mentioned, minimal switching cost language
+  - **"unknown"**: Cannot determine
+
+### sentiment_trajectory
+- `tenure`: How long the reviewer has used the product (e.g., "3 years", "6 months"). Null if not stated.
+- `direction`: Overall sentiment trend over the stated tenure:
+  - **"declining"**: Was happy, now unhappy. HIGHEST VALUE signal for churn prediction.
+  - **"consistently_negative"**: Has always been unhappy.
+  - **"improving"**: Was unhappy, getting better.
+  - **"stable_positive"**: Consistently satisfied.
+  - **"unknown"**: Cannot determine trajectory.
+- `turning_point`: What caused sentiment to change (e.g., "After migrating to V2", "Since the acquisition"). Null if no clear turning point.
+
+### buyer_authority
+- `role_type`: Buyer classification based on reviewer title and language:
+  - **"economic_buyer"**: Controls budget, makes purchase decisions (CFO, VP Finance, "I decided to purchase")
+  - **"champion"**: Advocates for/against internally (team lead pushing for change, "I recommended we switch")
+  - **"evaluator"**: Formally comparing options ("I was tasked with evaluating")
+  - **"end_user"**: Uses the product but has no purchase influence
+  - **"unknown"**: Cannot determine
+- `has_budget_authority`: Boolean. True if the reviewer explicitly mentions controlling or influencing budget.
+- `executive_sponsor_mentioned`: Boolean. True if the review references an executive decision-maker.
+- `buying_stage`: Where the reviewer is in the purchase cycle:
+  - **"active_purchase"**: Actively buying or switching right now
+  - **"evaluation"**: Comparing options, building shortlist
+  - **"renewal_decision"**: At a contract renewal point
+  - **"post_purchase"**: Already made their decision (switched or stayed)
+  - **"unknown"**: Cannot determine
+
+### timeline
+- `contract_end`: When the current contract expires, if stated (e.g., "Q2 2026", "end of year"). Null otherwise.
+- `evaluation_deadline`: When a decision must be made, if stated. Null otherwise.
+- `decision_timeline`: Urgency of the decision:
+  - **"immediate"**: Switching now, already in migration
+  - **"within_quarter"**: Decision within 3 months
+  - **"within_year"**: Decision within 12 months
+  - **"unknown"**: Cannot determine
+
 ## Source Context
 
 The `source_weight` field indicates how much to trust this review source. Calibrate your analysis accordingly:
@@ -139,13 +243,16 @@ Before filling fields, reason through these dimensions in order:
 Score language precision: "not renewing" (urgency 8-10) > "might not renew" (6-7) > "considering alternatives" (5-6) > "frustrated" (3-4). Past tense switching ("we moved to X") = urgency 3-4 (already churned, less actionable).
 
 ### 2. Compound Pain
-When multiple pain categories appear, identify the root cause. Pricing complaints after feature complaints = features is the root cause (pricing is the rationalization). Support complaints + reliability complaints = reliability is the root cause (support is the symptom).
+When multiple pain categories appear, identify the root cause and rank all pains in `pain_categories` by severity. Pricing complaints after feature complaints = features is the root cause (pricing is the rationalization). Support complaints + reliability complaints = reliability is the root cause (support is the symptom). The first entry (severity "primary") becomes `pain_category` for backward compatibility.
 
 ### 3. Credibility Calibration
 "We decided" or "our team evaluated" language = `decision_maker=true` even without an explicit title. High specificity (exact dollar amounts, seat counts, contract terms) correlates with credibility; vague complaints ("it's just bad") correlate with lower urgency.
 
 ### 4. Decision-Maker Weight
 A 4/10 urgency from a CTO is more actionable than 8/10 from an individual contributor. Reflect this in `quotable_phrases` selection: prioritize quotes from decision-makers.
+
+### 5. Budget and Timeline Extraction
+Only extract budget figures, seat counts, and timeline dates that are EXPLICITLY stated in the review text. Never estimate, infer, or calculate values. If the reviewer says "we have 200 users" that is a seat_count. If they say "it costs too much" without a figure, leave `annual_spend_estimate` and `price_per_seat` null.
 
 ## Output
 

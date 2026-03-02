@@ -51,7 +51,7 @@ PARAMETERLESS_TOOLS = {
 }
 
 # ---------------------------------------------------------------------------
-# WORKFLOW_ONLY_TOOLS — tools invoked by a workflow's internal LLM tool-calling.
+# WORKFLOW_ONLY_TOOLS -- tools invoked by a workflow's internal LLM tool-calling.
 #
 # These tools are registered in tool_registry so workflows can call them, but
 # they do NOT need their own entry in ROUTE_DEFINITIONS or ROUTE_TO_ACTION.
@@ -112,8 +112,8 @@ WORKFLOW_ONLY_TOOLS: frozenset[str] = frozenset({
 #      "conversation" and the tool is never executed.
 #
 #   2. ROUTE_TO_ACTION maps that route name to (action_category, tool_name).
-#      - "tool_use" + a tool_name  → direct tool execution path
-#      - "device_command"          → delegated to HomeAgent (device control)
+#      - "tool_use" + a tool_name  -> direct tool execution path
+#      - "device_command"          -> delegated to HomeAgent (device control)
 #      - If the entry is missing entirely, the route lands in "conversation"
 #
 #   3. For multi-turn workflows (reminder, booking, email, etc.) the route
@@ -121,7 +121,7 @@ WORKFLOW_ONLY_TOOLS: frozenset[str] = frozenset({
 #      query to start_workflow instead of the single-turn execute path.
 #
 # If any of these three entries is absent, the tool silently becomes
-# unreachable — user queries appear to Atlas as general conversation.
+# unreachable -- user queries appear to Atlas as general conversation.
 #
 # Tools invoked *only* by a workflow's internal LLM tool-calling
 # (set_reminder, book_appointment, send_email, etc.) do NOT need their own
@@ -434,7 +434,7 @@ ROUTE_TO_WORKFLOW: dict[str, str] = {
 _VALID_ROUTES = set(ROUTE_TO_ACTION.keys()) | set(ROUTE_TO_WORKFLOW.keys())
 
 # Routes where we should attempt lightweight entity extraction on the
-# semantic path (no LLM call — just strip known verb/preposition prefixes).
+# semantic path (no LLM call -- just strip known verb/preposition prefixes).
 _ENTITY_ROUTES = {
     "crm_query", "call_person", "email", "email_query", "detection_query",
 }
@@ -453,7 +453,7 @@ _ENTITY_SUFFIX_RE = re.compile(
 
 
 def _extract_entity_from_query(query: str, route: str) -> Optional[str]:
-    """Best-effort entity extraction without LLM — strip known prefixes/suffixes."""
+    """Best-effort entity extraction without LLM -- strip known prefixes/suffixes."""
     if route not in _ENTITY_ROUTES:
         return None
     text = _ENTITY_STRIP_RE.sub("", query).strip()
@@ -820,7 +820,10 @@ class SemanticIntentRouter:
     async def _semantic_classify(self, query: str) -> tuple[str, float]:
         """Embed query and find best matching route centroid."""
         loop = asyncio.get_event_loop()
-        query_vec = await loop.run_in_executor(None, self._embedder.embed, query)
+        query_vec = await asyncio.wait_for(
+            loop.run_in_executor(None, self._embedder.embed, query),
+            timeout=10.0,
+        )
 
         best_route = "conversation"
         best_sim = -1.0
@@ -858,7 +861,13 @@ class SemanticIntentRouter:
                 "final_route": final_route,
                 "route_time_ms": round(route_time_ms, 1),
             }
-            with open(self._fallback_log_path, "a") as f:
+            log_path = self._fallback_log_path
+            try:
+                if log_path.stat().st_size > 10 * 1024 * 1024:  # 10 MB
+                    log_path.rename(str(log_path) + ".old")
+            except FileNotFoundError:
+                pass
+            with open(log_path, "a") as f:
                 f.write(json.dumps(entry) + "\n")
         except Exception:
             logger.debug("Failed to write fallback log entry", exc_info=True)

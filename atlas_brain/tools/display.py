@@ -162,7 +162,7 @@ class ShowCameraFeedTool:
 
         except Exception as e:
             logger.error("Failed to show camera on monitor: %s", e)
-            return ToolResult(success=False, message=f"Failed to open viewer: {e}")
+            return ToolResult(success=False, message="Failed to open viewer.")
 
 class CloseCameraFeedTool:
     """Close a camera feed display."""
@@ -228,7 +228,7 @@ class CloseCameraFeedTool:
                         os.kill(pid, signal.SIGTERM)
                         closed.append(pid_file.split("_")[-1].replace(".pid", ""))
                     except ProcessLookupError:
-                        pass
+                        logger.debug("Process already exited for %s", pid_file)
                     os.remove(pid_file)
 
             if closed:
@@ -243,7 +243,7 @@ class CloseCameraFeedTool:
 
         except Exception as e:
             logger.error("Failed to close camera viewer: %s", e)
-            return ToolResult(success=False, message=f"Failed: {e}")
+            return ToolResult(success=False, message="Failed to close viewer.")
 
 
 # Tool instances

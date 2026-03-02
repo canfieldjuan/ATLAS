@@ -36,6 +36,7 @@ class G2Parser:
         pages_scraped = 0
         seen_ids: set[str] = set()
 
+        consecutive_empty = 0
         for page in range(1, target.max_pages + 1):
             url = f"{_BASE_URL}/{target.product_slug}/reviews"
             if page > 1:
@@ -73,16 +74,25 @@ class G2Parser:
                     errors.append(f"Page {page}: unexpected content-type ({ct[:40]})")
                     break
 
+                before = len(reviews)
                 page_reviews = _parse_page(resp.text, target, seen_ids)
                 if not page_reviews:
                     if page == 1:
                         logger.warning(
-                            "G2 page 1 returned 0 reviews for %s — selectors may be stale",
+                            "G2 page 1 returned 0 reviews for %s -- selectors may be stale",
                             target.product_slug,
                         )
                     break  # No more reviews
 
                 reviews.extend(page_reviews)
+
+                if len(reviews) == before:
+                    consecutive_empty += 1
+                    if consecutive_empty >= 2:
+                        logger.info("G2: 2 consecutive pages with no new reviews, stopping")
+                        break
+                else:
+                    consecutive_empty = 0
 
             except Exception as exc:
                 errors.append(f"Page {page}: {exc}")
@@ -122,7 +132,7 @@ def _parse_page(
                 seen_ids.add(review["source_review_id"])
                 reviews.append(review)
         except Exception:
-            logger.debug("Failed to parse G2 review card", exc_info=True)
+            logger.warning("Failed to parse G2 review card", exc_info=True)
 
     return reviews
 

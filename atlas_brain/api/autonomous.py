@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger("atlas.api.autonomous")
@@ -277,7 +277,7 @@ async def disable_task(task_id: UUID):
 
 
 @router.get("/{task_id}/executions")
-async def get_executions(task_id: UUID, limit: int = 20):
+async def get_executions(task_id: UUID, limit: int = Query(default=20, ge=1, le=100)):
     """Get execution history for a task."""
     from ..storage.repositories.scheduled_task import get_scheduled_task_repo
 

@@ -1,7 +1,7 @@
 """
 TrustRadius parser for B2B review scraping.
 
-STATUS: LIMITED — TrustRadius removed their public review API in 2025 and
+STATUS: LIMITED -- TrustRadius removed their public review API in 2025 and
 switched to 100% client-side rendering.  Individual reviews cannot be
 extracted without a headless browser (Playwright).
 
@@ -62,7 +62,7 @@ class TrustRadiusParser:
             )
 
             if resp.status_code == 403:
-                errors.append("Blocked (403) — CAPTCHA or anti-bot")
+                errors.append("Blocked (403) -- CAPTCHA or anti-bot")
                 return ScrapeResult(reviews=[], pages_scraped=1, errors=errors)
             if resp.status_code == 404:
                 errors.append(f"Product slug not found: {target.product_slug}")
@@ -102,8 +102,8 @@ def _extract_jsonld_product(
 
     TrustRadius embeds ``SoftwareApplication`` schema with:
     - ``aggregateRating`` (ratingValue, ratingCount, bestRating)
-    - ``positiveNotes`` (ItemList of 2–3 word tags)
-    - ``negativeNotes`` (ItemList of 2–3 word tags)
+    - ``positiveNotes`` (ItemList of 2-3 word tags)
+    - ``negativeNotes`` (ItemList of 2-3 word tags)
 
     We synthesize a single "product summary" review from these so the
     downstream enrichment pipeline has *something* to work with.
@@ -144,7 +144,10 @@ def _extract_jsonld_product(
                 parts.append(f"Users praise: {', '.join(pros_list)}.")
             if cons_list:
                 parts.append(f"Users criticize: {', '.join(cons_list)}.")
-            rating_count = agg.get("ratingCount", 0)
+            try:
+                rating_count = int(agg.get("ratingCount", 0))
+            except (ValueError, TypeError):
+                rating_count = 0
             rating_val = agg.get("ratingValue")
             best = agg.get("bestRating", 10)
             parts.append(
@@ -162,7 +165,7 @@ def _extract_jsonld_product(
                 "product_category": target.product_category or item.get("applicationCategory"),
                 "rating": float(rating_val) if rating_val is not None else None,
                 "rating_max": int(best) if best else 10,
-                "summary": f"{product_name} — TrustRadius aggregate ({rating_count:,} reviews)",
+                "summary": f"{product_name} -- TrustRadius aggregate ({rating_count:,} reviews)",
                 "review_text": review_text,
                 "pros": pros,
                 "cons": cons,

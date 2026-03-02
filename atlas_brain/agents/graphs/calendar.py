@@ -114,7 +114,7 @@ async def run_calendar_workflow(
                 workflow_type=CALENDAR_WORKFLOW_TYPE,
                 current_step="conversation",
                 partial_state={},
-                conversation_context=context_turns,
+                conversation_context=context_turns[-40:],
             )
         return {
             "response": "Sorry, something went wrong. Could you try again?",

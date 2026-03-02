@@ -11,8 +11,8 @@ import logging
 from typing import Any, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from ..storage import db_settings
 from ..storage.database import get_db_pool
@@ -25,14 +25,14 @@ router = APIRouter(prefix="/session", tags=["session"])
 
 
 class CreateSessionRequest(BaseModel):
-    user_id: Optional[str] = None
-    terminal_id: Optional[str] = None
+    user_id: Optional[str] = Field(None, max_length=100)
+    terminal_id: Optional[str] = Field(None, max_length=100)
     metadata: Optional[dict[str, Any]] = None
 
 
 class ContinueSessionRequest(BaseModel):
-    user_id: str
-    terminal_id: str
+    user_id: str = Field(..., max_length=100)
+    terminal_id: str = Field(..., max_length=100)
 
 
 class SessionResponse(BaseModel):
@@ -83,8 +83,8 @@ async def create_session(request: CreateSessionRequest) -> SessionResponse:
             last_activity_at=session.last_activity_at.isoformat(),
         )
     except Exception as e:
-        logger.error("Failed to create session: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to create session: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to create session")
 
 
 @router.post("/continue")
@@ -114,11 +114,11 @@ async def continue_session(request: ContinueSessionRequest) -> SessionResponse:
             started_at=session.started_at.isoformat(),
             last_activity_at=session.last_activity_at.isoformat(),
         )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid user ID format")
     except Exception as e:
-        logger.error("Failed to continue session: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to continue session: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to continue session")
 
 
 @router.get("/{session_id}")
@@ -147,12 +147,12 @@ async def get_session(session_id: str) -> SessionResponse:
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid session ID format")
     except Exception as e:
-        logger.error("Failed to get session: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to get session: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to get session")
 
 
 @router.get("/{session_id}/history")
-async def get_session_history(session_id: str, limit: int = 20):
+async def get_session_history(session_id: str, limit: int = Query(default=20, ge=1, le=200)):
     """Get conversation history for a session."""
     _check_db_enabled()
 
@@ -180,8 +180,8 @@ async def get_session_history(session_id: str, limit: int = 20):
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid session ID format")
     except Exception as e:
-        logger.error("Failed to get history: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to get history: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to get history")
 
 
 @router.post("/{session_id}/close")
@@ -199,8 +199,8 @@ async def close_session(session_id: str):
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid session ID format")
     except Exception as e:
-        logger.error("Failed to close session: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to close session: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to close session")
 
 
 @router.get("/status/db")

@@ -24,6 +24,9 @@ class ProxyConfig:
     type: str      # "datacenter" or "residential"
 
 
+_MAX_STICKY_DOMAINS = 1000
+
+
 class ProxyManager:
     """Manages proxy rotation with sticky session support."""
 
@@ -88,6 +91,10 @@ class ProxyManager:
         proxy = random.choice(pool)
 
         if sticky:
+            # Evict oldest entries if over limit
+            while len(self._sticky) >= _MAX_STICKY_DOMAINS:
+                oldest = next(iter(self._sticky))
+                del self._sticky[oldest]
             self._sticky[domain] = proxy
 
         return proxy

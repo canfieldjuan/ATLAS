@@ -30,9 +30,15 @@ import requests
 import sounddevice as sd
 import soundfile as sf
 import webrtcvad
-from openwakeword.model import Model as WakeWordModel
 
 from .vad import SileroVAD
+
+OPENWAKEWORD_IMPORT_ERROR: Exception | None = None
+try:
+    from openwakeword.model import Model as WakeWordModel
+except Exception as exc:  # pragma: no cover - environment dependent
+    WakeWordModel = None  # type: ignore[assignment]
+    OPENWAKEWORD_IMPORT_ERROR = exc
 
 try:
     import websockets
@@ -252,7 +258,7 @@ class NemotronAsrStreamingClient:
                 data = json.loads(response)
                 if data.get("type") == "partial":
                     self._last_partial = data.get("text", "")
-                    # Track best partial by word count — RNNT models can
+                    # Track best partial by word count -- RNNT models can
                     # degrade mid-stream (oscillation), so we keep the
                     # longest meaningful hypothesis as a fallback.
                     if len(self._last_partial.split()) > len(self._best_partial.split()):
@@ -301,7 +307,7 @@ class NemotronAsrStreamingClient:
                     # Guard against RNNT oscillation: if the final
                     # transcript has fewer words than the best streaming
                     # partial, the model degraded during finalization
-                    # (e.g. "what time is it" → "with diamond").
+                    # (e.g. "what time is it" -> "with diamond").
                     # Prefer the best partial in that case.
                     best = self._best_partial
                     final_words = len(text.split()) if text else 0
@@ -632,7 +638,7 @@ class PiperTTS:
             ]
             if self.speaker is not None:
                 cmd.extend(["--speaker", str(self.speaker)])
-            subprocess.run(cmd, input=text.encode("utf-8"), check=True)
+            subprocess.run(cmd, input=text.encode("utf-8"), check=True, timeout=30)
             audio, sr = sf.read(wav_path, dtype="float32")
             if audio.ndim > 1:
                 audio = audio[:, 0]
@@ -839,7 +845,7 @@ class VoicePipeline:
         # Session ID stored as string for context passing, converted to UUID for database ops
         self.session_id = str(uuid.uuid4())
         self.node_id = node_id
-        # Free conversation mode flag — set by FreeModeManager
+        # Free conversation mode flag -- set by FreeModeManager
         self._free_mode_active = False
         self.playback = PlaybackController(tts)
         # Monotonic counter incremented on each new command; checked before
@@ -906,6 +912,11 @@ class VoicePipeline:
         else:
             logger.info("Using WebRTC VAD with aggressiveness=%d", vad_aggressiveness)
             self.vad = webrtcvad.Vad(vad_aggressiveness)
+
+        if WakeWordModel is None:
+            raise ImportError(
+                "openwakeword is unavailable; install runtime voice dependencies to use VoicePipeline."
+            ) from OPENWAKEWORD_IMPORT_ERROR
 
         logger.info("Initializing wake word model with paths: %s", wakeword_model_paths)
         self.model = WakeWordModel(wakeword_model_paths=wakeword_model_paths)
@@ -1525,7 +1536,7 @@ class VoicePipeline:
         # Free mode: immediately re-enter conversation mode so Atlas
         # keeps listening without requiring a wake word.
         if self._free_mode_active:
-            logger.info("Free mode active — resuming conversation after timeout")
+            logger.info("Free mode active -- resuming conversation after timeout")
             delay_sec = self.conversation_start_delay_ms / 1000.0
             timer = threading.Timer(delay_sec, self._enter_conversation_mode_delayed)
             timer.daemon = True
@@ -1802,7 +1813,7 @@ class VoicePipeline:
         self.frame_processor.turn_limit_enabled = self.turn_limit_enabled
         # Restore original conversation timeout
         self.frame_processor.set_conversation_timeout(self.conversation_timeout_ms)
-        # Exit conversation mode → back to wake-word listening
+        # Exit conversation mode -> back to wake-word listening
         if self.frame_processor.state == "conversing":
             self.frame_processor.exit_conversation_mode("free_mode_exit")
 

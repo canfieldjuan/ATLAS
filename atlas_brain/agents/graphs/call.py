@@ -133,7 +133,7 @@ async def run_call_workflow(
                 workflow_type=CALL_WORKFLOW_TYPE,
                 current_step="conversation",
                 partial_state={"speaker_id": speaker_id},
-                conversation_context=context_turns,
+                conversation_context=context_turns[-40:],
             )
         return {
             "response": "Sorry, something went wrong placing the call. Could you try again?",
@@ -161,8 +161,8 @@ async def run_call_workflow(
                 {"session_id": session_id, "input_text": input_text,
                  "speaker_id": speaker_id},
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Reasoning event emission failed: %s", e)
 
         return {
             "response": response or "Call placed.",

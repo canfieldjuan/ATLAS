@@ -143,7 +143,7 @@ class TrafficTool:
             return ToolResult(
                 success=False,
                 error="EXECUTION_ERROR",
-                message=str(e),
+                message="Traffic lookup failed.",
             )
 
     async def _fetch_flow_segment(

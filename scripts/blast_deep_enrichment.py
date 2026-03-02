@@ -21,6 +21,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sys
 import time
 from datetime import datetime, timezone
@@ -30,7 +31,18 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent.parent / ".env")
+_root = Path(__file__).parent.parent
+load_dotenv(_root / ".env", override=True)
+load_dotenv(_root / ".env.local", override=True)
+
+
+def _resolve_vllm_url() -> str:
+    explicit = os.getenv("VLLM_BASE_URL")
+    if explicit:
+        return explicit
+    host = os.getenv("VLLM_HOST", "localhost")
+    port = os.getenv("VLLM_PORT", "8082")
+    return f"http://{host}:{port}"
 
 logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("blast_deep_enrichment")
@@ -86,14 +98,25 @@ _VALID_HOUSEHOLD = {"single", "family", "professional", "gift", "bulk"}
 _VALID_BUDGET = {"budget_constrained", "value_seeker", "premium_willing", "unknown"}
 _VALID_INTENSITY = {"light", "moderate", "heavy"}
 _VALID_RESEARCH = {"impulse", "light", "moderate", "deep"}
-_VALID_CONSEQUENCE = {"inconvenience", "workflow_impact", "financial_loss", "safety_concern"}
-_VALID_REPLACEMENT = {"returned", "replaced_same", "switched_brand", "kept_broken", "unknown"}
+_VALID_CONSEQUENCE = {"none", "positive_impact", "inconvenience", "workflow_impact", "financial_loss", "safety_concern"}
+_VALID_REPLACEMENT = {"returned", "replaced_same", "switched_brand", "switched_to", "avoided", "kept_broken", "kept_using", "repurchased", "unknown"}
+
+# Enum sets for Section A sub-objects
+_VALID_SENTIMENT = {"positive", "negative", "mixed", "neutral"}
+_VALID_DIRECTION = {"switched_to", "switched_from", "considered", "compared", "recommended", "avoided", "used_with", "relied_on"}
+_VALID_PRICE_SENTIMENT = {"expensive", "fair", "cheap", "not_mentioned"}
 
 # Enum sets for Section C
 _VALID_LOYALTY = {"first_time", "occasional", "loyal", "long_term_loyal"}
 _VALID_DELAY = {"immediate", "days", "weeks", "months", "unknown"}
-_VALID_TRAJECTORY = {"always_bad", "degraded", "mixed_then_bad", "initially_positive", "unknown"}
-_VALID_OCCASION = {"none", "gift", "replacement", "upgrade", "first_in_category", "seasonal"}
+_VALID_TRAJECTORY = {"always_negative", "degraded", "mixed_then_negative", "mixed_then_positive", "improved", "always_positive", "unknown"}
+_VALID_OCCASION = {"none", "gift", "replacement", "upgrade", "first_in_category", "seasonal", "event", "professional_use"}
+
+# Enum sets for Section C sub-objects
+_VALID_ECOSYSTEM_LEVEL = {"free", "partially", "fully"}
+_VALID_BARRIER_LEVEL = {"none", "low", "medium", "high"}
+_VALID_AMPLIFICATION = {"quiet", "private", "social"}
+_VALID_BULK_TYPE = {"single", "multi"}
 
 # Tier definitions: (min_reviews, max_reviews_or_none)
 _TIERS = {
@@ -138,6 +161,23 @@ def _validate_extraction(data: dict) -> bool:
         for field in ("use_case", "buyer_type", "price_sentiment"):
             if field not in bc:
                 return False
+        ps = bc.get("price_sentiment")
+        if ps is not None and ps not in _VALID_PRICE_SENTIMENT:
+            return False
+
+    # Section A sub-object: sentiment_aspects enum values
+    aspects = data.get("sentiment_aspects")
+    if isinstance(aspects, list):
+        for a in aspects:
+            if isinstance(a, dict) and a.get("sentiment") not in _VALID_SENTIMENT:
+                return False
+
+    # Section A sub-object: product_comparisons (direction is free-form string)
+    comparisons = data.get("product_comparisons")
+    if isinstance(comparisons, list):
+        for c in comparisons:
+            if isinstance(c, dict) and not c.get("direction"):
+                return False
 
     # Section B enum validation
     if data.get("expertise_level") not in _VALID_EXPERTISE:
@@ -169,9 +209,11 @@ def _validate_extraction(data: dict) -> bool:
     if data.get("occasion_context") not in _VALID_OCCASION:
         return False
 
-    # Section C sub-object key checks
+    # Section C sub-object key + enum checks
     eco = data.get("ecosystem_lock_in", {})
     if not isinstance(eco, dict) or "level" not in eco or "ecosystem" not in eco:
+        return False
+    if eco["level"] not in _VALID_ECOSYSTEM_LEVEL:
         return False
     safety = data.get("safety_flag", {})
     if not isinstance(safety, dict) or "flagged" not in safety or "description" not in safety:
@@ -179,11 +221,17 @@ def _validate_extraction(data: dict) -> bool:
     bulk = data.get("bulk_purchase_signal", {})
     if not isinstance(bulk, dict) or "type" not in bulk or "estimated_qty" not in bulk:
         return False
+    if bulk["type"] not in _VALID_BULK_TYPE:
+        return False
     barrier = data.get("switching_barrier", {})
     if not isinstance(barrier, dict) or "level" not in barrier or "reason" not in barrier:
         return False
+    if barrier["level"] not in _VALID_BARRIER_LEVEL:
+        return False
     amp = data.get("amplification_intent", {})
     if not isinstance(amp, dict) or "intent" not in amp or "context" not in amp:
+        return False
+    if amp["intent"] not in _VALID_AMPLIFICATION:
         return False
     openness = data.get("review_sentiment_openness", {})
     if not isinstance(openness, dict) or "open" not in openness or "condition" not in openness:
@@ -571,8 +619,8 @@ async def main():
                         help="Process N reviews, print formatted results, exit")
     parser.add_argument("--dry-run", action="store_true", help="Show tier counts and exit")
     parser.add_argument("--model", type=str, default=None, help="Model override (HuggingFace format for vllm, e.g. Qwen/Qwen3-14B)")
-    parser.add_argument("--provider", type=str, default="ollama", choices=["ollama", "vllm"],
-                        help="LLM provider: ollama (default) or vllm (continuous batching)")
+    parser.add_argument("--provider", type=str, default="vllm", choices=["vllm", "ollama"],
+                        help="LLM provider: vllm (default, continuous batching) or ollama")
     parser.add_argument("--base-url", type=str, default=None, help="Override server URL for the chosen provider")
     args = parser.parse_args()
 
@@ -590,8 +638,8 @@ async def main():
 
     # Activate LLM
     if args.provider == "vllm":
-        model = args.model or "Qwen/Qwen3-14B"
-        base_url = args.base_url or "http://localhost:8000"
+        model = args.model or "stelterlab/Qwen3-30B-A3B-Instruct-2507-AWQ"
+        base_url = args.base_url or _resolve_vllm_url()
         llm_registry.activate("vllm", model=model, base_url=base_url, timeout=settings.llm.ollama_timeout)
     else:
         model = args.model or settings.llm.ollama_model

@@ -7,7 +7,7 @@ and access control. Tools are designed for LLM tool calling.
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import httpx
@@ -302,7 +302,7 @@ class SecurityClient:
             camera_id = self.resolve_camera_id(camera_id)
         try:
             params = {
-                "since": (datetime.now() - timedelta(hours=hours)).isoformat(),
+                "since": (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(),
                 "type": "motion",
             }
             if camera_id:
@@ -815,7 +815,7 @@ class QueryDetectionsTool:
         detection_type = params.get("detection_type")
 
         client = get_security_client()
-        since = datetime.now() - timedelta(hours=hours)
+        since = datetime.now(timezone.utc) - timedelta(hours=hours)
 
         detections = await client.query_detections(
             camera_id=camera_name,

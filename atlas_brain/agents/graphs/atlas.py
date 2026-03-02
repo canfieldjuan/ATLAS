@@ -548,7 +548,7 @@ async def execute_action(state: AtlasAgentState) -> AtlasAgentState:
             )
         except Exception as e:
             logger.warning("Action execution failed: %s", e)
-            result = ActionResult(success=False, message=str(e), error=str(e))
+            result = ActionResult(success=False, message="Action failed", error=type(e).__name__)
 
     elif action_type == "tool_use":
         # Fast path: tool from router
@@ -567,7 +567,7 @@ async def execute_action(state: AtlasAgentState) -> AtlasAgentState:
                 logger.info("Fast tool executed: %s", tool_name)
             except Exception as e:
                 logger.warning("Tool execution failed: %s", e)
-                result = ActionResult(success=False, message=str(e), error=str(e))
+                result = ActionResult(success=False, message="Action failed", error=type(e).__name__)
 
         # Slow path: tool from LLM intent (or router hint fallback)
         else:
@@ -589,7 +589,7 @@ async def execute_action(state: AtlasAgentState) -> AtlasAgentState:
                     logger.info("Tool executed: %s", target_name)
                 except Exception as e:
                     logger.warning("Tool execution failed: %s", e)
-                    result = ActionResult(success=False, message=str(e), error=str(e))
+                    result = ActionResult(success=False, message="Action failed", error=type(e).__name__)
 
     act_ms = (time.perf_counter() - start_time) * 1000
 
@@ -1362,8 +1362,8 @@ class AtlasAgentGraph:
             logger.exception("Error running AtlasAgent graph: %s", e)
             final_state = {
                 **initial_state,
-                "response": f"I'm sorry, I encountered an error: {e}",
-                "error": str(e),
+                "response": "I'm sorry, something went wrong.",
+                "error": type(e).__name__,
             }
 
         total_ms = (time.perf_counter() - start_time) * 1000

@@ -1,7 +1,7 @@
 """
 Business context repository.
 
-Loads business identities (phone number → persona/services/hours) from
+Loads business identities (phone number -> persona/services/hours) from
 PostgreSQL so the comms service can route calls dynamically.
 """
 
@@ -25,7 +25,7 @@ class BusinessContextRepository:
 
         try:
             rows = await pool.fetch(
-                "SELECT * FROM business_contexts WHERE enabled = TRUE"
+                "SELECT * FROM business_contexts WHERE enabled = TRUE LIMIT 100"
             )
             return [dict(row) for row in rows]
         except DatabaseUnavailableError:

@@ -21,6 +21,9 @@ class ScrapeTarget:
       - capterra: ``123456/salesforce`` -> capterra.com/p/123456/salesforce/reviews/
       - trustradius: ``salesforce-crm`` -> trustradius.com/products/salesforce-crm/reviews
       - reddit: vendor name itself (used as search term, slug is informational)
+      - hackernews: vendor name (used as search term via HN Algolia API)
+      - github: vendor name (used as search term via GitHub REST API)
+      - rss: feed URL (e.g. Google News RSS search URL)
     """
 
     id: str
@@ -84,4 +87,4 @@ def get_all_parsers() -> dict[str, ReviewParser]:
 
 
 # Auto-register parsers on import
-from . import reddit, trustradius, capterra, g2  # noqa: E402, F401
+from . import reddit, trustradius, capterra, g2, hackernews, github, rss  # noqa: E402, F401

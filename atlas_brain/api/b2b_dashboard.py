@@ -55,9 +55,9 @@ def _pool_or_503():
 @router.get("/signals")
 async def list_signals(
     vendor_name: Optional[str] = Query(None),
-    min_urgency: float = Query(0),
+    min_urgency: float = Query(0, ge=0, le=10),
     category: Optional[str] = Query(None),
-    limit: int = Query(20, le=100),
+    limit: int = Query(20, ge=1, le=100),
 ):
     pool = _pool_or_503()
     conditions: list[str] = []
@@ -170,6 +170,12 @@ async def get_signal(
         "top_feature_gaps": _safe_json(row["top_feature_gaps"]),
         "company_churn_list": _safe_json(row["company_churn_list"]),
         "quotable_evidence": _safe_json(row["quotable_evidence"]),
+        "top_use_cases": _safe_json(row["top_use_cases"]),
+        "top_integration_stacks": _safe_json(row["top_integration_stacks"]),
+        "budget_signal_summary": _safe_json(row["budget_signal_summary"]),
+        "sentiment_distribution": _safe_json(row["sentiment_distribution"]),
+        "buyer_authority_summary": _safe_json(row["buyer_authority_summary"]),
+        "timeline_summary": _safe_json(row["timeline_summary"]),
         "last_computed_at": str(row["last_computed_at"]) if row["last_computed_at"] else None,
         "created_at": str(row["created_at"]) if row["created_at"] else None,
     }
@@ -183,9 +189,9 @@ async def get_signal(
 @router.get("/high-intent")
 async def list_high_intent(
     vendor_name: Optional[str] = Query(None),
-    min_urgency: float = Query(7),
-    window_days: int = Query(30),
-    limit: int = Query(20, le=100),
+    min_urgency: float = Query(7, ge=0, le=10),
+    window_days: int = Query(30, ge=1, le=3650),
+    limit: int = Query(20, ge=1, le=100),
 ):
     pool = _pool_or_503()
     conditions = [
@@ -214,7 +220,12 @@ async def list_high_intent(
                (enrichment->>'urgency_score')::numeric AS urgency,
                enrichment->>'pain_category' AS pain,
                enrichment->'competitors_mentioned' AS alternatives,
-               enrichment->'contract_context'->>'contract_value_signal' AS value_signal
+               enrichment->'contract_context'->>'contract_value_signal' AS value_signal,
+               CASE WHEN enrichment->'budget_signals'->>'seat_count' ~ '^\\d+$'
+                    THEN (enrichment->'budget_signals'->>'seat_count')::int END AS seat_count,
+               enrichment->'use_case'->>'lock_in_level' AS lock_in_level,
+               enrichment->'timeline'->>'contract_end' AS contract_end,
+               enrichment->'buyer_authority'->>'buying_stage' AS buying_stage
         FROM b2b_reviews
         WHERE {where}
         ORDER BY (enrichment->>'urgency_score')::numeric DESC
@@ -235,6 +246,10 @@ async def list_high_intent(
             "pain": r["pain"],
             "alternatives": _safe_json(r["alternatives"]),
             "contract_signal": r["value_signal"],
+            "seat_count": r["seat_count"],
+            "lock_in_level": r["lock_in_level"],
+            "contract_end": r["contract_end"],
+            "buying_stage": r["buying_stage"],
         })
 
     return {"companies": companies, "count": len(companies)}
@@ -297,6 +312,7 @@ async def get_vendor_profile(vendor_name: str):
           AND enrichment->>'pain_category' IS NOT NULL
         GROUP BY enrichment->>'pain_category'
         ORDER BY cnt DESC
+        LIMIT 50
         """,
         vname,
     )
@@ -315,6 +331,12 @@ async def get_vendor_profile(vendor_name: str):
             "top_competitors": _safe_json(signal_row["top_competitors"]),
             "top_feature_gaps": _safe_json(signal_row["top_feature_gaps"]),
             "quotable_evidence": _safe_json(signal_row["quotable_evidence"]),
+            "top_use_cases": _safe_json(signal_row["top_use_cases"]),
+            "top_integration_stacks": _safe_json(signal_row["top_integration_stacks"]),
+            "budget_signal_summary": _safe_json(signal_row["budget_signal_summary"]),
+            "sentiment_distribution": _safe_json(signal_row["sentiment_distribution"]),
+            "buyer_authority_summary": _safe_json(signal_row["buyer_authority_summary"]),
+            "timeline_summary": _safe_json(signal_row["timeline_summary"]),
             "last_computed_at": str(signal_row["last_computed_at"]) if signal_row["last_computed_at"] else None,
         }
     else:
@@ -352,6 +374,8 @@ VALID_REPORT_TYPES = (
     "vendor_scorecard",
     "displacement_report",
     "category_overview",
+    "vendor_retention",
+    "challenger_intel",
 )
 
 
@@ -359,7 +383,7 @@ VALID_REPORT_TYPES = (
 async def list_reports(
     report_type: Optional[str] = Query(None),
     vendor_filter: Optional[str] = Query(None),
-    limit: int = Query(10, le=50),
+    limit: int = Query(10, ge=1, le=50),
 ):
     if report_type and report_type not in VALID_REPORT_TYPES:
         raise HTTPException(status_code=400, detail=f"report_type must be one of {VALID_REPORT_TYPES}")
@@ -453,11 +477,11 @@ async def get_report(report_id: str):
 async def search_reviews(
     vendor_name: Optional[str] = Query(None),
     pain_category: Optional[str] = Query(None),
-    min_urgency: Optional[float] = Query(None),
+    min_urgency: Optional[float] = Query(None, ge=0, le=10),
     company: Optional[str] = Query(None),
     has_churn_intent: Optional[bool] = Query(None),
-    window_days: int = Query(30),
-    limit: int = Query(20, le=100),
+    window_days: int = Query(30, ge=1, le=3650),
+    limit: int = Query(20, ge=1, le=100),
 ):
     pool = _pool_or_503()
     conditions = [

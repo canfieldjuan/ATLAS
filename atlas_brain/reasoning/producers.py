@@ -29,6 +29,6 @@ async def emit_if_enabled(
         return await emit_event(
             event_type, source, payload, entity_type, entity_id
         )
-    except Exception:
-        logger.debug("Event emission failed (non-fatal)", exc_info=True)
+    except Exception as exc:
+        logger.warning("Event emission failed (non-fatal): %s", exc)
         return None

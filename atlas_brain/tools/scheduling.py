@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 import dateparser
 
 from ..config import settings
-from ..comms import EFFINGHAM_MAIDS_CONTEXT, BusinessContext, get_context_router
+from ..comms import BusinessContext, comms_settings, get_context_router
 from ..storage.repositories.appointment import get_appointment_repo
 from ..storage.exceptions import DatabaseUnavailableError, DatabaseOperationError
 from .base import ToolParameter, ToolResult
@@ -36,25 +36,17 @@ def _get_time_slot_class():
 def _get_default_context() -> Optional[BusinessContext]:
     """Get the default business context for scheduling."""
     router = get_context_router()
+    preferred_context_id = comms_settings.default_context
 
-    # Try effingham_maids first
-    ctx = router.get_context("effingham_maids")
-    if ctx:
+    ctx = router.get_context(preferred_context_id)
+    if ctx and ctx.scheduling.enabled:
         return ctx
 
-    # If not registered, try to register it (for standalone tool usage)
-    try:
-        from ..comms import EFFINGHAM_MAIDS_CONTEXT
-        if EFFINGHAM_MAIDS_CONTEXT.scheduling.enabled:
-            router.register_context(EFFINGHAM_MAIDS_CONTEXT)
-            logger.info("Auto-registered effingham_maids context for scheduling")
-            return EFFINGHAM_MAIDS_CONTEXT
-    except Exception as e:
-        logger.debug("Could not auto-register effingham_maids: %s", e)
-
-    # Fall back to first registered context
-    contexts = router.list_contexts()
-    return contexts[0] if contexts else None
+    # Fall back to first scheduling-enabled registered context.
+    for context in router.list_contexts():
+        if context.scheduling.enabled:
+            return context
+    return None
 
 
 def _parse_datetime(text: str, timezone: str = settings.reminder.default_timezone) -> Optional[datetime]:
@@ -250,7 +242,7 @@ class CheckAvailabilityTool:
             return ToolResult(
                 success=False,
                 error="AVAILABILITY_ERROR",
-                message=f"Failed to check availability: {e}",
+                message="Failed to check availability.",
             )
 
 
@@ -423,7 +415,7 @@ class BookAppointmentTool:
                 logger.warning("DB save failed but calendar event created: %s", e)
                 db_id = None
 
-            # Link appointment to CRM contact (fire-and-forget — never blocks the booking)
+            # Link appointment to CRM contact (fire-and-forget -- never blocks the booking)
             contact_id_str: Optional[str] = None
             if db_id:
                 try:
@@ -498,7 +490,7 @@ class BookAppointmentTool:
             return ToolResult(
                 success=False,
                 error="BOOKING_ERROR",
-                message=f"Failed to book appointment: {e}",
+                message="Failed to book appointment.",
             )
 
 
@@ -644,7 +636,7 @@ class CancelAppointmentTool:
             return ToolResult(
                 success=False,
                 error="CANCEL_ERROR",
-                message=f"Failed to cancel appointment: {e}",
+                message="Failed to cancel appointment.",
             )
 
 
@@ -817,7 +809,7 @@ class RescheduleAppointmentTool:
             return ToolResult(
                 success=False,
                 error="RESCHEDULE_ERROR",
-                message=f"Failed to reschedule: {e}",
+                message="Failed to reschedule.",
             )
 
 
@@ -872,8 +864,8 @@ class LookupCustomerTool:
         Look up a customer.
 
         Strategy (in order):
-          1. CRM contacts table — the single source of truth for customer data.
-          2. Appointment rows — fallback for legacy records not yet in the CRM.
+          1. CRM contacts table -- the single source of truth for customer data.
+          2. Appointment rows -- fallback for legacy records not yet in the CRM.
 
         When a match is found in the CRM the response includes full contact
         details plus linked appointments.  When found only via appointment rows
@@ -969,7 +961,7 @@ class LookupCustomerTool:
             logger.debug("CRM lookup failed, falling back to appointment rows: %s", crm_exc)
 
         # ------------------------------------------------------------------
-        # Step 2: Legacy fallback — scrape customer data from appointment rows
+        # Step 2: Legacy fallback -- scrape customer data from appointment rows
         # (covers contacts not yet in the CRM)
         # ------------------------------------------------------------------
         repo = get_appointment_repo()
@@ -1071,7 +1063,7 @@ class LookupCustomerTool:
             return ToolResult(
                 success=False,
                 error="LOOKUP_ERROR",
-                message=f"Failed to look up customer: {e}",
+                message="Failed to look up customer.",
             )
 
 

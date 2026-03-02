@@ -68,6 +68,7 @@ class HomeAssistantWebSocket:
         try:
             self._ws = await websockets.connect(
                 self._ws_url,
+                open_timeout=15,
                 ping_interval=30,
                 ping_timeout=10,
                 close_timeout=5,

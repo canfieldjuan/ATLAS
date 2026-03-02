@@ -27,7 +27,7 @@ class EventBus:
         self._connection = None  # dedicated asyncpg connection for LISTEN
         self._listen_task: Optional[asyncio.Task] = None
         self._running = False
-        self._queue: asyncio.Queue[UUID] = asyncio.Queue()
+        self._queue: asyncio.Queue[UUID] = asyncio.Queue(maxsize=10_000)
 
     # ------------------------------------------------------------------
     # Public API
@@ -129,7 +129,9 @@ class EventBus:
 
         pool = get_db_pool()
         row = await pool.fetchrow(
-            "SELECT * FROM atlas_events WHERE id = $1", event_id
+            "SELECT id, event_type, source, entity_type, entity_id, payload, created_at"
+            " FROM atlas_events WHERE id = $1",
+            event_id,
         )
         if not row:
             return
@@ -143,8 +145,9 @@ class EventBus:
                         await cb(event)
                     except Exception:
                         logger.error(
-                            "Subscriber %s failed for event %s",
+                            "Subscriber %s failed for event %s (type=%s)",
                             cb,
                             event_id,
+                            event.event_type,
                             exc_info=True,
                         )

@@ -392,7 +392,7 @@ async def generate_draft(gmail_message_id: str):
             if not ctx.is_empty:
                 customer_context_str = _format_customer_context(ctx)
     except Exception:
-        logger.debug("CRM context lookup failed for draft, continuing without")
+        logger.warning("CRM context lookup failed for draft, continuing without")
 
     # Enrich with graph facts
     graph_facts = await _get_sender_graph_context(full_msg.get("from", ""))
@@ -632,7 +632,7 @@ async def redraft(draft_id: UUID, reason: str | None = Query(default=None)):
             if not ctx.is_empty:
                 customer_context_str = _format_customer_context(ctx)
     except Exception:
-        logger.debug("CRM context lookup failed for redraft, continuing without")
+        logger.warning("CRM context lookup failed for redraft, continuing without")
 
     # Enrich with graph facts (all reasons, not just wrong_info)
     graph_facts = await _get_sender_graph_context(parent["original_from"])

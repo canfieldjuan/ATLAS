@@ -81,7 +81,7 @@ class LightsNearUserTool:
             logger.error("Presence service error: %s", e)
             return ToolResult(
                 success=False,
-                error=str(e),
+                error="Operation failed",
                 message="I couldn't determine your location.",
             )
 
@@ -142,7 +142,7 @@ class LightsNearUserTool:
             logger.error("Failed to control lights: %s", e)
             return ToolResult(
                 success=False,
-                error=str(e),
+                error="Operation failed",
                 message="I couldn't control the lights.",
             )
 
@@ -199,7 +199,7 @@ class MediaNearUserTool:
             logger.error("Presence service error: %s", e)
             return ToolResult(
                 success=False,
-                error=str(e),
+                error="Operation failed",
             )
 
         try:
@@ -249,7 +249,7 @@ class MediaNearUserTool:
             logger.error("Failed to control media: %s", e)
             return ToolResult(
                 success=False,
-                error=str(e),
+                error="Operation failed",
             )
 
 
@@ -321,7 +321,7 @@ class SceneNearUserTool:
         except Exception as e:
             return ToolResult(
                 success=False,
-                error=str(e),
+                error="Operation failed",
                 message="Sorry, I couldn't control the lights right now.",
             )
 
@@ -356,7 +356,7 @@ class SceneNearUserTool:
             logger.error("Failed to set scene: %s", e)
             return ToolResult(
                 success=False,
-                error=str(e),
+                error="Operation failed",
                 message="Sorry, I couldn't set the scene right now.",
             )
 
@@ -411,7 +411,7 @@ class WhereAmITool:
             logger.error("Presence error: %s", e)
             return ToolResult(
                 success=False,
-                error=str(e),
+                error="Operation failed",
                 message="Sorry, I couldn't determine your location right now.",
             )
 

@@ -38,6 +38,8 @@ VALID_REPORT_TYPES = (
     "vendor_scorecard",
     "displacement_report",
     "category_overview",
+    "vendor_retention",
+    "challenger_intel",
 )
 
 VALID_SOURCES = ("g2", "capterra", "trustradius", "reddit")
@@ -107,6 +109,8 @@ async def list_churn_signals(
     category: Filter by product_category (exact match)
     limit: Maximum results (default 20, cap 100)
     """
+    limit = max(1, min(limit, 100))
+    min_urgency = max(0.0, min(min_urgency, 10.0))
     try:
         from ..storage.database import get_db_pool
 
@@ -167,7 +171,7 @@ async def list_churn_signals(
         return json.dumps({"signals": signals, "count": len(signals)}, default=str)
     except Exception as exc:
         logger.exception("list_churn_signals error")
-        return json.dumps({"error": str(exc), "signals": [], "count": 0})
+        return json.dumps({"error": "Internal error", "signals": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +240,12 @@ async def get_churn_signal(
             "top_feature_gaps": _safe_json(row["top_feature_gaps"]),
             "company_churn_list": _safe_json(row["company_churn_list"]),
             "quotable_evidence": _safe_json(row["quotable_evidence"]),
+            "top_use_cases": _safe_json(row["top_use_cases"]),
+            "top_integration_stacks": _safe_json(row["top_integration_stacks"]),
+            "budget_signal_summary": _safe_json(row["budget_signal_summary"]),
+            "sentiment_distribution": _safe_json(row["sentiment_distribution"]),
+            "buyer_authority_summary": _safe_json(row["buyer_authority_summary"]),
+            "timeline_summary": _safe_json(row["timeline_summary"]),
             "last_computed_at": row["last_computed_at"],
             "created_at": row["created_at"],
         }
@@ -243,7 +253,7 @@ async def get_churn_signal(
         return json.dumps({"success": True, "signal": signal}, default=str)
     except Exception as exc:
         logger.exception("get_churn_signal error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +276,9 @@ async def list_high_intent_companies(
     window_days: How far back to look in days (default 30)
     limit: Maximum results (default 20, cap 100)
     """
+    limit = max(1, min(limit, 100))
+    min_urgency = max(0.0, min(min_urgency, 10.0))
+    window_days = max(1, min(window_days, 3650))
     try:
         from ..storage.database import get_db_pool
 
@@ -296,7 +309,12 @@ async def list_high_intent_companies(
                    (enrichment->>'urgency_score')::numeric AS urgency,
                    enrichment->>'pain_category' AS pain,
                    enrichment->'competitors_mentioned' AS alternatives,
-                   enrichment->'contract_context'->>'contract_value_signal' AS value_signal
+                   enrichment->'contract_context'->>'contract_value_signal' AS value_signal,
+                   CASE WHEN enrichment->'budget_signals'->>'seat_count' ~ '^\\d+$'
+                    THEN (enrichment->'budget_signals'->>'seat_count')::int END AS seat_count,
+                   enrichment->'use_case'->>'lock_in_level' AS lock_in_level,
+                   enrichment->'timeline'->>'contract_end' AS contract_end,
+                   enrichment->'buyer_authority'->>'buying_stage' AS buying_stage
             FROM b2b_reviews
             WHERE {where}
             ORDER BY (enrichment->>'urgency_score')::numeric DESC
@@ -321,12 +339,16 @@ async def list_high_intent_companies(
                 "pain": r["pain"],
                 "alternatives": _safe_json(r["alternatives"]),
                 "contract_signal": r["value_signal"],
+                "seat_count": r["seat_count"],
+                "lock_in_level": r["lock_in_level"],
+                "contract_end": r["contract_end"],
+                "buying_stage": r["buying_stage"],
             })
 
         return json.dumps({"companies": companies, "count": len(companies)}, default=str)
     except Exception as exc:
         logger.exception("list_high_intent_companies error")
-        return json.dumps({"error": str(exc), "companies": [], "count": 0})
+        return json.dumps({"error": "Internal error", "companies": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -421,6 +443,12 @@ async def get_vendor_profile(vendor_name: str) -> str:
                 "top_pain_categories": _safe_json(signal_row["top_pain_categories"]),
                 "top_competitors": _safe_json(signal_row["top_competitors"]),
                 "top_feature_gaps": _safe_json(signal_row["top_feature_gaps"]),
+                "top_use_cases": _safe_json(signal_row["top_use_cases"]),
+                "top_integration_stacks": _safe_json(signal_row["top_integration_stacks"]),
+                "budget_signal_summary": _safe_json(signal_row["budget_signal_summary"]),
+                "sentiment_distribution": _safe_json(signal_row["sentiment_distribution"]),
+                "buyer_authority_summary": _safe_json(signal_row["buyer_authority_summary"]),
+                "timeline_summary": _safe_json(signal_row["timeline_summary"]),
                 "last_computed_at": signal_row["last_computed_at"],
             }
         else:
@@ -449,7 +477,7 @@ async def get_vendor_profile(vendor_name: str) -> str:
         return json.dumps({"success": True, "profile": profile}, default=str)
     except Exception as exc:
         logger.exception("get_vendor_profile error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -467,10 +495,12 @@ async def list_reports(
     List B2B intelligence reports.
 
     report_type: Filter by type (weekly_churn_feed, vendor_scorecard,
-                 displacement_report, category_overview)
+                 displacement_report, category_overview, vendor_retention,
+                 challenger_intel)
     vendor_filter: Filter by vendor name in report (partial match)
     limit: Maximum results (default 10, cap 50)
     """
+    limit = max(1, min(limit, 50))
     if report_type and report_type not in VALID_REPORT_TYPES:
         return json.dumps({"error": f"report_type must be one of {VALID_REPORT_TYPES}", "reports": [], "count": 0})
 
@@ -524,7 +554,7 @@ async def list_reports(
         return json.dumps({"reports": reports, "count": len(reports)}, default=str)
     except Exception as exc:
         logger.exception("list_reports error")
-        return json.dumps({"error": str(exc), "reports": [], "count": 0})
+        return json.dumps({"error": "Internal error", "reports": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -571,7 +601,7 @@ async def get_report(report_id: str) -> str:
         return json.dumps({"success": True, "report": report}, default=str)
     except Exception as exc:
         logger.exception("get_report error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -600,6 +630,10 @@ async def search_reviews(
     window_days: How far back to look in days (default 30)
     limit: Maximum results (default 20, cap 100)
     """
+    limit = max(1, min(limit, 100))
+    window_days = max(1, min(window_days, 3650))
+    if min_urgency is not None:
+        min_urgency = max(0.0, min(min_urgency, 10.0))
     try:
         from ..storage.database import get_db_pool
 
@@ -678,7 +712,7 @@ async def search_reviews(
         return json.dumps({"reviews": reviews, "count": len(reviews)}, default=str)
     except Exception as exc:
         logger.exception("search_reviews error")
-        return json.dumps({"error": str(exc), "reviews": [], "count": 0})
+        return json.dumps({"error": "Internal error", "reviews": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -735,7 +769,7 @@ async def get_review(review_id: str) -> str:
         return json.dumps({"success": True, "review": review}, default=str)
     except Exception as exc:
         logger.exception("get_review error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -797,7 +831,7 @@ async def get_pipeline_status() -> str:
         return json.dumps({"success": True, **result}, default=str)
     except Exception as exc:
         logger.exception("get_pipeline_status error")
-        return json.dumps({"success": False, "error": str(exc)})
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -818,6 +852,7 @@ async def list_scrape_targets(
     enabled_only: Only show enabled targets (default true)
     limit: Maximum results (default 20, cap 100)
     """
+    limit = max(1, min(limit, 100))
     if source and source not in VALID_SOURCES:
         return json.dumps({"error": f"source must be one of {VALID_SOURCES}", "targets": [], "count": 0})
 
@@ -873,7 +908,7 @@ async def list_scrape_targets(
         return json.dumps({"targets": targets, "count": len(targets)}, default=str)
     except Exception as exc:
         logger.exception("list_scrape_targets error")
-        return json.dumps({"error": str(exc), "targets": [], "count": 0})
+        return json.dumps({"error": "Internal error", "targets": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------

@@ -168,8 +168,9 @@ class OllamaLLM(BaseModelService):
                     eval_count, eval_duration,
                     total_duration
                 )
-                logger.info("Ollama chat: done_reason=%s, content_len=%d, response='%s'",
-                           done_reason, len(response_text), response_text)
+                logger.info("Ollama chat: done_reason=%s, content_len=%d",
+                           done_reason, len(response_text))
+                logger.debug("Ollama chat response: '%s'", response_text)
 
                 # Retry if model hit token limit before producing output
                 if done_reason == "length" and not response_text and attempt < max_retries:
@@ -282,7 +283,7 @@ class OllamaLLM(BaseModelService):
             total_duration = data.get("total_duration", 0) / 1_000_000  # ns to ms
             logger.info("Ollama response: content_len=%d, tool_calls=%d, done_reason=%s",
                        len(raw_content), len(tool_calls), done_reason)
-            logger.info("Ollama raw content: '%s'", raw_content)
+            logger.debug("Ollama raw content: '%s'", raw_content)
             if tool_calls:
                 logger.info("Tool calls received: %s", [tc.get("function", {}).get("name") for tc in tool_calls])
             logger.info(

@@ -189,7 +189,7 @@ async def execute_tools(state: ReceptionistAgentState) -> ReceptionistAgentState
 
         except Exception as e:
             logger.warning("Tool %s failed: %s", tool_name, e)
-            tool_results[tool_name] = {"success": False, "error": str(e)}
+            tool_results[tool_name] = {"success": False, "error": "Tool execution failed"}
 
     act_ms = (time.perf_counter() - start_time) * 1000
 
@@ -620,7 +620,7 @@ class ReceptionistAgentGraph:
             final_state = {
                 **initial_state,
                 "response": "I'm sorry, could you repeat that?",
-                "error": str(e),
+                "error": type(e).__name__,
             }
 
         # Update persistent call state

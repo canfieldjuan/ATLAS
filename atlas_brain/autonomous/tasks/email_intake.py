@@ -11,6 +11,7 @@ import email.utils
 import json
 import logging
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -457,6 +458,141 @@ async def _classify_and_plan(emails: list[dict[str, Any]]) -> int:
 # ---------------------------------------------------------------------------
 # Enriched notifications (intent-aware)
 # ---------------------------------------------------------------------------
+# Campaign reply detection
+# ---------------------------------------------------------------------------
+
+
+async def _detect_campaign_replies(pool, emails: list[dict[str, Any]]) -> int:
+    """Detect replies to campaign emails by matching message headers.
+
+    For each email, checks In-Reply-To and References headers against
+    sent_message_id values in b2b_campaigns.  When matched, updates
+    the campaign sequence to status='replied'.
+
+    Returns count of campaign replies detected.
+    """
+    from .campaign_audit import log_campaign_event
+
+    reply_count = 0
+
+    for e in emails:
+        candidate_ids: list[str] = []
+        in_reply_to = e.get("in_reply_to", "")
+        references = e.get("references", "")
+        if in_reply_to:
+            candidate_ids.append(in_reply_to.strip().strip("<>"))
+        if references:
+            for ref in references.split():
+                ref_clean = ref.strip().strip("<>")
+                if ref_clean and ref_clean not in candidate_ids:
+                    candidate_ids.append(ref_clean)
+
+        if not candidate_ids:
+            continue
+
+        try:
+            campaign_row = await pool.fetchrow(
+                """
+                SELECT bc.id, bc.sequence_id, bc.subject, bc.body, bc.step_number,
+                       cs.company_name, cs.status AS seq_status
+                FROM b2b_campaigns bc
+                LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id
+                WHERE bc.status = 'sent'
+                  AND (bc.sent_message_id = ANY($1::text[])
+                       OR bc.esp_message_id = ANY($1::text[]))
+                ORDER BY bc.sent_at DESC NULLS LAST LIMIT 1
+                """,
+                candidate_ids,
+            )
+
+            if not campaign_row:
+                continue
+
+            row = dict(campaign_row)
+            e["_campaign_reply"] = row
+
+            sequence_id = row.get("sequence_id")
+            if not sequence_id:
+                continue
+
+            if row.get("seq_status") not in ("active", "paused"):
+                continue
+
+            now = datetime.now(timezone.utc)
+            reply_intent = e.get("category", "unknown")
+            body_text = (e.get("body_text") or "")[:500]
+
+            await pool.execute(
+                """
+                UPDATE campaign_sequences
+                SET status = 'replied',
+                    reply_received_at = $1,
+                    reply_intent = $2,
+                    reply_summary = $3,
+                    updated_at = $1
+                WHERE id = $4
+                """,
+                now, reply_intent, body_text, sequence_id,
+            )
+
+            await log_campaign_event(
+                pool, event_type="replied", source="email_intake",
+                campaign_id=row["id"], sequence_id=sequence_id,
+                step_number=row.get("step_number"),
+                recipient_email=e.get("from", ""),
+                metadata={
+                    "reply_intent": reply_intent,
+                    "reply_snippet": body_text[:200],
+                },
+            )
+
+            await _send_campaign_reply_notification(
+                company_name=row.get("company_name", ""),
+                reply_snippet=body_text[:200],
+                sender=e.get("from", ""),
+                sequence_id=str(sequence_id),
+            )
+
+            reply_count += 1
+            logger.info(
+                "Campaign reply detected from %s for sequence %s (%s)",
+                e.get("from"), sequence_id, row.get("company_name"),
+            )
+
+        except Exception as exc:
+            logger.warning("Campaign reply detection failed for email %s: %s", e.get("id"), exc)
+
+    return reply_count
+
+
+async def _send_campaign_reply_notification(
+    company_name: str,
+    reply_snippet: str,
+    sender: str,
+    sequence_id: str,
+) -> None:
+    """Send ntfy notification about a campaign reply."""
+    if not settings.alerts.ntfy_enabled:
+        return
+
+    ntfy_url = f"{settings.alerts.ntfy_url.rstrip('/')}/{settings.alerts.ntfy_topic}"
+    message = f"From: {sender}\n\n{reply_snippet}"
+
+    headers = {
+        "Title": f"Campaign Reply: {company_name}",
+        "Priority": "high",
+        "Tags": "email,campaign,reply",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(ntfy_url, content=message, headers=headers)
+            resp.raise_for_status()
+    except Exception as exc:
+        logger.warning("ntfy campaign reply notification failed: %s", exc)
+
+
+# ---------------------------------------------------------------------------
 
 async def _send_enriched_notifications(emails: list[dict[str, Any]]) -> None:
     """Send ntfy notifications with intent-specific buttons and CRM context.
@@ -655,7 +791,8 @@ async def _apply_inbox_rules(emails: list[dict[str, Any]]) -> int:
     rules = await pool.fetch(
         """SELECT * FROM email_inbox_rules
            WHERE enabled = true
-           ORDER BY position ASC""",
+           ORDER BY position ASC
+           LIMIT 200""",
     )
     if not rules:
         return 0
@@ -706,7 +843,7 @@ async def _record_with_action_plans(emails: list[dict[str, Any]]) -> None:
                         e.get("_contact_id"),
                         json.dumps({
                             "confidence": e.get("_confidence", 0.5),
-                            "actions": e["_action_plan"],
+                            "actions": e.get("_action_plan", []),
                         }) if e.get("_action_plan") else None,
                         e.get("_customer_summary"),
                         e.get("_intent"),
@@ -977,6 +1114,13 @@ async def run(task: ScheduledTask) -> dict:
             entity_id=e.get("_contact_id"),
         )
 
+    # 9a. Detect campaign replies (match In-Reply-To / References against sent_message_id)
+    campaign_replies = 0
+    if settings.campaign_sequence.enabled:
+        _pool = get_db_pool()
+        if _pool.is_initialized:
+            campaign_replies = await _detect_campaign_replies(_pool, emails)
+
     # 9b. Auto-execute high-confidence intent actions
     auto_executed = 0
     if cfg.auto_execute_enabled:
@@ -996,6 +1140,7 @@ async def run(task: ScheduledTask) -> dict:
             or e.get("category") == "lead"
             or e.get("_followup_draft"))
         and e.get("replyable") is not False
+        and not e.get("_campaign_reply")  # skip campaign replies (handled separately)
     ]
     if action_emails:
         await _send_enriched_notifications(action_emails)

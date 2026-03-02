@@ -116,7 +116,7 @@ class LocationTool:
             return ToolResult(
                 success=False,
                 error="EXECUTION_ERROR",
-                message=str(e),
+                message="Location lookup failed.",
             )
 
     async def _reverse_geocode(self, lat: float, lon: float) -> str | None:

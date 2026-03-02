@@ -480,6 +480,79 @@ class TaskScheduler:
                 "synthesis_skill": "digest/news_intelligence",
             },
         },
+        {
+            "name": "b2b_campaign_generation",
+            "description": "Daily ABM campaign generation from churn intelligence opportunities",
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": "0 22 * * *",
+            "timeout_seconds": 600,
+            "metadata": {
+                "builtin_handler": "b2b_campaign_generation",
+                "notify_tags": "briefcase,campaign",
+            },
+        },
+        {
+            "name": "campaign_sequence_progression",
+            "description": "Check active campaign sequences due for next step and generate follow-ups",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": None,  # resolved from settings.campaign_sequence.check_interval_seconds
+            "timeout_seconds": 600,
+            "metadata": {"builtin_handler": "campaign_sequence_progression"},
+        },
+        {
+            "name": "campaign_send",
+            "description": "Send queued campaign emails past the cancel window via Resend",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": 120,
+            "timeout_seconds": 120,
+            "metadata": {"builtin_handler": "campaign_send"},
+        },
+        {
+            "name": "campaign_analytics_refresh",
+            "description": "Refresh campaign funnel stats materialized view for analytics endpoints",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": 21600,  # 6 hours
+            "timeout_seconds": 60,
+            "metadata": {"builtin_handler": "campaign_analytics_refresh"},
+        },
+        {
+            "name": "amazon_seller_campaign_generation",
+            "description": "Generate outreach campaigns targeting Amazon sellers with category intelligence",
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": "0 21 * * *",
+            "timeout_seconds": 600,
+            "metadata": {
+                "builtin_handler": "amazon_seller_campaign_generation",
+                "notify_tags": "briefcase,campaign",
+            },
+        },
+        {
+            "name": "b2b_churn_alert",
+            "description": "Hourly check for churn signal spikes on tracked vendors and alert tenants",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": None,  # resolved from settings.b2b_alert.interval_seconds
+            "timeout_seconds": 120,
+            "enabled": False,  # opt-in via ATLAS_B2B_ALERT_ENABLED
+            "metadata": {"builtin_handler": "b2b_churn_alert"},
+        },
+        {
+            "name": "b2b_tenant_report",
+            "description": "Weekly per-tenant intelligence report scoped to tracked vendors",
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": "0 20 * * 0",
+            "timeout_seconds": 600,
+            "metadata": {
+                "builtin_handler": "b2b_tenant_report",
+                "notify_tags": "chart_with_upwards_trend,b2b",
+            },
+        },
     ]
 
     async def _ensure_default_tasks(self) -> None:
@@ -500,11 +573,15 @@ class TaskScheduler:
                 "email_intake": settings.email_intake.interval_seconds,
                 "email_stale_check": settings.email_stale_check.interval_seconds,
                 "weather_traffic_alerts": settings.alert_monitor.check_interval_seconds,
+                "campaign_sequence_progression": settings.campaign_sequence.check_interval_seconds,
+                "b2b_churn_alert": settings.b2b_alert.interval_seconds,
             }
 
             # Resolve configurable cron expressions at runtime
             _cron_overrides = {
                 "news_intelligence": f"0 {settings.news_intel.schedule_hour} * * *",
+                "b2b_campaign_generation": settings.b2b_campaign.schedule_cron,
+                "amazon_seller_campaign_generation": settings.seller_campaign.schedule_cron,
             }
 
             # Merge pipeline interval overrides from registry
@@ -605,6 +682,8 @@ class TaskScheduler:
                 "email_intake": settings.email_intake.interval_seconds,
                 "email_stale_check": settings.email_stale_check.interval_seconds,
                 "weather_traffic_alerts": settings.alert_monitor.check_interval_seconds,
+                "campaign_sequence_progression": settings.campaign_sequence.check_interval_seconds,
+                "b2b_churn_alert": settings.b2b_alert.interval_seconds,
             }
 
             # Merge pipeline interval overrides
@@ -638,6 +717,8 @@ class TaskScheduler:
                 "model_swap_night": settings.llm.model_swap_night_cron,
                 "email_graph_sync": "0 1 * * *",
                 "reasoning_reflection": settings.reasoning.reflection_cron,
+                "b2b_campaign_generation": settings.b2b_campaign.schedule_cron,
+                "amazon_seller_campaign_generation": settings.seller_campaign.schedule_cron,
             }
 
             # Merge pipeline cron overrides
@@ -769,8 +850,8 @@ class TaskScheduler:
                         "task", evt_level,
                         "Task '%s' %s (%dms)" % (task.name, status, duration_ms),
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Task broadcast failed: %s", e)
 
                 if status == "failed":
                     self._maybe_schedule_retry(task, retry_count)
@@ -793,11 +874,11 @@ class TaskScheduler:
                 await repo.complete_execution(
                     exec_id, "failed",
                     duration_ms=duration_ms,
-                    error=str(e),
+                    error=f"{type(e).__name__}: {str(e)[:500]}",
                 )
                 next_run = self._get_next_run_time(task)
                 await repo.update_last_run(task_id, now, next_run)
-                logger.error("Task '%s' failed: %s", task.name, e)
+                logger.error("Task '%s' failed", task.name, exc_info=True)
                 self._maybe_schedule_retry(task, retry_count)
                 await self._check_consecutive_failures(task.id)
 
@@ -873,8 +954,8 @@ class TaskScheduler:
             job = self._scheduler.get_job(str(task.id))
             if job and job.next_run_time:
                 return job.next_run_time
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to get next run time for %s: %s", task.id, e)
         return None
 
     async def register_and_schedule(self, task: ScheduledTask) -> None:
@@ -940,8 +1021,8 @@ class TaskScheduler:
                         "task", evt_level,
                         "Task '%s' %s (%dms)" % (task.name, status, duration_ms),
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Task broadcast failed: %s", e)
 
                 if status == "failed":
                     self._maybe_schedule_retry(task, 0)
@@ -963,10 +1044,10 @@ class TaskScheduler:
             await repo.complete_execution(
                 exec_id, "failed",
                 duration_ms=duration_ms,
-                error=str(e),
+                error=f"{type(e).__name__}: {str(e)[:500]}",
             )
             await repo.update_last_run(task.id, now, self._get_next_run_time(task))
-            logger.error("Manual task '%s' failed: %s", task.name, e)
+            logger.error("Manual task '%s' failed", task.name, exc_info=True)
             self._maybe_schedule_retry(task, 0)
             await self._check_consecutive_failures(task.id)
 

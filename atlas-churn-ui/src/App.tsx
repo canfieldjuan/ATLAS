@@ -1,4 +1,4 @@
-import { Routes, Route, useLocation } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import Layout from './components/Layout'
 import ErrorBoundary from './components/ErrorBoundary'
 import Dashboard from './pages/Dashboard'
@@ -8,6 +8,9 @@ import Reviews from './pages/Reviews'
 import ReviewDetail from './pages/ReviewDetail'
 import Reports from './pages/Reports'
 import ReportDetail from './pages/ReportDetail'
+import Leads from './pages/Leads'
+import VendorTargets from './pages/VendorTargets'
+import Challengers from './pages/Challengers'
 
 export default function App() {
   const location = useLocation()
@@ -23,6 +26,10 @@ export default function App() {
           <Route path="/reviews/:id" element={<ReviewDetail />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/reports/:id" element={<ReportDetail />} />
+          <Route path="/leads" element={<Leads />} />
+          <Route path="/vendor-targets" element={<VendorTargets />} />
+          <Route path="/challengers" element={<Challengers />} />
+          <Route path="/affiliates" element={<Navigate to="/leads" replace />} />
         </Routes>
       </ErrorBoundary>
     </Layout>

@@ -11,8 +11,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from scapy.all import sniff, Dot11, Dot11Beacon, Dot11Elt, Dot11Deauth
-
 from ...config import settings
 from .deauth_detector import DeauthDetector
 from .rogue_ap_detector import RogueAPDetector
@@ -20,6 +18,41 @@ from .rogue_ap_detector import RogueAPDetector
 logger = logging.getLogger("atlas.security.wireless.monitor")
 
 MIN_SIGNAL_DBM = -100
+
+sniff = None
+Dot11 = None
+Dot11Beacon = None
+Dot11Elt = None
+Dot11Deauth = None
+_SCAPY_IMPORT_ERROR: Exception | None = None
+
+
+def _ensure_scapy() -> None:
+    """Import scapy lazily to avoid privileged socket access during collection."""
+    global sniff, Dot11, Dot11Beacon, Dot11Elt, Dot11Deauth, _SCAPY_IMPORT_ERROR
+
+    if sniff is not None and Dot11 is not None:
+        return
+
+    try:
+        from scapy.all import (  # type: ignore
+            Dot11 as _Dot11,
+            Dot11Beacon as _Dot11Beacon,
+            Dot11Deauth as _Dot11Deauth,
+            Dot11Elt as _Dot11Elt,
+            sniff as _sniff,
+        )
+    except Exception as exc:  # pragma: no cover - environment dependent
+        _SCAPY_IMPORT_ERROR = exc
+        raise RuntimeError(
+            "Scapy is unavailable for wireless monitoring in this environment."
+        ) from exc
+
+    sniff = _sniff
+    Dot11 = _Dot11
+    Dot11Beacon = _Dot11Beacon
+    Dot11Elt = _Dot11Elt
+    Dot11Deauth = _Dot11Deauth
 
 class WirelessMonitor:
     """
@@ -75,6 +108,8 @@ class WirelessMonitor:
             
     def _process_packet(self, packet) -> None:
         """Process captured WiFi packet."""
+        _ensure_scapy()
+
         if not packet.haslayer(Dot11):
             return
             
@@ -174,6 +209,8 @@ class WirelessMonitor:
             
     def _start_packet_capture(self) -> None:
         """Start Scapy packet capture (runs in thread)."""
+        _ensure_scapy()
+
         logger.info("Starting packet capture on %s", self._interface)
         sniff(
             iface=self._interface,
@@ -231,4 +268,3 @@ class WirelessMonitor:
             self._capture_task = None
             
         logger.info("Wireless monitor stopped")
-

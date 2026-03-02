@@ -76,9 +76,9 @@ services:
     image: postgres:13
     container_name: db
     environment:
-      - POSTGRES_USER=user
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_DB=atlas
+      - POSTGRES_USER=${ATLAS_VISION_DB_USER:-user}
+      - POSTGRES_PASSWORD=${ATLAS_VISION_DB_PASSWORD:-password}
+      - POSTGRES_DB=${ATLAS_VISION_DB_NAME:-atlas}
     ports:
       - "5432:5432"
     volumes:

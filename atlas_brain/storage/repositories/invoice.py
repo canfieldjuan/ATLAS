@@ -369,6 +369,7 @@ class InvoiceRepository:
                 WHERE due_date < $1
                   AND status IN ('sent', 'partial')
                 ORDER BY due_date ASC
+                LIMIT 500
                 """,
                 check_date,
             )
@@ -544,6 +545,7 @@ class InvoiceRepository:
                 SELECT * FROM invoice_payments
                 WHERE invoice_id = $1
                 ORDER BY payment_date DESC
+                LIMIT 200
                 """,
                 invoice_id,
             )

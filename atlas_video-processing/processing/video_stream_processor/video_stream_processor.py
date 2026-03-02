@@ -1,52 +1,63 @@
-from kafka import KafkaConsumer
 import json
+import os
 import time
-import cv2 # Import OpenCV
+from typing import Any
 
-KAFKA_BROKER = 'localhost:9092' # This will be the service name in docker-compose
-KAFKA_TOPIC = 'drone_video_stream'
+from kafka import KafkaConsumer
 
-def process_frame_with_opencv(frame_data):
-    """
-    Placeholder function to simulate OpenCV processing on a video frame.
-    In a real scenario, this would involve decoding an actual image/frame,
-    applying computer vision algorithms (e.g., object detection), etc.
-    """
-    print(f"  [OpenCV Processor]: Simulating OpenCV processing for frame from Drone {frame_data['drone_id']}...")
-    # Simulate some CPU-bound work
-    time.sleep(0.05) 
-    # In a real application, you would decode the frame data here, e.g.:
-    # np_arr = np.frombuffer(base64.b64decode(frame_data['image_data']), np.uint8)
-    # img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-    # gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    # ... then apply detection models
-    print(f"  [OpenCV Processor]: Finished processing for frame from Drone {frame_data['drone_id']}.")
-    return "Processed_Metadata_Example" # Return some simulated result
+KAFKA_BROKER = os.getenv("ATLAS_VIDEO_KAFKA_BROKER", "localhost:9092")
+KAFKA_TOPIC = os.getenv("ATLAS_VIDEO_KAFKA_TOPIC", "drone_video_stream")
+PROCESSOR_MODE = os.getenv("ATLAS_VIDEO_PROCESSOR_MODE", "demo").strip().lower()
 
-def process_video_stream():
-    """
-    Consumes video stream data from a Kafka topic and simulates processing.
-    """
+
+def process_frame_demo(frame_data: dict[str, Any]) -> dict[str, Any]:
+    """Demo frame processing path used for local pipeline smoke tests."""
+    drone_id = frame_data.get("drone_id", "unknown")
+    print(f"  [Video Processor]: Demo processing frame from drone {drone_id}...")
+    time.sleep(0.05)
+    print(f"  [Video Processor]: Demo processing complete for drone {drone_id}.")
+    return {
+        "mode": "demo",
+        "drone_id": drone_id,
+        "timestamp": frame_data.get("timestamp"),
+        "status": "processed",
+    }
+
+
+def process_video_stream() -> None:
+    """Consume video stream data from Kafka using the demo processing path."""
+    if PROCESSOR_MODE != "demo":
+        raise RuntimeError(
+            "video_stream_processor.py only supports ATLAS_VIDEO_PROCESSOR_MODE=demo. "
+            "Production decode/detection must be implemented in a dedicated runtime path."
+        )
+
     consumer = None
     max_retries = 5
     for i in range(max_retries):
         try:
-            print(f"Video Processor: Attempting to connect to Kafka broker at {KAFKA_BROKER} (attempt {i+1}/{max_retries})...")
+            print(
+                f"Video Processor: connecting to Kafka {KAFKA_BROKER} "
+                f"(attempt {i + 1}/{max_retries})..."
+            )
             consumer = KafkaConsumer(
                 KAFKA_TOPIC,
                 bootstrap_servers=[KAFKA_BROKER],
-                auto_offset_reset='earliest', # Start reading at the earliest message
+                auto_offset_reset="earliest",
                 enable_auto_commit=True,
-                group_id='video-processor-group', # Consumer group ID
-                value_deserializer=lambda x: json.loads(x.decode('utf-8')),
-                api_version=(0, 10, 1) # Specify API version for compatibility
+                group_id="video-processor-group",
+                value_deserializer=lambda x: json.loads(x.decode("utf-8")),
+                api_version=(0, 10, 1),
             )
-            print(f"Video Processor: Connected to Kafka broker at {KAFKA_BROKER}. Listening to topic {KAFKA_TOPIC}...")
+            print(
+                f"Video Processor: connected to {KAFKA_BROKER}. "
+                f"Listening on topic {KAFKA_TOPIC} in demo mode."
+            )
             break
         except Exception as e:
             print(f"Video Processor: Could not connect to Kafka: {e}")
-            time.sleep(2 ** i) # Exponential backoff
-    
+            time.sleep(2 ** i)
+
     if not consumer:
         print(f"Video Processor: Failed to connect to Kafka after {max_retries} attempts. Exiting.")
         return
@@ -54,12 +65,14 @@ def process_video_stream():
     try:
         for message in consumer:
             frame_data = message.value
-            print(f"Video Processor: Received frame from Drone {frame_data['drone_id']} at {frame_data['timestamp']} - simulated data: {frame_data['simulated_data']}")
-            
-            # Call the placeholder OpenCV processing function
-            processing_result = process_frame_with_opencv(frame_data)
-            
-            print(f"Video Processor: Processed frame from Drone {frame_data['drone_id']}. Result: {processing_result}")
+            print(
+                "Video Processor: received frame "
+                f"drone={frame_data.get('drone_id')} "
+                f"timestamp={frame_data.get('timestamp')}"
+            )
+
+            processing_result = process_frame_demo(frame_data)
+            print(f"Video Processor: Demo result: {processing_result}")
 
     except KeyboardInterrupt:
         print("Video Processor: Shutting down.")
@@ -68,6 +81,7 @@ def process_video_stream():
     finally:
         if consumer:
             consumer.close()
+
 
 if __name__ == "__main__":
     process_video_stream()

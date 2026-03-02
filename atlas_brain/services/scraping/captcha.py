@@ -94,6 +94,61 @@ def _extract_datadome_params(html: str) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Cloudflare Turnstile parameter extraction
+# ---------------------------------------------------------------------------
+
+_CF_SITEKEY_ATTR = re.compile(r'data-sitekey=["\']([0-9a-zA-Z_-]+)["\']')
+_CF_SITEKEY_JS = re.compile(r'turnstileOptions\s*[=:]\s*\{[^}]*sitekey\s*:\s*["\']([0-9a-zA-Z_-]+)["\']', re.DOTALL)
+_CF_CHL_OPT = re.compile(r'window\._cf_chl_opt\s*=\s*\{([^}]+)\}', re.DOTALL)
+
+
+def _extract_cloudflare_params(html: str) -> dict[str, str]:
+    """Extract Turnstile sitekey + managed challenge params from Cloudflare HTML.
+
+    Returns dict with keys: sitekey, pagedata, action, cdata (all optional).
+    """
+    params: dict[str, str] = {}
+
+    # Sitekey: data-sitekey attribute or turnstileOptions JS block
+    m = _CF_SITEKEY_ATTR.search(html)
+    if m:
+        params["sitekey"] = m.group(1)
+    else:
+        m = _CF_SITEKEY_JS.search(html)
+        if m:
+            params["sitekey"] = m.group(1)
+
+    # _cf_chl_opt block: chlPageData, cFPWv (action), cData
+    m = _CF_CHL_OPT.search(html)
+    if m:
+        block = m.group(1)
+        for js_key, param_key in (
+            ("chlPageData", "pagedata"),
+            ("cFPWv", "action"),
+            ("cData", "cdata"),
+        ):
+            km = re.search(rf'["\']?{js_key}["\']?\s*:\s*["\']([^"\']+)["\']', block)
+            if km:
+                params[param_key] = km.group(1)
+
+    # Fallback: action from turnstile.render() call
+    if "action" not in params:
+        m = re.search(r'turnstile\.render\s*\([^)]*action\s*:\s*["\']([^"\']+)["\']', html, re.DOTALL)
+        if m:
+            params["action"] = m.group(1)
+
+    if params:
+        logger.info(
+            "Extracted CF params: sitekey=%s, pagedata=%s, action=%s, cdata=%s",
+            params.get("sitekey", "?")[:20],
+            bool(params.get("pagedata")),
+            params.get("action", "?"),
+            bool(params.get("cdata")),
+        )
+    return params
+
+
+# ---------------------------------------------------------------------------
 # Solution model
 # ---------------------------------------------------------------------------
 
@@ -142,7 +197,7 @@ def _ensure_capsolver_ua(user_agent: str) -> tuple[str, bool]:
         ver = int(m.group(1))
         if _CAPSOLVER_MIN_CHROME <= ver <= _CAPSOLVER_MAX_CHROME:
             return user_agent, False
-    # UA not supported — swap to a known-good one
+    # UA not supported -- swap to a known-good one
     logger.info("Swapping UA for CapSolver (original not in Chrome %d-%d range)",
                 _CAPSOLVER_MIN_CHROME, _CAPSOLVER_MAX_CHROME)
     return _CAPSOLVER_SUPPORTED_UA, True
@@ -231,10 +286,10 @@ class CaptchaSolver:
             if not dd or "cid" not in dd:
                 logger.warning("Failed to extract DataDome params from challenge page")
 
-            # t=bv means IP is banned by DataDome — solver cannot help
+            # t=bv means IP is banned by DataDome -- solver cannot help
             if dd.get("t") == "bv":
                 raise RuntimeError(
-                    "DataDome returned t=bv (IP banned) — rotate proxy before solving"
+                    "DataDome returned t=bv (IP banned) -- rotate proxy before solving"
                 )
 
             # Build full captchaUrl with all params CapSolver requires
@@ -277,16 +332,16 @@ class CaptchaSolver:
                 f"{base}/createTask",
                 json={"clientKey": self._api_key, "task": task},
             )
+            resp.raise_for_status()
             try:
                 data = resp.json()
-            except Exception:
-                resp.raise_for_status()
+            except (ValueError, TypeError):
                 raise RuntimeError(f"CapSolver returned non-JSON response: {resp.status_code}")
 
         if data.get("errorId", 0) != 0:
             raise RuntimeError(
                 f"CapSolver createTask error ({resp.status_code}): "
-                f"{data.get('errorCode', '?')} — {data.get('errorDescription', data)}"
+                f"{data.get('errorCode', '?')} -- {data.get('errorDescription', data)}"
             )
 
         task_id = data["taskId"]
@@ -351,7 +406,7 @@ class CaptchaSolver:
 
             if dd.get("t") == "bv":
                 raise RuntimeError(
-                    "DataDome returned t=bv (IP banned) — rotate proxy before solving"
+                    "DataDome returned t=bv (IP banned) -- rotate proxy before solving"
                 )
 
             from urllib.parse import quote, urlencode
@@ -376,12 +431,26 @@ class CaptchaSolver:
             }
 
         elif captcha_type == CaptchaType.CLOUDFLARE:
+            cf = _extract_cloudflare_params(page_html)
+            if not cf.get("sitekey"):
+                raise RuntimeError(
+                    "Could not extract Turnstile sitekey from Cloudflare challenge"
+                )
             task = {
                 "type": "TurnstileTask",
                 "websiteURL": page_url,
+                "websiteKey": cf["sitekey"],
                 "userAgent": user_agent,
                 **proxy_fields,
             }
+            # Challenge page params -- when present, 2Captcha solves the full
+            # managed challenge and returns cf_clearance cookie
+            if cf.get("action"):
+                task["action"] = cf["action"]
+            if cf.get("cdata"):
+                task["data"] = cf["cdata"]
+            if cf.get("pagedata"):
+                task["pagedata"] = cf["pagedata"]
         else:
             raise ValueError(f"Unsupported captcha type for 2Captcha: {captcha_type}")
 
@@ -391,12 +460,16 @@ class CaptchaSolver:
                 f"{base}/createTask",
                 json={"clientKey": self._api_key, "task": task},
             )
-            data = resp.json()
+            resp.raise_for_status()
+            try:
+                data = resp.json()
+            except (ValueError, TypeError):
+                raise RuntimeError(f"2Captcha returned non-JSON response: {resp.status_code}")
 
         if data.get("errorId", 0) != 0:
             raise RuntimeError(
                 f"2Captcha createTask error: "
-                f"{data.get('errorCode', '?')} — {data.get('errorDescription', data)}"
+                f"{data.get('errorCode', '?')} -- {data.get('errorDescription', data)}"
             )
 
         task_id = str(data["taskId"])
@@ -416,11 +489,15 @@ class CaptchaSolver:
                 status = data.get("status", "")
                 if status == "ready":
                     solution = data.get("solution", {})
+                    logger.info(
+                        "2Captcha raw solution: %s",
+                        {k: v[:40] if isinstance(v, str) else v for k, v in solution.items()},
+                    )
                     return _parse_2captcha_cookies(solution)
                 if data.get("errorId", 0) != 0:
                     raise RuntimeError(
                         f"2Captcha task failed: "
-                        f"{data.get('errorCode', '?')} — {data.get('errorDescription', data)}"
+                        f"{data.get('errorCode', '?')} -- {data.get('errorDescription', data)}"
                     )
 
         raise TimeoutError(f"2Captcha task {task_id} timed out after {(_POLL_INTERVAL_S + 2) * _MAX_POLL_ATTEMPTS}s")
@@ -461,7 +538,7 @@ def _parse_2captcha_cookies(solution: dict) -> dict[str, str]:
     """Parse 2Captcha solution into cookies dict.
 
     New API returns ``{"cookie": "*datadome=abc; expires=...; domain=.g2.com"}``.
-    The ``*`` prefix on the cookie name is a 2Captcha convention — strip it.
+    The ``*`` prefix on the cookie name is a 2Captcha convention -- strip it.
     Cookie attributes (expires, domain, path, secure, samesite) are filtered out.
     """
     _COOKIE_ATTRS = {"path", "secure", "samesite", "domain", "httponly", "max-age", "expires"}
@@ -480,7 +557,18 @@ def _parse_2captcha_cookies(solution: dict) -> dict[str, str]:
                     cookies[k] = v.strip()
 
     if not cookies:
-        logger.warning("No cookies parsed from 2Captcha solution: %s", solution)
+        # TurnstileTask may return {"token": "..."} instead of {"cookie": "..."}
+        # when challenge params are missing or 2Captcha only solved the widget.
+        # Store it so logs reveal what happened -- the retry will likely fail
+        # without cf_clearance, but at least we'll know why.
+        token = solution.get("token")
+        if token:
+            logger.warning(
+                "2Captcha returned token (not cookies) -- challenge params may be incomplete"
+            )
+            cookies["cf_turnstile_response"] = token
+        else:
+            logger.warning("No cookies parsed from 2Captcha solution: %s", solution)
     return cookies
 
 
@@ -493,6 +581,7 @@ _solver_2captcha: CaptchaSolver | None = None
 _2captcha_domains: set[str] = set()
 _enabled_domains: set[str] = set()
 _checked: bool = False
+_init_lock = __import__("threading").Lock()
 
 
 def get_captcha_solver(domain: str | None = None) -> CaptchaSolver | None:
@@ -503,7 +592,9 @@ def get_captcha_solver(domain: str | None = None) -> CaptchaSolver | None:
     """
     global _solver, _solver_2captcha, _2captcha_domains, _enabled_domains, _checked
     if not _checked:
-        _init_solvers()
+        with _init_lock:
+            if not _checked:
+                _init_solvers()
     if _solver is None:
         return None
 

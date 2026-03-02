@@ -250,8 +250,8 @@ async def _fetch_google_rss(
                         "source_name": entry.get("source", {}).get("title", "Google News"),
                         "published_at": entry.get("published", ""),
                     })
-            except Exception:
-                pass  # individual feed failure is non-fatal
+            except Exception as e:
+                logger.warning("RSS feed parse failed for keyword: %s", e)
 
             if len(articles) >= max_articles:
                 break
