@@ -6,12 +6,12 @@ import { useAuth } from '../auth/AuthContext'
 export default function Login() {
   const { user, login } = useAuth()
   const navigate = useNavigate()
-
-  if (user) return <Navigate to="/" replace />
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+
+  if (user) return <Navigate to="/" replace />
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()

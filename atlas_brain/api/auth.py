@@ -68,6 +68,9 @@ class UserResponse(BaseModel):
 @router.post("/register", response_model=TokenResponse)
 async def register(req: RegisterRequest):
     """Create a new account and user, return JWT tokens."""
+    if not settings.saas_auth.enabled:
+        raise HTTPException(status_code=404, detail="Registration not available")
+
     if len(req.password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
 
@@ -141,6 +144,9 @@ async def register(req: RegisterRequest):
 @router.post("/login", response_model=TokenResponse)
 async def login(req: LoginRequest):
     """Authenticate with email/password, return JWT tokens."""
+    if not settings.saas_auth.enabled:
+        raise HTTPException(status_code=404, detail="Login not available")
+
     pool = get_db_pool()
     if not pool.is_initialized:
         raise HTTPException(status_code=503, detail="Database not ready")
@@ -261,6 +267,9 @@ async def me(user: AuthUser = Depends(require_auth)):
 @router.post("/change-password")
 async def change_password(req: ChangePasswordRequest, user: AuthUser = Depends(require_auth)):
     """Change password for current user."""
+    if not settings.saas_auth.enabled:
+        raise HTTPException(status_code=404, detail="Password management not available in local dev mode")
+
     if len(req.new_password) < 8:
         raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
 

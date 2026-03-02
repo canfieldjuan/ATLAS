@@ -38,7 +38,7 @@ class SaaSAuthConfig(BaseSettings):
             import warnings
             warnings.warn(
                 "ATLAS_SAAS_STRIPE_WEBHOOK_SECRET is empty while Stripe is configured. "
-                "Webhooks will accept unverified payloads.",
+                "Stripe webhook endpoint will return 503 until this is set.",
                 stacklevel=2,
             )
         return self

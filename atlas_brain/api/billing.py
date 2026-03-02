@@ -363,7 +363,15 @@ async def _handle_subscription_updated(pool, subscription) -> _uuid.UUID | None:
     limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["starter"])
 
     # Map Stripe subscription status to our plan_status
-    status_map = {"active": "active", "past_due": "past_due", "trialing": "trialing"}
+    status_map = {
+        "active": "active",
+        "past_due": "past_due",
+        "trialing": "trialing",
+        "canceled": "canceled",
+        "unpaid": "past_due",
+        "incomplete": "past_due",
+        "incomplete_expired": "canceled",
+    }
     sub_status = getattr(subscription, "status", "active")
     plan_status = status_map.get(sub_status, "active")
 

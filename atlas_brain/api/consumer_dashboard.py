@@ -182,32 +182,31 @@ async def add_tracked_asin(req: AddAsinRequest, user: AuthUser = Depends(require
     pool = _pool_or_503()
 
     acct = _uuid.UUID(user.account_id)
+    asin_val = req.asin.strip().upper()
 
-    # Check limit
-    current_count = await pool.fetchval(
-        "SELECT COUNT(*) FROM tracked_asins WHERE account_id = $1",
-        acct,
-    )
-    asin_limit = await pool.fetchval(
-        "SELECT asin_limit FROM saas_accounts WHERE id = $1",
-        acct,
-    )
-    if current_count >= (asin_limit or 5):
-        raise HTTPException(status_code=403, detail="ASIN limit reached. Upgrade your plan for more.")
+    # Atomic limit check + upsert to prevent TOCTOU race
+    async with pool.transaction() as conn:
+        current_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM tracked_asins WHERE account_id = $1 AND asin != $2",
+            acct, asin_val,
+        )
+        asin_limit = await conn.fetchval(
+            "SELECT asin_limit FROM saas_accounts WHERE id = $1",
+            acct,
+        )
+        if current_count >= (asin_limit or 5):
+            raise HTTPException(status_code=403, detail="ASIN limit reached. Upgrade your plan for more.")
 
-    # Upsert
-    await pool.execute(
-        """
-        INSERT INTO tracked_asins (account_id, asin, label)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (account_id, asin) DO UPDATE SET label = EXCLUDED.label
-        """,
-        acct,
-        req.asin.strip().upper(),
-        req.label,
-    )
+        await conn.execute(
+            """
+            INSERT INTO tracked_asins (account_id, asin, label)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (account_id, asin) DO UPDATE SET label = EXCLUDED.label
+            """,
+            acct, asin_val, req.label,
+        )
 
-    return {"status": "ok", "asin": req.asin.strip().upper()}
+    return {"status": "ok", "asin": asin_val}
 
 
 @router.delete("/asins/{asin}")
@@ -474,6 +473,11 @@ async def list_brands(
         offset_idx = idx + 1
         sql_limit_clause = f"LIMIT ${limit_idx} OFFSET ${offset_idx}"
 
+    # Build tenant-scoped CTE
+    cte_tenant = ""
+    if t_cond != "TRUE":
+        cte_tenant = f"AND pm.asin IN (SELECT asin FROM tracked_asins WHERE account_id = $1)"
+
     rows = await pool.fetch(
         f"""
         WITH brand_products AS (
@@ -481,6 +485,7 @@ async def list_brands(
                    SUM(pm.rating_number) AS total_ratings
             FROM product_metadata pm
             WHERE pm.brand IS NOT NULL AND pm.brand != ''
+              {cte_tenant}
             GROUP BY pm.brand
         )
         SELECT pm.brand,
@@ -606,6 +611,10 @@ async def compare_brands(
     t_sql = f"AND {t_cond}" if t_cond != "TRUE" else ""
 
     # -- Query 1: Summary stats per brand --
+    cte_tenant = ""
+    if t_cond != "TRUE":
+        cte_tenant = f"AND pm.asin IN (SELECT asin FROM tracked_asins WHERE account_id = ${t_idx})"
+
     summary_rows = await pool.fetch(
         f"""
         WITH brand_products AS (
@@ -613,6 +622,7 @@ async def compare_brands(
             FROM product_metadata pm
             WHERE pm.brand IS NOT NULL AND pm.brand != ''
               AND ({brand_clauses})
+              {cte_tenant}
             GROUP BY pm.brand
         )
         SELECT pm.brand,
@@ -1235,6 +1245,7 @@ async def get_brand_detail(brand_name: str, user: AuthUser = Depends(require_aut
           AND pr.deep_extraction IS NOT NULL
           AND pr.deep_extraction != '{{}}'::jsonb
           AND jsonb_array_length(COALESCE(pr.deep_extraction->'positive_aspects', '[]'::jsonb)) > 0
+        LIMIT 5000
         """,
         bname, *t_extra,
     )
@@ -1264,6 +1275,7 @@ async def get_brand_detail(brand_name: str, user: AuthUser = Depends(require_aut
           AND pr.deep_extraction IS NOT NULL
           AND pr.deep_extraction != '{{}}'::jsonb
           AND jsonb_array_length(COALESCE(pr.deep_extraction->'consideration_set', '[]'::jsonb)) > 0
+        LIMIT 5000
         """,
         bname, *t_extra,
     )

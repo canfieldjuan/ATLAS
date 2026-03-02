@@ -6,14 +6,14 @@ import { useAuth } from '../auth/AuthContext'
 export default function Signup() {
   const { user, signup } = useAuth()
   const navigate = useNavigate()
-
-  if (user) return <Navigate to="/" replace />
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [fullName, setFullName] = useState('')
   const [accountName, setAccountName] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+
+  if (user) return <Navigate to="/" replace />
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()

@@ -131,6 +131,9 @@ async def optional_auth(request: Request) -> Optional[AuthUser]:
     if not row:
         return None
 
+    if row["plan_status"] == "canceled":
+        return None
+
     return AuthUser(
         user_id=payload["sub"],
         account_id=payload["account_id"],

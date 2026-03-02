@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { User, CreditCard, Settings, LogOut, ExternalLink } from 'lucide-react'
+import { User, CreditCard, Settings, LogOut, ExternalLink, AlertCircle } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 
 const PLAN_LABELS: Record<string, string> = {
@@ -19,21 +19,26 @@ const PLAN_COLORS: Record<string, string> = {
 export default function Account() {
   const { user, logout } = useAuth()
   const [portalLoading, setPortalLoading] = useState(false)
+  const [checkoutLoading, setCheckoutLoading] = useState(false)
+  const [error, setError] = useState('')
 
   if (!user) return null
 
   const planBadge = PLAN_COLORS[user.plan] || PLAN_COLORS.trial
 
-  function handle401(res: Response) {
+  function check401(res: Response): boolean {
     if (res.status === 401) {
       localStorage.removeItem('atlas_token')
       localStorage.removeItem('atlas_refresh_token')
       window.location.href = '/login'
+      return true
     }
+    return false
   }
 
   async function openBillingPortal() {
     setPortalLoading(true)
+    setError('')
     try {
       const token = localStorage.getItem('atlas_token')
       const res = await fetch('/api/v1/billing/portal', {
@@ -43,41 +48,55 @@ export default function Account() {
           Authorization: `Bearer ${token}`,
         },
       })
-      handle401(res)
-      if (!res.ok) throw new Error('Failed to open portal')
+      if (check401(res)) return
+      if (!res.ok) throw new Error('Failed to open billing portal')
       const data = await res.json()
       window.location.href = data.portal_url
-    } catch {
-      // Stripe not configured or no subscription
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not open billing portal')
     } finally {
       setPortalLoading(false)
     }
   }
 
   async function startCheckout(planName: string) {
-    const token = localStorage.getItem('atlas_token')
-    const res = await fetch('/api/v1/billing/checkout', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        plan: planName,
-        success_url: `${window.location.origin}/account?upgraded=1`,
-        cancel_url: `${window.location.origin}/account`,
-      }),
-    })
-    handle401(res)
-    if (res.ok) {
+    setCheckoutLoading(true)
+    setError('')
+    try {
+      const token = localStorage.getItem('atlas_token')
+      const res = await fetch('/api/v1/billing/checkout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          plan: planName,
+          success_url: `${window.location.origin}/account?upgraded=1`,
+          cancel_url: `${window.location.origin}/account`,
+        }),
+      })
+      if (check401(res)) return
+      if (!res.ok) throw new Error('Failed to start checkout')
       const data = await res.json()
       window.location.href = data.checkout_url
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not start checkout')
+    } finally {
+      setCheckoutLoading(false)
     }
   }
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <h1 className="text-2xl font-bold text-white">Account</h1>
+
+      {error && (
+        <div className="flex items-center gap-2 text-sm text-red-400 bg-red-900/20 border border-red-800/50 rounded-lg px-3 py-2">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          {error}
+        </div>
+      )}
 
       {/* Profile */}
       <section className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-5 space-y-3">
@@ -131,16 +150,17 @@ export default function Account() {
           {(user.plan === 'trial' || user.plan === 'starter') && (
             <button
               onClick={() => startCheckout('growth')}
-              className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-white text-sm font-medium transition-colors flex items-center gap-1.5"
+              disabled={checkoutLoading}
+              className="px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-lg text-white text-sm font-medium transition-colors flex items-center gap-1.5"
             >
-              Upgrade to Growth
-              <ExternalLink className="h-3.5 w-3.5" />
+              {checkoutLoading ? 'Loading...' : 'Upgrade to Growth'}
+              {!checkoutLoading && <ExternalLink className="h-3.5 w-3.5" />}
             </button>
           )}
           <button
             onClick={openBillingPortal}
             disabled={portalLoading}
-            className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white text-sm transition-colors"
+            className="px-4 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 rounded-lg text-white text-sm transition-colors"
           >
             {portalLoading ? 'Loading...' : 'Manage billing'}
           </button>
