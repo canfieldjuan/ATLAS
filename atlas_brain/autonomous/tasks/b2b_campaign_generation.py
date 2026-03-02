@@ -231,9 +231,13 @@ async def generate_campaigns(
     mode = target_mode or cfg.target_mode
 
     if mode == "vendor_retention":
-        return await _generate_vendor_campaigns(pool, min_score, limit, vendor_filter)
+        return await _generate_vendor_campaigns(
+            pool, min_score, limit, vendor_filter, company_filter,
+        )
     elif mode == "challenger_intel":
-        return await _generate_challenger_campaigns(pool, min_score, limit, vendor_filter)
+        return await _generate_challenger_campaigns(
+            pool, min_score, limit, vendor_filter, company_filter,
+        )
 
     # Default: churning_company (original behavior)
     return await _generate_churning_company_campaigns(
@@ -600,6 +604,7 @@ async def _generate_vendor_campaigns(
     min_score: int,
     limit: int,
     vendor_filter: str | None,
+    company_filter: str | None = None,
 ) -> dict[str, Any]:
     """Generate campaigns targeting vendor CS/Product leaders with churn intelligence."""
     cfg = settings.b2b_campaign
@@ -610,8 +615,10 @@ async def _generate_vendor_campaigns(
         return {"generated": 0, "skipped": 0, "failed": 0, "companies": 0,
                 "target_mode": "vendor_retention", "error": "No active vendor targets"}
 
-    # 2. Fetch all enriched opportunities
-    opportunities = await _fetch_opportunities(pool, min_score, limit * 5, dm_only=False)
+    # 2. Fetch all enriched opportunities (company_filter narrows the signal pool)
+    opportunities = await _fetch_opportunities(
+        pool, min_score, limit * 5, company_filter=company_filter, dm_only=False,
+    )
 
     # 3. Get LLM + skill
     from ...services.llm_router import get_llm
@@ -905,6 +912,7 @@ async def _generate_challenger_campaigns(
     min_score: int,
     limit: int,
     vendor_filter: str | None,
+    company_filter: str | None = None,
 ) -> dict[str, Any]:
     """Generate campaigns targeting challenger Sales/Competitive Intel leaders."""
     cfg = settings.b2b_campaign
@@ -915,8 +923,10 @@ async def _generate_challenger_campaigns(
         return {"generated": 0, "skipped": 0, "failed": 0, "companies": 0,
                 "target_mode": "challenger_intel", "error": "No active challenger targets"}
 
-    # 2. Fetch all enriched opportunities
-    opportunities = await _fetch_opportunities(pool, min_score, limit * 5, dm_only=False)
+    # 2. Fetch all enriched opportunities (company_filter narrows the signal pool)
+    opportunities = await _fetch_opportunities(
+        pool, min_score, limit * 5, company_filter=company_filter, dm_only=False,
+    )
 
     # 3. Get LLM + skill
     from ...services.llm_router import get_llm

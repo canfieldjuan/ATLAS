@@ -2074,6 +2074,20 @@ class B2BChurnConfig(BaseSettings):
     )
 
 
+class B2BAlertConfig(BaseSettings):
+    """B2B churn signal spike alert configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_B2B_ALERT_", env_file=".env", extra="ignore"
+    )
+
+    enabled: bool = Field(default=False, description="Enable churn signal spike alerts")
+    signal_count_threshold: int = Field(default=3, description="New signals to trigger alert")
+    urgency_spike_threshold: float = Field(default=1.5, description="Avg urgency increase to trigger alert")
+    cooldown_hours: int = Field(default=24, description="Min hours between alerts for same vendor")
+    interval_seconds: int = Field(default=3600, description="Alert check interval (1 hour)")
+
+
 class B2BScrapeConfig(BaseSettings):
     """B2B review scraping pipeline configuration."""
 
@@ -2680,6 +2694,7 @@ class Settings(BaseSettings):
     invoicing: InvoicingConfig = Field(default_factory=InvoicingConfig)
     external_data: ExternalDataConfig = Field(default_factory=ExternalDataConfig)
     b2b_churn: B2BChurnConfig = Field(default_factory=B2BChurnConfig)
+    b2b_alert: B2BAlertConfig = Field(default_factory=B2BAlertConfig)
     b2b_scrape: B2BScrapeConfig = Field(default_factory=B2BScrapeConfig)
     b2b_campaign: B2BCampaignConfig = Field(default_factory=B2BCampaignConfig)
     campaign_sequence: CampaignSequenceConfig = Field(default_factory=CampaignSequenceConfig)

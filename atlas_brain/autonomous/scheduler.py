@@ -531,6 +531,28 @@ class TaskScheduler:
                 "notify_tags": "briefcase,campaign",
             },
         },
+        {
+            "name": "b2b_churn_alert",
+            "description": "Hourly check for churn signal spikes on tracked vendors and alert tenants",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": None,  # resolved from settings.b2b_alert.interval_seconds
+            "timeout_seconds": 120,
+            "enabled": False,  # opt-in via ATLAS_B2B_ALERT_ENABLED
+            "metadata": {"builtin_handler": "b2b_churn_alert"},
+        },
+        {
+            "name": "b2b_tenant_report",
+            "description": "Weekly per-tenant intelligence report scoped to tracked vendors",
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": "0 20 * * 0",
+            "timeout_seconds": 600,
+            "metadata": {
+                "builtin_handler": "b2b_tenant_report",
+                "notify_tags": "chart_with_upwards_trend,b2b",
+            },
+        },
     ]
 
     async def _ensure_default_tasks(self) -> None:
@@ -552,6 +574,7 @@ class TaskScheduler:
                 "email_stale_check": settings.email_stale_check.interval_seconds,
                 "weather_traffic_alerts": settings.alert_monitor.check_interval_seconds,
                 "campaign_sequence_progression": settings.campaign_sequence.check_interval_seconds,
+                "b2b_churn_alert": settings.b2b_alert.interval_seconds,
             }
 
             # Resolve configurable cron expressions at runtime
@@ -660,6 +683,7 @@ class TaskScheduler:
                 "email_stale_check": settings.email_stale_check.interval_seconds,
                 "weather_traffic_alerts": settings.alert_monitor.check_interval_seconds,
                 "campaign_sequence_progression": settings.campaign_sequence.check_interval_seconds,
+                "b2b_churn_alert": settings.b2b_alert.interval_seconds,
             }
 
             # Merge pipeline interval overrides

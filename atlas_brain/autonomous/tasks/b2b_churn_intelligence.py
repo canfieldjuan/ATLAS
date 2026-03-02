@@ -857,6 +857,142 @@ async def _fetch_prior_reports(pool, *, limit: int = 4) -> list[dict[str, Any]]:
 
 
 # ------------------------------------------------------------------
+# Public aggregation entry point (reused by b2b_tenant_report)
+# ------------------------------------------------------------------
+
+
+def _vendor_match(value: str, vendor_set: set[str]) -> bool:
+    """Case-insensitive ILIKE-style match: vendor_set entry is contained in value."""
+    vl = value.lower()
+    return any(name in vl for name in vendor_set)
+
+
+def _filter_by_vendors(data: list[dict], vendor_names: list[str]) -> list[dict]:
+    """Post-filter fetcher results to only include rows matching vendor_names.
+
+    Handles two structures:
+    - Flat dicts with a ``vendor`` / ``vendor_name`` key (most fetchers)
+    - Nested dicts like ``use_case_distribution`` with ``{"type": ..., "data": [...]}``
+      where vendor data lives inside ``data[*]["vendor_name"]``
+    """
+    lowered = {v.lower() for v in vendor_names}
+    filtered = []
+    for row in data:
+        vn = row.get("vendor") or row.get("vendor_name") or ""
+        if vn:
+            # Standard flat row
+            if _vendor_match(vn, lowered):
+                filtered.append(row)
+        elif "data" in row and isinstance(row["data"], list):
+            # Nested structure (use_case_distribution): filter inner data
+            inner = [r for r in row["data"] if _vendor_match(
+                r.get("vendor_name") or r.get("vendor") or "", lowered
+            )]
+            if inner:
+                filtered.append({**row, "data": inner})
+        # else: no vendor key at all, skip row
+    return filtered
+
+
+async def gather_intelligence_data(
+    pool,
+    window_days: int = 30,
+    min_reviews: int = 3,
+    vendor_names: list[str] | None = None,
+) -> dict[str, Any]:
+    """Gather all 16 intelligence data sources, optionally scoped to vendors.
+
+    Returns the same payload dict that the LLM expects. Used by both
+    the global ``run()`` handler and per-tenant report generation.
+    """
+    cfg = settings.b2b_churn
+    urgency_threshold = cfg.high_churn_urgency_threshold
+    neg_threshold = cfg.negative_review_threshold
+    fg_min_mentions = cfg.feature_gap_min_mentions
+    quote_min_urgency = cfg.quotable_phrase_min_urgency
+    tl_limit = cfg.timeline_signals_limit
+    prior_limit = cfg.prior_reports_limit
+
+    results = await asyncio.gather(
+        _fetch_vendor_churn_scores(pool, window_days, min_reviews),
+        _fetch_high_intent_companies(pool, urgency_threshold, window_days),
+        _fetch_competitive_displacement(pool, window_days),
+        _fetch_pain_distribution(pool, window_days),
+        _fetch_feature_gaps(pool, window_days, min_mentions=fg_min_mentions),
+        _fetch_negative_review_counts(pool, window_days, threshold=neg_threshold),
+        _fetch_price_complaint_rates(pool, window_days),
+        _fetch_dm_churn_rates(pool, window_days),
+        _fetch_churning_companies(pool, window_days),
+        _fetch_quotable_evidence(pool, window_days, min_urgency=quote_min_urgency),
+        _fetch_budget_signals(pool, window_days),
+        _fetch_use_case_distribution(pool, window_days),
+        _fetch_sentiment_trajectory(pool, window_days),
+        _fetch_buyer_authority_summary(pool, window_days),
+        _fetch_timeline_signals(pool, window_days, limit=tl_limit),
+        _fetch_competitor_reasons(pool, window_days),
+        return_exceptions=True,
+    )
+
+    names = [
+        "vendor_scores", "high_intent", "competitive_disp", "pain_dist",
+        "feature_gaps", "negative_counts", "price_rates", "dm_rates",
+        "churning_companies", "quotable_evidence", "budget_signals",
+        "use_case_dist", "sentiment_traj", "buyer_auth",
+        "timeline_signals", "competitor_reasons",
+    ]
+
+    fetcher_failures = 0
+    data = {}
+    for name, val in zip(names, results):
+        if isinstance(val, Exception):
+            fetcher_failures += 1
+            logger.error("%s fetch failed: %s", name, val, exc_info=val)
+            data[name] = []
+        else:
+            data[name] = val
+
+    # Post-filter by vendor names if scoped
+    if vendor_names:
+        for key in data:
+            if isinstance(data[key], list) and data[key] and isinstance(data[key][0], dict):
+                data[key] = _filter_by_vendors(data[key], vendor_names)
+
+    prior_reports = await _fetch_prior_reports(pool, limit=prior_limit)
+
+    payload = {
+        "date": str(date.today()),
+        "analysis_window_days": window_days,
+        "vendor_churn_scores": data["vendor_scores"],
+        "high_intent_companies": data["high_intent"],
+        "competitive_displacement": data["competitive_disp"],
+        "pain_distribution": data["pain_dist"],
+        "feature_gaps": data["feature_gaps"],
+        "negative_review_counts": data["negative_counts"],
+        "price_complaint_rates": data["price_rates"],
+        "decision_maker_churn_rates": data["dm_rates"],
+        "churning_companies": data["churning_companies"],
+        "quotable_evidence": data["quotable_evidence"],
+        "budget_signal_summary": data["budget_signals"],
+        "use_case_distribution": data["use_case_dist"],
+        "sentiment_trajectory_distribution": data["sentiment_traj"],
+        "buyer_authority_summary": data["buyer_auth"],
+        "timeline_signals": data["timeline_signals"],
+        "competitor_reasons": data["competitor_reasons"],
+        "prior_reports": prior_reports,
+    }
+
+    return {
+        "payload": payload,
+        "fetcher_failures": fetcher_failures,
+        "vendors_analyzed": len(data["vendor_scores"]),
+        "high_intent_companies": len(data["high_intent"]),
+        "competitive_flows": len(data["competitive_disp"]),
+        "pain_categories": len(data["pain_dist"]),
+        "feature_gaps": len(data["feature_gaps"]),
+    }
+
+
+# ------------------------------------------------------------------
 # Lookup builders (pure Python, no DB)
 # ------------------------------------------------------------------
 

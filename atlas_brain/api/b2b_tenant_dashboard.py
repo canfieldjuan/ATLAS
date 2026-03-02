@@ -13,6 +13,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ..auth.dependencies import AuthUser, require_auth, require_b2b_plan
+from ..autonomous.tasks.b2b_campaign_generation import (
+    generate_campaigns as _generate_campaigns,
+)
 from ..config import settings
 from ..storage.database import get_db_pool
 
@@ -1082,62 +1085,27 @@ async def generate_campaigns(
         if not tracked:
             raise HTTPException(status_code=403, detail="Vendor not in your tracked list")
 
-    # Find high-intent leads for this vendor
-    conditions = [
-        "enrichment_status = 'enriched'",
-        "reviewer_company IS NOT NULL AND reviewer_company != ''",
-        "(enrichment->>'urgency_score')::numeric >= 7",
-        "vendor_name ILIKE '%' || $1 || '%'",
-    ]
-    params: list = [vname]
-    idx = 2
+    # Use the full LLM campaign generation pipeline
+    cfg = settings.b2b_campaign
 
-    if req.company_filter:
-        conditions.append(f"reviewer_company ILIKE '%' || ${idx} || '%'")
-        params.append(req.company_filter.strip())
-        idx += 1
-
-    where = " AND ".join(conditions)
-
-    leads = await pool.fetch(
-        f"""
-        SELECT DISTINCT ON (reviewer_company) reviewer_company,
-               (enrichment->>'urgency_score')::numeric AS urgency,
-               enrichment->>'pain_category' AS pain,
-               enrichment->'competitors_mentioned' AS competitors,
-               enrichment->'buyer_authority'->>'buying_stage' AS buying_stage
-        FROM b2b_reviews
-        WHERE {where}
-        ORDER BY reviewer_company, (enrichment->>'urgency_score')::numeric DESC
-        LIMIT 20
-        """,
-        *params,
-    )
-
-    if not leads:
-        return {"campaigns_created": 0, "message": "No high-intent leads found for this vendor"}
-
-    # Create draft campaigns for each lead
-    created = 0
-    for lead in leads:
-        pain = lead["pain"] or "general dissatisfaction"
-        company = lead["reviewer_company"]
-
-        await pool.execute(
-            """
-            INSERT INTO b2b_campaigns (company_name, vendor_name, channel, subject, body, status, batch_id)
-            VALUES ($1, $2, 'email_cold', $3, $4, 'draft', $5)
-            ON CONFLICT DO NOTHING
-            """,
-            company,
-            vname,
-            f"Re: {pain} challenges with {vname}",
-            f"Draft campaign targeting {company} (pain: {pain}, urgency: {_safe_float(lead['urgency'], 0)}, stage: {lead['buying_stage'] or 'unknown'})",
-            f"tenant_{user.account_id}_{vname}",
+    try:
+        result = await _generate_campaigns(
+            pool,
+            vendor_filter=vname,
+            company_filter=req.company_filter or None,
+            target_mode=cfg.target_mode,
+            min_score=cfg.min_opportunity_score,
+            limit=cfg.max_campaigns_per_run,
         )
-        created += 1
+    except Exception as exc:
+        logger.error("Campaign generation failed for vendor %s: %s", vname, exc)
+        raise HTTPException(status_code=500, detail="Campaign generation failed")
 
-    return {"campaigns_created": created}
+    # Surface pipeline errors as 5xx instead of silent 200
+    if result.get("error"):
+        raise HTTPException(status_code=503, detail=result["error"])
+
+    return {"campaigns_created": result.get("generated", 0), **result}
 
 
 @router.patch("/campaigns/{campaign_id}")

@@ -100,16 +100,17 @@ async def _generate_next_step(
         selling_context = json.loads(selling_context)
 
     # Select skill based on sequence type
-    is_seller_seq = company_context.get("recipient_type") == "amazon_seller"
+    recipient_type = company_context.get("recipient_type")
     _meta = {
-        "_recipient_type": company_context.get("recipient_type"),
+        "_recipient_type": recipient_type,
         "_category": company_context.get("category"),
     }
-    skill_name = (
-        "digest/amazon_seller_campaign_sequence"
-        if is_seller_seq
-        else "digest/b2b_campaign_sequence"
-    )
+    if recipient_type == "onboarding":
+        skill_name = "digest/b2b_onboarding_sequence"
+    elif recipient_type == "amazon_seller":
+        skill_name = "digest/amazon_seller_campaign_sequence"
+    else:
+        skill_name = "digest/b2b_campaign_sequence"
     skill = get_skill_registry().get(skill_name)
     if not skill:
         logger.error("Skill %s not found", skill_name)

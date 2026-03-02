@@ -1,5 +1,6 @@
 """Authentication endpoints: register, login, refresh, me, change-password."""
 
+import json
 import logging
 import uuid as _uuid
 from datetime import datetime, timedelta, timezone
@@ -129,6 +130,40 @@ async def register(req: RegisterRequest):
             pw_hash,
             req.full_name,
         )
+
+    # Create onboarding sequence for B2B accounts (outside transaction -- non-critical)
+    if is_b2b:
+        try:
+            await pool.execute(
+                """
+                INSERT INTO campaign_sequences (
+                    company_name, batch_id, sequence_type,
+                    recipient_email, max_steps,
+                    company_context, selling_context,
+                    next_step_after
+                ) VALUES ($1, $2, 'onboarding', $3, 4, $4, $5, NOW())
+                ON CONFLICT DO NOTHING
+                """,
+                req.account_name,
+                f"onboarding_{account_id}",
+                req.email.lower(),
+                json.dumps({
+                    "recipient_type": "onboarding",
+                    "product": product,
+                    "plan": plan,
+                    "trial_ends_at": trial_ends.isoformat(),
+                    "account_id": str(account_id),
+                }),
+                json.dumps({
+                    k: v for k, v in {
+                        "sender_name": "Atlas Intel",
+                        "sender_company": "Atlas Intelligence",
+                        "booking_url": settings.b2b_campaign.default_booking_url or None,
+                    }.items() if v is not None
+                }),
+            )
+        except Exception as e:
+            logger.warning("Onboarding sequence creation failed: %s", e)
 
     # Create Stripe customer if configured (outside transaction -- non-critical)
     if cfg.stripe_secret_key:
