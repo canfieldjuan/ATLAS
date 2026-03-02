@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Search, RefreshCw, X, Loader2 } from 'lucide-react'
+import { Search, RefreshCw, X, Loader2, Download } from 'lucide-react'
 import { clsx } from 'clsx'
 import DataTable, { type Column } from '../components/DataTable'
 import UrgencyBadge from '../components/UrgencyBadge'
 import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
-import { fetchSignals } from '../api/client'
+import { fetchSignals, downloadCsv } from '../api/client'
 import type { ChurnSignal } from '../types'
 
 export default function Vendors() {
@@ -119,14 +119,29 @@ export default function Vendors() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-white">Vendor Signals</h1>
-        <button
-          onClick={refresh}
-          disabled={refreshing}
-          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
-        >
-          <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() =>
+              downloadCsv('/export/signals', {
+                vendor_name: debouncedSearch || undefined,
+                min_urgency: minUrgency || undefined,
+                category: category || undefined,
+              })
+            }
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors"
+          >
+            <Download className="h-4 w-4" />
+            Export CSV
+          </button>
+          <button
+            onClick={refresh}
+            disabled={refreshing}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">

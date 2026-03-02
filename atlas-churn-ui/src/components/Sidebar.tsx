@@ -7,6 +7,7 @@ import {
   Crosshair,
   Shield,
   Swords,
+  Handshake,
   Activity,
   X,
 } from 'lucide-react'
@@ -20,6 +21,7 @@ const links = [
   { to: '/leads', icon: Crosshair, label: 'Leads' },
   { to: '/vendor-targets', icon: Shield, label: 'Targets' },
   { to: '/challengers', icon: Swords, label: 'Challengers' },
+  { to: '/affiliates', icon: Handshake, label: 'Affiliates' },
 ]
 
 interface SidebarProps {

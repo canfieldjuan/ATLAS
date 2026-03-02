@@ -5,12 +5,15 @@ Mirrors the SQL from ``atlas_brain.mcp.b2b_churn_server`` so the frontend
 can query data directly over HTTP instead of going through MCP stdio.
 """
 
+import csv
+import io
 import json
 import logging
 import uuid as _uuid
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from starlette.responses import StreamingResponse
 
 from ..storage.database import get_db_pool
 
@@ -644,3 +647,261 @@ async def get_pipeline_status():
         "active_scrape_targets": scrape_stats["active_scrape_targets"] if scrape_stats else 0,
         "last_scrape_at": str(scrape_stats["last_scrape_at"]) if scrape_stats and scrape_stats["last_scrape_at"] else None,
     }
+
+
+# ---------------------------------------------------------------------------
+# CSV helpers
+# ---------------------------------------------------------------------------
+
+
+def _csv_response(rows: list[dict], filename: str) -> StreamingResponse:
+    """Build a StreamingResponse from a list of dicts."""
+    if not rows:
+        buf = io.StringIO()
+        buf.write("")
+        buf.seek(0)
+        return StreamingResponse(
+            buf,
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+    writer.writeheader()
+    writer.writerows(rows)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /export/signals  (CSV)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/export/signals")
+async def export_signals(
+    vendor_name: Optional[str] = Query(None),
+    min_urgency: float = Query(0, ge=0, le=10),
+    category: Optional[str] = Query(None),
+):
+    pool = _pool_or_503()
+    conditions: list[str] = []
+    params: list = []
+    idx = 1
+
+    if vendor_name:
+        conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
+        params.append(vendor_name)
+        idx += 1
+
+    if min_urgency > 0:
+        conditions.append(f"avg_urgency_score >= ${idx}")
+        params.append(min_urgency)
+        idx += 1
+
+    if category:
+        conditions.append(f"product_category = ${idx}")
+        params.append(category)
+        idx += 1
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+    rows = await pool.fetch(
+        f"""
+        SELECT vendor_name, product_category, total_reviews,
+               churn_intent_count, avg_urgency_score, avg_rating_normalized,
+               nps_proxy, price_complaint_rate, decision_maker_churn_rate,
+               last_computed_at
+        FROM b2b_churn_signals
+        {where}
+        ORDER BY avg_urgency_score DESC
+        LIMIT 10000
+        """,
+        *params,
+    )
+
+    data = [
+        {
+            "vendor_name": r["vendor_name"],
+            "product_category": r["product_category"] or "",
+            "total_reviews": r["total_reviews"],
+            "churn_intent_count": r["churn_intent_count"],
+            "avg_urgency_score": _safe_float(r["avg_urgency_score"], ""),
+            "avg_rating_normalized": _safe_float(r["avg_rating_normalized"], ""),
+            "nps_proxy": _safe_float(r["nps_proxy"], ""),
+            "price_complaint_rate": _safe_float(r["price_complaint_rate"], ""),
+            "decision_maker_churn_rate": _safe_float(r["decision_maker_churn_rate"], ""),
+            "last_computed_at": str(r["last_computed_at"]) if r["last_computed_at"] else "",
+        }
+        for r in rows
+    ]
+
+    return _csv_response(data, "churn_signals.csv")
+
+
+# ---------------------------------------------------------------------------
+# GET /export/reviews  (CSV)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/export/reviews")
+async def export_reviews(
+    vendor_name: Optional[str] = Query(None),
+    pain_category: Optional[str] = Query(None),
+    min_urgency: Optional[float] = Query(None, ge=0, le=10),
+    company: Optional[str] = Query(None),
+    has_churn_intent: Optional[bool] = Query(None),
+    window_days: int = Query(90, ge=1, le=3650),
+):
+    pool = _pool_or_503()
+    conditions = [
+        "enrichment_status = 'enriched'",
+        "enriched_at > NOW() - make_interval(days => $1)",
+    ]
+    params: list = [window_days]
+    idx = 2
+
+    if vendor_name:
+        conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
+        params.append(vendor_name)
+        idx += 1
+
+    if pain_category:
+        conditions.append(f"enrichment->>'pain_category' = ${idx}")
+        params.append(pain_category)
+        idx += 1
+
+    if min_urgency is not None:
+        conditions.append(f"(enrichment->>'urgency_score')::numeric >= ${idx}")
+        params.append(min_urgency)
+        idx += 1
+
+    if company:
+        conditions.append(f"reviewer_company ILIKE '%' || ${idx} || '%'")
+        params.append(company)
+        idx += 1
+
+    if has_churn_intent is not None:
+        conditions.append(
+            f"(enrichment->'churn_signals'->>'intent_to_leave')::boolean = ${idx}"
+        )
+        params.append(has_churn_intent)
+        idx += 1
+
+    where = " AND ".join(conditions)
+
+    rows = await pool.fetch(
+        f"""
+        SELECT vendor_name, product_category, reviewer_company,
+               rating,
+               (enrichment->>'urgency_score')::numeric AS urgency_score,
+               enrichment->>'pain_category' AS pain_category,
+               (enrichment->'churn_signals'->>'intent_to_leave')::boolean AS intent_to_leave,
+               (enrichment->'reviewer_context'->>'decision_maker')::boolean AS decision_maker,
+               enriched_at
+        FROM b2b_reviews
+        WHERE {where}
+        ORDER BY (enrichment->>'urgency_score')::numeric DESC
+        LIMIT 10000
+        """,
+        *params,
+    )
+
+    data = [
+        {
+            "vendor_name": r["vendor_name"],
+            "product_category": r["product_category"] or "",
+            "reviewer_company": r["reviewer_company"] or "",
+            "rating": _safe_float(r["rating"], ""),
+            "urgency_score": _safe_float(r["urgency_score"], ""),
+            "pain_category": r["pain_category"] or "",
+            "intent_to_leave": r["intent_to_leave"] if r["intent_to_leave"] is not None else "",
+            "decision_maker": r["decision_maker"] if r["decision_maker"] is not None else "",
+            "enriched_at": str(r["enriched_at"]) if r["enriched_at"] else "",
+        }
+        for r in rows
+    ]
+
+    return _csv_response(data, "enriched_reviews.csv")
+
+
+# ---------------------------------------------------------------------------
+# GET /export/high-intent  (CSV)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/export/high-intent")
+async def export_high_intent(
+    vendor_name: Optional[str] = Query(None),
+    min_urgency: float = Query(7, ge=0, le=10),
+    window_days: int = Query(90, ge=1, le=3650),
+):
+    pool = _pool_or_503()
+    conditions = [
+        "enrichment_status = 'enriched'",
+        "(enrichment->>'urgency_score')::numeric >= $1",
+        "reviewer_company IS NOT NULL AND reviewer_company != ''",
+        "enriched_at > NOW() - make_interval(days => $2)",
+    ]
+    params: list = [min_urgency, window_days]
+    idx = 3
+
+    if vendor_name:
+        conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
+        params.append(vendor_name)
+        idx += 1
+
+    where = " AND ".join(conditions)
+
+    rows = await pool.fetch(
+        f"""
+        SELECT reviewer_company, vendor_name, product_category,
+               enrichment->'reviewer_context'->>'role_level' AS role_level,
+               (enrichment->'reviewer_context'->>'decision_maker')::boolean AS is_dm,
+               (enrichment->>'urgency_score')::numeric AS urgency,
+               enrichment->>'pain_category' AS pain,
+               enrichment->'competitors_mentioned' AS alternatives,
+               enrichment->'contract_context'->>'contract_value_signal' AS value_signal,
+               CASE WHEN enrichment->'budget_signals'->>'seat_count' ~ '^\\d+$'
+                    THEN (enrichment->'budget_signals'->>'seat_count')::int END AS seat_count,
+               enrichment->'use_case'->>'lock_in_level' AS lock_in_level,
+               enrichment->'timeline'->>'contract_end' AS contract_end,
+               enrichment->'buyer_authority'->>'buying_stage' AS buying_stage
+        FROM b2b_reviews
+        WHERE {where}
+        ORDER BY (enrichment->>'urgency_score')::numeric DESC
+        LIMIT 10000
+        """,
+        *params,
+    )
+
+    data = []
+    for r in rows:
+        alternatives = _safe_json(r["alternatives"])
+        if isinstance(alternatives, list):
+            alt_str = "; ".join(str(a) for a in alternatives)
+        else:
+            alt_str = str(alternatives) if alternatives else ""
+
+        data.append({
+            "company": r["reviewer_company"],
+            "vendor": r["vendor_name"],
+            "category": r["product_category"] or "",
+            "role_level": r["role_level"] or "",
+            "decision_maker": r["is_dm"] if r["is_dm"] is not None else "",
+            "urgency": _safe_float(r["urgency"], ""),
+            "pain": r["pain"] or "",
+            "alternatives": alt_str,
+            "contract_signal": r["value_signal"] or "",
+            "seat_count": r["seat_count"] if r["seat_count"] is not None else "",
+            "lock_in_level": r["lock_in_level"] or "",
+            "contract_end": r["contract_end"] or "",
+            "buying_stage": r["buying_stage"] or "",
+        })
+
+    return _csv_response(data, "high_intent_leads.csv")

@@ -14,6 +14,7 @@ import {
   Zap,
   Check,
   Eye,
+  Download,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import StatCard from '../components/StatCard'
@@ -28,6 +29,7 @@ import {
   fetchCampaignStats,
   generateCampaigns,
   approveCampaign,
+  downloadCsv,
   updateCampaign,
   createAffiliatePartner,
   updateAffiliatePartner,
@@ -617,6 +619,18 @@ export default function Leads() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-white">Lead Intelligence</h1>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() =>
+              downloadCsv('/export/high-intent', {
+                vendor_name: debouncedVendor || undefined,
+                min_urgency: minUrgency || undefined,
+              })
+            }
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors"
+          >
+            <Download className="h-4 w-4" />
+            Export CSV
+          </button>
           <button
             onClick={handleGenerate}
             disabled={generating}
