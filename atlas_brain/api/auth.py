@@ -80,40 +80,39 @@ async def register(req: RegisterRequest):
     trial_asin_limit = PLAN_LIMITS.get("trial", {}).get("asins", 5)
 
     # Use a transaction so account + user are created atomically
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            # Check email uniqueness inside transaction to prevent TOCTOU
-            existing = await conn.fetchval(
-                "SELECT id FROM saas_users WHERE email = $1", req.email
-            )
-            if existing:
-                raise HTTPException(status_code=409, detail="Email already registered")
+    async with pool.transaction() as conn:
+        # Check email uniqueness inside transaction to prevent TOCTOU
+        existing = await conn.fetchval(
+            "SELECT id FROM saas_users WHERE email = $1", req.email.lower()
+        )
+        if existing:
+            raise HTTPException(status_code=409, detail="Email already registered")
 
-            # Create account
-            account_id = await conn.fetchval(
-                """
-                INSERT INTO saas_accounts (name, plan, plan_status, trial_ends_at, asin_limit)
-                VALUES ($1, 'trial', 'trialing', $2, $3)
-                RETURNING id
-                """,
-                req.account_name,
-                trial_ends,
-                trial_asin_limit,
-            )
+        # Create account
+        account_id = await conn.fetchval(
+            """
+            INSERT INTO saas_accounts (name, plan, plan_status, trial_ends_at, asin_limit)
+            VALUES ($1, 'trial', 'trialing', $2, $3)
+            RETURNING id
+            """,
+            req.account_name,
+            trial_ends,
+            trial_asin_limit,
+        )
 
-            # Create user
-            pw_hash = hash_password(req.password)
-            user_id = await conn.fetchval(
-                """
-                INSERT INTO saas_users (account_id, email, password_hash, full_name, role)
-                VALUES ($1, $2, $3, $4, 'owner')
-                RETURNING id
-                """,
-                account_id,
-                req.email,
-                pw_hash,
-                req.full_name,
-            )
+        # Create user
+        pw_hash = hash_password(req.password)
+        user_id = await conn.fetchval(
+            """
+            INSERT INTO saas_users (account_id, email, password_hash, full_name, role)
+            VALUES ($1, $2, $3, $4, 'owner')
+            RETURNING id
+            """,
+            account_id,
+            req.email.lower(),
+            pw_hash,
+            req.full_name,
+        )
 
     # Create Stripe customer if configured (outside transaction -- non-critical)
     if cfg.stripe_secret_key:
@@ -154,7 +153,7 @@ async def login(req: LoginRequest):
         JOIN saas_accounts sa ON sa.id = su.account_id
         WHERE su.email = $1
         """,
-        req.email,
+        req.email.lower(),
     )
 
     if not row or not verify_password(req.password, row["password_hash"]):
@@ -214,6 +213,21 @@ async def refresh(req: RefreshRequest):
 @router.get("/me", response_model=UserResponse)
 async def me(user: AuthUser = Depends(require_auth)):
     """Get current user and account info."""
+    # When auth is disabled, return synthetic admin data (no DB query)
+    if not settings.saas_auth.enabled:
+        return UserResponse(
+            user_id=user.user_id,
+            email="admin@localhost",
+            full_name="Admin",
+            role="owner",
+            account_id=user.account_id,
+            account_name="Local Dev",
+            plan="pro",
+            plan_status="active",
+            asin_limit=9999,
+            trial_ends_at=None,
+        )
+
     pool = get_db_pool()
     row = await pool.fetchrow(
         """

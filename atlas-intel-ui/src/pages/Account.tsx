@@ -24,6 +24,14 @@ export default function Account() {
 
   const planBadge = PLAN_COLORS[user.plan] || PLAN_COLORS.trial
 
+  function handle401(res: Response) {
+    if (res.status === 401) {
+      localStorage.removeItem('atlas_token')
+      localStorage.removeItem('atlas_refresh_token')
+      window.location.href = '/login'
+    }
+  }
+
   async function openBillingPortal() {
     setPortalLoading(true)
     try {
@@ -35,6 +43,7 @@ export default function Account() {
           Authorization: `Bearer ${token}`,
         },
       })
+      handle401(res)
       if (!res.ok) throw new Error('Failed to open portal')
       const data = await res.json()
       window.location.href = data.portal_url
@@ -59,6 +68,7 @@ export default function Account() {
         cancel_url: `${window.location.origin}/account`,
       }),
     })
+    handle401(res)
     if (res.ok) {
       const data = await res.json()
       window.location.href = data.checkout_url

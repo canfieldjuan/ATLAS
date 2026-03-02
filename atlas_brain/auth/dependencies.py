@@ -60,6 +60,7 @@ async def require_auth(request: Request) -> AuthUser:
     # Cast JWT string IDs to UUID for asyncpg
     try:
         user_uuid = _uuid.UUID(payload["sub"])
+        _uuid.UUID(payload["account_id"])  # validate account_id exists and is valid
     except (ValueError, KeyError):
         raise HTTPException(status_code=401, detail="Invalid token payload")
 
@@ -109,20 +110,24 @@ async def optional_auth(request: Request) -> Optional[AuthUser]:
 
     try:
         user_uuid = _uuid.UUID(payload["sub"])
+        _uuid.UUID(payload["account_id"])  # validate account_id exists and is valid
     except (ValueError, KeyError):
         return None
 
     from ..storage.database import get_db_pool
     pool = get_db_pool()
-    row = await pool.fetchrow(
-        """
-        SELECT sa.plan, sa.plan_status, su.role
-        FROM saas_users su
-        JOIN saas_accounts sa ON sa.id = su.account_id
-        WHERE su.id = $1 AND su.is_active = TRUE
-        """,
-        user_uuid,
-    )
+    try:
+        row = await pool.fetchrow(
+            """
+            SELECT sa.plan, sa.plan_status, su.role
+            FROM saas_users su
+            JOIN saas_accounts sa ON sa.id = su.account_id
+            WHERE su.id = $1 AND su.is_active = TRUE
+            """,
+            user_uuid,
+        )
+    except Exception:
+        return None
     if not row:
         return None
 

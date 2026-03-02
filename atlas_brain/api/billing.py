@@ -202,12 +202,11 @@ async def stripe_webhook(request: Request):
     body = await request.body()
     sig = request.headers.get("stripe-signature", "")
 
+    if not cfg.stripe_webhook_secret:
+        raise HTTPException(status_code=503, detail="Webhook secret not configured")
+
     try:
-        if cfg.stripe_webhook_secret:
-            event = stripe.Webhook.construct_event(body, sig, cfg.stripe_webhook_secret)
-        else:
-            import json
-            event = stripe.Event.construct_from(json.loads(body), stripe.api_key)
+        event = stripe.Webhook.construct_event(body, sig, cfg.stripe_webhook_secret)
     except Exception as e:
         logger.warning("Stripe webhook signature verification failed: %s", e)
         raise HTTPException(status_code=400, detail="Invalid signature")
@@ -247,18 +246,19 @@ async def stripe_webhook(request: Request):
     elif event_type == "customer.subscription.deleted":
         account_id = await _handle_subscription_deleted(pool, obj)
 
-    # Log event
+    # Log event -- pass dict for JSONB column, add ::jsonb cast for asyncpg
     import json
+    payload_str = json.dumps(event.data.object.to_dict() if hasattr(event.data.object, 'to_dict') else {})
     await pool.execute(
         """
         INSERT INTO billing_events (account_id, stripe_event_id, event_type, payload)
-        VALUES ($1, $2, $3, $4)
+        VALUES ($1, $2, $3, $4::jsonb)
         ON CONFLICT (stripe_event_id) DO NOTHING
         """,
         account_id,
         event.id,
         event_type,
-        json.dumps(event.data.object.to_dict() if hasattr(event.data.object, 'to_dict') else {}),
+        payload_str,
     )
 
     return {"status": "ok"}
@@ -362,19 +362,26 @@ async def _handle_subscription_updated(pool, subscription) -> _uuid.UUID | None:
 
     limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["starter"])
 
+    # Map Stripe subscription status to our plan_status
+    status_map = {"active": "active", "past_due": "past_due", "trialing": "trialing"}
+    sub_status = getattr(subscription, "status", "active")
+    plan_status = status_map.get(sub_status, "active")
+
     await pool.execute(
         """
         UPDATE saas_accounts
-        SET plan = $1, asin_limit = $2, stripe_subscription_id = $3, updated_at = NOW()
-        WHERE id = $4
+        SET plan = $1, plan_status = $2, asin_limit = $3,
+            stripe_subscription_id = $4, updated_at = NOW()
+        WHERE id = $5
         """,
         plan,
+        plan_status,
         limits["asins"],
         subscription.id,
         account_id,
     )
 
-    logger.info("Account %s subscription updated to %s", account_id, plan)
+    logger.info("Account %s subscription updated to %s (status=%s)", account_id, plan, plan_status)
     return account_id
 
 

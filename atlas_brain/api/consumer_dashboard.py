@@ -1297,7 +1297,7 @@ async def get_brand_detail(brand_name: str, user: AuthUser = Depends(require_aut
     total_reviews = sum(r["review_count"] for r in products)
     deep_review_count = len(enum_rows)
     if t_cond2 != "TRUE":
-        # Query product_metadata directly with subquery filter — avoids JOIN fanout
+        # Query product_metadata directly with subquery filter -- avoids JOIN fanout
         avg_rating_all = await pool.fetchval(
             """
             SELECT AVG(average_rating) FROM product_metadata

@@ -1,11 +1,13 @@
 import { useState, type FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { Search, AlertCircle } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 
 export default function Signup() {
-  const { signup } = useAuth()
+  const { user, signup } = useAuth()
   const navigate = useNavigate()
+
+  if (user) return <Navigate to="/" replace />
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [fullName, setFullName] = useState('')
