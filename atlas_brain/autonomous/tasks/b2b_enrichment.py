@@ -33,21 +33,31 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not pool.is_initialized:
         return {"_skip_synthesis": "DB not ready"}
 
-    max_batch = cfg.enrichment_max_per_batch
+    max_batch = min(cfg.enrichment_max_per_batch, 500)
     max_attempts = cfg.enrichment_max_attempts
 
+    # Atomically claim rows: SET status='enriching' prevents concurrent runs
+    # from picking up the same rows. FOR UPDATE SKIP LOCKED avoids blocking.
     rows = await pool.fetch(
         """
-        SELECT id, vendor_name, product_name, product_category,
-               source, raw_metadata,
-               rating, rating_max, summary, review_text, pros, cons,
-               reviewer_title, reviewer_company, company_size_raw,
-               reviewer_industry, enrichment_attempts
-        FROM b2b_reviews
-        WHERE enrichment_status = 'pending'
-          AND enrichment_attempts < $1
-        ORDER BY imported_at ASC
-        LIMIT $2
+        WITH batch AS (
+            SELECT id
+            FROM b2b_reviews
+            WHERE enrichment_status = 'pending'
+              AND enrichment_attempts < $1
+            ORDER BY imported_at ASC
+            LIMIT $2
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE b2b_reviews r
+        SET enrichment_status = 'enriching'
+        FROM batch
+        WHERE r.id = batch.id
+        RETURNING r.id, r.vendor_name, r.product_name, r.product_category,
+                  r.source, r.raw_metadata,
+                  r.rating, r.rating_max, r.summary, r.review_text, r.pros, r.cons,
+                  r.reviewer_title, r.reviewer_company, r.company_size_raw,
+                  r.reviewer_industry, r.enrichment_attempts
         """,
         max_attempts,
         max_batch,
@@ -74,7 +84,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     for row, result in zip(rows, results):
         if isinstance(result, Exception):
-            logger.exception("Unexpected enrichment error for %s: %s", row["id"], result)
+            logger.error("Unexpected enrichment error for %s: %s", row["id"], result, exc_info=result)
             if (row["enrichment_attempts"] + 1) >= max_attempts:
                 failed += 1
         elif result:
@@ -101,9 +111,12 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
     review_id = row["id"]
 
     try:
-        # Run blocking LLM call in thread pool for true concurrency
-        result = await asyncio.to_thread(
-            _classify_review, row, local_only, max_tokens, truncate_length
+        # Run blocking LLM call in thread pool with 120s timeout
+        result = await asyncio.wait_for(
+            asyncio.to_thread(
+                _classify_review, row, local_only, max_tokens, truncate_length
+            ),
+            timeout=120,
         )
 
         if result and _validate_enrichment(result):
@@ -128,9 +141,16 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
     except Exception:
         logger.exception("Failed to enrich B2B review %s", review_id)
         try:
+            # Reset from 'enriching' back to 'pending' (or 'failed' if exhausted)
+            new_status = "failed" if (row["enrichment_attempts"] + 1) >= max_attempts else "pending"
             await pool.execute(
-                "UPDATE b2b_reviews SET enrichment_attempts = enrichment_attempts + 1 WHERE id = $1",
-                review_id,
+                """
+                UPDATE b2b_reviews
+                SET enrichment_attempts = enrichment_attempts + 1,
+                    enrichment_status = $1
+                WHERE id = $2
+                """,
+                new_status, review_id,
             )
         except Exception:
             pass
@@ -178,6 +198,10 @@ def _classify_review(row, local_only: bool, max_tokens: int,
         try:
             raw_meta = json.loads(raw_meta)
         except (json.JSONDecodeError, TypeError):
+            logger.warning(
+                "Malformed raw_metadata for review %s, defaulting to empty",
+                row["id"],
+            )
             raw_meta = {}
 
     payload = {
@@ -215,7 +239,10 @@ def _classify_review(row, local_only: bool, max_tokens: int,
             return None
         return parsed
     except json.JSONDecodeError:
-        logger.debug("Failed to parse B2B enrichment JSON")
+        logger.warning(
+            "Failed to parse B2B enrichment JSON for review %s (vendor=%s)",
+            row["id"], row["vendor_name"],
+        )
         return None
     except Exception:
         logger.exception("B2B enrichment LLM call failed")
@@ -381,7 +408,8 @@ def _validate_enrichment(result: dict) -> bool:
         else:
             if "seat_count" in bs and bs["seat_count"] is not None:
                 try:
-                    bs["seat_count"] = int(bs["seat_count"])
+                    seat = int(bs["seat_count"])
+                    bs["seat_count"] = seat if 1 <= seat <= 1_000_000 else None
                 except (ValueError, TypeError):
                     bs["seat_count"] = None
             if "price_increase_mentioned" in bs:
@@ -453,14 +481,14 @@ def _validate_enrichment(result: dict) -> bool:
 
 
 async def _increment_attempts(pool, review_id, current_attempts: int, max_attempts: int) -> None:
-    """Bump attempts; mark failed if exhausted."""
-    new_attempts = current_attempts + 1
+    """Bump attempts atomically; reset to pending or mark failed if exhausted."""
+    new_status = "failed" if (current_attempts + 1) >= max_attempts else "pending"
     await pool.execute(
-        "UPDATE b2b_reviews SET enrichment_attempts = $1 WHERE id = $2",
-        new_attempts, review_id,
+        """
+        UPDATE b2b_reviews
+        SET enrichment_attempts = enrichment_attempts + 1,
+            enrichment_status = $1
+        WHERE id = $2
+        """,
+        new_status, review_id,
     )
-    if new_attempts >= max_attempts:
-        await pool.execute(
-            "UPDATE b2b_reviews SET enrichment_status = 'failed' WHERE id = $1",
-            review_id,
-        )
