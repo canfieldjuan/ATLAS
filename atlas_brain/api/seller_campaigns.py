@@ -359,6 +359,7 @@ async def list_category_intelligence(
             SELECT DISTINCT ON (category) *
             FROM category_intelligence_snapshots
             ORDER BY category, snapshot_date DESC
+            LIMIT 200
             """
         )
 

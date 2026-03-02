@@ -457,6 +457,7 @@ async def _fetch_seller_targets(
             FROM seller_targets
             WHERE status = 'active'
             ORDER BY created_at ASC
+            LIMIT 200
             """
         )
     return [dict(r) for r in rows]
@@ -557,7 +558,7 @@ async def generate_campaigns(
         try:
             await _save_intelligence_snapshot(pool, intel)
         except Exception as exc:
-            logger.debug("Failed to save intel snapshot for %s: %s", category, exc)
+            logger.warning("Failed to save intel snapshot for %s: %s", category, exc)
 
         categories_processed += 1
 

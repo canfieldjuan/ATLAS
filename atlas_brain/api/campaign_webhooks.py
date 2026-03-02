@@ -33,6 +33,7 @@ def _verify_svix_signature(
     Returns True if valid or if no secret is configured (skip verification).
     """
     if not secret:
+        logger.warning("Webhook signing secret not configured -- signature verification disabled")
         return True
 
     msg_id = headers.get("svix-id", "")
