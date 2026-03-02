@@ -1,4 +1,4 @@
-import { Routes, Route, useLocation } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import Layout from './components/Layout'
 import ErrorBoundary from './components/ErrorBoundary'
 import Dashboard from './pages/Dashboard'
@@ -31,6 +31,7 @@ export default function App() {
           <Route path="/vendor-targets" element={<VendorTargets />} />
           <Route path="/challengers" element={<Challengers />} />
           <Route path="/affiliates" element={<Affiliates />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </ErrorBoundary>
     </Layout>

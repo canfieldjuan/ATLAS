@@ -23,6 +23,44 @@ from ...storage.models import ScheduledTask
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_enrichment")
 
 
+async def _notify_high_urgency(
+    vendor_name: str,
+    reviewer_company: str,
+    urgency: float,
+    pain_category: str,
+    intent_to_leave: bool,
+) -> None:
+    """Send ntfy push when a newly enriched review exceeds the urgency threshold."""
+    if not settings.alerts.ntfy_enabled:
+        return
+
+    import httpx
+
+    url = f"{settings.alerts.ntfy_url.rstrip('/')}/{settings.alerts.ntfy_topic}"
+    company_part = f" at {reviewer_company}" if reviewer_company else ""
+    intent_part = " | Intent to leave" if intent_to_leave else ""
+    pain_part = f" | Pain: {pain_category}" if pain_category else ""
+
+    message = (
+        f"Urgency {urgency:.0f}/10{company_part}\n"
+        f"Vendor: {vendor_name}{pain_part}{intent_part}"
+    )
+
+    headers: dict[str, str] = {
+        "Title": f"High-Urgency Signal: {vendor_name}",
+        "Priority": "high",
+        "Tags": "rotating_light,b2b,churn",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(url, content=message, headers=headers)
+            resp.raise_for_status()
+        logger.info("ntfy high-urgency alert sent for %s (urgency=%s)", vendor_name, urgency)
+    except Exception as exc:
+        logger.warning("ntfy high-urgency alert failed for %s: %s", vendor_name, exc)
+
+
 async def run(task: ScheduledTask) -> dict[str, Any]:
     """Autonomous task handler: enrich pending B2B reviews with churn signals."""
     cfg = settings.b2b_churn
@@ -133,6 +171,24 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
                 datetime.now(timezone.utc),
                 review_id,
             )
+
+            # Fire ntfy notification for high-urgency signals (must never
+            # break enrichment -- wrapped in its own try/except)
+            try:
+                urgency = result.get("urgency_score", 0)
+                threshold = settings.b2b_churn.high_churn_urgency_threshold
+                if urgency >= threshold:
+                    signals = result.get("churn_signals", {})
+                    await _notify_high_urgency(
+                        vendor_name=row["vendor_name"],
+                        reviewer_company=row.get("reviewer_company") or "",
+                        urgency=urgency,
+                        pain_category=result.get("pain_category", ""),
+                        intent_to_leave=bool(signals.get("intent_to_leave")),
+                    )
+            except Exception:
+                logger.warning("ntfy notification failed for review %s, enrichment preserved", review_id)
+
             return True
         else:
             await _increment_attempts(pool, review_id, row["enrichment_attempts"], max_attempts)

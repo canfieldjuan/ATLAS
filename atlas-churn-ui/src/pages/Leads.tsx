@@ -1,20 +1,17 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import {
   Crosshair,
   Target,
   Send,
   TrendingUp,
   RefreshCw,
-  ChevronDown,
-  ChevronUp,
-  Plus,
-  Pencil,
-  Trash2,
   X,
   Zap,
   Check,
   Eye,
   Download,
+  Handshake,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import StatCard from '../components/StatCard'
@@ -24,27 +21,21 @@ import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
 import {
   fetchAffiliateOpportunities,
-  fetchAffiliatePartners,
   fetchCampaigns,
   fetchCampaignStats,
   generateCampaigns,
   approveCampaign,
   downloadCsv,
   updateCampaign,
-  createAffiliatePartner,
-  updateAffiliatePartner,
-  deleteAffiliatePartner,
 } from '../api/client'
 import type {
   AffiliateOpportunity,
-  AffiliatePartner,
   Campaign,
   CampaignStats,
 } from '../types'
 
 interface LeadsData {
   opportunities: AffiliateOpportunity[]
-  partners: AffiliatePartner[]
   campaigns: Campaign[]
   stats: CampaignStats
 }
@@ -177,20 +168,6 @@ function CampaignModal({
   )
 }
 
-const EMPTY_PARTNER = {
-  name: '',
-  product_name: '',
-  product_aliases: [] as string[],
-  category: '',
-  affiliate_url: '',
-  commission_type: 'unknown',
-  commission_value: '',
-  notes: '',
-  enabled: true,
-}
-
-const COMMISSION_TYPES = ['cpa', 'recurring', 'rev_share', 'flat', 'unknown']
-
 export default function Leads() {
   // Filters
   const [vendorSearch, setVendorSearch] = useState('')
@@ -198,14 +175,6 @@ export default function Leads() {
   const [minUrgency, setMinUrgency] = useState(5)
   const [minScore, setMinScore] = useState(0)
   const [dmOnly, setDmOnly] = useState(false)
-
-  // Partner management
-  const [showPartners, setShowPartners] = useState(false)
-  const [showForm, setShowForm] = useState(false)
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [form, setForm] = useState(EMPTY_PARTNER)
-  const [aliasInput, setAliasInput] = useState('')
-  const [saving, setSaving] = useState(false)
 
   // Campaign generation
   const [generating, setGenerating] = useState(false)
@@ -222,7 +191,7 @@ export default function Leads() {
 
   const { data, loading, error, refresh, refreshing } = useApiData<LeadsData>(
     async () => {
-      const [oppRes, partnerRes, campRes, statsRes] = await Promise.all([
+      const [oppRes, campRes, statsRes] = await Promise.all([
         fetchAffiliateOpportunities({
           min_urgency: minUrgency,
           min_score: minScore,
@@ -230,13 +199,11 @@ export default function Leads() {
           dm_only: dmOnly || undefined,
           limit: 100,
         }),
-        fetchAffiliatePartners(),
         fetchCampaigns({ limit: 200 }),
         fetchCampaignStats(),
       ])
       return {
         opportunities: oppRes.opportunities,
-        partners: partnerRes.partners,
         campaigns: campRes.campaigns,
         stats: statsRes,
       }
@@ -245,11 +212,9 @@ export default function Leads() {
   )
 
   const opportunities = data?.opportunities ?? []
-  const partners = data?.partners ?? []
   const campaigns = data?.campaigns ?? []
   const stats = data?.stats ?? { by_status: {}, by_channel: {}, top_vendors: [], total: 0 }
 
-  const activePartners = partners.filter((p) => p.enabled).length
   const campaignsSent = (stats.by_status['sent'] ?? 0) + (stats.by_status['approved'] ?? 0)
   const avgScore =
     opportunities.length > 0
@@ -305,78 +270,6 @@ export default function Leads() {
       refresh()
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Reject failed')
-    }
-  }
-
-  // -- Partner form --
-  function openAdd() {
-    setEditingId(null)
-    setForm(EMPTY_PARTNER)
-    setAliasInput('')
-    setShowForm(true)
-  }
-
-  function openEdit(p: AffiliatePartner) {
-    setEditingId(p.id)
-    setForm({
-      name: p.name,
-      product_name: p.product_name,
-      product_aliases: p.product_aliases,
-      category: p.category ?? '',
-      affiliate_url: p.affiliate_url,
-      commission_type: p.commission_type,
-      commission_value: p.commission_value ?? '',
-      notes: p.notes ?? '',
-      enabled: p.enabled,
-    })
-    setAliasInput(p.product_aliases.join(', '))
-    setShowForm(true)
-  }
-
-  async function handleSave() {
-    setSaving(true)
-    const aliases = aliasInput
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean)
-    const payload = {
-      ...form,
-      product_aliases: aliases,
-      category: form.category || null,
-      commission_value: form.commission_value || null,
-      notes: form.notes || null,
-    }
-    try {
-      if (editingId) {
-        await updateAffiliatePartner(editingId, payload)
-      } else {
-        await createAffiliatePartner(payload)
-      }
-      setShowForm(false)
-      refresh()
-    } catch (err) {
-      alert(err instanceof Error ? err.message : 'Save failed')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  async function handleDelete(id: string) {
-    if (!confirm('Delete this partner?')) return
-    try {
-      await deleteAffiliatePartner(id)
-      refresh()
-    } catch (err) {
-      alert(err instanceof Error ? err.message : 'Delete failed')
-    }
-  }
-
-  async function handleToggleEnabled(p: AffiliatePartner) {
-    try {
-      await updateAffiliatePartner(p.id, { enabled: !p.enabled })
-      refresh()
-    } catch (err) {
-      alert(err instanceof Error ? err.message : 'Toggle failed')
     }
   }
 
@@ -460,74 +353,6 @@ export default function Leads() {
         }
         return <CampaignStatusBadge status={campaign.status} />
       },
-    },
-  ]
-
-  // -- Partner table columns --
-  const partnerColumns: Column<AffiliatePartner>[] = [
-    {
-      key: 'name',
-      header: 'Name',
-      render: (r) => <span className="text-white font-medium">{r.name}</span>,
-    },
-    {
-      key: 'product',
-      header: 'Product',
-      render: (r) => <span className="text-slate-300">{r.product_name}</span>,
-    },
-    {
-      key: 'category',
-      header: 'Category',
-      render: (r) => <span className="text-slate-400">{r.category ?? '--'}</span>,
-    },
-    {
-      key: 'enabled',
-      header: 'Active',
-      render: (r) => (
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            handleToggleEnabled(r)
-          }}
-          className={clsx(
-            'w-9 h-5 rounded-full relative transition-colors',
-            r.enabled ? 'bg-cyan-500' : 'bg-slate-600',
-          )}
-        >
-          <span
-            className={clsx(
-              'absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform',
-              r.enabled ? 'left-[18px]' : 'left-0.5',
-            )}
-          />
-        </button>
-      ),
-    },
-    {
-      key: 'actions',
-      header: '',
-      render: (r) => (
-        <div className="flex items-center gap-1">
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              openEdit(r)
-            }}
-            className="p-1 text-slate-400 hover:text-white transition-colors"
-          >
-            <Pencil className="h-3.5 w-3.5" />
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              handleDelete(r.id)
-            }}
-            className="p-1 text-slate-400 hover:text-red-400 transition-colors"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      ),
     },
   ]
 
@@ -743,13 +568,6 @@ export default function Leads() {
             columns={columns}
             data={opportunities}
             emptyMessage="No lead opportunities found"
-            emptyAction={{
-              label: 'Add Partners',
-              onClick: () => {
-                setShowPartners(true)
-                openAdd()
-              },
-            }}
           />
         )}
       </div>
@@ -778,131 +596,20 @@ export default function Leads() {
         />
       )}
 
-      {/* Partner Management */}
-      <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl">
-        <button
-          onClick={() => setShowPartners((v) => !v)}
-          className="w-full flex items-center justify-between p-5 text-left"
-        >
-          <h3 className="text-sm font-medium text-slate-300">Partner Management</h3>
-          {showPartners ? (
-            <ChevronUp className="h-4 w-4 text-slate-400" />
-          ) : (
-            <ChevronDown className="h-4 w-4 text-slate-400" />
-          )}
-        </button>
-
-        {showPartners && (
-          <div className="px-5 pb-5 space-y-4">
-            <div className="flex items-center justify-end">
-              <button
-                onClick={openAdd}
-                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 transition-colors"
-              >
-                <Plus className="h-4 w-4" />
-                Add Partner
-              </button>
-            </div>
-
-            {/* Inline Form */}
-            {showForm && (
-              <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4 space-y-3">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm font-medium text-white">
-                    {editingId ? 'Edit Partner' : 'New Partner'}
-                  </span>
-                  <button
-                    onClick={() => setShowForm(false)}
-                    className="text-slate-400 hover:text-white"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  <input
-                    placeholder="Name *"
-                    value={form.name}
-                    onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                    className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
-                  />
-                  <input
-                    placeholder="Product name * (matches competitor)"
-                    value={form.product_name}
-                    onChange={(e) => setForm((f) => ({ ...f, product_name: e.target.value }))}
-                    className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
-                  />
-                  <input
-                    placeholder="Aliases (comma-separated)"
-                    value={aliasInput}
-                    onChange={(e) => setAliasInput(e.target.value)}
-                    className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
-                  />
-                  <input
-                    placeholder="Category"
-                    value={form.category}
-                    onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
-                    className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
-                  />
-                  <input
-                    placeholder="Affiliate URL *"
-                    value={form.affiliate_url}
-                    onChange={(e) => setForm((f) => ({ ...f, affiliate_url: e.target.value }))}
-                    className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
-                  />
-                  <select
-                    value={form.commission_type}
-                    onChange={(e) => setForm((f) => ({ ...f, commission_type: e.target.value }))}
-                    className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-cyan-500/50"
-                  >
-                    {COMMISSION_TYPES.map((t) => (
-                      <option key={t} value={t}>
-                        {t}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    placeholder="Commission value (e.g. $150/signup)"
-                    value={form.commission_value}
-                    onChange={(e) => setForm((f) => ({ ...f, commission_value: e.target.value }))}
-                    className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
-                  />
-                  <input
-                    placeholder="Notes"
-                    value={form.notes}
-                    onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-                    className="bg-slate-900/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
-                  />
-                </div>
-                <div className="flex items-center gap-3 pt-1">
-                  <button
-                    onClick={handleSave}
-                    disabled={saving || !form.name || !form.product_name || !form.affiliate_url}
-                    className="px-4 py-1.5 rounded-lg text-sm bg-cyan-500 text-white hover:bg-cyan-600 transition-colors disabled:opacity-50"
-                  >
-                    {saving ? 'Saving...' : editingId ? 'Update' : 'Create'}
-                  </button>
-                  <button
-                    onClick={() => setShowForm(false)}
-                    className="px-4 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white transition-colors"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {loading ? (
-              <DataTable columns={partnerColumns} data={[]} skeletonRows={3} />
-            ) : (
-              <DataTable
-                columns={partnerColumns}
-                data={partners}
-                emptyMessage="No partners registered"
-              />
-            )}
+      {/* Partner Management Link */}
+      <Link
+        to="/affiliates"
+        className="flex items-center justify-between bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-5 hover:border-cyan-500/30 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <Handshake className="h-5 w-5 text-cyan-400" />
+          <div>
+            <h3 className="text-sm font-medium text-white">Partner Management</h3>
+            <p className="text-xs text-slate-400 mt-0.5">Manage affiliate partners, commissions, and click tracking</p>
           </div>
-        )}
-      </div>
+        </div>
+        <span className="text-xs text-slate-400">View &rarr;</span>
+      </Link>
     </div>
   )
 }
