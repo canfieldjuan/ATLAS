@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 
 import numpy as np
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..config import settings
 from ..storage import db_settings
@@ -48,7 +48,7 @@ def _check_db_enabled():
 
 class StartEnrollmentRequest(BaseModel):
     """Request to start voice enrollment."""
-    user_name: str
+    user_name: str = Field(..., max_length=200)
 
 
 class StartEnrollmentResponse(BaseModel):
@@ -62,9 +62,9 @@ class StartEnrollmentResponse(BaseModel):
 
 class AddSampleRequest(BaseModel):
     """Request to add voice sample."""
-    session_id: str
-    audio_base64: str
-    sample_rate: int = 16000
+    session_id: str = Field(..., max_length=100)
+    audio_base64: str = Field(..., max_length=10_000_000)
+    sample_rate: int = Field(16000, ge=8000, le=48000)
 
 
 class AddSampleResponse(BaseModel):
@@ -78,7 +78,7 @@ class AddSampleResponse(BaseModel):
 
 class CompleteEnrollmentRequest(BaseModel):
     """Request to complete enrollment."""
-    session_id: str
+    session_id: str = Field(..., max_length=100)
 
 
 class CompleteEnrollmentResponse(BaseModel):
@@ -92,8 +92,8 @@ class CompleteEnrollmentResponse(BaseModel):
 
 class VerifyRequest(BaseModel):
     """Request to verify speaker."""
-    audio_base64: str
-    sample_rate: int = 16000
+    audio_base64: str = Field(..., max_length=10_000_000)
+    sample_rate: int = Field(16000, ge=8000, le=48000)
 
 
 class VerifyResponse(BaseModel):
@@ -159,7 +159,7 @@ async def start_enrollment(request: StartEnrollmentRequest):
         )
     except Exception as e:
         logger.error("Failed to start enrollment: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 @router.post("/enroll/sample", response_model=AddSampleResponse)
@@ -206,7 +206,7 @@ async def add_enrollment_sample(request: AddSampleRequest):
         )
     except Exception as e:
         logger.error("Failed to add enrollment sample: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 @router.post("/enroll/complete", response_model=CompleteEnrollmentResponse)
@@ -239,7 +239,7 @@ async def complete_enrollment(request: CompleteEnrollmentRequest):
         )
     except Exception as e:
         logger.error("Failed to complete enrollment: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 @router.post("/enroll/cancel")
@@ -289,7 +289,7 @@ async def verify_speaker(request: VerifyRequest):
         )
     except Exception as e:
         logger.error("Failed to verify speaker: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 @router.get("/enrolled")
@@ -318,7 +318,7 @@ async def list_enrolled_users():
         }
     except Exception as e:
         logger.error("Failed to list enrolled users: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 @router.delete("/{user_id}")
@@ -343,4 +343,4 @@ async def delete_enrollment(user_id: str):
         raise HTTPException(status_code=400, detail="Invalid user ID format")
     except Exception as e:
         logger.error("Failed to delete enrollment: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal error")

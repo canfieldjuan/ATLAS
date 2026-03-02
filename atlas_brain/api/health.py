@@ -33,7 +33,7 @@ async def health():
             }
     except Exception as e:
         logger.warning("Webcam detector health check failed: %s", e)
-        webcam_status["error"] = str(e)
+        webcam_status["error"] = "unavailable"
 
     # Get presence status
     presence_status = {"current_room": None}
@@ -58,7 +58,8 @@ async def health():
         if room_states:
             presence_status["room_states"] = room_states
     except Exception as e:
-        presence_status["error"] = str(e)
+        logger.warning("Presence health check failed: %s", e)
+        presence_status["error"] = "unavailable"
 
     # Get Google OAuth token status
     google_oauth_status = {}
@@ -67,7 +68,8 @@ async def health():
         store = get_google_token_store()
         google_oauth_status = store.get_status()
     except Exception as e:
-        google_oauth_status = {"error": str(e)}
+        logger.warning("Google OAuth health check failed: %s", e)
+        google_oauth_status = {"error": "unavailable"}
 
     return {
         "status": "ok",

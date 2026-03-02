@@ -10,7 +10,7 @@ import uuid as _uuid
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..storage.database import get_db_pool
 
@@ -111,7 +111,7 @@ async def list_opportunities(
     min_urgency: float = Query(5),
     min_score: int = Query(0),
     window_days: int = Query(90),
-    limit: int = Query(50, le=200),
+    limit: int = Query(50, ge=1, le=200),
     vendor_name: Optional[str] = Query(None),
     dm_only: bool = Query(False),
 ):
@@ -210,14 +210,14 @@ async def list_opportunities(
 
 
 class PartnerCreate(BaseModel):
-    name: str
-    product_name: str
-    product_aliases: list[str] = []
-    category: str | None = None
-    affiliate_url: str
-    commission_type: str = "unknown"
-    commission_value: str | None = None
-    notes: str | None = None
+    name: str = Field(..., max_length=200)
+    product_name: str = Field(..., max_length=200)
+    product_aliases: list[str] = Field(default=[], max_length=50)
+    category: str | None = Field(None, max_length=100)
+    affiliate_url: str = Field(..., max_length=2000)
+    commission_type: str = Field("unknown", max_length=50)
+    commission_value: str | None = Field(None, max_length=50)
+    notes: str | None = Field(None, max_length=2000)
     enabled: bool = True
 
 
@@ -243,6 +243,7 @@ async def list_partners():
                enabled, created_at, updated_at
         FROM affiliate_partners
         ORDER BY name
+        LIMIT 500
         """
     )
     partners = [

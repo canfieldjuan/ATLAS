@@ -11,7 +11,7 @@ from typing import Optional
 
 import numpy as np
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger("atlas.api.identity")
 
@@ -19,10 +19,10 @@ router = APIRouter(prefix="/identity", tags=["identity"])
 
 
 class IdentityCreate(BaseModel):
-    name: str
-    modality: str
-    embedding: list[float]
-    source_node: Optional[str] = None
+    name: str = Field(..., max_length=200)
+    modality: str = Field(..., max_length=20)
+    embedding: list[float] = Field(..., max_length=2048)
+    source_node: Optional[str] = Field(None, max_length=100)
 
 
 @router.get("/")

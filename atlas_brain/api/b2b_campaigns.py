@@ -197,10 +197,10 @@ async def campaign_stats():
     pool = _pool_or_503()
 
     status_rows = await pool.fetch(
-        "SELECT status, COUNT(*) AS cnt FROM b2b_campaigns GROUP BY status"
+        "SELECT status, COUNT(*) AS cnt FROM b2b_campaigns GROUP BY status LIMIT 50"
     )
     channel_rows = await pool.fetch(
-        "SELECT channel, COUNT(*) AS cnt FROM b2b_campaigns GROUP BY channel ORDER BY cnt DESC"
+        "SELECT channel, COUNT(*) AS cnt FROM b2b_campaigns GROUP BY channel ORDER BY cnt DESC LIMIT 50"
     )
     vendor_rows = await pool.fetch(
         """
@@ -1090,7 +1090,7 @@ async def _send_campaign_notification(
 
 
 # ---------------------------------------------------------------------------
-# Campaign CRUD (/{campaign_id} catch-all routes — MUST be last)
+# Campaign CRUD (/{campaign_id} catch-all routes -- MUST be last)
 # ---------------------------------------------------------------------------
 
 

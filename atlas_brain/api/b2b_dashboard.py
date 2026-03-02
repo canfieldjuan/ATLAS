@@ -312,6 +312,7 @@ async def get_vendor_profile(vendor_name: str):
           AND enrichment->>'pain_category' IS NOT NULL
         GROUP BY enrichment->>'pain_category'
         ORDER BY cnt DESC
+        LIMIT 50
         """,
         vname,
     )

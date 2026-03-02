@@ -11,7 +11,7 @@ import time as _time
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ..storage.database import get_db_pool
@@ -81,6 +81,7 @@ async def list_targets(
         FROM b2b_scrape_targets
         {where}
         ORDER BY priority DESC, vendor_name
+        LIMIT 500
         """,
         *args,
     )
@@ -121,7 +122,8 @@ async def create_target(body: ScrapeTargetCreate) -> dict:
                 status_code=409,
                 detail=f"Target already exists for {body.source}/{body.product_slug}",
             )
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.error("Failed to create scrape target: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to create target")
 
     return dict(row)
 
@@ -266,7 +268,8 @@ async def trigger_scrape(target_id: UUID) -> dict:
             """,
             target_id,
         )
-        raise HTTPException(status_code=502, detail=f"Scrape failed: {exc}")
+        logger.error("Scrape failed for target %s: %s", target_id, exc)
+        raise HTTPException(status_code=502, detail="Scrape failed")
 
     # Relevance filter: drop noise from social media sources
     filtered_count = 0
@@ -462,7 +465,7 @@ async def _write_scrape_log(
 @router.get("/logs")
 async def list_logs(
     target_id: Optional[UUID] = None,
-    limit: int = 50,
+    limit: int = Query(default=50, ge=1, le=500),
 ) -> list[dict]:
     """View scrape execution logs."""
     pool = get_db_pool()

@@ -81,8 +81,8 @@ async def _proxy_request(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Proxy error: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Proxy error: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal proxy error")
 
 
 class CreatePersonRequest(BaseModel):

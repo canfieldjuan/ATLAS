@@ -10,7 +10,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..storage.database import get_db_pool
 
@@ -32,29 +32,29 @@ def _pool_or_503():
 
 
 class VendorTargetCreate(BaseModel):
-    company_name: str
-    target_mode: str  # vendor_retention | challenger_intel
-    contact_name: str | None = None
-    contact_email: str | None = None
-    contact_role: str | None = None
-    products_tracked: list[str] | None = None
-    competitors_tracked: list[str] | None = None
-    tier: str = "report"
-    status: str = "active"
-    notes: str | None = None
+    company_name: str = Field(..., max_length=200)
+    target_mode: str = Field(..., max_length=30)
+    contact_name: str | None = Field(None, max_length=200)
+    contact_email: str | None = Field(None, max_length=254)
+    contact_role: str | None = Field(None, max_length=100)
+    products_tracked: list[str] | None = Field(None, max_length=50)
+    competitors_tracked: list[str] | None = Field(None, max_length=50)
+    tier: str = Field("report", max_length=30)
+    status: str = Field("active", max_length=30)
+    notes: str | None = Field(None, max_length=5000)
 
 
 class VendorTargetUpdate(BaseModel):
-    company_name: str | None = None
-    target_mode: str | None = None
-    contact_name: str | None = None
-    contact_email: str | None = None
-    contact_role: str | None = None
-    products_tracked: list[str] | None = None
-    competitors_tracked: list[str] | None = None
-    tier: str | None = None
-    status: str | None = None
-    notes: str | None = None
+    company_name: str | None = Field(None, max_length=200)
+    target_mode: str | None = Field(None, max_length=30)
+    contact_name: str | None = Field(None, max_length=200)
+    contact_email: str | None = Field(None, max_length=254)
+    contact_role: str | None = Field(None, max_length=100)
+    products_tracked: list[str] | None = Field(None, max_length=50)
+    competitors_tracked: list[str] | None = Field(None, max_length=50)
+    tier: str | None = Field(None, max_length=30)
+    status: str | None = Field(None, max_length=30)
+    notes: str | None = Field(None, max_length=5000)
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +214,7 @@ async def update_vendor_target(target_id: UUID, body: VendorTargetUpdate):
     """Update a vendor/challenger target."""
     pool = _pool_or_503()
 
-    # Build dynamic SET clause — model_fields_set tracks which fields were
+    # Build dynamic SET clause -- model_fields_set tracks which fields were
     # explicitly provided in the request body (including explicit nulls).
     updates = []
     params: list = []

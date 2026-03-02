@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..agents.interface import get_agent
 from ..services import llm_registry
@@ -30,21 +30,21 @@ class ActivateRequest(BaseModel):
 
 
 class GenerateRequest(BaseModel):
-    prompt: str
-    system_prompt: Optional[str] = None
-    max_tokens: int = 512
-    temperature: float = 0.7
+    prompt: str = Field(..., max_length=100_000)
+    system_prompt: Optional[str] = Field(None, max_length=50_000)
+    max_tokens: int = Field(512, ge=1, le=16384)
+    temperature: float = Field(0.7, ge=0.0, le=2.0)
 
 
 class ChatMessage(BaseModel):
-    role: str  # "system", "user", "assistant"
-    content: str
+    role: str = Field(..., max_length=20)
+    content: str = Field(..., max_length=100_000)
 
 
 class ChatRequest(BaseModel):
-    messages: list[ChatMessage]
-    max_tokens: int = 512
-    temperature: float = 0.7
+    messages: list[ChatMessage] = Field(..., max_length=200)
+    max_tokens: int = Field(512, ge=1, le=16384)
+    temperature: float = Field(0.7, ge=0.0, le=2.0)
     session_id: Optional[str] = None
     user_id: Optional[str] = None
     terminal_id: Optional[str] = None
@@ -86,7 +86,8 @@ async def activate_llm(request: ActivateRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to activate: {e}")
+        logger.error("Failed to activate LLM: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to activate LLM")
 
 
 @router.post("/deactivate")
@@ -115,7 +116,8 @@ async def generate_text(request: GenerateRequest):
         )
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Generation failed: {e}")
+        logger.error("Generation failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Generation failed")
 
 
 @router.post("/chat")
@@ -170,7 +172,7 @@ async def chat(request: ChatRequest):
         }
     except Exception as e:
         logger.exception("Chat failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"Chat failed: {e}")
+        raise HTTPException(status_code=500, detail="Chat failed")
 
 
 @router.get("/status")
