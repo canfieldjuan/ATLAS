@@ -1,8 +1,37 @@
+import { tryRefreshToken } from '../auth/AuthContext'
+
 const BASE = '/api/v1/consumer/dashboard'
 
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem('atlas_token')
   return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+function forceLogout(): never {
+  localStorage.removeItem('atlas_token')
+  localStorage.removeItem('atlas_refresh_token')
+  window.location.href = '/login'
+  throw new Error('Session expired')
+}
+
+async function handleResponse<T>(res: Response, retry: () => Promise<Response>): Promise<T> {
+  if (res.status === 401) {
+    const newToken = await tryRefreshToken()
+    if (!newToken) forceLogout()
+    // Retry the original request with the new token
+    const retryRes = await retry()
+    if (retryRes.status === 401) forceLogout()
+    if (!retryRes.ok) {
+      const body = await retryRes.text().catch(() => '')
+      throw new Error(`API ${retryRes.status}: ${body || retryRes.statusText}`)
+    }
+    return retryRes.json()
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`API ${res.status}: ${body || res.statusText}`)
+  }
+  return res.json()
 }
 
 async function get<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
@@ -14,55 +43,30 @@ async function get<T>(path: string, params?: Record<string, string | number | bo
       }
     }
   }
-  const res = await fetch(url.toString(), { headers: authHeaders() })
-  if (res.status === 401) {
-    localStorage.removeItem('atlas_token')
-    localStorage.removeItem('atlas_refresh_token')
-    window.location.href = '/login'
-    throw new Error('Session expired')
-  }
-  if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new Error(`API ${res.status}: ${body || res.statusText}`)
-  }
-  return res.json()
+  const doFetch = () => fetch(url.toString(), { headers: authHeaders() })
+  const res = await doFetch()
+  return handleResponse<T>(res, doFetch)
 }
 
 async function post<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: body ? JSON.stringify(body) : undefined,
-  })
-  if (res.status === 401) {
-    localStorage.removeItem('atlas_token')
-    localStorage.removeItem('atlas_refresh_token')
-    window.location.href = '/login'
-    throw new Error('Session expired')
-  }
-  if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new Error(`API ${res.status}: ${body || res.statusText}`)
-  }
-  return res.json()
+  const doFetch = () =>
+    fetch(`${BASE}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: body ? JSON.stringify(body) : undefined,
+    })
+  const res = await doFetch()
+  return handleResponse<T>(res, doFetch)
 }
 
 async function del<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: 'DELETE',
-    headers: authHeaders(),
-  })
-  if (res.status === 401) {
-    localStorage.removeItem('atlas_token')
-    localStorage.removeItem('atlas_refresh_token')
-    window.location.href = '/login'
-    throw new Error('Session expired')
-  }
-  if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new Error(`API ${res.status}: ${body || res.statusText}`)
-  }
-  return res.json()
+  const doFetch = () =>
+    fetch(`${BASE}${path}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    })
+  const res = await doFetch()
+  return handleResponse<T>(res, doFetch)
 }
 
 // -- Types --

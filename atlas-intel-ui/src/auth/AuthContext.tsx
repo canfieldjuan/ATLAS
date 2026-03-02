@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 
 const TOKEN_KEY = 'atlas_token'
 const REFRESH_KEY = 'atlas_refresh_token'
@@ -48,23 +48,66 @@ async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
   return res.json()
 }
 
+// ---------------------------------------------------------------------------
+// Refresh token logic (shared across client.ts and AuthContext)
+// ---------------------------------------------------------------------------
+
+let refreshPromise: Promise<string | null> | null = null
+
+/**
+ * Attempt to exchange the stored refresh token for a new access token.
+ * Deduplicates concurrent calls -- only one refresh request is in-flight at a time.
+ * Returns the new access token on success, or null on failure (caller should logout).
+ */
+export async function tryRefreshToken(): Promise<string | null> {
+  // Deduplicate: if a refresh is already in-flight, piggyback on it
+  if (refreshPromise) return refreshPromise
+
+  refreshPromise = (async () => {
+    const refreshToken = localStorage.getItem(REFRESH_KEY)
+    if (!refreshToken) return null
+
+    try {
+      const res = await fetch(`${BASE}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      })
+      if (!res.ok) return null
+
+      const data: { access_token: string; refresh_token: string } = await res.json()
+      localStorage.setItem(TOKEN_KEY, data.access_token)
+      localStorage.setItem(REFRESH_KEY, data.refresh_token)
+      return data.access_token
+    } catch {
+      return null
+    } finally {
+      refreshPromise = null
+    }
+  })()
+
+  return refreshPromise
+}
+
 export default function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [token, setToken] = useState<string | null>(() => localStorage.getItem(TOKEN_KEY))
   const [loading, setLoading] = useState(true)
+  const tokenRef = useRef(token)
+  tokenRef.current = token
 
-  const saveTokens = (access: string, refresh: string) => {
+  const saveTokens = useCallback((access: string, refresh: string) => {
     localStorage.setItem(TOKEN_KEY, access)
     localStorage.setItem(REFRESH_KEY, refresh)
     setToken(access)
-  }
+  }, [])
 
-  const clearTokens = () => {
+  const clearTokens = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY)
     localStorage.removeItem(REFRESH_KEY)
     setToken(null)
     setUser(null)
-  }
+  }, [])
 
   const fetchMe = useCallback(async (t: string) => {
     try {
@@ -73,9 +116,23 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
       })
       setUser(u)
     } catch {
+      // Access token failed -- try refresh before giving up
+      const newToken = await tryRefreshToken()
+      if (newToken) {
+        setToken(newToken)
+        try {
+          const u = await apiFetch<User>('/auth/me', {
+            headers: { Authorization: `Bearer ${newToken}` },
+          })
+          setUser(u)
+          return
+        } catch {
+          // Refresh succeeded but /me still failed -- give up
+        }
+      }
       clearTokens()
     }
-  }, [])
+  }, [clearTokens])
 
   useEffect(() => {
     if (token) {
@@ -85,31 +142,32 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const login = async (email: string, password: string) => {
+  const login = useCallback(async (email: string, password: string) => {
     const res = await apiFetch<{ access_token: string; refresh_token: string }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     })
     saveTokens(res.access_token, res.refresh_token)
     await fetchMe(res.access_token)
-  }
+  }, [saveTokens, fetchMe])
 
-  const signup = async (email: string, password: string, fullName: string, accountName: string) => {
+  const signup = useCallback(async (email: string, password: string, fullName: string, accountName: string) => {
     const res = await apiFetch<{ access_token: string; refresh_token: string }>('/auth/register', {
       method: 'POST',
       body: JSON.stringify({ email, password, full_name: fullName, account_name: accountName }),
     })
     saveTokens(res.access_token, res.refresh_token)
     await fetchMe(res.access_token)
-  }
+  }, [saveTokens, fetchMe])
 
-  const logout = () => {
+  const logout = useCallback(() => {
     clearTokens()
-  }
+  }, [clearTokens])
 
-  const refreshUser = async () => {
-    if (token) await fetchMe(token)
-  }
+  const refreshUser = useCallback(async () => {
+    const t = tokenRef.current
+    if (t) await fetchMe(t)
+  }, [fetchMe])
 
   return (
     <AuthContext.Provider value={{ user, token, loading, login, signup, logout, refreshUser }}>
