@@ -826,8 +826,8 @@ class TaskScheduler:
                         "task", evt_level,
                         "Task '%s' %s (%dms)" % (task.name, status, duration_ms),
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Task broadcast failed: %s", e)
 
                 if status == "failed":
                     self._maybe_schedule_retry(task, retry_count)
@@ -850,11 +850,11 @@ class TaskScheduler:
                 await repo.complete_execution(
                     exec_id, "failed",
                     duration_ms=duration_ms,
-                    error=str(e),
+                    error=f"{type(e).__name__}: {str(e)[:500]}",
                 )
                 next_run = self._get_next_run_time(task)
                 await repo.update_last_run(task_id, now, next_run)
-                logger.error("Task '%s' failed: %s", task.name, e)
+                logger.error("Task '%s' failed", task.name, exc_info=True)
                 self._maybe_schedule_retry(task, retry_count)
                 await self._check_consecutive_failures(task.id)
 
@@ -930,8 +930,8 @@ class TaskScheduler:
             job = self._scheduler.get_job(str(task.id))
             if job and job.next_run_time:
                 return job.next_run_time
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to get next run time for %s: %s", task.id, e)
         return None
 
     async def register_and_schedule(self, task: ScheduledTask) -> None:
@@ -997,8 +997,8 @@ class TaskScheduler:
                         "task", evt_level,
                         "Task '%s' %s (%dms)" % (task.name, status, duration_ms),
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Task broadcast failed: %s", e)
 
                 if status == "failed":
                     self._maybe_schedule_retry(task, 0)
@@ -1020,10 +1020,10 @@ class TaskScheduler:
             await repo.complete_execution(
                 exec_id, "failed",
                 duration_ms=duration_ms,
-                error=str(e),
+                error=f"{type(e).__name__}: {str(e)[:500]}",
             )
             await repo.update_last_run(task.id, now, self._get_next_run_time(task))
-            logger.error("Manual task '%s' failed: %s", task.name, e)
+            logger.error("Manual task '%s' failed", task.name, exc_info=True)
             self._maybe_schedule_retry(task, 0)
             await self._check_consecutive_failures(task.id)
 

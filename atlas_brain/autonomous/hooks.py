@@ -74,8 +74,13 @@ class HookManager:
             return False
         return (time.monotonic() - last) < cooldown
 
+    _MAX_EXECUTION_ENTRIES = 500
+
     def _record_execution_time(self, task_name: str, rule_name: str) -> None:
         """Record the monotonic time of a successful hook execution."""
+        if len(self._last_execution) >= self._MAX_EXECUTION_ENTRIES:
+            oldest_key = next(iter(self._last_execution))
+            del self._last_execution[oldest_key]
         self._last_execution[(task_name, rule_name)] = time.monotonic()
 
     async def on_alert(

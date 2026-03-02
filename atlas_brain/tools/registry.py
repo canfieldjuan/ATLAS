@@ -179,7 +179,7 @@ class ToolRegistry:
             return ToolResult(
                 success=False,
                 error="EXECUTION_ERROR",
-                message=str(e),
+                message="Tool execution failed",
             )
 
 

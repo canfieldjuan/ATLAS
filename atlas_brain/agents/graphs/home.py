@@ -249,8 +249,8 @@ async def execute_action(state: HomeAgentState) -> HomeAgentState:
             logger.warning("Action execution failed: %s", e)
             result = ActionResult(
                 success=False,
-                message=str(e),
-                error=str(e),
+                message="Action failed",
+                error=type(e).__name__,
             )
 
     elif action_type == "tool_use":
@@ -720,8 +720,8 @@ class HomeAgentGraph:
             logger.exception("Error running HomeAgent graph: %s", e)
             final_state = {
                 **initial_state,
-                "response": f"I'm sorry, I encountered an error: {e}",
-                "error": str(e),
+                "response": "I'm sorry, something went wrong.",
+                "error": type(e).__name__,
             }
 
         # Update entity tracker

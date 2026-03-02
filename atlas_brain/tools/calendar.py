@@ -296,7 +296,7 @@ class CalendarTool:
                 message="Calendar not configured. Run calendar setup first.",
             )
 
-        hours_ahead = params.get("hours_ahead", 24)
+        hours_ahead = max(1, min(params.get("hours_ahead", 24), 168))
         max_results = min(params.get("max_results", 10), 25)
         calendar_name = params.get("calendar_name")
 
@@ -356,7 +356,7 @@ class CalendarTool:
             return ToolResult(
                 success=False,
                 error="EXECUTION_ERROR",
-                message=str(e),
+                message="Calendar operation failed",
             )
 
     async def _fetch_events(
@@ -619,7 +619,7 @@ class CalendarTool:
             return ToolResult(
                 success=False,
                 error="EXECUTION_ERROR",
-                message=str(e),
+                message="Calendar event creation failed",
             )
 
     async def verify_credentials(self) -> bool:
@@ -712,7 +712,7 @@ class CreateCalendarEventTool:
 
         summary = params.get("summary", "").strip()
         start_text = params.get("start_time", "").strip()
-        duration = int(params.get("duration_minutes", 60))
+        duration = max(1, min(int(params.get("duration_minutes", 60)), 1440))
         location = params.get("location")
 
         if not summary:

@@ -62,8 +62,8 @@ async def _on_state_changed(event_data: dict[str, Any]) -> None:
                 or entity_id.split(".", 1)[-1].replace("_", " ").title()
             )
             await broadcast_system_event("ha", "info", "%s: %s" % (friendly, state_value))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("HA state broadcast failed: %s", e)
 
 
 def _friendly_name_from_entity(entity: dict) -> str:
@@ -207,8 +207,8 @@ async def init_homeassistant() -> list[str]:
     try:
         from .device_resolver import get_device_resolver
         get_device_resolver().invalidate()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Device resolver invalidation failed: %s", e)
 
     logger.info("Registered %d Home Assistant devices", len(registered))
     return registered

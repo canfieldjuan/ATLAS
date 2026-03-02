@@ -115,7 +115,8 @@ async def run(task: ScheduledTask) -> dict:
     try:
         sender = get_campaign_sender()
     except RuntimeError as exc:
-        return {"_skip_synthesis": f"Sender not configured: {exc}"}
+        logger.warning("Campaign sender not configured: %s", exc)
+        return {"_skip_synthesis": "Campaign sender not configured"}
 
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(seconds=cfg.auto_send_delay_seconds)
@@ -277,7 +278,7 @@ async def run(task: ScheduledTask) -> dict:
                 campaign_id=campaign_id, sequence_id=sequence_id,
                 step_number=c.get("step_number"),
                 recipient_email=c["recipient_email"],
-                error_detail=str(exc),
+                error_detail=f"{type(exc).__name__}: {str(exc)[:200]}",
             )
 
             # Check if we've exceeded max attempts -- revert to draft

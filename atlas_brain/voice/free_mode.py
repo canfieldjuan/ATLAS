@@ -59,7 +59,7 @@ class FreeModeManager:
             return
         if not self.pipeline.conversation_mode_enabled:
             logger.warning(
-                "FreeModeManager: conversation_mode_enabled=False — "
+                "FreeModeManager: conversation_mode_enabled=False -- "
                 "free mode requires conversation mode. Evaluator will not start."
             )
             return
@@ -89,7 +89,7 @@ class FreeModeManager:
     # ------------------------------------------------------------------
 
     def _loop(self) -> None:
-        """Main evaluation loop — runs every poll_interval_s seconds."""
+        """Main evaluation loop -- runs every poll_interval_s seconds."""
         # Initial delay so pipeline has time to fully start
         self._stop.wait(timeout=5.0)
         while not self._stop.is_set():
@@ -124,7 +124,7 @@ class FreeModeManager:
             if not self._speaker_ok():
                 return False
 
-        # Ambient RMS check — only meaningful when rms_adaptive=True
+        # Ambient RMS check -- only meaningful when rms_adaptive=True
         if not self._ambient_ok():
             return False
 
@@ -153,7 +153,7 @@ class FreeModeManager:
             )
             return False
 
-        # Bootstrap path: no heartbeat yet — check if there's a current positive match
+        # Bootstrap path: no heartbeat yet -- check if there's a current positive match
         match = self.pipeline._last_speaker_match
         if (match is not None
                 and match.matched
