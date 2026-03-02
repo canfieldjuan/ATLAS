@@ -129,7 +129,7 @@ def _tenant_params(user: AuthUser) -> list:
     """Return [account_id] when auth is enabled, else empty (no param needed)."""
     if not settings.saas_auth.enabled:
         return []
-    return [user.account_id]
+    return [_uuid.UUID(user.account_id)]
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +146,7 @@ class AddAsinRequest(BaseModel):
 async def list_tracked_asins(user: AuthUser = Depends(require_auth)):
     """List ASINs tracked by the current account."""
     pool = _pool_or_503()
+    acct = _uuid.UUID(user.account_id)
     rows = await pool.fetch(
         """
         SELECT ta.asin, ta.label, ta.added_at,
@@ -155,7 +156,7 @@ async def list_tracked_asins(user: AuthUser = Depends(require_auth)):
         WHERE ta.account_id = $1
         ORDER BY ta.added_at DESC
         """,
-        user.account_id,
+        acct,
     )
     return {
         "asins": [
@@ -180,14 +181,16 @@ async def add_tracked_asin(req: AddAsinRequest, user: AuthUser = Depends(require
     """Add an ASIN to track. Enforces plan limit."""
     pool = _pool_or_503()
 
+    acct = _uuid.UUID(user.account_id)
+
     # Check limit
     current_count = await pool.fetchval(
         "SELECT COUNT(*) FROM tracked_asins WHERE account_id = $1",
-        user.account_id,
+        acct,
     )
     asin_limit = await pool.fetchval(
         "SELECT asin_limit FROM saas_accounts WHERE id = $1",
-        user.account_id,
+        acct,
     )
     if current_count >= (asin_limit or 5):
         raise HTTPException(status_code=403, detail="ASIN limit reached. Upgrade your plan for more.")
@@ -199,7 +202,7 @@ async def add_tracked_asin(req: AddAsinRequest, user: AuthUser = Depends(require
         VALUES ($1, $2, $3)
         ON CONFLICT (account_id, asin) DO UPDATE SET label = EXCLUDED.label
         """,
-        user.account_id,
+        acct,
         req.asin.strip().upper(),
         req.label,
     )
@@ -213,7 +216,7 @@ async def remove_tracked_asin(asin: str, user: AuthUser = Depends(require_auth))
     pool = _pool_or_503()
     result = await pool.execute(
         "DELETE FROM tracked_asins WHERE account_id = $1 AND asin = $2",
-        user.account_id,
+        _uuid.UUID(user.account_id),
         asin.strip().upper(),
     )
     if result == "DELETE 0":
@@ -787,9 +790,10 @@ async def compare_brands(
         JOIN product_metadata pm ON pm.asin = pr.asin
         WHERE pm.brand IS NOT NULL AND pm.brand != ''
           AND ({brand_clauses})
+          {t_sql}
           AND pr.enrichment_status = 'enriched'
         """,
-        *brand_params,
+        *brand_params, *t_extra,
     )
 
     fp_counters: dict[str, dict] = {}
@@ -934,6 +938,9 @@ async def get_brand_detail(brand_name: str, user: AuthUser = Depends(require_aut
     t_and = f"AND {t_cond2}" if t_cond2 != "TRUE" else ""
 
     # Products for this brand
+    # Move tenant condition into JOIN ON clause to preserve LEFT JOIN semantics
+    # (products with zero reviews should still appear)
+    t_join_on = f"AND {t_cond2}" if t_cond2 != "TRUE" else ""
     products = await pool.fetch(
         f"""
         SELECT pm.asin, pm.title, pm.average_rating, pm.rating_number, pm.price,
@@ -943,8 +950,8 @@ async def get_brand_detail(brand_name: str, user: AuthUser = Depends(require_aut
                COUNT(*) FILTER (WHERE pr.rating <= 3) AS complaint_count,
                COUNT(*) FILTER (WHERE pr.rating > 3)  AS praise_count
         FROM product_metadata pm
-        LEFT JOIN product_reviews pr ON pr.asin = pm.asin
-        WHERE pm.brand ILIKE $1 {t_and}
+        LEFT JOIN product_reviews pr ON pr.asin = pm.asin {t_join_on}
+        WHERE pm.brand ILIKE $1
         GROUP BY pm.asin, pm.title, pm.average_rating, pm.rating_number, pm.price
         ORDER BY review_count DESC
         """,
@@ -1061,7 +1068,7 @@ async def get_brand_detail(brand_name: str, user: AuthUser = Depends(require_aut
     # All enum/scalar deep fields in a single pass
     # ------------------------------------------------------------------
     enum_rows = await pool.fetch(
-        """
+        f"""
         SELECT deep_extraction->>'brand_loyalty_depth'   AS loyalty,
                deep_extraction->>'expertise_level'       AS expertise,
                deep_extraction->>'budget_type'           AS budget,
@@ -1267,9 +1274,20 @@ async def get_brand_detail(brand_name: str, user: AuthUser = Depends(require_aut
     # ------------------------------------------------------------------
     total_reviews = sum(r["review_count"] for r in products)
     deep_review_count = len(enum_rows)
-    avg_rating_all = await pool.fetchval(
-        "SELECT AVG(average_rating) FROM product_metadata WHERE brand ILIKE $1", bname
-    )
+    if t_and:
+        avg_rating_all = await pool.fetchval(
+            f"""
+            SELECT AVG(pm.average_rating)
+            FROM product_metadata pm
+            JOIN product_reviews pr ON pr.asin = pm.asin
+            WHERE pm.brand ILIKE $1 {t_and}
+            """,
+            bname, *t_extra,
+        )
+    else:
+        avg_rating_all = await pool.fetchval(
+            "SELECT AVG(average_rating) FROM product_metadata WHERE brand ILIKE $1", bname
+        )
 
     # Compute brand health from already-aggregated counters
     detail_health: int | None = None
@@ -1964,17 +1982,21 @@ async def get_review(review_id: str, user: AuthUser = Depends(require_auth)):
         raise HTTPException(status_code=400, detail="Invalid review_id (must be UUID)")
 
     pool = _pool_or_503()
+    t_cond = _tenant_cond("pr", 2)
+    t_params = _tenant_params(user)
+    t_and = f"AND {t_cond}" if t_cond != "TRUE" else ""
+
     row = await pool.fetchrow(
-        """
+        f"""
         SELECT pr.*, pm.brand, pm.title AS product_title,
                pm.average_rating AS product_avg_rating,
                pm.rating_number AS product_total_ratings,
                pm.price AS product_price
         FROM product_reviews pr
         LEFT JOIN product_metadata pm ON pm.asin = pr.asin
-        WHERE pr.id = $1
+        WHERE pr.id = $1 {t_and}
         """,
-        rid,
+        rid, *t_params,
     )
 
     if not row:

@@ -7,7 +7,7 @@ Configuration is loaded from environment variables with sensible defaults.
 from pathlib import Path
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,6 +29,19 @@ class SaaSAuthConfig(BaseSettings):
     stripe_starter_price_id: str = Field(default="", description="Stripe Price ID for Starter plan")
     stripe_growth_price_id: str = Field(default="", description="Stripe Price ID for Growth plan")
     stripe_pro_price_id: str = Field(default="", description="Stripe Price ID for Pro plan")
+
+    @model_validator(mode="after")
+    def _validate_secrets(self):
+        if self.enabled and self.jwt_secret == "change-me-in-production":
+            raise ValueError("ATLAS_SAAS_JWT_SECRET must be set when SaaS auth is enabled")
+        if self.stripe_secret_key and not self.stripe_webhook_secret:
+            import warnings
+            warnings.warn(
+                "ATLAS_SAAS_STRIPE_WEBHOOK_SECRET is empty while Stripe is configured. "
+                "Webhooks will accept unverified payloads.",
+                stacklevel=2,
+            )
+        return self
 
 
 class STTConfig(BaseSettings):

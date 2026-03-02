@@ -36,9 +36,10 @@ export function useAuth(): AuthState {
 }
 
 async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
+  const { headers: extraHeaders, ...restOpts } = opts ?? {}
   const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...opts?.headers },
-    ...opts,
+    ...restOpts,
+    headers: { 'Content-Type': 'application/json', ...(extraHeaders as Record<string, string>) },
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: res.statusText }))

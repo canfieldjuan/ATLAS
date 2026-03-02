@@ -52,6 +52,12 @@ async function del<T>(path: string): Promise<T> {
     method: 'DELETE',
     headers: authHeaders(),
   })
+  if (res.status === 401) {
+    localStorage.removeItem('atlas_token')
+    localStorage.removeItem('atlas_refresh_token')
+    window.location.href = '/login'
+    throw new Error('Session expired')
+  }
   if (!res.ok) {
     const body = await res.text().catch(() => '')
     throw new Error(`API ${res.status}: ${body || res.statusText}`)

@@ -5,6 +5,7 @@ import { useAuth } from '../auth/AuthContext'
 import {
   searchAvailableAsins,
   addTrackedAsin,
+  removeTrackedAsin,
   type AsinSearchResult,
 } from '../api/client'
 
@@ -45,8 +46,13 @@ export default function Onboarding() {
     }
   }
 
-  function handleRemove(asin: string) {
+  async function handleRemove(asin: string) {
     setAdded(prev => prev.filter(a => a !== asin))
+    try {
+      await removeTrackedAsin(asin)
+    } catch {
+      // best-effort removal
+    }
   }
 
   async function handleContinue() {

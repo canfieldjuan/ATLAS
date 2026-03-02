@@ -1,6 +1,7 @@
 """Authentication endpoints: register, login, refresh, me, change-password."""
 
 import logging
+import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,6 +12,9 @@ from ..auth.jwt import create_access_token, create_refresh_token, decode_token
 from ..auth.passwords import hash_password, verify_password
 from ..config import settings
 from ..storage.database import get_db_pool
+
+# Import PLAN_LIMITS for default asin limit
+from .billing import PLAN_LIMITS
 
 logger = logging.getLogger("atlas.api.auth")
 
@@ -71,42 +75,47 @@ async def register(req: RegisterRequest):
     if not pool.is_initialized:
         raise HTTPException(status_code=503, detail="Database not ready")
 
-    # Check email uniqueness
-    existing = await pool.fetchval(
-        "SELECT id FROM saas_users WHERE email = $1", req.email
-    )
-    if existing:
-        raise HTTPException(status_code=409, detail="Email already registered")
-
     cfg = settings.saas_auth
     trial_ends = datetime.now(timezone.utc) + timedelta(days=cfg.trial_days)
+    trial_asin_limit = PLAN_LIMITS.get("trial", {}).get("asins", 5)
 
-    # Create account
-    account_id = await pool.fetchval(
-        """
-        INSERT INTO saas_accounts (name, plan, plan_status, trial_ends_at, asin_limit)
-        VALUES ($1, 'trial', 'trialing', $2, 5)
-        RETURNING id
-        """,
-        req.account_name,
-        trial_ends,
-    )
+    # Use a transaction so account + user are created atomically
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Check email uniqueness inside transaction to prevent TOCTOU
+            existing = await conn.fetchval(
+                "SELECT id FROM saas_users WHERE email = $1", req.email
+            )
+            if existing:
+                raise HTTPException(status_code=409, detail="Email already registered")
 
-    # Create user
-    pw_hash = hash_password(req.password)
-    user_id = await pool.fetchval(
-        """
-        INSERT INTO saas_users (account_id, email, password_hash, full_name, role)
-        VALUES ($1, $2, $3, $4, 'owner')
-        RETURNING id
-        """,
-        account_id,
-        req.email,
-        pw_hash,
-        req.full_name,
-    )
+            # Create account
+            account_id = await conn.fetchval(
+                """
+                INSERT INTO saas_accounts (name, plan, plan_status, trial_ends_at, asin_limit)
+                VALUES ($1, 'trial', 'trialing', $2, $3)
+                RETURNING id
+                """,
+                req.account_name,
+                trial_ends,
+                trial_asin_limit,
+            )
 
-    # Create Stripe customer if configured
+            # Create user
+            pw_hash = hash_password(req.password)
+            user_id = await conn.fetchval(
+                """
+                INSERT INTO saas_users (account_id, email, password_hash, full_name, role)
+                VALUES ($1, $2, $3, $4, 'owner')
+                RETURNING id
+                """,
+                account_id,
+                req.email,
+                pw_hash,
+                req.full_name,
+            )
+
+    # Create Stripe customer if configured (outside transaction -- non-critical)
     if cfg.stripe_secret_key:
         try:
             import stripe
@@ -178,6 +187,11 @@ async def refresh(req: RefreshRequest):
         raise HTTPException(status_code=401, detail="Invalid token type")
 
     pool = get_db_pool()
+    try:
+        user_uuid = _uuid.UUID(payload["sub"])
+    except (ValueError, KeyError):
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+
     row = await pool.fetchrow(
         """
         SELECT su.id, su.account_id, su.is_active, sa.plan
@@ -185,7 +199,7 @@ async def refresh(req: RefreshRequest):
         JOIN saas_accounts sa ON sa.id = su.account_id
         WHERE su.id = $1
         """,
-        payload["sub"],
+        user_uuid,
     )
 
     if not row or not row["is_active"]:
@@ -210,7 +224,7 @@ async def me(user: AuthUser = Depends(require_auth)):
         JOIN saas_accounts sa ON sa.id = su.account_id
         WHERE su.id = $1
         """,
-        user.user_id,
+        _uuid.UUID(user.user_id),
     )
 
     if not row:
@@ -237,9 +251,10 @@ async def change_password(req: ChangePasswordRequest, user: AuthUser = Depends(r
         raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
 
     pool = get_db_pool()
+    uid = _uuid.UUID(user.user_id)
     row = await pool.fetchrow(
         "SELECT password_hash FROM saas_users WHERE id = $1",
-        user.user_id,
+        uid,
     )
 
     if not row or not verify_password(req.current_password, row["password_hash"]):
@@ -249,7 +264,7 @@ async def change_password(req: ChangePasswordRequest, user: AuthUser = Depends(r
     await pool.execute(
         "UPDATE saas_users SET password_hash = $1 WHERE id = $2",
         new_hash,
-        user.user_id,
+        uid,
     )
 
     return {"status": "ok"}

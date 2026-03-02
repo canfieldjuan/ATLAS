@@ -45,7 +45,7 @@ export default function Account() {
     }
   }
 
-  async function startCheckout(priceParam: string) {
+  async function startCheckout(planName: string) {
     const token = localStorage.getItem('atlas_token')
     const res = await fetch('/api/v1/billing/checkout', {
       method: 'POST',
@@ -54,7 +54,7 @@ export default function Account() {
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({
-        price_id: priceParam,
+        plan: planName,
         success_url: `${window.location.origin}/account?upgraded=1`,
         cancel_url: `${window.location.origin}/account`,
       }),

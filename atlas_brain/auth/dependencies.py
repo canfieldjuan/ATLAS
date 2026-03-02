@@ -1,5 +1,6 @@
 """FastAPI dependencies for authentication and plan-based authorization."""
 
+import uuid as _uuid
 from dataclasses import dataclass
 from typing import Optional
 
@@ -56,6 +57,12 @@ async def require_auth(request: Request) -> AuthUser:
     if payload.get("type") != "access":
         raise HTTPException(status_code=401, detail="Invalid token type")
 
+    # Cast JWT string IDs to UUID for asyncpg
+    try:
+        user_uuid = _uuid.UUID(payload["sub"])
+    except (ValueError, KeyError):
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+
     # Fetch plan_status and role from DB for freshness
     from ..storage.database import get_db_pool
     pool = get_db_pool()
@@ -66,7 +73,7 @@ async def require_auth(request: Request) -> AuthUser:
         JOIN saas_accounts sa ON sa.id = su.account_id
         WHERE su.id = $1 AND su.is_active = TRUE
         """,
-        payload["sub"],
+        user_uuid,
     )
     if not row:
         raise HTTPException(status_code=401, detail="User not found or inactive")
@@ -100,6 +107,11 @@ async def optional_auth(request: Request) -> Optional[AuthUser]:
     if payload.get("type") != "access":
         return None
 
+    try:
+        user_uuid = _uuid.UUID(payload["sub"])
+    except (ValueError, KeyError):
+        return None
+
     from ..storage.database import get_db_pool
     pool = get_db_pool()
     row = await pool.fetchrow(
@@ -109,7 +121,7 @@ async def optional_auth(request: Request) -> Optional[AuthUser]:
         JOIN saas_accounts sa ON sa.id = su.account_id
         WHERE su.id = $1 AND su.is_active = TRUE
         """,
-        payload["sub"],
+        user_uuid,
     )
     if not row:
         return None

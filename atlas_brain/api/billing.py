@@ -1,6 +1,7 @@
 """Stripe billing endpoints: checkout, portal, status, webhook."""
 
 import logging
+import uuid as _uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -45,8 +46,16 @@ def _get_stripe():
 
 # -- Request/Response schemas --
 
+PLAN_NAME_TO_CONFIG_KEY = {
+    "starter": "stripe_starter_price_id",
+    "growth": "stripe_growth_price_id",
+    "pro": "stripe_pro_price_id",
+}
+
+
 class CheckoutRequest(BaseModel):
-    price_id: str
+    price_id: str = ""
+    plan: str = ""  # alternative: pass plan name (starter/growth/pro)
     success_url: str = ""
     cancel_url: str = ""
 
@@ -74,11 +83,25 @@ async def create_checkout(req: CheckoutRequest, user: AuthUser = Depends(require
     """Create a Stripe Checkout session for plan upgrade."""
     stripe = _get_stripe()
     pool = get_db_pool()
+    acct_uuid = _uuid.UUID(user.account_id)
+    user_uuid = _uuid.UUID(user.user_id)
+
+    # Resolve price_id from plan name if needed
+    price_id = req.price_id
+    if not price_id and req.plan:
+        cfg_key = PLAN_NAME_TO_CONFIG_KEY.get(req.plan)
+        if not cfg_key:
+            raise HTTPException(status_code=400, detail=f"Unknown plan: {req.plan}")
+        price_id = getattr(settings.saas_auth, cfg_key, "")
+        if not price_id:
+            raise HTTPException(status_code=400, detail=f"No Stripe price configured for plan '{req.plan}'")
+    if not price_id:
+        raise HTTPException(status_code=400, detail="Either price_id or plan is required")
 
     # Get or create Stripe customer
     account = await pool.fetchrow(
         "SELECT stripe_customer_id, name FROM saas_accounts WHERE id = $1",
-        user.account_id,
+        acct_uuid,
     )
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -87,7 +110,7 @@ async def create_checkout(req: CheckoutRequest, user: AuthUser = Depends(require
     if not customer_id:
         # Create customer on the fly
         user_row = await pool.fetchrow(
-            "SELECT email FROM saas_users WHERE id = $1", user.user_id
+            "SELECT email FROM saas_users WHERE id = $1", user_uuid
         )
         customer = stripe.Customer.create(
             email=user_row["email"] if user_row else "",
@@ -98,18 +121,20 @@ async def create_checkout(req: CheckoutRequest, user: AuthUser = Depends(require
         await pool.execute(
             "UPDATE saas_accounts SET stripe_customer_id = $1 WHERE id = $2",
             customer_id,
-            user.account_id,
+            acct_uuid,
         )
 
-    success_url = req.success_url or "{CHECKOUT_SESSION_ID}"
-    cancel_url = req.cancel_url or ""
+    if not req.success_url:
+        raise HTTPException(status_code=400, detail="success_url is required")
+    if not req.cancel_url:
+        raise HTTPException(status_code=400, detail="cancel_url is required")
 
     session = stripe.checkout.Session.create(
         customer=customer_id,
         mode="subscription",
-        line_items=[{"price": req.price_id, "quantity": 1}],
-        success_url=success_url,
-        cancel_url=cancel_url,
+        line_items=[{"price": price_id, "quantity": 1}],
+        success_url=req.success_url,
+        cancel_url=req.cancel_url,
         metadata={"account_id": str(user.account_id)},
     )
 
@@ -127,7 +152,7 @@ async def create_portal(user: AuthUser = Depends(require_auth)):
 
     customer_id = await pool.fetchval(
         "SELECT stripe_customer_id FROM saas_accounts WHERE id = $1",
-        user.account_id,
+        _uuid.UUID(user.account_id),
     )
     if not customer_id:
         raise HTTPException(status_code=400, detail="No billing account found. Subscribe to a plan first.")
@@ -148,7 +173,7 @@ async def billing_status(user: AuthUser = Depends(require_auth)):
         SELECT plan, plan_status, asin_limit, trial_ends_at, stripe_customer_id
         FROM saas_accounts WHERE id = $1
         """,
-        user.account_id,
+        _uuid.UUID(user.account_id),
     )
     if not row:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -239,18 +264,25 @@ async def stripe_webhook(request: Request):
     return {"status": "ok"}
 
 
-async def _find_account_by_customer(pool, customer_id: str):
-    """Find account ID by Stripe customer ID."""
+async def _find_account_by_customer(pool, customer_id: str) -> _uuid.UUID | None:
+    """Find account ID (UUID) by Stripe customer ID."""
     return await pool.fetchval(
         "SELECT id FROM saas_accounts WHERE stripe_customer_id = $1", customer_id
     )
 
 
-async def _handle_checkout_completed(pool, session) -> str | None:
+async def _handle_checkout_completed(pool, session) -> _uuid.UUID | None:
     """Handle checkout.session.completed -- activate subscription."""
     customer_id = session.customer
     subscription_id = session.subscription
-    account_id = session.metadata.get("account_id") if session.metadata else None
+    account_id_str = session.metadata.get("account_id") if session.metadata else None
+
+    account_id: _uuid.UUID | None = None
+    if account_id_str:
+        try:
+            account_id = _uuid.UUID(account_id_str)
+        except ValueError:
+            pass
 
     if not account_id:
         account_id = await _find_account_by_customer(pool, customer_id)
@@ -291,7 +323,7 @@ async def _handle_checkout_completed(pool, session) -> str | None:
     return account_id
 
 
-async def _handle_invoice_paid(pool, invoice) -> str | None:
+async def _handle_invoice_paid(pool, invoice) -> _uuid.UUID | None:
     """Handle invoice.paid -- ensure plan_status is active."""
     customer_id = invoice.customer
     account_id = await _find_account_by_customer(pool, customer_id)
@@ -303,7 +335,7 @@ async def _handle_invoice_paid(pool, invoice) -> str | None:
     return account_id
 
 
-async def _handle_invoice_failed(pool, invoice) -> str | None:
+async def _handle_invoice_failed(pool, invoice) -> _uuid.UUID | None:
     """Handle invoice.payment_failed -- set past_due."""
     customer_id = invoice.customer
     account_id = await _find_account_by_customer(pool, customer_id)
@@ -316,7 +348,7 @@ async def _handle_invoice_failed(pool, invoice) -> str | None:
     return account_id
 
 
-async def _handle_subscription_updated(pool, subscription) -> str | None:
+async def _handle_subscription_updated(pool, subscription) -> _uuid.UUID | None:
     """Handle subscription changes (upgrades/downgrades)."""
     customer_id = subscription.customer
     account_id = await _find_account_by_customer(pool, customer_id)
@@ -346,7 +378,7 @@ async def _handle_subscription_updated(pool, subscription) -> str | None:
     return account_id
 
 
-async def _handle_subscription_deleted(pool, subscription) -> str | None:
+async def _handle_subscription_deleted(pool, subscription) -> _uuid.UUID | None:
     """Handle subscription cancellation."""
     customer_id = subscription.customer
     account_id = await _find_account_by_customer(pool, customer_id)
