@@ -4,6 +4,7 @@ REST API for B2B scrape target management.
 CRUD for scrape targets, manual trigger, and log viewing.
 """
 
+import asyncio
 import json
 import logging
 import time as _time
@@ -236,7 +237,21 @@ async def trigger_scrape(target_id: UUID) -> dict:
     started_at = _time.monotonic()
 
     try:
-        result = await parser.scrape(target, client)
+        result = await asyncio.wait_for(parser.scrape(target, client), timeout=300)
+    except asyncio.TimeoutError:
+        duration_ms = int((_time.monotonic() - started_at) * 1000)
+        await _write_scrape_log(pool, target_id, target.source, "failed", 0, 0, 0,
+                                ["scrape timed out after 300s"], duration_ms, parser)
+        await pool.execute(
+            """
+            UPDATE b2b_scrape_targets
+            SET last_scraped_at = NOW(), last_scrape_status = 'failed',
+                last_scrape_reviews = 0, updated_at = NOW()
+            WHERE id = $1
+            """,
+            target_id,
+        )
+        raise HTTPException(status_code=504, detail="Scrape timed out after 300s")
     except Exception as exc:
         duration_ms = int((_time.monotonic() - started_at) * 1000)
         # Log failure
@@ -441,7 +456,7 @@ async def _write_scrape_log(
             pages_scraped, json.dumps(errors), duration_ms, proxy_type,
         )
     except Exception:
-        logger.debug("Failed to write scrape log", exc_info=True)
+        logger.warning("Failed to write scrape log", exc_info=True)
 
 
 @router.get("/logs")

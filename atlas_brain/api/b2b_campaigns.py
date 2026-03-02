@@ -12,7 +12,7 @@ from typing import Any, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..config import settings
 from ..storage.database import get_db_pool
@@ -46,7 +46,7 @@ class GenerateRequest(BaseModel):
     vendor_name: str | None = None
     company_name: str | None = None
     min_score: int = 70
-    limit: int = 20
+    limit: int = Field(default=20, ge=1, le=200)
     target_mode: str | None = None  # vendor_retention | challenger_intel | churning_company
 
 
@@ -66,12 +66,12 @@ class SuppressionCreate(BaseModel):
 
 
 class BulkApproveBody(BaseModel):
-    campaign_ids: list[str]
+    campaign_ids: list[str] = Field(max_length=100)
     action: str  # "approve", "queue-send", "reject"
 
 
 class BulkRejectBody(BaseModel):
-    campaign_ids: list[str]
+    campaign_ids: list[str] = Field(max_length=100)
     reason: str | None = None
 
 
@@ -666,10 +666,13 @@ async def bulk_approve(body: BulkApproveBody):
         now = datetime.now(timezone.utc)
 
         if body.action == "reject":
-            await pool.execute(
-                "UPDATE b2b_campaigns SET status = 'cancelled' WHERE id = $1",
+            result = await pool.execute(
+                "UPDATE b2b_campaigns SET status = 'cancelled' WHERE id = $1 AND status = 'draft'",
                 cid,
             )
+            if result == "UPDATE 0":
+                failed.append({"id": cid_str, "reason": "status changed concurrently"})
+                continue
             await log_campaign_event(
                 pool, event_type="cancelled", source="api",
                 campaign_id=cid, sequence_id=campaign.get("sequence_id"),
@@ -679,10 +682,13 @@ async def bulk_approve(body: BulkApproveBody):
             continue
 
         if body.action == "approve":
-            await pool.execute(
-                "UPDATE b2b_campaigns SET status = 'approved', approved_at = $1 WHERE id = $2",
+            result = await pool.execute(
+                "UPDATE b2b_campaigns SET status = 'approved', approved_at = $1 WHERE id = $2 AND status = 'draft'",
                 now, cid,
             )
+            if result == "UPDATE 0":
+                failed.append({"id": cid_str, "reason": "status changed concurrently"})
+                continue
             await log_campaign_event(
                 pool, event_type="approved", source="api",
                 campaign_id=cid, sequence_id=campaign.get("sequence_id"),
@@ -702,14 +708,17 @@ async def bulk_approve(body: BulkApproveBody):
             failed.append({"id": cid_str, "reason": f"recipient suppressed ({sup['reason']})"})
             continue
 
-        await pool.execute(
+        result = await pool.execute(
             """
             UPDATE b2b_campaigns
             SET status = 'queued', approved_at = $1, recipient_email = $2
-            WHERE id = $3
+            WHERE id = $3 AND status = 'draft'
             """,
             now, recipient, cid,
         )
+        if result == "UPDATE 0":
+            failed.append({"id": cid_str, "reason": "status changed concurrently"})
+            continue
         await log_campaign_event(
             pool, event_type="queued", source="api",
             campaign_id=cid, sequence_id=campaign.get("sequence_id"),
@@ -748,10 +757,13 @@ async def bulk_reject(body: BulkRejectBody):
             failed.append({"id": cid_str, "reason": f"cannot reject '{campaign['status']}'"})
             continue
 
-        await pool.execute(
-            "UPDATE b2b_campaigns SET status = 'cancelled' WHERE id = $1",
+        result = await pool.execute(
+            "UPDATE b2b_campaigns SET status = 'cancelled' WHERE id = $1 AND status IN ('draft', 'approved')",
             cid,
         )
+        if result == "UPDATE 0":
+            failed.append({"id": cid_str, "reason": "status changed concurrently"})
+            continue
         await log_campaign_event(
             pool, event_type="cancelled", source="api",
             campaign_id=cid, sequence_id=campaign.get("sequence_id"),
@@ -1155,22 +1167,27 @@ async def approve_campaign(campaign_id: str):
 
     pool = _pool_or_503()
 
-    row = await pool.fetchrow(
-        "SELECT status FROM b2b_campaigns WHERE id = $1", cid
-    )
-    if not row:
-        raise HTTPException(status_code=404, detail="Campaign not found")
-    if row["status"] != "draft":
-        raise HTTPException(
-            status_code=409,
-            detail=f"Campaign is '{row['status']}', can only approve drafts",
-        )
-
     now = datetime.now(timezone.utc)
-    await pool.execute(
-        "UPDATE b2b_campaigns SET status = 'approved', approved_at = $1 WHERE id = $2",
+    row = await pool.fetchrow(
+        """
+        UPDATE b2b_campaigns
+        SET status = 'approved', approved_at = $1
+        WHERE id = $2 AND status = 'draft'
+        RETURNING id
+        """,
         now, cid,
     )
+    if not row:
+        existing = await pool.fetchval(
+            "SELECT status FROM b2b_campaigns WHERE id = $1", cid
+        )
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+        raise HTTPException(
+            status_code=409,
+            detail=f"Campaign is '{existing}', can only approve drafts",
+        )
+
     await log_campaign_event(
         pool, event_type="approved", source="api",
         campaign_id=cid,
@@ -1232,16 +1249,18 @@ async def queue_campaign_for_send(campaign_id: str, body: ApproveQueueBody | Non
             detail=f"Recipient is suppressed ({sup['reason']})"
         )
 
-    await pool.execute(
+    result = await pool.execute(
         """
         UPDATE b2b_campaigns
         SET status = 'queued',
             approved_at = $1,
             recipient_email = $2
-        WHERE id = $3
+        WHERE id = $3 AND status = 'draft'
         """,
         now, recipient, cid,
     )
+    if result == "UPDATE 0":
+        raise HTTPException(status_code=409, detail="Campaign status changed concurrently")
 
     await log_campaign_event(
         pool, event_type="queued", source="api",

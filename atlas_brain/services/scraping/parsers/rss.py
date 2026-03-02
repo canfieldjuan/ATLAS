@@ -96,7 +96,7 @@ class RSSParser:
 
                 feed_title = feed.feed.get("title", "")
 
-                for entry in feed.entries:
+                for entry in feed.entries[:200]:
                     # Determine entry ID (guid) for dedup
                     entry_id = entry.get("id") or entry.get("link", "")
                     if not entry_id or entry_id in seen_ids:

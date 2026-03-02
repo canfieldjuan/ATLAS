@@ -127,8 +127,8 @@ class AntiDetectionClient:
                 # 5. Random delay (human-like)
                 delay = random.uniform(self._min_delay, self._max_delay)
                 if attempt > 0:
-                    # Exponential backoff on retries
-                    delay *= (2 ** attempt)
+                    # Exponential backoff on retries, capped at 60s
+                    delay = min(delay * (2 ** attempt), 60.0)
                 await asyncio.sleep(delay)
 
                 # 6. Execute via curl_cffi with matching TLS fingerprint
