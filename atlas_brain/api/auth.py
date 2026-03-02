@@ -23,11 +23,15 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 # -- Request/Response schemas --
 
+VALID_PRODUCTS = {"consumer", "b2b_retention", "b2b_challenger"}
+
+
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=72)
     full_name: str = Field(..., max_length=200)
     account_name: str = Field(..., max_length=200)
+    product: str = Field(default="consumer", description="consumer | b2b_retention | b2b_challenger")
 
 
 class LoginRequest(BaseModel):
@@ -61,6 +65,8 @@ class UserResponse(BaseModel):
     plan_status: str
     asin_limit: int
     trial_ends_at: str | None
+    product: str = "consumer"
+    vendor_limit: int = 1
 
 
 # -- Endpoints --
@@ -75,9 +81,16 @@ async def register(req: RegisterRequest):
     if not pool.is_initialized:
         raise HTTPException(status_code=503, detail="Database not ready")
 
+    product = req.product if req.product in VALID_PRODUCTS else "consumer"
+    is_b2b = product in ("b2b_retention", "b2b_challenger")
+
     cfg = settings.saas_auth
     trial_ends = datetime.now(timezone.utc) + timedelta(days=cfg.trial_days)
     trial_asin_limit = PLAN_LIMITS.get("trial", {}).get("asins", 5)
+
+    # B2B accounts get b2b_trial plan with 1 vendor; consumer gets trial with ASINs
+    plan = "b2b_trial" if is_b2b else "trial"
+    vendor_limit = 1
 
     # Use a transaction so account + user are created atomically
     async with pool.transaction() as conn:
@@ -91,13 +104,16 @@ async def register(req: RegisterRequest):
         # Create account
         account_id = await conn.fetchval(
             """
-            INSERT INTO saas_accounts (name, plan, plan_status, trial_ends_at, asin_limit)
-            VALUES ($1, 'trial', 'trialing', $2, $3)
+            INSERT INTO saas_accounts (name, plan, plan_status, trial_ends_at, asin_limit, product, vendor_limit)
+            VALUES ($1, $2, 'trialing', $3, $4, $5, $6)
             RETURNING id
             """,
             req.account_name,
+            plan,
             trial_ends,
             trial_asin_limit,
+            product,
+            vendor_limit,
         )
 
         # Create user
@@ -133,7 +149,7 @@ async def register(req: RegisterRequest):
         except Exception as e:
             logger.warning("Stripe customer creation failed: %s", e)
 
-    access = create_access_token(str(user_id), str(account_id), "trial")
+    access = create_access_token(str(user_id), str(account_id), plan)
     refresh = create_refresh_token(str(user_id))
 
     return TokenResponse(access_token=access, refresh_token=refresh)
@@ -235,6 +251,8 @@ async def me(user: AuthUser = Depends(require_auth)):
             plan_status="active",
             asin_limit=9999,
             trial_ends_at=None,
+            product="consumer",
+            vendor_limit=9999,
         )
 
     pool = get_db_pool()
@@ -242,7 +260,8 @@ async def me(user: AuthUser = Depends(require_auth)):
         """
         SELECT su.email, su.full_name, su.role,
                sa.id AS account_id, sa.name AS account_name,
-               sa.plan, sa.plan_status, sa.asin_limit, sa.trial_ends_at
+               sa.plan, sa.plan_status, sa.asin_limit, sa.trial_ends_at,
+               sa.product, sa.vendor_limit
         FROM saas_users su
         JOIN saas_accounts sa ON sa.id = su.account_id
         WHERE su.id = $1
@@ -264,6 +283,8 @@ async def me(user: AuthUser = Depends(require_auth)):
         plan_status=row["plan_status"],
         asin_limit=row["asin_limit"],
         trial_ends_at=row["trial_ends_at"].isoformat() if row["trial_ends_at"] else None,
+        product=row["product"] or "consumer",
+        vendor_limit=row["vendor_limit"] or 1,
     )
 
 

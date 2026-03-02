@@ -22,6 +22,13 @@ PLAN_LIMITS = {
     "pro":     {"asins": 100, "compare": True,  "api": True},
 }
 
+B2B_PLAN_LIMITS = {
+    "b2b_trial":   {"vendors": 1,  "campaigns": False, "reports": False},
+    "b2b_starter": {"vendors": 3,  "campaigns": False, "reports": True},
+    "b2b_growth":  {"vendors": 10, "campaigns": True,  "reports": True},
+    "b2b_pro":     {"vendors": 25, "campaigns": True,  "reports": True, "api": True},
+}
+
 PRICE_TO_PLAN = {}  # populated at module init from config
 
 
@@ -33,6 +40,12 @@ def _init_price_map():
         PRICE_TO_PLAN[cfg.stripe_growth_price_id] = "growth"
     if cfg.stripe_pro_price_id:
         PRICE_TO_PLAN[cfg.stripe_pro_price_id] = "pro"
+    if cfg.stripe_b2b_starter_price_id:
+        PRICE_TO_PLAN[cfg.stripe_b2b_starter_price_id] = "b2b_starter"
+    if cfg.stripe_b2b_growth_price_id:
+        PRICE_TO_PLAN[cfg.stripe_b2b_growth_price_id] = "b2b_growth"
+    if cfg.stripe_b2b_pro_price_id:
+        PRICE_TO_PLAN[cfg.stripe_b2b_pro_price_id] = "b2b_pro"
 
 
 def _get_stripe():
@@ -50,6 +63,9 @@ PLAN_NAME_TO_CONFIG_KEY = {
     "starter": "stripe_starter_price_id",
     "growth": "stripe_growth_price_id",
     "pro": "stripe_pro_price_id",
+    "b2b_starter": "stripe_b2b_starter_price_id",
+    "b2b_growth": "stripe_b2b_growth_price_id",
+    "b2b_pro": "stripe_b2b_pro_price_id",
 }
 
 
@@ -101,7 +117,10 @@ async def create_checkout(req: CheckoutRequest, user: AuthUser = Depends(require
     # Validate price_id against configured prices
     _cfg = settings.saas_auth
     valid_prices = {
-        v for v in [_cfg.stripe_starter_price_id, _cfg.stripe_growth_price_id, _cfg.stripe_pro_price_id]
+        v for v in [
+            _cfg.stripe_starter_price_id, _cfg.stripe_growth_price_id, _cfg.stripe_pro_price_id,
+            _cfg.stripe_b2b_starter_price_id, _cfg.stripe_b2b_growth_price_id, _cfg.stripe_b2b_pro_price_id,
+        ]
         if v
     }
     if valid_prices and price_id not in valid_prices:
@@ -319,22 +338,39 @@ async def _handle_checkout_completed(pool, session) -> _uuid.UUID | None:
     except Exception as e:
         logger.error("Failed to determine plan from subscription %s: %s", subscription_id, e)
 
-    limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["starter"])
-
-    await pool.execute(
-        """
-        UPDATE saas_accounts
-        SET plan = $1, plan_status = 'active',
-            stripe_customer_id = $2, stripe_subscription_id = $3,
-            asin_limit = $4, updated_at = NOW()
-        WHERE id = $5
-        """,
-        plan,
-        customer_id,
-        subscription_id,
-        limits["asins"],
-        account_id,
-    )
+    is_b2b = plan.startswith("b2b_")
+    if is_b2b:
+        b2b_limits = B2B_PLAN_LIMITS.get(plan, B2B_PLAN_LIMITS["b2b_starter"])
+        await pool.execute(
+            """
+            UPDATE saas_accounts
+            SET plan = $1, plan_status = 'active',
+                stripe_customer_id = $2, stripe_subscription_id = $3,
+                vendor_limit = $4, updated_at = NOW()
+            WHERE id = $5
+            """,
+            plan,
+            customer_id,
+            subscription_id,
+            b2b_limits["vendors"],
+            account_id,
+        )
+    else:
+        limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["starter"])
+        await pool.execute(
+            """
+            UPDATE saas_accounts
+            SET plan = $1, plan_status = 'active',
+                stripe_customer_id = $2, stripe_subscription_id = $3,
+                asin_limit = $4, updated_at = NOW()
+            WHERE id = $5
+            """,
+            plan,
+            customer_id,
+            subscription_id,
+            limits["asins"],
+            account_id,
+        )
 
     logger.info("Account %s upgraded to %s", account_id, plan)
     return account_id
@@ -377,8 +413,6 @@ async def _handle_subscription_updated(pool, subscription) -> _uuid.UUID | None:
         price_id = subscription.items.data[0].price.id
         plan = PRICE_TO_PLAN.get(price_id, "starter")
 
-    limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["starter"])
-
     # Map Stripe subscription status to our plan_status
     status_map = {
         "active": "active",
@@ -392,19 +426,37 @@ async def _handle_subscription_updated(pool, subscription) -> _uuid.UUID | None:
     sub_status = getattr(subscription, "status", "active")
     plan_status = status_map.get(sub_status, "active")
 
-    await pool.execute(
-        """
-        UPDATE saas_accounts
-        SET plan = $1, plan_status = $2, asin_limit = $3,
-            stripe_subscription_id = $4, updated_at = NOW()
-        WHERE id = $5
-        """,
-        plan,
-        plan_status,
-        limits["asins"],
-        subscription.id,
-        account_id,
-    )
+    is_b2b = plan.startswith("b2b_")
+    if is_b2b:
+        b2b_limits = B2B_PLAN_LIMITS.get(plan, B2B_PLAN_LIMITS["b2b_starter"])
+        await pool.execute(
+            """
+            UPDATE saas_accounts
+            SET plan = $1, plan_status = $2, vendor_limit = $3,
+                stripe_subscription_id = $4, updated_at = NOW()
+            WHERE id = $5
+            """,
+            plan,
+            plan_status,
+            b2b_limits["vendors"],
+            subscription.id,
+            account_id,
+        )
+    else:
+        limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["starter"])
+        await pool.execute(
+            """
+            UPDATE saas_accounts
+            SET plan = $1, plan_status = $2, asin_limit = $3,
+                stripe_subscription_id = $4, updated_at = NOW()
+            WHERE id = $5
+            """,
+            plan,
+            plan_status,
+            limits["asins"],
+            subscription.id,
+            account_id,
+        )
 
     logger.info("Account %s subscription updated to %s (status=%s)", account_id, plan, plan_status)
     return account_id

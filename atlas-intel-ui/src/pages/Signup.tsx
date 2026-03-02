@@ -1,11 +1,37 @@
 import { useState, type FormEvent } from 'react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
-import { Search, AlertCircle } from 'lucide-react'
+import { Search, AlertCircle, ShieldCheck, Target, Users } from 'lucide-react'
+import { clsx } from 'clsx'
 import { useAuth } from '../auth/AuthContext'
+
+const PRODUCTS = [
+  {
+    id: 'consumer',
+    label: 'Amazon Seller Intel',
+    desc: 'Track competitor products, complaints, and feature gaps',
+    icon: Search,
+    color: 'cyan',
+  },
+  {
+    id: 'b2b_retention',
+    label: 'Vendor Retention',
+    desc: 'Track YOUR vendors to see churn signals and pain trends',
+    icon: ShieldCheck,
+    color: 'violet',
+  },
+  {
+    id: 'b2b_challenger',
+    label: 'Challenger Lead Gen',
+    desc: 'Track COMPETITOR vendors to find high-intent leads',
+    icon: Target,
+    color: 'amber',
+  },
+] as const
 
 export default function Signup() {
   const { user, signup } = useAuth()
   const navigate = useNavigate()
+  const [product, setProduct] = useState<string>('consumer')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [fullName, setFullName] = useState('')
@@ -13,7 +39,10 @@ export default function Signup() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  if (user) return <Navigate to="/" replace />
+  if (user) {
+    const home = user.product === 'consumer' ? '/' : '/b2b'
+    return <Navigate to={home} replace />
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -24,8 +53,9 @@ export default function Signup() {
     }
     setLoading(true)
     try {
-      await signup(email, password, fullName, accountName)
-      navigate('/onboarding')
+      await signup(email, password, fullName, accountName, product)
+      const dest = product === 'consumer' ? '/onboarding' : '/b2b/onboarding'
+      navigate(dest)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Registration failed')
     } finally {
@@ -34,14 +64,14 @@ export default function Signup() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4">
-      <div className="w-full max-w-sm">
+    <div className="min-h-screen flex items-center justify-center px-4 py-8">
+      <div className="w-full max-w-lg">
         <div className="flex items-center justify-center gap-2 mb-8">
-          <Search className="h-8 w-8 text-cyan-400" />
-          <span className="text-2xl font-bold text-white">Consumer Intel</span>
+          <Users className="h-8 w-8 text-cyan-400" />
+          <span className="text-2xl font-bold text-white">Atlas Intelligence</span>
         </div>
 
-        <form onSubmit={handleSubmit} className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-6 space-y-4">
+        <form onSubmit={handleSubmit} className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-6 space-y-5">
           <h2 className="text-lg font-semibold text-white text-center">Create your account</h2>
 
           {error && (
@@ -50,6 +80,42 @@ export default function Signup() {
               {error}
             </div>
           )}
+
+          {/* Product selector */}
+          <div className="space-y-2">
+            <label className="block text-sm text-slate-400">Choose your product</label>
+            <div className="grid grid-cols-1 gap-2">
+              {PRODUCTS.map(p => {
+                const Icon = p.icon
+                const selected = product === p.id
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setProduct(p.id)}
+                    className={clsx(
+                      'flex items-start gap-3 p-3 rounded-lg border text-left transition-colors',
+                      selected
+                        ? `border-${p.color}-500/50 bg-${p.color}-900/20`
+                        : 'border-slate-700/50 bg-slate-900/40 hover:border-slate-600/50',
+                    )}
+                    style={selected ? {
+                      borderColor: p.color === 'cyan' ? 'rgb(6 182 212 / 0.5)' : p.color === 'violet' ? 'rgb(139 92 246 / 0.5)' : 'rgb(245 158 11 / 0.5)',
+                      backgroundColor: p.color === 'cyan' ? 'rgb(22 78 99 / 0.2)' : p.color === 'violet' ? 'rgb(76 29 149 / 0.2)' : 'rgb(120 53 15 / 0.2)',
+                    } : undefined}
+                  >
+                    <Icon className={clsx('h-5 w-5 mt-0.5 shrink-0', selected ? 'text-white' : 'text-slate-500')} />
+                    <div>
+                      <div className={clsx('text-sm font-medium', selected ? 'text-white' : 'text-slate-300')}>
+                        {p.label}
+                      </div>
+                      <div className="text-xs text-slate-500">{p.desc}</div>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
 
           <div>
             <label className="block text-sm text-slate-400 mb-1">Full name</label>

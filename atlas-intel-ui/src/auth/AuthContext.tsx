@@ -15,6 +15,8 @@ export interface User {
   plan_status: string
   asin_limit: number
   trial_ends_at: string | null
+  product: string       // consumer | b2b_retention | b2b_challenger
+  vendor_limit: number
 }
 
 interface AuthState {
@@ -22,7 +24,7 @@ interface AuthState {
   token: string | null
   loading: boolean
   login: (email: string, password: string) => Promise<void>
-  signup: (email: string, password: string, fullName: string, accountName: string) => Promise<void>
+  signup: (email: string, password: string, fullName: string, accountName: string, product?: string) => Promise<void>
   logout: () => void
   refreshUser: () => Promise<void>
 }
@@ -151,10 +153,10 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
     await fetchMe(res.access_token)
   }, [saveTokens, fetchMe])
 
-  const signup = useCallback(async (email: string, password: string, fullName: string, accountName: string) => {
+  const signup = useCallback(async (email: string, password: string, fullName: string, accountName: string, product?: string) => {
     const res = await apiFetch<{ access_token: string; refresh_token: string }>('/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ email, password, full_name: fullName, account_name: accountName }),
+      body: JSON.stringify({ email, password, full_name: fullName, account_name: accountName, product: product || 'consumer' }),
     })
     saveTokens(res.access_token, res.refresh_token)
     await fetchMe(res.access_token)

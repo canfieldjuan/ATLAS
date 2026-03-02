@@ -10,15 +10,17 @@ from ..config import settings
 from .jwt import decode_token
 
 PLAN_ORDER = ["trial", "starter", "growth", "pro"]
+B2B_PLAN_ORDER = ["b2b_trial", "b2b_starter", "b2b_growth", "b2b_pro"]
 
 
 @dataclass
 class AuthUser:
     user_id: str
     account_id: str
-    plan: str        # trial | starter | growth | pro
+    plan: str        # trial | starter | growth | pro | b2b_trial | b2b_starter | b2b_growth | b2b_pro
     plan_status: str  # trialing | active | past_due | canceled
     role: str        # owner | admin | member
+    product: str = "consumer"  # consumer | b2b_retention | b2b_challenger
 
 
 def _synthetic_admin() -> AuthUser:
@@ -29,6 +31,7 @@ def _synthetic_admin() -> AuthUser:
         plan="pro",
         plan_status="active",
         role="owner",
+        product="consumer",
     )
 
 
@@ -64,12 +67,12 @@ async def require_auth(request: Request) -> AuthUser:
     except (ValueError, KeyError):
         raise HTTPException(status_code=401, detail="Invalid token payload")
 
-    # Fetch plan_status and role from DB for freshness
+    # Fetch plan_status, role, product from DB for freshness
     from ..storage.database import get_db_pool
     pool = get_db_pool()
     row = await pool.fetchrow(
         """
-        SELECT sa.plan, sa.plan_status, su.role
+        SELECT sa.plan, sa.plan_status, sa.product, su.role
         FROM saas_users su
         JOIN saas_accounts sa ON sa.id = su.account_id
         WHERE su.id = $1 AND su.is_active = TRUE
@@ -88,6 +91,7 @@ async def require_auth(request: Request) -> AuthUser:
         plan=row["plan"],
         plan_status=row["plan_status"],
         role=row["role"],
+        product=row["product"] or "consumer",
     )
 
 
@@ -119,7 +123,7 @@ async def optional_auth(request: Request) -> Optional[AuthUser]:
     try:
         row = await pool.fetchrow(
             """
-            SELECT sa.plan, sa.plan_status, su.role
+            SELECT sa.plan, sa.plan_status, sa.product, su.role
             FROM saas_users su
             JOIN saas_accounts sa ON sa.id = su.account_id
             WHERE su.id = $1 AND su.is_active = TRUE
@@ -140,6 +144,7 @@ async def optional_auth(request: Request) -> Optional[AuthUser]:
         plan=row["plan"],
         plan_status=row["plan_status"],
         role=row["role"],
+        product=row["product"] or "consumer",
     )
 
 
@@ -149,6 +154,27 @@ def require_plan(min_plan: str):
 
     async def _check(user: AuthUser = Depends(require_auth)) -> AuthUser:
         user_idx = PLAN_ORDER.index(user.plan) if user.plan in PLAN_ORDER else -1
+        if user_idx < min_idx:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Plan '{min_plan}' or higher required (current: '{user.plan}')",
+            )
+        return user
+
+    return Depends(_check)
+
+
+def require_b2b_plan(min_plan: str):
+    """Return a dependency that enforces a B2B product + minimum B2B plan tier."""
+    min_idx = B2B_PLAN_ORDER.index(min_plan)
+
+    async def _check(user: AuthUser = Depends(require_auth)) -> AuthUser:
+        if user.product not in ("b2b_retention", "b2b_challenger"):
+            raise HTTPException(
+                status_code=403,
+                detail="B2B product required",
+            )
+        user_idx = B2B_PLAN_ORDER.index(user.plan) if user.plan in B2B_PLAN_ORDER else -1
         if user_idx < min_idx:
             raise HTTPException(
                 status_code=403,

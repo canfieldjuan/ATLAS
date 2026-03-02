@@ -1,17 +1,17 @@
 import { useState, type FormEvent } from 'react'
-import { Link, Navigate, useNavigate } from 'react-router-dom'
+import { Link, Navigate } from 'react-router-dom'
 import { Search, AlertCircle } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 
 export default function Login() {
   const { user, login } = useAuth()
-  const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  if (user) return <Navigate to="/" replace />
+  const isB2B = user?.product === 'b2b_retention' || user?.product === 'b2b_challenger'
+  if (user) return <Navigate to={isB2B ? '/b2b' : '/'} replace />
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -19,7 +19,7 @@ export default function Login() {
     setLoading(true)
     try {
       await login(email, password)
-      navigate('/')
+      // Redirect handled by the <Navigate> guard above after user state updates
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed')
     } finally {
