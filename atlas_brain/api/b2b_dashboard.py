@@ -19,6 +19,8 @@ from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.b2b_dashboard")
 
+EXPORT_ROW_LIMIT = 10_000
+
 router = APIRouter(prefix="/b2b/dashboard", tags=["b2b-dashboard"])
 
 
@@ -720,7 +722,7 @@ async def export_signals(
         FROM b2b_churn_signals
         {where}
         ORDER BY avg_urgency_score DESC
-        LIMIT 10000
+        LIMIT {EXPORT_ROW_LIMIT}
         """,
         *params,
     )
@@ -807,7 +809,7 @@ async def export_reviews(
         FROM b2b_reviews
         WHERE {where}
         ORDER BY (enrichment->>'urgency_score')::numeric DESC
-        LIMIT 10000
+        LIMIT {EXPORT_ROW_LIMIT}
         """,
         *params,
     )
@@ -875,7 +877,7 @@ async def export_high_intent(
         FROM b2b_reviews
         WHERE {where}
         ORDER BY (enrichment->>'urgency_score')::numeric DESC
-        LIMIT 10000
+        LIMIT {EXPORT_ROW_LIMIT}
         """,
         *params,
     )
