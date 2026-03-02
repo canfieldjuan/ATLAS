@@ -89,7 +89,7 @@ async def run(task: ScheduledTask) -> dict:
     # 8. Invoice summary
     result["invoices"] = await _get_invoice_summary()
 
-    # 9. Knowledge graph context — historical facts about obligations and deadlines
+    # 9. Knowledge graph context -- historical facts about obligations and deadlines
     result["graph_context"] = await _get_graph_context()
 
     # Build summary
@@ -308,7 +308,7 @@ async def _get_graph_context() -> list[str]:
         return facts
 
     except Exception as e:
-        logger.debug("Morning briefing graph context fetch failed: %s", e)
+        logger.warning("Morning briefing graph context fetch failed: %s", e)
         return []
 
 

@@ -11,7 +11,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..storage.database import get_db_pool
 
@@ -84,7 +84,7 @@ class ReorderItem(BaseModel):
 
 
 class ReorderBody(BaseModel):
-    rules: list[ReorderItem]
+    rules: list[ReorderItem] = Field(max_length=500)
 
 
 # ---------------------------------------------------------------------------
@@ -268,8 +268,24 @@ async def update_rule(rule_id: UUID, body: InboxRuleUpdate):
     if not updates:
         raise HTTPException(400, "No fields to update")
 
+    # Column whitelist -- defense-in-depth against injection via dynamic col names.
+    # Pydantic already constrains keys, but this guards against future field additions
+    # accidentally exposing non-updatable columns.
+    _ALLOWED_COLUMNS = {
+        "name", "enabled", "position",
+        "sender_domain", "sender_contains", "subject_contains",
+        "category", "has_unsubscribe", "priority", "replyable", "is_known_contact",
+        "set_priority", "set_category", "set_replyable", "label",
+        "skip_llm", "skip_notify", "archive",
+        "updated_at",
+    }
     # Always bump updated_at
     updates["updated_at"] = datetime.now(timezone.utc)
+
+    # Filter to allowed columns before building query
+    updates = {k: v for k, v in updates.items() if k in _ALLOWED_COLUMNS}
+    if not updates:
+        raise HTTPException(400, "No valid fields to update")
 
     set_parts = []
     values = []
