@@ -586,6 +586,9 @@ class TaskScheduler:
 
             # Merge pipeline interval overrides from registry
             try:
+                # Trigger pipeline registration before reading the registry
+                from .tasks import _pipelines  # noqa: F401
+
                 from ..pipelines import get_pipeline_interval_overrides, get_pipeline_default_tasks, resolve_config_value
 
                 for task_name, config_key in get_pipeline_interval_overrides().items():

@@ -170,6 +170,15 @@ register_pipeline(PipelineConfig(
             },
             cron_config_key="external_data.competitive_intelligence_cron",
         ),
+        TaskDef(
+            name="consumer_analytics_refresh",
+            module="consumer_analytics_refresh",
+            schedule_type="interval",
+            interval_seconds=21600,  # 6 hours
+            timeout_seconds=120,
+            description="Refresh consumer analytics materialized views (brand, category, ASIN summaries)",
+            metadata={"builtin_handler": "consumer_analytics_refresh"},
+        ),
     ],
     cleanup_rules=[
         CleanupRule(

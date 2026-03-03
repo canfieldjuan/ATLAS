@@ -230,7 +230,6 @@ async def _fetch_brand_health(pool) -> list[dict[str, Any]]:
         GROUP BY pm.brand
         HAVING count(*) >= 5
         ORDER BY count(*) DESC
-        LIMIT 50
         """
     )
     return [
@@ -270,7 +269,7 @@ async def _fetch_competitive_flows(pool) -> list[dict[str, Any]]:
         GROUP BY pm.brand, comp->>'product_name', comp->>'direction'
         HAVING count(*) >= 2
         ORDER BY count(*) DESC
-        LIMIT 100
+        LIMIT 500
         """
     )
     return [
@@ -305,7 +304,7 @@ async def _fetch_feature_gaps(pool) -> list[dict[str, Any]]:
         GROUP BY category, feat
         HAVING count(*) >= 2
         ORDER BY count(*) DESC
-        LIMIT 100
+        LIMIT 500
         """
     )
     return [
@@ -350,7 +349,7 @@ async def _fetch_buyer_personas(pool) -> list[dict[str, Any]]:
             pr.deep_extraction->>'budget_type'
         HAVING count(*) >= 3
         ORDER BY count(*) DESC
-        LIMIT 100
+        LIMIT 500
         """
     )
     return [
@@ -386,7 +385,7 @@ async def _fetch_sentiment_landscape(pool) -> list[dict[str, Any]]:
           AND jsonb_array_length(pr.deep_extraction->'sentiment_aspects') > 0
         GROUP BY pm.brand, asp->>'aspect', asp->>'sentiment'
         ORDER BY count(*) DESC
-        LIMIT 200
+        LIMIT 500
         """
     )
     return [
@@ -415,7 +414,7 @@ async def _fetch_safety_signals(pool) -> list[dict[str, Any]]:
           AND pm.brand IS NOT NULL AND pm.brand != ''
         GROUP BY pm.brand, pr.deep_extraction->>'consequence_severity'
         ORDER BY count(*) DESC
-        LIMIT 100
+        LIMIT 500
         """
     )
     return [
@@ -446,7 +445,7 @@ async def _fetch_loyalty_churn(pool) -> list[dict[str, Any]]:
             pr.deep_extraction->>'replacement_behavior'
         HAVING count(*) >= 2
         ORDER BY count(*) DESC
-        LIMIT 200
+        LIMIT 500
         """
     )
     return [

@@ -422,11 +422,154 @@ async def list_brands(
     user: AuthUser = Depends(require_auth),
 ):
     pool = _pool_or_503()
+
+    # Fast path: use materialized view when no tenant scoping or category filter
+    t_cond = _tenant_cond("pr", 1)
+    use_mv = t_cond == "TRUE" and not source_category
+    if use_mv:
+        try:
+            return await _list_brands_from_mv(
+                pool, search=search, min_reviews=min_reviews,
+                sort_by=sort_by, limit=limit, offset=offset,
+            )
+        except Exception:
+            logger.debug("mv_brand_summary not available, falling back to live query")
+
+    # Slow path: live query with JSONB scans (tenant-scoped or MV not ready)
+    return await _list_brands_live(
+        pool, user=user, source_category=source_category,
+        search=search, min_reviews=min_reviews, sort_by=sort_by,
+        limit=limit, offset=offset,
+    )
+
+
+def _brand_health_from_mv(r) -> int | None:
+    """Compute brand health from mv_brand_summary row."""
+    deep = r["deep_count"]
+    if deep < 5:
+        return None
+
+    scores: list[float] = []
+
+    # 1. Repurchase
+    rp_total = r["repurchase_total"]
+    if rp_total > 0:
+        scores.append(r["repurchase_yes"] / rp_total)
+    else:
+        scores.append(0.5)
+
+    # 2. Retention
+    ret_pos = r["retention_positive"]
+    ret_neg = r["retention_negative"]
+    ret_total = ret_pos + ret_neg
+    scores.append(ret_pos / ret_total if ret_total > 0 else 0.5)
+
+    # 3. Trajectory
+    traj_pos = r["trajectory_positive"]
+    traj_neg = r["trajectory_negative"]
+    traj_total = traj_pos + traj_neg
+    scores.append(traj_pos / traj_total if traj_total > 0 else 0.5)
+
+    # 4. Safety (inverted)
+    safety = r["safety_count"]
+    safety_rate = max(0.0, 1.0 - (safety / deep) * 10)
+    scores.append(safety_rate)
+
+    return round(sum(scores) / len(scores) * 100)
+
+
+async def _list_brands_from_mv(
+    pool, *, search, min_reviews, sort_by, limit, offset,
+) -> dict:
+    """Read brands from mv_brand_summary materialized view."""
+    conditions: list[str] = []
+    params: list = []
+    idx = 1
+
+    if search:
+        conditions.append(f"brand ILIKE '%' || ${idx} || '%'")
+        params.append(search)
+        idx += 1
+
+    if min_reviews > 0:
+        conditions.append(f"review_count >= ${idx}")
+        params.append(min_reviews)
+        idx += 1
+
+    where = "WHERE " + " AND ".join(conditions) if conditions else ""
+
+    sort_map = {
+        "review_count": "review_count DESC",
+        "avg_complaint_score": "avg_complaint_score DESC NULLS LAST",
+        "avg_praise_score": "avg_praise_score DESC NULLS LAST",
+        "avg_rating": "pm_avg_rating DESC NULLS LAST",
+        "safety_count": "safety_count DESC",
+        "brand": "brand ASC",
+    }
+    health_sort = sort_by == "brand_health"
+    order = sort_map.get(sort_by, "review_count DESC")
+
+    if health_sort:
+        sql_limit = "LIMIT 1000"
+    else:
+        params.extend([limit, offset])
+        sql_limit = f"LIMIT ${idx} OFFSET ${idx + 1}"
+
+    rows = await pool.fetch(
+        f"""
+        SELECT brand, product_count, review_count, pm_avg_rating, total_ratings,
+               avg_complaint_score, avg_praise_score, complaint_count, praise_count,
+               deep_count, repurchase_yes, repurchase_total, safety_count,
+               trajectory_positive, trajectory_negative,
+               retention_positive, retention_negative
+        FROM mv_brand_summary
+        {where}
+        ORDER BY {order}
+        {sql_limit}
+        """,
+        *params,
+    )
+
+    brands = []
+    for r in rows:
+        health = _brand_health_from_mv(r)
+        brands.append({
+            "brand": r["brand"],
+            "product_count": r["product_count"],
+            "review_count": r["review_count"],
+            "avg_rating": _safe_float(r["pm_avg_rating"]),
+            "total_ratings": r["total_ratings"],
+            "avg_complaint_score": _safe_float(r["avg_complaint_score"]),
+            "avg_praise_score": _safe_float(r["avg_praise_score"]),
+            "complaint_count": r["complaint_count"],
+            "praise_count": r["praise_count"],
+            "safety_count": r["safety_count"],
+            "brand_health": health,
+        })
+
+    if health_sort:
+        brands.sort(key=lambda b: (b["brand_health"] is not None, b["brand_health"] or 0), reverse=True)
+        total_count = len(brands)
+        brands = brands[offset : offset + limit]
+    else:
+        count_params = params[:-2]
+        total_count = await pool.fetchval(
+            f"SELECT COUNT(*) FROM mv_brand_summary {where}",
+            *count_params,
+        )
+        total_count = total_count or 0
+
+    return {"brands": brands, "count": len(brands), "total_count": total_count}
+
+
+async def _list_brands_live(
+    pool, *, user, source_category, search, min_reviews, sort_by, limit, offset,
+) -> dict:
+    """Live query with JSONB scans (used for tenant-scoped or filtered requests)."""
     conditions: list[str] = ["pm.brand IS NOT NULL", "pm.brand != ''"]
     params: list = []
     idx = 1
 
-    # Tenant scoping
     t_cond = _tenant_cond("pr", idx)
     if t_cond != "TRUE":
         conditions.append(t_cond)
@@ -463,8 +606,6 @@ async def list_brands(
     else:
         having = ""
 
-    # For brand_health sort, fetch all rows and paginate in Python
-    # (health is computed after SQL, can't ORDER BY it in SQL)
     if health_sort:
         sql_limit_clause = "LIMIT 1000"
     else:
@@ -473,7 +614,6 @@ async def list_brands(
         offset_idx = idx + 1
         sql_limit_clause = f"LIMIT ${limit_idx} OFFSET ${offset_idx}"
 
-    # Build tenant-scoped CTE
     cte_tenant = ""
     if t_cond != "TRUE":
         cte_tenant = f"AND pm.asin IN (SELECT asin FROM tracked_asins WHERE account_id = $1)"
@@ -502,7 +642,6 @@ async def list_brands(
                      AND pr.deep_extraction != '{{}}'::jsonb
                      AND pr.deep_extraction->'safety_flag'->>'flagged' = 'true'
                ) AS safety_count,
-               -- Brand health score components
                COUNT(*) FILTER (
                    WHERE pr.deep_extraction IS NOT NULL
                      AND pr.deep_extraction != '{{}}'::jsonb
@@ -563,8 +702,7 @@ async def list_brands(
         total_count = len(brands)
         brands = brands[offset : offset + limit]
     else:
-        # Total count (without LIMIT/OFFSET) for pagination
-        count_params = params[:-2]  # strip limit & offset
+        count_params = params[:-2]
         total_count = await pool.fetchval(
             f"""
             SELECT COUNT(*) FROM (

@@ -30,7 +30,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not pool.is_initialized:
         return {"_skip_synthesis": "DB not ready"}
 
-    window_days = cfg.complaint_analysis_window_days
     today = date.today()
 
     # Skip if we already have a report for today
@@ -43,8 +42,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     # Gather data sources in parallel
     category_stats, product_stats, prior_reports = await asyncio.gather(
-        _fetch_category_stats(pool, window_days),
-        _fetch_product_stats(pool, window_days),
+        _fetch_category_stats(pool),
+        _fetch_product_stats(pool),
         _fetch_prior_reports(pool),
         return_exceptions=True,
     )
@@ -65,21 +64,33 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if total_enriched == 0 and not product_stats:
         return {"_skip_synthesis": "No enriched reviews to analyze"}
 
-    # Build payload
+    # Build payload -- cap product_stats for LLM (top 50 by pain score)
+    # Full product_stats used below for upserts
+    llm_product_stats = product_stats[:50]
     payload = {
         "date": str(today),
         "category_stats": category_stats,
-        "product_stats": product_stats,
+        "product_stats": llm_product_stats,
         "prior_reports": prior_reports,
     }
 
-    # Load skill and call LLM
+    # Load skill and call LLM (in thread to avoid blocking event loop)
     from ...pipelines.llm import call_llm_with_skill, parse_json_response
 
-    analysis = call_llm_with_skill(
-        "digest/complaint_analysis", payload,
-        max_tokens=cfg.complaint_analysis_max_tokens, temperature=0.4,
-    )
+    try:
+        analysis = await asyncio.wait_for(
+            asyncio.to_thread(
+                call_llm_with_skill,
+                "digest/complaint_analysis", payload,
+                max_tokens=cfg.complaint_analysis_max_tokens, temperature=0.4,
+            ),
+            timeout=300,
+        )
+    except asyncio.TimeoutError:
+        logger.error("LLM call timed out after 300s for complaint_analysis")
+        # Still upsert pain points even if LLM times out
+        await _upsert_pain_points(pool, product_stats, {})
+        return {"_skip_synthesis": "LLM analysis timed out", "products_upserted": len(product_stats)}
     if not analysis:
         return {"_skip_synthesis": "LLM analysis failed"}
 
@@ -138,8 +149,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 # ------------------------------------------------------------------
 
 
-async def _fetch_category_stats(pool, window_days: int) -> list[dict[str, Any]]:
-    """Aggregate enriched reviews by source_category."""
+async def _fetch_category_stats(pool) -> list[dict[str, Any]]:
+    """Aggregate enriched reviews by source_category (all enriched, no time window)."""
     rows = await pool.fetch(
         """
         SELECT
@@ -152,11 +163,9 @@ async def _fetch_category_stats(pool, window_days: int) -> list[dict[str, Any]]:
             mode() WITHIN GROUP (ORDER BY root_cause) AS top_root_cause
         FROM product_reviews
         WHERE enrichment_status = 'enriched'
-          AND enriched_at > NOW() - make_interval(days => $1)
         GROUP BY source_category
         ORDER BY count(*) DESC
         """,
-        window_days,
     )
     result = []
     for r in rows:
@@ -167,12 +176,10 @@ async def _fetch_category_stats(pool, window_days: int) -> list[dict[str, Any]]:
             FROM product_reviews
             WHERE enrichment_status = 'enriched'
               AND source_category = $1
-              AND enriched_at > NOW() - make_interval(days => $2)
             GROUP BY root_cause
             ORDER BY cnt DESC
             """,
             r["category"],
-            window_days,
         )
         rc_dist = {row["root_cause"]: row["cnt"] for row in rc_rows if row["root_cause"]}
 
@@ -191,8 +198,8 @@ async def _fetch_category_stats(pool, window_days: int) -> list[dict[str, Any]]:
     return result
 
 
-async def _fetch_product_stats(pool, window_days: int) -> list[dict[str, Any]]:
-    """Aggregate by ASIN for products with 3+ complaints."""
+async def _fetch_product_stats(pool) -> list[dict[str, Any]]:
+    """Aggregate by ASIN for products with 5+ complaints (all enriched, no time window)."""
     rows = await pool.fetch(
         """
         SELECT
@@ -203,13 +210,10 @@ async def _fetch_product_stats(pool, window_days: int) -> list[dict[str, Any]]:
             avg(rating) AS avg_rating
         FROM product_reviews
         WHERE enrichment_status = 'enriched'
-          AND enriched_at > NOW() - make_interval(days => $1)
         GROUP BY asin, source_category
-        HAVING count(*) >= 3
+        HAVING count(*) >= 5
         ORDER BY avg(pain_score) DESC
-        LIMIT 50
         """,
-        window_days,
     )
 
     result = []
