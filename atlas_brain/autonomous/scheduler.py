@@ -553,6 +553,30 @@ class TaskScheduler:
                 "notify_tags": "chart_with_upwards_trend,b2b",
             },
         },
+        {
+            "name": "consumer_weekly_digest",
+            "description": "Weekly email digest with review metrics for consumer accounts with tracked ASINs",
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": "0 8 * * 1",
+            "timeout_seconds": 300,
+            "metadata": {
+                "builtin_handler": "consumer_weekly_digest",
+                "notify_tags": "chart_with_upwards_trend,consumer",
+            },
+        },
+        {
+            "name": "consumer_signal_alerts",
+            "description": "Check for high-severity review signals and alert affected consumer accounts",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": 21600,
+            "timeout_seconds": 120,
+            "metadata": {
+                "builtin_handler": "consumer_signal_alerts",
+                "notify_tags": "warning,consumer",
+            },
+        },
     ]
 
     async def _ensure_default_tasks(self) -> None:

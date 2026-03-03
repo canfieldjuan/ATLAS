@@ -1,10 +1,12 @@
 """Authentication endpoints: register, login, refresh, me, change-password."""
 
+import asyncio
 import json
 import logging
 import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, Field
 
@@ -187,7 +189,65 @@ async def register(req: RegisterRequest):
     access = create_access_token(str(user_id), str(account_id), plan)
     refresh = create_refresh_token(str(user_id))
 
+    # Fire-and-forget welcome email
+    asyncio.create_task(_send_welcome_email(req.email, req.full_name, product))
+
     return TokenResponse(access_token=access, refresh_token=refresh)
+
+
+async def _send_welcome_email(email: str, full_name: str, product: str) -> None:
+    """Send a welcome email via Resend (fire-and-forget)."""
+    cfg = settings.campaign_sequence
+    if not cfg.resend_api_key or not cfg.resend_from_email:
+        return
+
+    if product in ("b2b_retention", "b2b_challenger"):
+        subject = "Welcome to Atlas B2B Intelligence"
+        heading = "B2B Churn Intelligence"
+        steps = (
+            "<li>Track your first vendor from the dashboard</li>"
+            "<li>Review churn signals and competitive intelligence</li>"
+            "<li>Set up weekly intelligence reports</li>"
+        )
+    else:
+        subject = "Welcome to Amazon Seller Intelligence"
+        heading = "Amazon Seller Intelligence"
+        steps = (
+            "<li>Add your first ASIN to start tracking</li>"
+            "<li>Explore brand health, safety signals, and competitive flows</li>"
+            "<li>Check your weekly digest every Monday for new insights</li>"
+        )
+
+    name = full_name or "there"
+    body = (
+        f"<h2>Welcome to {heading}!</h2>"
+        f"<p>Hi {name},</p>"
+        f"<p>Your account is ready. Here's how to get started:</p>"
+        f"<ol>{steps}</ol>"
+        f"<p>Your 14-day trial gives you full access to all features. "
+        f"Upgrade anytime from your account settings.</p>"
+        f"<hr>"
+        f"<p><em>Questions? Reply to this email and we'll help you out.</em></p>"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {cfg.resend_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "from": cfg.resend_from_email,
+                    "to": [email],
+                    "subject": subject,
+                    "html": body,
+                },
+            )
+            resp.raise_for_status()
+    except Exception as exc:
+        logger.warning("Failed to send welcome email to %s: %s", email, exc)
 
 
 @router.post("/login", response_model=TokenResponse)

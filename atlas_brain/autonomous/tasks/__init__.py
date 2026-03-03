@@ -40,6 +40,8 @@ _BUILTIN_TASKS = [
     ("amazon_seller_campaign_generation", "run", "amazon_seller_campaign_generation"),
     ("b2b_churn_alert", "run", "b2b_churn_alert"),
     ("b2b_tenant_report", "run", "b2b_tenant_report"),
+    ("consumer_weekly_digest", "run", "consumer_weekly_digest"),
+    ("consumer_signal_alerts", "run", "consumer_signal_alerts"),
 ]
 
 

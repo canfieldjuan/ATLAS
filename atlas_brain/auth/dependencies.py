@@ -1,7 +1,8 @@
 """FastAPI dependencies for authentication and plan-based authorization."""
 
 import uuid as _uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import Depends, HTTPException, Request
@@ -21,6 +22,7 @@ class AuthUser:
     plan_status: str  # trialing | active | past_due | canceled
     role: str        # owner | admin | member
     product: str = "consumer"  # consumer | b2b_retention | b2b_challenger
+    trial_ends_at: Optional[datetime] = field(default=None, repr=False)
 
 
 def _synthetic_admin() -> AuthUser:
@@ -67,12 +69,12 @@ async def require_auth(request: Request) -> AuthUser:
     except (ValueError, KeyError):
         raise HTTPException(status_code=401, detail="Invalid token payload")
 
-    # Fetch plan_status, role, product from DB for freshness
+    # Fetch plan_status, role, product, trial_ends_at from DB for freshness
     from ..storage.database import get_db_pool
     pool = get_db_pool()
     row = await pool.fetchrow(
         """
-        SELECT sa.plan, sa.plan_status, sa.product, su.role
+        SELECT sa.plan, sa.plan_status, sa.product, sa.trial_ends_at, su.role
         FROM saas_users su
         JOIN saas_accounts sa ON sa.id = su.account_id
         WHERE su.id = $1 AND su.is_active = TRUE
@@ -85,6 +87,14 @@ async def require_auth(request: Request) -> AuthUser:
     if row["plan_status"] == "canceled":
         raise HTTPException(status_code=403, detail="Subscription canceled")
 
+    # Check trial expiration
+    trial_ends = row["trial_ends_at"]
+    if row["plan"] in ("trial", "b2b_trial") and trial_ends:
+        # Ensure timezone-aware comparison
+        te = trial_ends if trial_ends.tzinfo else trial_ends.replace(tzinfo=timezone.utc)
+        if te < datetime.now(timezone.utc):
+            raise HTTPException(status_code=403, detail="Trial expired")
+
     return AuthUser(
         user_id=payload["sub"],
         account_id=payload["account_id"],
@@ -92,6 +102,7 @@ async def require_auth(request: Request) -> AuthUser:
         plan_status=row["plan_status"],
         role=row["role"],
         product=row["product"] or "consumer",
+        trial_ends_at=trial_ends,
     )
 
 
@@ -123,7 +134,7 @@ async def optional_auth(request: Request) -> Optional[AuthUser]:
     try:
         row = await pool.fetchrow(
             """
-            SELECT sa.plan, sa.plan_status, sa.product, su.role
+            SELECT sa.plan, sa.plan_status, sa.product, sa.trial_ends_at, su.role
             FROM saas_users su
             JOIN saas_accounts sa ON sa.id = su.account_id
             WHERE su.id = $1 AND su.is_active = TRUE
@@ -145,6 +156,7 @@ async def optional_auth(request: Request) -> Optional[AuthUser]:
         plan_status=row["plan_status"],
         role=row["role"],
         product=row["product"] or "consumer",
+        trial_ends_at=row["trial_ends_at"],
     )
 
 
@@ -153,6 +165,11 @@ def require_plan(min_plan: str):
     min_idx = PLAN_ORDER.index(min_plan)
 
     async def _check(user: AuthUser = Depends(require_auth)) -> AuthUser:
+        if user.plan_status == "past_due":
+            raise HTTPException(
+                status_code=402,
+                detail="Payment past due",
+            )
         user_idx = PLAN_ORDER.index(user.plan) if user.plan in PLAN_ORDER else -1
         if user_idx < min_idx:
             raise HTTPException(
@@ -169,6 +186,11 @@ def require_b2b_plan(min_plan: str):
     min_idx = B2B_PLAN_ORDER.index(min_plan)
 
     async def _check(user: AuthUser = Depends(require_auth)) -> AuthUser:
+        if user.plan_status == "past_due":
+            raise HTTPException(
+                status_code=402,
+                detail="Payment past due",
+            )
         if user.product not in ("b2b_retention", "b2b_challenger"):
             raise HTTPException(
                 status_code=403,

@@ -27,6 +27,19 @@ async function handleResponse<T>(res: Response, retry: () => Promise<Response>):
     }
     return retryRes.json()
   }
+  if (res.status === 402) {
+    // Payment past due -- redirect to account page for billing fix
+    window.location.href = '/account'
+    throw new Error('Payment past due')
+  }
+  if (res.status === 403) {
+    const body = await res.text().catch(() => '')
+    if (body.includes('Trial expired')) {
+      window.location.href = '/account'
+      throw new Error('Trial expired')
+    }
+    throw new Error(`API 403: ${body || res.statusText}`)
+  }
   if (!res.ok) {
     const body = await res.text().catch(() => '')
     throw new Error(`API ${res.status}: ${body || res.statusText}`)
