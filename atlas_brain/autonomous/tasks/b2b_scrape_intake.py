@@ -221,10 +221,25 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     target.source, target.vendor_name,
                 )
 
-        # Insert reviews
+        # Insert reviews and enrich inline
         inserted = 0
         if result.reviews:
             inserted = await _insert_reviews(pool, result.reviews, batch_id)
+
+            # Enrich newly inserted reviews immediately (don't wait for scheduler)
+            if inserted > 0:
+                try:
+                    from .b2b_enrichment import enrich_batch
+                    enrich_result = await enrich_batch(batch_id)
+                    logger.info(
+                        "Inline enrichment for %s/%s: %s",
+                        target.source, target.vendor_name, enrich_result,
+                    )
+                except Exception as enrich_exc:
+                    logger.warning(
+                        "Inline enrichment failed for %s/%s (scheduler will retry): %s",
+                        target.source, target.vendor_name, enrich_exc,
+                    )
 
             # Mark synthetic aggregate reviews as not_applicable for enrichment
             synthetic_keys = [
@@ -302,10 +317,20 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     }
 
 
+_MIN_ENRICHABLE_TEXT_LEN = 80  # Reviews shorter than this can't produce useful enrichment
+
+
 async def _insert_reviews(pool, reviews: list[dict], batch_id: str) -> int:
     """Insert reviews into b2b_reviews with dedup. Returns count of new inserts."""
     rows = []
+    skipped_short = 0
     for r in reviews:
+        # Gate: don't insert reviews with no meaningful text body
+        review_text = r.get("review_text") or ""
+        if len(review_text) < _MIN_ENRICHABLE_TEXT_LEN:
+            skipped_short += 1
+            continue
+
         reviewed_at_ts = _parse_date(r.get("reviewed_at"))
 
         dedup_key = _make_dedup_key(
@@ -338,6 +363,9 @@ async def _insert_reviews(pool, reviews: list[dict], batch_id: str) -> int:
             batch_id,
             json.dumps(r.get("raw_metadata", {})),
         ))
+
+    if skipped_short:
+        logger.info("Skipped %d reviews with text < %d chars", skipped_short, _MIN_ENRICHABLE_TEXT_LEN)
 
     if not rows:
         return 0

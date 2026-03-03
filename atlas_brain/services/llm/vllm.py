@@ -184,7 +184,15 @@ class VLLMLLM(BaseModelService):
 
             choice = data.get("choices", [{}])[0]
             message = choice.get("message", {})
-            return message.get("content", "").strip()
+            content = message.get("content", "").strip()
+
+            logger.info(
+                "vLLM async chat: tokens=%s, content_len=%d",
+                data.get("usage", {}),
+                len(content),
+            )
+
+            return content
         except httpx.HTTPError as e:
             logger.error("vLLM async chat error: %s", e)
             raise

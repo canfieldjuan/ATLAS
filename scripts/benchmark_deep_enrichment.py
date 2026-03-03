@@ -5,6 +5,7 @@ Benchmark deep enrichment extraction throughput and schema quality.
 
 import argparse
 import asyncio
+import concurrent.futures
 import json
 import os
 import sys
@@ -86,6 +87,169 @@ VALID_ECOSYSTEM_LEVEL = {"free", "partially", "fully"}
 VALID_BARRIER_LEVEL = {"none", "low", "medium", "high"}
 VALID_AMPLIFICATION = {"quiet", "private", "social"}
 VALID_BULK_TYPE = {"single", "multi"}
+
+
+# ------------------------------------------------------------------
+# Guided decoding schema (mirrors blast_full_pipeline.py _DEEP_SCHEMA)
+# ------------------------------------------------------------------
+
+def _str_or_null():
+    return {"anyOf": [{"type": "string"}, {"type": "null"}]}
+
+def _num_or_null():
+    return {"anyOf": [{"type": "number"}, {"type": "null"}]}
+
+def _bool_or_null():
+    return {"anyOf": [{"type": "boolean"}, {"type": "null"}]}
+
+def _int_or_null():
+    return {"anyOf": [{"type": "integer"}, {"type": "null"}]}
+
+DEEP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "sentiment_aspects": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "aspect": {"type": "string"},
+                    "sentiment": {"type": "string", "enum": sorted(VALID_SENTIMENT)},
+                    "detail": {"type": "string"},
+                },
+                "required": ["aspect", "sentiment", "detail"],
+            },
+        },
+        "feature_requests": {"type": "array", "items": {"type": "string"}},
+        "failure_details": {
+            "anyOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "timeline": {"type": "string"},
+                        "failed_component": {"type": "string"},
+                        "failure_mode": {"type": "string"},
+                        "dollar_amount_lost": _num_or_null(),
+                    },
+                    "required": ["timeline", "failed_component", "failure_mode", "dollar_amount_lost"],
+                },
+                {"type": "null"},
+            ],
+        },
+        "product_comparisons": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "product_name": {"type": "string"},
+                    "direction": {"type": "string", "enum": sorted(VALID_DIRECTION)},
+                    "context": {"type": "string"},
+                },
+                "required": ["product_name", "direction", "context"],
+            },
+        },
+        "product_name_mentioned": {"type": "string"},
+        "buyer_context": {
+            "type": "object",
+            "properties": {
+                "use_case": {"type": "string"},
+                "buyer_type": {"type": "string"},
+                "price_sentiment": {"type": "string", "enum": sorted(VALID_PRICE_SENTIMENT)},
+            },
+            "required": ["use_case", "buyer_type", "price_sentiment"],
+        },
+        "quotable_phrases": {"type": "array", "items": {"type": "string"}},
+        "would_repurchase": _bool_or_null(),
+        "external_references": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"source": {"type": "string"}, "context": {"type": "string"}},
+                "required": ["source", "context"],
+            },
+        },
+        "positive_aspects": {"type": "array", "items": {"type": "string"}},
+        "expertise_level": {"type": "string", "enum": sorted(VALID_EXPERTISE)},
+        "frustration_threshold": {"type": "string", "enum": sorted(VALID_FRUSTRATION)},
+        "discovery_channel": {"type": "string", "enum": sorted(VALID_DISCOVERY)},
+        "consideration_set": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"product": {"type": "string"}, "why_not": {"type": "string"}},
+                "required": ["product", "why_not"],
+            },
+        },
+        "buyer_household": {"type": "string", "enum": sorted(VALID_HOUSEHOLD)},
+        "profession_hint": _str_or_null(),
+        "budget_type": {"type": "string", "enum": sorted(VALID_BUDGET)},
+        "use_intensity": {"type": "string", "enum": sorted(VALID_INTENSITY)},
+        "research_depth": {"type": "string", "enum": sorted(VALID_RESEARCH)},
+        "community_mentions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"platform": {"type": "string"}, "context": {"type": "string"}},
+                "required": ["platform", "context"],
+            },
+        },
+        "consequence_severity": {"type": "string", "enum": sorted(VALID_CONSEQUENCE)},
+        "replacement_behavior": {"type": "string", "enum": sorted(VALID_REPLACEMENT)},
+        "brand_loyalty_depth": {"type": "string", "enum": sorted(VALID_LOYALTY)},
+        "ecosystem_lock_in": {
+            "type": "object",
+            "properties": {
+                "level": {"type": "string", "enum": sorted(VALID_ECOSYSTEM_LEVEL)},
+                "ecosystem": _str_or_null(),
+            },
+            "required": ["level", "ecosystem"],
+        },
+        "safety_flag": {
+            "type": "object",
+            "properties": {
+                "flagged": {"type": "boolean"},
+                "description": _str_or_null(),
+            },
+            "required": ["flagged", "description"],
+        },
+        "bulk_purchase_signal": {
+            "type": "object",
+            "properties": {
+                "type": {"type": "string", "enum": sorted(VALID_BULK_TYPE)},
+                "estimated_qty": _int_or_null(),
+            },
+            "required": ["type", "estimated_qty"],
+        },
+        "review_delay_signal": {"type": "string", "enum": sorted(VALID_DELAY)},
+        "sentiment_trajectory": {"type": "string", "enum": sorted(VALID_TRAJECTORY)},
+        "occasion_context": {"type": "string", "enum": sorted(VALID_OCCASION)},
+        "switching_barrier": {
+            "type": "object",
+            "properties": {
+                "level": {"type": "string", "enum": sorted(VALID_BARRIER_LEVEL)},
+                "reason": _str_or_null(),
+            },
+            "required": ["level", "reason"],
+        },
+        "amplification_intent": {
+            "type": "object",
+            "properties": {
+                "intent": {"type": "string", "enum": sorted(VALID_AMPLIFICATION)},
+                "context": _str_or_null(),
+            },
+            "required": ["intent", "context"],
+        },
+        "review_sentiment_openness": {
+            "type": "object",
+            "properties": {
+                "open": {"type": "boolean"},
+                "condition": _str_or_null(),
+            },
+            "required": ["open", "condition"],
+        },
+    },
+    "required": sorted(REQUIRED_KEYS.keys()),
+}
 
 
 def load_env() -> None:
@@ -230,8 +394,12 @@ def build_payload(row: dict[str, Any]) -> str:
     return json.dumps(payload)
 
 
-def call_llm(llm, skill_content: str, row: dict[str, Any], max_tokens: int) -> str:
+def call_llm(llm, skill_content: str, row: dict[str, Any], max_tokens: int,
+             guided_json=None) -> str:
     payload = build_payload(row)
+    llm_kwargs: dict[str, Any] = {}
+    if guided_json is not None:
+        llm_kwargs["guided_json"] = guided_json
     result = llm.chat(
         messages=[
             Message(role="system", content=skill_content),
@@ -239,6 +407,7 @@ def call_llm(llm, skill_content: str, row: dict[str, Any], max_tokens: int) -> s
         ],
         max_tokens=max_tokens,
         temperature=0.1,
+        **llm_kwargs,
     )
     return clean_llm_output(result.get("response", ""))
 
@@ -255,11 +424,15 @@ def parse_extraction(text: str) -> tuple[dict | None, str]:
     return parsed, "ok"
 
 
-async def process_row(llm, skill_content: str, row: dict[str, Any], max_tokens: int) -> dict[str, Any]:
+async def process_row(llm, skill_content: str, row: dict[str, Any], max_tokens: int,
+                      guided_json=None) -> dict[str, Any]:
     start = time.perf_counter()
     error = "ok"
     try:
-        text = await asyncio.to_thread(call_llm, llm, skill_content, row, max_tokens)
+        text = await asyncio.to_thread(
+            call_llm, llm, skill_content, row, max_tokens,
+            guided_json=guided_json,
+        )
         parsed, error = parse_extraction(text)
         schema_ok = bool(parsed) and validate_extraction(parsed)
         if parsed and not schema_ok:
@@ -418,7 +591,8 @@ def print_summary(output: dict[str, Any]) -> None:
         )
 
 
-async def run_model(pool, args, model: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+async def run_model(pool, args, model: str, rows: list[dict[str, Any]],
+                    guided_json=None) -> dict[str, Any]:
     llm_registry.activate(
         args.provider,
         model=model,
@@ -433,8 +607,25 @@ async def run_model(pool, args, model: str, rows: list[dict[str, Any]]) -> dict[
     if not skill:
         raise RuntimeError("Skill digest/deep_extraction not found")
 
+    # Probe guided decoding for this model
+    use_guided = False
+    if guided_json is not None:
+        try:
+            llm.chat(
+                messages=[Message(role="user", content='{"test":true}')],
+                max_tokens=10, temperature=0,
+                guided_json={"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]},
+            )
+            use_guided = True
+            print(f"  Guided JSON: ENABLED", flush=True)
+        except Exception as e:
+            print(f"  Guided JSON: NOT AVAILABLE ({e}), using unguided", flush=True)
+            guided_json = None
+
     start = time.perf_counter()
-    worker_fn = lambda row: process_row(llm, skill.content, row, args.max_tokens)
+    worker_fn = lambda row: process_row(
+        llm, skill.content, row, args.max_tokens, guided_json=guided_json,
+    )
     results = await run_workers(rows, args.workers, worker_fn)
     elapsed = time.perf_counter() - start
     summary = summarize(results, elapsed)
@@ -442,6 +633,7 @@ async def run_model(pool, args, model: str, rows: list[dict[str, Any]]) -> dict[
         "model": model,
         "provider": args.provider,
         "base_url": args.base_url,
+        "guided": use_guided,
         "sample_file": args.sample_file,
         "sample_size": len(rows),
         "started_at": datetime.now(timezone.utc).isoformat(),
@@ -551,13 +743,15 @@ async def run_benchmark(pool, args, sample_path: Path) -> None:
     if args.baseline_file:
         baseline = json.loads(Path(args.baseline_file).read_text())
 
+    guided_json = None if args.no_guided else DEEP_SCHEMA
+
     results_dir = Path(args.results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
     models = parse_models(args.models)
     regressions_found = False
 
     for model in models:
-        output = await run_model(pool, args, model, rows)
+        output = await run_model(pool, args, model, rows, guided_json=guided_json)
         if baseline:
             comparison = compare_baseline(baseline, output)
             output["comparison"] = comparison
@@ -595,6 +789,8 @@ def parse_args() -> argparse.Namespace:
         help="Do not fail when baseline regressions are detected",
     )
     parser.add_argument("--results-dir", type=str, default=None, help="Output dir for results")
+    parser.add_argument("--no-guided", action="store_true",
+                        help="Disable guided JSON decoding (vLLM only)")
     return parser.parse_args()
 
 
@@ -627,6 +823,13 @@ async def main() -> None:
     load_env()
     args = parse_args()
     resolve_args(args)
+
+    # Size thread pool for asyncio.to_thread() workers
+    if args.workers and args.workers > 0:
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(
+            concurrent.futures.ThreadPoolExecutor(max_workers=max(args.workers * 2, 64))
+        )
 
     pool = get_db_pool()
     await pool.initialize()
