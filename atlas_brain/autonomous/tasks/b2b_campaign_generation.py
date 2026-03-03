@@ -330,6 +330,22 @@ async def _generate_churning_company_campaigns(
         best = max(opps, key=lambda o: o["opportunity_score"])
         context = _build_company_context(best, opps)
 
+        # Inject product profile recommendations (if profiles exist)
+        try:
+            from ...services.b2b.product_matching import match_products
+            matches = await match_products(
+                churning_from=best["vendor_name"],
+                pain_categories=context["pain_categories"],
+                company_size=best.get("seat_count"),
+                industry=best.get("industry"),
+                pool=pool,
+                limit=3,
+            )
+            if matches:
+                context["recommended_alternatives"] = matches
+        except Exception:
+            logger.debug("Product matching unavailable, continuing without recommendations")
+
         # Match to an affiliate partner (Gap 4: sender identity)
         partner = _match_partner(context, partner_index)
         if not partner:

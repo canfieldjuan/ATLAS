@@ -23,6 +23,9 @@ class SaaSAuthConfig(BaseSettings):
     jwt_refresh_expiry_days: int = Field(default=30, description="Refresh token expiry in days")
     trial_days: int = Field(default=14, description="Trial period length in days")
 
+    # CORS -- extra origins to allow (comma-separated), e.g. "https://my-app.vercel.app"
+    cors_origins: str = Field(default="", description="Extra CORS origins (comma-separated)")
+
     # Stripe
     stripe_secret_key: str = Field(default="", description="Stripe secret API key")
     stripe_webhook_secret: str = Field(default="", description="Stripe webhook signing secret")
@@ -1737,7 +1740,7 @@ class AutonomousConfig(BaseSettings):
     default_agent_type: str = Field(default="atlas", description="Default agent type for headless tasks")
     default_session_prefix: str = Field(default="autonomous", description="Session ID prefix for task runs")
     max_concurrent_tasks: int = Field(default=2, ge=1, le=10, description="Max concurrent task executions")
-    task_timeout_seconds: int = Field(default=120, ge=10, le=600, description="Default task timeout")
+    task_timeout_seconds: int = Field(default=120, ge=10, le=3600, description="Default task timeout")
     task_history_retention_days: int = Field(default=30, ge=1, le=365, description="Execution history retention")
     hooks_enabled: bool = Field(default=True, description="Enable alert-driven hook processing")
     hook_cooldown_seconds: int = Field(default=30, ge=0, le=300, description="Min seconds between duplicate hook executions")
@@ -2036,6 +2039,12 @@ class ExternalDataConfig(BaseSettings):
     competitive_intelligence_cron: str = Field(default="30 21 * * *", description="Cron for competitive intelligence (default 9:30 PM)")
     competitive_intelligence_max_tokens: int = Field(default=3072, description="Max output tokens for competitive intelligence LLM call")
     competitive_intelligence_min_deep_enriched: int = Field(default=100, description="Min deep-enriched reviews required to run")
+    # Blog post generation (data-backed articles with charts)
+    blog_post_enabled: bool = Field(default=True, description="Enable blog post generation from review data")
+    blog_post_cron: str = Field(default="0 23 * * *", description="Cron for blog post generation (default 11 PM)")
+    blog_post_max_tokens: int = Field(default=6144, description="Max tokens per blog post LLM call")
+    blog_post_max_per_run: int = Field(default=1, description="Max blog posts to generate per run")
+    blog_post_ui_path: str = Field(default="", description="Path to atlas-intel-ui/src/content/blog/ (empty = DB only)")
 
 
 class B2BChurnConfig(BaseSettings):
@@ -2089,6 +2098,12 @@ class B2BChurnConfig(BaseSettings):
     keyword_max_vendors_per_run: int = Field(default=20, description="Max vendors to query per run")
     keyword_geo: str = Field(default="US", description="Google Trends geo region")
     keyword_retention_days: int = Field(default=364, description="Days to retain keyword signal snapshots")
+
+    # Product profiles
+    product_profile_enabled: bool = Field(default=True, description="Enable product profile generation")
+    product_profile_cron: str = Field(default="30 21 * * *", description="Product profile schedule (9:30 PM)")
+    product_profile_min_reviews: int = Field(default=5, description="Min enriched reviews to generate a profile")
+    product_profile_max_tokens: int = Field(default=1024, description="Max LLM output tokens for profile synthesis")
 
 
 class B2BAlertConfig(BaseSettings):
@@ -2173,6 +2188,16 @@ class B2BScrapeConfig(BaseSettings):
     playwright_headless: bool = Field(default=True, description="Run Chromium in headless mode")
     playwright_timeout_ms: int = Field(default=30000, description="Page navigation timeout (ms)")
     playwright_max_concurrent: int = Field(default=1, description="Max concurrent browser contexts")
+
+    # Bright Data Web Unlocker (DataDome / heavy anti-bot bypass)
+    web_unlocker_url: str = Field(
+        default="",
+        description="Bright Data Web Unlocker proxy URL (bypasses DataDome/Cloudflare automatically)",
+    )
+    web_unlocker_domains: str = Field(
+        default="g2.com",
+        description="Domains to route through Web Unlocker (comma-separated)",
+    )
 
 
 class B2BCampaignConfig(BaseSettings):
