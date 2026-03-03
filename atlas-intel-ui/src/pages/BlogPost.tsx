@@ -3,7 +3,9 @@ import { useMemo, useEffect } from 'react'
 import { marked } from 'marked'
 import { ArrowLeft } from 'lucide-react'
 import PublicLayout from '../components/PublicLayout'
+import BlogChart from '../components/BlogChartRenderer'
 import { POSTS } from '../content/blog'
+import type { ChartSpec } from '../content/blog'
 
 function formatDate(iso: string) {
   return new Date(iso + 'T00:00:00').toLocaleDateString('en-US', {
@@ -13,13 +15,41 @@ function formatDate(iso: string) {
   })
 }
 
+const CHART_PLACEHOLDER_RE = /(\{\{chart:[^}]+\}\})/
+
+function renderContentWithCharts(content: string, charts?: ChartSpec[]) {
+  if (!charts || charts.length === 0) {
+    const html = marked.parse(content, { async: false }) as string
+    return <div className="blog-prose" dangerouslySetInnerHTML={{ __html: html }} />
+  }
+
+  const chartMap = new Map(charts.map(c => [c.chart_id, c]))
+  const parts = content.split(CHART_PLACEHOLDER_RE)
+
+  return (
+    <div className="blog-prose">
+      {parts.map((part, i) => {
+        const match = part.match(/^\{\{chart:([^}]+)\}\}$/)
+        if (match) {
+          const spec = chartMap.get(match[1])
+          if (spec) return <BlogChart key={i} spec={spec} />
+          return null
+        }
+        if (!part.trim()) return null
+        const html = marked.parse(part, { async: false }) as string
+        return <div key={i} dangerouslySetInnerHTML={{ __html: html }} />
+      })}
+    </div>
+  )
+}
+
 export default function BlogPost() {
   const { slug } = useParams<{ slug: string }>()
   const post = POSTS.find(p => p.slug === slug)
 
-  const html = useMemo(() => {
-    if (!post) return ''
-    return marked.parse(post.content, { async: false }) as string
+  const renderedContent = useMemo(() => {
+    if (!post) return null
+    return renderContentWithCharts(post.content, post.charts)
   }, [post])
 
   useEffect(() => {
@@ -74,11 +104,8 @@ export default function BlogPost() {
           </div>
         </header>
 
-        {/* Rendered markdown */}
-        <div
-          className="blog-prose"
-          dangerouslySetInnerHTML={{ __html: html }}
-        />
+        {/* Rendered markdown with inline charts */}
+        {renderedContent}
 
         {/* CTA */}
         <div className="mt-16 p-8 bg-slate-800/60 border border-slate-700/50 rounded-xl text-center">
