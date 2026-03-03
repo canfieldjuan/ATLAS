@@ -41,10 +41,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         return {"_skip_synthesis": f"Report already exists for {today}"}
 
     # Gather data sources in parallel
-    category_stats, product_stats, prior_reports = await asyncio.gather(
+    category_stats, product_stats, prior_reports, data_context = await asyncio.gather(
         _fetch_category_stats(pool),
         _fetch_product_stats(pool),
         _fetch_prior_reports(pool),
+        _fetch_data_context(pool),
         return_exceptions=True,
     )
 
@@ -58,20 +59,46 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if isinstance(prior_reports, Exception):
         logger.warning("Prior reports fetch failed: %s", prior_reports)
         prior_reports = []
+    if isinstance(data_context, Exception):
+        logger.warning("Data context fetch failed: %s", data_context)
+        data_context = {}
 
     # Check if there's enough data
     total_enriched = sum(c.get("total_enriched", 0) for c in category_stats)
     if total_enriched == 0 and not product_stats:
         return {"_skip_synthesis": "No enriched reviews to analyze"}
 
-    # Build payload -- cap product_stats for LLM (top 50 by pain score)
-    # Full product_stats used below for upserts
-    llm_product_stats = product_stats[:50]
+    # Build payload -- trim to fit ~4k token input budget (8k context - 4k output).
+    # Full product_stats used below for upserts.
+    llm_product_stats = [
+        {
+            "asin": p["asin"],
+            "category": p["category"],
+            "complaints": p["complaint_count"],
+            "pain": p["avg_pain_score"],
+            "rating": p["avg_rating"],
+            "top_complaints": p["top_complaints"][:2],
+            "root_causes": p["root_causes"],
+        }
+        for p in product_stats[:15]
+    ]
+    # Compact category stats for LLM
+    llm_categories = [
+        {
+            "category": c["category"],
+            "count": c["total_enriched"],
+            "period": c.get("review_period", ""),
+            "pain": c["avg_pain_score"],
+            "top_cause": c["top_root_cause"],
+        }
+        for c in category_stats
+    ]
     payload = {
         "date": str(today),
-        "category_stats": category_stats,
+        "data_context": data_context,
+        "total_products_with_complaints": len(product_stats),
+        "category_stats": llm_categories,
         "product_stats": llm_product_stats,
-        "prior_reports": prior_reports,
     }
 
     # Load skill and call LLM (in thread to avoid blocking event loop)
@@ -83,6 +110,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 call_llm_with_skill,
                 "digest/complaint_analysis", payload,
                 max_tokens=cfg.complaint_analysis_max_tokens, temperature=0.4,
+                response_format={"type": "json_object"},
             ),
             timeout=300,
         )
@@ -95,7 +123,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         return {"_skip_synthesis": "LLM analysis failed"}
 
     # Parse structured output
-    parsed = parse_json_response(analysis)
+    parsed = parse_json_response(analysis, recover_truncated=True)
 
     # Persist to complaint_reports
     try:
@@ -149,49 +177,91 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 # ------------------------------------------------------------------
 
 
-async def _fetch_category_stats(pool) -> list[dict[str, Any]]:
-    """Aggregate enriched reviews by source_category (all enriched, no time window)."""
-    rows = await pool.fetch(
+async def _fetch_data_context(pool) -> dict[str, Any]:
+    """Compute temporal metadata for the dataset so the LLM can anchor claims."""
+    row = await pool.fetchrow(
         """
         SELECT
-            source_category AS category,
             count(*) AS total_enriched,
-            count(*) FILTER (WHERE severity = 'critical') AS critical_count,
-            count(*) FILTER (WHERE severity = 'major') AS major_count,
-            count(*) FILTER (WHERE severity = 'minor') AS minor_count,
-            avg(pain_score) AS avg_pain_score,
-            mode() WITHIN GROUP (ORDER BY root_cause) AS top_root_cause
+            count(*) FILTER (WHERE reviewed_at IS NOT NULL) AS with_date,
+            min(reviewed_at) AS earliest_review,
+            max(reviewed_at) AS latest_review,
+            count(*) FILTER (WHERE reviewed_at >= NOW() - INTERVAL '1 year') AS last_1y,
+            count(*) FILTER (WHERE reviewed_at >= NOW() - INTERVAL '3 years') AS last_3y,
+            count(*) FILTER (WHERE reviewed_at < NOW() - INTERVAL '3 years') AS older_3y
         FROM product_reviews
         WHERE enrichment_status = 'enriched'
-        GROUP BY source_category
-        ORDER BY count(*) DESC
-        """,
+        """
     )
-    result = []
-    for r in rows:
-        # Fetch root cause distribution for this category
-        rc_rows = await pool.fetch(
+    return {
+        "total_reviews_analyzed": row["total_enriched"],
+        "reviews_with_dates": row["with_date"],
+        "review_period": {
+            "earliest": str(row["earliest_review"].date()) if row["earliest_review"] else None,
+            "latest": str(row["latest_review"].date()) if row["latest_review"] else None,
+        },
+        "recency": {
+            "last_1_year": row["last_1y"],
+            "last_3_years": row["last_3y"],
+            "older_than_3_years": row["older_3y"],
+        },
+        "note": "Use these date ranges when citing statistics. Say 'over the past N years' or 'between YYYY and YYYY' instead of unanchored claims.",
+    }
+
+
+async def _fetch_category_stats(pool) -> list[dict[str, Any]]:
+    """Aggregate enriched reviews by source_category (all enriched, no time window).
+
+    Uses a single bulk query for root cause distributions instead of N+1.
+    """
+    rows, rc_rows = await asyncio.gather(
+        pool.fetch(
             """
-            SELECT root_cause, count(*) AS cnt
+            SELECT
+                source_category AS category,
+                count(*) AS total_enriched,
+                count(*) FILTER (WHERE severity = 'critical') AS critical_count,
+                count(*) FILTER (WHERE severity = 'major') AS major_count,
+                count(*) FILTER (WHERE severity = 'minor') AS minor_count,
+                avg(pain_score) AS avg_pain_score,
+                mode() WITHIN GROUP (ORDER BY root_cause) AS top_root_cause,
+                min(reviewed_at)::date AS earliest_review,
+                max(reviewed_at)::date AS latest_review
             FROM product_reviews
             WHERE enrichment_status = 'enriched'
-              AND source_category = $1
-            GROUP BY root_cause
-            ORDER BY cnt DESC
+            GROUP BY source_category
+            ORDER BY count(*) DESC
             """,
-            r["category"],
-        )
-        rc_dist = {row["root_cause"]: row["cnt"] for row in rc_rows if row["root_cause"]}
+        ),
+        pool.fetch(
+            """
+            SELECT source_category AS category, root_cause, count(*) AS cnt
+            FROM product_reviews
+            WHERE enrichment_status = 'enriched'
+              AND root_cause IS NOT NULL
+            GROUP BY source_category, root_cause
+            ORDER BY source_category, cnt DESC
+            """,
+        ),
+    )
 
+    # Build root cause lookup by category
+    rc_by_cat: dict[str, dict[str, int]] = {}
+    for row in rc_rows:
+        rc_by_cat.setdefault(row["category"], {})[row["root_cause"]] = row["cnt"]
+
+    result = []
+    for r in rows:
         result.append({
             "category": r["category"],
             "total_enriched": r["total_enriched"],
+            "review_period": f"{r['earliest_review']} to {r['latest_review']}" if r["earliest_review"] else "dates unavailable",
             "severity_distribution": {
                 "critical": r["critical_count"],
                 "major": r["major_count"],
                 "minor": r["minor_count"],
             },
-            "root_cause_distribution": rc_dist,
+            "root_cause_distribution": rc_by_cat.get(r["category"], {}),
             "avg_pain_score": round(float(r["avg_pain_score"]), 2) if r["avg_pain_score"] else 0.0,
             "top_root_cause": r["top_root_cause"],
         })
@@ -199,7 +269,11 @@ async def _fetch_category_stats(pool) -> list[dict[str, Any]]:
 
 
 async def _fetch_product_stats(pool) -> list[dict[str, Any]]:
-    """Aggregate by ASIN for products with 5+ complaints (all enriched, no time window)."""
+    """Aggregate by ASIN for products with 5+ complaints (all enriched, no time window).
+
+    Uses bulk queries instead of per-ASIN sub-queries to avoid N+1 pattern.
+    4 queries total instead of 4*N (was ~14k queries for 3,710 ASINs).
+    """
     rows = await pool.fetch(
         """
         SELECT
@@ -215,82 +289,88 @@ async def _fetch_product_stats(pool) -> list[dict[str, Any]]:
         ORDER BY avg(pain_score) DESC
         """,
     )
+    if not rows:
+        return []
 
+    # Bulk fetch all sub-data in 4 queries (replaces 4 queries per ASIN)
+    complaint_rows, rc_rows, mfg_rows, alt_rows = await asyncio.gather(
+        pool.fetch(
+            """
+            SELECT asin, specific_complaint, count(*) AS cnt
+            FROM product_reviews
+            WHERE enrichment_status = 'enriched'
+              AND specific_complaint IS NOT NULL
+            GROUP BY asin, specific_complaint
+            ORDER BY asin, cnt DESC
+            """,
+        ),
+        pool.fetch(
+            """
+            SELECT asin, root_cause, count(*) AS cnt
+            FROM product_reviews
+            WHERE enrichment_status = 'enriched'
+              AND root_cause IS NOT NULL
+            GROUP BY asin, root_cause
+            ORDER BY asin, cnt DESC
+            """,
+        ),
+        pool.fetch(
+            """
+            SELECT DISTINCT ON (asin, manufacturing_suggestion)
+                asin, manufacturing_suggestion
+            FROM product_reviews
+            WHERE enrichment_status = 'enriched'
+              AND actionable_for_manufacturing = true
+              AND manufacturing_suggestion IS NOT NULL
+            ORDER BY asin, manufacturing_suggestion
+            """,
+        ),
+        pool.fetch(
+            """
+            SELECT asin, alternative_name, count(*) AS cnt
+            FROM product_reviews
+            WHERE enrichment_status = 'enriched'
+              AND alternative_mentioned = true
+              AND alternative_name IS NOT NULL
+            GROUP BY asin, alternative_name
+            ORDER BY asin, cnt DESC
+            """,
+        ),
+    )
+
+    # Build lookup dicts keyed by ASIN
+    complaints_by_asin: dict[str, list[str]] = {}
+    for row in complaint_rows:
+        complaints_by_asin.setdefault(row["asin"], []).append(row["specific_complaint"])
+
+    rc_by_asin: dict[str, dict[str, int]] = {}
+    for row in rc_rows:
+        rc_by_asin.setdefault(row["asin"], {})[row["root_cause"]] = row["cnt"]
+
+    mfg_by_asin: dict[str, list[str]] = {}
+    for row in mfg_rows:
+        mfg_by_asin.setdefault(row["asin"], []).append(row["manufacturing_suggestion"])
+
+    alt_by_asin: dict[str, list[dict]] = {}
+    for row in alt_rows:
+        alt_by_asin.setdefault(row["asin"], []).append(
+            {"name": row["alternative_name"], "mentions": row["cnt"]}
+        )
+
+    # Assemble results
     result = []
     for r in rows:
         asin = r["asin"]
-
-        # Top specific complaints for this ASIN
-        complaint_rows = await pool.fetch(
-            """
-            SELECT specific_complaint, count(*) AS cnt
-            FROM product_reviews
-            WHERE asin = $1 AND enrichment_status = 'enriched'
-              AND specific_complaint IS NOT NULL
-            GROUP BY specific_complaint
-            ORDER BY cnt DESC
-            LIMIT 5
-            """,
-            asin,
-        )
-        top_complaints = [row["specific_complaint"] for row in complaint_rows]
-
-        # Root cause distribution
-        rc_rows = await pool.fetch(
-            """
-            SELECT root_cause, count(*) AS cnt
-            FROM product_reviews
-            WHERE asin = $1 AND enrichment_status = 'enriched'
-            GROUP BY root_cause
-            ORDER BY cnt DESC
-            """,
-            asin,
-        )
-        root_causes = {row["root_cause"]: row["cnt"] for row in rc_rows if row["root_cause"]}
-
-        # Manufacturing suggestions
-        mfg_rows = await pool.fetch(
-            """
-            SELECT manufacturing_suggestion
-            FROM product_reviews
-            WHERE asin = $1 AND enrichment_status = 'enriched'
-              AND actionable_for_manufacturing = true
-              AND manufacturing_suggestion IS NOT NULL
-            LIMIT 5
-            """,
-            asin,
-        )
-        mfg_suggestions = [row["manufacturing_suggestion"] for row in mfg_rows]
-
-        # Alternatives mentioned
-        alt_rows = await pool.fetch(
-            """
-            SELECT alternative_name, count(*) AS cnt
-            FROM product_reviews
-            WHERE asin = $1 AND enrichment_status = 'enriched'
-              AND alternative_mentioned = true
-              AND alternative_name IS NOT NULL
-            GROUP BY alternative_name
-            ORDER BY cnt DESC
-            LIMIT 5
-            """,
-            asin,
-        )
-        alternatives = [
-            {"name": row["alternative_name"], "mentions": row["cnt"]}
-            for row in alt_rows
-        ]
-
         result.append({
             "asin": asin,
             "category": r["category"],
             "complaint_count": r["complaint_count"],
             "avg_pain_score": round(float(r["avg_pain_score"]), 2) if r["avg_pain_score"] else 0.0,
             "avg_rating": round(float(r["avg_rating"]), 2) if r["avg_rating"] else 0.0,
-            "top_complaints": top_complaints,
-            "root_causes": root_causes,
-            "manufacturing_suggestions": mfg_suggestions,
-            "alternatives": alternatives,
+            "top_complaints": complaints_by_asin.get(asin, [])[:5],
+            "root_causes": rc_by_asin.get(asin, {}),
+            "manufacturing_suggestions": mfg_by_asin.get(asin, [])[:5],
+            "alternatives": alt_by_asin.get(asin, [])[:5],
         })
 
     return result

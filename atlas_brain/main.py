@@ -485,9 +485,9 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to start MCP client: %s", e)
 
-    # Start ASR server if voice is enabled and ASR isn't already running
+    # Start ASR server if voice is enabled, auto-start is on, and ASR isn't already running
     asr_process = None
-    if settings.voice.enabled and settings.voice.asr_url:
+    if settings.voice.enabled and settings.voice.auto_start_asr and settings.voice.asr_url:
         asr_process = await _start_asr_server()
 
     # Start voice pipeline if enabled
@@ -642,6 +642,13 @@ async def lifespan(app: FastAPI):
             logger.info("Communications service shutdown complete")
         except Exception as e:
             logger.error("Error shutting down communications: %s", e)
+
+    # Shutdown stealth browser (Playwright)
+    try:
+        from .services.scraping.browser import shutdown_stealth_browser
+        await shutdown_stealth_browser()
+    except Exception as e:
+        logger.error("Error shutting down stealth browser: %s", e)
 
     # Close calendar provider httpx client
     try:

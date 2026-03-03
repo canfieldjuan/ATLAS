@@ -2,7 +2,7 @@
 name: digest/b2b_challenger_outreach
 description: Generate challenger-targeted outreach selling qualified intent leads
 tags: [b2b, challenger, outreach, competitive-intelligence]
-version: 1
+version: 2
 ---
 
 # Challenger Competitive Intelligence Outreach Generator
@@ -94,5 +94,11 @@ Return a JSON object:
 14. **Do NOT include** placeholder brackets. Use actual values.
 
 15. **Subject lines**: Curiosity-driven. Good: "12 companies evaluating your product right now" -- Bad: "Grow your pipeline with our intent data"
+
+16. **Competitive awareness angle** — subtly let the challenger know that incumbents also receive intelligence:
+    - **email_cold**: Include ONE brief sentence mid-email. Example framing: "Incumbents are also being alerted with defensive intelligence on at-risk accounts. The advantage goes to whoever acts first." Keep it matter-of-fact, not urgent.
+    - **email_followup**: Be slightly more concrete. Frame as first-mover advantage: "The vendors losing these accounts are getting churn alerts and retention playbooks. These leads have a window -- the question is whether your team reaches them before the save campaign does." Keep to 1-2 sentences within the displacement section (Rule 12).
+    - **Never make it the headline or subject line.** It supports the pitch, it isn't the pitch.
+    - **Never frame it as a threat or create false urgency.** Tone is "this is how competitive intelligence works" -- informational, not manipulative.
 
 Return ONLY the JSON object, no markdown fences, no explanation.

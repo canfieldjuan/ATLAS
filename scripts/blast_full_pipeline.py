@@ -501,7 +501,6 @@ async def worker(
                                 WHERE pr.deep_enrichment_status = 'pending'
                                   AND pr.deep_enrichment_attempts < $1
                                   AND pr.asin = ANY($2::text[])
-                                ORDER BY pr.imported_at ASC
                                 LIMIT $3
                                 FOR UPDATE SKIP LOCKED
                             )
@@ -525,7 +524,6 @@ async def worker(
                                 SELECT pr.id FROM product_reviews pr
                                 WHERE pr.deep_enrichment_status = 'pending'
                                   AND pr.deep_enrichment_attempts < $1
-                                ORDER BY pr.imported_at ASC
                                 LIMIT $2
                                 FOR UPDATE SKIP LOCKED
                             )

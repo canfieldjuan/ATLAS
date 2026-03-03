@@ -68,6 +68,9 @@ trafilatura>=1.6
 # B2B review scraping (anti-detection HTTP client + HTML parsing)
 curl_cffi>=0.7.0
 beautifulsoup4>=4.12.0
+pytrends>=4.9.0
+playwright>=1.40.0
+playwright-stealth>=1.0.6
 
 # SaaS auth + billing
 bcrypt>=4.0.0

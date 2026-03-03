@@ -234,6 +234,16 @@ register_pipeline(PipelineConfig(
             },
             cron_config_key="b2b_churn.intelligence_cron",
         ),
+        TaskDef(
+            name="b2b_keyword_signal",
+            module="b2b_keyword_signal",
+            schedule_type="cron",
+            cron_expression="0 6 * * 1",
+            timeout_seconds=600,
+            description="Weekly Google Trends keyword signal collection",
+            metadata={"builtin_handler": "b2b_keyword_signal"},
+            cron_config_key="b2b_churn.keyword_signal_cron",
+        ),
     ],
     cleanup_rules=[
         CleanupRule(
@@ -247,6 +257,12 @@ register_pipeline(PipelineConfig(
             where_clause="DELETE FROM b2b_campaigns WHERE status IN ('expired', 'sent') AND created_at < CURRENT_TIMESTAMP - make_interval(days => $1)",
             retention_config_key="b2b_campaign.retention_days",
             result_key="b2b_campaigns_cleaned",
+        ),
+        CleanupRule(
+            table="b2b_keyword_signals",
+            where_clause="DELETE FROM b2b_keyword_signals WHERE snapshot_at < CURRENT_TIMESTAMP - make_interval(days => $1)",
+            retention_config_key="b2b_churn.keyword_retention_days",
+            result_key="b2b_keyword_signals_cleaned",
         ),
     ],
 ))

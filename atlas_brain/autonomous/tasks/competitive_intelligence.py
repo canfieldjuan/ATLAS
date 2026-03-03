@@ -68,7 +68,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not has_metadata or not has_metadata["ok"]:
         return {"_skip_synthesis": "product_metadata table not found (run match_product_metadata first)"}
 
-    # Gather 8 data sources in parallel
+    # Gather 9 data sources in parallel
     (
         brand_health,
         competitive_flows,
@@ -78,6 +78,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         safety_signals,
         loyalty_churn,
         prior_reports,
+        data_context,
     ) = await asyncio.gather(
         _fetch_brand_health(pool),
         _fetch_competitive_flows(pool),
@@ -87,6 +88,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _fetch_safety_signals(pool),
         _fetch_loyalty_churn(pool),
         _fetch_prior_reports(pool),
+        _fetch_data_context(pool),
         return_exceptions=True,
     )
 
@@ -105,6 +107,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         if isinstance(val, Exception):
             logger.warning("%s fetch failed: %s", key, val)
             fetchers[key] = []
+    if isinstance(data_context, Exception):
+        logger.warning("Data context fetch failed: %s", data_context)
+        data_context = {}
 
     if not fetchers["brand_health"]:
         return {"_skip_synthesis": "No brand data to analyze"}
@@ -117,8 +122,31 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if fetchers["feature_gaps"]:
         fetchers["feature_gaps"] = _normalize_feature_requests(fetchers["feature_gaps"])
 
-    # Build payload
-    payload = {"date": str(today), **fetchers}
+    # Build LLM payload -- trim to fit ~4k token input budget (8k context - 4k output).
+    # Full fetchers data used below for upserts.
+    llm_brands = [
+        {
+            "brand": b["brand"],
+            "reviews": b["total_reviews"],
+            "period": b.get("review_period", ""),
+            "rating": b["avg_rating"],
+            "pain": b["avg_pain_score"],
+            "repurchase": f"{b['repurchase_yes']}/{b['repurchase_yes'] + b['repurchase_no']}",
+            "safety": b["safety_flagged_count"],
+        }
+        for b in fetchers["brand_health"][:15]
+    ]
+    payload = {
+        "date": str(today),
+        "data_context": data_context,
+        "total_brands": len(fetchers["brand_health"]),
+        "brand_health": llm_brands,
+        "competitive_flows": fetchers["competitive_flows"][:10],
+        "feature_gaps": fetchers["feature_gaps"][:8],
+        "buyer_personas": fetchers["buyer_personas"][:6],
+        "safety_signals": fetchers["safety_signals"][:6],
+        "loyalty_churn": fetchers["loyalty_churn"][:8],
+    }
 
     # Load skill and call LLM
     from ...pipelines.llm import call_llm_with_skill, parse_json_response
@@ -131,6 +159,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 payload,
                 max_tokens=cfg.competitive_intelligence_max_tokens,
                 temperature=0.4,
+                response_format={"type": "json_object"},
             ),
             timeout=300,
         )
@@ -202,6 +231,38 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 # ------------------------------------------------------------------
 
 
+async def _fetch_data_context(pool) -> dict[str, Any]:
+    """Compute temporal metadata so the LLM can anchor claims with timeframes."""
+    row = await pool.fetchrow(
+        """
+        SELECT
+            count(*) AS total,
+            count(*) FILTER (WHERE reviewed_at IS NOT NULL) AS with_date,
+            min(reviewed_at) AS earliest,
+            max(reviewed_at) AS latest,
+            count(*) FILTER (WHERE reviewed_at >= NOW() - INTERVAL '1 year') AS last_1y,
+            count(*) FILTER (WHERE reviewed_at >= NOW() - INTERVAL '3 years') AS last_3y,
+            count(*) FILTER (WHERE reviewed_at < NOW() - INTERVAL '3 years') AS older_3y
+        FROM product_reviews
+        WHERE deep_enrichment_status = 'enriched'
+        """
+    )
+    return {
+        "total_deep_enriched": row["total"],
+        "reviews_with_dates": row["with_date"],
+        "review_period": {
+            "earliest": str(row["earliest"].date()) if row["earliest"] else None,
+            "latest": str(row["latest"].date()) if row["latest"] else None,
+        },
+        "recency": {
+            "last_1_year": row["last_1y"],
+            "last_3_years": row["last_3y"],
+            "older_than_3_years": row["older_3y"],
+        },
+        "note": "IMPORTANT: Always anchor statistics with timeframes. Say 'between 2012 and 2023' or 'over the review period' instead of unqualified claims. Use the date range per brand when available.",
+    }
+
+
 async def _fetch_brand_health(pool) -> list[dict[str, Any]]:
     """Per-brand health: reviews, rating, pain, severity, repurchase, safety."""
     rows = await pool.fetch(
@@ -222,7 +283,9 @@ async def _fetch_brand_health(pool) -> list[dict[str, Any]]:
             ) AS repurchase_no,
             count(*) FILTER (
                 WHERE (pr.deep_extraction->'safety_flag'->>'flagged')::boolean IS TRUE
-            ) AS safety_flagged_count
+            ) AS safety_flagged_count,
+            min(pr.reviewed_at)::date AS earliest_review,
+            max(pr.reviewed_at)::date AS latest_review
         FROM product_reviews pr
         JOIN product_metadata pm ON pm.asin = pr.asin
         WHERE pr.deep_enrichment_status = 'enriched'
@@ -236,6 +299,7 @@ async def _fetch_brand_health(pool) -> list[dict[str, Any]]:
         {
             "brand": r["brand"],
             "total_reviews": r["total_reviews"],
+            "review_period": f"{r['earliest_review']} to {r['latest_review']}" if r["earliest_review"] else "dates unavailable",
             "avg_rating": round(float(r["avg_rating"]), 2) if r["avg_rating"] else 0.0,
             "avg_pain_score": round(float(r["avg_pain_score"]), 1) if r["avg_pain_score"] else 0.0,
             "severity_distribution": {

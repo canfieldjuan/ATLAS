@@ -2,18 +2,22 @@
 G2 parser for B2B review scraping.
 
 URL pattern: g2.com/products/{slug}/reviews?page={n}
-Hardest target -- heavy Cloudflare protection.
-Requires residential proxy + sticky sessions + referer chain.
+Hardest target -- heavy DataDome protection.
+
+Primary: Playwright stealth browser (when playwright_enabled).
+Fallback: curl_cffi HTTP client with residential proxy + sticky sessions.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
-import re
+import random
 from urllib.parse import quote_plus
 
 from bs4 import BeautifulSoup
 
+from ....config import settings
 from ..client import AntiDetectionClient
 from . import ScrapeResult, ScrapeTarget, register_parser
 
@@ -24,13 +28,111 @@ _BASE_URL = "https://www.g2.com/products"
 
 
 class G2Parser:
-    """Parse G2 review pages with Cloudflare bypass."""
+    """Parse G2 review pages with DataDome bypass."""
 
     source_name = "g2"
     prefer_residential = True
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
-        """Scrape G2 reviews for the given product."""
+        """Scrape G2 reviews -- browser first, HTTP fallback."""
+        if settings.b2b_scrape.playwright_enabled:
+            try:
+                result = await self._scrape_browser(target)
+                if result.reviews:
+                    return result
+                logger.warning(
+                    "Browser scrape for %s returned 0 reviews, falling back to HTTP",
+                    target.vendor_name,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Browser scrape failed for %s: %s -- falling back to HTTP",
+                    target.vendor_name, exc,
+                )
+
+        return await self._scrape_http(target, client)
+
+    # ------------------------------------------------------------------
+    # Browser path (Playwright stealth)
+    # ------------------------------------------------------------------
+
+    async def _scrape_browser(self, target: ScrapeTarget) -> ScrapeResult:
+        """Scrape G2 via Playwright stealth browser."""
+        from ..browser import get_stealth_browser
+        from ..proxy import ProxyManager
+
+        browser = get_stealth_browser()
+        proxy_mgr = ProxyManager.from_config(settings.b2b_scrape)
+
+        reviews: list[dict] = []
+        errors: list[str] = []
+        pages_scraped = 0
+        seen_ids: set[str] = set()
+
+        # Get a residential proxy URL if available
+        proxy_config = proxy_mgr.get_proxy(domain=_DOMAIN, sticky=True, prefer_residential=True)
+        proxy_url = proxy_config.url if proxy_config else None
+
+        for page in range(1, target.max_pages + 1):
+            url = f"{_BASE_URL}/{target.product_slug}/reviews"
+            if page > 1:
+                url += f"?page={page}"
+
+            referer = (
+                f"https://www.google.com/search?q={quote_plus(target.vendor_name)}+g2+reviews"
+                if page == 1
+                else f"{_BASE_URL}/{target.product_slug}/reviews?page={page - 1}"
+                if page > 2
+                else f"{_BASE_URL}/{target.product_slug}/reviews"
+            )
+
+            try:
+                result = await browser.scrape_page(
+                    url,
+                    proxy_url=proxy_url,
+                    wait_for_selector="[data-review-id]",
+                    referer=referer,
+                )
+                pages_scraped += 1
+
+                if result.status_code == 403:
+                    errors.append(f"Page {page}: blocked (403) via browser")
+                    break
+                if result.status_code != 200:
+                    errors.append(f"Page {page}: HTTP {result.status_code}")
+                    continue
+
+                page_reviews = _parse_page(result.html, target, seen_ids)
+                if not page_reviews:
+                    if page == 1:
+                        logger.warning(
+                            "G2 browser page 1 returned 0 reviews for %s",
+                            target.product_slug,
+                        )
+                    break
+
+                reviews.extend(page_reviews)
+
+            except Exception as exc:
+                errors.append(f"Page {page}: {exc}")
+                logger.warning("G2 browser page %d failed for %s: %s", page, target.product_slug, exc)
+                break
+
+            # Human-like inter-page delay
+            await asyncio.sleep(random.uniform(3.0, 7.0))
+
+        logger.info(
+            "G2 browser scrape for %s: %d reviews from %d pages",
+            target.vendor_name, len(reviews), pages_scraped,
+        )
+        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors)
+
+    # ------------------------------------------------------------------
+    # HTTP path (curl_cffi -- original)
+    # ------------------------------------------------------------------
+
+    async def _scrape_http(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
+        """Scrape G2 reviews via curl_cffi HTTP client."""
         reviews: list[dict] = []
         errors: list[str] = []
         pages_scraped = 0

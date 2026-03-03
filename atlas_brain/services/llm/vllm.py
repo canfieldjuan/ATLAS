@@ -107,13 +107,12 @@ class VLLMLLM(BaseModelService):
 
         response_format = kwargs.get("response_format")
         if response_format is not None:
-            is_structured_format = (
-                isinstance(response_format, dict)
-                and str(response_format.get("type", "")).lower() in {"json_object", "json_schema"}
-            )
-            if is_structured_format and not settings.llm.vllm_guided_json_enabled:
+            fmt_type = str(response_format.get("type", "")).lower() if isinstance(response_format, dict) else ""
+            # json_object is lightweight (just ensures valid JSON) -- always allow.
+            # json_schema requires guided decoding -- gate behind vllm_guided_json_enabled.
+            if fmt_type == "json_schema" and not settings.llm.vllm_guided_json_enabled:
                 logger.warning(
-                    "structured response_format requested but disabled by ATLAS_LLM__VLLM_GUIDED_JSON_ENABLED",
+                    "json_schema response_format requested but disabled by ATLAS_LLM__VLLM_GUIDED_JSON_ENABLED",
                 )
             else:
                 payload["response_format"] = response_format
