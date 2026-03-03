@@ -116,6 +116,13 @@ class LLMConfig(BaseSettings):
     # vllm settings (OpenAI-compatible vLLM server)
     vllm_model: str = Field(default="Qwen/Qwen3-14B-AWQ", description="vLLM model name")
     vllm_url: str = Field(default="http://localhost:8082", description="vLLM API base URL")
+    vllm_guided_json_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable guided/structured JSON decoding for vLLM requests. "
+            "Disable to avoid xgrammar/nanobind leak issues in affected vLLM builds."
+        ),
+    )
 
     # transformers-flash settings (HuggingFace models)
     hf_model_id: str = Field(
@@ -2020,7 +2027,7 @@ class ExternalDataConfig(BaseSettings):
     deep_enrichment_interval_seconds: int = Field(default=600, description="Deep enrichment polling interval (10 min)")
     deep_enrichment_max_per_batch: int = Field(default=5, description="Max reviews to deep-enrich per autonomous batch")
     deep_enrichment_max_attempts: int = Field(default=3, description="Max attempts before marking deep_failed")
-    deep_enrichment_max_tokens: int = Field(default=2048, description="Max LLM output tokens for deep extraction (32 fields)")
+    deep_enrichment_max_tokens: int = Field(default=1024, description="Max LLM output tokens for deep extraction (32 fields)")
     deep_enrichment_blast_workers: int = Field(default=80, description="Concurrent workers for blast_deep_enrichment script")
     deep_enrichment_blast_batch_size: int = Field(default=30, description="Reviews claimed per worker per round in blast script")
     # Competitive intelligence (cross-brand analysis from deep_extraction)
@@ -2123,10 +2130,15 @@ class B2BScrapeConfig(BaseSettings):
     max_delay_seconds: float = Field(default=8.0, description="Max delay between requests")
 
     # Reddit
+    reddit_client_id: str = Field(default="", description="Reddit API OAuth2 client ID")
+    reddit_client_secret: str = Field(default="", description="Reddit API OAuth2 client secret")
     reddit_default_subreddits: str = Field(
         default="sysadmin,salesforce,aws,ITManagers,devops,msp",
         description="Default subreddits for Reddit scraping (comma-separated)",
     )
+
+    # Firecrawl (JS-rendered scraping for TrustRadius etc.)
+    firecrawl_api_key: str = Field(default="", description="Firecrawl API key for JS-rendered page scraping")
 
     # Resilience
     max_retries: int = Field(default=2, description="Max retries per request")

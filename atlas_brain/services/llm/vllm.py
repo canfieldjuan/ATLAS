@@ -28,7 +28,7 @@ class VLLMLLM(BaseModelService):
 
     def __init__(
         self,
-        model: str = "Qwen/Qwen3-14B",
+        model: str = "stelterlab/Qwen3-30B-A3B-Instruct-2507-AWQ",
         base_url: str = "http://localhost:8000",
         timeout: float = 300,
         **kwargs: Any,
@@ -53,8 +53,9 @@ class VLLMLLM(BaseModelService):
 
     def load(self) -> None:
         headers = {"Content-Type": "application/json"}
+        limits = httpx.Limits(max_connections=500, max_keepalive_connections=200)
         self._sync_client = httpx.Client(timeout=self.timeout, headers=headers)
-        self._client = httpx.AsyncClient(timeout=self.timeout, headers=headers)
+        self._client = httpx.AsyncClient(timeout=self.timeout, headers=headers, limits=limits)
         self._loaded = True
         logger.info("vLLM initialized: model=%s, base_url=%s", self.model, self.base_url)
 
@@ -82,7 +83,10 @@ class VLLMLLM(BaseModelService):
 
     def _build_payload(
         self, messages: list[Message], max_tokens: int, temperature: float,
+        **kwargs: Any,
     ) -> dict[str, Any]:
+        from atlas_brain.config import settings
+
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": self._convert_messages(messages),
@@ -91,12 +95,34 @@ class VLLMLLM(BaseModelService):
         }
         if self._supports_thinking:
             payload["chat_template_kwargs"] = {"enable_thinking": False}
+
+        guided_json = kwargs.get("guided_json")
+        if guided_json is not None:
+            if settings.llm.vllm_guided_json_enabled:
+                payload["structured_outputs"] = {"json": guided_json}
+            else:
+                logger.warning(
+                    "guided_json requested but disabled by ATLAS_LLM__VLLM_GUIDED_JSON_ENABLED",
+                )
+
+        response_format = kwargs.get("response_format")
+        if response_format is not None:
+            is_structured_format = (
+                isinstance(response_format, dict)
+                and str(response_format.get("type", "")).lower() in {"json_object", "json_schema"}
+            )
+            if is_structured_format and not settings.llm.vllm_guided_json_enabled:
+                logger.warning(
+                    "structured response_format requested but disabled by ATLAS_LLM__VLLM_GUIDED_JSON_ENABLED",
+                )
+            else:
+                payload["response_format"] = response_format
         return payload
 
     @property
     def _supports_thinking(self) -> bool:
-        model_lower = self.model.lower()
-        return "qwen3" in model_lower and "instruct" not in model_lower
+        # All Qwen3 variants (including Instruct) default to thinking mode
+        return "qwen3" in self.model.lower()
 
     def chat(
         self,
@@ -108,7 +134,7 @@ class VLLMLLM(BaseModelService):
         if not self._sync_client:
             raise RuntimeError("vLLM not loaded")
 
-        payload = self._build_payload(messages, max_tokens, temperature)
+        payload = self._build_payload(messages, max_tokens, temperature, **kwargs)
 
         try:
             response = self._sync_client.post(
@@ -146,7 +172,7 @@ class VLLMLLM(BaseModelService):
         if not self._client:
             raise RuntimeError("vLLM not loaded")
 
-        payload = self._build_payload(messages, max_tokens, temperature)
+        payload = self._build_payload(messages, max_tokens, temperature, **kwargs)
 
         try:
             response = await self._client.post(
@@ -175,4 +201,4 @@ class VLLMLLM(BaseModelService):
         if system_prompt:
             messages.append(Message(role="system", content=system_prompt))
         messages.append(Message(role="user", content=prompt))
-        return self.chat(messages, max_tokens=max_tokens, temperature=temperature)
+        return self.chat(messages, max_tokens=max_tokens, temperature=temperature, **kwargs)

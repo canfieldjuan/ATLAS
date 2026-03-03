@@ -167,6 +167,191 @@ def _validate_deep(data: dict) -> bool:
 
 
 # ------------------------------------------------------------------
+# Guided decoding schemas (vLLM only)
+# ------------------------------------------------------------------
+
+def _str_or_null():
+    return {"anyOf": [{"type": "string"}, {"type": "null"}]}
+
+def _num_or_null():
+    return {"anyOf": [{"type": "number"}, {"type": "null"}]}
+
+def _bool_or_null():
+    return {"anyOf": [{"type": "boolean"}, {"type": "null"}]}
+
+def _int_or_null():
+    return {"anyOf": [{"type": "integer"}, {"type": "null"}]}
+
+_FIRST_PASS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "root_cause": {"type": "string"},
+        "specific_complaint": _str_or_null(),
+        "severity": _str_or_null(),
+        "pain_score": _num_or_null(),
+        "time_to_failure": _str_or_null(),
+        "workaround_found": _bool_or_null(),
+        "workaround_text": _str_or_null(),
+        "alternative_mentioned": _bool_or_null(),
+        "alternative_asin": _str_or_null(),
+        "alternative_name": _str_or_null(),
+        "actionable_for_manufacturing": _bool_or_null(),
+        "manufacturing_suggestion": _str_or_null(),
+    },
+    "required": ["root_cause"],
+}
+
+_DEEP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "sentiment_aspects": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "aspect": {"type": "string"},
+                    "sentiment": {"type": "string", "enum": sorted(_VALID_SENTIMENT)},
+                    "detail": {"type": "string"},
+                },
+                "required": ["aspect", "sentiment", "detail"],
+            },
+        },
+        "feature_requests": {"type": "array", "items": {"type": "string"}},
+        "failure_details": {
+            "anyOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "timeline": {"type": "string"},
+                        "failed_component": {"type": "string"},
+                        "failure_mode": {"type": "string"},
+                        "dollar_amount_lost": _num_or_null(),
+                    },
+                    "required": ["timeline", "failed_component", "failure_mode", "dollar_amount_lost"],
+                },
+                {"type": "null"},
+            ],
+        },
+        "product_comparisons": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "product_name": {"type": "string"},
+                    "direction": {"type": "string", "enum": [
+                        "switched_to", "switched_from", "considered", "compared",
+                        "recommended", "avoided", "used_with", "relied_on",
+                    ]},
+                    "context": {"type": "string"},
+                },
+                "required": ["product_name", "direction", "context"],
+            },
+        },
+        "product_name_mentioned": {"type": "string"},
+        "buyer_context": {
+            "type": "object",
+            "properties": {
+                "use_case": {"type": "string"},
+                "buyer_type": {"type": "string"},
+                "price_sentiment": {"type": "string", "enum": sorted(_VALID_PRICE_SENTIMENT)},
+            },
+            "required": ["use_case", "buyer_type", "price_sentiment"],
+        },
+        "quotable_phrases": {"type": "array", "items": {"type": "string"}},
+        "would_repurchase": _bool_or_null(),
+        "external_references": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"source": {"type": "string"}, "context": {"type": "string"}},
+                "required": ["source", "context"],
+            },
+        },
+        "positive_aspects": {"type": "array", "items": {"type": "string"}},
+        "expertise_level": {"type": "string", "enum": sorted(_VALID_EXPERTISE)},
+        "frustration_threshold": {"type": "string", "enum": sorted(_VALID_FRUSTRATION)},
+        "discovery_channel": {"type": "string", "enum": sorted(_VALID_DISCOVERY)},
+        "consideration_set": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"product": {"type": "string"}, "why_not": {"type": "string"}},
+                "required": ["product", "why_not"],
+            },
+        },
+        "buyer_household": {"type": "string", "enum": sorted(_VALID_HOUSEHOLD)},
+        "profession_hint": _str_or_null(),
+        "budget_type": {"type": "string", "enum": sorted(_VALID_BUDGET)},
+        "use_intensity": {"type": "string", "enum": sorted(_VALID_INTENSITY)},
+        "research_depth": {"type": "string", "enum": sorted(_VALID_RESEARCH)},
+        "community_mentions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"platform": {"type": "string"}, "context": {"type": "string"}},
+                "required": ["platform", "context"],
+            },
+        },
+        "consequence_severity": {"type": "string", "enum": sorted(_VALID_CONSEQUENCE)},
+        "replacement_behavior": {"type": "string", "enum": sorted(_VALID_REPLACEMENT)},
+        "brand_loyalty_depth": {"type": "string", "enum": sorted(_VALID_LOYALTY)},
+        "ecosystem_lock_in": {
+            "type": "object",
+            "properties": {
+                "level": {"type": "string", "enum": sorted(_VALID_ECOSYSTEM_LEVEL)},
+                "ecosystem": _str_or_null(),
+            },
+            "required": ["level", "ecosystem"],
+        },
+        "safety_flag": {
+            "type": "object",
+            "properties": {
+                "flagged": {"type": "boolean"},
+                "description": _str_or_null(),
+            },
+            "required": ["flagged", "description"],
+        },
+        "bulk_purchase_signal": {
+            "type": "object",
+            "properties": {
+                "type": {"type": "string", "enum": sorted(_VALID_BULK_TYPE)},
+                "estimated_qty": _int_or_null(),
+            },
+            "required": ["type", "estimated_qty"],
+        },
+        "review_delay_signal": {"type": "string", "enum": sorted(_VALID_DELAY)},
+        "sentiment_trajectory": {"type": "string", "enum": sorted(_VALID_TRAJECTORY)},
+        "occasion_context": {"type": "string", "enum": sorted(_VALID_OCCASION)},
+        "switching_barrier": {
+            "type": "object",
+            "properties": {
+                "level": {"type": "string", "enum": sorted(_VALID_BARRIER_LEVEL)},
+                "reason": _str_or_null(),
+            },
+            "required": ["level", "reason"],
+        },
+        "amplification_intent": {
+            "type": "object",
+            "properties": {
+                "intent": {"type": "string", "enum": sorted(_VALID_AMPLIFICATION)},
+                "context": _str_or_null(),
+            },
+            "required": ["intent", "context"],
+        },
+        "review_sentiment_openness": {
+            "type": "object",
+            "properties": {
+                "open": {"type": "boolean"},
+                "condition": _str_or_null(),
+            },
+            "required": ["open", "condition"],
+        },
+    },
+    "required": sorted(_REQUIRED_KEYS.keys()),
+}
+
+
+# ------------------------------------------------------------------
 # LLM helpers
 # ------------------------------------------------------------------
 
@@ -178,7 +363,7 @@ def _clean(text: str) -> str:
     return text
 
 
-def _classify_single(llm, skill_content: str, row) -> dict | None:
+async def _classify_single(llm, skill_content: str, row, guided_json=None) -> dict | None:
     """First-pass classification (complaint or praise)."""
     from atlas_brain.services.protocols import Message
 
@@ -190,15 +375,19 @@ def _classify_single(llm, skill_content: str, row) -> dict | None:
         "hardware_category": list(row["hardware_category"] or []),
         "issue_types": list(row["issue_types"] or []),
     })
+    llm_kwargs: dict[str, Any] = {}
+    if guided_json is not None:
+        llm_kwargs["guided_json"] = guided_json
     try:
-        result = llm.chat(
+        text = await llm.chat_async(
             messages=[
                 Message(role="system", content=skill_content),
                 Message(role="user", content=payload),
             ],
             max_tokens=256, temperature=0.1,
+            **llm_kwargs,
         )
-        text = _clean(result.get("response", ""))
+        text = _clean(text)
         if not text:
             return None
         parsed = json.loads(text)
@@ -209,8 +398,9 @@ def _classify_single(llm, skill_content: str, row) -> dict | None:
     return None
 
 
-def _extract_deep(llm, skill_content: str, row, title: str, brand: str,
-                  first_pass: dict, max_tokens: int) -> dict | None:
+async def _extract_deep(llm, skill_content: str, row, title: str, brand: str,
+                  first_pass: dict, max_tokens: int,
+                  guided_json=None) -> dict | None:
     """Deep extraction (32 fields) using first-pass results as context."""
     from atlas_brain.services.protocols import Message
     from atlas_brain.pipelines.llm import clean_llm_output
@@ -225,15 +415,19 @@ def _extract_deep(llm, skill_content: str, row, title: str, brand: str,
         "severity": first_pass.get("severity") or "",
         "pain_score": float(first_pass.get("pain_score", 0) or 0),
     })
+    llm_kwargs: dict[str, Any] = {}
+    if guided_json is not None:
+        llm_kwargs["guided_json"] = guided_json
     try:
-        result = llm.chat(
+        text = await llm.chat_async(
             messages=[
                 Message(role="system", content=skill_content),
                 Message(role="user", content=payload),
             ],
             max_tokens=max_tokens, temperature=0.1,
+            **llm_kwargs,
         )
-        text = clean_llm_output(result.get("response", ""))
+        text = clean_llm_output(text)
         if not text:
             return None
         parsed = json.loads(text)
@@ -283,6 +477,8 @@ async def worker(
     deep_max_tokens: int,
     metadata_cache: MetadataCache,
     target_asins: set[str] | None,
+    first_pass_schema=None,
+    deep_schema=None,
 ):
     global _first_pass_done, _deep_done, _failed
 
@@ -365,6 +561,8 @@ async def worker(
                 await _process_review(
                     pool, llm, classify_skills, deep_skill_content,
                     deep_max_tokens, max_attempts, metadata_cache, row,
+                    first_pass_schema=first_pass_schema,
+                    deep_schema=deep_schema,
                 )
             except Exception:
                 logger.exception("Failed review %s", review_id)
@@ -385,6 +583,7 @@ async def worker(
 async def _process_review(
     pool, llm, classify_skills, deep_skill_content,
     deep_max_tokens, max_attempts, metadata_cache, row,
+    first_pass_schema=None, deep_schema=None,
 ):
     global _first_pass_done, _deep_done, _failed
     review_id = row["id"]
@@ -409,8 +608,9 @@ async def _process_review(
         }
     else:
         skill_key = "complaint" if rating <= 3.0 else "praise"
-        first_pass = await asyncio.to_thread(
-            _classify_single, llm, classify_skills[skill_key], row,
+        first_pass = await _classify_single(
+            llm, classify_skills[skill_key], row,
+            guided_json=first_pass_schema,
         )
         if not first_pass or "root_cause" not in first_pass:
             # First-pass failed — bump attempts, put back to pending
@@ -460,9 +660,9 @@ async def _process_review(
 
     # ------ Step 2: Deep extraction ------
     title, brand = await metadata_cache.get(row["asin"])
-    extraction = await asyncio.to_thread(
-        _extract_deep, llm, deep_skill_content, row, title, brand,
-        first_pass, deep_max_tokens,
+    extraction = await _extract_deep(
+        llm, deep_skill_content, row, title, brand,
+        first_pass, deep_max_tokens, guided_json=deep_schema,
     )
 
     if extraction and _validate_deep(extraction):
@@ -664,7 +864,7 @@ async def main():
     parser.add_argument("--batch", type=int, default=10, help="Reviews per worker per round (default: 10)")
     parser.add_argument("--cap", type=int, default=200, help="Max reviews per ASIN (default: 200, 0=no cap)")
     parser.add_argument("--max-attempts", type=int, default=3)
-    parser.add_argument("--deep-max-tokens", type=int, default=2048)
+    parser.add_argument("--deep-max-tokens", type=int, default=1024)
     parser.add_argument("--categories", type=str, default=None,
                         help="Comma-separated category filter (e.g. 'cell phones,electronics')")
     parser.add_argument("--validate", type=int, default=0, metavar="N",
@@ -674,6 +874,8 @@ async def main():
     parser.add_argument("--model", type=str, default=None)
     parser.add_argument("--provider", type=str, default="vllm", choices=["vllm", "ollama"])
     parser.add_argument("--base-url", type=str, default=None)
+    parser.add_argument("--no-guided", action="store_true",
+                        help="Disable guided JSON decoding (vLLM only)")
     args = parser.parse_args()
 
     from atlas_brain.config import settings
@@ -718,6 +920,25 @@ async def main():
         "praise": praise_skill.content,
     }
 
+    # Guided JSON decoding (vLLM only -- schema constrains output at token level)
+    first_pass_schema = None
+    deep_schema = None
+    use_guided = False
+    if args.provider == "vllm" and not args.no_guided:
+        try:
+            from atlas_brain.services.protocols import Message as _Msg
+            _test = await llm.chat_async(
+                messages=[_Msg(role="user", content='{"test":true}')],
+                max_tokens=10, temperature=0,
+                guided_json={"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]},
+            )
+            first_pass_schema = _FIRST_PASS_SCHEMA
+            deep_schema = _DEEP_SCHEMA
+            use_guided = True
+            print("Guided JSON decoding: ENABLED (schema-constrained output)", flush=True)
+        except Exception as e:
+            print(f"Guided JSON decoding: NOT AVAILABLE ({e}), using unguided", flush=True)
+
     # Validate mode
     if args.validate > 0:
         metadata_cache = MetadataCache(pool)
@@ -732,22 +953,26 @@ async def main():
             "ORDER BY pr.imported_at ASC LIMIT $1",
             args.validate,
         )
-        print(f"\n{'='*80}\nVALIDATING {len(rows)} REVIEWS (full pipeline)\n{'='*80}\n")
+        print(f"\n{'='*80}\nVALIDATING {len(rows)} REVIEWS (full pipeline) | guided={use_guided}\n{'='*80}\n")
         ok, fail = 0, 0
         for i, row in enumerate(rows, 1):
             rating = float(row["rating"])
             skill_key = "complaint" if rating <= 3.0 else "praise"
 
             # Step 1
-            fp = await asyncio.to_thread(_classify_single, llm, classify_skills[skill_key], row)
+            fp = await _classify_single(
+                llm, classify_skills[skill_key], row,
+                guided_json=first_pass_schema,
+            )
             fp_ok = fp and "root_cause" in fp
 
             # Step 2
             de = None
             if fp_ok:
                 title, brand = await metadata_cache.get(row["asin"])
-                de = await asyncio.to_thread(
-                    _extract_deep, llm, deep_skill.content, row, title, brand, fp, args.deep_max_tokens
+                de = await _extract_deep(
+                    llm, deep_skill.content, row, title, brand,
+                    fp, args.deep_max_tokens, guided_json=deep_schema,
                 )
             de_ok = de and _validate_deep(de)
 
@@ -808,7 +1033,8 @@ async def main():
 
     print(
         f"Starting {args.workers} workers | provider={args.provider} | model={model} | "
-        f"batch={args.batch} | cap={args.cap}/ASIN | pending: {pending:,}",
+        f"batch={args.batch} | cap={args.cap}/ASIN | guided={use_guided} | "
+        f"pending: {pending:,}",
         flush=True,
     )
 
@@ -820,7 +1046,9 @@ async def main():
         asyncio.create_task(
             worker(i, pool, llm, classify_skills, deep_skill.content,
                    args.batch, args.max_attempts, args.deep_max_tokens,
-                   metadata_cache, target_asins)
+                   metadata_cache, target_asins,
+                   first_pass_schema=first_pass_schema,
+                   deep_schema=deep_schema)
         )
         for i in range(args.workers)
     ]
