@@ -126,6 +126,7 @@ import bigcommerceVsShopify202603 from './bigcommerce-vs-shopify-2026-03'
 import awsVsAzure202603 from './aws-vs-azure-2026-03'
 import asanaVsSmartsheet202603 from './asana-vs-smartsheet-2026-03'
 import asanaVsBasecamp202603 from './asana-vs-basecamp-2026-03'
+import asanaVsTeamwork202603 from './asana-vs-teamwork-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -276,4 +277,5 @@ export const POSTS: BlogPost[] = [
   awsVsAzure202603,
   asanaVsSmartsheet202603,
   asanaVsBasecamp202603,
+  asanaVsTeamwork202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
