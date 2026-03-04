@@ -78,6 +78,7 @@ import powerBiDeepDive202603 from './power-bi-deep-dive-2026-03'
 import bigcommerceDeepDive202603 from './bigcommerce-deep-dive-2026-03'
 import ringcentralDeepDive202603 from './ringcentral-deep-dive-2026-03'
 import mondaycomDeepDive202603 from './mondaycom-deep-dive-2026-03'
+import linodeDeepDive202603 from './linode-deep-dive-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -180,4 +181,5 @@ export const POSTS: BlogPost[] = [
   bigcommerceDeepDive202603,
   ringcentralDeepDive202603,
   mondaycomDeepDive202603,
+  linodeDeepDive202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
