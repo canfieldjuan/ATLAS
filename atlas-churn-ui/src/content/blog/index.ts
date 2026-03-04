@@ -69,6 +69,7 @@ import klaviyoDeepDive202603 from './klaviyo-deep-dive-2026-03'
 import digitaloceanDeepDive202603 from './digitalocean-deep-dive-2026-03'
 import gustoDeepDive202603 from './gusto-deep-dive-2026-03'
 import brevoDeepDive202603 from './brevo-deep-dive-2026-03'
+import getresponseDeepDive202603 from './getresponse-deep-dive-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -162,4 +163,5 @@ export const POSTS: BlogPost[] = [
   digitaloceanDeepDive202603,
   gustoDeepDive202603,
   brevoDeepDive202603,
+  getresponseDeepDive202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
