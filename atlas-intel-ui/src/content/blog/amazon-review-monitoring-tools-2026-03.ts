@@ -1,7 +1,7 @@
 import type { BlogPost } from './index'
 
 const post: BlogPost = {
-  slug: 'amazon-review-monitoring-tools',
+  slug: 'amazon-review-monitoring-tools-2026-03',
   title: '5 Best Amazon Review Monitoring Tools in 2026',
   description:
     'Compare the top Amazon review monitoring tools for sellers. We break down features, pricing, and which tool is best for tracking complaints, competitor reviews, and safety signals.',

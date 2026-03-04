@@ -15,7 +15,33 @@ function formatDate(iso: string) {
 }
 
 export default function Blog() {
-  useEffect(() => { document.title = 'Blog | Atlas Intelligence' }, [])
+  useEffect(() => {
+    document.title = 'Blog | Atlas Intelligence'
+    const desc = 'Amazon seller intelligence, review monitoring strategies, and competitive analysis insights.'
+    const tags: Record<string, string> = {
+      description: desc,
+      'og:title': 'Blog | Atlas Intelligence',
+      'og:description': desc,
+      'og:type': 'website',
+      'og:url': window.location.href,
+      'twitter:card': 'summary',
+      'twitter:title': 'Blog | Atlas Intelligence',
+      'twitter:description': desc,
+    }
+    const metas: HTMLMetaElement[] = []
+    for (const [key, value] of Object.entries(tags)) {
+      const attr = key.startsWith('og:') ? 'property' : 'name'
+      let el = document.querySelector<HTMLMetaElement>(`meta[${attr}="${key}"]`)
+      if (!el) {
+        el = document.createElement('meta')
+        el.setAttribute(attr, key)
+        document.head.appendChild(el)
+        metas.push(el)
+      }
+      el.content = value
+    }
+    return () => { metas.forEach(el => el.remove()) }
+  }, [])
 
   return (
     <PublicLayout>

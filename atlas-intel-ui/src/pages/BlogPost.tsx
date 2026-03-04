@@ -54,9 +54,38 @@ export default function BlogPost() {
   }, [post])
 
   useEffect(() => {
-    document.title = post
-      ? `${post.title} | Atlas Intelligence`
-      : 'Post Not Found | Atlas Intelligence'
+    if (!post) {
+      document.title = 'Post Not Found | Atlas Intelligence'
+      return
+    }
+    const title = `${post.title} | Atlas Intelligence`
+    document.title = title
+
+    const tags: Record<string, string> = {
+      description: post.description,
+      'og:title': title,
+      'og:description': post.description,
+      'og:type': 'article',
+      'og:url': window.location.href,
+      'twitter:card': 'summary_large_image',
+      'twitter:title': title,
+      'twitter:description': post.description,
+    }
+
+    const metas: HTMLMetaElement[] = []
+    for (const [key, value] of Object.entries(tags)) {
+      const attr = key.startsWith('og:') ? 'property' : 'name'
+      let el = document.querySelector<HTMLMetaElement>(`meta[${attr}="${key}"]`)
+      if (!el) {
+        el = document.createElement('meta')
+        el.setAttribute(attr, key)
+        document.head.appendChild(el)
+        metas.push(el)
+      }
+      el.content = value
+    }
+
+    return () => { metas.forEach(el => el.remove()) }
   }, [post])
 
   if (!post) {

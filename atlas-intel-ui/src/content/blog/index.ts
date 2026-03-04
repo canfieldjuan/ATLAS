@@ -18,7 +18,7 @@ export interface BlogPost {
   topic_type?: string
 }
 
-import amazonReviewMonitoringTools from './amazon-review-monitoring-tools'
+import amazonReviewMonitoringTools from './amazon-review-monitoring-tools-2026-03'
 import migrationComputerAccessoriesPeripherals202603 from './migration-computer-accessories-peripherals-2026-03'
 
 export const POSTS: BlogPost[] = [

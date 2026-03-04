@@ -90,11 +90,13 @@ async def auto_deploy_blog(
         )
         result["pushed"] = True
     except Exception as exc:
-        result["error"] = f"git push failed: {exc}"
-        logger.warning(result["error"])
-        return result
+        result["push_error"] = f"git push failed: {exc}"
+        logger.warning(result["push_error"])
+        # Continue -- deploy hook can still trigger a build from latest remote
 
-    # Fire Vercel deploy hook if configured
+    # Fire Vercel deploy hook regardless of push outcome.
+    # Vercel may block git-triggered builds (unverified commits) but the
+    # hook always works and rebuilds from whatever is on the branch.
     if hook_url:
         try:
             import httpx
@@ -106,8 +108,8 @@ async def auto_deploy_blog(
             result["hook_error"] = str(exc)
             logger.warning("Deploy hook failed: %s", exc)
 
-    result["deployed"] = True
-    logger.info("Auto-deployed blog post: %s", slug)
+    result["deployed"] = bool(result.get("pushed") or result.get("hook_status"))
+    logger.info("Auto-deployed blog post: %s (deployed=%s)", slug, result["deployed"])
     return result
 
 
