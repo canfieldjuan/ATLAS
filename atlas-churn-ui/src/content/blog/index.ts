@@ -114,6 +114,7 @@ import clickupVsNotion202603 from './clickup-vs-notion-2026-03'
 import basecampVsNotion202603 from './basecamp-vs-notion-2026-03'
 import asanaDeepDive202603 from './asana-deep-dive-2026-03'
 import mondaycomVsNotion202603 from './mondaycom-vs-notion-2026-03'
+import notionVsWrike202603 from './notion-vs-wrike-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -252,4 +253,5 @@ export const POSTS: BlogPost[] = [
   basecampVsNotion202603,
   asanaDeepDive202603,
   mondaycomVsNotion202603,
+  notionVsWrike202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
