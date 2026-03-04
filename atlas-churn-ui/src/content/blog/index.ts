@@ -138,6 +138,7 @@ import nutshellVsSalesforce202603 from './nutshell-vs-salesforce-2026-03'
 import azureVsGoogleCloud202603 from './azure-vs-google-cloud-2026-03'
 import realCostOfAzure202603 from './real-cost-of-azure-2026-03'
 import awsVsLinode202603 from './aws-vs-linode-2026-03'
+import gustoVsRippling202603 from './gusto-vs-rippling-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -300,4 +301,5 @@ export const POSTS: BlogPost[] = [
   azureVsGoogleCloud202603,
   realCostOfAzure202603,
   awsVsLinode202603,
+  gustoVsRippling202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
