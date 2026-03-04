@@ -27,6 +27,7 @@ import migrationBasicCases202603 from './migration-basic-cases-2026-03'
 import migrationDataStorage202603 from './migration-data-storage-2026-03'
 import migrationComputersTablets202603 from './migration-computers-tablets-2026-03'
 import migrationAccessories202603 from './migration-accessories-2026-03'
+import safetyComputerAccessoriesPeripherals202603 from './safety-computer-accessories-peripherals-2026-03'
 
 export const POSTS: BlogPost[] = [
   amazonReviewMonitoringTools,
@@ -38,4 +39,5 @@ export const POSTS: BlogPost[] = [
   migrationDataStorage202603,
   migrationComputersTablets202603,
   migrationAccessories202603,
+  safetyComputerAccessoriesPeripherals202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
