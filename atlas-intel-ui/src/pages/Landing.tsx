@@ -1,6 +1,9 @@
+import React from 'react'
 import { Link } from 'react-router-dom'
 import { AlertTriangle, ArrowRightLeft, Shield, Mail, Check } from 'lucide-react'
 import PublicLayout from '../components/PublicLayout'
+
+const AtlasHeroScene = React.lazy(() => import('../components/AtlasHeroScene'))
 
 const FEATURES = [
   {
@@ -36,7 +39,7 @@ const PLANS = [
   },
   {
     name: 'Growth',
-    price: 99,
+    price: 149,
     features: ['25 tracked ASINs', 'Everything in Starter', 'Brand comparison', 'API access'],
     cta: 'Start Free Trial',
     href: '/signup?product=consumer',
@@ -44,7 +47,7 @@ const PLANS = [
   },
   {
     name: 'Pro',
-    price: 249,
+    price: 399,
     features: ['100 tracked ASINs', 'Everything in Growth', 'Priority support', 'Custom alerts'],
     cta: 'Start Free Trial',
     href: '/signup?product=consumer',
@@ -56,8 +59,11 @@ export default function Landing() {
   return (
     <PublicLayout>
       {/* Hero */}
-      <section className="max-w-4xl mx-auto px-6 pt-20 pb-24 text-center">
-        <h1 className="text-4xl sm:text-5xl font-bold leading-tight">
+      <section className="mx-auto px-6 pt-8 pb-24 text-center">
+        <React.Suspense fallback={<div className="h-[300px]" />}>
+          <AtlasHeroScene title="ATLAS" tagline="INTELLIGENCE PLATFORM" />
+        </React.Suspense>
+        <h1 className="mt-8 text-4xl sm:text-5xl font-bold leading-tight">
           Amazon review intelligence
           <br />
           <span className="text-cyan-400">before your competitors see it</span>
