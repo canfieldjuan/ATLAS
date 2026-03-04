@@ -62,6 +62,7 @@ import topComplaintEveryHrHcm202603 from './top-complaint-every-hr-hcm-2026-03'
 import cybersecurityLandscape202603 from './cybersecurity-landscape-2026-03'
 import topComplaintEveryCybersecurity202603 from './top-complaint-every-cybersecurity-2026-03'
 import jiraDeepDive202603 from './jira-deep-dive-2026-03'
+import trelloDeepDive202603 from './trello-deep-dive-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -148,4 +149,5 @@ export const POSTS: BlogPost[] = [
   cybersecurityLandscape202603,
   topComplaintEveryCybersecurity202603,
   jiraDeepDive202603,
+  trelloDeepDive202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
