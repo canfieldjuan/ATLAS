@@ -64,8 +64,8 @@ const PLANS = [
     highlight: true,
   },
   {
-    name: 'Enterprise',
-    price: 2499,
+    name: 'Pro',
+    price: 2500,
     features: [
       'Unlimited vendors',
       'Everything in Growth',
@@ -73,7 +73,7 @@ const PLANS = [
       'Custom alert rules',
       'Dedicated support',
     ],
-    cta: 'Contact Sales',
+    cta: 'Start Free Trial',
     href: '/signup',
     highlight: false,
   },
