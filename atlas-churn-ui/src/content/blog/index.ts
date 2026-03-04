@@ -94,6 +94,7 @@ import hubspotServiceHubDeepDive202603 from './hubspot-service-hub-deep-dive-202
 import activecampaignAlternatives202603 from './activecampaign-alternatives-2026-03'
 import realCostOfShopify202603 from './real-cost-of-shopify-2026-03'
 import azureDeepDive202603 from './azure-deep-dive-2026-03'
+import woocommerceDeepDive202603 from './woocommerce-deep-dive-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -212,4 +213,5 @@ export const POSTS: BlogPost[] = [
   activecampaignAlternatives202603,
   realCostOfShopify202603,
   azureDeepDive202603,
+  woocommerceDeepDive202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
