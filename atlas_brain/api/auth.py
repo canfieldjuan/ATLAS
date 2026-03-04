@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, Field
 
 from ..auth.dependencies import AuthUser, require_auth
-from ..auth.jwt import create_access_token, create_refresh_token, decode_token
+from ..auth.jwt import create_access_token, create_password_reset_token, create_refresh_token, decode_token
 from ..auth.passwords import hash_password, verify_password
 from ..config import settings
 from ..storage.database import get_db_pool
@@ -48,6 +48,15 @@ class RefreshRequest(BaseModel):
 
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(..., max_length=72)
+    new_password: str = Field(..., min_length=8, max_length=72)
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
     new_password: str = Field(..., min_length=8, max_length=72)
 
 
@@ -407,3 +416,119 @@ async def change_password(req: ChangePasswordRequest, user: AuthUser = Depends(r
     )
 
     return {"status": "ok"}
+
+
+# -- Password reset --
+
+
+@router.post("/forgot-password")
+async def forgot_password(req: ForgotPasswordRequest):
+    """Send a password-reset email.  Always returns 200 to prevent email enumeration."""
+    if not settings.saas_auth.enabled:
+        raise HTTPException(status_code=404, detail="Not available")
+
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(status_code=503, detail="Database not ready")
+
+    row = await pool.fetchrow(
+        "SELECT id, full_name, is_active FROM saas_users WHERE email = $1",
+        req.email.lower(),
+    )
+
+    # Always return 200 — send email only when user exists and is active
+    if row and row["is_active"]:
+        token = create_password_reset_token(str(row["id"]))
+        asyncio.create_task(
+            _send_password_reset_email(req.email.lower(), row["full_name"], token)
+        )
+
+    return {"status": "ok"}
+
+
+@router.post("/reset-password")
+async def reset_password(req: ResetPasswordRequest):
+    """Reset password using a valid reset token."""
+    if not settings.saas_auth.enabled:
+        raise HTTPException(status_code=404, detail="Not available")
+
+    try:
+        payload = decode_token(req.token)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset link")
+
+    if payload.get("type") != "password_reset":
+        raise HTTPException(status_code=400, detail="Invalid token type")
+
+    pool = get_db_pool()
+    uid = _uuid.UUID(payload["sub"])
+
+    row = await pool.fetchrow(
+        "SELECT is_active FROM saas_users WHERE id = $1", uid
+    )
+    if not row or not row["is_active"]:
+        raise HTTPException(status_code=400, detail="Account not found or deactivated")
+
+    new_hash = hash_password(req.new_password)
+    await pool.execute(
+        "UPDATE saas_users SET password_hash = $1 WHERE id = $2",
+        new_hash,
+        uid,
+    )
+
+    return {"status": "ok"}
+
+
+async def _send_password_reset_email(email: str, full_name: str | None, token: str) -> None:
+    """Send a password-reset email via Resend (fire-and-forget)."""
+    cfg = settings.campaign_sequence
+    if not cfg.resend_api_key or not cfg.resend_from_email:
+        logger.warning("Resend not configured — cannot send password reset email")
+        return
+
+    # Determine the correct frontend URL for the reset link
+    origins = settings.saas_auth.cors_origins or ""
+    # Pick the first real domain, fall back to localhost
+    reset_base = "http://localhost:5173"
+    for origin in origins.split(","):
+        origin = origin.strip()
+        if origin and "vercel.app" not in origin and "localhost" not in origin:
+            reset_base = origin
+            break
+
+    reset_link = f"{reset_base}/reset-password?token={token}"
+    name = full_name or "there"
+
+    body = (
+        "<h2>Reset your password</h2>"
+        f"<p>Hi {name},</p>"
+        "<p>We received a request to reset your Churn Signals password. "
+        "Click the button below to choose a new password:</p>"
+        f'<p><a href="{reset_link}" style="display:inline-block;padding:12px 24px;'
+        'background-color:#0891b2;color:#fff;text-decoration:none;border-radius:8px;'
+        'font-weight:600;">Reset Password</a></p>'
+        "<p>This link expires in 1 hour. If you didn't request a reset, "
+        "you can safely ignore this email.</p>"
+        "<hr>"
+        "<p><em>Churn Signals by Atlas Intelligence</em></p>"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {cfg.resend_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "from": cfg.resend_from_email,
+                    "to": [email],
+                    "subject": "Reset your Churn Signals password",
+                    "html": body,
+                },
+            )
+            resp.raise_for_status()
+            logger.info("Password reset email sent to %s", email)
+    except Exception as exc:
+        logger.warning("Failed to send password reset email to %s: %s", email, exc)
