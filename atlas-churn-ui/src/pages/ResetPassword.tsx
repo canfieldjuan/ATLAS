@@ -1,0 +1,134 @@
+import { useState, type FormEvent } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { AlertCircle, CheckCircle, ArrowLeft } from 'lucide-react'
+import AtlasRobotLogo from '../components/AtlasRobotLogo'
+
+const API_BASE = import.meta.env.VITE_API_BASE || ''
+
+export default function ResetPassword() {
+  const [params] = useSearchParams()
+  const token = params.get('token') || ''
+
+  const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [error, setError] = useState('')
+  const [done, setDone] = useState(false)
+  const [loading, setLoading] = useState(false)
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    setError('')
+
+    if (password !== confirm) {
+      setError('Passwords do not match')
+      return
+    }
+
+    if (!token) {
+      setError('Missing reset token. Please use the link from your email.')
+      return
+    }
+
+    setLoading(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/auth/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, new_password: password }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ detail: 'Request failed' }))
+        throw new Error(body.detail || `Error ${res.status}`)
+      }
+      setDone(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Something went wrong')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-900 flex items-center justify-center px-4">
+      <div className="w-full max-w-sm">
+        <div className="flex items-center justify-center gap-2 mb-8">
+          <AtlasRobotLogo className="h-8 w-8" />
+          <span className="text-2xl font-bold text-white">Churn Signals</span>
+        </div>
+
+        <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-6 space-y-4">
+          {done ? (
+            <>
+              <div className="flex items-center gap-2 text-sm text-green-400 bg-green-900/20 border border-green-800/50 rounded-lg px-3 py-2">
+                <CheckCircle className="h-4 w-4 shrink-0" />
+                Password reset successfully
+              </div>
+              <p className="text-sm text-slate-400 text-center">
+                Your password has been updated. You can now sign in with your new password.
+              </p>
+              <Link
+                to="/login"
+                className="block w-full py-2.5 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-medium transition-colors text-center"
+              >
+                Sign in
+              </Link>
+            </>
+          ) : (
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <h2 className="text-lg font-semibold text-white text-center">Choose a new password</h2>
+
+              {error && (
+                <div className="flex items-center gap-2 text-sm text-red-400 bg-red-900/20 border border-red-800/50 rounded-lg px-3 py-2">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  {error}
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm text-slate-400 mb-1">New password</label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  required
+                  minLength={8}
+                  className="w-full px-3 py-2 bg-slate-900/60 border border-slate-600/50 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                  placeholder="Min 8 characters"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm text-slate-400 mb-1">Confirm password</label>
+                <input
+                  type="password"
+                  value={confirm}
+                  onChange={e => setConfirm(e.target.value)}
+                  required
+                  minLength={8}
+                  className="w-full px-3 py-2 bg-slate-900/60 border border-slate-600/50 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                  placeholder="Re-enter password"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-2.5 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 rounded-lg text-white font-medium transition-colors"
+              >
+                {loading ? 'Resetting...' : 'Reset password'}
+              </button>
+
+              <Link
+                to="/login"
+                className="flex items-center justify-center gap-2 text-sm text-cyan-400 hover:text-cyan-300"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Back to sign in
+              </Link>
+            </form>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}

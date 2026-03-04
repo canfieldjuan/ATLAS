@@ -16,12 +16,14 @@ import Affiliates from './pages/Affiliates'
 import Landing from './pages/Landing'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
+import ForgotPassword from './pages/ForgotPassword'
+import ResetPassword from './pages/ResetPassword'
 import Onboarding from './pages/Onboarding'
 import Account from './pages/Account'
 import Blog from './pages/Blog'
 import BlogPost from './pages/BlogPost'
 
-const PUBLIC_PATHS = ['/blog', '/landing', '/login', '/signup']
+const PUBLIC_PATHS = ['/blog', '/landing', '/login', '/signup', '/forgot-password', '/reset-password']
 
 export default function App() {
   const location = useLocation()
@@ -36,6 +38,8 @@ export default function App() {
           <Route path="/blog/:slug" element={<BlogPost />} />
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
         </Routes>
       </ErrorBoundary>
     )
