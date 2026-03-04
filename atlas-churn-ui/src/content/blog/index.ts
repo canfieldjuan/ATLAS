@@ -22,6 +22,7 @@ import realCostOfAsana202603 from './real-cost-of-asana-2026-03'
 import topComplaintEveryCloudInfrastructure202603 from './top-complaint-every-cloud-infrastructure-2026-03'
 import mailchimpDeepDive202603 from './mailchimp-deep-dive-2026-03'
 import crmLandscape202603 from './crm-landscape-2026-03'
+import eCommerceLandscape202603 from './e-commerce-landscape-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -68,4 +69,5 @@ export const POSTS: BlogPost[] = [
   topComplaintEveryCloudInfrastructure202603,
   mailchimpDeepDive202603,
   crmLandscape202603,
+  eCommerceLandscape202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
