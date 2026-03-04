@@ -86,6 +86,7 @@ import workdayDeepDive202603 from './workday-deep-dive-2026-03'
 import ripplingDeepDive202603 from './rippling-deep-dive-2026-03'
 import fortinetDeepDive202603 from './fortinet-deep-dive-2026-03'
 import sentineloneDeepDive202603 from './sentinelone-deep-dive-2026-03'
+import helpScoutDeepDive202603 from './help-scout-deep-dive-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -196,4 +197,5 @@ export const POSTS: BlogPost[] = [
   ripplingDeepDive202603,
   fortinetDeepDive202603,
   sentineloneDeepDive202603,
+  helpScoutDeepDive202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
