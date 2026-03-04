@@ -53,6 +53,7 @@ import bestCrmForUnknown202603 from './best-crm-for-unknown-2026-03'
 import magentoDeepDive202603 from './magento-deep-dive-2026-03'
 import topComplaintEveryCommunication202603 from './top-complaint-every-communication-2026-03'
 import activecampaignDeepDive202603 from './activecampaign-deep-dive-2026-03'
+import topComplaintEveryHelpdesk202603 from './top-complaint-every-helpdesk-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -130,4 +131,5 @@ export const POSTS: BlogPost[] = [
   magentoDeepDive202603,
   topComplaintEveryCommunication202603,
   activecampaignDeepDive202603,
+  topComplaintEveryHelpdesk202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
