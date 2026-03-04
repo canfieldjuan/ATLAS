@@ -92,6 +92,7 @@ import zohoDeskDeepDive202603 from './zoho-desk-deep-dive-2026-03'
 import insightlyDeepDive202603 from './insightly-deep-dive-2026-03'
 import hubspotServiceHubDeepDive202603 from './hubspot-service-hub-deep-dive-2026-03'
 import activecampaignAlternatives202603 from './activecampaign-alternatives-2026-03'
+import realCostOfShopify202603 from './real-cost-of-shopify-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -208,4 +209,5 @@ export const POSTS: BlogPost[] = [
   insightlyDeepDive202603,
   hubspotServiceHubDeepDive202603,
   activecampaignAlternatives202603,
+  realCostOfShopify202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
