@@ -128,6 +128,7 @@ import asanaVsSmartsheet202603 from './asana-vs-smartsheet-2026-03'
 import asanaVsBasecamp202603 from './asana-vs-basecamp-2026-03'
 import asanaVsTeamwork202603 from './asana-vs-teamwork-2026-03'
 import whyTeamsLeaveAzure202603 from './why-teams-leave-azure-2026-03'
+import asanaVsWrike202603 from './asana-vs-wrike-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -280,4 +281,5 @@ export const POSTS: BlogPost[] = [
   asanaVsBasecamp202603,
   asanaVsTeamwork202603,
   whyTeamsLeaveAzure202603,
+  asanaVsWrike202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
