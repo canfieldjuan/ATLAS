@@ -55,6 +55,7 @@ import topComplaintEveryCommunication202603 from './top-complaint-every-communic
 import activecampaignDeepDive202603 from './activecampaign-deep-dive-2026-03'
 import topComplaintEveryHelpdesk202603 from './top-complaint-every-helpdesk-2026-03'
 import dataAnalyticsLandscape202603 from './data-analytics-landscape-2026-03'
+import hrHcmLandscape202603 from './hr-hcm-landscape-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -134,4 +135,5 @@ export const POSTS: BlogPost[] = [
   activecampaignDeepDive202603,
   topComplaintEveryHelpdesk202603,
   dataAnalyticsLandscape202603,
+  hrHcmLandscape202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
