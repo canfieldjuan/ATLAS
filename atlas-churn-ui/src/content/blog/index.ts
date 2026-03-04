@@ -66,6 +66,7 @@ import trelloDeepDive202603 from './trello-deep-dive-2026-03'
 import smartsheetDeepDive202603 from './smartsheet-deep-dive-2026-03'
 import pipedriveDeepDive202603 from './pipedrive-deep-dive-2026-03'
 import klaviyoDeepDive202603 from './klaviyo-deep-dive-2026-03'
+import digitaloceanDeepDive202603 from './digitalocean-deep-dive-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -156,4 +157,5 @@ export const POSTS: BlogPost[] = [
   smartsheetDeepDive202603,
   pipedriveDeepDive202603,
   klaviyoDeepDive202603,
+  digitaloceanDeepDive202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
