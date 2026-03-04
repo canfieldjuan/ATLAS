@@ -116,7 +116,7 @@ export default function AtlasHeroScene({
     <div className="w-full max-w-[900px] mx-auto">
       <svg
         ref={svgRef}
-        viewBox="0 100 900 340"
+        viewBox="0 150 900 290"
         className="w-full h-auto"
         aria-label="Animated Atlas robot scene"
       >
