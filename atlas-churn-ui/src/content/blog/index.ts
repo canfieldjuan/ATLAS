@@ -118,6 +118,7 @@ import notionVsWrike202603 from './notion-vs-wrike-2026-03'
 import notionVsTrello202603 from './notion-vs-trello-2026-03'
 import notionVsSmartsheet202603 from './notion-vs-smartsheet-2026-03'
 import jiraVsNotion202603 from './jira-vs-notion-2026-03'
+import shopifyVsWoocommerce202603 from './shopify-vs-woocommerce-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -260,4 +261,5 @@ export const POSTS: BlogPost[] = [
   notionVsTrello202603,
   notionVsSmartsheet202603,
   jiraVsNotion202603,
+  shopifyVsWoocommerce202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
