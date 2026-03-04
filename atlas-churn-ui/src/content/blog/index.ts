@@ -124,6 +124,7 @@ import migrationFromNotion202603 from './migration-from-notion-2026-03'
 import asanaVsClickup202603 from './asana-vs-clickup-2026-03'
 import bigcommerceVsShopify202603 from './bigcommerce-vs-shopify-2026-03'
 import awsVsAzure202603 from './aws-vs-azure-2026-03'
+import asanaVsSmartsheet202603 from './asana-vs-smartsheet-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -272,4 +273,5 @@ export const POSTS: BlogPost[] = [
   asanaVsClickup202603,
   bigcommerceVsShopify202603,
   awsVsAzure202603,
+  asanaVsSmartsheet202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
