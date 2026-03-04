@@ -106,8 +106,8 @@ export default function Landing() {
   return (
     <PublicLayout>
       {/* Hero */}
-      <section className="mx-auto px-6 pt-8 pb-20 text-center">
-        <React.Suspense fallback={<div className="h-[300px]" />}>
+      <section className="mx-auto px-6 pt-4 pb-20 text-center">
+        <React.Suspense fallback={<div className="h-[200px]" />}>
           <AtlasHeroScene title="CHURN" tagline="SIGNALS INTELLIGENCE" />
         </React.Suspense>
         <h1 className="mt-8 text-4xl sm:text-5xl font-bold leading-tight">
