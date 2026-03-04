@@ -142,6 +142,7 @@ import gustoVsRippling202603 from './gusto-vs-rippling-2026-03'
 import activecampaignVsMailchimp202603 from './activecampaign-vs-mailchimp-2026-03'
 import powerBiVsTableau202603 from './power-bi-vs-tableau-2026-03'
 import microsoftTeamsVsZoom202603 from './microsoft-teams-vs-zoom-2026-03'
+import microsoftTeamsVsSlack202603 from './microsoft-teams-vs-slack-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -308,4 +309,5 @@ export const POSTS: BlogPost[] = [
   activecampaignVsMailchimp202603,
   powerBiVsTableau202603,
   microsoftTeamsVsZoom202603,
+  microsoftTeamsVsSlack202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
