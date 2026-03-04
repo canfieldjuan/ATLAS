@@ -20,8 +20,10 @@ export interface BlogPost {
 
 import amazonReviewMonitoringTools from './amazon-review-monitoring-tools-2026-03'
 import migrationComputerAccessoriesPeripherals202603 from './migration-computer-accessories-peripherals-2026-03'
+import migrationComputerComponents202603 from './migration-computer-components-2026-03'
 
 export const POSTS: BlogPost[] = [
   amazonReviewMonitoringTools,
   migrationComputerAccessoriesPeripherals202603,
+  migrationComputerComponents202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
