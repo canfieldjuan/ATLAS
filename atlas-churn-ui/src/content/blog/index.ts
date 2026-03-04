@@ -101,6 +101,7 @@ import salesforceDeepDive202603 from './salesforce-deep-dive-2026-03'
 import tableauDeepDive202603 from './tableau-deep-dive-2026-03'
 import freshdeskDeepDive202603 from './freshdesk-deep-dive-2026-03'
 import wrikeDeepDive202603 from './wrike-deep-dive-2026-03'
+import gustoVsWorkday202603 from './gusto-vs-workday-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -226,4 +227,5 @@ export const POSTS: BlogPost[] = [
   tableauDeepDive202603,
   freshdeskDeepDive202603,
   wrikeDeepDive202603,
+  gustoVsWorkday202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
