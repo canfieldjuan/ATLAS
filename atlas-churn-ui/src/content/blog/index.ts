@@ -47,6 +47,7 @@ import migrationFromZoom202603 from './migration-from-zoom-2026-03'
 import migrationFromClickup202603 from './migration-from-clickup-2026-03'
 import migrationFromAsana202603 from './migration-from-asana-2026-03'
 import migrationFromSlack202603 from './migration-from-slack-2026-03'
+import migrationFromAws202603 from './migration-from-aws-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -118,4 +119,5 @@ export const POSTS: BlogPost[] = [
   migrationFromClickup202603,
   migrationFromAsana202603,
   migrationFromSlack202603,
+  migrationFromAws202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
