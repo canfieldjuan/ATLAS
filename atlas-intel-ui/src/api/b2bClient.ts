@@ -1,6 +1,7 @@
 import { tryRefreshToken } from '../auth/AuthContext'
+import { API_BASE } from './config'
 
-const BASE = '/api/v1/b2b/tenant'
+const BASE = `${API_BASE}/api/v1/b2b/tenant`
 
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem('atlas_token')
@@ -25,6 +26,18 @@ async function handleResponse<T>(res: Response, retry: () => Promise<Response>):
       throw new Error(`API ${retryRes.status}: ${body || retryRes.statusText}`)
     }
     return retryRes.json()
+  }
+  if (res.status === 402) {
+    window.location.href = '/account'
+    throw new Error('Payment past due')
+  }
+  if (res.status === 403) {
+    const body = await res.text().catch(() => '')
+    if (body.includes('Trial expired')) {
+      window.location.href = '/account'
+      throw new Error('Trial expired')
+    }
+    throw new Error(`API 403: ${body || res.statusText}`)
   }
   if (!res.ok) {
     const body = await res.text().catch(() => '')

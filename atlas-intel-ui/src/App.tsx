@@ -12,6 +12,9 @@ import Features from './pages/Features'
 import Safety from './pages/Safety'
 import Reviews from './pages/Reviews'
 import ReviewDetail from './pages/ReviewDetail'
+import Landing from './pages/Landing'
+import Blog from './pages/Blog'
+import BlogPost from './pages/BlogPost'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
 import Onboarding from './pages/Onboarding'
@@ -35,6 +38,9 @@ export default function App() {
       <ErrorBoundary>
         <Routes>
           {/* Public routes */}
+          <Route path="/landing" element={<Landing />} />
+          <Route path="/blog" element={<Blog />} />
+          <Route path="/blog/:slug" element={<BlogPost />} />
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
 

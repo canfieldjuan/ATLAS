@@ -485,9 +485,9 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to start MCP client: %s", e)
 
-    # Start ASR server if voice is enabled and ASR isn't already running
+    # Start ASR server if voice is enabled, auto-start is on, and ASR isn't already running
     asr_process = None
-    if settings.voice.enabled and settings.voice.asr_url:
+    if settings.voice.enabled and settings.voice.auto_start_asr and settings.voice.asr_url:
         asr_process = await _start_asr_server()
 
     # Start voice pipeline if enabled
@@ -643,6 +643,13 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Error shutting down communications: %s", e)
 
+    # Shutdown stealth browser (Playwright)
+    try:
+        from .services.scraping.browser import shutdown_stealth_browser
+        await shutdown_stealth_browser()
+    except Exception as e:
+        logger.error("Error shutting down stealth browser: %s", e)
+
     # Close calendar provider httpx client
     try:
         from .services.calendar_provider import _provider_instance as _cal_provider
@@ -712,11 +719,14 @@ app.include_router(openai_compat_router)
 from .api.ollama_compat import router as ollama_compat_router
 app.include_router(ollama_compat_router)
 
-# CORS middleware for dashboard dev servers
+# CORS middleware for dashboard dev servers + production (Vercel, etc.)
 from fastapi.middleware.cors import CORSMiddleware
+_cors_origins = ["http://localhost:5174", "http://localhost:5173", "http://localhost:5175"]
+if settings.saas_auth.cors_origins:
+    _cors_origins.extend(o.strip() for o in settings.saas_auth.cors_origins.split(",") if o.strip())
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5174", "http://localhost:5173", "http://localhost:5175"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["*"],

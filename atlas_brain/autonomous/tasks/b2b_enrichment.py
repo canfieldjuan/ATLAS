@@ -61,8 +61,101 @@ async def _notify_high_urgency(
         logger.warning("ntfy high-urgency alert failed for %s: %s", vendor_name, exc)
 
 
+async def enrich_batch(batch_id: str) -> dict[str, Any]:
+    """Enrich all pending reviews from a specific import batch immediately.
+
+    Called inline after scrape insertion so reviews are enriched on arrival
+    rather than waiting for the scheduler.
+    """
+    cfg = settings.b2b_churn
+    if not cfg.enabled:
+        return {"skipped": "B2B churn pipeline disabled"}
+
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        return {"skipped": "DB not ready"}
+
+    max_attempts = cfg.enrichment_max_attempts
+
+    rows = await pool.fetch(
+        """
+        WITH batch AS (
+            SELECT id
+            FROM b2b_reviews
+            WHERE import_batch_id = $1
+              AND enrichment_status = 'pending'
+              AND enrichment_attempts < $2
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE b2b_reviews r
+        SET enrichment_status = 'enriching'
+        FROM batch
+        WHERE r.id = batch.id
+        RETURNING r.id, r.vendor_name, r.product_name, r.product_category,
+                  r.source, r.raw_metadata,
+                  r.rating, r.rating_max, r.summary, r.review_text, r.pros, r.cons,
+                  r.reviewer_title, r.reviewer_company, r.company_size_raw,
+                  r.reviewer_industry, r.enrichment_attempts
+        """,
+        batch_id,
+        max_attempts,
+    )
+
+    if not rows:
+        return {"total": 0, "enriched": 0, "failed": 0}
+
+    return await _enrich_rows(rows, cfg, pool)
+
+
+async def _enrich_rows(rows, cfg, pool) -> dict[str, Any]:
+    """Enrich a list of claimed rows concurrently."""
+    max_attempts = cfg.enrichment_max_attempts
+    enriched = 0
+    failed = 0
+
+    sem = asyncio.Semaphore(100)
+
+    async def _bounded_enrich(row):
+        async with sem:
+            return await _enrich_single(pool, row, max_attempts, cfg.enrichment_local_only,
+                                        cfg.enrichment_max_tokens, cfg.review_truncate_length)
+
+    results = await asyncio.gather(
+        *[_bounded_enrich(row) for row in rows],
+        return_exceptions=True,
+    )
+
+    for row, result in zip(rows, results):
+        if isinstance(result, Exception):
+            logger.error("Unexpected enrichment error for %s: %s", row["id"], result, exc_info=result)
+            if (row["enrichment_attempts"] + 1) >= max_attempts:
+                failed += 1
+        elif result:
+            enriched += 1
+        elif (row["enrichment_attempts"] + 1) >= max_attempts:
+            failed += 1
+
+    # Count how many were triaged out in this batch
+    no_signal = await pool.fetchval(
+        "SELECT count(*) FROM b2b_reviews WHERE id = ANY($1::uuid[]) AND enrichment_status = 'no_signal'",
+        [row["id"] for row in rows],
+    )
+
+    logger.info(
+        "B2B enrichment: %d enriched, %d no_signal, %d failed (of %d)",
+        enriched, no_signal or 0, failed, len(rows),
+    )
+
+    return {
+        "total": len(rows),
+        "enriched": enriched,
+        "no_signal": no_signal or 0,
+        "failed": failed,
+    }
+
+
 async def run(task: ScheduledTask) -> dict[str, Any]:
-    """Autonomous task handler: enrich pending B2B reviews with churn signals."""
+    """Autonomous task handler: enrich pending B2B reviews (fallback for anything missed)."""
     cfg = settings.b2b_churn
     if not cfg.enabled:
         return {"_skip_synthesis": "B2B churn pipeline disabled"}
@@ -74,8 +167,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     max_batch = min(cfg.enrichment_max_per_batch, 500)
     max_attempts = cfg.enrichment_max_attempts
 
-    # Atomically claim rows: SET status='enriching' prevents concurrent runs
-    # from picking up the same rows. FOR UPDATE SKIP LOCKED avoids blocking.
     rows = await pool.fetch(
         """
         WITH batch AS (
@@ -104,43 +195,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not rows:
         return {"_skip_synthesis": "No B2B reviews to enrich"}
 
-    enriched = 0
-    failed = 0
+    result = await _enrich_rows(rows, cfg, pool)
+    result["_skip_synthesis"] = "B2B enrichment complete"
+    return result
 
-    # Concurrent enrichment -- vLLM batches parallel requests efficiently
-    sem = asyncio.Semaphore(10)
 
-    async def _bounded_enrich(row):
-        async with sem:
-            return await _enrich_single(pool, row, max_attempts, cfg.enrichment_local_only,
-                                        cfg.enrichment_max_tokens, cfg.review_truncate_length)
-
-    results = await asyncio.gather(
-        *[_bounded_enrich(row) for row in rows],
-        return_exceptions=True,
-    )
-
-    for row, result in zip(rows, results):
-        if isinstance(result, Exception):
-            logger.error("Unexpected enrichment error for %s: %s", row["id"], result, exc_info=result)
-            if (row["enrichment_attempts"] + 1) >= max_attempts:
-                failed += 1
-        elif result:
-            enriched += 1
-        elif (row["enrichment_attempts"] + 1) >= max_attempts:
-            failed += 1
-
-    logger.info(
-        "B2B enrichment: %d enriched, %d failed (of %d)",
-        enriched, failed, len(rows),
-    )
-
-    return {
-        "_skip_synthesis": "B2B enrichment complete",
-        "total": len(rows),
-        "enriched": enriched,
-        "failed": failed,
-    }
+_MIN_REVIEW_TEXT_LENGTH = 80  # Skip LLM calls for reviews shorter than this
 
 
 async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
@@ -148,12 +208,48 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
     """Enrich a single B2B review with churn signals. Returns True on success."""
     review_id = row["id"]
 
+    # Skip reviews with insufficient text — title-only scrapes can't yield 47 fields
+    review_text = row.get("review_text") or ""
+    if len(review_text) < _MIN_REVIEW_TEXT_LENGTH:
+        await pool.execute(
+            "UPDATE b2b_reviews SET enrichment_status = 'not_applicable' WHERE id = $1",
+            review_id,
+        )
+        return False
+
     try:
-        # Run blocking LLM call in thread pool with 120s timeout
+        # Stage 1: Fast triage — is this review worth full extraction?
+        triage = await asyncio.wait_for(
+            _triage_review(row, local_only),
+            timeout=30,
+        )
+
+        if triage is None:
+            # Triage failed (no LLM, skill missing, parse error).
+            # Don't fall through to full extraction — that will likely fail too.
+            # Leave as pending for retry on next cycle.
+            logger.debug("Triage returned None for %s, deferring to next cycle", review_id)
+            await _increment_attempts(pool, review_id, row["enrichment_attempts"], max_attempts)
+            return False
+
+        if not triage.get("signal", True):
+            # No churn signal — skip full extraction
+            await pool.execute(
+                """
+                UPDATE b2b_reviews
+                SET enrichment_status = 'no_signal',
+                    enrichment_attempts = enrichment_attempts + 1,
+                    enrichment = $1
+                WHERE id = $2
+                """,
+                json.dumps({"triage": triage}),
+                review_id,
+            )
+            return False
+
+        # Stage 2: Full 47-field extraction (only for reviews that passed triage)
         result = await asyncio.wait_for(
-            asyncio.to_thread(
-                _classify_review, row, local_only, max_tokens, truncate_length
-            ),
+            _classify_review_async(row, local_only, max_tokens, truncate_length),
             timeout=120,
         )
 
@@ -225,42 +321,18 @@ def _smart_truncate(text: str, max_len: int = 3000) -> str:
     return text[:half] + "\n[...truncated...]\n" + text[-half:]
 
 
-def _classify_review(row, local_only: bool, max_tokens: int,
-                     truncate_length: int = 3000) -> dict[str, Any] | None:
-    """Call LLM with b2b_churn_extraction skill."""
-    from ...skills import get_skill_registry
-    from ...services.protocols import Message
-    from ...pipelines.llm import get_pipeline_llm, clean_llm_output
-
-    skill = get_skill_registry().get("digest/b2b_churn_extraction")
-    if not skill:
-        logger.warning("Skill 'digest/b2b_churn_extraction' not found")
-        return None
-
-    llm = get_pipeline_llm(
-        prefer_cloud=not local_only,
-        try_openrouter=False,
-        auto_activate_ollama=True,
-    )
-    if llm is None:
-        logger.warning("No LLM available for B2B churn extraction")
-        return None
-
+def _build_classify_payload(row, truncate_length: int = 3000) -> dict[str, Any]:
+    """Build the JSON payload for the churn extraction skill."""
     review_text = _smart_truncate(row["review_text"] or "", max_len=truncate_length)
 
-    # Extract source context from raw_metadata
     raw_meta = row.get("raw_metadata") or {}
     if isinstance(raw_meta, str):
         try:
             raw_meta = json.loads(raw_meta)
         except (json.JSONDecodeError, TypeError):
-            logger.warning(
-                "Malformed raw_metadata for review %s, defaulting to empty",
-                row["id"],
-            )
             raw_meta = {}
 
-    payload = {
+    return {
         "vendor_name": row["vendor_name"],
         "product_name": row["product_name"] or "",
         "product_category": row["product_category"] or "",
@@ -279,14 +351,102 @@ def _classify_review(row, local_only: bool, max_tokens: int,
         "reviewer_industry": row["reviewer_industry"] or "",
     }
 
+
+async def _triage_review(row, local_only: bool) -> dict[str, Any] | None:
+    """Fast LLM triage: does this review contain churn signals worth extracting?
+
+    Returns {"signal": bool, "confidence": int, "reason": str} or None on error.
+    ~50 tokens output — runs 5-10x faster than full extraction.
+    """
+    from ...skills import get_skill_registry
+    from ...services.protocols import Message
+    from ...pipelines.llm import get_pipeline_llm, clean_llm_output
+
+    skill = get_skill_registry().get("digest/b2b_churn_triage")
+    if not skill:
+        # Triage skill missing — fall through to full extraction
+        return None
+
+    llm = get_pipeline_llm(prefer_cloud=False, try_openrouter=False, auto_activate_ollama=True)
+    if llm is None:
+        return None
+
+    # Compact payload — triage doesn't need all fields
+    review_text = (row.get("review_text") or "")[:1500]
+    payload = json.dumps({
+        "vendor_name": row["vendor_name"],
+        "source": row.get("source") or "",
+        "rating": float(row["rating"]) if row.get("rating") is not None else None,
+        "summary": row.get("summary") or "",
+        "review_text": review_text,
+        "pros": (row.get("pros") or "")[:300],
+        "cons": (row.get("cons") or "")[:300],
+    })
+
+    messages = [
+        Message(role="system", content=skill.content),
+        Message(role="user", content=payload),
+    ]
+
+    try:
+        if hasattr(llm, "chat_async"):
+            text = await llm.chat_async(messages=messages, max_tokens=64, temperature=0.0)
+        else:
+            result = await asyncio.to_thread(
+                llm.chat, messages=messages, max_tokens=64, temperature=0.0,
+            )
+            text = result.get("response", "").strip()
+
+        if not text:
+            return None
+        text = clean_llm_output(text)
+        parsed = json.loads(text)
+        if isinstance(parsed, dict) and "signal" in parsed:
+            return parsed
+    except (json.JSONDecodeError, Exception):
+        pass
+    # On any failure, return None (fall through to full extraction — safe default)
+    return None
+
+
+async def _classify_review_async(row, local_only: bool, max_tokens: int,
+                                  truncate_length: int = 3000) -> dict[str, Any] | None:
+    """Async LLM call -- no thread pool, pure async for maximum vLLM throughput."""
+    from ...skills import get_skill_registry
+    from ...services.protocols import Message
+    from ...pipelines.llm import get_pipeline_llm, clean_llm_output
+
+    skill = get_skill_registry().get("digest/b2b_churn_extraction")
+    if not skill:
+        logger.warning("Skill 'digest/b2b_churn_extraction' not found")
+        return None
+
+    llm = get_pipeline_llm(
+        prefer_cloud=False,
+        try_openrouter=False,
+        auto_activate_ollama=True,
+    )
+    if llm is None:
+        logger.warning("No LLM available for B2B churn extraction")
+        return None
+
+    payload = _build_classify_payload(row, truncate_length)
     messages = [
         Message(role="system", content=skill.content),
         Message(role="user", content=json.dumps(payload)),
     ]
 
     try:
-        result = llm.chat(messages=messages, max_tokens=max_tokens, temperature=0.1)
-        text = result.get("response", "").strip()
+        # Use async chat if available (vLLM, httpx-based backends)
+        if hasattr(llm, "chat_async"):
+            text = await llm.chat_async(messages=messages, max_tokens=max_tokens, temperature=0.1)
+        else:
+            # Fallback to sync in thread for backends without async
+            result = await asyncio.to_thread(
+                llm.chat, messages=messages, max_tokens=max_tokens, temperature=0.1
+            )
+            text = result.get("response", "").strip()
+
         if not text:
             return None
         text = clean_llm_output(text)

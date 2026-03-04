@@ -43,6 +43,7 @@ from .consumer_dashboard import router as consumer_dashboard_router
 from .seller_campaigns import router as seller_campaigns_router
 from .auth import router as auth_router
 from .billing import router as billing_router
+from .blog_admin import router as blog_admin_router
 
 # Main router that aggregates all sub-routers
 router = APIRouter()
@@ -86,3 +87,4 @@ router.include_router(consumer_dashboard_router)
 router.include_router(seller_campaigns_router)
 router.include_router(auth_router)
 router.include_router(billing_router)
+router.include_router(blog_admin_router)

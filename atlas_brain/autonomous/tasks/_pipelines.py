@@ -170,6 +170,29 @@ register_pipeline(PipelineConfig(
             },
             cron_config_key="external_data.competitive_intelligence_cron",
         ),
+        TaskDef(
+            name="consumer_analytics_refresh",
+            module="consumer_analytics_refresh",
+            schedule_type="interval",
+            interval_seconds=21600,  # 6 hours
+            timeout_seconds=120,
+            description="Refresh consumer analytics materialized views (brand, category, ASIN summaries)",
+            metadata={"builtin_handler": "consumer_analytics_refresh"},
+        ),
+        TaskDef(
+            name="blog_post_generation",
+            module="blog_post_generation",
+            schedule_type="cron",
+            cron_expression="0 23 * * *",
+            timeout_seconds=600,
+            description="Generate data-backed blog posts with interactive charts",
+            metadata={
+                "builtin_handler": "blog_post_generation",
+                "notify_priority": "default",
+                "notify_tags": "brain,newspaper",
+            },
+            cron_config_key="external_data.blog_post_cron",
+        ),
     ],
     cleanup_rules=[
         CleanupRule(
@@ -225,6 +248,26 @@ register_pipeline(PipelineConfig(
             },
             cron_config_key="b2b_churn.intelligence_cron",
         ),
+        TaskDef(
+            name="b2b_keyword_signal",
+            module="b2b_keyword_signal",
+            schedule_type="cron",
+            cron_expression="0 6 * * 1",
+            timeout_seconds=600,
+            description="Weekly Google Trends keyword signal collection",
+            metadata={"builtin_handler": "b2b_keyword_signal"},
+            cron_config_key="b2b_churn.keyword_signal_cron",
+        ),
+        TaskDef(
+            name="b2b_product_profiles",
+            module="b2b_product_profiles",
+            schedule_type="cron",
+            cron_expression="30 21 * * *",
+            timeout_seconds=600,
+            description="Generate/refresh product profile knowledge cards from enriched reviews",
+            metadata={"builtin_handler": "b2b_product_profiles"},
+            cron_config_key="b2b_churn.product_profile_cron",
+        ),
     ],
     cleanup_rules=[
         CleanupRule(
@@ -238,6 +281,12 @@ register_pipeline(PipelineConfig(
             where_clause="DELETE FROM b2b_campaigns WHERE status IN ('expired', 'sent') AND created_at < CURRENT_TIMESTAMP - make_interval(days => $1)",
             retention_config_key="b2b_campaign.retention_days",
             result_key="b2b_campaigns_cleaned",
+        ),
+        CleanupRule(
+            table="b2b_keyword_signals",
+            where_clause="DELETE FROM b2b_keyword_signals WHERE snapshot_at < CURRENT_TIMESTAMP - make_interval(days => $1)",
+            retention_config_key="b2b_churn.keyword_retention_days",
+            result_key="b2b_keyword_signals_cleaned",
         ),
     ],
 ))
@@ -255,7 +304,7 @@ register_pipeline(PipelineConfig(
             module="b2b_scrape_intake",
             schedule_type="interval",
             interval_seconds=None,
-            timeout_seconds=600,
+            timeout_seconds=1800,
             description="Scrape B2B review sites per configured targets",
             metadata={"builtin_handler": "b2b_scrape_intake"},
             interval_config_key="b2b_scrape.intake_interval_seconds",

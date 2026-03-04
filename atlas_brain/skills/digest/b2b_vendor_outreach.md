@@ -2,7 +2,7 @@
 name: digest/b2b_vendor_outreach
 description: Generate vendor-targeted outreach selling churn intelligence about their customers
 tags: [b2b, vendor, outreach, churn-intelligence]
-version: 1
+version: 2
 ---
 
 # Vendor Churn Intelligence Outreach Generator
@@ -96,5 +96,11 @@ Return a JSON object:
 13. **Do NOT include** placeholder brackets like [Name] or [Company]. Use actual values from the input.
 
 14. **Subject lines** should be curiosity-driven, not salesy. Good: "47 of your accounts this month" -- Bad: "Reduce churn with our platform"
+
+15. **Competitive awareness angle** — subtly let the vendor know that intelligence reaches both sides:
+    - **email_cold**: Include ONE brief sentence mid-email, matter-of-fact tone. Example framing: "This intelligence reaches both sides of the table -- the vendors who can act on it and the competitors who will." Do NOT elaborate or threaten. Just state it and move on.
+    - **email_followup**: Be slightly more concrete. Frame as a timing observation: "The competitors gaining your accounts also have access to intent data showing which of your customers are in-market. The question is who moves first." Keep it to 1-2 sentences, woven naturally into the competitive displacement section (Rule 11).
+    - **Never make it the headline or subject line.** It's supporting context, not the hook.
+    - **Never frame it as a threat.** Tone is informational -- "this is how the market works now."
 
 Return ONLY the JSON object, no markdown fences, no explanation.

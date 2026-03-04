@@ -9,7 +9,7 @@ export default function B2BReports() {
   const [loading, setLoading] = useState(true)
   const [reportType, setReportType] = useState('')
   const [selected, setSelected] = useState<B2BReportDetail | null>(null)
-  const [detailLoading, setDetailLoading] = useState(false)
+  const [_detailLoading, setDetailLoading] = useState(false)
 
   useEffect(() => {
     setLoading(true)
@@ -124,7 +124,7 @@ export default function B2BReports() {
                   <p className="text-slate-300">{selected.executive_summary}</p>
                 </div>
               )}
-              {selected.intelligence_data && (
+              {!!selected.intelligence_data && (
                 <div>
                   <span className="text-slate-500 block mb-1">Intelligence Data:</span>
                   <pre className="text-xs text-slate-400 bg-slate-900/50 rounded p-3 overflow-x-auto">

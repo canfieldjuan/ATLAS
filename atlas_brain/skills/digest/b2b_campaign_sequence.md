@@ -3,7 +3,7 @@ name: digest/b2b_campaign_sequence
 domain: digest
 description: Generate the next email in a B2B campaign sequence based on engagement signals
 tags: [b2b, campaign, outreach, sequence]
-version: 1
+version: 2
 ---
 
 # B2B Campaign Sequence - Next Step Generator
@@ -77,3 +77,4 @@ Respond with ONLY this JSON (no markdown fences, no extra text):
 - Sign off with the sender's name from the selling context
 - angle_reasoning is for internal debugging -- be honest about what signal drove your decision
 - If this is a break-up email (last step), make it clear you won't email again unless they respond
+- If the original email included a competitive awareness angle (both sides having access to intelligence), maintain that thread naturally in follow-ups when relevant to the chosen strategy -- but don't force it. It's a supporting detail, not a repeated talking point.

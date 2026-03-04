@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom'
+import { NavLink, Link } from 'react-router-dom'
 import {
   LayoutDashboard,
   Building2,
@@ -8,9 +8,12 @@ import {
   Shield,
   Swords,
   Handshake,
-  Activity,
+  Newspaper,
+  LogOut,
   X,
 } from 'lucide-react'
+import AtlasRobotLogo from './AtlasRobotLogo'
+import { useAuth } from '../auth/AuthContext'
 import { clsx } from 'clsx'
 
 const links = [
@@ -22,6 +25,7 @@ const links = [
   { to: '/vendor-targets', icon: Shield, label: 'Targets' },
   { to: '/challengers', icon: Swords, label: 'Challengers' },
   { to: '/affiliates', icon: Handshake, label: 'Affiliates' },
+  { to: '/blog', icon: Newspaper, label: 'Blog' },
 ]
 
 interface SidebarProps {
@@ -30,6 +34,8 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ open, onClose }: SidebarProps) {
+  const { user, logout } = useAuth()
+
   return (
     <>
       {/* Backdrop (mobile) */}
@@ -48,9 +54,9 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
       >
         <div className="p-4 border-b border-slate-700/50 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Activity className="h-6 w-6 text-cyan-400" />
+            <AtlasRobotLogo className="h-6 w-6" />
             <span className="text-lg font-semibold text-white">
-              Churn Intel
+              Churn Signals
             </span>
           </div>
           <button
@@ -81,6 +87,18 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
             </NavLink>
           ))}
         </nav>
+        {user && (
+          <div className="p-3 border-t border-slate-700/50">
+            <Link to="/account" className="block px-3 py-1 mb-2 text-xs text-slate-500 truncate hover:text-slate-300 transition-colors">{user.email}</Link>
+            <button
+              onClick={logout}
+              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors w-full"
+            >
+              <LogOut className="h-4 w-4" />
+              Sign out
+            </button>
+          </div>
+        )}
       </aside>
     </>
   )

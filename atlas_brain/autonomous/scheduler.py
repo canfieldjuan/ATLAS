@@ -542,6 +542,19 @@ class TaskScheduler:
             "metadata": {"builtin_handler": "b2b_churn_alert"},
         },
         {
+            "name": "b2b_blog_post_generation",
+            "description": "Daily B2B SaaS comparison blog post generation from churn intelligence",
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": "0 23 * * *",
+            "timeout_seconds": 600,
+            "enabled": False,  # opt-in via ATLAS_B2B_CHURN_BLOG_POST_ENABLED
+            "metadata": {
+                "builtin_handler": "b2b_blog_post_generation",
+                "notify_tags": "brain,newspaper",
+            },
+        },
+        {
             "name": "b2b_tenant_report",
             "description": "Weekly per-tenant intelligence report scoped to tracked vendors",
             "task_type": "builtin",
@@ -551,6 +564,42 @@ class TaskScheduler:
             "metadata": {
                 "builtin_handler": "b2b_tenant_report",
                 "notify_tags": "chart_with_upwards_trend,b2b",
+            },
+        },
+        {
+            "name": "consumer_weekly_digest",
+            "description": "Weekly email digest with review metrics for consumer accounts with tracked ASINs",
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": "0 8 * * 1",
+            "timeout_seconds": 300,
+            "metadata": {
+                "builtin_handler": "consumer_weekly_digest",
+                "notify_tags": "chart_with_upwards_trend,consumer",
+            },
+        },
+        {
+            "name": "consumer_signal_alerts",
+            "description": "Check for high-severity review signals and alert affected consumer accounts",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": 21600,
+            "timeout_seconds": 120,
+            "metadata": {
+                "builtin_handler": "consumer_signal_alerts",
+                "notify_tags": "warning,consumer",
+            },
+        },
+        {
+            "name": "product_metadata_sync",
+            "description": "Match new product_reviews ASINs against HF metadata shards and populate product_metadata",
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": "0 4 * * 0",
+            "timeout_seconds": 3600,
+            "metadata": {
+                "builtin_handler": "product_metadata_sync",
+                "notify_tags": "package,consumer",
             },
         },
     ]
@@ -582,10 +631,14 @@ class TaskScheduler:
                 "news_intelligence": f"0 {settings.news_intel.schedule_hour} * * *",
                 "b2b_campaign_generation": settings.b2b_campaign.schedule_cron,
                 "amazon_seller_campaign_generation": settings.seller_campaign.schedule_cron,
+                "b2b_blog_post_generation": settings.b2b_churn.blog_post_cron,
             }
 
             # Merge pipeline interval overrides from registry
             try:
+                # Trigger pipeline registration before reading the registry
+                from .tasks import _pipelines  # noqa: F401
+
                 from ..pipelines import get_pipeline_interval_overrides, get_pipeline_default_tasks, resolve_config_value
 
                 for task_name, config_key in get_pipeline_interval_overrides().items():
@@ -719,6 +772,7 @@ class TaskScheduler:
                 "reasoning_reflection": settings.reasoning.reflection_cron,
                 "b2b_campaign_generation": settings.b2b_campaign.schedule_cron,
                 "amazon_seller_campaign_generation": settings.seller_campaign.schedule_cron,
+                "b2b_blog_post_generation": settings.b2b_churn.blog_post_cron,
             }
 
             # Merge pipeline cron overrides

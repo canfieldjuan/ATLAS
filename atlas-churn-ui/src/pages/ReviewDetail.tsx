@@ -50,11 +50,11 @@ export default function ReviewDetail() {
   const competitors = enrichment?.competitors_mentioned as { name: string; context: string; reason?: string }[] | undefined
   const contractCtx = enrichment?.contract_context as Record<string, unknown> | undefined
   const painCategories = enrichment?.pain_categories as { category: string; severity: string }[] | undefined
-  const budgetSignals = enrichment?.budget_signals as Record<string, unknown> | undefined
-  const useCase = enrichment?.use_case as Record<string, unknown> | undefined
-  const sentimentTraj = enrichment?.sentiment_trajectory as Record<string, unknown> | undefined
-  const buyerAuth = enrichment?.buyer_authority as Record<string, unknown> | undefined
-  const timeline = enrichment?.timeline as Record<string, unknown> | undefined
+  const budgetSignals = enrichment?.budget_signals as Record<string, string | number | boolean | null> | undefined
+  const useCase = enrichment?.use_case as Record<string, string | string[] | null> | undefined
+  const sentimentTraj = enrichment?.sentiment_trajectory as Record<string, string | null> | undefined
+  const buyerAuth = enrichment?.buyer_authority as Record<string, string | boolean> | undefined
+  const timeline = enrichment?.timeline as Record<string, string> | undefined
 
   return (
     <div className="space-y-6 max-w-4xl">

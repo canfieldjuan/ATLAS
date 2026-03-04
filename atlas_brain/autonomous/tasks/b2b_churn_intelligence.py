@@ -63,7 +63,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     prior_limit = cfg.prior_reports_limit
     today = date.today()
 
-    # Gather all 16 data sources in parallel
+    # Gather all 17 data sources + data_context in parallel
     (
         vendor_scores, high_intent, competitive_disp,
         pain_dist, feature_gaps,
@@ -71,6 +71,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         churning_companies, quotable_evidence,
         budget_signals, use_case_dist, sentiment_traj,
         buyer_auth, timeline_signals, competitor_reasons,
+        keyword_spikes, data_context,
     ) = await asyncio.gather(
         _fetch_vendor_churn_scores(pool, window_days, min_reviews),
         _fetch_high_intent_companies(pool, urgency_threshold, window_days),
@@ -88,6 +89,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _fetch_buyer_authority_summary(pool, window_days),
         _fetch_timeline_signals(pool, window_days, limit=tl_limit),
         _fetch_competitor_reasons(pool, window_days),
+        _fetch_keyword_spikes(pool),
+        _fetch_data_context(pool, window_days),
         return_exceptions=True,
     )
 
@@ -118,6 +121,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     buyer_auth = _safe(buyer_auth, "buyer_auth")
     timeline_signals = _safe(timeline_signals, "timeline_signals")
     competitor_reasons = _safe(competitor_reasons, "competitor_reasons")
+    keyword_spikes = _safe(keyword_spikes, "keyword_spikes")
+    if isinstance(data_context, Exception):
+        logger.warning("data_context fetch failed: %s", data_context)
+        data_context = {}
 
     # Check if there's enough data
     if not vendor_scores and not high_intent:
@@ -126,25 +133,57 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # Fetch prior reports for trend comparison
     prior_reports = await _fetch_prior_reports(pool, limit=prior_limit)
 
-    # Build payload
+    # Build payload -- trim to fit ~4k token input budget (8k context - 4k output).
+    # Full data is used below for upserts; only trimmed versions go to LLM.
+    llm_vendors = [
+        {
+            "vendor": v["vendor_name"],
+            "category": v["product_category"],
+            "reviews": v["total_reviews"],
+            "churn": v["churn_intent"],
+            "urgency": round(v["avg_urgency"], 1),
+            "rating": round(v["avg_rating_normalized"], 2) if v["avg_rating_normalized"] else None,
+            "rec_yes": v["recommend_yes"],
+            "rec_no": v["recommend_no"],
+        }
+        for v in vendor_scores[:15]
+    ]
+    llm_high_intent = [
+        {
+            "company": h["company"],
+            "vendor": h["vendor"],
+            "urgency": h["urgency"],
+            "pain": h["pain"],
+            "dm": h.get("decision_maker"),
+            "role": h.get("role_level"),
+            "alts": [a.get("name", a) if isinstance(a, dict) else a for a in h.get("alternatives", [])[:3]],
+            "signal": h.get("contract_signal"),
+        }
+        for h in high_intent[:10]
+    ]
+    llm_prior = [
+        {
+            "type": p["report_type"],
+            "date": p["report_date"],
+            "data": p.get("intelligence_data", {}),
+        }
+        for p in prior_reports[:2]
+    ]
     payload = {
         "date": str(today),
+        "data_context": data_context,
         "analysis_window_days": window_days,
-        "vendor_churn_scores": vendor_scores,
-        "high_intent_companies": high_intent,
-        "competitive_displacement": competitive_disp,
-        "pain_distribution": pain_dist,
-        "feature_gaps": feature_gaps,
-        "negative_review_counts": negative_counts,
-        "price_complaint_rates": price_rates,
-        "decision_maker_churn_rates": dm_rates,
-        "budget_signal_summary": budget_signals,
-        "use_case_distribution": use_case_dist,
-        "sentiment_trajectory_distribution": sentiment_traj,
-        "buyer_authority_summary": buyer_auth,
-        "timeline_signals": timeline_signals,
-        "competitor_reasons": competitor_reasons,
-        "prior_reports": prior_reports,
+        "vendor_churn_scores": llm_vendors,
+        "high_intent_companies": llm_high_intent,
+        "competitive_displacement": competitive_disp[:10],
+        "pain_distribution": pain_dist[:10],
+        "feature_gaps": feature_gaps[:8],
+        "negative_review_counts": negative_counts[:10],
+        "price_complaint_rates": price_rates[:10],
+        "decision_maker_churn_rates": dm_rates[:10],
+        "timeline_signals": timeline_signals[:8],
+        "competitor_reasons": competitor_reasons[:8],
+        "prior_reports": llm_prior,
     }
 
     # Load skill and call LLM (synchronous -- run in thread to avoid blocking)
@@ -156,6 +195,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 call_llm_with_skill,
                 "digest/b2b_churn_intelligence", payload,
                 max_tokens=cfg.intelligence_max_tokens, temperature=0.4,
+                response_format={"type": "json_object"},
             ),
             timeout=300,
         )
@@ -220,6 +260,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     sentiment_lookup = _build_sentiment_lookup(sentiment_traj)
     buyer_auth_lookup = _build_buyer_auth_lookup(buyer_auth)
     timeline_lookup = _build_timeline_lookup(timeline_signals)
+    keyword_spike_lookup = _build_keyword_spike_lookup(keyword_spikes)
 
     # Upsert per-vendor churn signals
     upsert_failures = await _upsert_churn_signals(
@@ -228,6 +269,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         price_lookup, dm_lookup, company_lookup, quote_lookup,
         budget_lookup, use_case_lookup, integration_lookup,
         sentiment_lookup, buyer_auth_lookup, timeline_lookup,
+        keyword_spike_lookup,
     )
 
     # Send ntfy notification
@@ -293,6 +335,38 @@ async def _emit_reasoning_events(
 # ------------------------------------------------------------------
 # Data fetchers
 # ------------------------------------------------------------------
+
+
+async def _fetch_data_context(pool, window_days: int) -> dict[str, Any]:
+    """Compute temporal metadata so the LLM can anchor claims with timeframes."""
+    row = await pool.fetchrow(
+        """
+        SELECT
+            count(*) AS total_enriched,
+            count(*) FILTER (WHERE enriched_at > NOW() - make_interval(days => $1)) AS in_window,
+            min(enriched_at) AS earliest_enriched,
+            max(enriched_at) AS latest_enriched,
+            count(DISTINCT vendor_name) AS vendor_count,
+            count(DISTINCT reviewer_company) FILTER (
+                WHERE reviewer_company IS NOT NULL AND reviewer_company != ''
+            ) AS company_count
+        FROM b2b_reviews
+        WHERE enrichment_status = 'enriched'
+        """,
+        window_days,
+    )
+    return {
+        "total_enriched_reviews": row["total_enriched"],
+        "reviews_in_analysis_window": row["in_window"],
+        "analysis_window_days": window_days,
+        "enrichment_period": {
+            "earliest": str(row["earliest_enriched"].date()) if row["earliest_enriched"] else None,
+            "latest": str(row["latest_enriched"].date()) if row["latest_enriched"] else None,
+        },
+        "unique_vendors": row["vendor_count"],
+        "unique_companies": row["company_count"],
+        "note": "Use these date ranges when citing statistics. Say 'over the past N days' or 'in the analysis window' instead of unanchored claims.",
+    }
 
 
 async def _fetch_vendor_churn_scores(pool, window_days: int, min_reviews: int) -> list[dict[str, Any]]:
@@ -900,9 +974,9 @@ async def gather_intelligence_data(
     min_reviews: int = 3,
     vendor_names: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Gather all 16 intelligence data sources, optionally scoped to vendors.
+    """Gather all 17 intelligence data sources, optionally scoped to vendors.
 
-    Returns the same payload dict that the LLM expects. Used by both
+    Returns a trimmed payload dict that fits the LLM token budget. Used by both
     the global ``run()`` handler and per-tenant report generation.
     """
     cfg = settings.b2b_churn
@@ -930,6 +1004,7 @@ async def gather_intelligence_data(
         _fetch_buyer_authority_summary(pool, window_days),
         _fetch_timeline_signals(pool, window_days, limit=tl_limit),
         _fetch_competitor_reasons(pool, window_days),
+        _fetch_data_context(pool, window_days),
         return_exceptions=True,
     )
 
@@ -938,47 +1013,78 @@ async def gather_intelligence_data(
         "feature_gaps", "negative_counts", "price_rates", "dm_rates",
         "churning_companies", "quotable_evidence", "budget_signals",
         "use_case_dist", "sentiment_traj", "buyer_auth",
-        "timeline_signals", "competitor_reasons",
+        "timeline_signals", "competitor_reasons", "data_context",
     ]
 
     fetcher_failures = 0
-    data = {}
+    data: dict[str, Any] = {}
     for name, val in zip(names, results):
         if isinstance(val, Exception):
             fetcher_failures += 1
             logger.error("%s fetch failed: %s", name, val, exc_info=val)
-            data[name] = []
+            data[name] = {} if name == "data_context" else []
         else:
             data[name] = val
 
     # Post-filter by vendor names if scoped
     if vendor_names:
         for key in data:
-            if isinstance(data[key], list) and data[key] and isinstance(data[key][0], dict):
-                data[key] = _filter_by_vendors(data[key], vendor_names)
+            val = data[key]
+            if isinstance(val, list) and val and isinstance(val[0], dict):
+                data[key] = _filter_by_vendors(val, vendor_names)
 
     prior_reports = await _fetch_prior_reports(pool, limit=prior_limit)
 
+    # Trim payload to fit ~4k token input budget (8k context - 4k output)
+    llm_vendors = [
+        {
+            "vendor": v["vendor_name"],
+            "category": v["product_category"],
+            "reviews": v["total_reviews"],
+            "churn": v["churn_intent"],
+            "urgency": round(v["avg_urgency"], 1),
+            "rating": round(v["avg_rating_normalized"], 2) if v["avg_rating_normalized"] else None,
+            "rec_yes": v["recommend_yes"],
+            "rec_no": v["recommend_no"],
+        }
+        for v in data["vendor_scores"][:15]
+    ]
+    llm_high_intent = [
+        {
+            "company": h["company"],
+            "vendor": h["vendor"],
+            "urgency": h["urgency"],
+            "pain": h["pain"],
+            "dm": h.get("decision_maker"),
+            "role": h.get("role_level"),
+            "alts": [a.get("name", a) if isinstance(a, dict) else a for a in h.get("alternatives", [])[:3]],
+            "signal": h.get("contract_signal"),
+        }
+        for h in data["high_intent"][:10]
+    ]
+    llm_prior = [
+        {
+            "type": p["report_type"],
+            "date": p["report_date"],
+            "data": p.get("intelligence_data", {}),
+        }
+        for p in prior_reports[:2]
+    ]
     payload = {
         "date": str(date.today()),
+        "data_context": data["data_context"],
         "analysis_window_days": window_days,
-        "vendor_churn_scores": data["vendor_scores"],
-        "high_intent_companies": data["high_intent"],
-        "competitive_displacement": data["competitive_disp"],
-        "pain_distribution": data["pain_dist"],
-        "feature_gaps": data["feature_gaps"],
-        "negative_review_counts": data["negative_counts"],
-        "price_complaint_rates": data["price_rates"],
-        "decision_maker_churn_rates": data["dm_rates"],
-        "churning_companies": data["churning_companies"],
-        "quotable_evidence": data["quotable_evidence"],
-        "budget_signal_summary": data["budget_signals"],
-        "use_case_distribution": data["use_case_dist"],
-        "sentiment_trajectory_distribution": data["sentiment_traj"],
-        "buyer_authority_summary": data["buyer_auth"],
-        "timeline_signals": data["timeline_signals"],
-        "competitor_reasons": data["competitor_reasons"],
-        "prior_reports": prior_reports,
+        "vendor_churn_scores": llm_vendors,
+        "high_intent_companies": llm_high_intent,
+        "competitive_displacement": data["competitive_disp"][:10],
+        "pain_distribution": data["pain_dist"][:10],
+        "feature_gaps": data["feature_gaps"][:8],
+        "negative_review_counts": data["negative_counts"][:10],
+        "price_complaint_rates": data["price_rates"][:10],
+        "decision_maker_churn_rates": data["dm_rates"][:10],
+        "timeline_signals": data["timeline_signals"][:8],
+        "competitor_reasons": data["competitor_reasons"][:8],
+        "prior_reports": llm_prior,
     }
 
     return {
@@ -1115,6 +1221,56 @@ def _build_timeline_lookup(timeline_signals: list[dict]) -> dict[str, list[dict]
     return lookup
 
 
+async def _fetch_keyword_spikes(pool) -> list[dict[str, Any]]:
+    """Fetch recent keyword spikes from b2b_keyword_signals.
+
+    Returns one row per vendor with spike count and spike keywords.
+    Uses only the latest snapshot per keyword (most recent week) to avoid
+    JSONB_OBJECT_AGG duplicate key non-determinism.
+    """
+    rows = await pool.fetch(
+        """
+        WITH latest AS (
+            SELECT DISTINCT ON (vendor_name, keyword)
+                   vendor_name, keyword, volume_relative,
+                   volume_change_pct, is_spike
+            FROM b2b_keyword_signals
+            WHERE snapshot_week >= CURRENT_DATE - INTERVAL '28 days'
+            ORDER BY vendor_name, keyword, snapshot_week DESC
+        )
+        SELECT vendor_name,
+               COUNT(*) FILTER (WHERE is_spike) AS spike_count,
+               ARRAY_AGG(DISTINCT keyword) FILTER (WHERE is_spike) AS spike_keywords,
+               JSONB_OBJECT_AGG(
+                   keyword,
+                   JSONB_BUILD_OBJECT(
+                       'volume', volume_relative,
+                       'change_pct', volume_change_pct,
+                       'is_spike', is_spike
+                   )
+               ) AS trend_summary
+        FROM latest
+        GROUP BY vendor_name
+        """
+    )
+    return [dict(r) for r in rows]
+
+
+def _build_keyword_spike_lookup(
+    keyword_spikes: list[dict],
+) -> dict[str, dict]:
+    """vendor -> {spike_count, spike_keywords, trend_summary}."""
+    lookup: dict[str, dict] = {}
+    for row in keyword_spikes:
+        vendor = row.get("vendor_name", "")
+        lookup[vendor] = {
+            "spike_count": row.get("spike_count", 0),
+            "spike_keywords": row.get("spike_keywords") or [],
+            "trend_summary": row.get("trend_summary") or {},
+        }
+    return lookup
+
+
 # ------------------------------------------------------------------
 # Persistence helpers
 # ------------------------------------------------------------------
@@ -1137,8 +1293,9 @@ async def _upsert_churn_signals(
     sentiment_lookup: dict[str, dict[str, int]] | None = None,
     buyer_auth_lookup: dict[str, dict] | None = None,
     timeline_lookup: dict[str, list[dict]] | None = None,
+    keyword_spike_lookup: dict[str, dict] | None = None,
 ) -> int:
-    """Upsert b2b_churn_signals with all 21 columns. Returns failure count."""
+    """Upsert b2b_churn_signals (25 columns incl. keyword signals). Returns failure count."""
     now = datetime.now(timezone.utc)
     budget_lookup = budget_lookup or {}
     use_case_lookup = use_case_lookup or {}
@@ -1146,6 +1303,7 @@ async def _upsert_churn_signals(
     sentiment_lookup = sentiment_lookup or {}
     buyer_auth_lookup = buyer_auth_lookup or {}
     timeline_lookup = timeline_lookup or {}
+    keyword_spike_lookup = keyword_spike_lookup or {}
     failures = 0
 
     for vs in vendor_scores:
@@ -1158,6 +1316,7 @@ async def _upsert_churn_signals(
         nps = ((recommend_yes - recommend_no) / total * 100) if total > 0 else None
 
         try:
+            kw_data = keyword_spike_lookup.get(vendor, {})
             await pool.execute(
                 """
                 INSERT INTO b2b_churn_signals (
@@ -1170,9 +1329,12 @@ async def _upsert_churn_signals(
                     top_use_cases, top_integration_stacks,
                     budget_signal_summary, sentiment_distribution,
                     buyer_authority_summary, timeline_summary,
+                    keyword_spike_count, keyword_spike_keywords,
+                    keyword_trend_summary,
                     last_computed_at
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-                          $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+                          $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
+                          $22, $23, $24, $25)
                 ON CONFLICT (vendor_name, COALESCE(product_category, '')) DO UPDATE SET
                     total_reviews = EXCLUDED.total_reviews,
                     negative_reviews = EXCLUDED.negative_reviews,
@@ -1193,6 +1355,9 @@ async def _upsert_churn_signals(
                     sentiment_distribution = EXCLUDED.sentiment_distribution,
                     buyer_authority_summary = EXCLUDED.buyer_authority_summary,
                     timeline_summary = EXCLUDED.timeline_summary,
+                    keyword_spike_count = EXCLUDED.keyword_spike_count,
+                    keyword_spike_keywords = EXCLUDED.keyword_spike_keywords,
+                    keyword_trend_summary = EXCLUDED.keyword_trend_summary,
                     last_computed_at = EXCLUDED.last_computed_at
                 """,
                 vendor,
@@ -1216,6 +1381,9 @@ async def _upsert_churn_signals(
                 json.dumps(sentiment_lookup.get(vendor, {})),
                 json.dumps(buyer_auth_lookup.get(vendor, {})),
                 json.dumps(timeline_lookup.get(vendor, [])[:10]),
+                kw_data.get("spike_count", 0),
+                json.dumps(kw_data.get("spike_keywords", [])),
+                json.dumps(kw_data.get("trend_summary", {})),
                 now,
             )
         except Exception:

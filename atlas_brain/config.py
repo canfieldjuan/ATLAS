@@ -23,6 +23,9 @@ class SaaSAuthConfig(BaseSettings):
     jwt_refresh_expiry_days: int = Field(default=30, description="Refresh token expiry in days")
     trial_days: int = Field(default=14, description="Trial period length in days")
 
+    # CORS -- extra origins to allow (comma-separated), e.g. "https://my-app.vercel.app"
+    cors_origins: str = Field(default="", description="Extra CORS origins (comma-separated)")
+
     # Stripe
     stripe_secret_key: str = Field(default="", description="Stripe secret API key")
     stripe_webhook_secret: str = Field(default="", description="Stripe webhook signing secret")
@@ -116,6 +119,13 @@ class LLMConfig(BaseSettings):
     # vllm settings (OpenAI-compatible vLLM server)
     vllm_model: str = Field(default="Qwen/Qwen3-14B-AWQ", description="vLLM model name")
     vllm_url: str = Field(default="http://localhost:8082", description="vLLM API base URL")
+    vllm_guided_json_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable guided/structured JSON decoding for vLLM requests. "
+            "Disable to avoid xgrammar/nanobind leak issues in affected vLLM builds."
+        ),
+    )
 
     # transformers-flash settings (HuggingFace models)
     hf_model_id: str = Field(
@@ -820,6 +830,7 @@ class VoiceClientConfig(BaseSettings):
     )
 
     # ASR settings (HTTP batch mode)
+    auto_start_asr: bool = Field(default=True, description="Auto-start ASR subprocess on brain startup")
     asr_url: str | None = Field(default="http://localhost:8081", description="Nemotron ASR HTTP endpoint URL (override: ATLAS_VOICE__ASR_URL)")
     asr_api_key: str | None = Field(default=None, description="ASR API key if required")
     asr_timeout: int = Field(default=30, description="ASR request timeout in seconds")
@@ -1729,7 +1740,7 @@ class AutonomousConfig(BaseSettings):
     default_agent_type: str = Field(default="atlas", description="Default agent type for headless tasks")
     default_session_prefix: str = Field(default="autonomous", description="Session ID prefix for task runs")
     max_concurrent_tasks: int = Field(default=2, ge=1, le=10, description="Max concurrent task executions")
-    task_timeout_seconds: int = Field(default=120, ge=10, le=600, description="Default task timeout")
+    task_timeout_seconds: int = Field(default=120, ge=10, le=3600, description="Default task timeout")
     task_history_retention_days: int = Field(default=30, ge=1, le=365, description="Execution history retention")
     hooks_enabled: bool = Field(default=True, description="Enable alert-driven hook processing")
     hook_cooldown_seconds: int = Field(default=30, ge=0, le=300, description="Min seconds between duplicate hook executions")
@@ -2000,7 +2011,7 @@ class ExternalDataConfig(BaseSettings):
     safety_auto_approve_max_risk: str = Field(default="MEDIUM", description="Max risk level for auto-approval (LOW, MEDIUM, HIGH, CRITICAL)")
     safety_approval_expiry_hours: int = Field(default=72, description="Hours before pending approval requests expire")
     # Complaint mining
-    complaint_mining_enabled: bool = Field(default=False, description="Enable complaint mining pipeline")
+    complaint_mining_enabled: bool = Field(default=True, description="Enable complaint mining pipeline")
     complaint_enrichment_interval_seconds: int = Field(default=300, description="Complaint enrichment polling interval (5 min)")
     complaint_enrichment_max_per_batch: int = Field(default=20, description="Max reviews to enrich per batch")
     complaint_enrichment_max_attempts: int = Field(default=3, description="Max enrichment attempts before marking failed")
@@ -2009,7 +2020,7 @@ class ExternalDataConfig(BaseSettings):
     complaint_analysis_enabled: bool = Field(default=True, description="Enable daily complaint analysis task")
     complaint_analysis_cron: str = Field(default="0 21 * * *", description="Cron for complaint analysis (default 9 PM)")
     complaint_analysis_window_days: int = Field(default=7, description="Days of enriched reviews to include in analysis")
-    complaint_analysis_max_tokens: int = Field(default=16384, description="Max tokens for analysis LLM call")
+    complaint_analysis_max_tokens: int = Field(default=4096, description="Max output tokens for analysis LLM call")
     complaint_retention_days: int = Field(default=365, description="Days to retain complaint reports")
     # Content generation (Claude-powered)
     complaint_content_enabled: bool = Field(default=True, description="Enable complaint content generation")
@@ -2020,14 +2031,28 @@ class ExternalDataConfig(BaseSettings):
     deep_enrichment_interval_seconds: int = Field(default=600, description="Deep enrichment polling interval (10 min)")
     deep_enrichment_max_per_batch: int = Field(default=5, description="Max reviews to deep-enrich per autonomous batch")
     deep_enrichment_max_attempts: int = Field(default=3, description="Max attempts before marking deep_failed")
-    deep_enrichment_max_tokens: int = Field(default=2048, description="Max LLM output tokens for deep extraction (32 fields)")
+    deep_enrichment_max_tokens: int = Field(default=1024, description="Max LLM output tokens for deep extraction (32 fields)")
     deep_enrichment_blast_workers: int = Field(default=80, description="Concurrent workers for blast_deep_enrichment script")
     deep_enrichment_blast_batch_size: int = Field(default=30, description="Reviews claimed per worker per round in blast script")
     # Competitive intelligence (cross-brand analysis from deep_extraction)
     competitive_intelligence_enabled: bool = Field(default=True, description="Enable competitive intelligence analysis")
     competitive_intelligence_cron: str = Field(default="30 21 * * *", description="Cron for competitive intelligence (default 9:30 PM)")
-    competitive_intelligence_max_tokens: int = Field(default=16384, description="Max tokens for competitive intelligence LLM call")
+    competitive_intelligence_max_tokens: int = Field(default=3072, description="Max output tokens for competitive intelligence LLM call")
     competitive_intelligence_min_deep_enriched: int = Field(default=100, description="Min deep-enriched reviews required to run")
+    # Blog post generation (data-backed articles with charts)
+    blog_post_enabled: bool = Field(default=True, description="Enable blog post generation from review data")
+    blog_post_cron: str = Field(default="0 23 * * *", description="Cron for blog post generation (default 11 PM)")
+    blog_post_max_tokens: int = Field(default=6144, description="Max tokens per blog post LLM call")
+    blog_post_max_per_run: int = Field(default=1, description="Max blog posts to generate per run")
+    blog_post_ui_path: str = Field(default="", description="Path to atlas-intel-ui/src/content/blog/ (empty = DB only)")
+    blog_post_openrouter_model: str = Field(
+        default="moonshotai/kimi-k2.5",
+        description="OpenRouter model for blog post generation",
+    )
+    # Blog auto-deploy (git push + Vercel deploy hook)
+    blog_auto_deploy_enabled: bool = Field(default=False, description="Auto git-push + Vercel deploy after blog publish")
+    blog_auto_deploy_branch: str = Field(default="dev", description="Git branch to push blog commits to")
+    blog_auto_deploy_hook_url: str = Field(default="", description="Vercel deploy hook URL (POST triggers rebuild)")
 
 
 class B2BChurnConfig(BaseSettings):
@@ -2049,7 +2074,7 @@ class B2BChurnConfig(BaseSettings):
     # Intelligence aggregation
     intelligence_enabled: bool = Field(default=True, description="Enable churn intelligence aggregation")
     intelligence_cron: str = Field(default="0 21 * * *", description="Daily churn intelligence (9 PM)")
-    intelligence_max_tokens: int = Field(default=16384, description="Max tokens for intelligence LLM call")
+    intelligence_max_tokens: int = Field(default=4096, description="Max output tokens for churn intelligence LLM call")
     intelligence_window_days: int = Field(default=30, description="Days of enriched reviews to analyze")
     intelligence_min_reviews: int = Field(default=3, description="Min reviews per vendor to include")
 
@@ -2072,6 +2097,41 @@ class B2BChurnConfig(BaseSettings):
         default=True,
         description="Include B2B churn signals in customer context lookups",
     )
+
+    # Keyword search volume signals (Google Trends)
+    keyword_signal_enabled: bool = Field(default=False, description="Enable Google Trends keyword signal collection")
+    keyword_signal_cron: str = Field(default="0 6 * * 1", description="Keyword signal schedule (Monday 6 AM)")
+    keyword_spike_threshold_pct: float = Field(default=50.0, description="Volume change % to flag as spike")
+    keyword_query_delay_seconds: float = Field(default=15.0, description="Delay between vendor queries (rate limit)")
+    keyword_max_vendors_per_run: int = Field(default=20, description="Max vendors to query per run")
+    keyword_geo: str = Field(default="US", description="Google Trends geo region")
+    keyword_retention_days: int = Field(default=364, description="Days to retain keyword signal snapshots")
+
+    # Product profiles
+    product_profile_enabled: bool = Field(default=True, description="Enable product profile generation")
+    product_profile_cron: str = Field(default="30 21 * * *", description="Product profile schedule (9:30 PM)")
+    product_profile_min_reviews: int = Field(default=5, description="Min enriched reviews to generate a profile")
+    product_profile_max_tokens: int = Field(default=1024, description="Max LLM output tokens for profile synthesis")
+    product_profile_vllm_url: str = Field(
+        default="http://localhost:8082",
+        description="vLLM server URL for profile synthesis",
+    )
+    product_profile_vllm_model: str = Field(
+        default="stelterlab/Qwen3-30B-A3B-Instruct-2507-AWQ",
+        description="vLLM model for profile synthesis",
+    )
+
+    # Blog post generation
+    blog_post_enabled: bool = Field(default=False, description="Enable B2B blog post generation")
+    blog_post_cron: str = Field(default="0 23 * * *", description="Blog post schedule (11 PM, after profiles)")
+    blog_post_max_tokens: int = Field(default=6144, description="Max LLM output tokens for blog post")
+    blog_post_max_per_run: int = Field(default=1, description="Max blog posts per run")
+    blog_post_ui_path: str = Field(default="", description="Path to atlas-churn-ui blog content dir")
+    blog_post_openrouter_model: str = Field(default="moonshotai/kimi-k2.5", description="OpenRouter model for blog generation")
+    # Blog auto-deploy (git push + Vercel deploy hook)
+    blog_auto_deploy_enabled: bool = Field(default=False, description="Auto git-push + Vercel deploy after B2B blog publish")
+    blog_auto_deploy_branch: str = Field(default="dev", description="Git branch to push B2B blog commits to")
+    blog_auto_deploy_hook_url: str = Field(default="", description="Vercel deploy hook URL for B2B blog")
 
 
 class B2BAlertConfig(BaseSettings):
@@ -2123,10 +2183,15 @@ class B2BScrapeConfig(BaseSettings):
     max_delay_seconds: float = Field(default=8.0, description="Max delay between requests")
 
     # Reddit
+    reddit_client_id: str = Field(default="", description="Reddit API OAuth2 client ID")
+    reddit_client_secret: str = Field(default="", description="Reddit API OAuth2 client secret")
     reddit_default_subreddits: str = Field(
         default="sysadmin,salesforce,aws,ITManagers,devops,msp",
         description="Default subreddits for Reddit scraping (comma-separated)",
     )
+
+    # Firecrawl (JS-rendered scraping for TrustRadius etc.)
+    firecrawl_api_key: str = Field(default="", description="Firecrawl API key for JS-rendered page scraping")
 
     # Resilience
     max_retries: int = Field(default=2, description="Max retries per request")
@@ -2145,6 +2210,22 @@ class B2BScrapeConfig(BaseSettings):
     # Relevance filtering (social media noise reduction)
     relevance_filter_enabled: bool = Field(default=True, description="Enable relevance filtering for social media sources")
     relevance_threshold: float = Field(default=0.55, description="Min relevance score (0.0-1.0) for social media posts")
+
+    # Playwright stealth browser (DataDome/Cloudflare bypass)
+    playwright_enabled: bool = Field(default=False, description="Enable Playwright stealth browser for protected sites")
+    playwright_headless: bool = Field(default=True, description="Run Chromium in headless mode")
+    playwright_timeout_ms: int = Field(default=30000, description="Page navigation timeout (ms)")
+    playwright_max_concurrent: int = Field(default=1, description="Max concurrent browser contexts")
+
+    # Bright Data Web Unlocker (DataDome / heavy anti-bot bypass)
+    web_unlocker_url: str = Field(
+        default="",
+        description="Bright Data Web Unlocker proxy URL (bypasses DataDome/Cloudflare automatically)",
+    )
+    web_unlocker_domains: str = Field(
+        default="g2.com",
+        description="Domains to route through Web Unlocker (comma-separated)",
+    )
 
 
 class B2BCampaignConfig(BaseSettings):

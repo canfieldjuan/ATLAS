@@ -286,10 +286,13 @@ class CaptchaSolver:
             if not dd or "cid" not in dd:
                 logger.warning("Failed to extract DataDome params from challenge page")
 
-            # t=bv means IP is banned by DataDome -- solver cannot help
+            # t=bv means DataDome blocked the IP outright -- no solvable
+            # challenge is presented.  CAPTCHA APIs reject these.
+            # Solution: use Bright Data Web Unlocker (handles DataDome internally).
             if dd.get("t") == "bv":
                 raise RuntimeError(
-                    "DataDome returned t=bv (IP banned) -- rotate proxy before solving"
+                    "DataDome returned t=bv (IP blocked, no solvable challenge). "
+                    "Use web_unlocker_url or rotate to cleaner residential IPs."
                 )
 
             # Build full captchaUrl with all params CapSolver requires
@@ -406,7 +409,8 @@ class CaptchaSolver:
 
             if dd.get("t") == "bv":
                 raise RuntimeError(
-                    "DataDome returned t=bv (IP banned) -- rotate proxy before solving"
+                    "DataDome returned t=bv (IP blocked, no solvable challenge). "
+                    "Use web_unlocker_url or rotate to cleaner residential IPs."
                 )
 
             from urllib.parse import quote, urlencode
@@ -640,21 +644,29 @@ def is_captcha_enabled_for_domain(domain: str) -> bool:
     return domain.lower() in _enabled_domains
 
 
-_captcha_proxy: str | None = None
+_captcha_proxy_base: str | None = None
 
 
 def get_captcha_proxy() -> str | None:
-    """Get the sticky proxy URL configured for CAPTCHA solving, or None."""
-    global _captcha_proxy
-    if _captcha_proxy is not None:
-        return _captcha_proxy or None  # empty string -> None
+    """Get a session-bound sticky proxy URL for CAPTCHA solving.
 
-    # Ensure singleton is initialized (loads config)
-    get_captcha_solver()
+    Injects a per-call session ID into the proxy username so the CAPTCHA
+    solver and the subsequent retry use the same exit IP.
+    """
+    global _captcha_proxy_base
+    if _captcha_proxy_base is None:
+        get_captcha_solver()
+        from ...config import settings
+        url = settings.b2b_scrape.captcha_proxy_url.strip()
+        _captcha_proxy_base = url or ""
+        if url:
+            logger.info("CAPTCHA sticky proxy configured: %s", url.split("@")[-1])
 
-    from ...config import settings
-    url = settings.b2b_scrape.captcha_proxy_url.strip()
-    _captcha_proxy = url or ""
-    if url:
-        logger.info("CAPTCHA sticky proxy configured: %s", url.split("@")[-1])
-    return url or None
+    if not _captcha_proxy_base:
+        return None
+
+    # Inject a unique session ID so the solve and retry share the same IP.
+    from .proxy import _make_session_url
+    import hashlib
+    sess_id = hashlib.sha256(str(time.monotonic()).encode()).hexdigest()[:12]
+    return _make_session_url(_captcha_proxy_base, sess_id)

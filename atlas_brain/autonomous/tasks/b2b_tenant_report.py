@@ -90,6 +90,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     payload,
                     max_tokens=cfg.intelligence_max_tokens,
                     temperature=0.4,
+                    response_format={"type": "json_object"},
                 ),
                 timeout=300,
             )

@@ -21,8 +21,8 @@ logger = logging.getLogger("atlas.services.scraping.parsers.github")
 _DOMAIN = "api.github.com"
 _BASE_URL = "https://api.github.com"
 _PER_PAGE = 50
-_MIN_TEXT_LEN = 100  # Min body length for issues
-_MIN_REPO_DESC_LEN = 20  # Min description length for repos (intentionally shorter)
+_MIN_TEXT_LEN = 200  # Min body length for issues (skip short bug reports)
+_MIN_REPO_DESC_LEN = 80  # Min description length for repos
 
 
 class GitHubParser:
@@ -39,7 +39,7 @@ class GitHubParser:
         seen_ids: set[str] = set()
 
         search_mode = target.metadata.get("search_mode", "both")
-        issue_labels = target.metadata.get("issue_labels", "bug,migration")
+        issue_labels = target.metadata.get("issue_labels", "migration")
         try:
             min_stars = int(target.metadata.get("min_stars", 10))
         except (ValueError, TypeError):

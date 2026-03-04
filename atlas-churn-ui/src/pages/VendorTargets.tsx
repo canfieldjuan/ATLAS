@@ -9,8 +9,6 @@ import {
   FileBarChart,
   Send,
   Building2,
-  ChevronDown,
-  ChevronUp,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import StatCard from '../components/StatCard'
@@ -99,7 +97,6 @@ export default function VendorTargets() {
   const [saving, setSaving] = useState(false)
 
   // Detail panel
-  const [expandedId, setExpandedId] = useState<string | null>(null)
   const [generatingReport, setGeneratingReport] = useState<string | null>(null)
   const [generatingCampaign, setGeneratingCampaign] = useState<string | null>(null)
   const [actionResult, setActionResult] = useState<string | null>(null)
@@ -158,6 +155,9 @@ export default function VendorTargets() {
     const competitors = competitorsInput.split(',').map(s => s.trim()).filter(Boolean)
     const payload = {
       ...form,
+      target_mode: form.target_mode as 'vendor_retention' | 'challenger_intel',
+      tier: form.tier as 'report' | 'dashboard' | 'api',
+      status: form.status as 'active' | 'paused' | 'inactive',
       contact_name: form.contact_name || null,
       contact_email: form.contact_email || null,
       contact_role: form.contact_role || null,

@@ -27,6 +27,7 @@ def get_pipeline_llm(
     prefer_cloud: bool = True,
     try_openrouter: bool = True,
     auto_activate_ollama: bool = True,
+    openrouter_model: str | None = None,
 ):
     """Resolve an LLM instance using a configurable fallback chain.
 
@@ -55,7 +56,7 @@ def get_pipeline_llm(
             try:
                 llm_registry.activate(
                     "openrouter",
-                    model="deepseek/deepseek-chat-v3-0324",
+                    model=openrouter_model or "deepseek/deepseek-chat-v3-0324",
                     api_key=or_key,
                 )
                 llm = llm_registry.get_active()
@@ -177,7 +178,7 @@ def _recover_truncated_json(raw_text: str) -> dict[str, Any] | None:
 
     text = raw_text[start:]
 
-    for trim in range(0, min(len(text), 500), 1):
+    for trim in range(0, min(len(text), 2000), 1):
         candidate = text if trim == 0 else text[:-trim]
         opens = candidate.count("{") - candidate.count("}")
         open_brackets = candidate.count("[") - candidate.count("]")
@@ -212,6 +213,7 @@ def call_llm_with_skill(
     prefer_cloud: bool = True,
     try_openrouter: bool = True,
     auto_activate_ollama: bool = True,
+    response_format: dict[str, Any] | None = None,
 ) -> str | None:
     """Load a skill, resolve an LLM, call it, clean the output.
 
@@ -239,15 +241,20 @@ def call_llm_with_skill(
         Message(role="system", content=skill.content),
         Message(
             role="user",
-            content=json.dumps(payload, indent=2, default=str),
+            content=json.dumps(payload, separators=(",", ":"), default=str),
         ),
     ]
+
+    kwargs: dict[str, Any] = {}
+    if response_format is not None:
+        kwargs["response_format"] = response_format
 
     try:
         result = llm.chat(
             messages=messages,
             max_tokens=max_tokens,
             temperature=temperature,
+            **kwargs,
         )
         text = result.get("response", "").strip()
         if not text:

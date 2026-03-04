@@ -2,15 +2,17 @@
 Capterra parser for B2B review scraping.
 
 URL pattern: capterra.com/p/{id}/{slug}/reviews/
-Strategy: Try JSON-LD extraction first, fall back to HTML parsing.
+Strategy: Web Unlocker first, then JSON-LD extraction, fall back to HTML parsing.
 Residential proxy required (Cloudflare protected).
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
+import random
 import re
 from urllib.parse import quote_plus
 
@@ -32,7 +34,114 @@ class CapterraParser:
     prefer_residential = True
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
-        """Scrape Capterra reviews for the given product."""
+        """Scrape Capterra reviews -- Web Unlocker first, then HTTP client."""
+        from atlas_brain.config import settings
+
+        # Priority 1: Bright Data Web Unlocker (handles Cloudflare automatically)
+        if settings.b2b_scrape.web_unlocker_url:
+            unlocker_domains = {
+                d.strip().lower()
+                for d in settings.b2b_scrape.web_unlocker_domains.split(",")
+                if d.strip()
+            }
+            if _DOMAIN in unlocker_domains:
+                try:
+                    result = await self._scrape_web_unlocker(target)
+                    if result.reviews:
+                        return result
+                    logger.warning(
+                        "Web Unlocker for %s returned 0 reviews, falling back",
+                        target.vendor_name,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Web Unlocker failed for %s: %s -- falling back",
+                        target.vendor_name, exc,
+                    )
+
+        # Priority 2: curl_cffi HTTP client with residential proxy
+        return await self._scrape_http(target, client)
+
+    # ------------------------------------------------------------------
+    # Web Unlocker path (Bright Data -- handles Cloudflare internally)
+    # ------------------------------------------------------------------
+
+    async def _scrape_web_unlocker(self, target: ScrapeTarget) -> ScrapeResult:
+        """Scrape Capterra via Bright Data Web Unlocker proxy."""
+        import httpx
+        from atlas_brain.config import settings
+
+        proxy_url = settings.b2b_scrape.web_unlocker_url.strip()
+        reviews: list[dict] = []
+        errors: list[str] = []
+        pages_scraped = 0
+        seen_ids: set[str] = set()
+
+        for page in range(1, target.max_pages + 1):
+            base_path = f"{_BASE_URL}/{target.product_slug}/reviews/"
+            url = base_path if page == 1 else f"{base_path}?page={page}"
+
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+
+            try:
+                async with httpx.AsyncClient(
+                    proxy=proxy_url, verify=False, timeout=90
+                ) as http:
+                    resp = await http.get(url, headers=headers)
+
+                pages_scraped += 1
+
+                if resp.status_code == 403:
+                    errors.append(f"Page {page}: blocked (403) via Web Unlocker")
+                    break
+                if resp.status_code != 200:
+                    errors.append(f"Page {page}: HTTP {resp.status_code}")
+                    continue
+
+                page_reviews = _parse_json_ld(resp.text, target, seen_ids)
+                if not page_reviews:
+                    page_reviews = _parse_html(resp.text, target, seen_ids)
+
+                if not page_reviews:
+                    if page == 1:
+                        logger.warning(
+                            "Capterra Web Unlocker page 1 returned 0 reviews for %s",
+                            target.product_slug,
+                        )
+                    break
+
+                reviews.extend(page_reviews)
+
+            except Exception as exc:
+                errors.append(f"Page {page}: {exc}")
+                logger.warning(
+                    "Capterra Web Unlocker page %d failed for %s: %s",
+                    page, target.product_slug, exc,
+                )
+                break
+
+            await asyncio.sleep(random.uniform(2.0, 5.0))
+
+        logger.info(
+            "Capterra Web Unlocker scrape for %s: %d reviews from %d pages",
+            target.vendor_name, len(reviews), pages_scraped,
+        )
+        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors)
+
+    # ------------------------------------------------------------------
+    # HTTP client path (curl_cffi + residential proxy + CAPTCHA)
+    # ------------------------------------------------------------------
+
+    async def _scrape_http(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
+        """Scrape Capterra via curl_cffi HTTP client."""
         reviews: list[dict] = []
         errors: list[str] = []
         pages_scraped = 0

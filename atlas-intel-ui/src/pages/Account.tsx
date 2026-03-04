@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { User, CreditCard, Settings, LogOut, ExternalLink, AlertCircle } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
+import { API_BASE } from '../api/config'
 
 const PLAN_LABELS: Record<string, string> = {
   trial: 'Trial',
@@ -41,7 +42,7 @@ export default function Account() {
     setError('')
     try {
       const token = localStorage.getItem('atlas_token')
-      const res = await fetch('/api/v1/billing/portal', {
+      const res = await fetch(`${API_BASE}/api/v1/billing/portal`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -64,7 +65,7 @@ export default function Account() {
     setError('')
     try {
       const token = localStorage.getItem('atlas_token')
-      const res = await fetch('/api/v1/billing/checkout', {
+      const res = await fetch(`${API_BASE}/api/v1/billing/checkout`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

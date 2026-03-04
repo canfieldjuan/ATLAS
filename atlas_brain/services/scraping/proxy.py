@@ -7,9 +7,11 @@ and sticky sessions for multi-page crawls.
 
 from __future__ import annotations
 
+import hashlib
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse, urlunparse
 
 if TYPE_CHECKING:
     from ...config import B2BScrapeConfig
@@ -25,6 +27,28 @@ class ProxyConfig:
 
 
 _MAX_STICKY_DOMAINS = 1000
+
+# Proxy providers that support -session-{ID} sticky sessions in the username.
+_SESSION_CAPABLE_HOSTS = ("2captcha.com", "brd.superproxy.io")
+
+
+def _make_session_url(base_url: str, session_id: str) -> str:
+    """Inject ``-session-{ID}`` into the proxy username for sticky IP binding.
+
+    Works with providers that support session IDs in the username
+    (e.g. 2Captcha residential proxies: ``user-zone-custom-session-abc``).
+    Returns the original URL unchanged for non-session-capable hosts.
+    """
+    parsed = urlparse(base_url)
+    hostname = parsed.hostname or ""
+    if not any(h in hostname for h in _SESSION_CAPABLE_HOSTS):
+        return base_url
+    if not parsed.username:
+        return base_url
+    # Bright Data uses -session-{ID} appended to the username (same as 2Captcha)
+    new_user = f"{parsed.username}-session-{session_id}"
+    netloc = f"{new_user}:{parsed.password}@{hostname}:{parsed.port}"
+    return urlunparse((parsed.scheme, netloc, parsed.path, "", "", ""))
 
 
 class ProxyManager:
@@ -46,7 +70,9 @@ class ProxyManager:
         for url in cfg.proxy_residential_urls.split(","):
             url = url.strip()
             if url:
-                proxies.append(ProxyConfig(url=url, geo=cfg.proxy_residential_geo, type="residential"))
+                proxies.append(
+                    ProxyConfig(url=url, geo=cfg.proxy_residential_geo, type="residential")
+                )
         return cls(proxies)
 
     @property
@@ -91,6 +117,11 @@ class ProxyManager:
         proxy = random.choice(pool)
 
         if sticky:
+            # Inject a random session ID so the provider keeps the same exit IP
+            # for this domain until clear_sticky() is called.
+            sess_id = hashlib.sha256(random.randbytes(16)).hexdigest()[:12]
+            session_url = _make_session_url(proxy.url, sess_id)
+            proxy = ProxyConfig(url=session_url, geo=proxy.geo, type=proxy.type)
             # Evict oldest entries if over limit
             while len(self._sticky) >= _MAX_STICKY_DOMAINS:
                 oldest = next(iter(self._sticky))
