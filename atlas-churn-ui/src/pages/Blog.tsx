@@ -1,7 +1,9 @@
-import { useEffect } from 'react'
+import React, { useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import PublicLayout from '../components/PublicLayout'
 import { POSTS } from '../content/blog'
+
+const AtlasRobotScene = React.lazy(() => import('../components/AtlasRobotScene'))
 
 function formatDate(iso: string) {
   return new Date(iso + 'T00:00:00').toLocaleDateString('en-US', {
@@ -12,13 +14,16 @@ function formatDate(iso: string) {
 }
 
 export default function Blog() {
-  useEffect(() => { document.title = 'Blog | Churn Intel' }, [])
+  useEffect(() => { document.title = 'Blog | Churn Signals' }, [])
 
   return (
     <PublicLayout>
       {/* Hero */}
-      <section className="max-w-4xl mx-auto px-6 pt-20 pb-12 text-center">
-        <h1 className="text-4xl sm:text-5xl font-bold">Blog</h1>
+      <section className="max-w-4xl mx-auto px-6 pt-16 pb-12 text-center">
+        <React.Suspense fallback={<div className="h-40" />}>
+          <AtlasRobotScene />
+        </React.Suspense>
+        <h1 className="mt-4 text-4xl sm:text-5xl font-bold">Blog</h1>
         <p className="mt-4 text-lg text-slate-400 max-w-2xl mx-auto">
           B2B software churn intelligence, vendor comparisons, and migration analysis backed by real enterprise review data.
         </p>

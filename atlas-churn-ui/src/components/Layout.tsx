@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react'
-import { Menu, Activity } from 'lucide-react'
+import { Menu } from 'lucide-react'
 import Sidebar from './Sidebar'
+import AtlasRobotLogo from './AtlasRobotLogo'
 
 export default function Layout({ children }: { children: ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -15,8 +16,8 @@ export default function Layout({ children }: { children: ReactNode }) {
         >
           <Menu className="h-5 w-5" />
         </button>
-        <Activity className="h-5 w-5 text-cyan-400" />
-        <span className="text-sm font-semibold text-white">Churn Intel</span>
+        <AtlasRobotLogo className="h-5 w-5" />
+        <span className="text-sm font-semibold text-white">Churn Signals</span>
       </header>
 
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />

@@ -1,3 +1,4 @@
+import { tryRefreshToken } from '../auth/AuthContext'
 import type {
   ChurnSignal,
   ChurnSignalDetail,
@@ -16,18 +17,51 @@ import type {
   VendorTarget,
 } from '../types'
 
-const BASE = '/api/v1/b2b/dashboard'
+const API_BASE = import.meta.env.VITE_API_BASE || ''
+const BASE = `${API_BASE}/api/v1/b2b/dashboard`
+const CAMPAIGNS_BASE = `${API_BASE}/api/v1/b2b/campaigns`
+const TARGETS_BASE = `${API_BASE}/api/v1/b2b/vendor-targets`
 
-async function get<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
-  const url = new URL(BASE + path, window.location.origin)
-  if (params) {
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== null && v !== '') {
-        url.searchParams.set(k, String(v))
-      }
+function authHeaders(): Record<string, string> {
+  const token = localStorage.getItem('atlas_token')
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+function forceLogout() {
+  localStorage.removeItem('atlas_token')
+  localStorage.removeItem('atlas_refresh_token')
+  window.location.href = '/landing'
+}
+
+async function handleResponse<T>(res: Response, retryFetch: () => Promise<Response>): Promise<T> {
+  if (res.status === 401) {
+    const newToken = await tryRefreshToken()
+    if (!newToken) {
+      forceLogout()
+      throw new Error('Session expired')
     }
+    const retry = await retryFetch()
+    if (retry.status === 401) {
+      forceLogout()
+      throw new Error('Session expired')
+    }
+    if (!retry.ok) {
+      const body = await retry.text().catch(() => '')
+      throw new Error(`API ${retry.status}: ${body || retry.statusText}`)
+    }
+    return retry.json()
   }
-  const res = await fetch(url.toString())
+  if (res.status === 402) {
+    window.location.href = '/account'
+    throw new Error('Payment required')
+  }
+  if (res.status === 403) {
+    const body = await res.json().catch(() => ({ detail: '' }))
+    if (body.detail?.includes('Trial expired')) {
+      window.location.href = '/account'
+    }
+    throw new Error(body.detail || 'Forbidden')
+  }
   if (!res.ok) {
     const body = await res.text()
     throw new Error(`API ${res.status}: ${body}`)
@@ -35,17 +69,79 @@ async function get<T>(path: string, params?: Record<string, string | number | bo
   return res.json()
 }
 
+// ---------------------------------------------------------------------------
+// Generic fetchers
+// ---------------------------------------------------------------------------
+
+async function get<T>(base: string, path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
+  const url = new URL(base + path, window.location.origin)
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null && v !== '') {
+        url.searchParams.set(k, String(v))
+      }
+    }
+  }
+  const doFetch = () => fetch(url.toString(), { headers: authHeaders() })
+  const res = await doFetch()
+  return handleResponse<T>(res, doFetch)
+}
+
+async function post<T>(base: string, path: string, body?: unknown): Promise<T> {
+  const url = base + path
+  const doFetch = () => fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  })
+  const res = await doFetch()
+  return handleResponse<T>(res, doFetch)
+}
+
+async function patch<T>(base: string, path: string, body: unknown): Promise<T> {
+  const url = base + path
+  const doFetch = () => fetch(url, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(body),
+  })
+  const res = await doFetch()
+  return handleResponse<T>(res, doFetch)
+}
+
+async function put<T>(base: string, path: string, body: unknown): Promise<T> {
+  const url = base + path
+  const doFetch = () => fetch(url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(body),
+  })
+  const res = await doFetch()
+  return handleResponse<T>(res, doFetch)
+}
+
+async function del<T>(base: string, path: string): Promise<T> {
+  const url = base + path
+  const doFetch = () => fetch(url, { method: 'DELETE', headers: authHeaders() })
+  const res = await doFetch()
+  return handleResponse<T>(res, doFetch)
+}
+
+// ---------------------------------------------------------------------------
+// Signals
+// ---------------------------------------------------------------------------
+
 export async function fetchSignals(params?: {
   vendor_name?: string
   min_urgency?: number
   category?: string
   limit?: number
 }) {
-  return get<{ signals: ChurnSignal[]; count: number }>('/signals', params)
+  return get<{ signals: ChurnSignal[]; count: number }>(BASE, '/signals', params)
 }
 
 export async function fetchSignal(vendorName: string, productCategory?: string) {
-  return get<ChurnSignalDetail>(`/signals/${encodeURIComponent(vendorName)}`, {
+  return get<ChurnSignalDetail>(BASE, `/signals/${encodeURIComponent(vendorName)}`, {
     product_category: productCategory,
   })
 }
@@ -56,11 +152,11 @@ export async function fetchHighIntent(params?: {
   window_days?: number
   limit?: number
 }) {
-  return get<{ companies: HighIntentCompany[]; count: number }>('/high-intent', params)
+  return get<{ companies: HighIntentCompany[]; count: number }>(BASE, '/high-intent', params)
 }
 
 export async function fetchVendorProfile(vendorName: string) {
-  return get<VendorProfile>(`/vendors/${encodeURIComponent(vendorName)}`)
+  return get<VendorProfile>(BASE, `/vendors/${encodeURIComponent(vendorName)}`)
 }
 
 export async function fetchReports(params?: {
@@ -68,11 +164,11 @@ export async function fetchReports(params?: {
   vendor_filter?: string
   limit?: number
 }) {
-  return get<{ reports: Report[]; count: number }>('/reports', params)
+  return get<{ reports: Report[]; count: number }>(BASE, '/reports', params)
 }
 
 export async function fetchReport(reportId: string) {
-  return get<ReportDetail>(`/reports/${reportId}`)
+  return get<ReportDetail>(BASE, `/reports/${reportId}`)
 }
 
 export async function fetchReviews(params?: {
@@ -84,15 +180,15 @@ export async function fetchReviews(params?: {
   window_days?: number
   limit?: number
 }) {
-  return get<{ reviews: ReviewSummary[]; count: number }>('/reviews', params)
+  return get<{ reviews: ReviewSummary[]; count: number }>(BASE, '/reviews', params)
 }
 
 export async function fetchReview(reviewId: string) {
-  return get<ReviewDetail>(`/reviews/${reviewId}`)
+  return get<ReviewDetail>(BASE, `/reviews/${reviewId}`)
 }
 
 export async function fetchPipeline() {
-  return get<PipelineStatus>('/pipeline')
+  return get<PipelineStatus>(BASE, '/pipeline')
 }
 
 // ---------------------------------------------------------------------------
@@ -107,72 +203,36 @@ export async function fetchAffiliateOpportunities(params?: {
   vendor_name?: string
   dm_only?: boolean
 }) {
-  return get<{ opportunities: AffiliateOpportunity[]; count: number }>('/affiliates/opportunities', params)
+  return get<{ opportunities: AffiliateOpportunity[]; count: number }>(BASE, '/affiliates/opportunities', params)
 }
 
 export async function fetchAffiliatePartners() {
-  return get<{ partners: AffiliatePartner[]; count: number }>('/affiliates/partners')
+  return get<{ partners: AffiliatePartner[]; count: number }>(BASE, '/affiliates/partners')
 }
 
 export async function fetchClickSummary() {
-  return get<{ clicks: ClickSummary[] }>('/affiliates/clicks/summary')
+  return get<{ clicks: ClickSummary[] }>(BASE, '/affiliates/clicks/summary')
 }
 
 export async function createAffiliatePartner(body: Omit<AffiliatePartner, 'id' | 'created_at' | 'updated_at'>) {
-  const res = await fetch(BASE + '/affiliates/partners', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
-  return res.json()
+  return post<AffiliatePartner>(BASE, '/affiliates/partners', body)
 }
 
 export async function updateAffiliatePartner(id: string, body: Partial<AffiliatePartner>) {
-  const res = await fetch(BASE + `/affiliates/partners/${id}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
-  return res.json()
+  return patch<AffiliatePartner>(BASE, `/affiliates/partners/${id}`, body)
 }
 
 export async function deleteAffiliatePartner(id: string) {
-  const res = await fetch(BASE + `/affiliates/partners/${id}`, { method: 'DELETE' })
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
-  return res.json()
+  return del<{ status: string }>(BASE, `/affiliates/partners/${id}`)
 }
 
 export async function recordAffiliateClick(partnerId: string, reviewId?: string) {
-  const res = await fetch(BASE + '/affiliates/clicks', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ partner_id: partnerId, review_id: reviewId, referrer: 'dashboard' }),
-  })
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
-  return res.json()
+  return post<{ status: string }>(BASE, '/affiliates/clicks', { partner_id: partnerId, review_id: reviewId, referrer: 'dashboard' })
 }
 
 // ---------------------------------------------------------------------------
 // Campaigns
 // ---------------------------------------------------------------------------
-
-const CAMPAIGNS_BASE = '/api/v1/b2b/campaigns'
-
-async function campaignGet<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
-  const url = new URL(CAMPAIGNS_BASE + path, window.location.origin)
-  if (params) {
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== null && v !== '') {
-        url.searchParams.set(k, String(v))
-      }
-    }
-  }
-  const res = await fetch(url.toString())
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
-  return res.json()
-}
 
 export async function fetchCampaigns(params?: {
   status?: string
@@ -181,15 +241,15 @@ export async function fetchCampaigns(params?: {
   channel?: string
   limit?: number
 }) {
-  return campaignGet<{ campaigns: Campaign[]; count: number }>('', params)
+  return get<{ campaigns: Campaign[]; count: number }>(CAMPAIGNS_BASE, '', params)
 }
 
 export async function fetchCampaign(id: string) {
-  return campaignGet<Campaign>(`/${id}`)
+  return get<Campaign>(CAMPAIGNS_BASE, `/${id}`)
 }
 
 export async function fetchCampaignStats() {
-  return campaignGet<CampaignStats>('/stats')
+  return get<CampaignStats>(CAMPAIGNS_BASE, '/stats')
 }
 
 export async function generateCampaigns(body?: {
@@ -199,50 +259,20 @@ export async function generateCampaigns(body?: {
   limit?: number
   target_mode?: string
 }) {
-  const res = await fetch(CAMPAIGNS_BASE + '/generate', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body ?? {}),
-  })
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
-  return res.json()
+  return post<{ generated: number; companies?: number }>(CAMPAIGNS_BASE, '/generate', body ?? {})
 }
 
 export async function approveCampaign(id: string) {
-  const res = await fetch(CAMPAIGNS_BASE + `/${id}/approve`, { method: 'POST' })
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
-  return res.json()
+  return post<{ status: string }>(CAMPAIGNS_BASE, `/${id}/approve`)
 }
 
 export async function updateCampaign(id: string, body: Partial<Pick<Campaign, 'subject' | 'body' | 'cta' | 'status'>>) {
-  const res = await fetch(CAMPAIGNS_BASE + `/${id}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
-  return res.json()
+  return patch<Campaign>(CAMPAIGNS_BASE, `/${id}`, body)
 }
 
 // ---------------------------------------------------------------------------
 // Vendor Targets
 // ---------------------------------------------------------------------------
-
-const TARGETS_BASE = '/api/v1/b2b/vendor-targets'
-
-async function targetGet<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
-  const url = new URL(TARGETS_BASE + path, window.location.origin)
-  if (params) {
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== null && v !== '') {
-        url.searchParams.set(k, String(v))
-      }
-    }
-  }
-  const res = await fetch(url.toString())
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
-  return res.json()
-}
 
 export async function fetchVendorTargets(params?: {
   target_mode?: string
@@ -250,37 +280,23 @@ export async function fetchVendorTargets(params?: {
   search?: string
   limit?: number
 }) {
-  return targetGet<{ targets: VendorTarget[]; count: number }>('', params)
+  return get<{ targets: VendorTarget[]; count: number }>(TARGETS_BASE, '', params)
 }
 
 export async function fetchVendorTarget(id: string) {
-  return targetGet<VendorTarget>(`/${id}`)
+  return get<VendorTarget>(TARGETS_BASE, `/${id}`)
 }
 
 export async function createVendorTarget(body: Partial<VendorTarget>) {
-  const res = await fetch(TARGETS_BASE, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
-  return res.json()
+  return post<VendorTarget>(TARGETS_BASE, '', body)
 }
 
 export async function updateVendorTarget(id: string, body: Partial<VendorTarget>) {
-  const res = await fetch(TARGETS_BASE + `/${id}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
-  return res.json()
+  return put<VendorTarget>(TARGETS_BASE, `/${id}`, body)
 }
 
 export async function deleteVendorTarget(id: string) {
-  const res = await fetch(TARGETS_BASE + `/${id}`, { method: 'DELETE' })
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
-  return res.json()
+  return del<{ status: string }>(TARGETS_BASE, `/${id}`)
 }
 
 // ---------------------------------------------------------------------------
@@ -299,11 +315,52 @@ export function downloadCsv(
       }
     }
   }
+  const token = localStorage.getItem('atlas_token')
+  if (token) url.searchParams.set('token', token)
   window.open(url.toString(), '_blank')
 }
 
 export async function generateVendorReport(id: string) {
-  const res = await fetch(TARGETS_BASE + `/${id}/generate-report`, { method: 'POST' })
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
-  return res.json()
+  return post<{ status: string; signal_count?: number; high_urgency_count?: number }>(TARGETS_BASE, `/${id}/generate-report`)
+}
+
+// ---------------------------------------------------------------------------
+// Tenant Vendor Tracking (onboarding + scoped data)
+// ---------------------------------------------------------------------------
+
+const TENANT_BASE = `${API_BASE}/api/v1/b2b/tenant`
+
+export interface TrackedVendor {
+  id: string
+  vendor_name: string
+  track_mode: string
+  label: string | null
+  added_at: string | null
+  avg_urgency: number | null
+  churn_intent_count: number | null
+  total_reviews: number | null
+  nps_proxy: number | null
+}
+
+export interface VendorSearchResult {
+  vendor_name: string
+  product_category: string | null
+  total_reviews: number | null
+  avg_urgency: number | null
+}
+
+export async function searchAvailableVendors(q: string) {
+  return get<{ vendors: VendorSearchResult[]; count: number }>(TENANT_BASE, '/vendors/search', { q })
+}
+
+export async function addTrackedVendor(vendor_name: string, track_mode: string = 'own', label: string = '') {
+  return post<TrackedVendor>(TENANT_BASE, '/vendors', { vendor_name, track_mode, label })
+}
+
+export async function removeTrackedVendor(vendor_name: string) {
+  return del<{ status: string }>(TENANT_BASE, `/vendors/${encodeURIComponent(vendor_name)}`)
+}
+
+export async function listTrackedVendors() {
+  return get<{ vendors: TrackedVendor[]; count: number }>(TENANT_BASE, '/vendors')
 }

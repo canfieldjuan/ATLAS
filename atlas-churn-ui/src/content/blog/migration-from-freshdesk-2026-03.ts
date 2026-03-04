@@ -5,7 +5,7 @@ const post: BlogPost = {
   title: 'Migration Guide: Why Teams Are Switching Away From Freshdesk',
   description: 'Data from 154 enriched reviews reveals why helpdesk teams are migrating from Freshdesk and what alternatives they\'re choosing.',
   date: '2026-03-03',
-  author: 'Churn Intel Team',
+  author: 'Churn Signals Team',
   tags: ["Helpdesk", "freshdesk", "migration", "switching-guide"],
   topic_type: 'migration_guide',
   charts: [

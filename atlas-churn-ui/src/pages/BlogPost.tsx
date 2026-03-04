@@ -58,8 +58,8 @@ export default function BlogPost() {
 
   useEffect(() => {
     document.title = post
-      ? `${post.title} | Churn Intel`
-      : 'Post Not Found | Churn Intel'
+      ? `${post.title} | Churn Signals`
+      : 'Post Not Found | Churn Signals'
   }, [post])
 
   if (!post) {

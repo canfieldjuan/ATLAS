@@ -1,9 +1,8 @@
 import { Link, useLocation } from 'react-router-dom'
-import { Activity } from 'lucide-react'
+import AtlasRobotLogo from './AtlasRobotLogo'
 
 const NAV_LINKS = [
   { label: 'Blog', to: '/blog' },
-  { label: 'Dashboard', to: '/' },
 ]
 
 export default function PublicLayout({ children }: { children: React.ReactNode }) {
@@ -14,16 +13,16 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
       {/* Nav */}
       <nav className="flex items-center justify-between max-w-6xl mx-auto w-full px-6 py-5">
         <div className="flex items-center gap-6">
-          <Link to="/blog" className="flex items-center gap-2">
-            <Activity className="h-7 w-7 text-cyan-400" />
-            <span className="text-xl font-bold">Churn Intel</span>
+          <Link to="/landing" className="flex items-center gap-2">
+            <AtlasRobotLogo className="h-7 w-7" />
+            <span className="text-xl font-bold">Churn Signals</span>
           </Link>
           {NAV_LINKS.map(link => (
             <Link
               key={link.to}
               to={link.to}
               className={`text-sm font-medium transition-colors ${
-                location.pathname.startsWith(link.to) && link.to !== '/'
+                location.pathname.startsWith(link.to)
                   ? 'text-white'
                   : 'text-slate-400 hover:text-white'
               }`}
@@ -31,6 +30,17 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
               {link.label}
             </Link>
           ))}
+        </div>
+        <div className="flex items-center gap-4">
+          <Link to="/login" className="text-sm text-slate-400 hover:text-white transition-colors">
+            Sign in
+          </Link>
+          <Link
+            to="/signup"
+            className="text-sm px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg font-medium transition-colors"
+          >
+            Start Free Trial
+          </Link>
         </div>
       </nav>
 
@@ -41,12 +51,13 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
       <footer className="border-t border-slate-800 py-8">
         <div className="max-w-6xl mx-auto px-6 flex items-center justify-between text-sm text-slate-500">
           <div className="flex items-center gap-2">
-            <Activity className="h-4 w-4 text-slate-600" />
-            <span>Churn Intel</span>
+            <AtlasRobotLogo className="h-4 w-4" />
+            <span>Churn Signals</span>
           </div>
           <div className="flex items-center gap-4">
             <Link to="/blog" className="hover:text-slate-300 transition-colors">Blog</Link>
-            <Link to="/" className="hover:text-slate-300 transition-colors">Dashboard</Link>
+            <Link to="/login" className="hover:text-slate-300 transition-colors">Sign in</Link>
+            <Link to="/signup" className="hover:text-slate-300 transition-colors">Sign up</Link>
           </div>
         </div>
       </footer>

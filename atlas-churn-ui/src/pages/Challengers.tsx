@@ -17,22 +17,6 @@ import {
   fetchHighIntent,
   generateCampaigns,
 } from '../api/client'
-import type { VendorTarget, HighIntentCompany } from '../types'
-
-function StageBadge({ stage }: { stage: string }) {
-  if (!stage || stage === 'unknown') return <span className="text-slate-500 text-xs">--</span>
-  const colors: Record<string, string> = {
-    active_purchase: 'bg-red-500/20 text-red-400',
-    evaluation: 'bg-cyan-500/20 text-cyan-400',
-    renewal_decision: 'bg-amber-500/20 text-amber-400',
-    post_purchase: 'bg-slate-500/20 text-slate-400',
-  }
-  return (
-    <span className={clsx('inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium', colors[stage] ?? 'bg-slate-500/20 text-slate-400')}>
-      {stage.replace(/_/g, ' ')}
-    </span>
-  )
-}
 
 interface ChallengerSummary {
   name: string
