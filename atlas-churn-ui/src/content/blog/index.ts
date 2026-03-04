@@ -30,6 +30,7 @@ import topComplaintEveryECommerce202603 from './top-complaint-every-e-commerce-2
 import whyTeamsLeaveAws202603 from './why-teams-leave-aws-2026-03'
 import realCostOfKlaviyo202603 from './real-cost-of-klaviyo-2026-03'
 import topComplaintEveryMarketingAutomation202603 from './top-complaint-every-marketing-automation-2026-03'
+import realCostOfZoom202603 from './real-cost-of-zoom-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -84,4 +85,5 @@ export const POSTS: BlogPost[] = [
   whyTeamsLeaveAws202603,
   realCostOfKlaviyo202603,
   topComplaintEveryMarketingAutomation202603,
+  realCostOfZoom202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
