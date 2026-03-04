@@ -4,6 +4,7 @@ python-dotenv
 python-multipart
 pydantic-settings
 psutil
+slowapi>=0.1.9
 
 # ML / AI
 torch

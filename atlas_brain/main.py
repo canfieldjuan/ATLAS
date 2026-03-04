@@ -719,6 +719,34 @@ app.include_router(openai_compat_router)
 from .api.ollama_compat import router as ollama_compat_router
 app.include_router(ollama_compat_router)
 
+# ── Rate-limiting (slowapi) ──────────────────────────────────────────
+from .auth.rate_limit import limiter
+
+app.state.limiter = limiter
+
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+@app.middleware("http")
+async def _inject_rate_limit_identity(request, call_next):
+    """Decode JWT for /api/v1/consumer/dashboard paths to feed slowapi key_func."""
+    if request.url.path.startswith("/api/v1/consumer/dashboard"):
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            try:
+                from .auth.jwt import decode_token
+
+                payload = decode_token(auth_header[7:])
+                request.state.rate_limit_key = payload.get("account_id", "")
+                request.state.rate_limit_plan = payload.get("plan", "trial")
+            except Exception:
+                pass  # require_auth handles 401 downstream
+    return await call_next(request)
+
+
 # CORS middleware for dashboard dev servers + production (Vercel, etc.)
 from fastapi.middleware.cors import CORSMiddleware
 _cors_origins = ["http://localhost:5174", "http://localhost:5173", "http://localhost:5175"]
