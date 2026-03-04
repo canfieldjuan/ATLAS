@@ -34,6 +34,7 @@ import realCostOfZoom202603 from './real-cost-of-zoom-2026-03'
 import helpdeskLandscape202603 from './helpdesk-landscape-2026-03'
 import bestCommunicationFor150202603 from './best-communication-for-1-50-2026-03'
 import whyTeamsLeaveAsana202603 from './why-teams-leave-asana-2026-03'
+import realCostOfSlack202603 from './real-cost-of-slack-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -92,4 +93,5 @@ export const POSTS: BlogPost[] = [
   helpdeskLandscape202603,
   bestCommunicationFor150202603,
   whyTeamsLeaveAsana202603,
+  realCostOfSlack202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
