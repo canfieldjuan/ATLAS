@@ -98,6 +98,7 @@ import woocommerceDeepDive202603 from './woocommerce-deep-dive-2026-03'
 import clickupDeepDive202603 from './clickup-deep-dive-2026-03'
 import realCostOfMailchimp202603 from './real-cost-of-mailchimp-2026-03'
 import salesforceDeepDive202603 from './salesforce-deep-dive-2026-03'
+import tableauDeepDive202603 from './tableau-deep-dive-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -220,4 +221,5 @@ export const POSTS: BlogPost[] = [
   clickupDeepDive202603,
   realCostOfMailchimp202603,
   salesforceDeepDive202603,
+  tableauDeepDive202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
