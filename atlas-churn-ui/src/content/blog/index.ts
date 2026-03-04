@@ -45,6 +45,7 @@ import bestHrHcmFor51200202603 from './best-hr-hcm-for-51-200-2026-03'
 import bestProjectManagementFor150202603 from './best-project-management-for-1-50-2026-03'
 import migrationFromZoom202603 from './migration-from-zoom-2026-03'
 import migrationFromClickup202603 from './migration-from-clickup-2026-03'
+import migrationFromAsana202603 from './migration-from-asana-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -114,4 +115,5 @@ export const POSTS: BlogPost[] = [
   bestProjectManagementFor150202603,
   migrationFromZoom202603,
   migrationFromClickup202603,
+  migrationFromAsana202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
