@@ -110,6 +110,7 @@ import asanaVsNotion202603 from './asana-vs-notion-2026-03'
 import activecampaignChurnReport202603 from './activecampaign-churn-report-2026-03'
 import notionDeepDive202603 from './notion-deep-dive-2026-03'
 import zoomDeepDive202603 from './zoom-deep-dive-2026-03'
+import clickupVsNotion202603 from './clickup-vs-notion-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -244,4 +245,5 @@ export const POSTS: BlogPost[] = [
   activecampaignChurnReport202603,
   notionDeepDive202603,
   zoomDeepDive202603,
+  clickupVsNotion202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
