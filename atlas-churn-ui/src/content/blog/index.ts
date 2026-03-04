@@ -23,6 +23,7 @@ import topComplaintEveryCloudInfrastructure202603 from './top-complaint-every-cl
 import mailchimpDeepDive202603 from './mailchimp-deep-dive-2026-03'
 import crmLandscape202603 from './crm-landscape-2026-03'
 import eCommerceLandscape202603 from './e-commerce-landscape-2026-03'
+import marketingAutomationLandscape202603 from './marketing-automation-landscape-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -70,4 +71,5 @@ export const POSTS: BlogPost[] = [
   mailchimpDeepDive202603,
   crmLandscape202603,
   eCommerceLandscape202603,
+  marketingAutomationLandscape202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
