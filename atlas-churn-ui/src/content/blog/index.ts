@@ -60,6 +60,7 @@ import bestCybersecurityFor51200202603 from './best-cybersecurity-for-51-200-202
 import topComplaintEveryDataAnalytics202603 from './top-complaint-every-data-analytics-2026-03'
 import topComplaintEveryHrHcm202603 from './top-complaint-every-hr-hcm-2026-03'
 import cybersecurityLandscape202603 from './cybersecurity-landscape-2026-03'
+import topComplaintEveryCybersecurity202603 from './top-complaint-every-cybersecurity-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -144,4 +145,5 @@ export const POSTS: BlogPost[] = [
   topComplaintEveryDataAnalytics202603,
   topComplaintEveryHrHcm202603,
   cybersecurityLandscape202603,
+  topComplaintEveryCybersecurity202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
