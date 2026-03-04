@@ -72,6 +72,7 @@ import brevoDeepDive202603 from './brevo-deep-dive-2026-03'
 import getresponseDeepDive202603 from './getresponse-deep-dive-2026-03'
 import bamboohrDeepDive202603 from './bamboohr-deep-dive-2026-03'
 import nutshellDeepDive202603 from './nutshell-deep-dive-2026-03'
+import lookerDeepDive202603 from './looker-deep-dive-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -168,4 +169,5 @@ export const POSTS: BlogPost[] = [
   getresponseDeepDive202603,
   bamboohrDeepDive202603,
   nutshellDeepDive202603,
+  lookerDeepDive202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
