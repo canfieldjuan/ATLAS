@@ -41,6 +41,7 @@ import whyTeamsLeaveSlack202603 from './why-teams-leave-slack-2026-03'
 import bestCrmFor150202603 from './best-crm-for-1-50-2026-03'
 import topComplaintEveryCrm202603 from './top-complaint-every-crm-2026-03'
 import intercomDeepDive202603 from './intercom-deep-dive-2026-03'
+import bestHrHcmFor51200202603 from './best-hr-hcm-for-51-200-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -106,4 +107,5 @@ export const POSTS: BlogPost[] = [
   bestCrmFor150202603,
   topComplaintEveryCrm202603,
   intercomDeepDive202603,
+  bestHrHcmFor51200202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
