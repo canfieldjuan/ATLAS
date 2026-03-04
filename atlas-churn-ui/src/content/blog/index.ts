@@ -26,6 +26,7 @@ import eCommerceLandscape202603 from './e-commerce-landscape-2026-03'
 import marketingAutomationLandscape202603 from './marketing-automation-landscape-2026-03'
 import bestMarketingAutomationForUnknown202603 from './best-marketing-automation-for-unknown-2026-03'
 import communicationLandscape202603 from './communication-landscape-2026-03'
+import topComplaintEveryECommerce202603 from './top-complaint-every-e-commerce-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -76,4 +77,5 @@ export const POSTS: BlogPost[] = [
   marketingAutomationLandscape202603,
   bestMarketingAutomationForUnknown202603,
   communicationLandscape202603,
+  topComplaintEveryECommerce202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
