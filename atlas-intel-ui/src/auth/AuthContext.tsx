@@ -2,7 +2,9 @@ import { createContext, useContext, useState, useEffect, useCallback, useRef, ty
 
 const TOKEN_KEY = 'atlas_token'
 const REFRESH_KEY = 'atlas_refresh_token'
-const BASE = '/api/v1'
+
+const API_BASE = import.meta.env.VITE_API_BASE || ''
+const BASE = `${API_BASE}/api/v1`
 
 export interface User {
   user_id: string

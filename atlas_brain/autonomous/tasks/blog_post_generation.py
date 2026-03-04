@@ -91,7 +91,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # Stage 4: content generation (LLM)
     from ...pipelines.llm import get_pipeline_llm, clean_llm_output, parse_json_response
 
-    llm = get_pipeline_llm(prefer_cloud=True, try_openrouter=True, auto_activate_ollama=False)
+    llm = get_pipeline_llm(
+        prefer_cloud=True,
+        try_openrouter=True,
+        auto_activate_ollama=False,
+        openrouter_model=cfg.blog_post_openrouter_model,
+    )
     if llm is None:
         from ...services import llm_registry
         llm = llm_registry.get_active()
@@ -104,6 +109,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     # Stage 5: assembly & storage
     post_id = await _assemble_and_store(pool, blueprint, content, llm)
+
+    if not post_id:
+        return {
+            "_skip_synthesis": f"Skipped: slug {blueprint.slug} is already published",
+        }
 
     # Notify
     from ...pipelines.notify import send_pipeline_notification
@@ -174,21 +184,44 @@ async def _select_topic(pool) -> tuple[str, dict[str, Any]] | None:
     if not raw_candidates:
         return None
 
-    # Batch slug check: single query instead of N+1
+    # --- Dedup layer 1: exact slug match (same topic+category+month) ---
     all_slugs = list({c[0] for c in raw_candidates})
     existing_slugs = await _batch_slug_check(pool, all_slugs)
+
+    # --- Dedup layer 2: category-level cooldown (any topic type, 90 days) ---
+    covered = await _recently_covered_subjects(pool, days=90)
+
+    def _subject_key(ctx: dict) -> str:
+        """Normalize category/brand for dedup."""
+        return (
+            ctx.get("category") or ctx.get("brand_a") or ""
+        ).lower().strip()
 
     candidates = [
         (score, topic_type, ctx)
         for slug, score, topic_type, ctx in raw_candidates
         if slug not in existing_slugs
+        and _subject_key(ctx) not in covered
     ]
 
     if not candidates:
         return None
 
     candidates.sort(key=lambda x: x[0], reverse=True)
-    best = candidates[0]
+
+    # --- Dedup layer 3: one subject per run (pick highest-scoring) ---
+    seen: set[str] = set()
+    best = None
+    for c in candidates:
+        sk = _subject_key(c[2])
+        if sk in seen:
+            continue
+        seen.add(sk)
+        if best is None:
+            best = c
+
+    if best is None:
+        return None
     logger.info(
         "Selected topic: %s (score=%.1f, slug=%s)",
         best[1], best[0], best[2].get("slug"),
@@ -349,15 +382,37 @@ async def _find_safety_candidates(pool) -> list[dict[str, Any]]:
 
 
 async def _batch_slug_check(pool, slugs: list[str]) -> set[str]:
-    """Check which slugs already exist in the last 30 days. Single query."""
+    """Check which slugs already exist (all time). Single query."""
     if not slugs:
         return set()
     rows = await pool.fetch(
-        "SELECT slug FROM blog_posts WHERE slug = ANY($1) "
-        "AND created_at > NOW() - INTERVAL '30 days'",
+        "SELECT slug FROM blog_posts WHERE slug = ANY($1)",
         slugs,
     )
     return {r["slug"] for r in rows}
+
+
+async def _recently_covered_subjects(pool, days: int = 90) -> set[str]:
+    """Return category/brand names that already have a blog post in the last N days.
+
+    Prevents the same category from dominating the blog across topic types.
+    """
+    rows = await pool.fetch(
+        """
+        SELECT DISTINCT
+            LOWER(COALESCE(
+                data_context->>'category',
+                data_context->>'brand_a',
+                ''
+            )) AS subject
+        FROM blog_posts
+        WHERE topic_type IN ('brand_showdown','complaint_roundup','migration_report','safety_spotlight')
+          AND created_at > NOW() - make_interval(days => $1)
+          AND COALESCE(data_context->>'category', data_context->>'brand_a', '') != ''
+        """,
+        days,
+    )
+    return {r["subject"] for r in rows if r["subject"]}
 
 
 def _slugify(text: str) -> str:
@@ -461,6 +516,14 @@ async def _gather_data(
         ),
         "report_date": str(date.today()),
     }
+
+    # Embed subject keys so category/brand-level dedup can query data_context
+    if topic_ctx.get("category"):
+        data["data_context"]["category"] = topic_ctx["category"]
+    if topic_ctx.get("brand_a"):
+        data["data_context"]["brand_a"] = topic_ctx["brand_a"]
+    if topic_ctx.get("brand_b"):
+        data["data_context"]["brand_b"] = topic_ctx["brand_b"]
 
     return data
 
@@ -1130,6 +1193,7 @@ async def _assemble_and_store(
             data_context = EXCLUDED.data_context,
             llm_model = EXCLUDED.llm_model,
             source_report_date = EXCLUDED.source_report_date
+        WHERE blog_posts.status != 'published'
         RETURNING id
         """,
         blueprint.slug,
@@ -1143,6 +1207,150 @@ async def _assemble_and_store(
         str(model_name),
         date.today(),
     )
+    if not row:
+        logger.warning(
+            "Skipped overwrite of published post: slug=%s", blueprint.slug
+        )
+        return ""
     post_id = str(row["id"])
     logger.info("Stored blog draft: slug=%s, id=%s", blueprint.slug, post_id)
+
+    # Write .ts file for the frontend if ui_path is configured
+    cfg = settings.external_data
+    if cfg.blog_post_ui_path:
+        try:
+            _write_ui_post(
+                cfg.blog_post_ui_path,
+                blueprint,
+                content,
+                charts_json,
+            )
+        except Exception:
+            logger.warning("Failed to write UI blog file", exc_info=True)
+        else:
+            try:
+                from ._blog_deploy import auto_deploy_blog
+                await auto_deploy_blog(
+                    cfg.blog_post_ui_path,
+                    blueprint.slug,
+                    enabled=cfg.blog_auto_deploy_enabled,
+                    branch=cfg.blog_auto_deploy_branch,
+                    hook_url=cfg.blog_auto_deploy_hook_url,
+                )
+            except Exception:
+                logger.warning("Blog auto-deploy failed", exc_info=True)
+
     return post_id
+
+
+def _write_ui_post(
+    ui_path: str,
+    blueprint: PostBlueprint,
+    content: dict[str, Any],
+    charts_json: list[dict[str, Any]],
+) -> None:
+    """Write a .ts post file and register it in index.ts."""
+    from pathlib import Path
+
+    # Resolve relative paths against project root (where main.py lives)
+    blog_dir = Path(ui_path)
+    if not blog_dir.is_absolute():
+        project_root = Path(__file__).resolve().parent.parent.parent.parent
+        blog_dir = project_root / blog_dir
+    if not blog_dir.is_dir():
+        logger.warning("blog_post_ui_path does not exist: %s", blog_dir)
+        return
+
+    # Derive a stable filename from the slug
+    slug = blueprint.slug
+    filename = slug + ".ts"
+    var_name = re.sub(r"[^a-zA-Z0-9]", "_", slug).strip("_")
+    # camelCase: split on _ and capitalize each part after the first
+    parts = var_name.split("_")
+    var_name = parts[0] + "".join(p.capitalize() for p in parts[1:])
+    # JS identifiers cannot start with a digit
+    if var_name and var_name[0].isdigit():
+        var_name = "post" + var_name[0].upper() + var_name[1:]
+
+    # Build the .ts file content
+    charts_str = json.dumps(charts_json, indent=2, default=str)
+    # Escape backticks and ${} in content for template literal
+    escaped_content = (
+        content["content"]
+        .replace("\\", "\\\\")
+        .replace("`", "\\`")
+        .replace("${", "\\${")
+    )
+    # Escape single-quoted strings (backslash first, then quotes, then newlines)
+    escaped_title = _escape_js_single(content["title"])
+    escaped_desc = _escape_js_single(content.get("description", ""))
+
+    ts_content = f"""import type {{ BlogPost }} from './index'
+
+const post: BlogPost = {{
+  slug: '{slug}',
+  title: '{escaped_title}',
+  description: '{escaped_desc}',
+  date: '{date.today().isoformat()}',
+  author: 'Atlas Intelligence Team',
+  tags: {json.dumps(blueprint.tags)},
+  topic_type: '{blueprint.topic_type}',
+  charts: {charts_str},
+  content: `{escaped_content}`,
+}}
+
+export default post
+"""
+
+    # Write the post file
+    post_path = blog_dir / filename
+    post_path.write_text(ts_content, encoding="utf-8")
+    logger.info("Wrote blog UI file: %s", post_path)
+
+    # Update index.ts: add import + array entry if not already present
+    index_path = blog_dir / "index.ts"
+    if not index_path.exists():
+        logger.warning("index.ts not found in %s", blog_dir)
+        return
+
+    index_text = index_path.read_text(encoding="utf-8")
+    import_line = f"import {var_name} from './{slug}'"
+
+    if slug in index_text:
+        logger.debug("Post %s already in index.ts, skipping", slug)
+        return
+
+    # Insert import after the last existing import line
+    lines = index_text.split("\n")
+    last_import_idx = -1
+    for i, line in enumerate(lines):
+        if line.startswith("import "):
+            last_import_idx = i
+
+    if last_import_idx >= 0:
+        lines.insert(last_import_idx + 1, import_line)
+    else:
+        lines.insert(0, import_line)
+
+    # Add to POSTS array -- find the closing ].sort line and insert before it
+    new_text = "\n".join(lines)
+    new_text = re.sub(
+        r"(].sort\()",
+        f"  {var_name},\n\\1",
+        new_text,
+        count=1,
+    )
+
+    index_path.write_text(new_text, encoding="utf-8")
+    logger.info("Updated index.ts with %s", slug)
+
+
+def _escape_js_single(text: str) -> str:
+    """Escape a string for use inside JS single quotes."""
+    return (
+        text
+        .replace("\\", "\\\\")
+        .replace("'", "\\'")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )

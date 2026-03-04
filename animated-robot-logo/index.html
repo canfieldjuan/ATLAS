@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Atlas — AI Brain</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: radial-gradient(ellipse at 40% 30%, #0f1628 0%, #060610 70%);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  #scene-wrapper { width: 900px; max-width: 100vw; }
+  #scene { width: 100%; height: auto; overflow: visible; }
+</style>
+</head>
+<body>
+
+<div id="scene-wrapper">
+  <svg id="scene" viewBox="0 0 900 440" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <!-- Cyan glow for eyes / antenna / accentss -->
+      <filter id="glow-cyan" x="-80%" y="-80%" width="260%" height="260%">
+        <feGaussianBlur stdDeviation="3.5" result="blur"/>
+        <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+      <!-- Subtle drop shadow for robot -->
+      <filter id="body-shadow" x="-20%" y="-20%" width="140%" height="160%">
+        <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="rgba(0,0,0,0.6)"/>
+      </filter>
+      <!-- ATLAS logo glow -->
+      <filter id="logo-glow" x="-10%" y="-40%" width="120%" height="180%">
+        <feGaussianBlur stdDeviation="7" result="blur"/>
+        <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+      <!-- Robot body gradient -->
+      <linearGradient id="grad-body" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%"   stop-color="#8fb8d8"/>
+        <stop offset="100%" stop-color="#3a5c82"/>
+      </linearGradient>
+      <!-- Robot dark panels / joints -->
+      <linearGradient id="grad-dark" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%"   stop-color="#3a5c80"/>
+        <stop offset="100%" stop-color="#1e3350"/>
+      </linearGradient>
+      <!-- ATLAS logo -->
+      <linearGradient id="grad-logo" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%"   stop-color="#d8ecff"/>
+        <stop offset="55%"  stop-color="#7aadd4"/>
+        <stop offset="100%" stop-color="#2a4a70"/>
+      </linearGradient>
+    </defs>
+
+    <!-- Background stars -->
+    <g opacity="0.45">
+      <circle cx="42"  cy="28"  r="1"   fill="white"/>
+      <circle cx="127" cy="55"  r="1.5" fill="white"/>
+      <circle cx="210" cy="18"  r="1"   fill="white"/>
+      <circle cx="320" cy="42"  r="0.8" fill="white"/>
+      <circle cx="480" cy="12"  r="1.2" fill="white"/>
+      <circle cx="630" cy="35"  r="1"   fill="white"/>
+      <circle cx="755" cy="20"  r="1.5" fill="white"/>
+      <circle cx="858" cy="50"  r="1"   fill="white"/>
+      <circle cx="70"  cy="80"  r="0.8" fill="white"/>
+      <circle cx="180" cy="95"  r="1"   fill="white"/>
+      <circle cx="540" cy="70"  r="1.2" fill="white"/>
+      <circle cx="780" cy="88"  r="0.8" fill="white"/>
+      <circle cx="880" cy="110" r="1"   fill="white"/>
+      <circle cx="25"  cy="140" r="1.5" fill="white"/>
+      <circle cx="840" cy="155" r="0.8" fill="white"/>
+      <circle cx="350" cy="30"  r="2"   fill="white" opacity="0.9"/>
+      <circle cx="690" cy="58"  r="2"   fill="white" opacity="0.9"/>
+      <circle cx="150" cy="130" r="1.8" fill="white" opacity="0.7"/>
+    </g>
+
+    <!-- Floor line -->
+    <line x1="80" y1="388" x2="820" y2="388"
+          stroke="rgba(80,140,210,0.12)" stroke-width="1"/>
+
+    <!-- ATLAS Logo -->
+    <text
+      id="atlas-text"
+      x="450" y="383"
+      text-anchor="middle"
+      font-family="Impact, 'Arial Narrow', Arial, sans-serif"
+      font-size="168"
+      font-weight="900"
+      letter-spacing="12"
+      fill="url(#grad-logo)"
+      filter="url(#logo-glow)"
+    >ATLAS</text>
+
+    <!-- Tagline -->
+    <text
+      x="450" y="418"
+      text-anchor="middle"
+      font-family="'Courier New', Courier, monospace"
+      font-size="13"
+      letter-spacing="6"
+      fill="rgba(80,140,210,0.55)"
+    >INTELLIGENCE PLATFORM</text>
+
+    <!-- Robot rendered here by robot.js -->
+    <g id="robot-mount"></g>
+
+  </svg>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<script src="js/robot.js"></script>
+<script src="js/scene.js"></script>
+
+</body>
+</html>

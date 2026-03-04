@@ -232,10 +232,32 @@ async def publish_draft(
 
     # Optionally write the TS file to the blog content directory
     from ..config import settings
-    ui_path = settings.external_data.blog_post_ui_path
+    topic_type = row.get("topic_type", "")
+    b2b_types = ("vendor_alternative", "vendor_showdown", "churn_report", "migration_guide")
+    if topic_type in b2b_types:
+        ui_path = settings.b2b_churn.blog_post_ui_path
+    else:
+        ui_path = settings.external_data.blog_post_ui_path
     ts_path = None
+    deployed = None
+    if topic_type in b2b_types:
+        deploy_cfg = settings.b2b_churn
+    else:
+        deploy_cfg = settings.external_data
     if ui_path and os.path.isdir(ui_path):
         ts_path = _write_blog_ts_file(row, ui_path, now)
+        if ts_path:
+            try:
+                from ..autonomous.tasks._blog_deploy import auto_deploy_blog
+                deployed = await auto_deploy_blog(
+                    ui_path,
+                    row["slug"],
+                    enabled=deploy_cfg.blog_auto_deploy_enabled,
+                    branch=deploy_cfg.blog_auto_deploy_branch,
+                    hook_url=deploy_cfg.blog_auto_deploy_hook_url,
+                )
+            except Exception:
+                logger.warning("Blog auto-deploy failed", exc_info=True)
 
     return {
         "ok": True,
@@ -243,6 +265,7 @@ async def publish_draft(
         "slug": row["slug"],
         "published_at": now.isoformat(),
         "ts_file": ts_path,
+        "deploy": deployed,
     }
 
 

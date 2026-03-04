@@ -1,7 +1,10 @@
-import { useEffect } from 'react'
+import { useEffect, lazy, Suspense } from 'react'
 import { Link } from 'react-router-dom'
 import PublicLayout from '../components/PublicLayout'
+import BlogCardVisual from '../components/BlogCardVisual'
 import { POSTS } from '../content/blog'
+
+const AtlasRobotScene = lazy(() => import('../components/AtlasRobotScene'))
 
 function formatDate(iso: string) {
   return new Date(iso + 'T00:00:00').toLocaleDateString('en-US', {
@@ -17,8 +20,11 @@ export default function Blog() {
   return (
     <PublicLayout>
       {/* Hero */}
-      <section className="max-w-4xl mx-auto px-6 pt-20 pb-12 text-center">
-        <h1 className="text-4xl sm:text-5xl font-bold">Blog</h1>
+      <section className="max-w-4xl mx-auto px-6 pt-16 pb-12 text-center">
+        <Suspense fallback={null}>
+          <AtlasRobotScene />
+        </Suspense>
+        <h1 className="text-4xl sm:text-5xl font-bold mt-4">Blog</h1>
         <p className="mt-4 text-lg text-slate-400 max-w-2xl mx-auto">
           Amazon seller intelligence, review monitoring strategies, and competitive analysis insights.
         </p>
@@ -33,8 +39,7 @@ export default function Blog() {
               to={`/blog/${post.slug}`}
               className="group bg-slate-800/60 border border-slate-700/50 rounded-xl overflow-hidden hover:border-slate-600 transition-colors"
             >
-              {/* Gradient placeholder for image */}
-              <div className="h-40 bg-gradient-to-br from-cyan-900/40 to-slate-800" />
+              <BlogCardVisual post={post} />
               <div className="p-6">
                 <div className="flex items-center gap-2 mb-3">
                   <time className="text-xs text-slate-500">{formatDate(post.date)}</time>

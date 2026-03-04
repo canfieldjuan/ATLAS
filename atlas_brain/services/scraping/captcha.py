@@ -286,10 +286,13 @@ class CaptchaSolver:
             if not dd or "cid" not in dd:
                 logger.warning("Failed to extract DataDome params from challenge page")
 
-            # t=bv means IP is banned by DataDome -- solver cannot help
+            # t=bv means DataDome blocked the IP outright -- no solvable
+            # challenge is presented.  CAPTCHA APIs reject these.
+            # Solution: use Bright Data Web Unlocker (handles DataDome internally).
             if dd.get("t") == "bv":
                 raise RuntimeError(
-                    "DataDome returned t=bv (IP banned) -- rotate proxy before solving"
+                    "DataDome returned t=bv (IP blocked, no solvable challenge). "
+                    "Use web_unlocker_url or rotate to cleaner residential IPs."
                 )
 
             # Build full captchaUrl with all params CapSolver requires
@@ -406,7 +409,8 @@ class CaptchaSolver:
 
             if dd.get("t") == "bv":
                 raise RuntimeError(
-                    "DataDome returned t=bv (IP banned) -- rotate proxy before solving"
+                    "DataDome returned t=bv (IP blocked, no solvable challenge). "
+                    "Use web_unlocker_url or rotate to cleaner residential IPs."
                 )
 
             from urllib.parse import quote, urlencode

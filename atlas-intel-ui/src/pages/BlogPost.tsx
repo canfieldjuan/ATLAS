@@ -3,6 +3,7 @@ import { useMemo, useEffect } from 'react'
 import { marked } from 'marked'
 import { ArrowLeft } from 'lucide-react'
 import PublicLayout from '../components/PublicLayout'
+import BlogCardVisual from '../components/BlogCardVisual'
 import BlogChart from '../components/BlogChartRenderer'
 import { POSTS } from '../content/blog'
 import type { ChartSpec } from '../content/blog'
@@ -83,6 +84,11 @@ export default function BlogPost() {
           <ArrowLeft className="h-4 w-4" />
           All posts
         </Link>
+
+        {/* Hero visual */}
+        <div className="rounded-xl overflow-hidden mb-8">
+          <BlogCardVisual post={post} />
+        </div>
 
         {/* Article header */}
         <header className="mb-10">

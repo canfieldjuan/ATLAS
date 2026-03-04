@@ -54,6 +54,35 @@ def _safe_float(val, default=None):
         return default
 
 
+async def _fetch_relevant_blog_urls(
+    pool, vendor_name: str | None = None, category: str | None = None
+) -> list[dict[str, str]]:
+    """Fetch published blog post URLs relevant to a vendor or category.
+
+    Returns a list of {title, slug, topic_type} for injection into campaign
+    selling context so the LLM can reference published analysis.
+    """
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT title, slug, topic_type FROM blog_posts
+            WHERE status = 'published'
+              AND topic_type IN ('vendor_alternative', 'vendor_showdown', 'churn_report', 'migration_guide')
+              AND (
+                  ($1::text IS NOT NULL AND (LOWER(title) LIKE '%' || LOWER($1) || '%' OR LOWER(slug) LIKE '%' || LOWER($1) || '%'))
+                  OR ($2::text IS NOT NULL AND LOWER(slug) LIKE '%' || LOWER($2) || '%')
+              )
+            ORDER BY published_at DESC
+            LIMIT 3
+            """,
+            vendor_name,
+            category,
+        )
+        return [{"title": r["title"], "slug": r["slug"], "topic_type": r["topic_type"]} for r in rows]
+    except Exception:
+        return []
+
+
 def _compute_score(row: dict) -> int:
     """Compute opportunity score (0-100) from enrichment signals."""
     score = 0.0
@@ -354,11 +383,15 @@ async def _generate_churning_company_campaigns(
             continue
 
         # Inject selling context
+        blog_urls = await _fetch_relevant_blog_urls(
+            pool, vendor_name=context.get("vendor_name"), category=context.get("category"),
+        )
         context["selling"] = {
             "product_name": partner["product_name"],
             "affiliate_url": partner["affiliate_url"],
             "sender_name": cfg.default_sender_name,
             "sender_company": cfg.default_sender_company,
+            **({"blog_posts": blog_urls} if blog_urls else {}),
         }
         partner_id = partner["id"]
 
@@ -699,6 +732,9 @@ async def _generate_vendor_campaigns(
         review_ids = [o["review_id"] for o in vendor_signals if o.get("review_id")]
 
         # Generate for email_cold and email_followup
+        vendor_blog_urls = await _fetch_relevant_blog_urls(
+            pool, vendor_name=vendor_name, category=vendor_ctx.get("category"),
+        )
         cold_email_content: dict[str, str] | None = None
         for channel in ["email_cold", "email_followup"]:
             payload = {
@@ -710,6 +746,7 @@ async def _generate_vendor_campaigns(
                     "sender_name": cfg.default_sender_name,
                     "sender_company": cfg.default_sender_company,
                     "booking_url": cfg.default_booking_url,
+                    **({"blog_posts": vendor_blog_urls} if vendor_blog_urls else {}),
                 },
                 "channel": channel,
             }
@@ -1016,6 +1053,9 @@ async def _generate_challenger_campaigns(
         best = max(challenger_signals, key=lambda o: o["opportunity_score"])
         review_ids = [o["review_id"] for o in challenger_signals if o.get("review_id")]
 
+        challenger_blog_urls = await _fetch_relevant_blog_urls(
+            pool, vendor_name=challenger_name, category=challenger_ctx.get("category"),
+        )
         cold_email_content: dict[str, str] | None = None
         for channel in ["email_cold", "email_followup"]:
             payload = {
@@ -1027,6 +1067,7 @@ async def _generate_challenger_campaigns(
                     "sender_name": cfg.default_sender_name,
                     "sender_company": cfg.default_sender_company,
                     "booking_url": cfg.default_booking_url,
+                    **({"blog_posts": challenger_blog_urls} if challenger_blog_urls else {}),
                 },
                 "channel": channel,
             }

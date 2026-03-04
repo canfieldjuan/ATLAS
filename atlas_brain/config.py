@@ -2045,6 +2045,14 @@ class ExternalDataConfig(BaseSettings):
     blog_post_max_tokens: int = Field(default=6144, description="Max tokens per blog post LLM call")
     blog_post_max_per_run: int = Field(default=1, description="Max blog posts to generate per run")
     blog_post_ui_path: str = Field(default="", description="Path to atlas-intel-ui/src/content/blog/ (empty = DB only)")
+    blog_post_openrouter_model: str = Field(
+        default="moonshotai/kimi-k2.5",
+        description="OpenRouter model for blog post generation",
+    )
+    # Blog auto-deploy (git push + Vercel deploy hook)
+    blog_auto_deploy_enabled: bool = Field(default=False, description="Auto git-push + Vercel deploy after blog publish")
+    blog_auto_deploy_branch: str = Field(default="dev", description="Git branch to push blog commits to")
+    blog_auto_deploy_hook_url: str = Field(default="", description="Vercel deploy hook URL (POST triggers rebuild)")
 
 
 class B2BChurnConfig(BaseSettings):
@@ -2104,6 +2112,26 @@ class B2BChurnConfig(BaseSettings):
     product_profile_cron: str = Field(default="30 21 * * *", description="Product profile schedule (9:30 PM)")
     product_profile_min_reviews: int = Field(default=5, description="Min enriched reviews to generate a profile")
     product_profile_max_tokens: int = Field(default=1024, description="Max LLM output tokens for profile synthesis")
+    product_profile_vllm_url: str = Field(
+        default="http://localhost:8082",
+        description="vLLM server URL for profile synthesis",
+    )
+    product_profile_vllm_model: str = Field(
+        default="stelterlab/Qwen3-30B-A3B-Instruct-2507-AWQ",
+        description="vLLM model for profile synthesis",
+    )
+
+    # Blog post generation
+    blog_post_enabled: bool = Field(default=False, description="Enable B2B blog post generation")
+    blog_post_cron: str = Field(default="0 23 * * *", description="Blog post schedule (11 PM, after profiles)")
+    blog_post_max_tokens: int = Field(default=6144, description="Max LLM output tokens for blog post")
+    blog_post_max_per_run: int = Field(default=1, description="Max blog posts per run")
+    blog_post_ui_path: str = Field(default="", description="Path to atlas-churn-ui blog content dir")
+    blog_post_openrouter_model: str = Field(default="moonshotai/kimi-k2.5", description="OpenRouter model for blog generation")
+    # Blog auto-deploy (git push + Vercel deploy hook)
+    blog_auto_deploy_enabled: bool = Field(default=False, description="Auto git-push + Vercel deploy after B2B blog publish")
+    blog_auto_deploy_branch: str = Field(default="dev", description="Git branch to push B2B blog commits to")
+    blog_auto_deploy_hook_url: str = Field(default="", description="Vercel deploy hook URL for B2B blog")
 
 
 class B2BAlertConfig(BaseSettings):

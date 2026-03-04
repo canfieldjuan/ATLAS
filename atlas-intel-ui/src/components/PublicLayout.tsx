@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom'
-import { Users } from 'lucide-react'
+import AtlasRobotLogo from './AtlasRobotLogo'
 
 const NAV_LINKS = [
   { label: 'Blog', to: '/blog' },
@@ -14,7 +14,7 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
       <nav className="flex items-center justify-between max-w-6xl mx-auto w-full px-6 py-5">
         <div className="flex items-center gap-6">
           <Link to="/landing" className="flex items-center gap-2">
-            <Users className="h-7 w-7 text-cyan-400" />
+            <AtlasRobotLogo className="h-7 w-7" />
             <span className="text-xl font-bold">Atlas Intelligence</span>
           </Link>
           {NAV_LINKS.map(link => (
@@ -51,7 +51,7 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
       <footer className="border-t border-slate-800 py-8">
         <div className="max-w-6xl mx-auto px-6 flex items-center justify-between text-sm text-slate-500">
           <div className="flex items-center gap-2">
-            <Users className="h-4 w-4 text-slate-600" />
+            <AtlasRobotLogo className="h-4 w-4" />
             <span>Atlas Intelligence</span>
           </div>
           <div className="flex items-center gap-4">

@@ -29,7 +29,7 @@ class ProxyConfig:
 _MAX_STICKY_DOMAINS = 1000
 
 # Proxy providers that support -session-{ID} sticky sessions in the username.
-_SESSION_CAPABLE_HOSTS = ("2captcha.com",)
+_SESSION_CAPABLE_HOSTS = ("2captcha.com", "brd.superproxy.io")
 
 
 def _make_session_url(base_url: str, session_id: str) -> str:
@@ -45,6 +45,7 @@ def _make_session_url(base_url: str, session_id: str) -> str:
         return base_url
     if not parsed.username:
         return base_url
+    # Bright Data uses -session-{ID} appended to the username (same as 2Captcha)
     new_user = f"{parsed.username}-session-{session_id}"
     netloc = f"{new_user}:{parsed.password}@{hostname}:{parsed.port}"
     return urlunparse((parsed.scheme, netloc, parsed.path, "", "", ""))

@@ -1,6 +1,7 @@
 import { tryRefreshToken } from '../auth/AuthContext'
+import { API_BASE } from './config'
 
-const BASE = '/api/v1/b2b/tenant'
+const BASE = `${API_BASE}/api/v1/b2b/tenant`
 
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem('atlas_token')

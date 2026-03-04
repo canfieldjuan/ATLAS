@@ -34,7 +34,31 @@ class G2Parser:
     prefer_residential = True
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
-        """Scrape G2 reviews -- browser first, HTTP fallback."""
+        """Scrape G2 reviews -- Web Unlocker first, then browser, then HTTP."""
+
+        # Priority 1: Bright Data Web Unlocker (handles DataDome automatically)
+        if settings.b2b_scrape.web_unlocker_url:
+            unlocker_domains = {
+                d.strip().lower()
+                for d in settings.b2b_scrape.web_unlocker_domains.split(",")
+                if d.strip()
+            }
+            if _DOMAIN in unlocker_domains:
+                try:
+                    result = await self._scrape_web_unlocker(target)
+                    if result.reviews:
+                        return result
+                    logger.warning(
+                        "Web Unlocker for %s returned 0 reviews, falling back",
+                        target.vendor_name,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Web Unlocker failed for %s: %s -- falling back",
+                        target.vendor_name, exc,
+                    )
+
+        # Priority 2: Playwright stealth browser
         if settings.b2b_scrape.playwright_enabled:
             try:
                 result = await self._scrape_browser(target)
@@ -50,7 +74,96 @@ class G2Parser:
                     target.vendor_name, exc,
                 )
 
+        # Priority 3: curl_cffi HTTP client
         return await self._scrape_http(target, client)
+
+    # ------------------------------------------------------------------
+    # Web Unlocker path (Bright Data -- handles DataDome internally)
+    # ------------------------------------------------------------------
+
+    async def _scrape_web_unlocker(self, target: ScrapeTarget) -> ScrapeResult:
+        """Scrape G2 via Bright Data Web Unlocker proxy.
+
+        Web Unlocker is an HTTP proxy that handles DataDome/Cloudflare
+        challenges automatically -- no CAPTCHA solving or stealth browser
+        needed.  Just send a normal GET and it returns the unblocked HTML.
+        """
+        import httpx
+
+        proxy_url = settings.b2b_scrape.web_unlocker_url.strip()
+        reviews: list[dict] = []
+        errors: list[str] = []
+        pages_scraped = 0
+        seen_ids: set[str] = set()
+
+        for page in range(1, target.max_pages + 1):
+            url = f"{_BASE_URL}/{target.product_slug}/reviews"
+            if page > 1:
+                url += f"?page={page}"
+
+            referer = (
+                f"https://www.google.com/search?q={quote_plus(target.vendor_name)}+g2+reviews"
+                if page == 1
+                else f"{_BASE_URL}/{target.product_slug}/reviews?page={page - 1}"
+                if page > 2
+                else f"{_BASE_URL}/{target.product_slug}/reviews"
+            )
+
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/131.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": referer,
+            }
+
+            try:
+                async with httpx.AsyncClient(
+                    proxy=proxy_url,
+                    verify=False,
+                    timeout=60.0,
+                ) as http:
+                    resp = await http.get(url, headers=headers)
+
+                pages_scraped += 1
+
+                if resp.status_code == 403:
+                    errors.append(f"Page {page}: blocked (403) via Web Unlocker")
+                    break
+                if resp.status_code != 200:
+                    errors.append(f"Page {page}: HTTP {resp.status_code}")
+                    continue
+
+                page_reviews = _parse_page(resp.text, target, seen_ids)
+                if not page_reviews:
+                    if page == 1:
+                        logger.warning(
+                            "G2 Web Unlocker page 1 returned 0 reviews for %s",
+                            target.product_slug,
+                        )
+                    break
+
+                reviews.extend(page_reviews)
+
+            except Exception as exc:
+                errors.append(f"Page {page}: {exc}")
+                logger.warning(
+                    "G2 Web Unlocker page %d failed for %s: %s",
+                    page, target.product_slug, exc,
+                )
+                break
+
+            # Inter-page delay
+            await asyncio.sleep(random.uniform(2.0, 5.0))
+
+        logger.info(
+            "G2 Web Unlocker scrape for %s: %d reviews from %d pages",
+            target.vendor_name, len(reviews), pages_scraped,
+        )
+        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors)
 
     # ------------------------------------------------------------------
     # Browser path (Playwright stealth)

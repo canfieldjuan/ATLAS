@@ -8,6 +8,7 @@ const post: BlogPost = {
   date: '2026-03-01',
   author: 'Atlas Intelligence Team',
   tags: ['Amazon', 'Review Monitoring', 'Seller Tools', 'Comparison'],
+  topic_type: 'guide',
   content: `
 Amazon sellers who ignore reviews lose money. Negative reviews tank conversion rates, undetected safety complaints trigger listing suspensions, and competitors quietly poach your customers while you check Seller Central manually.
 

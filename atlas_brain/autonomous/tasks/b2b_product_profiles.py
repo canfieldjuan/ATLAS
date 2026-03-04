@@ -13,7 +13,10 @@ Returns _skip_synthesis.
 import asyncio
 import json
 import logging
+import re
 from typing import Any
+
+import httpx
 
 from ...config import settings
 from ...storage.database import get_db_pool
@@ -437,42 +440,39 @@ async def _synthesize_profile(
         "pain_categories": _PAIN_CATEGORIES,
     }
 
-    from ...pipelines.llm import get_pipeline_llm, clean_llm_output
-    from ...services.protocols import Message
-
-    llm = get_pipeline_llm(prefer_cloud=False, try_openrouter=False, auto_activate_ollama=True)
-    if llm is None:
-        logger.warning("No LLM available for profile synthesis")
-        return None, pain_heuristic
-
-    messages = [
-        Message(role="system", content=skill.content),
-        Message(role="user", content=json.dumps(payload, default=str)),
-    ]
+    cfg = settings.b2b_churn
+    vllm_url = cfg.product_profile_vllm_url
+    vllm_model = cfg.product_profile_vllm_model
 
     try:
-        if hasattr(llm, "chat_async"):
-            text = (await llm.chat_async(
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=0.3,
-            )).strip()
-        else:
-            result = await asyncio.wait_for(
-                asyncio.to_thread(
-                    llm.chat,
-                    messages=messages,
-                    max_tokens=max_tokens,
-                    temperature=0.3,
-                ),
-                timeout=120,
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.post(
+                f"{vllm_url}/v1/chat/completions",
+                json={
+                    "model": vllm_model,
+                    "messages": [
+                        {"role": "system", "content": skill.content},
+                        {"role": "user", "content": json.dumps(payload, default=str)},
+                    ],
+                    "max_tokens": max_tokens,
+                    "temperature": 0.3,
+                },
             )
-            text = result.get("response", "").strip()
+            resp.raise_for_status()
+            data = resp.json()
+            text = data["choices"][0]["message"]["content"].strip()
 
         if not text:
             return None, pain_heuristic
 
-        text = clean_llm_output(text)
+        # Strip <think>...</think> tags (qwen3 thinking tokens)
+        text = re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
+
+        # Strip markdown code fences (```json ... ```)
+        text = re.sub(r"^```(?:json)?\s*\n?", "", text)
+        text = re.sub(r"\n?```\s*$", "", text)
+        text = text.strip()
+
         parsed = json.loads(text)
 
         summary = parsed.get("summary")

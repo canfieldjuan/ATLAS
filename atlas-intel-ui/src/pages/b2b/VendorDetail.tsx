@@ -119,7 +119,7 @@ export default function VendorDetail() {
       )}
 
       {/* Quotable evidence */}
-      {signal?.quotable_evidence && Array.isArray(signal.quotable_evidence) && signal.quotable_evidence.length > 0 && (
+      {Array.isArray(signal?.quotable_evidence) && signal.quotable_evidence.length > 0 && (
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
           <h2 className="text-sm font-semibold text-slate-300 mb-3">Quotable Evidence</h2>
           <div className="space-y-2">
@@ -133,7 +133,7 @@ export default function VendorDetail() {
       )}
 
       {/* Top competitors */}
-      {signal?.top_competitors && Array.isArray(signal.top_competitors) && signal.top_competitors.length > 0 && (
+      {Array.isArray(signal?.top_competitors) && signal.top_competitors.length > 0 && (
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
           <h2 className="text-sm font-semibold text-slate-300 mb-3">Top Competitors Mentioned</h2>
           <div className="flex flex-wrap gap-2">

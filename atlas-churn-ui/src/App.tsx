@@ -12,9 +12,25 @@ import Leads from './pages/Leads'
 import VendorTargets from './pages/VendorTargets'
 import Challengers from './pages/Challengers'
 import Affiliates from './pages/Affiliates'
+import Blog from './pages/Blog'
+import BlogPost from './pages/BlogPost'
+
+const BLOG_PATHS = ['/blog']
 
 export default function App() {
   const location = useLocation()
+  const isBlogRoute = BLOG_PATHS.some(p => location.pathname.startsWith(p))
+
+  if (isBlogRoute) {
+    return (
+      <ErrorBoundary key={location.pathname}>
+        <Routes>
+          <Route path="/blog" element={<Blog />} />
+          <Route path="/blog/:slug" element={<BlogPost />} />
+        </Routes>
+      </ErrorBoundary>
+    )
+  }
 
   return (
     <Layout>

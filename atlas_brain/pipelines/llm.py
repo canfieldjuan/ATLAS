@@ -27,6 +27,7 @@ def get_pipeline_llm(
     prefer_cloud: bool = True,
     try_openrouter: bool = True,
     auto_activate_ollama: bool = True,
+    openrouter_model: str | None = None,
 ):
     """Resolve an LLM instance using a configurable fallback chain.
 
@@ -55,7 +56,7 @@ def get_pipeline_llm(
             try:
                 llm_registry.activate(
                     "openrouter",
-                    model="deepseek/deepseek-chat-v3-0324",
+                    model=openrouter_model or "deepseek/deepseek-chat-v3-0324",
                     api_key=or_key,
                 )
                 llm = llm_registry.get_active()
