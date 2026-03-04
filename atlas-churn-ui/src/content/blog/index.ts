@@ -75,6 +75,7 @@ import nutshellDeepDive202603 from './nutshell-deep-dive-2026-03'
 import lookerDeepDive202603 from './looker-deep-dive-2026-03'
 import zendeskDeepDive202603 from './zendesk-deep-dive-2026-03'
 import powerBiDeepDive202603 from './power-bi-deep-dive-2026-03'
+import bigcommerceDeepDive202603 from './bigcommerce-deep-dive-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -174,4 +175,5 @@ export const POSTS: BlogPost[] = [
   lookerDeepDive202603,
   zendeskDeepDive202603,
   powerBiDeepDive202603,
+  bigcommerceDeepDive202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
