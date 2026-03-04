@@ -90,6 +90,7 @@ import helpScoutDeepDive202603 from './help-scout-deep-dive-2026-03'
 import hubspotMarketingHubDeepDive202603 from './hubspot-marketing-hub-deep-dive-2026-03'
 import zohoDeskDeepDive202603 from './zoho-desk-deep-dive-2026-03'
 import insightlyDeepDive202603 from './insightly-deep-dive-2026-03'
+import hubspotServiceHubDeepDive202603 from './hubspot-service-hub-deep-dive-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -204,4 +205,5 @@ export const POSTS: BlogPost[] = [
   hubspotMarketingHubDeepDive202603,
   zohoDeskDeepDive202603,
   insightlyDeepDive202603,
+  hubspotServiceHubDeepDive202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
