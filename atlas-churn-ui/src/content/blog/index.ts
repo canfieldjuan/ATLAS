@@ -122,6 +122,7 @@ import shopifyVsWoocommerce202603 from './shopify-vs-woocommerce-2026-03'
 import shopifyDeepDive202603 from './shopify-deep-dive-2026-03'
 import migrationFromNotion202603 from './migration-from-notion-2026-03'
 import asanaVsClickup202603 from './asana-vs-clickup-2026-03'
+import bigcommerceVsShopify202603 from './bigcommerce-vs-shopify-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -268,4 +269,5 @@ export const POSTS: BlogPost[] = [
   shopifyDeepDive202603,
   migrationFromNotion202603,
   asanaVsClickup202603,
+  bigcommerceVsShopify202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
