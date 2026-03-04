@@ -134,6 +134,7 @@ import awsDeepDive202603 from './aws-deep-dive-2026-03'
 import awsVsGoogleCloud202603 from './aws-vs-google-cloud-2026-03'
 import asanaVsJira202603 from './asana-vs-jira-2026-03'
 import slackDeepDive202603 from './slack-deep-dive-2026-03'
+import nutshellVsSalesforce202603 from './nutshell-vs-salesforce-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -292,4 +293,5 @@ export const POSTS: BlogPost[] = [
   awsVsGoogleCloud202603,
   asanaVsJira202603,
   slackDeepDive202603,
+  nutshellVsSalesforce202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
