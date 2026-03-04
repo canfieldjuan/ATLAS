@@ -11,9 +11,10 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from ..auth.dependencies import AuthUser, optional_auth, require_b2b_plan
 from ..config import settings
 from ..storage.database import get_db_pool
 from ..autonomous.tasks.campaign_audit import log_campaign_event
@@ -113,12 +114,18 @@ async def list_campaigns(
     channel: Optional[str] = Query(None),
     batch_id: Optional[str] = Query(None),
     limit: int = Query(50, le=200),
+    user: AuthUser | None = Depends(optional_auth),
 ):
     pool = _pool_or_503()
 
     conditions = []
     params: list[Any] = []
     idx = 1
+
+    if user:
+        conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
+        params.append(user.account_id)
+        idx += 1
 
     if status:
         conditions.append(f"status = ${idx}")
@@ -192,24 +199,34 @@ async def list_campaigns(
 
 
 @router.get("/stats")
-async def campaign_stats():
+async def campaign_stats(user: AuthUser | None = Depends(optional_auth)):
     """KPI summary: counts by status, top vendors, top channels."""
     pool = _pool_or_503()
 
+    scope = ""
+    scope_params: list[Any] = []
+    if user:
+        scope = " WHERE vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)"
+        scope_params = [user.account_id]
+
     status_rows = await pool.fetch(
-        "SELECT status, COUNT(*) AS cnt FROM b2b_campaigns GROUP BY status LIMIT 50"
+        f"SELECT status, COUNT(*) AS cnt FROM b2b_campaigns{scope} GROUP BY status LIMIT 50",
+        *scope_params,
     )
     channel_rows = await pool.fetch(
-        "SELECT channel, COUNT(*) AS cnt FROM b2b_campaigns GROUP BY channel ORDER BY cnt DESC LIMIT 50"
+        f"SELECT channel, COUNT(*) AS cnt FROM b2b_campaigns{scope} GROUP BY channel ORDER BY cnt DESC LIMIT 50",
+        *scope_params,
     )
     vendor_rows = await pool.fetch(
-        """
+        f"""
         SELECT vendor_name, COUNT(*) AS cnt
         FROM b2b_campaigns
+        {scope}
         GROUP BY vendor_name
         ORDER BY cnt DESC
         LIMIT 10
-        """
+        """,
+        *scope_params,
     )
 
     return {
@@ -626,7 +643,7 @@ async def review_queue(
 
 
 @router.post("/bulk-approve")
-async def bulk_approve(body: BulkApproveBody):
+async def bulk_approve(body: BulkApproveBody, user: AuthUser = require_b2b_plan("b2b_growth")):
     """Approve, queue-send, or reject multiple campaigns at once."""
     if body.action not in ("approve", "queue-send", "reject"):
         raise HTTPException(status_code=400, detail="action must be approve, queue-send, or reject")
@@ -732,7 +749,7 @@ async def bulk_approve(body: BulkApproveBody):
 
 
 @router.post("/bulk-reject")
-async def bulk_reject(body: BulkRejectBody):
+async def bulk_reject(body: BulkRejectBody, user: AuthUser = require_b2b_plan("b2b_growth")):
     """Reject/cancel multiple campaigns."""
     pool = _pool_or_503()
 
@@ -1029,7 +1046,10 @@ async def resume_sequence(sequence_id: UUID):
 
 
 @router.post("/generate")
-async def generate_campaigns_endpoint(body: GenerateRequest):
+async def generate_campaigns_endpoint(
+    body: GenerateRequest,
+    user: AuthUser = require_b2b_plan("b2b_growth"),
+):
     """Manual trigger: generate campaign content for top opportunities."""
     pool = _pool_or_503()
 
@@ -1095,7 +1115,7 @@ async def _send_campaign_notification(
 
 
 @router.get("/{campaign_id}")
-async def get_campaign(campaign_id: str):
+async def get_campaign(campaign_id: str, user: AuthUser | None = Depends(optional_auth)):
     try:
         cid = _uuid.UUID(campaign_id)
     except (ValueError, AttributeError):
@@ -1107,6 +1127,14 @@ async def get_campaign(campaign_id: str):
     )
     if not row:
         raise HTTPException(status_code=404, detail="Campaign not found")
+
+    if user:
+        is_tracked = await pool.fetchval(
+            "SELECT 1 FROM tracked_vendors WHERE account_id = $1::uuid AND vendor_name ILIKE $2",
+            user.account_id, row["vendor_name"],
+        )
+        if not is_tracked:
+            raise HTTPException(status_code=403, detail="Campaign vendor not in your tracked list")
 
     r = dict(row)
     r["id"] = str(r["id"])
@@ -1121,7 +1149,11 @@ async def get_campaign(campaign_id: str):
 
 
 @router.patch("/{campaign_id}")
-async def update_campaign(campaign_id: str, body: CampaignUpdate):
+async def update_campaign(
+    campaign_id: str,
+    body: CampaignUpdate,
+    user: AuthUser = require_b2b_plan("b2b_growth"),
+):
     try:
         cid = _uuid.UUID(campaign_id)
     except (ValueError, AttributeError):
@@ -1159,7 +1191,10 @@ async def update_campaign(campaign_id: str, body: CampaignUpdate):
 
 
 @router.post("/{campaign_id}/approve")
-async def approve_campaign(campaign_id: str):
+async def approve_campaign(
+    campaign_id: str,
+    user: AuthUser = require_b2b_plan("b2b_growth"),
+):
     try:
         cid = _uuid.UUID(campaign_id)
     except (ValueError, AttributeError):
@@ -1196,7 +1231,11 @@ async def approve_campaign(campaign_id: str):
 
 
 @router.post("/{campaign_id}/queue-send")
-async def queue_campaign_for_send(campaign_id: str, body: ApproveQueueBody | None = None):
+async def queue_campaign_for_send(
+    campaign_id: str,
+    body: ApproveQueueBody | None = None,
+    user: AuthUser = require_b2b_plan("b2b_growth"),
+):
     """Queue a campaign for auto-send with a cancel window.
 
     Used for sequence campaigns. Sets status to 'queued' with approved_at
@@ -1305,7 +1344,10 @@ async def queue_campaign_for_send(campaign_id: str, body: ApproveQueueBody | Non
 
 
 @router.post("/{campaign_id}/cancel")
-async def cancel_campaign(campaign_id: str):
+async def cancel_campaign(
+    campaign_id: str,
+    user: AuthUser = require_b2b_plan("b2b_growth"),
+):
     """Cancel a queued campaign before it sends."""
     try:
         cid = _uuid.UUID(campaign_id)

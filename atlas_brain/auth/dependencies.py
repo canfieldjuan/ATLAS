@@ -107,9 +107,14 @@ async def require_auth(request: Request) -> AuthUser:
 
 
 async def optional_auth(request: Request) -> Optional[AuthUser]:
-    """Same as require_auth but returns None instead of 401."""
+    """Same as require_auth but returns None instead of 401.
+
+    When SaaS auth is disabled (local dev), returns None so endpoints
+    behave as unscoped (admin mode) rather than scoping to a synthetic
+    account that has no tracked vendors.
+    """
     if not settings.saas_auth.enabled:
-        return _synthetic_admin()
+        return None
 
     token = _extract_token(request)
     if not token:
