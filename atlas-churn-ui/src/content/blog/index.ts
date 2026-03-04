@@ -28,6 +28,7 @@ import bestMarketingAutomationForUnknown202603 from './best-marketing-automation
 import communicationLandscape202603 from './communication-landscape-2026-03'
 import topComplaintEveryECommerce202603 from './top-complaint-every-e-commerce-2026-03'
 import whyTeamsLeaveAws202603 from './why-teams-leave-aws-2026-03'
+import realCostOfKlaviyo202603 from './real-cost-of-klaviyo-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -80,4 +81,5 @@ export const POSTS: BlogPost[] = [
   communicationLandscape202603,
   topComplaintEveryECommerce202603,
   whyTeamsLeaveAws202603,
+  realCostOfKlaviyo202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
