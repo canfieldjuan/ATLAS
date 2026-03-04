@@ -106,6 +106,7 @@ import googleCloudVsLinode202603 from './google-cloud-vs-linode-2026-03'
 import copperDeepDive202603 from './copper-deep-dive-2026-03'
 import basecampDeepDive202603 from './basecamp-deep-dive-2026-03'
 import smartsheetVsTeamwork202603 from './smartsheet-vs-teamwork-2026-03'
+import asanaVsNotion202603 from './asana-vs-notion-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -236,4 +237,5 @@ export const POSTS: BlogPost[] = [
   copperDeepDive202603,
   basecampDeepDive202603,
   smartsheetVsTeamwork202603,
+  asanaVsNotion202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
