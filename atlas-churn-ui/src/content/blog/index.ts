@@ -144,6 +144,7 @@ import powerBiVsTableau202603 from './power-bi-vs-tableau-2026-03'
 import microsoftTeamsVsZoom202603 from './microsoft-teams-vs-zoom-2026-03'
 import microsoftTeamsVsSlack202603 from './microsoft-teams-vs-slack-2026-03'
 import azureVsDigitalocean202603 from './azure-vs-digitalocean-2026-03'
+import basecampVsClickup202603 from './basecamp-vs-clickup-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -312,4 +313,5 @@ export const POSTS: BlogPost[] = [
   microsoftTeamsVsZoom202603,
   microsoftTeamsVsSlack202603,
   azureVsDigitalocean202603,
+  basecampVsClickup202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
