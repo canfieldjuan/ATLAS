@@ -83,6 +83,7 @@ import metabaseDeepDive202603 from './metabase-deep-dive-2026-03'
 import crowdstrikeDeepDive202603 from './crowdstrike-deep-dive-2026-03'
 import microsoftTeamsDeepDive202603 from './microsoft-teams-deep-dive-2026-03'
 import workdayDeepDive202603 from './workday-deep-dive-2026-03'
+import ripplingDeepDive202603 from './rippling-deep-dive-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -190,4 +191,5 @@ export const POSTS: BlogPost[] = [
   crowdstrikeDeepDive202603,
   microsoftTeamsDeepDive202603,
   workdayDeepDive202603,
+  ripplingDeepDive202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
