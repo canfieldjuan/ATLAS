@@ -194,6 +194,7 @@ import mondaycomVsWrike202603 from './mondaycom-vs-wrike-2026-03'
 import basecampVsTrello202603 from './basecamp-vs-trello-2026-03'
 import teamworkVsTrello202603 from './teamwork-vs-trello-2026-03'
 import jiraVsTrello202603 from './jira-vs-trello-2026-03'
+import hubspotServiceHubVsZendesk202603 from './hubspot-service-hub-vs-zendesk-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -412,4 +413,5 @@ export const POSTS: BlogPost[] = [
   basecampVsTrello202603,
   teamworkVsTrello202603,
   jiraVsTrello202603,
+  hubspotServiceHubVsZendesk202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
