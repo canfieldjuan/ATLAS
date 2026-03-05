@@ -189,6 +189,7 @@ import pipedriveVsSalesforce202603 from './pipedrive-vs-salesforce-2026-03'
 import jiraVsMondaycom202603 from './jira-vs-mondaycom-2026-03'
 import lookerVsPowerBi202603 from './looker-vs-power-bi-2026-03'
 import bamboohrVsGusto202603 from './bamboohr-vs-gusto-2026-03'
+import mondaycomVsTrello202603 from './mondaycom-vs-trello-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -402,4 +403,5 @@ export const POSTS: BlogPost[] = [
   jiraVsMondaycom202603,
   lookerVsPowerBi202603,
   bamboohrVsGusto202603,
+  mondaycomVsTrello202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
