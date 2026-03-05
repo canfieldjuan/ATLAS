@@ -187,6 +187,7 @@ import smartsheetVsWrike202603 from './smartsheet-vs-wrike-2026-03'
 import helpScoutVsZendesk202603 from './help-scout-vs-zendesk-2026-03'
 import pipedriveVsSalesforce202603 from './pipedrive-vs-salesforce-2026-03'
 import jiraVsMondaycom202603 from './jira-vs-mondaycom-2026-03'
+import lookerVsPowerBi202603 from './looker-vs-power-bi-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -398,4 +399,5 @@ export const POSTS: BlogPost[] = [
   helpScoutVsZendesk202603,
   pipedriveVsSalesforce202603,
   jiraVsMondaycom202603,
+  lookerVsPowerBi202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
