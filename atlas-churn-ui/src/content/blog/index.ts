@@ -146,6 +146,7 @@ import microsoftTeamsVsSlack202603 from './microsoft-teams-vs-slack-2026-03'
 import azureVsDigitalocean202603 from './azure-vs-digitalocean-2026-03'
 import basecampVsClickup202603 from './basecamp-vs-clickup-2026-03'
 import clickupVsTeamwork202603 from './clickup-vs-teamwork-2026-03'
+import magentoVsWoocommerce202603 from './magento-vs-woocommerce-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -316,4 +317,5 @@ export const POSTS: BlogPost[] = [
   azureVsDigitalocean202603,
   basecampVsClickup202603,
   clickupVsTeamwork202603,
+  magentoVsWoocommerce202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
