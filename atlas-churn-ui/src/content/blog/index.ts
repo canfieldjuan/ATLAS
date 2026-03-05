@@ -178,6 +178,7 @@ import zendeskVsZohoDesk202603 from './zendesk-vs-zoho-desk-2026-03'
 import zohoCrmDeepDive202603 from './zoho-crm-deep-dive-2026-03'
 import brevoVsMailchimp202603 from './brevo-vs-mailchimp-2026-03'
 import whyTeamsLeaveClickup202603 from './why-teams-leave-clickup-2026-03'
+import mondaycomVsSmartsheet202603 from './mondaycom-vs-smartsheet-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -380,4 +381,5 @@ export const POSTS: BlogPost[] = [
   zohoCrmDeepDive202603,
   brevoVsMailchimp202603,
   whyTeamsLeaveClickup202603,
+  mondaycomVsSmartsheet202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
