@@ -184,6 +184,7 @@ import basecampVsMondaycom202603 from './basecamp-vs-mondaycom-2026-03'
 import mondaycomVsTeamwork202603 from './mondaycom-vs-teamwork-2026-03'
 import bigcommerceVsMagento202603 from './bigcommerce-vs-magento-2026-03'
 import smartsheetVsWrike202603 from './smartsheet-vs-wrike-2026-03'
+import helpScoutVsZendesk202603 from './help-scout-vs-zendesk-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -392,4 +393,5 @@ export const POSTS: BlogPost[] = [
   mondaycomVsTeamwork202603,
   bigcommerceVsMagento202603,
   smartsheetVsWrike202603,
+  helpScoutVsZendesk202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
