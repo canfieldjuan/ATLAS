@@ -180,6 +180,7 @@ import brevoVsMailchimp202603 from './brevo-vs-mailchimp-2026-03'
 import whyTeamsLeaveClickup202603 from './why-teams-leave-clickup-2026-03'
 import mondaycomVsSmartsheet202603 from './mondaycom-vs-smartsheet-2026-03'
 import smartsheetVsTrello202603 from './smartsheet-vs-trello-2026-03'
+import basecampVsMondaycom202603 from './basecamp-vs-mondaycom-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -384,4 +385,5 @@ export const POSTS: BlogPost[] = [
   whyTeamsLeaveClickup202603,
   mondaycomVsSmartsheet202603,
   smartsheetVsTrello202603,
+  basecampVsMondaycom202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
