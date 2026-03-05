@@ -151,6 +151,7 @@ import bigcommerceVsWoocommerce202603 from './bigcommerce-vs-woocommerce-2026-03
 import asanaVsTrello202603 from './asana-vs-trello-2026-03'
 import hubspotMarketingHubVsKlaviyo202603 from './hubspot-marketing-hub-vs-klaviyo-2026-03'
 import awsVsDigitalocean202603 from './aws-vs-digitalocean-2026-03'
+import klaviyoVsMailchimp202603 from './klaviyo-vs-mailchimp-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -326,4 +327,5 @@ export const POSTS: BlogPost[] = [
   asanaVsTrello202603,
   hubspotMarketingHubVsKlaviyo202603,
   awsVsDigitalocean202603,
+  klaviyoVsMailchimp202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
