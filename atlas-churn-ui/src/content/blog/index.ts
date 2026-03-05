@@ -174,6 +174,7 @@ import whyTeamsLeaveMagento202603 from './why-teams-leave-magento-2026-03'
 import jiraVsSmartsheet202603 from './jira-vs-smartsheet-2026-03'
 import getresponseVsMailchimp202603 from './getresponse-vs-mailchimp-2026-03'
 import lookerVsTableau202603 from './looker-vs-tableau-2026-03'
+import zendeskVsZohoDesk202603 from './zendesk-vs-zoho-desk-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -372,4 +373,5 @@ export const POSTS: BlogPost[] = [
   jiraVsSmartsheet202603,
   getresponseVsMailchimp202603,
   lookerVsTableau202603,
+  zendeskVsZohoDesk202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
