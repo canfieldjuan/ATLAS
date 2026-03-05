@@ -197,6 +197,7 @@ import jiraVsTrello202603 from './jira-vs-trello-2026-03'
 import hubspotServiceHubVsZendesk202603 from './hubspot-service-hub-vs-zendesk-2026-03'
 import trelloVsWrike202603 from './trello-vs-wrike-2026-03'
 import intercomVsZendesk202603 from './intercom-vs-zendesk-2026-03'
+import basecampVsJira202603 from './basecamp-vs-jira-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -418,4 +419,5 @@ export const POSTS: BlogPost[] = [
   hubspotServiceHubVsZendesk202603,
   trelloVsWrike202603,
   intercomVsZendesk202603,
+  basecampVsJira202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
