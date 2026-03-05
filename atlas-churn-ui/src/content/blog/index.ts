@@ -164,6 +164,7 @@ import whyTeamsLeaveZoom202603 from './why-teams-leave-zoom-2026-03'
 import whyTeamsLeaveWoocommerce202603 from './why-teams-leave-woocommerce-2026-03'
 import clickupVsTrello202603 from './clickup-vs-trello-2026-03'
 import clickupVsWrike202603 from './clickup-vs-wrike-2026-03'
+import freshdeskVsZendesk202603 from './freshdesk-vs-zendesk-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -352,4 +353,5 @@ export const POSTS: BlogPost[] = [
   whyTeamsLeaveWoocommerce202603,
   clickupVsTrello202603,
   clickupVsWrike202603,
+  freshdeskVsZendesk202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
