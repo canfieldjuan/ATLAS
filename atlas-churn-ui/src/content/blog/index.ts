@@ -200,6 +200,7 @@ import intercomVsZendesk202603 from './intercom-vs-zendesk-2026-03'
 import basecampVsJira202603 from './basecamp-vs-jira-2026-03'
 import digitaloceanVsLinode202603 from './digitalocean-vs-linode-2026-03'
 import copperVsSalesforce202603 from './copper-vs-salesforce-2026-03'
+import salesforceVsZohoCrm202603 from './salesforce-vs-zoho-crm-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -424,4 +425,5 @@ export const POSTS: BlogPost[] = [
   basecampVsJira202603,
   digitaloceanVsLinode202603,
   copperVsSalesforce202603,
+  salesforceVsZohoCrm202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
