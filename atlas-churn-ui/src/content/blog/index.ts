@@ -156,6 +156,7 @@ import clickupVsJira202603 from './clickup-vs-jira-2026-03'
 import ringcentralVsZoom202603 from './ringcentral-vs-zoom-2026-03'
 import ringcentralVsSlack202603 from './ringcentral-vs-slack-2026-03'
 import hubspotMarketingHubVsMailchimp202603 from './hubspot-marketing-hub-vs-mailchimp-2026-03'
+import migrationFromJira202603 from './migration-from-jira-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -336,4 +337,5 @@ export const POSTS: BlogPost[] = [
   ringcentralVsZoom202603,
   ringcentralVsSlack202603,
   hubspotMarketingHubVsMailchimp202603,
+  migrationFromJira202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
