@@ -157,6 +157,7 @@ import ringcentralVsZoom202603 from './ringcentral-vs-zoom-2026-03'
 import ringcentralVsSlack202603 from './ringcentral-vs-slack-2026-03'
 import hubspotMarketingHubVsMailchimp202603 from './hubspot-marketing-hub-vs-mailchimp-2026-03'
 import migrationFromJira202603 from './migration-from-jira-2026-03'
+import realCostOfWoocommerce202603 from './real-cost-of-woocommerce-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -338,4 +339,5 @@ export const POSTS: BlogPost[] = [
   ringcentralVsSlack202603,
   hubspotMarketingHubVsMailchimp202603,
   migrationFromJira202603,
+  realCostOfWoocommerce202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
