@@ -168,6 +168,7 @@ import freshdeskVsZendesk202603 from './freshdesk-vs-zendesk-2026-03'
 import closeVsSalesforce202603 from './close-vs-salesforce-2026-03'
 import activecampaignVsKlaviyo202603 from './activecampaign-vs-klaviyo-2026-03'
 import digitaloceanVsGoogleCloud202603 from './digitalocean-vs-google-cloud-2026-03'
+import basecampVsSmartsheet202603 from './basecamp-vs-smartsheet-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -360,4 +361,5 @@ export const POSTS: BlogPost[] = [
   closeVsSalesforce202603,
   activecampaignVsKlaviyo202603,
   digitaloceanVsGoogleCloud202603,
+  basecampVsSmartsheet202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
