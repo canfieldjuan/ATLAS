@@ -192,6 +192,7 @@ import bamboohrVsGusto202603 from './bamboohr-vs-gusto-2026-03'
 import mondaycomVsTrello202603 from './mondaycom-vs-trello-2026-03'
 import mondaycomVsWrike202603 from './mondaycom-vs-wrike-2026-03'
 import basecampVsTrello202603 from './basecamp-vs-trello-2026-03'
+import teamworkVsTrello202603 from './teamwork-vs-trello-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -408,4 +409,5 @@ export const POSTS: BlogPost[] = [
   mondaycomVsTrello202603,
   mondaycomVsWrike202603,
   basecampVsTrello202603,
+  teamworkVsTrello202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
