@@ -172,6 +172,7 @@ import basecampVsSmartsheet202603 from './basecamp-vs-smartsheet-2026-03'
 import getresponseVsKlaviyo202603 from './getresponse-vs-klaviyo-2026-03'
 import whyTeamsLeaveMagento202603 from './why-teams-leave-magento-2026-03'
 import jiraVsSmartsheet202603 from './jira-vs-smartsheet-2026-03'
+import getresponseVsMailchimp202603 from './getresponse-vs-mailchimp-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -368,4 +369,5 @@ export const POSTS: BlogPost[] = [
   getresponseVsKlaviyo202603,
   whyTeamsLeaveMagento202603,
   jiraVsSmartsheet202603,
+  getresponseVsMailchimp202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
