@@ -154,6 +154,7 @@ import awsVsDigitalocean202603 from './aws-vs-digitalocean-2026-03'
 import klaviyoVsMailchimp202603 from './klaviyo-vs-mailchimp-2026-03'
 import clickupVsJira202603 from './clickup-vs-jira-2026-03'
 import ringcentralVsZoom202603 from './ringcentral-vs-zoom-2026-03'
+import ringcentralVsSlack202603 from './ringcentral-vs-slack-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -332,4 +333,5 @@ export const POSTS: BlogPost[] = [
   klaviyoVsMailchimp202603,
   clickupVsJira202603,
   ringcentralVsZoom202603,
+  ringcentralVsSlack202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
