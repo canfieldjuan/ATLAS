@@ -166,6 +166,7 @@ import clickupVsTrello202603 from './clickup-vs-trello-2026-03'
 import clickupVsWrike202603 from './clickup-vs-wrike-2026-03'
 import freshdeskVsZendesk202603 from './freshdesk-vs-zendesk-2026-03'
 import closeVsSalesforce202603 from './close-vs-salesforce-2026-03'
+import activecampaignVsKlaviyo202603 from './activecampaign-vs-klaviyo-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -356,4 +357,5 @@ export const POSTS: BlogPost[] = [
   clickupVsWrike202603,
   freshdeskVsZendesk202603,
   closeVsSalesforce202603,
+  activecampaignVsKlaviyo202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
