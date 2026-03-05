@@ -160,6 +160,7 @@ import migrationFromJira202603 from './migration-from-jira-2026-03'
 import realCostOfWoocommerce202603 from './real-cost-of-woocommerce-2026-03'
 import clickupVsMondaycom202603 from './clickup-vs-mondaycom-2026-03'
 import clickupVsSmartsheet202603 from './clickup-vs-smartsheet-2026-03'
+import whyTeamsLeaveZoom202603 from './why-teams-leave-zoom-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -344,4 +345,5 @@ export const POSTS: BlogPost[] = [
   realCostOfWoocommerce202603,
   clickupVsMondaycom202603,
   clickupVsSmartsheet202603,
+  whyTeamsLeaveZoom202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
