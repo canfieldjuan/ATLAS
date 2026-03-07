@@ -2041,10 +2041,12 @@ class ExternalDataConfig(BaseSettings):
     competitive_intelligence_min_deep_enriched: int = Field(default=100, description="Min deep-enriched reviews required to run")
     # Blog post generation (data-backed articles with charts)
     blog_post_enabled: bool = Field(default=True, description="Enable blog post generation from review data")
-    blog_post_cron: str = Field(default="0 23 * * *", description="Cron for blog post generation (default 11 PM)")
+    blog_post_cron: str = Field(default="0 23 * * 0", description="Cron for blog post generation (weekly, Sunday 11 PM)")
     blog_post_max_tokens: int = Field(default=6144, description="Max tokens per blog post LLM call")
     blog_post_max_per_run: int = Field(default=1, description="Max blog posts to generate per run")
     blog_post_ui_path: str = Field(default="", description="Path to atlas-intel-ui/src/content/blog/ (empty = DB only)")
+    blog_base_url: str = Field(default="https://atlas-intel-ui-two.vercel.app", description="Base URL for consumer blog (full URLs in campaign emails)")
+    amazon_associate_tag: str = Field(default="", description="Amazon Associates tag for consumer affiliate links")
     blog_post_openrouter_model: str = Field(
         default="moonshotai/kimi-k2.5",
         description="OpenRouter model for blog post generation",
@@ -2123,15 +2125,18 @@ class B2BChurnConfig(BaseSettings):
 
     # Blog post generation
     blog_post_enabled: bool = Field(default=False, description="Enable B2B blog post generation")
-    blog_post_cron: str = Field(default="0 23 * * *", description="Blog post schedule (11 PM, after profiles)")
+    blog_post_cron: str = Field(default="0 23 * * 1-5", description="Blog post schedule (weekdays 11 PM, 5x/week)")
     blog_post_max_tokens: int = Field(default=6144, description="Max LLM output tokens for blog post")
     blog_post_max_per_run: int = Field(default=1, description="Max blog posts per run")
     blog_post_ui_path: str = Field(default="", description="Path to atlas-churn-ui blog content dir")
+    blog_base_url: str = Field(default="https://churnsignals.co", description="Base URL for B2B blog (full URLs in campaign emails)")
     blog_post_openrouter_model: str = Field(default="moonshotai/kimi-k2.5", description="OpenRouter model for blog generation")
     # Blog auto-deploy (git push + Vercel deploy hook)
     blog_auto_deploy_enabled: bool = Field(default=False, description="Auto git-push + Vercel deploy after B2B blog publish")
-    blog_auto_deploy_branch: str = Field(default="dev", description="Git branch to push B2B blog commits to")
+    blog_auto_deploy_branch: str = Field(default="main", description="Git branch to push B2B blog commits to")
     blog_auto_deploy_hook_url: str = Field(default="", description="Vercel deploy hook URL for B2B blog")
+    # Regeneration mode — re-process existing drafts through fixed pipeline
+    blog_post_regenerate_mode: bool = Field(default=False, description="When True, regenerate existing draft posts instead of selecting new topics")
 
 
 class B2BAlertConfig(BaseSettings):
@@ -2178,6 +2183,19 @@ class B2BScrapeConfig(BaseSettings):
     rss_rpm: int = Field(default=10, description="RSS feed requests per minute")
     github_token: str = Field(default="", description="GitHub personal access token for higher rate limits")
 
+    # Phase 2 sources
+    gartner_rpm: int = Field(default=4, description="Gartner Peer Insights requests per minute")
+    trustpilot_rpm: int = Field(default=6, description="TrustPilot requests per minute")
+    getapp_rpm: int = Field(default=8, description="GetApp requests per minute")
+    producthunt_rpm: int = Field(default=20, description="ProductHunt requests per minute")
+    producthunt_api_token: str = Field(default="", description="ProductHunt API bearer token")
+    youtube_api_key: str = Field(default="", description="YouTube Data API v3 key")
+    youtube_rpm: int = Field(default=50, description="YouTube API requests per minute")
+    quora_rpm: int = Field(default=4, description="Quora requests per minute")
+    stackoverflow_rpm: int = Field(default=25, description="Stack Exchange API requests per minute")
+    stackoverflow_api_key: str = Field(default="", description="Stack Exchange API key (10k req/day vs 300)")
+    peerspot_rpm: int = Field(default=4, description="PeerSpot requests per minute")
+
     # Behavioral delays
     min_delay_seconds: float = Field(default=2.0, description="Min delay between requests")
     max_delay_seconds: float = Field(default=8.0, description="Max delay between requests")
@@ -2223,7 +2241,7 @@ class B2BScrapeConfig(BaseSettings):
         description="Bright Data Web Unlocker proxy URL (bypasses DataDome/Cloudflare automatically)",
     )
     web_unlocker_domains: str = Field(
-        default="g2.com",
+        default="g2.com,capterra.com,gartner.com,getapp.com,peerspot.com,quora.com",
         description="Domains to route through Web Unlocker (comma-separated)",
     )
 
@@ -2255,6 +2273,10 @@ class B2BCampaignConfig(BaseSettings):
         default="vendor_retention",
         description="Campaign target mode: vendor_retention | challenger_intel | churning_company",
     )
+    personas: list[str] = Field(
+        default=["executive", "technical", "operations"],
+        description="Persona types to generate campaigns for in churning_company mode",
+    )
 
 
 class CampaignSequenceConfig(BaseSettings):
@@ -2285,11 +2307,27 @@ class CampaignSequenceConfig(BaseSettings):
         default="", description="Resend webhook signature verification secret"
     )
 
+    # ESP selection + SES
+    sender_type: str = Field(default="resend", description="Campaign ESP: 'resend' or 'ses'")
+    ses_region: str = Field(default="us-east-1", description="AWS region for SES")
+    ses_access_key_id: str = Field(default="", description="AWS access key (blank = use env/instance role)")
+    ses_secret_access_key: str = Field(default="", description="AWS secret key")
+    ses_configuration_set: str = Field(default="", description="SES Configuration Set name for tracking")
+    ses_from_email: str = Field(default="", description="Verified sender for SES")
+
     # Smart send scheduling
     send_window_start: str = Field(default="09:00", description="Earliest send time (HH:MM)")
     send_window_end: str = Field(default="17:00", description="Latest send time (HH:MM)")
     send_timezone: str = Field(default="America/Chicago", description="Timezone for send window")
     skip_weekends: bool = Field(default=True, description="Don't send on Sat/Sun")
+
+    @field_validator("sender_type", mode="after")
+    @classmethod
+    def _validate_sender_type(cls, v: str) -> str:
+        allowed = ("resend", "ses")
+        if v not in allowed:
+            raise ValueError(f"sender_type must be one of {allowed}, got '{v}'")
+        return v
 
     @field_validator("send_window_start", "send_window_end", mode="after")
     @classmethod
@@ -2333,6 +2371,33 @@ class AmazonSellerCampaignConfig(BaseSettings):
     product_name: str = Field(default="Atlas Seller Intelligence", description="Product name used in outreach")
     landing_url: str = Field(default="", description="Dashboard landing page URL")
     free_report_url: str = Field(default="", description="Free category report URL template")
+
+
+class ApolloConfig(BaseSettings):
+    """Apollo.io prospect enrichment configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_APOLLO_", env_file=".env", extra="ignore",
+    )
+
+    enabled: bool = Field(default=False, description="Enable Apollo.io prospect pipeline")
+    api_key: str = Field(default="", description="Apollo.io API key")
+    max_prospects_per_company: int = Field(default=5, ge=1, le=10, description="Max people to enrich per company")
+    target_seniorities: list[str] = Field(
+        default=["c_suite", "owner", "founder", "vp", "head", "director"],
+        description="Apollo seniority levels to target",
+    )
+    enrich_batch_size: int = Field(default=10, ge=1, le=10, description="People per bulk_match call (max 10)")
+    min_urgency_score: float = Field(default=6.5, ge=0, le=10, description="Min urgency score for proactive enrichment")
+    org_cache_days: int = Field(default=30, ge=1, description="Days before re-enriching a cached org")
+    max_credits_per_run: int = Field(default=200, ge=1, description="Max Apollo credits per enrichment run")
+    rate_limit_per_minute: int = Field(default=50, ge=1, description="API calls per minute")
+    accepted_email_statuses: list[str] = Field(
+        default=["verified", "probabilistic"],
+        description="Email statuses considered usable",
+    )
+    enrichment_cron: str = Field(default="0 20 * * *", description="Prospect enrichment schedule (daily 8 PM)")
+    matching_interval_seconds: int = Field(default=3600, ge=300, description="Prospect-to-sequence matching interval")
 
 
 class TemporalPatternConfig(BaseSettings):
@@ -2780,6 +2845,7 @@ class Settings(BaseSettings):
     b2b_campaign: B2BCampaignConfig = Field(default_factory=B2BCampaignConfig)
     campaign_sequence: CampaignSequenceConfig = Field(default_factory=CampaignSequenceConfig)
     seller_campaign: AmazonSellerCampaignConfig = Field(default_factory=AmazonSellerCampaignConfig)
+    apollo: ApolloConfig = Field(default_factory=ApolloConfig)
     openai_compat: OpenAICompatConfig = Field(default_factory=OpenAICompatConfig)
     ftl_tracing: FTLTracingConfig = Field(default_factory=FTLTracingConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)

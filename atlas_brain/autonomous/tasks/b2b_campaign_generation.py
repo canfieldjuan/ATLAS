@@ -54,33 +54,7 @@ def _safe_float(val, default=None):
         return default
 
 
-async def _fetch_relevant_blog_urls(
-    pool, vendor_name: str | None = None, category: str | None = None
-) -> list[dict[str, str]]:
-    """Fetch published blog post URLs relevant to a vendor or category.
-
-    Returns a list of {title, slug, topic_type} for injection into campaign
-    selling context so the LLM can reference published analysis.
-    """
-    try:
-        rows = await pool.fetch(
-            """
-            SELECT title, slug, topic_type FROM blog_posts
-            WHERE status = 'published'
-              AND topic_type IN ('vendor_alternative', 'vendor_showdown', 'churn_report', 'migration_guide')
-              AND (
-                  ($1::text IS NOT NULL AND (LOWER(title) LIKE '%' || LOWER($1) || '%' OR LOWER(slug) LIKE '%' || LOWER($1) || '%'))
-                  OR ($2::text IS NOT NULL AND LOWER(slug) LIKE '%' || LOWER($2) || '%')
-              )
-            ORDER BY published_at DESC
-            LIMIT 3
-            """,
-            vendor_name,
-            category,
-        )
-        return [{"title": r["title"], "slug": r["slug"], "topic_type": r["topic_type"]} for r in rows]
-    except Exception:
-        return []
+from ._blog_matching import fetch_relevant_blog_posts as _fetch_blog_posts
 
 
 def _compute_score(row: dict) -> int:
@@ -213,7 +187,10 @@ async def _create_sequence_for_cold_email(
     # Best-effort CRM recipient lookup (only for churning_company mode where
     # company_name is a person/company name; vendor/challenger modes set
     # recipient_email from the target contact directly after this function).
-    if partner_id:
+    # Skip when target_persona is set -- persona sequences rely on the
+    # prospect_matching task for differentiated recipient assignment.
+    has_persona = context.get("target_persona") is not None
+    if partner_id and not has_persona:
         try:
             contact_email = await pool.fetchval(
                 """
@@ -354,39 +331,41 @@ async def _generate_churning_company_campaigns(
     # Fetch affiliate partners for sender identity matching
     partner_index = await _fetch_affiliate_partners(pool)
 
+    personas_skipped = 0
+
     for company_name, opps in companies_to_process:
-        # Build context from best opportunity in the group
+        # Build base context from best opportunity in the group
         best = max(opps, key=lambda o: o["opportunity_score"])
-        context = _build_company_context(best, opps)
+        base_context = _build_company_context(best, opps)
 
         # Inject product profile recommendations (if profiles exist)
         try:
             from ...services.b2b.product_matching import match_products
             matches = await match_products(
                 churning_from=best["vendor_name"],
-                pain_categories=context["pain_categories"],
+                pain_categories=base_context["pain_categories"],
                 company_size=best.get("seat_count"),
                 industry=best.get("industry"),
                 pool=pool,
                 limit=3,
             )
             if matches:
-                context["recommended_alternatives"] = matches
+                base_context["recommended_alternatives"] = matches
         except Exception:
             logger.debug("Product matching unavailable, continuing without recommendations")
 
         # Match to an affiliate partner (Gap 4: sender identity)
-        partner = _match_partner(context, partner_index)
+        partner = _match_partner(base_context, partner_index)
         if not partner:
             logger.debug("No partner match for %s, skipping", company_name)
             skipped_no_partner += 1
             continue
 
-        # Inject selling context
-        blog_urls = await _fetch_relevant_blog_urls(
-            pool, vendor_name=context.get("vendor_name"), category=context.get("category"),
+        # Inject selling context into base
+        blog_urls = await _fetch_blog_posts(
+            pool, pipeline="b2b", vendor_name=base_context.get("churning_from"), category=base_context.get("category"),
         )
-        context["selling"] = {
+        base_context["selling"] = {
             "product_name": partner["product_name"],
             "affiliate_url": partner["affiliate_url"],
             "sender_name": cfg.default_sender_name,
@@ -395,103 +374,118 @@ async def _generate_churning_company_campaigns(
         }
         partner_id = partner["id"]
 
-        # Channel chaining: track cold email output for follow-up context (Gap 1)
-        cold_email_content: dict[str, str] | None = None
+        # Generate per-persona sequences
+        for persona in cfg.personas:
+            persona_context = _build_persona_context(base_context, persona)
+            if persona_context is None:
+                # Skip rule: no relevant pain categories for this persona
+                personas_skipped += 1
+                logger.debug(
+                    "Skipping persona %s for %s (no relevant pain categories)",
+                    persona, company_name,
+                )
+                continue
 
-        for channel in cfg.channels:
-            payload = {**context, "channel": channel}
+            persona_batch_id = f"{batch_id}_{persona}"
 
-            # Inject cold email context for follow-up (Gap 1)
-            if channel == "email_followup" and cold_email_content:
-                payload["cold_email_context"] = cold_email_content
+            # Channel chaining: track cold email output for follow-up context
+            cold_email_content: dict[str, str] | None = None
 
-            content = await _generate_content(
-                llm, skill.content, payload, cfg.max_tokens, cfg.temperature,
-            )
+            for channel in cfg.channels:
+                payload = {**persona_context, "channel": channel}
 
-            if content:
-                # Capture cold email output for chaining
-                if channel == "email_cold":
-                    cold_email_content = {
-                        "subject": content.get("subject", ""),
-                        "body": content.get("body", ""),
-                    }
+                # Inject cold email context for follow-up
+                if channel == "email_followup" and cold_email_content:
+                    payload["cold_email_context"] = cold_email_content
 
-                try:
-                    review_ids = [o["review_id"] for o in opps if o.get("review_id")][:20]
-                    await pool.execute(
-                        """
-                        INSERT INTO b2b_campaigns (
-                            company_name, vendor_name, product_category,
-                            opportunity_score, urgency_score, pain_categories,
-                            competitors_considering, seat_count, contract_end,
-                            decision_timeline, buying_stage, role_type,
-                            key_quotes, source_review_ids,
-                            channel, subject, body, cta,
-                            status, batch_id, llm_model,
-                            partner_id, industry, target_mode
-                        ) VALUES (
-                            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                            $11, $12, $13, $14, $15, $16, $17, $18,
-                            $19, $20, $21, $22, $23, $24
+                content = await _generate_content(
+                    llm, skill.content, payload, cfg.max_tokens, cfg.temperature,
+                )
+
+                if content:
+                    # Capture cold email output for chaining
+                    if channel == "email_cold":
+                        cold_email_content = {
+                            "subject": content.get("subject", ""),
+                            "body": content.get("body", ""),
+                        }
+
+                    try:
+                        review_ids = [o["review_id"] for o in opps if o.get("review_id")][:20]
+                        await pool.execute(
+                            """
+                            INSERT INTO b2b_campaigns (
+                                company_name, vendor_name, product_category,
+                                opportunity_score, urgency_score, pain_categories,
+                                competitors_considering, seat_count, contract_end,
+                                decision_timeline, buying_stage, role_type,
+                                key_quotes, source_review_ids,
+                                channel, subject, body, cta,
+                                status, batch_id, llm_model,
+                                partner_id, industry, target_mode
+                            ) VALUES (
+                                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                                $11, $12, $13, $14, $15, $16, $17, $18,
+                                $19, $20, $21, $22, $23, $24
+                            )
+                            """,
+                            company_name,
+                            best["vendor_name"],
+                            best.get("product_category"),
+                            best["opportunity_score"],
+                            best.get("urgency"),
+                            json.dumps(persona_context.get("pain_categories", [])),
+                            json.dumps(persona_context.get("competitors_considering", [])),
+                            best.get("seat_count"),
+                            best.get("contract_end"),
+                            best.get("decision_timeline"),
+                            best.get("buying_stage"),
+                            persona_context.get("role_type"),
+                            json.dumps(persona_context.get("key_quotes", [])),
+                            review_ids or None,
+                            channel,
+                            content.get("subject", ""),
+                            content.get("body", ""),
+                            content.get("cta", ""),
+                            "draft",
+                            persona_batch_id,
+                            llm_model_name,
+                            _uuid.UUID(partner_id),
+                            persona_context.get("industry"),
+                            "churning_company",
                         )
-                        """,
-                        company_name,
-                        best["vendor_name"],
-                        best.get("product_category"),
-                        best["opportunity_score"],
-                        best.get("urgency"),
-                        json.dumps(context.get("pain_categories", [])),
-                        json.dumps(context.get("competitors_considering", [])),
-                        best.get("seat_count"),
-                        best.get("contract_end"),
-                        best.get("decision_timeline"),
-                        best.get("buying_stage"),
-                        best.get("role_type"),
-                        json.dumps(context.get("key_quotes", [])),
-                        review_ids or None,
-                        channel,
-                        content.get("subject", ""),
-                        content.get("body", ""),
-                        content.get("cta", ""),
-                        "draft",
-                        batch_id,
-                        llm_model_name,
-                        _uuid.UUID(partner_id),
-                        context.get("industry"),
-                        "churning_company",
-                    )
-                    generated += 1
-                except Exception:
-                    logger.exception(
-                        "Failed to store campaign for %s/%s", company_name, channel
-                    )
+                        generated += 1
+                    except Exception:
+                        logger.exception(
+                            "Failed to store campaign for %s/%s/%s", company_name, persona, channel
+                        )
+                        failed += 1
+                else:
                     failed += 1
-            else:
-                failed += 1
 
-        # Create campaign sequence for the cold email (if sequences enabled)
-        if cold_email_content and settings.campaign_sequence.enabled:
-            try:
-                seq_id = await _create_sequence_for_cold_email(
-                    pool,
-                    company_name=company_name,
-                    batch_id=batch_id,
-                    partner_id=partner_id,
-                    context=context,
-                    cold_email_subject=cold_email_content.get("subject", ""),
-                    cold_email_body=cold_email_content.get("body", ""),
-                )
-                if seq_id:
-                    sequences_created += 1
-            except Exception as exc:
-                logger.warning(
-                    "Failed to create sequence for %s: %s", company_name, exc
-                )
+            # Create campaign sequence for the cold email (if sequences enabled)
+            if cold_email_content and settings.campaign_sequence.enabled:
+                try:
+                    seq_id = await _create_sequence_for_cold_email(
+                        pool,
+                        company_name=company_name,
+                        batch_id=persona_batch_id,
+                        partner_id=partner_id,
+                        context=persona_context,
+                        cold_email_subject=cold_email_content.get("subject", ""),
+                        cold_email_body=cold_email_content.get("body", ""),
+                    )
+                    if seq_id:
+                        sequences_created += 1
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to create sequence for %s/%s: %s", company_name, persona, exc
+                    )
 
     logger.info(
-        "Campaign generation (churning_company): %d generated, %d failed, %d skipped (no partner), %d sequences from %d companies",
-        generated, failed, skipped_no_partner, sequences_created, len(companies_to_process),
+        "Campaign generation (churning_company): %d generated, %d failed, %d skipped (no partner), "
+        "%d personas skipped, %d sequences from %d companies",
+        generated, failed, skipped_no_partner, personas_skipped, sequences_created, len(companies_to_process),
     )
 
     return {
@@ -499,6 +493,7 @@ async def _generate_churning_company_campaigns(
         "failed": failed,
         "skipped": len(by_company) - len(companies_to_process),
         "skipped_no_partner": skipped_no_partner,
+        "personas_skipped": personas_skipped,
         "sequences_created": sequences_created,
         "companies": len(companies_to_process),
         "batch_id": batch_id,
@@ -732,8 +727,8 @@ async def _generate_vendor_campaigns(
         review_ids = [o["review_id"] for o in vendor_signals if o.get("review_id")]
 
         # Generate for email_cold and email_followup
-        vendor_blog_urls = await _fetch_relevant_blog_urls(
-            pool, vendor_name=vendor_name, category=vendor_ctx.get("category"),
+        vendor_blog_urls = await _fetch_blog_posts(
+            pool, pipeline="b2b", vendor_name=vendor_name, category=vendor_ctx.get("category"),
         )
         cold_email_content: dict[str, str] | None = None
         for channel in ["email_cold", "email_followup"]:
@@ -1053,8 +1048,8 @@ async def _generate_challenger_campaigns(
         best = max(challenger_signals, key=lambda o: o["opportunity_score"])
         review_ids = [o["review_id"] for o in challenger_signals if o.get("review_id")]
 
-        challenger_blog_urls = await _fetch_relevant_blog_urls(
-            pool, vendor_name=challenger_name, category=challenger_ctx.get("category"),
+        challenger_blog_urls = await _fetch_blog_posts(
+            pool, pipeline="b2b", vendor_name=challenger_name, category=challenger_ctx.get("category"),
         )
         cold_email_content: dict[str, str] | None = None
         for channel in ["email_cold", "email_followup"]:
@@ -1347,6 +1342,81 @@ def _build_company_context(best: dict, all_opps: list[dict]) -> dict[str, Any]:
         "integration_stack": all_integrations[:5],
         "sentiment_direction": best.get("sentiment_direction"),
     }
+
+
+# ------------------------------------------------------------------
+# Persona-specific context filtering
+# ------------------------------------------------------------------
+
+# Pain categories relevant to each persona
+_PERSONA_PAIN_FILTER: dict[str, set[str]] = {
+    "executive": {"pricing", "cost", "scalability", "reliability"},
+    "technical": {"features", "ux", "integration", "security", "performance"},
+    "operations": {"support", "reliability", "usability", "service"},
+}
+
+# Quote keywords for filtering key_quotes per persona
+_PERSONA_QUOTE_KEYWORDS: dict[str, list[str]] = {
+    "executive": ["cost", "price", "budget", "roi", "renewal", "money", "expensive", "contract", "spend"],
+    "technical": ["feature", "bug", "api", "migration", "workaround", "integration", "missing", "broken", "limitation"],
+    "operations": ["support", "ticket", "downtime", "complaint", "productivity", "team", "workflow", "response time", "sla"],
+}
+
+# Persona -> role_type mapping (controls tone via existing skill Rule #3)
+_PERSONA_ROLE_TYPE: dict[str, str] = {
+    "executive": "economic_buyer",
+    "technical": "evaluator",
+    "operations": "champion",
+}
+
+# Context fields to emphasize per persona
+_PERSONA_EMPHASIS: dict[str, list[str]] = {
+    "executive": ["urgency", "seat_count", "contract_end", "decision_timeline"],
+    "technical": ["feature_gaps", "integration_stack", "competitors_considering"],
+    "operations": ["pain_categories", "key_quotes"],
+}
+
+
+def _build_persona_context(base_context: dict[str, Any], persona: str) -> dict[str, Any] | None:
+    """Filter base company context for a specific persona.
+
+    Returns a persona-tailored copy of the context, or None if the persona has
+    no relevant pain categories (skip rule).
+    """
+    pain_filter = _PERSONA_PAIN_FILTER.get(persona, set())
+    quote_keywords = _PERSONA_QUOTE_KEYWORDS.get(persona, [])
+
+    # Filter pain categories
+    filtered_pains = []
+    for p in base_context.get("pain_categories", []):
+        cat = (p.get("category") or "").lower()
+        if any(f in cat for f in pain_filter):
+            filtered_pains.append(p)
+
+    # Skip rule: no relevant pain categories -> skip this persona
+    if not filtered_pains:
+        return None
+
+    # Filter key quotes by persona-relevant keywords
+    filtered_quotes = []
+    for q in base_context.get("key_quotes", []):
+        q_lower = q.lower()
+        if any(kw in q_lower for kw in quote_keywords):
+            filtered_quotes.append(q)
+    # If no quotes matched keywords, keep top 2 from base (better than empty)
+    if not filtered_quotes:
+        filtered_quotes = base_context.get("key_quotes", [])[:2]
+
+    ctx = {
+        **base_context,
+        "pain_categories": filtered_pains,
+        "key_quotes": filtered_quotes[:5],
+        "role_type": _PERSONA_ROLE_TYPE.get(persona, base_context.get("role_type")),
+        "target_persona": persona,
+        "emphasized_fields": _PERSONA_EMPHASIS.get(persona, []),
+    }
+
+    return ctx
 
 
 # ------------------------------------------------------------------
