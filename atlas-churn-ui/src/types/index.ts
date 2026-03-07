@@ -216,6 +216,120 @@ export interface CampaignStats {
   total: number
 }
 
+// ---------------------------------------------------------------------------
+// Blog Drafts
+// ---------------------------------------------------------------------------
+
+export interface BlogDraftSummary {
+  id: string
+  slug: string
+  title: string
+  topic_type: string
+  status: string
+  llm_model: string | null
+  created_at: string | null
+  published_at: string | null
+}
+
+export interface BlogDraft extends BlogDraftSummary {
+  description?: string | null
+  tags: string[]
+  content: string
+  charts: unknown[]
+  data_context: Record<string, unknown> | null
+  reviewer_notes: string | null
+  source_report_date: string | null
+}
+
+export interface BlogEvidence {
+  id: string
+  vendor_name: string
+  reviewer_company: string | null
+  headline: string | null
+  full_text: string | null
+  pain_categories: string[]
+  urgency_score: number | null
+  source_site: string | null
+  review_date: string | null
+}
+
+// ---------------------------------------------------------------------------
+// Prospects
+// ---------------------------------------------------------------------------
+
+export interface Prospect {
+  id: string
+  first_name: string | null
+  last_name: string | null
+  email: string | null
+  email_status: string | null
+  title: string | null
+  seniority: string | null
+  department: string | null
+  company_name: string | null
+  company_domain: string | null
+  linkedin_url: string | null
+  city: string | null
+  state: string | null
+  country: string | null
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ProspectStats {
+  total: number
+  active: number
+  contacted: number
+  this_month: number
+}
+
+// ---------------------------------------------------------------------------
+// Campaign Review (enhanced)
+// ---------------------------------------------------------------------------
+
+export interface ReviewQueueDraft {
+  id: string
+  company_name: string
+  vendor_name: string
+  channel: string
+  subject: string | null
+  body: string | null
+  cta: string | null
+  status: string
+  step_number: number | null
+  recipient_email: string | null
+  seq_recipient: string | null
+  partner_name: string | null
+  product_name: string | null
+  is_suppressed: number
+  seq_status: string | null
+  current_step: number | null
+  max_steps: number | null
+  open_count: number | null
+  click_count: number | null
+  target_persona: string | null
+  prospect_first_name: string | null
+  prospect_last_name: string | null
+  prospect_title: string | null
+  prospect_seniority: string | null
+  prospect_email_status: string | null
+  created_at: string | null
+}
+
+export interface AuditEvent {
+  id: string
+  event_type: string
+  source: string | null
+  campaign_id: string | null
+  sequence_id: string | null
+  step_number: number | null
+  recipient_email: string | null
+  subject: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string | null
+}
+
 export type TargetMode = 'vendor_retention' | 'challenger_intel'
 export type TargetTier = 'report' | 'dashboard' | 'api'
 

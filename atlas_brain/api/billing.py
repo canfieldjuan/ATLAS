@@ -24,9 +24,9 @@ PLAN_LIMITS = {
 
 B2B_PLAN_LIMITS = {
     "b2b_trial":   {"vendors": 1,  "campaigns": False, "reports": False},
-    "b2b_starter": {"vendors": 3,  "campaigns": False, "reports": True},
-    "b2b_growth":  {"vendors": 10, "campaigns": True,  "reports": True},
-    "b2b_pro":     {"vendors": 25, "campaigns": True,  "reports": True, "api": True},
+    "b2b_starter": {"vendors": 5,  "campaigns": False, "reports": True},
+    "b2b_growth":  {"vendors": 25, "campaigns": True,  "reports": True},
+    "b2b_pro":     {"vendors": -1, "campaigns": True,  "reports": True, "api": True},
 }
 
 PRICE_TO_PLAN = {}  # populated at module init from config

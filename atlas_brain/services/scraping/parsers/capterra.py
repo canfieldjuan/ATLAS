@@ -107,7 +107,9 @@ class CapterraParser:
                     continue
 
                 page_reviews = _parse_json_ld(resp.text, target, seen_ids)
-                if not page_reviews:
+                if page_reviews:
+                    _supplement_pros_cons_from_html(resp.text, page_reviews)
+                else:
                     page_reviews = _parse_html(resp.text, target, seen_ids)
 
                 if not page_reviews:
@@ -190,6 +192,10 @@ class CapterraParser:
                 # Strategy 1: JSON-LD extraction (most reliable)
                 page_reviews = _parse_json_ld(html, target, seen_ids)
 
+                # Supplement JSON-LD reviews with pros/cons from HTML cards
+                if page_reviews:
+                    _supplement_pros_cons_from_html(html, page_reviews)
+
                 # Strategy 2: HTML fallback
                 if not page_reviews:
                     page_reviews = _parse_html(html, target, seen_ids)
@@ -225,6 +231,80 @@ class CapterraParser:
         )
 
         return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors)
+
+
+def _supplement_pros_cons_from_html(html: str, reviews: list[dict]) -> None:
+    """Fill in pros/cons/reviewer_title/reviewer_company from HTML cards for JSON-LD reviews.
+
+    JSON-LD captures reviewBody but always leaves pros/cons as None.
+    The HTML cards have proper pros/cons selectors. Match by source_review_id.
+    Modifies reviews in-place; gracefully no-ops if HTML parsing finds nothing.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    cards = soup.select(
+        '[data-testid="review-card"], '
+        '.review-card, '
+        '[class*="ReviewCard"], '
+        'div[class*="review-"][class*="card"]'
+    )
+    if not cards:
+        cards = soup.select('div[id^="review-"], div[class*="review-content"]')
+    if not cards:
+        return
+
+    # Build a lookup from review_id -> parsed HTML card data
+    html_data: dict[str, dict] = {}
+    for card in cards:
+        card_id = card.get("id", "") or card.get("data-review-id", "")
+        if not card_id:
+            card_id = hashlib.sha256(card.get_text(strip=True)[:200].encode()).hexdigest()[:16]
+
+        pros = None
+        for section in card.select('[class*="pros"], [class*="Pros"], [data-testid*="pros"]'):
+            text = section.get_text(strip=True)
+            if text:
+                pros = text[:5000]
+        cons = None
+        for section in card.select('[class*="cons"], [class*="Cons"], [data-testid*="cons"]'):
+            text = section.get_text(strip=True)
+            if text:
+                cons = text[:5000]
+
+        reviewer_title = _get_text(card, '[class*="title"], [class*="job"]')
+        reviewer_company = _get_text(card, '[class*="company"], [class*="org"]')
+
+        html_data[card_id] = {
+            "pros": pros,
+            "cons": cons,
+            "reviewer_title": reviewer_title,
+            "reviewer_company": reviewer_company,
+        }
+
+    # Match JSON-LD reviews to HTML cards and fill gaps.
+    # JSON-LD @id may be a full URL like "https://www.capterra.com/reviews/12345"
+    # while HTML card id may be "review-12345" or just "12345". Also try
+    # content-hash fallback when IDs don't match.
+    for review in reviews:
+        rid = review.get("source_review_id", "")
+        card_data = html_data.get(rid)
+        if not card_data:
+            # Try matching by trailing numeric segment (e.g. ".../12345" -> "12345")
+            rid_tail = rid.rsplit("/", 1)[-1] if "/" in rid else rid
+            for cid, cdata in html_data.items():
+                # Match "12345" == "12345" or "review-12345" ends with "12345"
+                if cid == rid_tail or cid.endswith(f"-{rid_tail}") or rid_tail.endswith(cid):
+                    card_data = cdata
+                    break
+        if not card_data:
+            continue
+        if review.get("pros") is None and card_data["pros"]:
+            review["pros"] = card_data["pros"]
+        if review.get("cons") is None and card_data["cons"]:
+            review["cons"] = card_data["cons"]
+        if review.get("reviewer_title") is None and card_data["reviewer_title"]:
+            review["reviewer_title"] = card_data["reviewer_title"]
+        if review.get("reviewer_company") is None and card_data["reviewer_company"]:
+            review["reviewer_company"] = card_data["reviewer_company"]
 
 
 def _parse_json_ld(

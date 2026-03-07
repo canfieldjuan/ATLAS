@@ -12,8 +12,17 @@ export default function LeadPipeline() {
   const [minUrgency, setMinUrgency] = useState('7')
   const [windowDays, setWindowDays] = useState('90')
 
-  useEffect(() => {
+  const handleMinUrgencyChange = (value: string) => {
     setLoading(true)
+    setMinUrgency(value)
+  }
+
+  const handleWindowDaysChange = (value: string) => {
+    setLoading(true)
+    setWindowDays(value)
+  }
+
+  useEffect(() => {
     fetchLeads({
       min_urgency: Number(minUrgency),
       window_days: Number(windowDays),
@@ -83,7 +92,7 @@ export default function LeadPipeline() {
         <FilterSelect
           label="Min Urgency"
           value={minUrgency}
-          onChange={setMinUrgency}
+          onChange={handleMinUrgencyChange}
           options={[
             { value: '5', label: '>= 5' },
             { value: '7', label: '>= 7 (High)' },
@@ -95,7 +104,7 @@ export default function LeadPipeline() {
         <FilterSelect
           label="Time Window"
           value={windowDays}
-          onChange={setWindowDays}
+          onChange={handleWindowDaysChange}
           options={[
             { value: '7', label: 'Last 7 days' },
             { value: '30', label: 'Last 30 days' },

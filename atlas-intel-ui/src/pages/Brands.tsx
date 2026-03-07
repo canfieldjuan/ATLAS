@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { RefreshCw, ChevronLeft, ChevronRight, Scale } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -35,11 +35,6 @@ export default function Brands() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const filtersKey = JSON.stringify(filters)
 
-  // Reset page when filters change
-  useEffect(() => {
-    setPage(0)
-  }, [filtersKey])
-
   const { data, loading, error, refresh, refreshing } = useApiData(
     () =>
       fetchBrands({
@@ -56,6 +51,21 @@ export default function Brands() {
   const brands = data?.brands ?? []
   const totalCount = data?.total_count ?? 0
   const totalPages = Math.ceil(totalCount / PAGE_SIZE)
+
+  const setFilterAndReset = <K extends keyof Filters>(key: K, value: Filters[K]) => {
+    setPage(0)
+    setFilter(key, value)
+  }
+
+  const clearFilterAndReset = (key: keyof Filters) => {
+    setPage(0)
+    clearFilter(key)
+  }
+
+  const clearAllAndReset = () => {
+    setPage(0)
+    clearAll()
+  }
 
   const toggleSelected = (brand: string, e: React.MouseEvent) => {
     e.stopPropagation()
@@ -221,27 +231,27 @@ export default function Brands() {
         activeFilters={activeFilterEntries.map((e) => ({
           key: e.key,
           label: e.label,
-          onClear: () => clearFilter(e.key),
+          onClear: () => clearFilterAndReset(e.key as keyof Filters),
         }))}
-        onClearAll={clearAll}
+        onClearAll={clearAllAndReset}
       >
         <FilterSearch
           label="Search brands"
           value={filters.search}
-          onChange={(v) => setFilter('search', v)}
+          onChange={(v) => setFilterAndReset('search', v)}
           placeholder="Brand name..."
         />
         <FilterSelect
           label="Category"
           value={filters.source_category}
-          onChange={(v) => setFilter('source_category', v)}
+          onChange={(v) => setFilterAndReset('source_category', v)}
           options={categories.map((c) => ({ value: c, label: c }))}
           placeholder="All Categories"
         />
         <FilterSelect
           label="Sort by"
           value={filters.sort_by || 'review_count'}
-          onChange={(v) => setFilter('sort_by', v)}
+          onChange={(v) => setFilterAndReset('sort_by', v)}
           options={[
             { value: 'review_count', label: 'Review Count' },
             { value: 'avg_rating', label: 'Avg Rating' },
@@ -261,7 +271,7 @@ export default function Brands() {
             min={0}
             max={100}
             value={filters.min_reviews}
-            onChange={(e) => setFilter('min_reviews', Number(e.target.value))}
+            onChange={(e) => setFilterAndReset('min_reviews', Number(e.target.value))}
             className="w-full accent-cyan-500"
           />
         </div>

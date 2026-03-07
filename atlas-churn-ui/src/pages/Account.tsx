@@ -26,10 +26,10 @@ const PLAN_COLORS: Record<string, string> = {
   pro: 'bg-amber-900/50 text-amber-300',
 }
 
-const VENDOR_LIMITS: Record<string, number> = {
-  b2b_starter: 3,
-  b2b_growth: 10,
-  b2b_pro: 25,
+const VENDOR_LIMITS: Record<string, number | string> = {
+  b2b_starter: 5,
+  b2b_growth: 25,
+  b2b_pro: 'Unlimited',
 }
 
 export default function Account() {

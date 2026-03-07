@@ -12,10 +12,11 @@ import uuid as _uuid
 from collections import defaultdict
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from ..auth.dependencies import AuthUser, require_auth, require_plan
+from ..auth.rate_limit import limiter, _dynamic_limit
 from ..config import settings
 from ..storage.database import get_db_pool
 
@@ -143,7 +144,8 @@ class AddAsinRequest(BaseModel):
 
 
 @router.get("/asins")
-async def list_tracked_asins(user: AuthUser = Depends(require_auth)):
+@limiter.limit(_dynamic_limit)
+async def list_tracked_asins(request: Request, user: AuthUser = Depends(require_auth)):
     """List ASINs tracked by the current account."""
     pool = _pool_or_503()
     acct = _uuid.UUID(user.account_id)
@@ -177,7 +179,8 @@ async def list_tracked_asins(user: AuthUser = Depends(require_auth)):
 
 
 @router.post("/asins")
-async def add_tracked_asin(req: AddAsinRequest, user: AuthUser = Depends(require_auth)):
+@limiter.limit(_dynamic_limit)
+async def add_tracked_asin(request: Request, req: AddAsinRequest, user: AuthUser = Depends(require_auth)):
     """Add an ASIN to track. Enforces plan limit."""
     pool = _pool_or_503()
 
@@ -210,7 +213,8 @@ async def add_tracked_asin(req: AddAsinRequest, user: AuthUser = Depends(require
 
 
 @router.delete("/asins/{asin}")
-async def remove_tracked_asin(asin: str, user: AuthUser = Depends(require_auth)):
+@limiter.limit(_dynamic_limit)
+async def remove_tracked_asin(request: Request, asin: str, user: AuthUser = Depends(require_auth)):
     """Remove a tracked ASIN."""
     pool = _pool_or_503()
     result = await pool.execute(
@@ -224,7 +228,9 @@ async def remove_tracked_asin(asin: str, user: AuthUser = Depends(require_auth))
 
 
 @router.get("/asins/search")
+@limiter.limit(_dynamic_limit)
 async def search_available_asins(
+    request: Request,
     q: str = Query(..., min_length=1),
     limit: int = Query(20, le=50),
     user: AuthUser = Depends(require_auth),
@@ -265,7 +271,9 @@ async def search_available_asins(
 
 
 @router.get("/pipeline")
+@limiter.limit(_dynamic_limit)
 async def get_pipeline_status(
+    request: Request,
     source_category: Optional[str] = Query(None),
     user: AuthUser = Depends(require_auth),
 ):
@@ -394,7 +402,8 @@ async def get_pipeline_status(
 
 
 @router.get("/categories")
-async def list_categories(user: AuthUser = Depends(require_auth)):
+@limiter.limit(_dynamic_limit)
+async def list_categories(request: Request, user: AuthUser = Depends(require_auth)):
     pool = _pool_or_503()
     t_cond = _tenant_cond("product_reviews", 1)
     t_params = _tenant_params(user)
@@ -412,7 +421,9 @@ async def list_categories(user: AuthUser = Depends(require_auth)):
 
 
 @router.get("/brands")
+@limiter.limit(_dynamic_limit)
 async def list_brands(
+    request: Request,
     source_category: Optional[str] = Query(None),
     min_reviews: int = Query(0),
     search: Optional[str] = Query(None),
@@ -727,7 +738,9 @@ async def _list_brands_live(
 
 
 @router.get("/brands/compare")
+@limiter.limit(_dynamic_limit)
 async def compare_brands(
+    request: Request,
     brands: str = Query(..., description="Comma-separated brand names (2-4)"),
     user: AuthUser = require_plan("growth"),
 ):
@@ -1094,7 +1107,8 @@ async def compare_brands(
 
 
 @router.get("/brands/{brand_name}")
-async def get_brand_detail(brand_name: str, user: AuthUser = Depends(require_auth)):
+@limiter.limit(_dynamic_limit)
+async def get_brand_detail(request: Request, brand_name: str, user: AuthUser = Depends(require_auth)):
     pool = _pool_or_503()
     bname = brand_name.strip()
 
@@ -1631,7 +1645,9 @@ async def get_brand_detail(brand_name: str, user: AuthUser = Depends(require_aut
 
 
 @router.get("/flows")
+@limiter.limit(_dynamic_limit)
 async def get_competitive_flows(
+    request: Request,
     source_category: Optional[str] = Query(None),
     brand: Optional[str] = Query(None),
     direction: Optional[str] = Query(None),
@@ -1746,7 +1762,9 @@ async def get_competitive_flows(
 
 
 @router.get("/features")
+@limiter.limit(_dynamic_limit)
 async def get_feature_gaps(
+    request: Request,
     source_category: Optional[str] = Query(None),
     brand: Optional[str] = Query(None),
     min_count: int = Query(1),
@@ -1872,7 +1890,9 @@ async def get_feature_gaps(
 
 
 @router.get("/safety")
+@limiter.limit(_dynamic_limit)
 async def get_safety_signals(
+    request: Request,
     source_category: Optional[str] = Query(None),
     brand: Optional[str] = Query(None),
     min_rating: Optional[float] = Query(None),
@@ -1972,7 +1992,9 @@ async def get_safety_signals(
 
 
 @router.get("/reviews")
+@limiter.limit(_dynamic_limit)
 async def search_reviews(
+    request: Request,
     source_category: Optional[str] = Query(None),
     brand: Optional[str] = Query(None),
     asin: Optional[str] = Query(None),
@@ -2148,7 +2170,8 @@ async def search_reviews(
 
 
 @router.get("/reviews/{review_id}")
-async def get_review(review_id: str, user: AuthUser = Depends(require_auth)):
+@limiter.limit(_dynamic_limit)
+async def get_review(request: Request, review_id: str, user: AuthUser = Depends(require_auth)):
     try:
         rid = _uuid.UUID(review_id)
     except (ValueError, AttributeError):

@@ -12,9 +12,10 @@ import logging
 import uuid as _uuid
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from starlette.responses import StreamingResponse
 
+from ..auth.dependencies import AuthUser, optional_auth
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.b2b_dashboard")
@@ -63,11 +64,17 @@ async def list_signals(
     min_urgency: float = Query(0, ge=0, le=10),
     category: Optional[str] = Query(None),
     limit: int = Query(20, ge=1, le=100),
+    user: AuthUser | None = Depends(optional_auth),
 ):
     pool = _pool_or_503()
     conditions: list[str] = []
     params: list = []
     idx = 1
+
+    if user:
+        conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
+        params.append(user.account_id)
+        idx += 1
 
     if vendor_name:
         conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
@@ -130,30 +137,42 @@ async def list_signals(
 async def get_signal(
     vendor_name: str,
     product_category: Optional[str] = Query(None),
+    user: AuthUser | None = Depends(optional_auth),
 ):
     pool = _pool_or_503()
+    vname = vendor_name.strip()
+
+    # Build optional tenant scope clause
+    scope = ""
+    scope_params: list = [vname]
+    if user:
+        scope = f" AND vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${ len(scope_params) + 1 }::uuid)"
+        scope_params.append(user.account_id)
 
     if product_category:
+        pidx = len(scope_params) + 1
         row = await pool.fetchrow(
-            """
+            f"""
             SELECT * FROM b2b_churn_signals
             WHERE vendor_name ILIKE '%' || $1 || '%'
-              AND product_category = $2
+              AND product_category = ${pidx}
+              {scope}
             ORDER BY avg_urgency_score DESC
             LIMIT 1
             """,
-            vendor_name.strip(),
+            *scope_params,
             product_category,
         )
     else:
         row = await pool.fetchrow(
-            """
+            f"""
             SELECT * FROM b2b_churn_signals
             WHERE vendor_name ILIKE '%' || $1 || '%'
+              {scope}
             ORDER BY avg_urgency_score DESC
             LIMIT 1
             """,
-            vendor_name.strip(),
+            *scope_params,
         )
 
     if not row:
@@ -197,6 +216,7 @@ async def list_high_intent(
     min_urgency: float = Query(7, ge=0, le=10),
     window_days: int = Query(30, ge=1, le=3650),
     limit: int = Query(20, ge=1, le=100),
+    user: AuthUser | None = Depends(optional_auth),
 ):
     pool = _pool_or_503()
     conditions = [
@@ -207,6 +227,11 @@ async def list_high_intent(
     ]
     params: list = [min_urgency, window_days]
     idx = 3
+
+    if user:
+        conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
+        params.append(user.account_id)
+        idx += 1
 
     if vendor_name:
         conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
@@ -266,9 +291,18 @@ async def list_high_intent(
 
 
 @router.get("/vendors/{vendor_name}")
-async def get_vendor_profile(vendor_name: str):
+async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(optional_auth)):
     pool = _pool_or_503()
     vname = vendor_name.strip()
+
+    # When authenticated, verify vendor is tracked by the user's account
+    if user:
+        is_tracked = await pool.fetchval(
+            "SELECT 1 FROM tracked_vendors WHERE account_id = $1::uuid AND vendor_name ILIKE $2",
+            user.account_id, vname,
+        )
+        if not is_tracked:
+            raise HTTPException(status_code=403, detail="Vendor not in your tracked list")
 
     signal_row = await pool.fetchrow(
         """
@@ -389,6 +423,7 @@ async def list_reports(
     report_type: Optional[str] = Query(None),
     vendor_filter: Optional[str] = Query(None),
     limit: int = Query(10, ge=1, le=50),
+    user: AuthUser | None = Depends(optional_auth),
 ):
     if report_type and report_type not in VALID_REPORT_TYPES:
         raise HTTPException(status_code=400, detail=f"report_type must be one of {VALID_REPORT_TYPES}")
@@ -397,6 +432,11 @@ async def list_reports(
     conditions: list[str] = []
     params: list = []
     idx = 1
+
+    if user:
+        conditions.append(f"vendor_filter IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
+        params.append(user.account_id)
+        idx += 1
 
     if report_type:
         conditions.append(f"report_type = ${idx}")
@@ -446,7 +486,7 @@ async def list_reports(
 
 
 @router.get("/reports/{report_id}")
-async def get_report(report_id: str):
+async def get_report(report_id: str, user: AuthUser | None = Depends(optional_auth)):
     try:
         rid = _uuid.UUID(report_id)
     except (ValueError, AttributeError):
@@ -457,6 +497,14 @@ async def get_report(report_id: str):
 
     if not row:
         raise HTTPException(status_code=404, detail="Report not found")
+
+    if user and row["vendor_filter"]:
+        is_tracked = await pool.fetchval(
+            "SELECT 1 FROM tracked_vendors WHERE account_id = $1::uuid AND vendor_name = $2",
+            user.account_id, row["vendor_filter"],
+        )
+        if not is_tracked:
+            raise HTTPException(status_code=403, detail="Report vendor not in your tracked list")
 
     return {
         "id": str(row["id"]),
@@ -487,6 +535,7 @@ async def search_reviews(
     has_churn_intent: Optional[bool] = Query(None),
     window_days: int = Query(30, ge=1, le=3650),
     limit: int = Query(20, ge=1, le=100),
+    user: AuthUser | None = Depends(optional_auth),
 ):
     pool = _pool_or_503()
     conditions = [
@@ -495,6 +544,11 @@ async def search_reviews(
     ]
     params: list = [window_days]
     idx = 2
+
+    if user:
+        conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
+        params.append(user.account_id)
+        idx += 1
 
     if vendor_name:
         conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
@@ -569,7 +623,7 @@ async def search_reviews(
 
 
 @router.get("/reviews/{review_id}")
-async def get_review(review_id: str):
+async def get_review(review_id: str, user: AuthUser | None = Depends(optional_auth)):
     try:
         rid = _uuid.UUID(review_id)
     except (ValueError, AttributeError):
@@ -580,6 +634,14 @@ async def get_review(review_id: str):
 
     if not row:
         raise HTTPException(status_code=404, detail="Review not found")
+
+    if user:
+        is_tracked = await pool.fetchval(
+            "SELECT 1 FROM tracked_vendors WHERE account_id = $1::uuid AND vendor_name ILIKE $2",
+            user.account_id, row["vendor_name"],
+        )
+        if not is_tracked:
+            raise HTTPException(status_code=403, detail="Vendor not in your tracked list")
 
     return {
         "id": str(row["id"]),
@@ -612,34 +674,49 @@ async def get_review(review_id: str):
 
 
 @router.get("/pipeline")
-async def get_pipeline_status():
+async def get_pipeline_status(user: AuthUser | None = Depends(optional_auth)):
     pool = _pool_or_503()
 
+    # Build vendor scope clause for authenticated users
+    vendor_scope = ""
+    scrape_scope = ""
+    scope_params: list = []
+    if user:
+        vendor_scope = " WHERE vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)"
+        scrape_scope = " WHERE vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)"
+        scope_params = [user.account_id]
+
     status_rows = await pool.fetch(
-        """
+        f"""
         SELECT enrichment_status, COUNT(*) AS cnt
         FROM b2b_reviews
+        {vendor_scope}
         GROUP BY enrichment_status
-        """
+        """,
+        *scope_params,
     )
     enrichment_counts = {r["enrichment_status"]: r["cnt"] for r in status_rows}
 
     stats = await pool.fetchrow(
-        """
+        f"""
         SELECT
             COUNT(*) FILTER (WHERE imported_at > NOW() - INTERVAL '24 hours') AS recent_imports_24h,
             MAX(enriched_at) AS last_enrichment_at
         FROM b2b_reviews
-        """
+        {vendor_scope}
+        """,
+        *scope_params,
     )
 
     scrape_stats = await pool.fetchrow(
-        """
+        f"""
         SELECT
             COUNT(*) FILTER (WHERE enabled) AS active_scrape_targets,
             MAX(last_scraped_at) AS last_scrape_at
         FROM b2b_scrape_targets
-        """
+        {scrape_scope}
+        """,
+        *scope_params,
     )
 
     return {
@@ -690,11 +767,17 @@ async def export_signals(
     vendor_name: Optional[str] = Query(None),
     min_urgency: float = Query(0, ge=0, le=10),
     category: Optional[str] = Query(None),
+    user: AuthUser | None = Depends(optional_auth),
 ):
     pool = _pool_or_503()
     conditions: list[str] = []
     params: list = []
     idx = 1
+
+    if user:
+        conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
+        params.append(user.account_id)
+        idx += 1
 
     if vendor_name:
         conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
@@ -759,6 +842,7 @@ async def export_reviews(
     company: Optional[str] = Query(None),
     has_churn_intent: Optional[bool] = Query(None),
     window_days: int = Query(90, ge=1, le=3650),
+    user: AuthUser | None = Depends(optional_auth),
 ):
     pool = _pool_or_503()
     conditions = [
@@ -767,6 +851,11 @@ async def export_reviews(
     ]
     params: list = [window_days]
     idx = 2
+
+    if user:
+        conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
+        params.append(user.account_id)
+        idx += 1
 
     if vendor_name:
         conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
@@ -842,6 +931,7 @@ async def export_high_intent(
     vendor_name: Optional[str] = Query(None),
     min_urgency: float = Query(7, ge=0, le=10),
     window_days: int = Query(90, ge=1, le=3650),
+    user: AuthUser | None = Depends(optional_auth),
 ):
     pool = _pool_or_503()
     conditions = [
@@ -852,6 +942,11 @@ async def export_high_intent(
     ]
     params: list = [min_urgency, window_days]
     idx = 3
+
+    if user:
+        conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
+        params.append(user.account_id)
+        idx += 1
 
     if vendor_name:
         conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")

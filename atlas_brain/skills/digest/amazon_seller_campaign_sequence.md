@@ -50,6 +50,15 @@ Days since last email: {days_since_last}
 
 **Step 3+ with no engagement**: Break-up email. Short and honest. "I've been sending [category] competitive data -- looks like the timing's off. No more emails from me. If you ever want to see where your competitors are gaining and losing customers, the report is here: [url]. Good luck out there."
 
+### Per-Step Engagement Patterns
+
+The engagement summary includes a per-step breakdown. Use it:
+
+- **Earlier steps opened but most recent step ignored**: The last angle missed. Hit harder with the strongest unused data point -- a bigger number, a scarier competitor move.
+- **Only one specific step was clicked**: That angle worked. Double down on the same theme (competitive flows, returns, untapped demand) but with fresh data points. Don't repeat the same email -- evolve it.
+- **Engagement tapered off**: Novelty is gone. Switch formats entirely -- lead with a question, use a single shocking stat as the entire email, or try a "your competitor just did X" trigger.
+- **Zero engagement across all steps**: Every approach failed. Go nuclear on the subject line. Pure number, pure jealousy, pure fear. The body barely matters if they won't open.
+
 **Reply -- interested**: Stop selling. Help them. Pull specific numbers from the intelligence and answer their question directly. Then: "The dashboard shows this in real time if you want to track it."
 
 **Reply -- not now**: Respect it. One sentence: "Totally get it. The free [category] report is here whenever you need it: [url]."
@@ -96,3 +105,4 @@ Respond with ONLY this JSON (no markdown fences, no extra text):
 - No "AI", "machine learning", or "algorithm." Say "we tracked", "our data shows", "we analyzed."
 - Sign off with sender name and title from selling context.
 - Break-up emails (last step): make it final, leave the report link as a parting gift.
+- When the selling context includes `blog_posts`, drop ONE blog link per email as a credibility builder. Rotate posts across sequence steps -- never link the same post twice. Frame as published analysis: "We broke this down here: [url]" or "Full category breakdown: [url]".

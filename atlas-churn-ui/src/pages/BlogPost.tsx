@@ -1,11 +1,12 @@
 import { useParams, Link } from 'react-router-dom'
-import { useMemo, useEffect } from 'react'
+import { lazy, Suspense, useMemo, useEffect } from 'react'
 import { marked } from 'marked'
 import { ArrowLeft } from 'lucide-react'
 import PublicLayout from '../components/PublicLayout'
-import BlogChart from '../components/BlogChartRenderer'
 import { POSTS } from '../content/blog'
-import type { ChartSpec } from '../content/blog'
+import type { ChartSpec, BlogPost as BlogPostType } from '../content/blog'
+
+const BlogChart = lazy(() => import('../components/BlogChartRenderer'))
 
 function formatDate(iso: string) {
   return new Date(iso + 'T00:00:00').toLocaleDateString('en-US', {
@@ -32,7 +33,13 @@ function renderContentWithCharts(content: string, charts?: ChartSpec[]) {
         const match = part.match(/^\{\{chart:([^}]+)\}\}$/)
         if (match) {
           const spec = chartMap.get(match[1])
-          if (spec) return <BlogChart key={i} spec={spec} />
+          if (spec) {
+            return (
+              <Suspense key={i} fallback={null}>
+                <BlogChart spec={spec} />
+              </Suspense>
+            )
+          }
           return null
         }
         if (!part.trim()) return null
@@ -43,13 +50,28 @@ function renderContentWithCharts(content: string, charts?: ChartSpec[]) {
   )
 }
 
-const DEFAULT_AFFILIATE_URL = 'https://try.monday.com/1p7bntdd5bui'
+function getAffiliateCta(post: BlogPostType) {
+  const url = post.data_context?.affiliate_url
+  const partner = post.data_context?.affiliate_partner
+  const partnerName = partner?.name || partner?.product_name
+
+  if (url && partnerName) {
+    return { url, name: partnerName, show: true }
+  }
+  // No affiliate — don't show a CTA
+  return { url: '', name: '', show: false }
+}
+
+function hasAffiliateContent(post: BlogPostType): boolean {
+  return !!(post.data_context?.affiliate_url || post.content?.includes('try.monday.com'))
+}
 
 export default function BlogPost() {
   const { slug } = useParams<{ slug: string }>()
   const post = POSTS.find(p => p.slug === slug)
 
-  const affiliateUrl = post?.data_context?.affiliate_url || DEFAULT_AFFILIATE_URL
+  const cta = post ? getAffiliateCta(post) : { url: '', name: '', show: false }
+  const showDisclosure = post ? hasAffiliateContent(post) : false
 
   const renderedContent = useMemo(() => {
     if (!post) return null
@@ -108,24 +130,35 @@ export default function BlogPost() {
           </div>
         </header>
 
+        {/* Affiliate disclosure — before content, near the top */}
+        {showDisclosure && (
+          <div className="mb-8 px-4 py-3 bg-slate-800/40 border border-slate-700/40 rounded-lg text-xs text-slate-500">
+            <strong>Disclosure:</strong> This article may contain affiliate links. If you purchase through these links, we may earn a commission at no additional cost to you. Our analysis and recommendations are based on verified review data, not affiliate relationships. See our{' '}
+            <Link to="/methodology" className="text-cyan-500 hover:text-cyan-400 underline">methodology</Link>.
+          </div>
+        )}
+
         {/* Rendered markdown with inline charts */}
         {renderedContent}
 
-        {/* CTA */}
-        <div className="mt-16 p-8 bg-slate-800/60 border border-slate-700/50 rounded-xl text-center">
-          <h2 className="text-xl font-bold mb-2">Ready to explore a better solution?</h2>
-          <p className="text-slate-400 mb-6">
-            See why teams are switching to smarter project management. Start free, no credit card required.
-          </p>
-          <a
-            href={affiliateUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-block px-6 py-3 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-semibold transition-colors"
-          >
-            Try Monday.com Free
-          </a>
-        </div>
+        {/* CTA — only shown when post has a matching affiliate partner */}
+        {cta.show && (
+          <div className="mt-16 p-8 bg-slate-800/60 border border-slate-700/50 rounded-xl text-center">
+            <h2 className="text-xl font-bold mb-2">Want to try {cta.name}?</h2>
+            <p className="text-slate-400 mb-6">
+              Based on the data, {cta.name} may be worth evaluating for your team. Start free, no credit card required.
+            </p>
+            <a
+              href={cta.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-block px-6 py-3 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-semibold transition-colors"
+            >
+              Try {cta.name} Free
+            </a>
+            <p className="mt-3 text-xs text-slate-600">Affiliate link — see disclosure above</p>
+          </div>
+        )}
       </article>
     </PublicLayout>
   )

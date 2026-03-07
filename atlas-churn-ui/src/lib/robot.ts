@@ -226,13 +226,12 @@ export class Robot {
     const newDir = targetX > this.x ? 1 : -1
     if (newDir !== this.dir) { this.dir = newDir; this._applyTransform() }
 
-    const self = this
     const proxy = { x: this.x }
-    const tl = gsap.timeline({ onComplete() { self.x = targetX; self._applyTransform() } })
+    const tl = gsap.timeline({ onComplete: () => { this.x = targetX; this._applyTransform() } })
 
     tl.to(proxy, {
       x: targetX, duration, ease: 'power1.inOut',
-      onUpdate() { self.x = proxy.x; self._applyTransform() },
+      onUpdate: () => { this.x = proxy.x; this._applyTransform() },
     }, 0)
 
     const ub = this._e('upper-body')
@@ -302,17 +301,16 @@ export class Robot {
   jump(height = 55, type = 0) {
     const origY = this.y
     const apex = origY - height
-    const self = this
     const proxy = { y: origY }
 
     const tl = gsap.timeline({
-      onComplete: () => { self.y = origY; self._applyTransform() },
+      onComplete: () => { this.y = origY; this._applyTransform() },
     })
 
     const moveY = (toY: number, dur: number, ease: string) =>
       tl.to(proxy, {
         y: toY, duration: dur, ease,
-        onUpdate() { self.y = proxy.y; self._applyTransform() },
+        onUpdate: () => { this.y = proxy.y; this._applyTransform() },
       })
 
     // Crouch
@@ -432,17 +430,16 @@ export class Robot {
 
     // Mini jump
     const origY = this.y
-    const self = this
     const proxy = { y: origY }
     tl.to(ub, { y: 5, duration: 0.08, ease: 'power2.in' })
     tl.to(proxy, {
       y: origY - 28, duration: 0.22, ease: 'power2.out',
-      onUpdate() { self.y = proxy.y; self._applyTransform() },
+      onUpdate: () => { this.y = proxy.y; this._applyTransform() },
     })
     tl.to(ub, { y: -2, duration: 0.15 }, '<')
     tl.to(proxy, {
       y: origY, duration: 0.26, ease: 'bounce.out',
-      onUpdate() { self.y = proxy.y; self._applyTransform() },
+      onUpdate: () => { this.y = proxy.y; this._applyTransform() },
     })
     tl.to(ub, { y: 6, duration: 0.06, ease: 'power2.in' })
       .to(ub, { y: 0, duration: 0.20, ease: 'elastic.out(1, 0.5)' })
@@ -459,26 +456,25 @@ export class Robot {
 
   turn(newDir: number) {
     if (newDir === this.dir) return gsap.timeline()
-    const self = this
     const proxy = { sx: this.scale * this.dir }
     const tl = gsap.timeline({
-      onComplete: () => { self.dir = newDir; self._applyTransform() },
+      onComplete: () => { this.dir = newDir; this._applyTransform() },
     })
     tl.to(proxy, {
       sx: 0, duration: 0.12, ease: 'power2.in',
-      onUpdate() {
-        self.root.setAttribute('transform',
-          `translate(${self.x}, ${self.y}) scale(${proxy.sx}, ${self.scale})`)
+      onUpdate: () => {
+        this.root.setAttribute('transform',
+          `translate(${this.x}, ${this.y}) scale(${proxy.sx}, ${this.scale})`)
       },
     })
     .to(proxy, {
-      sx: self.scale * newDir, duration: 0.12, ease: 'power2.out',
-      onUpdate() {
-        self.root.setAttribute('transform',
-          `translate(${self.x}, ${self.y}) scale(${proxy.sx}, ${self.scale})`)
+      sx: this.scale * newDir, duration: 0.12, ease: 'power2.out',
+      onUpdate: () => {
+        this.root.setAttribute('transform',
+          `translate(${this.x}, ${this.y}) scale(${proxy.sx}, ${this.scale})`)
       },
     })
-    tl.add(() => { self.dir = newDir }, 0.12)
+    tl.add(() => { this.dir = newDir }, 0.12)
     return tl
   }
 

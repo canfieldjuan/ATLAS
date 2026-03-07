@@ -5,10 +5,10 @@ import { useAuth } from '../auth/AuthContext'
 
 function TrialBanner() {
   const { user } = useAuth()
+  const [now] = useState(() => Date.now())
   if (!user || !user.trial_ends_at) return null
   if (!['trial', 'b2b_trial'].includes(user.plan)) return null
 
-  const now = Date.now()
   const ends = new Date(user.trial_ends_at).getTime()
   const daysLeft = Math.ceil((ends - now) / (1000 * 60 * 60 * 24))
 

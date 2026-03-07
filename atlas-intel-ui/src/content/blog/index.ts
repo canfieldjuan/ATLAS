@@ -1,9 +1,23 @@
+type ChartValue = string | number | null | undefined
+type ChartDatum = Record<string, ChartValue>
+
+interface ChartSeries {
+  dataKey: string
+  color?: string
+}
+
+interface ChartConfig {
+  bars?: ChartSeries[]
+  x_key?: string
+  [key: string]: unknown
+}
+
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
   title: string
-  data: Record<string, any>[]
-  config: Record<string, any>
+  data: ChartDatum[]
+  config: ChartConfig
 }
 
 export interface BlogPost {
@@ -30,6 +44,7 @@ import migrationAccessories202603 from './migration-accessories-2026-03'
 import safetyComputerAccessoriesPeripherals202603 from './safety-computer-accessories-peripherals-2026-03'
 import safetyStrengthTrainingEquipment202603 from './safety-strength-training-equipment-2026-03'
 import safetyElectronics202603 from './safety-electronics-2026-03'
+import safetyCycling202603 from './safety-cycling-2026-03'
 
 export const POSTS: BlogPost[] = [
   amazonReviewMonitoringTools,
@@ -44,4 +59,5 @@ export const POSTS: BlogPost[] = [
   safetyComputerAccessoriesPeripherals202603,
   safetyStrengthTrainingEquipment202603,
   safetyElectronics202603,
+  safetyCycling202603,
 ].sort((a, b) => b.date.localeCompare(a.date))

@@ -17,8 +17,10 @@ import { clsx } from 'clsx'
 import StatCard from '../components/StatCard'
 import DataTable, { type Column } from '../components/DataTable'
 import UrgencyBadge from '../components/UrgencyBadge'
+import UpgradeGate from '../components/UpgradeGate'
 import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
+import { usePlanGate } from '../hooks/usePlanGate'
 import {
   fetchAffiliateOpportunities,
   fetchCampaigns,
@@ -169,6 +171,8 @@ function CampaignModal({
 }
 
 export default function Leads() {
+  const { canAccessCampaigns } = usePlanGate()
+
   // Filters
   const [vendorSearch, setVendorSearch] = useState('')
   const [debouncedVendor, setDebouncedVendor] = useState('')
@@ -456,14 +460,16 @@ export default function Leads() {
             <Download className="h-4 w-4" />
             Export CSV
           </button>
-          <button
-            onClick={handleGenerate}
-            disabled={generating}
-            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 transition-colors disabled:opacity-50"
-          >
-            <Zap className={clsx('h-4 w-4', generating && 'animate-pulse')} />
-            {generating ? 'Generating...' : 'Generate Campaigns'}
-          </button>
+          {canAccessCampaigns && (
+            <button
+              onClick={handleGenerate}
+              disabled={generating}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 transition-colors disabled:opacity-50"
+            >
+              <Zap className={clsx('h-4 w-4', generating && 'animate-pulse')} />
+              {generating ? 'Generating...' : 'Generate Campaigns'}
+            </button>
+          )}
           <button
             onClick={refresh}
             disabled={refreshing}
@@ -573,7 +579,7 @@ export default function Leads() {
       </div>
 
       {/* Campaigns Table */}
-      {campaigns.length > 0 && (
+      {canAccessCampaigns && campaigns.length > 0 && (
         <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-5">
           <h3 className="text-sm font-medium text-slate-300 mb-4">
             Generated Campaigns ({campaigns.length})
@@ -584,6 +590,12 @@ export default function Leads() {
             emptyMessage="No campaigns generated yet"
           />
         </div>
+      )}
+
+      {!canAccessCampaigns && (
+        <UpgradeGate allowed={false} feature="Campaigns" requiredPlan="Growth">
+          <div />
+        </UpgradeGate>
       )}
 
       {/* Campaign Detail Modal */}

@@ -49,6 +49,15 @@ Choose your angle based on what the engagement signals tell you:
 
 **Step 3+ with no engagement**: This is a "break-up" email. Keep it very short and light. Close the loop gracefully. No hard sell. Example: "Looks like the timing isn't right -- no worries. If things change, I'm here."
 
+### Per-Step Engagement Patterns
+
+The engagement summary includes a per-step breakdown showing which specific emails were opened/clicked. Use this to write smarter follow-ups:
+
+- **Earlier steps opened but most recent step ignored**: The recipient may have lost interest or the last angle missed. Escalate urgency or try a completely different format (e.g., switch from value prop to social proof, or from long-form to a short question).
+- **Only one specific step was clicked**: That step's topic/angle is a proven interest signal. Reference or build on that topic -- don't repeat it verbatim, but lean into the same theme.
+- **Engagement tapered off progressively** (Step 1 opened, Step 2 opened, Step 3 nothing): The novelty wore off. A radically different approach is needed -- new format, new hook, new framing.
+- **No engagement on any step**: Every previous subject line and angle failed. Do not iterate on what didn't work. Start fresh with a completely different strategy.
+
 **Reply received -- interested**: Drop the sales pitch entirely. Focus on scheduling a call or meeting. Be helpful, not salesy.
 
 **Reply received -- not now**: Acknowledge the timing. Offer a useful resource (case study, guide) with no strings attached. Set a future touchpoint.
@@ -78,3 +87,5 @@ Respond with ONLY this JSON (no markdown fences, no extra text):
 - angle_reasoning is for internal debugging -- be honest about what signal drove your decision
 - If this is a break-up email (last step), make it clear you won't email again unless they respond
 - If the original email included a competitive awareness angle (both sides having access to intelligence), maintain that thread naturally in follow-ups when relevant to the chosen strategy -- but don't force it. It's a supporting detail, not a repeated talking point.
+- When the selling context includes `blog_posts`, reference ONE blog link per email as published analysis. Rotate posts across sequence steps -- never repeat the same post link in two emails. Frame as: "We recently published..." or "Our latest analysis covers..."
+- When the company context includes `target_persona`, maintain persona-consistent tone across all steps: `executive` = ROI/TCO/strategic focus with `economic_buyer` tone; `technical` = feature gaps/integration/migration with `evaluator` tone; `operations` = support quality/reliability/team productivity with `champion` tone. Match `role_type` from the context if present.

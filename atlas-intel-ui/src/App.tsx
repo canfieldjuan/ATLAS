@@ -1,36 +1,44 @@
+import { lazy, Suspense, type ComponentType } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import AuthProvider from './auth/AuthContext'
 import ProtectedRoute from './auth/ProtectedRoute'
 import Layout from './components/Layout'
 import ErrorBoundary from './components/ErrorBoundary'
-import Dashboard from './pages/Dashboard'
-import Brands from './pages/Brands'
-import BrandDetail from './pages/BrandDetail'
-import BrandCompare from './pages/BrandCompare'
-import Flows from './pages/Flows'
-import Features from './pages/Features'
-import Safety from './pages/Safety'
-import Reviews from './pages/Reviews'
-import ReviewDetail from './pages/ReviewDetail'
-import Landing from './pages/Landing'
-import Blog from './pages/Blog'
-import BlogPost from './pages/BlogPost'
-import Login from './pages/Login'
-import Signup from './pages/Signup'
-import Onboarding from './pages/Onboarding'
-import Account from './pages/Account'
 
-// B2B pages
-import B2BDashboard from './pages/b2b/B2BDashboard'
-import B2BOnboarding from './pages/b2b/B2BOnboarding'
-import ChurnSignals from './pages/b2b/ChurnSignals'
-import VendorDetail from './pages/b2b/VendorDetail'
-import LeadPipeline from './pages/b2b/LeadPipeline'
-import LeadDetail from './pages/b2b/LeadDetail'
-import CompetitorDisplacement from './pages/b2b/CompetitorDisplacement'
-import B2BReports from './pages/b2b/B2BReports'
-import B2BReviews from './pages/b2b/B2BReviews'
-import B2BCampaigns from './pages/b2b/B2BCampaigns'
+const Dashboard = lazy(() => import('./pages/Dashboard'))
+const Brands = lazy(() => import('./pages/Brands'))
+const BrandDetail = lazy(() => import('./pages/BrandDetail'))
+const BrandCompare = lazy(() => import('./pages/BrandCompare'))
+const Flows = lazy(() => import('./pages/Flows'))
+const Features = lazy(() => import('./pages/Features'))
+const Safety = lazy(() => import('./pages/Safety'))
+const Reviews = lazy(() => import('./pages/Reviews'))
+const ReviewDetail = lazy(() => import('./pages/ReviewDetail'))
+const Landing = lazy(() => import('./pages/Landing'))
+const Blog = lazy(() => import('./pages/Blog'))
+const BlogPost = lazy(() => import('./pages/BlogPost'))
+const Login = lazy(() => import('./pages/Login'))
+const Signup = lazy(() => import('./pages/Signup'))
+const Onboarding = lazy(() => import('./pages/Onboarding'))
+const Account = lazy(() => import('./pages/Account'))
+const B2BDashboard = lazy(() => import('./pages/b2b/B2BDashboard'))
+const B2BOnboarding = lazy(() => import('./pages/b2b/B2BOnboarding'))
+const ChurnSignals = lazy(() => import('./pages/b2b/ChurnSignals'))
+const VendorDetail = lazy(() => import('./pages/b2b/VendorDetail'))
+const LeadPipeline = lazy(() => import('./pages/b2b/LeadPipeline'))
+const LeadDetail = lazy(() => import('./pages/b2b/LeadDetail'))
+const CompetitorDisplacement = lazy(() => import('./pages/b2b/CompetitorDisplacement'))
+const B2BReports = lazy(() => import('./pages/b2b/B2BReports'))
+const B2BReviews = lazy(() => import('./pages/b2b/B2BReviews'))
+const B2BCampaigns = lazy(() => import('./pages/b2b/B2BCampaigns'))
+
+function renderLazyRoute(Component: ComponentType) {
+  return (
+    <Suspense fallback={null}>
+      <Component />
+    </Suspense>
+  )
+}
 
 export default function App() {
   return (
@@ -38,11 +46,11 @@ export default function App() {
       <ErrorBoundary>
         <Routes>
           {/* Public routes */}
-          <Route path="/landing" element={<Landing />} />
-          <Route path="/blog" element={<Blog />} />
-          <Route path="/blog/:slug" element={<BlogPost />} />
-          <Route path="/login" element={<Login />} />
-          <Route path="/signup" element={<Signup />} />
+          <Route path="/landing" element={renderLazyRoute(Landing)} />
+          <Route path="/blog" element={renderLazyRoute(Blog)} />
+          <Route path="/blog/:slug" element={renderLazyRoute(BlogPost)} />
+          <Route path="/login" element={renderLazyRoute(Login)} />
+          <Route path="/signup" element={renderLazyRoute(Signup)} />
 
           {/* Protected routes */}
           <Route
@@ -52,29 +60,29 @@ export default function App() {
                 <Layout>
                   <Routes>
                     {/* Consumer routes */}
-                    <Route path="/" element={<Dashboard />} />
-                    <Route path="/brands" element={<Brands />} />
-                    <Route path="/brands/:name" element={<BrandDetail />} />
-                    <Route path="/compare" element={<BrandCompare />} />
-                    <Route path="/flows" element={<Flows />} />
-                    <Route path="/features" element={<Features />} />
-                    <Route path="/safety" element={<Safety />} />
-                    <Route path="/reviews" element={<Reviews />} />
-                    <Route path="/reviews/:id" element={<ReviewDetail />} />
-                    <Route path="/onboarding" element={<Onboarding />} />
-                    <Route path="/account" element={<Account />} />
+                    <Route path="/" element={renderLazyRoute(Dashboard)} />
+                    <Route path="/brands" element={renderLazyRoute(Brands)} />
+                    <Route path="/brands/:name" element={renderLazyRoute(BrandDetail)} />
+                    <Route path="/compare" element={renderLazyRoute(BrandCompare)} />
+                    <Route path="/flows" element={renderLazyRoute(Flows)} />
+                    <Route path="/features" element={renderLazyRoute(Features)} />
+                    <Route path="/safety" element={renderLazyRoute(Safety)} />
+                    <Route path="/reviews" element={renderLazyRoute(Reviews)} />
+                    <Route path="/reviews/:id" element={renderLazyRoute(ReviewDetail)} />
+                    <Route path="/onboarding" element={renderLazyRoute(Onboarding)} />
+                    <Route path="/account" element={renderLazyRoute(Account)} />
 
                     {/* B2B routes */}
-                    <Route path="/b2b" element={<B2BDashboard />} />
-                    <Route path="/b2b/onboarding" element={<B2BOnboarding />} />
-                    <Route path="/b2b/signals" element={<ChurnSignals />} />
-                    <Route path="/b2b/signals/:vendorName" element={<VendorDetail />} />
-                    <Route path="/b2b/leads" element={<LeadPipeline />} />
-                    <Route path="/b2b/leads/:company" element={<LeadDetail />} />
-                    <Route path="/b2b/displacement" element={<CompetitorDisplacement />} />
-                    <Route path="/b2b/reports" element={<B2BReports />} />
-                    <Route path="/b2b/reviews" element={<B2BReviews />} />
-                    <Route path="/b2b/campaigns" element={<B2BCampaigns />} />
+                    <Route path="/b2b" element={renderLazyRoute(B2BDashboard)} />
+                    <Route path="/b2b/onboarding" element={renderLazyRoute(B2BOnboarding)} />
+                    <Route path="/b2b/signals" element={renderLazyRoute(ChurnSignals)} />
+                    <Route path="/b2b/signals/:vendorName" element={renderLazyRoute(VendorDetail)} />
+                    <Route path="/b2b/leads" element={renderLazyRoute(LeadPipeline)} />
+                    <Route path="/b2b/leads/:company" element={renderLazyRoute(LeadDetail)} />
+                    <Route path="/b2b/displacement" element={renderLazyRoute(CompetitorDisplacement)} />
+                    <Route path="/b2b/reports" element={renderLazyRoute(B2BReports)} />
+                    <Route path="/b2b/reviews" element={renderLazyRoute(B2BReviews)} />
+                    <Route path="/b2b/campaigns" element={renderLazyRoute(B2BCampaigns)} />
                   </Routes>
                 </Layout>
               </ProtectedRoute>

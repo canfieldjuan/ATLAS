@@ -66,7 +66,11 @@ class PostBlueprint:
 # -- entry point --------------------------------------------------
 
 async def run(task: ScheduledTask) -> dict[str, Any]:
-    """Autonomous task handler: generate a data-backed blog post."""
+    """Autonomous task handler: generate data-backed blog posts.
+
+    Loops up to ``max_per_run`` times, picking a fresh topic each iteration.
+    All posts are stored as drafts.
+    """
     cfg = settings.external_data
     if not cfg.complaint_mining_enabled or not cfg.blog_post_enabled:
         return {"_skip_synthesis": "Blog post generation disabled"}
@@ -75,21 +79,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not pool.is_initialized:
         return {"_skip_synthesis": "DB not ready"}
 
-    # Stage 1: topic selection
-    topic = await _select_topic(pool)
-    if topic is None:
-        return {"_skip_synthesis": "No viable blog topic found"}
-
-    topic_type, topic_ctx = topic
-
-    # Stage 2: data gathering
-    data = await _gather_data(pool, topic_type, topic_ctx)
-
-    # Stage 3: blueprint construction (deterministic, no LLM)
-    blueprint = _build_blueprint(topic_type, topic_ctx, data)
-
-    # Stage 4: content generation (LLM)
     from ...pipelines.llm import get_pipeline_llm, clean_llm_output, parse_json_response
+    from ...pipelines.notify import send_pipeline_notification
 
     llm = get_pipeline_llm(
         prefer_cloud=True,
@@ -103,38 +94,50 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if llm is None:
         return {"_skip_synthesis": "No LLM available for blog post generation"}
 
-    content = _generate_content(llm, blueprint, cfg.blog_post_max_tokens)
-    if content is None:
-        return {"_skip_synthesis": "LLM content generation failed"}
+    max_posts = max(1, cfg.blog_post_max_per_run)
+    results: list[dict[str, Any]] = []
 
-    # Stage 5: assembly & storage
-    post_id = await _assemble_and_store(pool, blueprint, content, llm)
+    for i in range(max_posts):
+        topic = await _select_topic(pool)
+        if topic is None:
+            logger.info("No more viable topics after %d posts", i)
+            break
 
-    if not post_id:
-        return {
-            "_skip_synthesis": f"Skipped: slug {blueprint.slug} is already published",
-        }
+        topic_type, topic_ctx = topic
+        data = await _gather_data(pool, topic_type, topic_ctx)
+        blueprint = _build_blueprint(topic_type, topic_ctx, data)
+        content = _generate_content(llm, blueprint, cfg.blog_post_max_tokens)
+        if content is None:
+            logger.warning("LLM failed for topic %s, skipping", blueprint.slug)
+            continue
 
-    # Notify
-    from ...pipelines.notify import send_pipeline_notification
+        post_id = await _assemble_and_store(pool, blueprint, content, llm)
+        if not post_id:
+            logger.info("Slug %s already published, skipping", blueprint.slug)
+            continue
 
-    n_charts = len(blueprint.charts)
-    msg = (
-        f"Blog draft: '{content['title']}' ({blueprint.topic_type}) "
-        f"with {n_charts} chart{'s' if n_charts != 1 else ''}. "
-        f"Review at /admin/blog"
-    )
+        n_charts = len(blueprint.charts)
+        results.append({
+            "post_id": str(post_id),
+            "topic_type": blueprint.topic_type,
+            "slug": blueprint.slug,
+            "charts": n_charts,
+        })
+
+    if not results:
+        return {"_skip_synthesis": "No blog posts generated this run"}
+
+    slugs = ", ".join(r["slug"] for r in results)
+    msg = f"Blog: {len(results)} draft(s) created -- {slugs}"
     await send_pipeline_notification(
-        msg, task, title="Atlas: Blog Post Draft",
+        msg, task, title="Atlas: Blog Post Drafts",
         default_tags="brain,newspaper",
     )
 
     return {
         "_skip_synthesis": msg,
-        "post_id": str(post_id),
-        "topic_type": blueprint.topic_type,
-        "slug": blueprint.slug,
-        "charts": n_charts,
+        "posts": results,
+        "count": len(results),
     }
 
 
@@ -188,8 +191,10 @@ async def _select_topic(pool) -> tuple[str, dict[str, Any]] | None:
     all_slugs = list({c[0] for c in raw_candidates})
     existing_slugs = await _batch_slug_check(pool, all_slugs)
 
-    # --- Dedup layer 2: category-level cooldown (any topic type, 90 days) ---
-    covered = await _recently_covered_subjects(pool, days=90)
+    # --- Dedup layer 2: category-level cooldown (any topic type, 14 days) ---
+    # 14 days at 1x/week cadence prevents the same category from
+    # appearing in consecutive weekly posts
+    covered = await _recently_covered_subjects(pool, days=14)
 
     def _subject_key(ctx: dict) -> str:
         """Normalize category/brand for dedup."""
@@ -1178,6 +1183,11 @@ async def _assemble_and_store(
     charts_json = [asdict(c) for c in blueprint.charts]
     model_name = getattr(llm, "model_name", None) or getattr(llm, "model", "unknown")
 
+    # Inject Amazon Associates tag so frontend can build affiliate links for ASINs
+    tag = settings.external_data.amazon_associate_tag
+    if tag:
+        blueprint.data_context["amazon_associate_tag"] = tag
+
     row = await pool.fetchrow(
         """
         INSERT INTO blog_posts (
@@ -1251,6 +1261,7 @@ def _write_ui_post(
 ) -> None:
     """Write a .ts post file and register it in index.ts."""
     from pathlib import Path
+    from ._blog_ts import build_post_ts, update_blog_index
 
     # Resolve relative paths against project root (where main.py lives)
     blog_dir = Path(ui_path)
@@ -1261,96 +1272,21 @@ def _write_ui_post(
         logger.warning("blog_post_ui_path does not exist: %s", blog_dir)
         return
 
-    # Derive a stable filename from the slug
     slug = blueprint.slug
-    filename = slug + ".ts"
-    var_name = re.sub(r"[^a-zA-Z0-9]", "_", slug).strip("_")
-    # camelCase: split on _ and capitalize each part after the first
-    parts = var_name.split("_")
-    var_name = parts[0] + "".join(p.capitalize() for p in parts[1:])
-    # JS identifiers cannot start with a digit
-    if var_name and var_name[0].isdigit():
-        var_name = "post" + var_name[0].upper() + var_name[1:]
-
-    # Build the .ts file content
-    charts_str = json.dumps(charts_json, indent=2, default=str)
-    # Escape backticks and ${} in content for template literal
-    escaped_content = (
-        content["content"]
-        .replace("\\", "\\\\")
-        .replace("`", "\\`")
-        .replace("${", "\\${")
+    var_name, ts_content = build_post_ts(
+        slug=slug,
+        title=content["title"],
+        description=content.get("description", ""),
+        date_str=date.today().isoformat(),
+        author="Atlas Intelligence Team",
+        tags=blueprint.tags,
+        topic_type=blueprint.topic_type,
+        charts_json=charts_json,
+        content=content["content"],
     )
-    # Escape single-quoted strings (backslash first, then quotes, then newlines)
-    escaped_title = _escape_js_single(content["title"])
-    escaped_desc = _escape_js_single(content.get("description", ""))
 
-    ts_content = f"""import type {{ BlogPost }} from './index'
-
-const post: BlogPost = {{
-  slug: '{slug}',
-  title: '{escaped_title}',
-  description: '{escaped_desc}',
-  date: '{date.today().isoformat()}',
-  author: 'Atlas Intelligence Team',
-  tags: {json.dumps(blueprint.tags)},
-  topic_type: '{blueprint.topic_type}',
-  charts: {charts_str},
-  content: `{escaped_content}`,
-}}
-
-export default post
-"""
-
-    # Write the post file
-    post_path = blog_dir / filename
+    post_path = blog_dir / (slug + ".ts")
     post_path.write_text(ts_content, encoding="utf-8")
     logger.info("Wrote blog UI file: %s", post_path)
 
-    # Update index.ts: add import + array entry if not already present
-    index_path = blog_dir / "index.ts"
-    if not index_path.exists():
-        logger.warning("index.ts not found in %s", blog_dir)
-        return
-
-    index_text = index_path.read_text(encoding="utf-8")
-    import_line = f"import {var_name} from './{slug}'"
-
-    if slug in index_text:
-        logger.debug("Post %s already in index.ts, skipping", slug)
-        return
-
-    # Insert import after the last existing import line
-    lines = index_text.split("\n")
-    last_import_idx = -1
-    for i, line in enumerate(lines):
-        if line.startswith("import "):
-            last_import_idx = i
-
-    if last_import_idx >= 0:
-        lines.insert(last_import_idx + 1, import_line)
-    else:
-        lines.insert(0, import_line)
-
-    # Add to POSTS array -- find the closing ].sort line and insert before it
-    new_text = "\n".join(lines)
-    new_text = re.sub(
-        r"(].sort\()",
-        f"  {var_name},\n\\1",
-        new_text,
-        count=1,
-    )
-
-    index_path.write_text(new_text, encoding="utf-8")
-    logger.info("Updated index.ts with %s", slug)
-
-
-def _escape_js_single(text: str) -> str:
-    """Escape a string for use inside JS single quotes."""
-    return (
-        text
-        .replace("\\", "\\\\")
-        .replace("'", "\\'")
-        .replace("\n", "\\n")
-        .replace("\r", "\\r")
-    )
+    update_blog_index(blog_dir / "index.ts", slug, var_name)

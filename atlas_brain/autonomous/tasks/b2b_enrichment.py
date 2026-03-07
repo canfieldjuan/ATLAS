@@ -202,6 +202,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
 _MIN_REVIEW_TEXT_LENGTH = 80  # Skip LLM calls for reviews shorter than this
 
+# Verified review platforms -- every review gets full extraction (skip triage).
+_VERIFIED_SOURCES = frozenset({
+    "g2", "capterra", "gartner", "trustradius",
+    "peerspot", "getapp", "software_advice", "trustpilot",
+})
+
 
 async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
                          max_tokens: int, truncate_length: int = 3000) -> bool:
@@ -217,35 +223,43 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
         )
         return False
 
+    source = (row.get("source") or "").lower().strip()
+    is_verified = source in _VERIFIED_SOURCES
+
     try:
-        # Stage 1: Fast triage — is this review worth full extraction?
-        triage = await asyncio.wait_for(
-            _triage_review(row, local_only),
-            timeout=30,
-        )
-
-        if triage is None:
-            # Triage failed (no LLM, skill missing, parse error).
-            # Don't fall through to full extraction — that will likely fail too.
-            # Leave as pending for retry on next cycle.
-            logger.debug("Triage returned None for %s, deferring to next cycle", review_id)
-            await _increment_attempts(pool, review_id, row["enrichment_attempts"], max_attempts)
-            return False
-
-        if not triage.get("signal", True):
-            # No churn signal — skip full extraction
-            await pool.execute(
-                """
-                UPDATE b2b_reviews
-                SET enrichment_status = 'no_signal',
-                    enrichment_attempts = enrichment_attempts + 1,
-                    enrichment = $1
-                WHERE id = $2
-                """,
-                json.dumps({"triage": triage}),
-                review_id,
+        if is_verified:
+            # Verified sources: skip triage, go straight to full extraction.
+            # Every review on these platforms has signal worth extracting.
+            logger.debug("Verified source %s for %s -- skipping triage", source, review_id)
+        else:
+            # Stage 1: Fast triage — is this review worth full extraction?
+            triage = await asyncio.wait_for(
+                _triage_review(row, local_only),
+                timeout=30,
             )
-            return False
+
+            if triage is None:
+                # Triage failed (no LLM, skill missing, parse error).
+                # Don't fall through to full extraction — that will likely fail too.
+                # Leave as pending for retry on next cycle.
+                logger.debug("Triage returned None for %s, deferring to next cycle", review_id)
+                await _increment_attempts(pool, review_id, row["enrichment_attempts"], max_attempts)
+                return False
+
+            if not triage.get("signal", True):
+                # No churn signal — skip full extraction
+                await pool.execute(
+                    """
+                    UPDATE b2b_reviews
+                    SET enrichment_status = 'no_signal',
+                        enrichment_attempts = enrichment_attempts + 1,
+                        enrichment = $1
+                    WHERE id = $2
+                    """,
+                    json.dumps({"triage": triage}),
+                    review_id,
+                )
+                return False
 
         # Stage 2: Full 47-field extraction (only for reviews that passed triage)
         result = await asyncio.wait_for(

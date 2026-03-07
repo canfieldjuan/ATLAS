@@ -23,7 +23,7 @@ from .campaign_audit import log_campaign_event
 logger = logging.getLogger("atlas.autonomous.tasks.campaign_sequence_progression")
 
 
-def _build_engagement_summary(seq: dict) -> str:
+def _build_engagement_summary(seq: dict, previous_campaigns: list[dict] | None = None) -> str:
     """Build a human-readable engagement summary for the LLM prompt."""
     parts: list[str] = []
 
@@ -49,6 +49,18 @@ def _build_engagement_summary(seq: dict) -> str:
         summary = seq.get("reply_summary", "")
         parts.append(f"Reply received ({intent}): {summary[:200]}")
 
+    # Per-step engagement breakdown
+    if previous_campaigns:
+        step_lines: list[str] = []
+        for c in previous_campaigns:
+            step = c.get("step_number", "?")
+            opened = "Opened" if c.get("opened_at") else "No opens"
+            clicked = "Clicked" if c.get("clicked_at") else "No clicks"
+            step_lines.append(f"- Step {step}: {opened}, {clicked}")
+        parts.append("")
+        parts.append("Per-step breakdown:")
+        parts.extend(step_lines)
+
     return "\n".join(parts)
 
 
@@ -64,9 +76,23 @@ def _build_previous_emails(campaigns: list[dict]) -> str:
         body = (c.get("body") or "")[:500]
         status = c.get("status", "")
         sent_at = c.get("sent_at", "")
+
+        opened_at = c.get("opened_at")
+        clicked_at = c.get("clicked_at")
+        if opened_at or clicked_at:
+            eng_parts = []
+            if opened_at:
+                eng_parts.append(f"Opened {opened_at.isoformat() if hasattr(opened_at, 'isoformat') else opened_at}")
+            if clicked_at:
+                eng_parts.append(f"Clicked {clicked_at.isoformat() if hasattr(clicked_at, 'isoformat') else clicked_at}")
+            engagement_line = f"Engagement: {' | '.join(eng_parts)}"
+        else:
+            engagement_line = "Engagement: No opens or clicks recorded"
+
         parts.append(
             f"--- Step {step} (status: {status}, sent: {sent_at}) ---\n"
             f"Subject: {subject}\n"
+            f"{engagement_line}\n"
             f"{body}\n"
         )
     return "\n".join(parts)
@@ -122,7 +148,7 @@ async def _generate_next_step(
         delta = datetime.now(timezone.utc) - seq["last_sent_at"]
         days_since = str(delta.days)
 
-    engagement = _build_engagement_summary(seq)
+    engagement = _build_engagement_summary(seq, previous_campaigns)
     prev_emails = _build_previous_emails(previous_campaigns)
 
     # Build template replacements (shared + skill-specific)
@@ -138,7 +164,7 @@ async def _generate_next_step(
     }
 
     # Extra placeholders for Amazon seller sequence skill
-    if is_seller_seq:
+    if recipient_type == "amazon_seller":
         cat_intel = company_context.get("category_intelligence", {})
         replacements["{recipient_name}"] = company_context.get("seller_name", "")
         replacements["{recipient_company}"] = company_context.get("seller_name", "")

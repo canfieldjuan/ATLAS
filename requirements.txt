@@ -4,6 +4,7 @@ python-dotenv
 python-multipart
 pydantic-settings
 psutil
+slowapi>=0.1.9
 
 # ML / AI
 torch
@@ -57,6 +58,9 @@ apscheduler>=3.10,<4.0
 
 # Email draft generation (Anthropic Claude)
 anthropic>=0.39.0
+
+# Campaign email sending (Amazon SES)
+boto3>=1.35.0
 
 # MCP (Model Context Protocol) — CRM and Email MCP servers
 mcp>=1.26.0

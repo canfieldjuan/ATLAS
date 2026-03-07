@@ -9,10 +9,13 @@ export default function B2BReports() {
   const [loading, setLoading] = useState(true)
   const [reportType, setReportType] = useState('')
   const [selected, setSelected] = useState<B2BReportDetail | null>(null)
-  const [_detailLoading, setDetailLoading] = useState(false)
+
+  const handleReportTypeChange = (value: string) => {
+    setLoading(true)
+    setReportType(value)
+  }
 
   useEffect(() => {
-    setLoading(true)
     fetchReports({ report_type: reportType || undefined, limit: 50 })
       .then(r => setReports(r.reports))
       .catch(() => setReports([]))
@@ -20,14 +23,11 @@ export default function B2BReports() {
   }, [reportType])
 
   const handleRowClick = async (r: B2BReport) => {
-    setDetailLoading(true)
     try {
       const detail = await fetchReportDetail(r.id)
       setSelected(detail)
     } catch {
       // ignore
-    } finally {
-      setDetailLoading(false)
     }
   }
 
@@ -88,7 +88,7 @@ export default function B2BReports() {
         <FilterSelect
           label="Report Type"
           value={reportType}
-          onChange={setReportType}
+          onChange={handleReportTypeChange}
           options={reportTypes}
           placeholder="All types"
         />

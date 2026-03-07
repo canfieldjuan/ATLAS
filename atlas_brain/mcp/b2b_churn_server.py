@@ -2,8 +2,8 @@
 Atlas B2B Churn Intelligence MCP Server.
 
 Exposes B2B churn intelligence data (reviews, vendor signals, reports,
-pipeline health) to any MCP-compatible client (Claude Desktop, Cursor,
-custom agents).
+pipeline health, blog posts, affiliate partners) to any MCP-compatible
+client (Claude Desktop, Cursor, custom agents).
 
 Tools:
     list_churn_signals       -- query pre-aggregated weekly vendor churn metrics
@@ -18,6 +18,12 @@ Tools:
     list_scrape_targets      -- view scrape target configuration and status
     get_product_profile      -- fetch pre-computed product knowledge card
     match_products_tool      -- find best alternatives for a churning company
+    list_blog_posts          -- list/filter generated blog posts
+    get_blog_post            -- fetch full blog post by ID or slug
+    add_scrape_target        -- add a new vendor/source scrape target
+    manage_scrape_target     -- update target settings (enabled, priority, pages, interval, metadata)
+    delete_scrape_target     -- remove a scrape target and its logs
+    list_affiliate_partners  -- list affiliate partner configurations
 
 Run:
     python -m atlas_brain.mcp.b2b_churn_server          # stdio
@@ -44,7 +50,12 @@ VALID_REPORT_TYPES = (
     "challenger_intel",
 )
 
-VALID_SOURCES = ("g2", "capterra", "trustradius", "reddit")
+VALID_SOURCES = (
+    "g2", "capterra", "trustradius", "reddit",
+    "gartner", "getapp", "github", "hackernews",
+    "peerspot", "producthunt", "quora", "rss",
+    "stackoverflow", "trustpilot", "twitter", "youtube",
+)
 
 
 def _is_uuid(value: str) -> bool:
@@ -84,8 +95,11 @@ mcp = FastMCP(
     instructions=(
         "B2B churn intelligence server for Atlas. "
         "Query vendor churn signals, search enriched reviews, read intelligence "
-        "reports, identify high-intent companies, and monitor pipeline health. "
-        "Data sourced from G2, Capterra, TrustRadius, and Reddit reviews."
+        "reports, identify high-intent companies, monitor pipeline health, "
+        "manage scrape targets, view blog posts, and list affiliate partners. "
+        "Data sourced from 16 review sites: G2, Capterra, TrustRadius, Reddit, "
+        "Gartner, GetApp, GitHub, HackerNews, PeerSpot, ProductHunt, Quora, "
+        "RSS, StackOverflow, TrustPilot, Twitter/X, YouTube."
     ),
     lifespan=_lifespan,
 )
@@ -850,7 +864,7 @@ async def list_scrape_targets(
     """
     View scrape target configuration and last run status.
 
-    source: Filter by source (g2, capterra, trustradius, reddit)
+    source: Filter by source (g2, capterra, trustradius, reddit, gartner, getapp, github, hackernews, peerspot, producthunt, quora, rss, stackoverflow, trustpilot, youtube)
     enabled_only: Only show enabled targets (default true)
     limit: Maximum results (default 20, cap 100)
     """
@@ -1041,6 +1055,501 @@ async def match_products_tool(
     except Exception:
         logger.exception("match_products error")
         return json.dumps({"success": False, "error": "Internal error", "matches": [], "count": 0})
+
+
+# ---------------------------------------------------------------------------
+# Tool: list_blog_posts
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def list_blog_posts(
+    status: Optional[str] = None,
+    topic_type: Optional[str] = None,
+    limit: int = 20,
+) -> str:
+    """
+    List generated B2B blog posts.
+
+    status: Filter by status (draft, published)
+    topic_type: Filter by topic type (vendor_alternative, vendor_showdown,
+                churn_report, migration_guide, vendor_deep_dive,
+                market_landscape, pricing_reality_check, switching_story,
+                pain_point_roundup, best_fit_guide)
+    limit: Maximum results (default 20, cap 50)
+    """
+    limit = max(1, min(limit, 50))
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        conditions = []
+        params = []
+        idx = 1
+
+        if status:
+            conditions.append(f"status = ${idx}")
+            params.append(status)
+            idx += 1
+
+        if topic_type:
+            conditions.append(f"topic_type = ${idx}")
+            params.append(topic_type)
+            idx += 1
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        params.append(limit)
+
+        rows = await pool.fetch(
+            f"""
+            SELECT id, slug, title, description, topic_type, tags,
+                   status, llm_model, created_at, published_at
+            FROM blog_posts
+            {where}
+            ORDER BY created_at DESC
+            LIMIT ${idx}
+            """,
+            *params,
+        )
+
+        posts = [
+            {
+                "id": str(r["id"]),
+                "slug": r["slug"],
+                "title": r["title"],
+                "description": r["description"],
+                "topic_type": r["topic_type"],
+                "tags": _safe_json(r["tags"]),
+                "status": r["status"],
+                "llm_model": r["llm_model"],
+                "created_at": r["created_at"],
+                "published_at": r["published_at"],
+            }
+            for r in rows
+        ]
+
+        return json.dumps({"posts": posts, "count": len(posts)}, default=str)
+    except Exception:
+        logger.exception("list_blog_posts error")
+        return json.dumps({"error": "Internal error", "posts": [], "count": 0})
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_blog_post
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_blog_post(
+    post_id: Optional[str] = None,
+    slug: Optional[str] = None,
+) -> str:
+    """
+    Fetch a full blog post by UUID or slug.
+
+    post_id: UUID of the blog post (optional if slug provided)
+    slug: URL slug of the blog post (optional if post_id provided)
+    """
+    if not post_id and not slug:
+        return json.dumps({"success": False, "error": "Provide either post_id or slug"})
+
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+
+        if post_id and _is_uuid(post_id):
+            row = await pool.fetchrow(
+                "SELECT * FROM blog_posts WHERE id = $1",
+                _uuid.UUID(post_id),
+            )
+        elif slug:
+            row = await pool.fetchrow(
+                "SELECT * FROM blog_posts WHERE slug = $1",
+                slug.strip(),
+            )
+        else:
+            return json.dumps({"success": False, "error": "Invalid post_id (must be UUID) or provide slug"})
+
+        if not row:
+            return json.dumps({"success": False, "error": "Blog post not found"})
+
+        post = {
+            "id": str(row["id"]),
+            "slug": row["slug"],
+            "title": row["title"],
+            "description": row["description"],
+            "topic_type": row["topic_type"],
+            "tags": _safe_json(row["tags"]),
+            "content": row["content"],
+            "charts": _safe_json(row["charts"]),
+            "data_context": _safe_json(row["data_context"]),
+            "status": row["status"],
+            "reviewer_notes": row["reviewer_notes"],
+            "llm_model": row["llm_model"],
+            "created_at": row["created_at"],
+            "published_at": row["published_at"],
+        }
+
+        return json.dumps({"success": True, "post": post}, default=str)
+    except Exception:
+        logger.exception("get_blog_post error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: add_scrape_target
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def add_scrape_target(
+    source: str,
+    vendor_name: str,
+    product_slug: str,
+    product_name: Optional[str] = None,
+    product_category: Optional[str] = None,
+    max_pages: int = 5,
+    priority: int = 0,
+    scrape_interval_hours: int = 168,
+    metadata_json: Optional[str] = None,
+) -> str:
+    """
+    Add a new scrape target to monitor a vendor on a review source.
+
+    source: Review source — one of: g2, capterra, trustradius, reddit, gartner,
+            getapp, github, hackernews, peerspot, producthunt, quora, rss,
+            stackoverflow, trustpilot, twitter, youtube
+    vendor_name: Vendor/company name (e.g. "Salesforce")
+    product_slug: Format depends on source type:
+        URL-slug sources (required — used in URL construction):
+          g2: "salesforce-crm"
+          capterra: "61368/Salesforce" (numeric-id/name)
+          trustradius: "salesforce-crm"
+          gartner: "market-slug/vendor-slug" (slash-separated)
+          peerspot: "monday-com"
+          getapp: "project-management-software/a/monday-com" (category/a/product)
+          producthunt: "my-product" (GraphQL slug)
+          trustpilot: "monday.com" (company domain)
+        Search sources (informational — vendor_name is used for search):
+          reddit, hackernews, github, youtube, stackoverflow, quora, twitter:
+          use vendor name as slug (e.g. "salesforce")
+        Special:
+          rss: full feed URL (e.g. "https://news.google.com/rss/search?q=salesforce")
+    product_name: Optional product variant name
+    product_category: Category (e.g. "CRM", "Project Management")
+    max_pages: Pages to scrape per run (default 5, max 100)
+    priority: Higher = scraped first (default 0, max 100)
+    scrape_interval_hours: Re-scrape interval (default 168 = weekly, max 8760)
+    metadata_json: Optional JSON string for source-specific config:
+        reddit: '{"subreddits": ["sysadmin","projectmanagement"]}'
+        twitter: '{"search_terms": ["salesforce down"], "min_likes": 2}'
+        youtube: '{"search_terms": ["salesforce review"], "max_videos_per_query": 10}'
+        hackernews: '{"min_points": 5, "include_comments": true}'
+        github: '{"search_mode": "both", "min_stars": 10}'
+        stackoverflow: '{"sites": "stackoverflow,softwarerecs", "min_score": 1}'
+        rss: '{"feed_urls": ["https://..."], "keywords": ["migration","switching"]}'
+    """
+    if source not in VALID_SOURCES:
+        return json.dumps({"success": False, "error": f"source must be one of {VALID_SOURCES}"})
+    if not vendor_name or not vendor_name.strip():
+        return json.dumps({"success": False, "error": "vendor_name is required"})
+    if not product_slug or not product_slug.strip():
+        return json.dumps({"success": False, "error": "product_slug is required"})
+
+    max_pages = max(1, min(max_pages, 100))
+    priority = max(0, min(priority, 100))
+    scrape_interval_hours = max(1, min(scrape_interval_hours, 8760))
+
+    meta = {}
+    if metadata_json:
+        try:
+            meta = json.loads(metadata_json)
+            if not isinstance(meta, dict):
+                return json.dumps({"success": False, "error": "metadata_json must be a JSON object"})
+        except (json.JSONDecodeError, TypeError):
+            return json.dumps({"success": False, "error": "Invalid metadata_json"})
+
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+
+        # Check for duplicate
+        existing = await pool.fetchrow(
+            "SELECT id FROM b2b_scrape_targets WHERE source = $1 AND product_slug = $2",
+            source, product_slug.strip(),
+        )
+        if existing:
+            return json.dumps({
+                "success": False,
+                "error": f"Target already exists for {source}/{product_slug} (id: {existing['id']})",
+            })
+
+        row = await pool.fetchrow(
+            """
+            INSERT INTO b2b_scrape_targets
+                (source, vendor_name, product_name, product_slug, product_category,
+                 max_pages, priority, scrape_interval_hours, metadata)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+            RETURNING id, source, vendor_name, product_slug, enabled, priority
+            """,
+            source,
+            vendor_name.strip(),
+            product_name.strip() if product_name else None,
+            product_slug.strip(),
+            product_category.strip() if product_category else None,
+            max_pages,
+            priority,
+            scrape_interval_hours,
+            json.dumps(meta),
+        )
+
+        return json.dumps({
+            "success": True,
+            "target": {
+                "id": str(row["id"]),
+                "source": row["source"],
+                "vendor_name": row["vendor_name"],
+                "product_slug": row["product_slug"],
+                "enabled": row["enabled"],
+                "priority": row["priority"],
+            },
+        }, default=str)
+    except Exception:
+        logger.exception("add_scrape_target error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: manage_scrape_target
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def manage_scrape_target(
+    target_id: str,
+    enabled: Optional[bool] = None,
+    priority: Optional[int] = None,
+    max_pages: Optional[int] = None,
+    scrape_interval_hours: Optional[int] = None,
+    metadata_json: Optional[str] = None,
+) -> str:
+    """
+    Update a scrape target's settings.
+
+    target_id: UUID of the scrape target (required)
+    enabled: Set to true/false to enable/disable
+    priority: Set priority (0-100, higher = scraped first)
+    max_pages: Pages to scrape per run (1-100)
+    scrape_interval_hours: Re-scrape interval in hours (1-8760)
+    metadata_json: Replace source-specific config JSON (e.g. subreddits for reddit)
+    """
+    if not _is_uuid(target_id):
+        return json.dumps({"success": False, "error": "Invalid target_id (must be UUID)"})
+
+    if all(v is None for v in [enabled, priority, max_pages, scrape_interval_hours, metadata_json]):
+        return json.dumps({"success": False, "error": "Provide at least one field to update"})
+
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+
+        sets = ["updated_at = NOW()"]
+        params = []
+        idx = 1
+
+        if enabled is not None:
+            sets.append(f"enabled = ${idx}")
+            params.append(enabled)
+            idx += 1
+
+        if priority is not None:
+            sets.append(f"priority = ${idx}")
+            params.append(max(0, min(priority, 100)))
+            idx += 1
+
+        if max_pages is not None:
+            sets.append(f"max_pages = ${idx}")
+            params.append(max(1, min(max_pages, 100)))
+            idx += 1
+
+        if scrape_interval_hours is not None:
+            sets.append(f"scrape_interval_hours = ${idx}")
+            params.append(max(1, min(scrape_interval_hours, 8760)))
+            idx += 1
+
+        if metadata_json is not None:
+            try:
+                meta = json.loads(metadata_json)
+                if not isinstance(meta, dict):
+                    return json.dumps({"success": False, "error": "metadata_json must be a JSON object"})
+            except (json.JSONDecodeError, TypeError):
+                return json.dumps({"success": False, "error": "Invalid metadata_json"})
+            sets.append(f"metadata = ${idx}::jsonb")
+            params.append(json.dumps(meta))
+            idx += 1
+
+        params.append(_uuid.UUID(target_id))
+
+        row = await pool.fetchrow(
+            f"""
+            UPDATE b2b_scrape_targets
+            SET {', '.join(sets)}
+            WHERE id = ${idx}
+            RETURNING id, source, vendor_name, product_name, product_slug,
+                      enabled, priority, max_pages, scrape_interval_hours
+            """,
+            *params,
+        )
+
+        if not row:
+            return json.dumps({"success": False, "error": "Target not found"})
+
+        return json.dumps({
+            "success": True,
+            "target": {
+                "id": str(row["id"]),
+                "source": row["source"],
+                "vendor_name": row["vendor_name"],
+                "product_name": row["product_name"],
+                "product_slug": row["product_slug"],
+                "enabled": row["enabled"],
+                "priority": row["priority"],
+                "max_pages": row["max_pages"],
+                "scrape_interval_hours": row["scrape_interval_hours"],
+            },
+        }, default=str)
+    except Exception:
+        logger.exception("manage_scrape_target error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: delete_scrape_target
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def delete_scrape_target(target_id: str) -> str:
+    """
+    Delete a scrape target and its associated scrape logs.
+
+    target_id: UUID of the scrape target to delete (required)
+    """
+    if not _is_uuid(target_id):
+        return json.dumps({"success": False, "error": "Invalid target_id (must be UUID)"})
+
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+
+        # Get target info before deleting
+        row = await pool.fetchrow(
+            "SELECT source, vendor_name, product_slug FROM b2b_scrape_targets WHERE id = $1",
+            _uuid.UUID(target_id),
+        )
+        if not row:
+            return json.dumps({"success": False, "error": "Target not found"})
+
+        # Delete logs first (FK has no CASCADE), then target -- in a transaction
+        async with pool.transaction() as conn:
+            await conn.execute(
+                "DELETE FROM b2b_scrape_log WHERE target_id = $1",
+                _uuid.UUID(target_id),
+            )
+            await conn.execute(
+                "DELETE FROM b2b_scrape_targets WHERE id = $1",
+                _uuid.UUID(target_id),
+            )
+
+        return json.dumps({
+            "success": True,
+            "deleted": {
+                "id": target_id,
+                "source": row["source"],
+                "vendor_name": row["vendor_name"],
+                "product_slug": row["product_slug"],
+            },
+        })
+    except Exception:
+        logger.exception("delete_scrape_target error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: list_affiliate_partners
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def list_affiliate_partners(
+    category: Optional[str] = None,
+    enabled_only: bool = True,
+    limit: int = 20,
+) -> str:
+    """
+    List affiliate partner configurations.
+
+    category: Filter by product category (partial match, case-insensitive)
+    enabled_only: Only show enabled partners (default true)
+    limit: Maximum results (default 20, cap 50)
+    """
+    limit = max(1, min(limit, 50))
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        conditions = []
+        params = []
+        idx = 1
+
+        if enabled_only:
+            conditions.append("enabled = true")
+
+        if category:
+            conditions.append(f"category ILIKE '%' || ${idx} || '%'")
+            params.append(category)
+            idx += 1
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        params.append(limit)
+
+        rows = await pool.fetch(
+            f"""
+            SELECT id, name, product_name, product_aliases, category,
+                   affiliate_url, commission_type, commission_value,
+                   enabled, created_at
+            FROM affiliate_partners
+            {where}
+            ORDER BY name ASC
+            LIMIT ${idx}
+            """,
+            *params,
+        )
+
+        partners = [
+            {
+                "id": str(r["id"]),
+                "name": r["name"],
+                "product_name": r["product_name"],
+                "product_aliases": list(r["product_aliases"]) if r["product_aliases"] else [],
+                "category": r["category"],
+                "affiliate_url": r["affiliate_url"],
+                "commission_type": r["commission_type"],
+                "commission_value": r["commission_value"],
+                "enabled": r["enabled"],
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ]
+
+        return json.dumps({"partners": partners, "count": len(partners)}, default=str)
+    except Exception:
+        logger.exception("list_affiliate_partners error")
+        return json.dumps({"error": "Internal error", "partners": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------

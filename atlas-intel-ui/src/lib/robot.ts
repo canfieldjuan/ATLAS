@@ -104,13 +104,11 @@ export class Robot {
     this.root = mk('g', { id: 'r-root', filter: 'url(#body-shadow)' })
     this.mount.appendChild(this.root)
 
-    // Shadow
     this.root.appendChild(mk('ellipse', {
       id: 'r-shadow', cx: 0, cy: 4,
       rx: P.shadowRx, ry: P.shadowRy, fill: 'rgba(0,0,0,0.28)',
     }))
 
-    // Legs
     for (const side of ['left', 'right']) {
       const sx = side === 'left' ? -P.hipOffX : P.hipOffX
       const hipG = mk('g', { id: `r-${side}-thigh`, transform: `translate(${sx}, ${P.hipY})` })
@@ -126,7 +124,6 @@ export class Robot {
       this.root.appendChild(hipG)
     }
 
-    // Upper body
     this.upperBody = mk('g', { id: 'r-upper-body' })
     this.root.appendChild(this.upperBody)
 
@@ -135,7 +132,6 @@ export class Robot {
     this.upperBody.appendChild(rect(P.torsoX + 6, P.stripe1Y, P.stripeW, P.stripeH, 2, COLORS.chest1))
     this.upperBody.appendChild(rect(P.torsoX + 6, P.stripe2Y, P.stripeW, P.stripeH, 2, COLORS.chest2))
 
-    // Arms
     for (const side of ['left', 'right']) {
       const sx = side === 'left' ? -P.shoulderOffX : P.shoulderOffX
       this.upperBody.appendChild(circ(sx, P.shoulderY, 5.5, COLORS.joint))
@@ -150,7 +146,6 @@ export class Robot {
       this.upperBody.appendChild(shoulderG)
     }
 
-    // Head
     const headG = mk('g', { id: 'r-head', transform: `translate(0, ${P.headY})` })
     headG.appendChild(circ(0, 0, P.headR, 'url(#grad-body)'))
 
@@ -175,7 +170,7 @@ export class Robot {
     this.upperBody.appendChild(headG)
   }
 
-  // ── Animation methods ───────────────────────────────────
+  // -- Animation methods --
 
   reset(duration = 0.25) {
     const tl = gsap.timeline()
@@ -231,13 +226,12 @@ export class Robot {
     const newDir = targetX > this.x ? 1 : -1
     if (newDir !== this.dir) { this.dir = newDir; this._applyTransform() }
 
-    const self = this
     const proxy = { x: this.x }
-    const tl = gsap.timeline({ onComplete() { self.x = targetX; self._applyTransform() } })
+    const tl = gsap.timeline({ onComplete: () => { this.x = targetX; this._applyTransform() } })
 
     tl.to(proxy, {
       x: targetX, duration, ease: 'power1.inOut',
-      onUpdate() { self.x = proxy.x; self._applyTransform() },
+      onUpdate: () => { this.x = proxy.x; this._applyTransform() },
     }, 0)
 
     const ub = this._e('upper-body')
@@ -304,6 +298,61 @@ export class Robot {
     return tl
   }
 
+  jump(height = 55, type = 0) {
+    const origY = this.y
+    const apex = origY - height
+    const proxy = { y: origY }
+
+    const tl = gsap.timeline({
+      onComplete: () => { this.y = origY; this._applyTransform() },
+    })
+
+    const moveY = (toY: number, dur: number, ease: string) =>
+      tl.to(proxy, {
+        y: toY, duration: dur, ease,
+        onUpdate: () => { this.y = proxy.y; this._applyTransform() },
+      })
+
+    // Crouch
+    tl.to(this._e('upper-body'), { y: 5, duration: 0.1, ease: 'power2.out' })
+      .to([this._e('left-thigh'), this._e('right-thigh')], { rotation: 18, duration: 0.1, ease: 'power2.out' }, '<')
+      .to([this._e('left-shin'), this._e('right-shin')], { rotation: 15, duration: 0.1, ease: 'power2.out' }, '<')
+
+    // Launch
+    moveY(apex, 0.28, 'power2.out')
+    tl.to(this._e('upper-body'), { y: 0, duration: 0.25 }, '<')
+      .to([this._e('left-thigh'), this._e('right-thigh')], { rotation: 0, duration: 0.1 }, '<')
+      .to([this._e('left-shin'), this._e('right-shin')], { rotation: 0, duration: 0.1 }, '<')
+
+    // Mid-air pose
+    if (type === 1) {
+      tl.to([this._e('left-shoulder'), this._e('right-shoulder')],
+        { rotation: 180, duration: 0.28, ease: 'none' }, '<0.05')
+    } else if (type === 2) {
+      tl.to([this._e('left-thigh'), this._e('right-thigh')],
+        { rotation: -35, duration: 0.15, ease: 'power1.inOut' }, '<0.05')
+        .to([this._e('left-shoulder'), this._e('right-shoulder')],
+          { rotation: -90, duration: 0.15 }, '<')
+    } else {
+      tl.to([this._e('left-thigh'), this._e('right-thigh')],
+        { rotation: -28, duration: 0.15, ease: 'power1.inOut' })
+        .to([this._e('left-shin'), this._e('right-shin')],
+          { rotation: 35, duration: 0.15 }, '<')
+    }
+
+    // Descend
+    moveY(origY, 0.26, 'power2.in')
+    tl.to([this._e('left-thigh'), this._e('right-thigh')], { rotation: 0, duration: 0.18 }, '<')
+      .to([this._e('left-shin'), this._e('right-shin')], { rotation: 0, duration: 0.18 }, '<')
+      .to([this._e('left-shoulder'), this._e('right-shoulder')], { rotation: 0, duration: 0.18 }, '<')
+
+    // Land bounce
+    tl.to(this._e('upper-body'), { y: 8, duration: 0.07, ease: 'power2.in' })
+      .to(this._e('upper-body'), { y: 0, duration: 0.25, ease: 'elastic.out(1, 0.4)' })
+
+    return tl
+  }
+
   wave(repeats = 2, side: 'right' | 'left' = 'right') {
     const arm = this._e(`${side}-shoulder`)
     const elbow = this._e(`${side}-elbow`)
@@ -331,7 +380,184 @@ export class Robot {
     return tl
   }
 
-  /** Track the active timeline so destroy() can kill it. */
+  dance() {
+    const lSh = this._e('left-shoulder'), rSh = this._e('right-shoulder')
+    const lEl = this._e('left-elbow'), rEl = this._e('right-elbow')
+    const ub = this._e('upper-body')
+    const lTh = this._e('left-thigh'), rTh = this._e('right-thigh')
+    const lSn = this._e('left-shin'), rSn = this._e('right-shin')
+    const head = this._e('head')
+    const tl = gsap.timeline()
+
+    tl.to(ub, { y: 4, duration: 0.1, ease: 'power2.in' })
+    tl.to(ub, { y: -2, duration: 0.12, ease: 'power3.out' })
+      .to([lSh, rSh], { rotation: -110, duration: 0.2, ease: 'back.out(2.5)' }, '<')
+      .to([lEl, rEl], { rotation: 25, duration: 0.18 }, '<0.04')
+      .to(head, { rotation: -5, y: -1.5, duration: 0.12, ease: 'power2.out' }, '<0.05')
+
+    tl.to(ub, { x: 8, rotation: 3, duration: 0.16, ease: 'power2.out' })
+      .to(lTh, { rotation: -20, duration: 0.15, ease: 'sine.out' }, '<0.03')
+      .to(rTh, { rotation: 15, duration: 0.15, ease: 'sine.out' }, '<')
+      .to(lSn, { rotation: 8, duration: 0.12 }, '<0.02')
+      .to(head, { rotation: 12, y: 0, duration: 0.14, ease: 'power2.out' }, '<0.06')
+
+    tl.to(ub, { x: -8, rotation: -3, duration: 0.14, ease: 'power2.out' })
+      .to(lTh, { rotation: 15, duration: 0.13, ease: 'sine.out' }, '<0.03')
+      .to(rTh, { rotation: -20, duration: 0.13, ease: 'sine.out' }, '<')
+      .to(rSn, { rotation: 8, duration: 0.10 }, '<0.02')
+      .to(head, { rotation: -12, duration: 0.12, ease: 'power2.out' }, '<0.05')
+
+    tl.to(ub, { x: 6, rotation: 2, duration: 0.14, ease: 'power2.out' })
+      .to(lTh, { rotation: -12, duration: 0.12 }, '<0.02')
+      .to(rTh, { rotation: 10, duration: 0.12 }, '<')
+      .to(head, { rotation: 8, duration: 0.12 }, '<0.04')
+
+    tl.to(ub, { x: 0, rotation: 0, duration: 0.16, ease: 'power2.inOut' })
+      .to(head, { rotation: 0, duration: 0.18, ease: 'power2.inOut' }, '<0.03')
+      .to([lSh, rSh], { rotation: 12, duration: 0.18, ease: 'power3.in' }, '<')
+      .to([lSh, rSh], { rotation: -4, duration: 0.12, ease: 'sine.out' })
+      .to([lSh, rSh], { rotation: 0, duration: 0.08 })
+      .to([lEl, rEl], { rotation: 0, duration: 0.14, ease: 'power2.out' }, '<0.04')
+      .to([lTh, rTh], { rotation: 0, duration: 0.16 }, '<')
+      .to([lSn, rSn], { rotation: 0, duration: 0.14 }, '<')
+
+    // Windmill
+    tl.to(lSh, { rotation: -360, duration: 0.55, ease: 'power1.inOut' })
+      .to(rSh, { rotation: 360, duration: 0.55, ease: 'power1.inOut' }, '<0.06')
+      .to(ub, { rotation: -3, duration: 0.25, ease: 'sine.out' }, '<')
+      .to(ub, { rotation: 0, duration: 0.25, ease: 'sine.in' }, '<0.25')
+      .add(() => { gsap.set([lSh, rSh], { rotation: 0 }) })
+
+    // Mini jump
+    const origY = this.y
+    const proxy = { y: origY }
+    tl.to(ub, { y: 5, duration: 0.08, ease: 'power2.in' })
+    tl.to(proxy, {
+      y: origY - 28, duration: 0.22, ease: 'power2.out',
+      onUpdate: () => { this.y = proxy.y; this._applyTransform() },
+    })
+    tl.to(ub, { y: -2, duration: 0.15 }, '<')
+    tl.to(proxy, {
+      y: origY, duration: 0.26, ease: 'bounce.out',
+      onUpdate: () => { this.y = proxy.y; this._applyTransform() },
+    })
+    tl.to(ub, { y: 6, duration: 0.06, ease: 'power2.in' })
+      .to(ub, { y: 0, duration: 0.20, ease: 'elastic.out(1, 0.5)' })
+
+    return tl
+  }
+
+  look(dir: 'left' | 'right' | 'up' | 'reset') {
+    const angles: Record<string, number> = { left: -20, right: 20, up: -15, reset: 0 }
+    return gsap.timeline().to(this._e('head'), {
+      rotation: angles[dir] ?? 0, duration: 0.25, ease: 'power2.inOut',
+    })
+  }
+
+  turn(newDir: number) {
+    if (newDir === this.dir) return gsap.timeline()
+    const proxy = { sx: this.scale * this.dir }
+    const tl = gsap.timeline({
+      onComplete: () => { this.dir = newDir; this._applyTransform() },
+    })
+    tl.to(proxy, {
+      sx: 0, duration: 0.12, ease: 'power2.in',
+      onUpdate: () => {
+        this.root.setAttribute('transform',
+          `translate(${this.x}, ${this.y}) scale(${proxy.sx}, ${this.scale})`)
+      },
+    })
+    .to(proxy, {
+      sx: this.scale * newDir, duration: 0.12, ease: 'power2.out',
+      onUpdate: () => {
+        this.root.setAttribute('transform',
+          `translate(${this.x}, ${this.y}) scale(${proxy.sx}, ${this.scale})`)
+      },
+    })
+    tl.add(() => { this.dir = newDir }, 0.12)
+    return tl
+  }
+
+  think(duration = 1.2) {
+    const rSh = this._e('right-shoulder')
+    const rEl = this._e('right-elbow')
+    const head = this._e('head')
+    const ub = this._e('upper-body')
+    const tl = gsap.timeline()
+
+    tl.to(ub, { x: -3, rotation: -2, duration: 0.3, ease: 'power2.out' })
+      .to(rSh, { rotation: -80, duration: 0.32, ease: 'back.out(1.3)' }, '<0.05')
+      .to(rEl, { rotation: 65, duration: 0.30, ease: 'power2.out' }, '<0.04')
+      .to(head, { rotation: -14, duration: 0.28, ease: 'power2.out' }, '<0.08')
+
+    if (duration > 0.4) {
+      const midT = tl.duration()
+      tl.to(head, { rotation: -10, duration: duration * 0.3, ease: 'sine.inOut' }, midT)
+      tl.to(head, { rotation: -16, duration: duration * 0.3, ease: 'sine.inOut' }, midT + duration * 0.3)
+      tl.to(head, { rotation: -12, duration: duration * 0.4, ease: 'sine.inOut' }, midT + duration * 0.6)
+    } else {
+      tl.to({}, { duration })
+    }
+
+    tl.to(head, { rotation: 0, duration: 0.22, ease: 'power2.inOut' })
+      .to(rSh, { rotation: 5, duration: 0.28, ease: 'power2.in' }, '<0.06')
+      .to(rSh, { rotation: 0, duration: 0.12, ease: 'sine.out' })
+      .to(rEl, { rotation: 0, duration: 0.25, ease: 'power2.inOut' }, '<')
+      .to(ub, { x: 0, rotation: 0, duration: 0.22, ease: 'sine.inOut' }, '<')
+
+    return tl
+  }
+
+  victory() {
+    const lSh = this._e('left-shoulder'), rSh = this._e('right-shoulder')
+    const ub = this._e('upper-body')
+    const head = this._e('head')
+    const tl = gsap.timeline()
+
+    tl.add(this.jump(70, 1))
+    tl.to(lSh, { rotation: -130, duration: 0.18, ease: 'back.out(2)' }, '-=0.3')
+    tl.to(rSh, { rotation: -115, duration: 0.20, ease: 'back.out(1.8)' }, '-=0.32')
+    tl.to(head, { rotation: -8, y: -1, duration: 0.15 }, '<0.04')
+    tl.to({}, { duration: 0.3 })
+
+    tl.to(ub, { rotation: 10, duration: 0.09, ease: 'power2.out' })
+      .to(ub, { rotation: -9, duration: 0.09 })
+      .to(ub, { rotation: 7, duration: 0.10 })
+      .to(ub, { rotation: -5, duration: 0.11 })
+      .to(ub, { rotation: 2, duration: 0.12, ease: 'sine.out' })
+      .to(ub, { rotation: 0, duration: 0.10, ease: 'sine.out' })
+
+    tl.to(head, { rotation: 5, duration: 0.08 }, '-=0.60')
+    tl.to(head, { rotation: -4, duration: 0.08 }, '-=0.50')
+    tl.to(head, { rotation: 0, y: 0, duration: 0.15, ease: 'sine.out' }, '-=0.25')
+
+    tl.to(lSh, { rotation: 8, duration: 0.22, ease: 'power3.in' }, '-=0.15')
+    tl.to(rSh, { rotation: 6, duration: 0.24, ease: 'power3.in' }, '<0.03')
+    tl.to([lSh, rSh], { rotation: -3, duration: 0.10, ease: 'sine.out' })
+    tl.to([lSh, rSh], { rotation: 0, duration: 0.08 })
+
+    return tl
+  }
+
+  sit(sitDuration = 0) {
+    const tl = gsap.timeline()
+    tl.to([this._e('left-thigh'), this._e('right-thigh')],
+        { rotation: -60, duration: 0.4, ease: 'power2.out' })
+      .to([this._e('left-shin'), this._e('right-shin')],
+        { rotation: 80, duration: 0.4 }, '<')
+      .to(this._e('upper-body'), { y: 14, duration: 0.4 }, '<')
+
+    if (sitDuration > 0) {
+      tl.to({}, { duration: sitDuration })
+      tl.to([this._e('left-thigh'), this._e('right-thigh')],
+          { rotation: 0, duration: 0.35, ease: 'power2.out' })
+        .to([this._e('left-shin'), this._e('right-shin')],
+          { rotation: 0, duration: 0.35 }, '<')
+        .to(this._e('upper-body'), { y: 0, duration: 0.35 }, '<')
+    }
+    return tl
+  }
+
   trackTimeline(tl: gsap.core.Timeline) {
     this._activeTl?.kill()
     this._activeTl = tl
@@ -348,7 +574,6 @@ export class Robot {
   }
 }
 
-/** SVG <defs> required by the Robot class */
 export const ROBOT_DEFS = `
   <linearGradient id="grad-body" x1="0" y1="0" x2="1" y2="1">
     <stop offset="0%" stop-color="#9abdd8"/>

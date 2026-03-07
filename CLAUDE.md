@@ -246,8 +246,8 @@ atlas_brain/mcp/                 # MCP servers (Claude Desktop / Cursor compatib
 ├── twilio_server.py             # Twilio MCP server        (10 tools, port 8058)
 ├── calendar_server.py           # Calendar MCP server      (8 tools, port 8059)
 ├── invoicing_server.py          # Invoicing MCP server     (15 tools, port 8060)
-├── intelligence_server.py       # Intelligence MCP server  (8 tools, port 8061)
-└── b2b_churn_server.py          # B2B Churn MCP server     (10 tools, port 8062)
+├── intelligence_server.py       # Intelligence MCP server  (17 tools, port 8061)
+└── b2b_churn_server.py          # B2B Churn MCP server     (18 tools, port 8062)
 ```
 
 ## Key Patterns
@@ -506,7 +506,7 @@ Tools: `create_invoice`, `get_invoice`, `list_invoices`, `update_invoice`,
 `payment_history`, `create_service`, `list_services`, `get_service`,
 `update_service`, `set_service_status`, `search_invoices`
 
-### Intelligence MCP Server (8 tools)
+### Intelligence MCP Server (17 tools)
 ```bash
 # stdio mode (Claude Desktop / Cursor)
 python -m atlas_brain.mcp.intelligence_server
@@ -515,15 +515,21 @@ python -m atlas_brain.mcp.intelligence_server
 python -m atlas_brain.mcp.intelligence_server --sse
 ```
 
-Tools: `generate_intelligence_report`, `list_intelligence_reports`,
+Tools (Strategic): `generate_intelligence_report`, `list_intelligence_reports`,
 `get_intelligence_report`, `list_pressure_baselines`, `analyze_risk_sensors`,
 `run_intervention_pipeline`, `list_pending_approvals`, `review_approval`
 
-**Intelligence reports**: On-demand competitive/market analysis from B2B churn data,
-news, and market snapshots. `run_intervention_pipeline` generates actionable
-interventions with approval workflow.
+Tools (Consumer Product): `search_product_reviews`, `get_product_review`,
+`list_pain_points`, `list_brands`, `get_brand_intelligence`,
+`list_market_reports`, `get_market_report`, `get_consumer_pipeline_status`,
+`list_complaint_content`
 
-### B2B Churn Intelligence MCP Server (10 tools)
+**Intelligence + Consumer product reviews**: Strategic entity intelligence
+(pressure baselines, behavioral risk, interventions) plus consumer product
+review data (Amazon reviews, brand health scores, pain points, competitive
+flows, generated content). Two-pass enrichment pipeline.
+
+### B2B Churn Intelligence MCP Server (18 tools)
 ```bash
 # stdio mode (Claude Desktop / Cursor)
 python -m atlas_brain.mcp.b2b_churn_server
@@ -534,11 +540,15 @@ python -m atlas_brain.mcp.b2b_churn_server --sse
 
 Tools: `list_churn_signals`, `get_churn_signal`, `list_high_intent_companies`,
 `get_vendor_profile`, `list_reports`, `get_report`, `search_reviews`,
-`get_review`, `get_pipeline_status`, `list_scrape_targets`
+`get_review`, `get_pipeline_status`, `list_scrape_targets`,
+`get_product_profile`, `match_products_tool`, `list_blog_posts`,
+`get_blog_post`, `add_scrape_target`, `manage_scrape_target`,
+`delete_scrape_target`, `list_affiliate_partners`
 
 **B2B churn intelligence**: Query vendor churn signals, search enriched reviews,
-read intelligence reports, identify high-intent companies, and monitor the
-scrape/enrichment pipeline. Data sourced from G2, Capterra, TrustRadius, Reddit.
+read intelligence reports, identify high-intent companies, monitor pipeline health,
+manage scrape targets, view blog posts, and list affiliate partners.
+Data sourced from 16 review sites (incl. Twitter/X via Web Unlocker).
 
 ```bash
 ATLAS_MCP_B2B_CHURN_ENABLED=true

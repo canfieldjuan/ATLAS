@@ -14,7 +14,6 @@ export default function VendorDetail() {
 
   useEffect(() => {
     if (!vendorName) return
-    setLoading(true)
     fetchVendorDetail(vendorName)
       .then(d => setDetail(d))
       .catch(err => setError(err instanceof Error ? err.message : 'Failed to load vendor'))

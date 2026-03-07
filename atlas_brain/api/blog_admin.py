@@ -8,6 +8,7 @@ blog_posts table. This router exposes list/get/patch/publish operations.
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
@@ -62,6 +63,14 @@ class BlogDraftPatch(BaseModel):
     tags: Optional[list] = None
     status: Optional[str] = None
     reviewer_notes: Optional[str] = None
+
+
+class ManualGenerateRequest(BaseModel):
+    vendor_name: str
+    topic_type: str
+    vendor_b: Optional[str] = None
+    category: Optional[str] = None
+    skip_sufficiency_check: bool = False
 
 
 # -- helpers ------------------------------------------------------
@@ -156,6 +165,84 @@ async def get_draft(
     return _row_to_detail(row)
 
 
+@router.get("/drafts/{draft_id}/evidence")
+async def get_draft_evidence(
+    draft_id: UUID,
+    limit: int = Query(20, ge=1, le=100),
+    _user: AuthUser = Depends(require_auth),
+):
+    """Return matching b2b_reviews that back the claims in a blog draft."""
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(503, "Database not ready")
+
+    row = await pool.fetchrow(
+        "SELECT data_context, source_report_date FROM blog_posts WHERE id = $1",
+        draft_id,
+    )
+    if not row:
+        raise HTTPException(404, "Draft not found")
+
+    ctx = _safe_json(row.get("data_context") or {})
+    vendor_name = ctx.get("vendor_name") or ctx.get("vendor_a") or ctx.get("vendor")
+    if not vendor_name:
+        return {"reviews": [], "count": 0}
+
+    # Build query based on available context
+    # Columns: summary (not headline), review_text (not full_text),
+    # enrichment JSONB contains urgency_score and pain_category,
+    # source (not source_site), reviewed_at (not review_date)
+    report_date = row.get("source_report_date")
+    if report_date:
+        reviews = await pool.fetch(
+            """
+            SELECT id, vendor_name, reviewer_company, summary, review_text,
+                   enrichment->>'pain_category' AS pain_category,
+                   (enrichment->>'urgency_score')::numeric AS urgency_score,
+                   source, reviewed_at
+            FROM b2b_reviews
+            WHERE LOWER(vendor_name) = LOWER($1)
+              AND enrichment_status = 'enriched'
+              AND reviewed_at >= ($2::date - INTERVAL '90 days')
+            ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST
+            LIMIT $3
+            """,
+            vendor_name, report_date, limit,
+        )
+    else:
+        reviews = await pool.fetch(
+            """
+            SELECT id, vendor_name, reviewer_company, summary, review_text,
+                   enrichment->>'pain_category' AS pain_category,
+                   (enrichment->>'urgency_score')::numeric AS urgency_score,
+                   source, reviewed_at
+            FROM b2b_reviews
+            WHERE LOWER(vendor_name) = LOWER($1)
+              AND enrichment_status = 'enriched'
+            ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST
+            LIMIT $2
+            """,
+            vendor_name, limit,
+        )
+
+    result = []
+    for r in reviews:
+        pain = r.get("pain_category")
+        result.append({
+            "id": str(r["id"]),
+            "vendor_name": r["vendor_name"],
+            "reviewer_company": r.get("reviewer_company"),
+            "headline": r.get("summary"),
+            "full_text": r.get("review_text"),
+            "pain_categories": [pain] if pain else [],
+            "urgency_score": float(r["urgency_score"]) if r.get("urgency_score") is not None else None,
+            "source_site": r.get("source"),
+            "review_date": r["reviewed_at"].isoformat() if r.get("reviewed_at") else None,
+        })
+
+    return {"reviews": result, "count": len(result)}
+
+
 @router.patch("/drafts/{draft_id}")
 async def update_draft(
     draft_id: UUID,
@@ -233,7 +320,11 @@ async def publish_draft(
     # Optionally write the TS file to the blog content directory
     from ..config import settings
     topic_type = row.get("topic_type", "")
-    b2b_types = ("vendor_alternative", "vendor_showdown", "churn_report", "migration_guide")
+    b2b_types = (
+        "vendor_alternative", "vendor_showdown", "churn_report", "migration_guide",
+        "vendor_deep_dive", "market_landscape", "pricing_reality_check",
+        "switching_story", "pain_point_roundup", "best_fit_guide",
+    )
     if topic_type in b2b_types:
         ui_path = settings.b2b_churn.blog_post_ui_path
     else:
@@ -258,6 +349,22 @@ async def publish_draft(
                 )
             except Exception:
                 logger.warning("Blog auto-deploy failed", exc_info=True)
+            
+            # Fire the Vercel CLI directly from the UI root directory
+            import subprocess
+            ui_root = ui_path.split("/src/")[0]
+            try:
+                # Log that we are attempting the CLI approach
+                logger.info(f"Triggering direct Vercel CLI deployment in {ui_root}")
+                subprocess.Popen(
+                    ["vercel", "--prod", "--yes"], 
+                    cwd=ui_root
+                )
+                if not deployed:
+                    deployed = {}
+                deployed["vercel_cli"] = "triggered"
+            except Exception as e:
+                logger.error(f"Failed to trigger Vercel CLI deployment: {e}")
 
     return {
         "ok": True,
@@ -269,75 +376,138 @@ async def publish_draft(
     }
 
 
+@router.post("/generate")
+async def generate_post(
+    req: ManualGenerateRequest,
+    _user: AuthUser = Depends(require_auth),
+):
+    """Manually trigger blog post generation for a specific vendor + topic type."""
+    from ..autonomous.tasks.b2b_blog_post_generation import (
+        _KNOWN_TOPIC_TYPES,
+        _check_data_sufficiency,
+        _gather_data,
+        _build_blueprint,
+        _generate_content,
+        _assemble_and_store,
+        build_manual_topic_ctx,
+    )
+    from ..config import settings
+
+    if req.topic_type not in _KNOWN_TOPIC_TYPES:
+        raise HTTPException(
+            422,
+            f"Unknown topic_type '{req.topic_type}'. Must be one of: {sorted(_KNOWN_TOPIC_TYPES)}",
+        )
+
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(503, "Database not ready")
+
+    cfg = settings.b2b_churn
+
+    # Get LLM
+    from ..pipelines.llm import get_pipeline_llm
+    llm = get_pipeline_llm(
+        prefer_cloud=True,
+        try_openrouter=True,
+        auto_activate_ollama=False,
+        openrouter_model=cfg.blog_post_openrouter_model,
+    )
+    if llm is None:
+        from ..services import llm_registry
+        llm = llm_registry.get_active()
+    if llm is None:
+        raise HTTPException(503, "No LLM available for blog post generation")
+
+    try:
+        topic_ctx = await build_manual_topic_ctx(
+            pool, req.vendor_name, req.topic_type,
+            vendor_b=req.vendor_b, category=req.category,
+        )
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+    data = await _gather_data(pool, req.topic_type, topic_ctx)
+
+    sufficiency = _check_data_sufficiency(req.topic_type, data)
+    if not sufficiency["sufficient"] and not req.skip_sufficiency_check:
+        raise HTTPException(422, {
+            "error": "Insufficient data",
+            "reason": sufficiency["reason"],
+            "hint": "Set skip_sufficiency_check=true to override",
+        })
+
+    blueprint = _build_blueprint(req.topic_type, topic_ctx, data)
+    content = _generate_content(llm, blueprint, cfg.blog_post_max_tokens)
+    if content is None:
+        raise HTTPException(500, "LLM content generation failed")
+
+    # Inject affiliate links
+    affiliate_url = blueprint.data_context.get("affiliate_url", "")
+    affiliate_slug = blueprint.data_context.get("affiliate_slug", "")
+    partner_info = blueprint.data_context.get("affiliate_partner", {})
+    partner_name = partner_info.get("name", "") or partner_info.get("product_name", "")
+    if affiliate_slug and affiliate_url and content.get("content"):
+        md_link = f"[{partner_name}]({affiliate_url})" if partner_name else affiliate_url
+        content["content"] = content["content"].replace(
+            f"{{{{affiliate:{affiliate_slug}}}}}",
+            md_link,
+        )
+        raw = content["content"]
+        if affiliate_url in raw:
+            raw = re.sub(
+                r'(?<!\]\()' + re.escape(affiliate_url) + r'(?!\))',
+                md_link,
+                raw,
+            )
+            content["content"] = raw
+
+    post_id = await _assemble_and_store(pool, blueprint, content, llm)
+    if not post_id:
+        raise HTTPException(409, f"Slug '{blueprint.slug}' already published")
+
+    return {
+        "ok": True,
+        "post_id": post_id,
+        "slug": blueprint.slug,
+        "topic_type": req.topic_type,
+        "charts": len(blueprint.charts),
+        "sufficiency": sufficiency,
+    }
+
+
 def _write_blog_ts_file(row, ui_path: str, published_at: datetime) -> str | None:
     """Write a TypeScript blog post file and update the index."""
+    from pathlib import Path
+    from ..autonomous.tasks._blog_ts import build_post_ts, update_blog_index
+
     slug = row["slug"]
     charts = _safe_json(row.get("charts", []))
     tags = _safe_json(row.get("tags", []))
-    content = row["content"]
     date_str = published_at.strftime("%Y-%m-%d")
 
-    # Escape backticks and dollar signs in content for template literals
-    escaped_content = content.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${")
+    data_context = _safe_json(row.get("data_context", {}))
 
-    # Build charts TS literal
-    charts_ts = json.dumps(charts, indent=2, default=str) if charts else "[]"
-    tags_ts = json.dumps(tags)
-
-    # Variable name from slug
-    var_name = slug.replace("-", "_").replace(".", "_")
-
-    ts_content = f"""import type {{ BlogPost }} from './index'
-
-const {var_name}: BlogPost = {{
-  slug: '{slug}',
-  title: {json.dumps(row['title'])},
-  description: {json.dumps(row.get('description', ''))},
-  date: '{date_str}',
-  author: 'Atlas Intelligence',
-  tags: {tags_ts},
-  topic_type: {json.dumps(row['topic_type'])},
-  charts: {charts_ts},
-  content: `{escaped_content}`,
-}}
-
-export default {var_name}
-"""
+    var_name, ts_content = build_post_ts(
+        slug=slug,
+        title=row["title"],
+        description=row.get("description", ""),
+        date_str=date_str,
+        author="Atlas Intelligence",
+        tags=tags,
+        topic_type=row.get("topic_type", ""),
+        charts_json=charts,
+        content=row["content"],
+        data_context=data_context,
+    )
 
     file_path = os.path.join(ui_path, f"{slug}.ts")
     try:
         with open(file_path, "w") as f:
             f.write(ts_content)
 
-        # Update index.ts to include the new post
-        index_path = os.path.join(ui_path, "index.ts")
-        if os.path.exists(index_path):
-            with open(index_path, "r") as f:
-                index_content = f.read()
-
-            import_line = f"import {var_name} from './{slug}'"
-            if import_line not in index_content:
-                # Add import after the last existing import line
-                last_import = index_content.rfind("\nimport ")
-                if last_import >= 0:
-                    end_of_line = index_content.index("\n", last_import + 1)
-                    index_content = (
-                        index_content[: end_of_line + 1]
-                        + import_line
-                        + "\n"
-                        + index_content[end_of_line + 1:]
-                    )
-
-                # Add to POSTS array (only if not already present)
-                posts_section = index_content.split("POSTS")
-                if len(posts_section) > 1 and var_name not in posts_section[1]:
-                    index_content = index_content.replace(
-                        "].sort(",
-                        f"  {var_name},\n].sort(",
-                    )
-
-                with open(index_path, "w") as f:
-                    f.write(index_content)
+        blog_dir = Path(ui_path)
+        update_blog_index(blog_dir / "index.ts", slug, var_name)
 
         logger.info("Wrote blog TS file: %s", file_path)
         return file_path

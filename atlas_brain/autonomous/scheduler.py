@@ -543,10 +543,10 @@ class TaskScheduler:
         },
         {
             "name": "b2b_blog_post_generation",
-            "description": "Daily B2B SaaS comparison blog post generation from churn intelligence",
+            "description": "Weekday B2B SaaS intelligence blog post generation (5x/week)",
             "task_type": "builtin",
             "schedule_type": "cron",
-            "cron_expression": "0 23 * * *",
+            "cron_expression": "0 23 * * 1-5",
             "timeout_seconds": 600,
             "enabled": False,  # opt-in via ATLAS_B2B_CHURN_BLOG_POST_ENABLED
             "metadata": {
@@ -588,6 +588,18 @@ class TaskScheduler:
             "metadata": {
                 "builtin_handler": "consumer_signal_alerts",
                 "notify_tags": "warning,consumer",
+            },
+        },
+        {
+            "name": "trial_nurture",
+            "description": "Daily trial-to-paid nurture emails at key milestones (day 3, 7, 11, 13)",
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": "0 10 * * *",
+            "timeout_seconds": 120,
+            "metadata": {
+                "builtin_handler": "trial_nurture",
+                "notify_tags": "email,consumer",
             },
         },
         {

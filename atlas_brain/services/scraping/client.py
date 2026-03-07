@@ -134,6 +134,10 @@ class AntiDetectionClient:
                 # 6. Execute via curl_cffi with matching TLS fingerprint
                 domain_cookies = self._get_domain_cookies(domain)
                 effective_proxy = override_proxy or (proxy.url if proxy else None)
+                # Residential proxies (e.g. Bright Data) inject their own SSL
+                # certificate in the chain, causing "self signed certificate"
+                # errors.  Disable verification when routing through a proxy.
+                skip_ssl = effective_proxy is not None
                 async with AsyncSession(impersonate=profile.impersonate) as session:
                     resp = await session.get(
                         url,
@@ -141,6 +145,7 @@ class AntiDetectionClient:
                         cookies=domain_cookies if domain_cookies else None,
                         proxy=effective_proxy,
                         timeout=30,
+                        verify=not skip_ssl,
                     )
 
                 # Capture any Set-Cookie headers
@@ -158,8 +163,8 @@ class AntiDetectionClient:
                         f" ({content_len} bytes)"
                     )
 
-                # 8. Check for CAPTCHA challenges on 403
-                if resp.status_code == 403 and captcha_enabled:
+                # 8. Check for CAPTCHA challenges on 403/429 (or 200 with challenge body)
+                if resp.status_code in (403, 429) and captcha_enabled:
                     captcha_type = detect_captcha(resp.text, resp.status_code)
 
                     if captcha_type != CaptchaType.NONE:

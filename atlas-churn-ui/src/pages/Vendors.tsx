@@ -15,13 +15,10 @@ export default function Vendors() {
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [minUrgency, setMinUrgency] = useState(0)
   const [category, setCategory] = useState('')
-  const [debouncePending, setDebouncePending] = useState(false)
 
   useEffect(() => {
-    setDebouncePending(true)
     const timer = setTimeout(() => {
       setDebouncedSearch(search)
-      setDebouncePending(false)
     }, 300)
     return () => clearTimeout(timer)
   }, [search])
@@ -40,6 +37,7 @@ export default function Vendors() {
   const signals = data?.signals ?? []
   const categories = [...new Set(signals.map((s) => s.product_category).filter(Boolean))]
   const hasFilters = search !== '' || minUrgency > 0 || category !== ''
+  const debouncePending = search !== debouncedSearch
 
   function clearFilters() {
     setSearch('')

@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components, react-hooks/set-state-in-effect */
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 
 const TOKEN_KEY = 'atlas_token'
@@ -98,7 +99,10 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(() => localStorage.getItem(TOKEN_KEY))
   const [loading, setLoading] = useState(true)
   const tokenRef = useRef(token)
-  tokenRef.current = token
+
+  useEffect(() => {
+    tokenRef.current = token
+  }, [token])
 
   const saveTokens = useCallback((access: string, refresh: string) => {
     localStorage.setItem(TOKEN_KEY, access)

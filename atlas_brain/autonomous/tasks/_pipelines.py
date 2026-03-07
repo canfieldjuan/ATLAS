@@ -183,9 +183,9 @@ register_pipeline(PipelineConfig(
             name="blog_post_generation",
             module="blog_post_generation",
             schedule_type="cron",
-            cron_expression="0 23 * * *",
+            cron_expression="0 23 * * 0",
             timeout_seconds=600,
-            description="Generate data-backed blog posts with interactive charts",
+            description="Weekly data-backed blog post generation with interactive charts",
             metadata={
                 "builtin_handler": "blog_post_generation",
                 "notify_priority": "default",
@@ -316,6 +316,49 @@ register_pipeline(PipelineConfig(
             where_clause="DELETE FROM b2b_scrape_log WHERE started_at < CURRENT_TIMESTAMP - make_interval(days => $1)",
             retention_config_key="b2b_scrape.scrape_log_retention_days",
             result_key="b2b_scrape_log_cleaned",
+        ),
+    ],
+))
+
+# ------------------------------------------------------------------
+# B2B prospect enrichment pipeline (Apollo.io)
+# ------------------------------------------------------------------
+
+register_pipeline(PipelineConfig(
+    name="b2b_prospect",
+    enabled_key="apollo.enabled",
+    tasks=[
+        TaskDef(
+            name="prospect_enrichment",
+            module="prospect_enrichment",
+            schedule_type="cron",
+            timeout_seconds=1800,
+            description="Enrich companies with Apollo.io prospects (org + people + email)",
+            metadata={"builtin_handler": "prospect_enrichment"},
+            cron_config_key="apollo.enrichment_cron",
+        ),
+        TaskDef(
+            name="prospect_matching",
+            module="prospect_matching",
+            schedule_type="interval",
+            timeout_seconds=120,
+            description="Match enriched prospects to unmatched campaign sequences",
+            metadata={"builtin_handler": "prospect_matching"},
+            interval_config_key="apollo.matching_interval_seconds",
+        ),
+    ],
+    cleanup_rules=[
+        CleanupRule(
+            table="prospect_org_cache",
+            where_clause="DELETE FROM prospect_org_cache WHERE status = 'not_found' AND enriched_at < CURRENT_TIMESTAMP - make_interval(days => $1)",
+            retention_config_key="apollo.org_cache_days",
+            result_key="prospect_org_not_found_cleaned",
+        ),
+        CleanupRule(
+            table="prospects",
+            where_clause="DELETE FROM prospects WHERE status IN ('bounced', 'suppressed') AND updated_at < CURRENT_TIMESTAMP - make_interval(days => $1)",
+            retention_config_key="apollo.org_cache_days",
+            result_key="bounced_prospects_cleaned",
         ),
     ],
 ))

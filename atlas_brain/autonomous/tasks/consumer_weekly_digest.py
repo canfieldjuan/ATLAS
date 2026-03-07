@@ -181,13 +181,18 @@ async def _send_digest_email(
     subject = f"Weekly Intel Digest: {metrics['new_reviews']} new reviews"
 
     # Build pain points section
+    tag = settings.external_data.amazon_associate_tag
     pain_html = ""
     if metrics["top_pain_points"]:
-        items = "".join(
-            f"<li><strong>{p['asin']}</strong>: {p['root_cause'] or 'Unknown'} "
-            f"(pain score: {p['pain_score']})</li>"
-            for p in metrics["top_pain_points"]
-        )
+        items = ""
+        for p in metrics["top_pain_points"]:
+            asin = p["asin"]
+            asin_url = f"https://www.amazon.com/dp/{asin}?tag={tag}" if tag else f"https://www.amazon.com/dp/{asin}"
+            asin_link = f"<a href='{asin_url}' style='color:#60a5fa;text-decoration:none;'>{asin}</a>"
+            items += (
+                f"<li><strong>{asin_link}</strong>: {p['root_cause'] or 'Unknown'} "
+                f"(pain score: {p['pain_score']})</li>"
+            )
         pain_html = f"<h3>Top Pain Points</h3><ul>{items}</ul>"
 
     # Build brand health section

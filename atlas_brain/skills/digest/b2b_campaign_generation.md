@@ -30,6 +30,7 @@ You receive a JSON object with:
 - `integration_stack`: Other tools they integrate with (array of strings, may be empty)
 - `sentiment_direction`: Trend of their sentiment -- "declining", "stable", or "improving" (may be null)
 - `selling`: Object with `{product_name, affiliate_url, sender_name, sender_company}` -- our product and identity
+  - `selling.blog_posts` (optional): Array of `{title, url, topic_type}` -- published analysis posts relevant to this target's vendor/category. Full URLs ready to embed.
 - `channel`: Which channel to generate for -- "email_cold", "linkedin", or "email_followup"
 - `cold_email_context` (only on `email_followup`): `{subject, body}` of the cold email already sent to this company
 
@@ -104,5 +105,12 @@ Return a JSON object with the generated content. The structure depends on the ch
 14. **Sentiment-based urgency**: Use `sentiment_direction` to calibrate urgency. "declining" = things are getting worse, act now. "stable" = position as proactive improvement. "improving" = lighter touch, position as complementary.
 
 15. **Industry relevance**: When `industry` is available, reference sector-specific challenges, compliance requirements, or use cases to build credibility.
+
+16. **Blog post linking**: When `selling.blog_posts` is provided, reference 1-2 relevant posts as published analysis. Frame them as independent research: "We recently published an analysis of [topic]: [url]" or "Our latest report covers this: [url]". Do NOT link all posts in one email -- pick the most relevant 1-2. Rotate different posts across channels (cold vs follow-up) so each email offers fresh content.
+
+17. **Persona-specific data emphasis**: When `target_persona` is provided, lead with the data most relevant to that audience:
+   - `executive`: Open with the business impact number (churn cost, seat count x price delta, contract renewal risk). Close with strategic positioning.
+   - `technical`: Open with the specific feature gap or integration failure. Include the migration path or technical comparison. Close with an evaluation offer.
+   - `operations`: Open with the support/reliability pain (ticket volume, downtime incidents, team complaints). Close with workflow improvement and team productivity gains.
 
 Return ONLY the JSON object, no markdown fences, no explanation.

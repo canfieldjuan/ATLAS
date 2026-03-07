@@ -1,15 +1,31 @@
 """
 Atlas Intelligence MCP Server.
 
-Exposes intelligence report generation and pressure baseline queries
+Exposes intelligence report generation, consumer product review data,
+brand intelligence, pain point analysis, and pressure baseline queries
 to any MCP-compatible client (Claude Desktop, Cursor, custom agents).
 
 Tools:
+    -- Strategic Intelligence --
     generate_intelligence_report  -- generate a full or executive report for an entity
     list_intelligence_reports     -- list recent reports with optional entity filter
     get_intelligence_report       -- fetch a stored report by ID
     list_pressure_baselines       -- list entity pressure baselines (highest first)
     analyze_risk_sensors          -- run behavioral risk sensors on text
+    run_intervention_pipeline     -- three-stage intervention analysis
+    list_pending_approvals        -- list pending intervention approvals
+    review_approval               -- approve or reject intervention requests
+
+    -- Consumer Product Intelligence --
+    search_product_reviews        -- search enriched Amazon product reviews
+    get_product_review            -- fetch single review with full enrichment
+    list_pain_points              -- top products by pain score
+    get_brand_intelligence        -- brand health scorecard with competitive flows
+    list_brands                   -- list brands sorted by health score
+    list_market_reports           -- competitive intelligence reports
+    get_market_report             -- fetch full market intelligence report
+    get_consumer_pipeline_status  -- enrichment pipeline health snapshot
+    list_complaint_content        -- generated content (articles, forum posts, email copy)
 
 Run:
     python -m atlas_brain.mcp.intelligence_server          # stdio
@@ -39,6 +55,18 @@ def _is_uuid(value: str) -> bool:
         return False
 
 
+def _safe_json(val):
+    """Return val if it's already a list/dict, else try json.loads, else return val as-is."""
+    if isinstance(val, (list, dict)):
+        return val
+    if isinstance(val, str):
+        try:
+            return json.loads(val)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return val
+
+
 @asynccontextmanager
 async def _lifespan(server):
     """Initialize DB pool on startup, close on shutdown."""
@@ -52,11 +80,12 @@ async def _lifespan(server):
 mcp = FastMCP(
     "atlas-intelligence",
     instructions=(
-        "Intelligence report server for Atlas. "
-        "Generate behavioral intelligence reports from pressure baselines, "
-        "SORAM-enriched news articles, and knowledge graph data. "
-        "Use generate_intelligence_report for on-demand analysis of entities. "
-        "Use list_pressure_baselines to see which entities have elevated pressure."
+        "Intelligence and consumer product review server for Atlas. "
+        "Generate behavioral intelligence reports, query Amazon product reviews, "
+        "analyze brand health scores, view pain points and competitive flows, "
+        "monitor enrichment pipeline health, and run intervention analysis. "
+        "Consumer data sourced from Amazon product reviews with two-pass "
+        "enrichment (complaint classification + deep extraction)."
     ),
     lifespan=_lifespan,
 )
@@ -419,6 +448,723 @@ async def review_approval(
     except Exception as exc:
         logger.exception("review_approval error")
         return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ===========================================================================
+# Consumer Product Intelligence Tools
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# Tool: search_product_reviews
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def search_product_reviews(
+    asin: Optional[str] = None,
+    brand: Optional[str] = None,
+    category: Optional[str] = None,
+    min_pain_score: Optional[float] = None,
+    has_safety_flag: Optional[bool] = None,
+    enrichment_status: Optional[str] = None,
+    window_days: int = 30,
+    limit: int = 20,
+) -> str:
+    """
+    Search enriched Amazon product reviews with flexible filters.
+
+    asin: Filter by Amazon ASIN (exact match)
+    brand: Filter by brand name (partial match from product_metadata)
+    category: Filter by hardware_category or source_category (partial match)
+    min_pain_score: Minimum pain_score threshold (0-10)
+    has_safety_flag: Filter by safety_flagged in deep_extraction
+    enrichment_status: Filter by status (pending, enriched, failed, not_applicable)
+    window_days: How far back to look in days (default 30)
+    limit: Maximum results (default 20, cap 100)
+    """
+    limit = max(1, min(limit, 100))
+    window_days = max(1, min(window_days, 3650))
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        conditions = [
+            "r.imported_at > NOW() - make_interval(days => $1)",
+        ]
+        params: list = [window_days]
+        idx = 2
+
+        if asin:
+            conditions.append(f"r.asin = ${idx}")
+            params.append(asin.strip().upper())
+            idx += 1
+
+        if brand:
+            conditions.append(f"m.brand ILIKE '%' || ${idx} || '%'")
+            params.append(brand)
+            idx += 1
+
+        if category:
+            conditions.append(
+                f"(r.hardware_category::text ILIKE '%' || ${idx} || '%' "
+                f"OR r.source_category ILIKE '%' || ${idx} || '%' "
+                f"OR m.store ILIKE '%' || ${idx} || '%')"
+            )
+            params.append(category)
+            idx += 1
+
+        if min_pain_score is not None:
+            conditions.append(f"r.pain_score >= ${idx}")
+            params.append(max(0.0, min(float(min_pain_score), 10.0)))
+            idx += 1
+
+        if has_safety_flag is not None:
+            conditions.append(
+                f"(r.deep_extraction->>'safety_flagged')::boolean = ${idx}"
+            )
+            params.append(has_safety_flag)
+            idx += 1
+
+        if enrichment_status:
+            conditions.append(f"r.enrichment_status = ${idx}")
+            params.append(enrichment_status)
+            idx += 1
+
+        params.append(limit)
+        where = " AND ".join(conditions)
+
+        rows = await pool.fetch(
+            f"""
+            SELECT r.id, r.asin, r.rating, r.summary, r.pain_score,
+                   r.root_cause, r.specific_complaint, r.severity,
+                   r.enrichment_status, r.deep_enrichment_status,
+                   r.imported_at, r.enriched_at,
+                   m.brand, m.title AS product_title, m.store AS product_category
+            FROM product_reviews r
+            LEFT JOIN product_metadata m ON r.asin = m.asin
+            WHERE {where}
+            ORDER BY r.pain_score DESC NULLS LAST
+            LIMIT ${idx}
+            """,
+            *params,
+        )
+
+        reviews = [
+            {
+                "id": str(r["id"]),
+                "asin": r["asin"],
+                "brand": r["brand"],
+                "product_title": r["product_title"],
+                "product_category": r["product_category"],
+                "rating": r["rating"],
+                "summary": r["summary"],
+                "pain_score": float(r["pain_score"]) if r["pain_score"] is not None else None,
+                "root_cause": r["root_cause"],
+                "specific_complaint": r["specific_complaint"],
+                "severity": r["severity"],
+                "enrichment_status": r["enrichment_status"],
+                "deep_enrichment_status": r["deep_enrichment_status"],
+                "imported_at": r["imported_at"],
+                "enriched_at": r["enriched_at"],
+            }
+            for r in rows
+        ]
+
+        return json.dumps({"reviews": reviews, "count": len(reviews)}, default=str)
+    except Exception:
+        logger.exception("search_product_reviews error")
+        return json.dumps({"error": "Internal error", "reviews": [], "count": 0})
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_product_review
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_product_review(review_id: str) -> str:
+    """
+    Fetch a single Amazon product review with full enrichment and deep extraction.
+
+    review_id: UUID of the review to retrieve
+    """
+    if not _is_uuid(review_id):
+        return json.dumps({"success": False, "error": "Invalid review_id (must be UUID)"})
+
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        row = await pool.fetchrow(
+            """
+            SELECT r.*, m.brand, m.title AS product_title, m.store AS product_category
+            FROM product_reviews r
+            LEFT JOIN product_metadata m ON r.asin = m.asin
+            WHERE r.id = $1
+            """,
+            _uuid.UUID(review_id),
+        )
+
+        if not row:
+            return json.dumps({"success": False, "error": "Review not found"})
+
+        review = {
+            "id": str(row["id"]),
+            "asin": row["asin"],
+            "brand": row["brand"],
+            "product_title": row["product_title"],
+            "product_category": row["product_category"],
+            "rating": row["rating"],
+            "summary": row["summary"],
+            "review_text": row["review_text"],
+            "reviewer_id": row["reviewer_id"],
+            "source": row["source"],
+            "source_category": row["source_category"],
+            "hardware_category": row["hardware_category"],
+            "pain_score": float(row["pain_score"]) if row["pain_score"] is not None else None,
+            "root_cause": row["root_cause"],
+            "specific_complaint": row["specific_complaint"],
+            "severity": row["severity"],
+            "issue_types": _safe_json(row["issue_types"]),
+            "time_to_failure": row["time_to_failure"],
+            "workaround_found": row["workaround_found"],
+            "alternative_mentioned": row["alternative_mentioned"],
+            "enrichment_status": row["enrichment_status"],
+            "enriched_at": row["enriched_at"],
+            "deep_extraction": _safe_json(row["deep_extraction"]),
+            "deep_enrichment_status": row["deep_enrichment_status"],
+            "deep_enriched_at": row["deep_enriched_at"],
+            "imported_at": row["imported_at"],
+        }
+
+        return json.dumps({"success": True, "review": review}, default=str)
+    except Exception:
+        logger.exception("get_product_review error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: list_pain_points
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def list_pain_points(
+    category: Optional[str] = None,
+    min_pain_score: float = 0,
+    min_complaint_rate: Optional[float] = None,
+    limit: int = 20,
+) -> str:
+    """
+    List products ranked by pain score -- highest-pain products first.
+
+    category: Filter by product category (partial match)
+    min_pain_score: Minimum pain_score threshold (default 0)
+    min_complaint_rate: Minimum complaint_rate (0-1, e.g. 0.5 = 50%)
+    limit: Maximum results (default 20, cap 100)
+    """
+    limit = max(1, min(limit, 100))
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        conditions = []
+        params = []
+        idx = 1
+
+        if min_pain_score > 0:
+            conditions.append(f"pain_score >= ${idx}")
+            params.append(max(0.0, min(float(min_pain_score), 10.0)))
+            idx += 1
+
+        if min_complaint_rate is not None:
+            conditions.append(f"complaint_rate >= ${idx}")
+            params.append(max(0.0, min(float(min_complaint_rate), 1.0)))
+            idx += 1
+
+        if category:
+            conditions.append(f"category ILIKE '%' || ${idx} || '%'")
+            params.append(category)
+            idx += 1
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        params.append(limit)
+
+        rows = await pool.fetch(
+            f"""
+            SELECT asin, product_name, category, total_reviews,
+                   complaint_reviews, complaint_rate, pain_score,
+                   top_complaints, root_cause_distribution
+            FROM product_pain_points
+            {where}
+            ORDER BY pain_score DESC
+            LIMIT ${idx}
+            """,
+            *params,
+        )
+
+        pain_points = [
+            {
+                "asin": r["asin"],
+                "product_name": r["product_name"],
+                "category": r["category"],
+                "total_reviews": r["total_reviews"],
+                "complaint_reviews": r["complaint_reviews"],
+                "complaint_rate": float(r["complaint_rate"]) if r["complaint_rate"] is not None else None,
+                "pain_score": float(r["pain_score"]) if r["pain_score"] is not None else None,
+                "top_complaints": _safe_json(r["top_complaints"]),
+                "root_cause_distribution": _safe_json(r["root_cause_distribution"]),
+            }
+            for r in rows
+        ]
+
+        return json.dumps({"pain_points": pain_points, "count": len(pain_points)}, default=str)
+    except Exception:
+        logger.exception("list_pain_points error")
+        return json.dumps({"error": "Internal error", "pain_points": [], "count": 0})
+
+
+# ---------------------------------------------------------------------------
+# Tool: list_brands
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def list_brands(
+    min_health_score: Optional[float] = None,
+    sort_by: str = "health_score",
+    limit: int = 20,
+) -> str:
+    """
+    List brands sorted by health score from brand_intelligence.
+
+    min_health_score: Minimum health_score threshold
+    sort_by: Sort field -- "health_score" (default), "total_reviews", "avg_rating",
+             "avg_pain_score"
+    limit: Maximum results (default 20, cap 100)
+    """
+    limit = max(1, min(limit, 100))
+    valid_sorts = {
+        "health_score": "health_score DESC NULLS LAST",
+        "total_reviews": "total_reviews DESC",
+        "avg_rating": "avg_rating DESC NULLS LAST",
+        "avg_pain_score": "avg_pain_score DESC NULLS LAST",
+    }
+    order = valid_sorts.get(sort_by, valid_sorts["health_score"])
+
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        conditions = []
+        params = []
+        idx = 1
+
+        if min_health_score is not None:
+            conditions.append(f"health_score >= ${idx}")
+            params.append(float(min_health_score))
+            idx += 1
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        params.append(limit)
+
+        rows = await pool.fetch(
+            f"""
+            SELECT brand, source, total_reviews, avg_rating, avg_pain_score,
+                   repurchase_yes, repurchase_no, health_score,
+                   top_complaints, top_feature_requests,
+                   competitive_flows, positive_aspects,
+                   last_computed_at
+            FROM brand_intelligence
+            {where}
+            ORDER BY {order}
+            LIMIT ${idx}
+            """,
+            *params,
+        )
+
+        brands = [
+            {
+                "brand": r["brand"],
+                "source": r["source"],
+                "total_reviews": r["total_reviews"],
+                "avg_rating": float(r["avg_rating"]) if r["avg_rating"] is not None else None,
+                "avg_pain_score": float(r["avg_pain_score"]) if r["avg_pain_score"] is not None else None,
+                "repurchase_yes": r["repurchase_yes"],
+                "repurchase_no": r["repurchase_no"],
+                "health_score": float(r["health_score"]) if r["health_score"] is not None else None,
+                "top_complaints": _safe_json(r["top_complaints"]),
+                "top_feature_requests": _safe_json(r["top_feature_requests"]),
+                "competitive_flows": _safe_json(r["competitive_flows"]),
+                "positive_aspects": _safe_json(r["positive_aspects"]),
+                "last_computed_at": r["last_computed_at"],
+            }
+            for r in rows
+        ]
+
+        return json.dumps({"brands": brands, "count": len(brands)}, default=str)
+    except Exception:
+        logger.exception("list_brands error")
+        return json.dumps({"error": "Internal error", "brands": [], "count": 0})
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_brand_intelligence
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_brand_intelligence(brand: str) -> str:
+    """
+    Detailed brand health scorecard with competitive flows, buyer profile,
+    sentiment breakdown, and feature requests.
+
+    brand: Brand name (partial match, case-insensitive)
+    """
+    if not brand or not brand.strip():
+        return json.dumps({"success": False, "error": "brand is required"})
+
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        row = await pool.fetchrow(
+            """
+            SELECT * FROM brand_intelligence
+            WHERE brand ILIKE '%' || $1 || '%'
+            ORDER BY total_reviews DESC
+            LIMIT 1
+            """,
+            brand.strip(),
+        )
+
+        if not row:
+            return json.dumps({"success": False, "error": f"No brand intelligence for '{brand}'"})
+
+        bi = {
+            "brand": row["brand"],
+            "source": row["source"],
+            "total_reviews": row["total_reviews"],
+            "avg_rating": float(row["avg_rating"]) if row["avg_rating"] is not None else None,
+            "avg_pain_score": float(row["avg_pain_score"]) if row["avg_pain_score"] is not None else None,
+            "repurchase_yes": row["repurchase_yes"],
+            "repurchase_no": row["repurchase_no"],
+            "health_score": float(row["health_score"]) if row["health_score"] is not None else None,
+            "sentiment_breakdown": _safe_json(row["sentiment_breakdown"]),
+            "top_complaints": _safe_json(row["top_complaints"]),
+            "top_feature_requests": _safe_json(row["top_feature_requests"]),
+            "competitive_flows": _safe_json(row["competitive_flows"]),
+            "buyer_profile": _safe_json(row["buyer_profile"]),
+            "positive_aspects": _safe_json(row["positive_aspects"]),
+            "last_computed_at": row["last_computed_at"],
+        }
+
+        return json.dumps({"success": True, "brand": bi}, default=str)
+    except Exception:
+        logger.exception("get_brand_intelligence error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: list_market_reports
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def list_market_reports(
+    report_type: Optional[str] = None,
+    limit: int = 10,
+) -> str:
+    """
+    List competitive intelligence / market intelligence reports.
+
+    report_type: Filter by type (e.g. "daily_competitive")
+    limit: Maximum results (default 10, cap 50)
+    """
+    limit = max(1, min(limit, 50))
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        conditions = []
+        params = []
+        idx = 1
+
+        if report_type:
+            conditions.append(f"report_type = ${idx}")
+            params.append(report_type)
+            idx += 1
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        params.append(limit)
+
+        rows = await pool.fetch(
+            f"""
+            SELECT id, report_date, report_type, analysis_text,
+                   created_at
+            FROM market_intelligence_reports
+            {where}
+            ORDER BY report_date DESC
+            LIMIT ${idx}
+            """,
+            *params,
+        )
+
+        reports = [
+            {
+                "id": str(r["id"]),
+                "report_date": r["report_date"],
+                "report_type": r["report_type"],
+                "analysis_text": (r["analysis_text"] or "")[:500] + ("..." if r["analysis_text"] and len(r["analysis_text"]) > 500 else ""),
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ]
+
+        return json.dumps({"reports": reports, "count": len(reports)}, default=str)
+    except Exception:
+        logger.exception("list_market_reports error")
+        return json.dumps({"error": "Internal error", "reports": [], "count": 0})
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_market_report
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_market_report(report_id: str) -> str:
+    """
+    Fetch a full market intelligence report by UUID.
+
+    report_id: UUID of the report
+    """
+    if not _is_uuid(report_id):
+        return json.dumps({"success": False, "error": "Invalid report_id (must be UUID)"})
+
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        row = await pool.fetchrow(
+            "SELECT * FROM market_intelligence_reports WHERE id = $1",
+            _uuid.UUID(report_id),
+        )
+
+        if not row:
+            return json.dumps({"success": False, "error": "Report not found"})
+
+        report = {
+            "id": str(row["id"]),
+            "report_date": row["report_date"],
+            "report_type": row["report_type"],
+            "analysis_text": row["analysis_text"],
+            "competitive_flows": _safe_json(row["competitive_flows"]),
+            "feature_gaps": _safe_json(row["feature_gaps"]),
+            "buyer_personas": _safe_json(row["buyer_personas"]),
+            "brand_scorecards": _safe_json(row["brand_scorecards"]),
+            "insights": _safe_json(row["insights"]),
+            "recommendations": _safe_json(row["recommendations"]),
+            "created_at": row["created_at"],
+        }
+
+        return json.dumps({"success": True, "report": report}, default=str)
+    except Exception:
+        logger.exception("get_market_report error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_consumer_pipeline_status
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_consumer_pipeline_status() -> str:
+    """
+    Consumer review enrichment pipeline health snapshot.
+
+    Returns enrichment counts by status (basic + deep), recent imports,
+    brand intelligence count, pain point count, and content generation stats.
+    """
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+
+        # Basic enrichment counts
+        basic_rows = await pool.fetch(
+            """
+            SELECT enrichment_status, COUNT(*) AS cnt
+            FROM product_reviews
+            GROUP BY enrichment_status
+            """
+        )
+        basic_counts = {r["enrichment_status"]: r["cnt"] for r in basic_rows}
+
+        # Deep enrichment counts
+        deep_rows = await pool.fetch(
+            """
+            SELECT deep_enrichment_status, COUNT(*) AS cnt
+            FROM product_reviews
+            WHERE deep_enrichment_status IS NOT NULL
+            GROUP BY deep_enrichment_status
+            """
+        )
+        deep_counts = {r["deep_enrichment_status"]: r["cnt"] for r in deep_rows}
+
+        # Pipeline stats
+        stats = await pool.fetchrow(
+            """
+            SELECT
+                COUNT(*) AS total_reviews,
+                COUNT(*) FILTER (WHERE imported_at > NOW() - INTERVAL '24 hours') AS imports_24h,
+                MAX(enriched_at) AS last_enrichment_at,
+                MAX(deep_enriched_at) AS last_deep_enrichment_at
+            FROM product_reviews
+            """
+        )
+
+        # Brand intelligence count
+        brand_count = await pool.fetchrow(
+            "SELECT COUNT(*) AS cnt FROM brand_intelligence"
+        )
+
+        # Pain points count
+        pain_count = await pool.fetchrow(
+            "SELECT COUNT(*) AS cnt FROM product_pain_points"
+        )
+
+        # Content stats
+        content_stats = await pool.fetchrow(
+            """
+            SELECT
+                COUNT(*) AS total_content,
+                COUNT(*) FILTER (WHERE status = 'draft') AS drafts,
+                COUNT(*) FILTER (WHERE status = 'published') AS published
+            FROM complaint_content
+            """
+        )
+
+        # Blog post stats
+        blog_stats = await pool.fetchrow(
+            """
+            SELECT
+                COUNT(*) AS total_posts,
+                COUNT(*) FILTER (WHERE status = 'draft') AS drafts,
+                COUNT(*) FILTER (WHERE status = 'published') AS published
+            FROM blog_posts
+            """
+        )
+
+        result = {
+            "basic_enrichment_counts": basic_counts,
+            "deep_enrichment_counts": deep_counts,
+            "total_reviews": stats["total_reviews"] if stats else 0,
+            "imports_24h": stats["imports_24h"] if stats else 0,
+            "last_enrichment_at": stats["last_enrichment_at"] if stats else None,
+            "last_deep_enrichment_at": stats["last_deep_enrichment_at"] if stats else None,
+            "brand_intelligence_count": brand_count["cnt"] if brand_count else 0,
+            "pain_point_products": pain_count["cnt"] if pain_count else 0,
+            "content": {
+                "total": content_stats["total_content"] if content_stats else 0,
+                "drafts": content_stats["drafts"] if content_stats else 0,
+                "published": content_stats["published"] if content_stats else 0,
+            },
+            "blog_posts": {
+                "total": blog_stats["total_posts"] if blog_stats else 0,
+                "drafts": blog_stats["drafts"] if blog_stats else 0,
+                "published": blog_stats["published"] if blog_stats else 0,
+            },
+        }
+
+        return json.dumps({"success": True, **result}, default=str)
+    except Exception:
+        logger.exception("get_consumer_pipeline_status error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: list_complaint_content
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def list_complaint_content(
+    content_type: Optional[str] = None,
+    category: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 20,
+) -> str:
+    """
+    List generated complaint-based content (articles, forum posts, email copy).
+
+    content_type: Filter by type (comparison_article, forum_post, email_copy,
+                  review_summary)
+    category: Filter by product category (partial match)
+    status: Filter by status (draft, published)
+    limit: Maximum results (default 20, cap 50)
+    """
+    limit = max(1, min(limit, 50))
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        conditions = []
+        params = []
+        idx = 1
+
+        if content_type:
+            conditions.append(f"content_type = ${idx}")
+            params.append(content_type)
+            idx += 1
+
+        if category:
+            conditions.append(f"category ILIKE '%' || ${idx} || '%'")
+            params.append(category)
+            idx += 1
+
+        if status:
+            conditions.append(f"status = ${idx}")
+            params.append(status)
+            idx += 1
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        params.append(limit)
+
+        rows = await pool.fetch(
+            f"""
+            SELECT id, content_type, category, target_asin, competitor_asin,
+                   title, pain_point_summary, status, llm_model, created_at
+            FROM complaint_content
+            {where}
+            ORDER BY created_at DESC
+            LIMIT ${idx}
+            """,
+            *params,
+        )
+
+        content = [
+            {
+                "id": str(r["id"]),
+                "content_type": r["content_type"],
+                "category": r["category"],
+                "target_asin": r["target_asin"],
+                "competitor_asin": r["competitor_asin"],
+                "title": r["title"],
+                "pain_point_summary": r["pain_point_summary"],
+                "status": r["status"],
+                "llm_model": r["llm_model"],
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ]
+
+        return json.dumps({"content": content, "count": len(content)}, default=str)
+    except Exception:
+        logger.exception("list_complaint_content error")
+        return json.dumps({"error": "Internal error", "content": [], "count": 0})
 
 
 # ---------------------------------------------------------------------------

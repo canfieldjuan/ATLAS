@@ -1,8 +1,11 @@
+/* eslint-disable react-refresh/only-export-components */
 import { useNavigate } from 'react-router-dom'
 import { FileBarChart, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PageError } from '../components/ErrorBoundary'
+import UpgradeGate from '../components/UpgradeGate'
 import useApiData from '../hooks/useApiData'
+import { usePlanGate } from '../hooks/usePlanGate'
 import { fetchReports } from '../api/client'
 import { useState } from 'react'
 import type { Report } from '../types'
@@ -33,6 +36,7 @@ function CardSkeleton() {
 
 export default function Reports() {
   const navigate = useNavigate()
+  const { canAccessReports } = usePlanGate()
   const [typeFilter, setTypeFilter] = useState('')
 
   const { data, loading, error, refresh, refreshing } = useApiData(
@@ -41,6 +45,14 @@ export default function Reports() {
   )
 
   const reports = data?.reports ?? []
+
+  if (!canAccessReports) {
+    return (
+      <UpgradeGate allowed={false} feature="Intelligence Reports" requiredPlan="Starter">
+        <div />
+      </UpgradeGate>
+    )
+  }
 
   if (error) return <PageError error={error} onRetry={refresh} />
 

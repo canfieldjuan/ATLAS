@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -54,11 +54,6 @@ export default function Reviews() {
   const [page, setPage] = useState(0)
   const filtersKey = JSON.stringify(filters)
 
-  // Reset to page 0 when any filter changes
-  useEffect(() => {
-    setPage(0)
-  }, [filtersKey])
-
   const { data, loading, error, refresh, refreshing } = useApiData(
     () =>
       fetchReviews({
@@ -85,6 +80,21 @@ export default function Reviews() {
   const reviews = data?.reviews ?? []
   const totalCount = data?.total_count ?? 0
   const totalPages = Math.ceil(totalCount / PAGE_SIZE)
+
+  const setFilterAndReset = <K extends keyof Filters>(key: K, value: Filters[K]) => {
+    setPage(0)
+    setFilter(key, value)
+  }
+
+  const clearFilterAndReset = (key: keyof Filters) => {
+    setPage(0)
+    clearFilter(key)
+  }
+
+  const clearAllAndReset = () => {
+    setPage(0)
+    clearAll()
+  }
 
   const columns: Column<ReviewSummary>[] = [
     {
@@ -181,22 +191,22 @@ export default function Reviews() {
         activeFilters={activeFilterEntries.map((e) => ({
           key: e.key,
           label: e.label,
-          onClear: () => clearFilter(e.key),
+          onClear: () => clearFilterAndReset(e.key as keyof Filters),
         }))}
-        onClearAll={clearAll}
+        onClearAll={clearAllAndReset}
         expanded={
           <>
             <FilterSearch
               label="Root cause"
               value={filters.root_cause}
-              onChange={(v) => setFilter('root_cause', v)}
+              onChange={(v) => setFilterAndReset('root_cause', v)}
               placeholder="e.g. quality, design..."
               icon={false}
             />
             <FilterSearch
               label="Text search"
               value={filters.search}
-              onChange={(v) => setFilter('search', v)}
+              onChange={(v) => setFilterAndReset('search', v)}
               placeholder="Full text..."
             />
             <div className="w-36">
@@ -209,7 +219,7 @@ export default function Reviews() {
                 max={5}
                 step={0.5}
                 value={filters.min_rating}
-                onChange={(e) => setFilter('min_rating', Number(e.target.value))}
+                onChange={(e) => setFilterAndReset('min_rating', Number(e.target.value))}
                 className="w-full accent-cyan-500"
               />
             </div>
@@ -223,14 +233,14 @@ export default function Reviews() {
                 max={5}
                 step={0.5}
                 value={filters.max_rating}
-                onChange={(e) => setFilter('max_rating', Number(e.target.value))}
+                onChange={(e) => setFilterAndReset('max_rating', Number(e.target.value))}
                 className="w-full accent-cyan-500"
               />
             </div>
             <FilterSelect
               label="Severity"
               value={filters.severity}
-              onChange={(v) => setFilter('severity', v)}
+              onChange={(v) => setFilterAndReset('severity', v)}
               options={[
                 { value: 'critical', label: 'Critical' },
                 { value: 'high', label: 'High' },
@@ -242,7 +252,7 @@ export default function Reviews() {
             <FilterSelect
               label="Status"
               value={filters.enrichment_status}
-              onChange={(v) => setFilter('enrichment_status', v)}
+              onChange={(v) => setFilterAndReset('enrichment_status', v)}
               options={[
                 { value: 'pending', label: 'Pending' },
                 { value: 'enriched', label: 'Enriched' },
@@ -255,7 +265,7 @@ export default function Reviews() {
               <input
                 type="date"
                 value={filters.imported_after}
-                onChange={(e) => setFilter('imported_after', e.target.value)}
+                onChange={(e) => setFilterAndReset('imported_after', e.target.value)}
                 className="w-full px-3 py-1.5 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white focus:outline-none focus:border-cyan-500/50"
               />
             </div>
@@ -264,7 +274,7 @@ export default function Reviews() {
               <input
                 type="date"
                 value={filters.imported_before}
-                onChange={(e) => setFilter('imported_before', e.target.value)}
+                onChange={(e) => setFilterAndReset('imported_before', e.target.value)}
                 className="w-full px-3 py-1.5 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white focus:outline-none focus:border-cyan-500/50"
               />
             </div>
@@ -273,7 +283,7 @@ export default function Reviews() {
                 type="checkbox"
                 checked={filters.has_comparisons === 'true'}
                 onChange={(e) =>
-                  setFilter('has_comparisons', e.target.checked ? 'true' : '')
+                  setFilterAndReset('has_comparisons', e.target.checked ? 'true' : '')
                 }
                 className="accent-cyan-500"
               />
@@ -284,7 +294,7 @@ export default function Reviews() {
                 type="checkbox"
                 checked={filters.has_feature_requests === 'true'}
                 onChange={(e) =>
-                  setFilter('has_feature_requests', e.target.checked ? 'true' : '')
+                  setFilterAndReset('has_feature_requests', e.target.checked ? 'true' : '')
                 }
                 className="accent-cyan-500"
               />
@@ -296,27 +306,27 @@ export default function Reviews() {
         <FilterSearch
           label="Brand"
           value={filters.brand}
-          onChange={(v) => setFilter('brand', v)}
+          onChange={(v) => setFilterAndReset('brand', v)}
           placeholder="Brand..."
         />
         <FilterSearch
           label="ASIN"
           value={filters.asin}
-          onChange={(v) => setFilter('asin', v)}
+          onChange={(v) => setFilterAndReset('asin', v)}
           placeholder="ASIN..."
           icon={false}
         />
         <FilterSelect
           label="Category"
           value={filters.source_category}
-          onChange={(v) => setFilter('source_category', v)}
+          onChange={(v) => setFilterAndReset('source_category', v)}
           options={categories.map((c) => ({ value: c, label: c }))}
           placeholder="All Categories"
         />
         <FilterSelect
           label="Sort by"
           value={filters.sort_by || 'imported_at'}
-          onChange={(v) => setFilter('sort_by', v)}
+          onChange={(v) => setFilterAndReset('sort_by', v)}
           options={[
             { value: 'imported_at', label: 'Newest' },
             { value: 'rating', label: 'Rating' },
