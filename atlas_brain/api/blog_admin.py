@@ -8,6 +8,7 @@ blog_posts table. This router exposes list/get/patch/publish operations.
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
@@ -201,7 +202,7 @@ async def get_draft_evidence(
                    source, reviewed_at
             FROM b2b_reviews
             WHERE LOWER(vendor_name) = LOWER($1)
-              AND enrichment_status = 'complete'
+              AND enrichment_status = 'enriched'
               AND reviewed_at >= ($2::date - INTERVAL '90 days')
             ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST
             LIMIT $3
@@ -217,7 +218,7 @@ async def get_draft_evidence(
                    source, reviewed_at
             FROM b2b_reviews
             WHERE LOWER(vendor_name) = LOWER($1)
-              AND enrichment_status = 'complete'
+              AND enrichment_status = 'enriched'
             ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST
             LIMIT $2
             """,
@@ -442,7 +443,6 @@ async def generate_post(
         raise HTTPException(500, "LLM content generation failed")
 
     # Inject affiliate links
-    import re as _re
     affiliate_url = blueprint.data_context.get("affiliate_url", "")
     affiliate_slug = blueprint.data_context.get("affiliate_slug", "")
     partner_info = blueprint.data_context.get("affiliate_partner", {})
@@ -455,8 +455,8 @@ async def generate_post(
         )
         raw = content["content"]
         if affiliate_url in raw:
-            raw = _re.sub(
-                r'(?<!\]\()' + _re.escape(affiliate_url) + r'(?!\))',
+            raw = re.sub(
+                r'(?<!\]\()' + re.escape(affiliate_url) + r'(?!\))',
                 md_link,
                 raw,
             )

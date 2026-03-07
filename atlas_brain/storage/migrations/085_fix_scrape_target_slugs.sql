@@ -278,7 +278,8 @@ WHERE source = 'trustpilot' AND product_slug = 'zoho.com/desk'
 AND EXISTS (SELECT 1 FROM b2b_scrape_targets WHERE source = 'trustpilot' AND product_slug = 'zoho.com');
 
 UPDATE b2b_scrape_targets SET product_slug = 'zoho.com', updated_at = NOW()
-WHERE source = 'trustpilot' AND product_slug = 'zoho.com/desk';
+WHERE source = 'trustpilot' AND product_slug = 'zoho.com/desk'
+AND NOT EXISTS (SELECT 1 FROM b2b_scrape_targets WHERE source = 'trustpilot' AND product_slug = 'zoho.com');
 
 -- hubspot.com/marketing -> hubspot.com (HubSpot Service Hub row already has hubspot.com)
 UPDATE b2b_scrape_targets SET enabled = false, updated_at = NOW()
@@ -286,7 +287,8 @@ WHERE source = 'trustpilot' AND product_slug = 'hubspot.com/marketing'
 AND EXISTS (SELECT 1 FROM b2b_scrape_targets WHERE source = 'trustpilot' AND product_slug = 'hubspot.com');
 
 UPDATE b2b_scrape_targets SET product_slug = 'hubspot.com', updated_at = NOW()
-WHERE source = 'trustpilot' AND product_slug = 'hubspot.com/marketing';
+WHERE source = 'trustpilot' AND product_slug = 'hubspot.com/marketing'
+AND NOT EXISTS (SELECT 1 FROM b2b_scrape_targets WHERE source = 'trustpilot' AND product_slug = 'hubspot.com');
 
 -- microsoft.com/teams -> microsoft.com
 UPDATE b2b_scrape_targets SET product_slug = 'microsoft.com', updated_at = NOW()
