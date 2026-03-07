@@ -15,12 +15,21 @@ import type {
   Campaign,
   CampaignStats,
   VendorTarget,
+  BlogDraftSummary,
+  BlogDraft,
+  BlogEvidence,
+  Prospect,
+  ProspectStats,
+  ReviewQueueDraft,
+  AuditEvent,
 } from '../types'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 const BASE = `${API_BASE}/api/v1/b2b/dashboard`
 const CAMPAIGNS_BASE = `${API_BASE}/api/v1/b2b/campaigns`
 const TARGETS_BASE = `${API_BASE}/api/v1/b2b/vendor-targets`
+const BLOG_ADMIN_BASE = `${API_BASE}/api/v1/admin/blog`
+const PROSPECTS_BASE = `${API_BASE}/api/v1/b2b/prospects`
 
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem('atlas_token')
@@ -322,6 +331,84 @@ export function downloadCsv(
 
 export async function generateVendorReport(id: string) {
   return post<{ status: string; signal_count?: number; high_urgency_count?: number }>(TARGETS_BASE, `/${id}/generate-report`)
+}
+
+// ---------------------------------------------------------------------------
+// Blog Admin (drafts, evidence, publish)
+// ---------------------------------------------------------------------------
+
+export async function fetchBlogDrafts(status?: string) {
+  return get<BlogDraftSummary[]>(BLOG_ADMIN_BASE, '/drafts', { status })
+}
+
+export async function fetchBlogDraft(id: string) {
+  return get<BlogDraft>(BLOG_ADMIN_BASE, `/drafts/${id}`)
+}
+
+export async function fetchBlogEvidence(id: string) {
+  return get<{ reviews: BlogEvidence[]; count: number }>(BLOG_ADMIN_BASE, `/drafts/${id}/evidence`)
+}
+
+export async function publishBlogDraft(id: string) {
+  return post<{ ok: boolean; id: string; slug: string; published_at: string }>(BLOG_ADMIN_BASE, `/drafts/${id}/publish`)
+}
+
+export async function updateBlogDraft(id: string, body: Partial<Pick<BlogDraft, 'title' | 'content' | 'status' | 'reviewer_notes'>>) {
+  return patch<{ ok: boolean; id: string }>(BLOG_ADMIN_BASE, `/drafts/${id}`, body)
+}
+
+// ---------------------------------------------------------------------------
+// Prospects
+// ---------------------------------------------------------------------------
+
+export async function fetchProspects(params?: {
+  company?: string
+  status?: string
+  seniority?: string
+  limit?: number
+  offset?: number
+}) {
+  return get<{ prospects: Prospect[]; count: number }>(PROSPECTS_BASE, '', params)
+}
+
+export async function fetchProspectStats() {
+  return get<ProspectStats>(PROSPECTS_BASE, '/stats')
+}
+
+// ---------------------------------------------------------------------------
+// Campaign Review Queue (enhanced)
+// ---------------------------------------------------------------------------
+
+export async function fetchReviewQueue(params?: {
+  status?: string
+  include_prospects?: boolean
+  limit?: number
+  offset?: number
+}) {
+  return get<{ drafts: ReviewQueueDraft[]; count: number }>(CAMPAIGNS_BASE, '/review-queue', params)
+}
+
+export async function fetchReviewQueueSummary() {
+  return get<{
+    pending_review: number
+    pending_recipient: number
+    ready_to_send: number
+    suppressed: number
+    oldest_draft_age_hours: number | null
+    by_partner: { partner_name: string; count: number }[]
+  }>(CAMPAIGNS_BASE, '/review-queue/summary')
+}
+
+export async function fetchCampaignAuditLog(campaignId: string) {
+  return get<{ count: number; audit_log: AuditEvent[] }>(CAMPAIGNS_BASE, `/${campaignId}/audit-log`)
+}
+
+export async function bulkApproveCampaigns(ids: string[], action: 'approve' | 'queue-send' | 'reject') {
+  return post<{ processed: number; failed: { id: string; reason: string }[] }>(CAMPAIGNS_BASE, '/bulk-approve', { campaign_ids: ids, action })
+}
+
+export async function bulkRejectCampaigns(ids: string[], reason?: string) {
+  return post<{ rejected: number; failed: { id: string; reason: string }[] }>(CAMPAIGNS_BASE, '/bulk-reject', { campaign_ids: ids, reason })
 }
 
 // ---------------------------------------------------------------------------

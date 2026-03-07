@@ -1,29 +1,43 @@
+import { lazy, Suspense, type ComponentType } from 'react'
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import Layout from './components/Layout'
 import ErrorBoundary from './components/ErrorBoundary'
 import ProtectedRoute from './auth/ProtectedRoute'
-import Dashboard from './pages/Dashboard'
-import Vendors from './pages/Vendors'
-import VendorDetail from './pages/VendorDetail'
-import Reviews from './pages/Reviews'
-import ReviewDetail from './pages/ReviewDetail'
-import Reports from './pages/Reports'
-import ReportDetail from './pages/ReportDetail'
-import Leads from './pages/Leads'
-import VendorTargets from './pages/VendorTargets'
-import Challengers from './pages/Challengers'
-import Affiliates from './pages/Affiliates'
-import Landing from './pages/Landing'
-import Login from './pages/Login'
-import Signup from './pages/Signup'
-import ForgotPassword from './pages/ForgotPassword'
-import ResetPassword from './pages/ResetPassword'
-import Onboarding from './pages/Onboarding'
-import Account from './pages/Account'
-import Blog from './pages/Blog'
-import BlogPost from './pages/BlogPost'
 
-const PUBLIC_PATHS = ['/blog', '/landing', '/login', '/signup', '/forgot-password', '/reset-password']
+const Dashboard = lazy(() => import('./pages/Dashboard'))
+const Vendors = lazy(() => import('./pages/Vendors'))
+const VendorDetail = lazy(() => import('./pages/VendorDetail'))
+const Reviews = lazy(() => import('./pages/Reviews'))
+const ReviewDetail = lazy(() => import('./pages/ReviewDetail'))
+const Reports = lazy(() => import('./pages/Reports'))
+const ReportDetail = lazy(() => import('./pages/ReportDetail'))
+const Leads = lazy(() => import('./pages/Leads'))
+const VendorTargets = lazy(() => import('./pages/VendorTargets'))
+const Challengers = lazy(() => import('./pages/Challengers'))
+const Affiliates = lazy(() => import('./pages/Affiliates'))
+const Landing = lazy(() => import('./pages/Landing'))
+const Login = lazy(() => import('./pages/Login'))
+const Signup = lazy(() => import('./pages/Signup'))
+const ForgotPassword = lazy(() => import('./pages/ForgotPassword'))
+const ResetPassword = lazy(() => import('./pages/ResetPassword'))
+const Onboarding = lazy(() => import('./pages/Onboarding'))
+const Account = lazy(() => import('./pages/Account'))
+const Blog = lazy(() => import('./pages/Blog'))
+const BlogPost = lazy(() => import('./pages/BlogPost'))
+const Methodology = lazy(() => import('./pages/Methodology'))
+const BlogReview = lazy(() => import('./pages/BlogReview'))
+const CampaignReview = lazy(() => import('./pages/CampaignReview'))
+const Prospects = lazy(() => import('./pages/Prospects'))
+
+const PUBLIC_PATHS = ['/blog', '/landing', '/login', '/signup', '/forgot-password', '/reset-password', '/methodology']
+
+function renderLazyRoute(Component: ComponentType) {
+  return (
+    <Suspense fallback={null}>
+      <Component />
+    </Suspense>
+  )
+}
 
 export default function App() {
   const location = useLocation()
@@ -33,13 +47,14 @@ export default function App() {
     return (
       <ErrorBoundary key={location.pathname}>
         <Routes>
-          <Route path="/landing" element={<Landing />} />
-          <Route path="/blog" element={<Blog />} />
-          <Route path="/blog/:slug" element={<BlogPost />} />
-          <Route path="/login" element={<Login />} />
-          <Route path="/signup" element={<Signup />} />
-          <Route path="/forgot-password" element={<ForgotPassword />} />
-          <Route path="/reset-password" element={<ResetPassword />} />
+          <Route path="/landing" element={renderLazyRoute(Landing)} />
+          <Route path="/blog" element={renderLazyRoute(Blog)} />
+          <Route path="/blog/:slug" element={renderLazyRoute(BlogPost)} />
+          <Route path="/methodology" element={renderLazyRoute(Methodology)} />
+          <Route path="/login" element={renderLazyRoute(Login)} />
+          <Route path="/signup" element={renderLazyRoute(Signup)} />
+          <Route path="/forgot-password" element={renderLazyRoute(ForgotPassword)} />
+          <Route path="/reset-password" element={renderLazyRoute(ResetPassword)} />
         </Routes>
       </ErrorBoundary>
     )
@@ -50,7 +65,7 @@ export default function App() {
     return (
       <ProtectedRoute>
         <ErrorBoundary key={location.pathname}>
-          <Onboarding />
+          {renderLazyRoute(Onboarding)}
         </ErrorBoundary>
       </ProtectedRoute>
     )
@@ -61,18 +76,21 @@ export default function App() {
       <Layout>
         <ErrorBoundary key={location.pathname}>
           <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/vendors" element={<Vendors />} />
-            <Route path="/vendors/:name" element={<VendorDetail />} />
-            <Route path="/reviews" element={<Reviews />} />
-            <Route path="/reviews/:id" element={<ReviewDetail />} />
-            <Route path="/reports" element={<Reports />} />
-            <Route path="/reports/:id" element={<ReportDetail />} />
-            <Route path="/leads" element={<Leads />} />
-            <Route path="/vendor-targets" element={<VendorTargets />} />
-            <Route path="/challengers" element={<Challengers />} />
-            <Route path="/affiliates" element={<Affiliates />} />
-            <Route path="/account" element={<Account />} />
+            <Route path="/" element={renderLazyRoute(Dashboard)} />
+            <Route path="/vendors" element={renderLazyRoute(Vendors)} />
+            <Route path="/vendors/:name" element={renderLazyRoute(VendorDetail)} />
+            <Route path="/reviews" element={renderLazyRoute(Reviews)} />
+            <Route path="/reviews/:id" element={renderLazyRoute(ReviewDetail)} />
+            <Route path="/reports" element={renderLazyRoute(Reports)} />
+            <Route path="/reports/:id" element={renderLazyRoute(ReportDetail)} />
+            <Route path="/leads" element={renderLazyRoute(Leads)} />
+            <Route path="/vendor-targets" element={renderLazyRoute(VendorTargets)} />
+            <Route path="/challengers" element={renderLazyRoute(Challengers)} />
+            <Route path="/affiliates" element={renderLazyRoute(Affiliates)} />
+            <Route path="/blog-review" element={renderLazyRoute(BlogReview)} />
+            <Route path="/campaign-review" element={renderLazyRoute(CampaignReview)} />
+            <Route path="/prospects" element={renderLazyRoute(Prospects)} />
+            <Route path="/account" element={renderLazyRoute(Account)} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </ErrorBoundary>

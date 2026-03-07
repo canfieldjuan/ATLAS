@@ -608,17 +608,46 @@ async def check_suppression(email: str = Query(...)):
 async def review_queue(
     limit: int = Query(50, le=200),
     offset: int = Query(0, ge=0),
+    status: str = Query("draft", description="Filter by status: draft, approved, sent, all"),
+    include_prospects: bool = Query(False, description="Join prospect details"),
 ):
     """Purpose-built review endpoint: drafts enriched with sequence, partner, suppression info."""
     pool = _pool_or_503()
 
+    # Whitelist valid status values to prevent SQL injection
+    valid_statuses = {"draft", "approved", "queued", "sent", "cancelled", "expired", "all"}
+    if status not in valid_statuses:
+        status = "draft"
+
+    # Build parameterized status filter
+    params: list = []
+    param_idx = 1
+    if status == "all":
+        status_filter = "1=1"
+    else:
+        status_filter = f"bc.status = ${param_idx}"
+        params.append(status)
+        param_idx += 1
+
+    params.extend([limit, offset])
+
+    prospect_cols = ""
+    prospect_join = ""
+    if include_prospects:
+        prospect_cols = """,
+               p.first_name AS prospect_first_name, p.last_name AS prospect_last_name,
+               p.title AS prospect_title, p.seniority AS prospect_seniority,
+               p.email_status AS prospect_email_status"""
+        prospect_join = "LEFT JOIN prospects p ON LOWER(p.email) = LOWER(COALESCE(bc.recipient_email, cs.recipient_email))"
+
     rows = await pool.fetch(
-        """
+        f"""
         SELECT bc.id, bc.company_name, bc.vendor_name, bc.channel,
                bc.subject, bc.body, bc.cta, bc.status, bc.step_number,
                bc.recipient_email, bc.partner_id, bc.created_at,
                cs.recipient_email AS seq_recipient, cs.open_count, cs.click_count,
                cs.status AS seq_status, cs.current_step, cs.max_steps,
+               cs.company_context,
                ap.name AS partner_name, ap.product_name,
                (SELECT COUNT(*) FROM campaign_suppressions sup
                 WHERE (sup.expires_at IS NULL OR sup.expires_at > NOW())
@@ -626,19 +655,31 @@ async def review_queue(
                     LOWER(sup.email) = LOWER(COALESCE(bc.recipient_email, cs.recipient_email))
                     OR LOWER(sup.domain) = LOWER(SPLIT_PART(COALESCE(bc.recipient_email, cs.recipient_email), '@', 2))
                 )) AS is_suppressed
+               {prospect_cols}
         FROM b2b_campaigns bc
         LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id
         LEFT JOIN affiliate_partners ap ON ap.id = bc.partner_id
-        WHERE bc.status = 'draft'
+        {prospect_join}
+        WHERE {status_filter}
         ORDER BY bc.created_at DESC
-        LIMIT $1 OFFSET $2
+        LIMIT ${param_idx} OFFSET ${param_idx + 1}
         """,
-        limit, offset,
+        *params,
     )
 
+    drafts = []
+    for r in rows:
+        d = _row_to_dict(r)
+        # Extract persona from company_context, then drop the large blob
+        cc = r.get("company_context")
+        if cc and isinstance(cc, dict):
+            d["target_persona"] = cc.get("target_persona")
+        d.pop("company_context", None)
+        drafts.append(d)
+
     return {
-        "count": len(rows),
-        "drafts": [_row_to_dict(r) for r in rows],
+        "count": len(drafts),
+        "drafts": drafts,
     }
 
 
