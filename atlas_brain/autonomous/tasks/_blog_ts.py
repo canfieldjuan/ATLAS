@@ -7,6 +7,10 @@ import logging
 import re
 from pathlib import Path
 
+import markdown as _md
+
+_md_converter = _md.Markdown(extensions=["tables", "fenced_code", "toc"])
+
 logger = logging.getLogger(__name__)
 
 
@@ -110,7 +114,10 @@ def build_post_ts(
     """
     var_name = slug_to_var_name(slug)
     charts_str = json.dumps(charts_json, indent=2, default=str)
-    escaped_content = escape_template_literal(content)
+    # Render markdown to HTML at deploy time so the frontend never parses markdown
+    _md_converter.reset()
+    html_content = _md_converter.convert(content)
+    escaped_content = escape_template_literal(html_content)
     escaped_title = escape_js_single(title)
     escaped_desc = escape_js_single(description)
 

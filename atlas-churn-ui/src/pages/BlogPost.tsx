@@ -1,6 +1,5 @@
 import { useParams, Link } from 'react-router-dom'
 import { lazy, Suspense, useMemo, useEffect } from 'react'
-import { marked } from 'marked'
 import { ArrowLeft } from 'lucide-react'
 import PublicLayout from '../components/PublicLayout'
 import { POSTS } from '../content/blog'
@@ -20,8 +19,7 @@ const CHART_PLACEHOLDER_RE = /(\{\{chart:[^}]+\}\})/
 
 function renderContentWithCharts(content: string, charts?: ChartSpec[]) {
   if (!charts || charts.length === 0) {
-    const html = marked.parse(content, { async: false }) as string
-    return <div className="blog-prose" dangerouslySetInnerHTML={{ __html: html }} />
+    return <div className="blog-prose" dangerouslySetInnerHTML={{ __html: content }} />
   }
 
   const chartMap = new Map(charts.map(c => [c.chart_id, c]))
@@ -43,8 +41,7 @@ function renderContentWithCharts(content: string, charts?: ChartSpec[]) {
           return null
         }
         if (!part.trim()) return null
-        const html = marked.parse(part, { async: false }) as string
-        return <div key={i} dangerouslySetInnerHTML={{ __html: html }} />
+        return <div key={i} dangerouslySetInnerHTML={{ __html: part }} />
       })}
     </div>
   )

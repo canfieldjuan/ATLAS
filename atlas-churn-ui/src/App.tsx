@@ -31,6 +31,10 @@ const Prospects = lazy(() => import('./pages/Prospects'))
 
 const PUBLIC_PATHS = ['/blog', '/landing', '/login', '/signup', '/forgot-password', '/reset-password', '/methodology']
 
+function isPublicPath(pathname: string): boolean {
+  return PUBLIC_PATHS.some(p => pathname === p || pathname.startsWith(p + '/'))
+}
+
 function renderLazyRoute(Component: ComponentType) {
   return (
     <Suspense fallback={null}>
@@ -41,7 +45,7 @@ function renderLazyRoute(Component: ComponentType) {
 
 export default function App() {
   const location = useLocation()
-  const isPublicRoute = PUBLIC_PATHS.some(p => location.pathname.startsWith(p))
+  const isPublicRoute = isPublicPath(location.pathname)
 
   if (isPublicRoute) {
     return (
