@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
+import markdown as _md
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
@@ -99,7 +101,17 @@ def _row_to_summary(row) -> dict:
     }
 
 
+_md_converter = _md.Markdown(extensions=["tables", "fenced_code", "toc"])
+
+
+def _render_md(text: str) -> str:
+    """Convert markdown to HTML. Resets converter state between calls."""
+    _md_converter.reset()
+    return _md_converter.convert(text)
+
+
 def _row_to_detail(row) -> dict:
+    raw_content = row["content"] or ""
     return {
         "id": str(row["id"]),
         "slug": row["slug"],
@@ -107,7 +119,7 @@ def _row_to_detail(row) -> dict:
         "description": row.get("description"),
         "topic_type": row["topic_type"],
         "tags": _safe_json(row.get("tags", [])),
-        "content": row["content"],
+        "content": _render_md(raw_content),
         "charts": _safe_json(row.get("charts", [])),
         "data_context": _safe_json(row.get("data_context")),
         "status": row["status"],

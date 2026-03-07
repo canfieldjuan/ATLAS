@@ -10,7 +10,6 @@ import {
   ChevronRight,
 } from 'lucide-react'
 import { clsx } from 'clsx'
-import { marked } from 'marked'
 import useApiData from '../hooks/useApiData'
 import DataTable from '../components/DataTable'
 import UrgencyBadge from '../components/UrgencyBadge'
@@ -275,7 +274,7 @@ export default function BlogReview() {
                   <div
                     className="prose prose-invert prose-sm max-w-none"
                     dangerouslySetInnerHTML={{
-                      __html: marked.parse(selectedDraft.content, { async: false }) as string,
+                      __html: selectedDraft.content,
                     }}
                   />
                 </div>
