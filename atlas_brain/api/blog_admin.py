@@ -64,6 +64,14 @@ class BlogDraftPatch(BaseModel):
     reviewer_notes: Optional[str] = None
 
 
+class ManualGenerateRequest(BaseModel):
+    vendor_name: str
+    topic_type: str
+    vendor_b: Optional[str] = None
+    category: Optional[str] = None
+    skip_sufficiency_check: bool = False
+
+
 # -- helpers ------------------------------------------------------
 
 def _safe_json(val):
@@ -364,6 +372,107 @@ async def publish_draft(
         "published_at": now.isoformat(),
         "ts_file": ts_path,
         "deploy": deployed,
+    }
+
+
+@router.post("/generate")
+async def generate_post(
+    req: ManualGenerateRequest,
+    _user: AuthUser = Depends(require_auth),
+):
+    """Manually trigger blog post generation for a specific vendor + topic type."""
+    from ..autonomous.tasks.b2b_blog_post_generation import (
+        _KNOWN_TOPIC_TYPES,
+        _check_data_sufficiency,
+        _gather_data,
+        _build_blueprint,
+        _generate_content,
+        _assemble_and_store,
+        build_manual_topic_ctx,
+    )
+    from ..config import settings
+
+    if req.topic_type not in _KNOWN_TOPIC_TYPES:
+        raise HTTPException(
+            422,
+            f"Unknown topic_type '{req.topic_type}'. Must be one of: {sorted(_KNOWN_TOPIC_TYPES)}",
+        )
+
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(503, "Database not ready")
+
+    cfg = settings.b2b_churn
+
+    # Get LLM
+    from ..pipelines.llm import get_pipeline_llm
+    llm = get_pipeline_llm(
+        prefer_cloud=True,
+        try_openrouter=True,
+        auto_activate_ollama=False,
+        openrouter_model=cfg.blog_post_openrouter_model,
+    )
+    if llm is None:
+        from ..services import llm_registry
+        llm = llm_registry.get_active()
+    if llm is None:
+        raise HTTPException(503, "No LLM available for blog post generation")
+
+    try:
+        topic_ctx = await build_manual_topic_ctx(
+            pool, req.vendor_name, req.topic_type,
+            vendor_b=req.vendor_b, category=req.category,
+        )
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+    data = await _gather_data(pool, req.topic_type, topic_ctx)
+
+    sufficiency = _check_data_sufficiency(req.topic_type, data)
+    if not sufficiency["sufficient"] and not req.skip_sufficiency_check:
+        raise HTTPException(422, {
+            "error": "Insufficient data",
+            "reason": sufficiency["reason"],
+            "hint": "Set skip_sufficiency_check=true to override",
+        })
+
+    blueprint = _build_blueprint(req.topic_type, topic_ctx, data)
+    content = _generate_content(llm, blueprint, cfg.blog_post_max_tokens)
+    if content is None:
+        raise HTTPException(500, "LLM content generation failed")
+
+    # Inject affiliate links
+    import re as _re
+    affiliate_url = blueprint.data_context.get("affiliate_url", "")
+    affiliate_slug = blueprint.data_context.get("affiliate_slug", "")
+    partner_info = blueprint.data_context.get("affiliate_partner", {})
+    partner_name = partner_info.get("name", "") or partner_info.get("product_name", "")
+    if affiliate_slug and affiliate_url and content.get("content"):
+        md_link = f"[{partner_name}]({affiliate_url})" if partner_name else affiliate_url
+        content["content"] = content["content"].replace(
+            f"{{{{affiliate:{affiliate_slug}}}}}",
+            md_link,
+        )
+        raw = content["content"]
+        if affiliate_url in raw:
+            raw = _re.sub(
+                r'(?<!\]\()' + _re.escape(affiliate_url) + r'(?!\))',
+                md_link,
+                raw,
+            )
+            content["content"] = raw
+
+    post_id = await _assemble_and_store(pool, blueprint, content, llm)
+    if not post_id:
+        raise HTTPException(409, f"Slug '{blueprint.slug}' already published")
+
+    return {
+        "ok": True,
+        "post_id": post_id,
+        "slug": blueprint.slug,
+        "topic_type": req.topic_type,
+        "charts": len(blueprint.charts),
+        "sufficiency": sufficiency,
     }
 
 

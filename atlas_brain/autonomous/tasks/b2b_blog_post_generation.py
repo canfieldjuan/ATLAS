@@ -2913,3 +2913,166 @@ def _write_ui_post(
     logger.info("Wrote B2B blog UI file: %s", post_path)
 
     update_blog_index(blog_dir / "index.ts", slug, var_name)
+
+
+# -- Manual generation helpers ------------------------------------
+
+_KNOWN_TOPIC_TYPES = {
+    "vendor_alternative", "vendor_showdown", "churn_report",
+    "migration_guide", "vendor_deep_dive", "market_landscape",
+    "pricing_reality_check", "switching_story", "pain_point_roundup",
+    "best_fit_guide",
+}
+
+
+async def _fetch_vendor_stats(pool, vendor_name: str) -> dict[str, Any]:
+    """Return review counts and urgency for a single vendor."""
+    row = await pool.fetchrow(
+        """
+        SELECT
+            COUNT(*) AS total,
+            COUNT(*) FILTER (WHERE enrichment_status = 'enriched') AS enriched,
+            COUNT(*) FILTER (WHERE rating IS NOT NULL AND rating < 3) AS negative,
+            ROUND(AVG(
+                CASE WHEN enrichment->>'urgency_score' ~ '^[0-9]'
+                     THEN (enrichment->>'urgency_score')::numeric ELSE NULL END
+            )::numeric, 1) AS avg_urgency,
+            MODE() WITHIN GROUP (ORDER BY product_category) AS category
+        FROM b2b_reviews
+        WHERE LOWER(vendor_name) = LOWER($1)
+        """,
+        vendor_name,
+    )
+    if not row or row["total"] == 0:
+        return {}
+    return {
+        "total": row["total"],
+        "enriched": row["enriched"],
+        "negative": row["negative"],
+        "avg_urgency": float(row["avg_urgency"]) if row["avg_urgency"] else 0,
+        "category": row["category"] or "",
+    }
+
+
+async def build_manual_topic_ctx(
+    pool,
+    vendor_name: str,
+    topic_type: str,
+    vendor_b: str | None = None,
+    category: str | None = None,
+) -> dict[str, Any]:
+    """Construct topic_ctx for a manually requested blog post.
+
+    Bypasses _select_topic() dedup — always builds context even if a post
+    for this vendor+month already exists.
+    """
+    month_suffix = date.today().strftime("%Y-%m")
+    stats = await _fetch_vendor_stats(pool, vendor_name)
+    if not category:
+        category = stats.get("category", "software") or "software"
+
+    ctx: dict[str, Any] = {
+        "category": category,
+    }
+
+    if topic_type == "vendor_showdown":
+        if not vendor_b:
+            raise ValueError("vendor_showdown requires vendor_b")
+        stats_b = await _fetch_vendor_stats(pool, vendor_b)
+        slug = f"{_slugify(vendor_name)}-vs-{_slugify(vendor_b)}-{month_suffix}"
+        ctx.update({
+            "vendor_a": vendor_name,
+            "vendor_b": vendor_b,
+            "reviews_a": stats.get("total", 0),
+            "reviews_b": stats_b.get("total", 0),
+            "total_reviews": stats.get("total", 0) + stats_b.get("total", 0),
+            "urgency_a": stats.get("avg_urgency", 0),
+            "urgency_b": stats_b.get("avg_urgency", 0),
+            "pain_diff": abs(stats.get("avg_urgency", 0) - stats_b.get("avg_urgency", 0)),
+            "slug": slug,
+        })
+    elif topic_type == "switching_story":
+        slug = f"why-teams-leave-{_slugify(vendor_name)}-{month_suffix}"
+        ctx.update({
+            "from_vendor": vendor_name,
+            "total_reviews": stats.get("total", 0),
+            "high_urgency_count": stats.get("negative", 0),
+            "switch_mentions": 0,
+            "avg_urgency": stats.get("avg_urgency", 0),
+            "slug": slug,
+        })
+    elif topic_type == "market_landscape":
+        slug = f"{_slugify(category)}-landscape-{month_suffix}"
+        ctx.update({
+            "vendor_count": 0,
+            "total_reviews": stats.get("total", 0),
+            "avg_urgency": stats.get("avg_urgency", 0),
+            "slug": slug,
+        })
+    elif topic_type == "pain_point_roundup":
+        slug = f"top-complaint-every-{_slugify(category)}-{month_suffix}"
+        ctx.update({
+            "vendor_count": 0,
+            "total_complaints": stats.get("negative", 0),
+            "avg_urgency": stats.get("avg_urgency", 0),
+            "slug": slug,
+        })
+    elif topic_type == "best_fit_guide":
+        slug = f"best-{_slugify(category)}-for-teams-{month_suffix}"
+        ctx.update({
+            "vendor_count": 0,
+            "total_reviews": stats.get("total", 0),
+            "company_size": "small-teams",
+            "slug": slug,
+        })
+    elif topic_type == "pricing_reality_check":
+        slug = f"real-cost-of-{_slugify(vendor_name)}-{month_suffix}"
+        ctx.update({
+            "vendor": vendor_name,
+            "total_reviews": stats.get("total", 0),
+            "pricing_complaints": stats.get("negative", 0),
+            "avg_urgency": stats.get("avg_urgency", 0),
+            "slug": slug,
+        })
+    elif topic_type == "migration_guide":
+        slug = f"migration-from-{_slugify(vendor_name)}-{month_suffix}"
+        ctx.update({
+            "vendor": vendor_name,
+            "switch_count": 0,
+            "review_total": stats.get("total", 0),
+            "slug": slug,
+        })
+    elif topic_type == "vendor_alternative":
+        slug = f"{_slugify(vendor_name)}-alternatives-{month_suffix}"
+        ctx.update({
+            "vendor": vendor_name,
+            "urgency": stats.get("avg_urgency", 0),
+            "review_count": stats.get("total", 0),
+            "has_affiliate": False,
+            "affiliate_id": None,
+            "affiliate_name": None,
+            "affiliate_product": None,
+            "affiliate_url": None,
+            "slug": slug,
+        })
+    elif topic_type == "churn_report":
+        slug = f"{_slugify(vendor_name)}-churn-report-{month_suffix}"
+        ctx.update({
+            "vendor": vendor_name,
+            "negative_reviews": stats.get("negative", 0),
+            "avg_urgency": stats.get("avg_urgency", 0),
+            "total_reviews": stats.get("total", 0),
+            "slug": slug,
+        })
+    elif topic_type == "vendor_deep_dive":
+        slug = f"{_slugify(vendor_name)}-deep-dive-{month_suffix}"
+        ctx.update({
+            "vendor": vendor_name,
+            "review_count": stats.get("total", 0),
+            "profile_richness": 0,
+            "slug": slug,
+        })
+    else:
+        raise ValueError(f"Unknown topic_type: {topic_type}")
+
+    return ctx
