@@ -204,6 +204,7 @@ import salesforceVsZohoCrm202603 from './salesforce-vs-zoho-crm-2026-03'
 import teamworkDeepDive202603 from './teamwork-deep-dive-2026-03'
 import paloAltoNetworksDeepDive202603 from './palo-alto-networks-deep-dive-2026-03'
 import magentoVsShopify202603 from './magento-vs-shopify-2026-03'
+import asanaVsMondaycom202603 from './asana-vs-mondaycom-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -432,4 +433,5 @@ export const POSTS: BlogPost[] = [
   teamworkDeepDive202603,
   paloAltoNetworksDeepDive202603,
   magentoVsShopify202603,
+  asanaVsMondaycom202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
