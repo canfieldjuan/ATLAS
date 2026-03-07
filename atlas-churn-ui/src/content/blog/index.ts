@@ -208,6 +208,7 @@ import asanaVsMondaycom202603 from './asana-vs-mondaycom-2026-03'
 import slackVsZoom202603 from './slack-vs-zoom-2026-03'
 import azureVsLinode202603 from './azure-vs-linode-2026-03'
 import brevoVsKlaviyo202603 from './brevo-vs-klaviyo-2026-03'
+import jiraVsWrike202603 from './jira-vs-wrike-2026-03'
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -440,4 +441,5 @@ export const POSTS: BlogPost[] = [
   slackVsZoom202603,
   azureVsLinode202603,
   brevoVsKlaviyo202603,
+  jiraVsWrike202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
