@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Megaphone, Check, X as XIcon, Loader2 } from 'lucide-react'
 import DataTable, { type Column } from '../../components/DataTable'
 import FilterBar, { FilterSelect } from '../../components/FilterBar'
@@ -21,7 +21,7 @@ export default function B2BCampaigns() {
   const [genResult, setGenResult] = useState('')
   const [updating, setUpdating] = useState<string | null>(null)
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true)
     try {
       const [c, v] = await Promise.all([
@@ -35,9 +35,9 @@ export default function B2BCampaigns() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [statusFilter])
 
-  useEffect(() => { load() }, [statusFilter])
+  useEffect(() => { void load() }, [load])
 
   const handleGenerate = async () => {
     if (!genVendor) return

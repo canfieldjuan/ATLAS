@@ -12,8 +12,23 @@ export default function ChurnSignals() {
   const [minUrgency, setMinUrgency] = useState('')
   const [category, setCategory] = useState('')
 
-  useEffect(() => {
+  const handleMinUrgencyChange = (value: string) => {
     setLoading(true)
+    setMinUrgency(value)
+  }
+
+  const handleCategoryChange = (value: string) => {
+    setLoading(true)
+    setCategory(value)
+  }
+
+  const clearAllFilters = () => {
+    setLoading(true)
+    setMinUrgency('')
+    setCategory('')
+  }
+
+  useEffect(() => {
     fetchSignals({
       min_urgency: minUrgency ? Number(minUrgency) : undefined,
       category: category || undefined,
@@ -105,19 +120,19 @@ export default function ChurnSignals() {
 
       <FilterBar
         activeFilters={activeFilters}
-        onClearAll={() => { setMinUrgency(''); setCategory('') }}
+        onClearAll={clearAllFilters}
       >
         <FilterSelect
           label="Min Urgency"
           value={minUrgency}
-          onChange={setMinUrgency}
+          onChange={handleMinUrgencyChange}
           options={urgencyOptions}
           placeholder="Any"
         />
         <FilterSearch
           label="Category"
           value={category}
-          onChange={setCategory}
+          onChange={handleCategoryChange}
           placeholder="e.g. CRM"
           icon={false}
         />

@@ -1,12 +1,13 @@
 import { useParams, Link } from 'react-router-dom'
-import { useMemo, useEffect } from 'react'
+import { lazy, Suspense, useMemo, useEffect } from 'react'
 import { marked } from 'marked'
 import { ArrowLeft } from 'lucide-react'
 import PublicLayout from '../components/PublicLayout'
 import BlogCardVisual from '../components/BlogCardVisual'
-import BlogChart from '../components/BlogChartRenderer'
 import { POSTS } from '../content/blog'
 import type { ChartSpec } from '../content/blog'
+
+const BlogChart = lazy(() => import('../components/BlogChartRenderer'))
 
 function formatDate(iso: string) {
   return new Date(iso + 'T00:00:00').toLocaleDateString('en-US', {
@@ -33,7 +34,13 @@ function renderContentWithCharts(content: string, charts?: ChartSpec[]) {
         const match = part.match(/^\{\{chart:([^}]+)\}\}$/)
         if (match) {
           const spec = chartMap.get(match[1])
-          if (spec) return <BlogChart key={i} spec={spec} />
+          if (spec) {
+            return (
+              <Suspense key={i} fallback={null}>
+                <BlogChart spec={spec} />
+              </Suspense>
+            )
+          }
           return null
         }
         if (!part.trim()) return null

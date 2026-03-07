@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { colorMaps } from './colorMaps'
 import type { DeepEnrichment } from './types'
 import {

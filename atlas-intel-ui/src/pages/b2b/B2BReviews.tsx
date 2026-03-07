@@ -13,8 +13,35 @@ export default function B2BReviews() {
   const [churnOnly, setChurnOnly] = useState('')
   const [selected, setSelected] = useState<B2BReviewDetail | null>(null)
 
-  useEffect(() => {
+  const handlePainCategoryChange = (value: string) => {
     setLoading(true)
+    setPainCategory(value)
+  }
+
+  const handleMinUrgencyChange = (value: string) => {
+    setLoading(true)
+    setMinUrgency(value)
+  }
+
+  const handleCompanyChange = (value: string) => {
+    setLoading(true)
+    setCompany(value)
+  }
+
+  const handleChurnOnlyChange = (value: string) => {
+    setLoading(true)
+    setChurnOnly(value)
+  }
+
+  const clearAllFilters = () => {
+    setLoading(true)
+    setPainCategory('')
+    setMinUrgency('')
+    setCompany('')
+    setChurnOnly('')
+  }
+
+  useEffect(() => {
     fetchReviews({
       pain_category: painCategory || undefined,
       min_urgency: minUrgency ? Number(minUrgency) : undefined,
@@ -102,19 +129,19 @@ export default function B2BReviews() {
 
       <FilterBar
         activeFilters={activeFilters}
-        onClearAll={() => { setPainCategory(''); setMinUrgency(''); setCompany(''); setChurnOnly('') }}
+        onClearAll={clearAllFilters}
       >
         <FilterSearch
           label="Pain Category"
           value={painCategory}
-          onChange={setPainCategory}
+          onChange={handlePainCategoryChange}
           placeholder="e.g. pricing"
           icon={false}
         />
         <FilterSelect
           label="Min Urgency"
           value={minUrgency}
-          onChange={setMinUrgency}
+          onChange={handleMinUrgencyChange}
           options={[
             { value: '3', label: '>= 3' },
             { value: '5', label: '>= 5' },
@@ -125,13 +152,13 @@ export default function B2BReviews() {
         <FilterSearch
           label="Company"
           value={company}
-          onChange={setCompany}
+          onChange={handleCompanyChange}
           placeholder="Filter by company"
         />
         <FilterSelect
           label="Churn Intent"
           value={churnOnly}
-          onChange={setChurnOnly}
+          onChange={handleChurnOnlyChange}
           options={[
             { value: 'true', label: 'Yes' },
             { value: 'false', label: 'No' },

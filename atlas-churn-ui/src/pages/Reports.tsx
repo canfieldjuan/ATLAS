@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { useNavigate } from 'react-router-dom'
 import { FileBarChart, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'

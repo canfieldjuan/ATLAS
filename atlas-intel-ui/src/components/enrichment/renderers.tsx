@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { ShieldAlert, ShieldCheck, Check, X } from 'lucide-react'
 import { colorMaps, mapLookup, type ColorPair } from './colorMaps'
 import type { SafetyFlag } from './types'

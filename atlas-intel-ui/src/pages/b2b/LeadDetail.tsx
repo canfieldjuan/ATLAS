@@ -15,7 +15,6 @@ export default function LeadDetail() {
 
   useEffect(() => {
     if (!company) return
-    setLoading(true)
     fetchLeadDetail(company)
       .then(d => setDetail(d))
       .catch(err => setError(err instanceof Error ? err.message : 'Failed to load lead'))

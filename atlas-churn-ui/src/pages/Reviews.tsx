@@ -19,14 +19,11 @@ export default function Reviews() {
   const [debouncedCompany, setDebouncedCompany] = useState('')
   const [minUrgency, setMinUrgency] = useState(0)
   const [churnOnly, setChurnOnly] = useState(false)
-  const [debouncePending, setDebouncePending] = useState(false)
 
   useEffect(() => {
-    setDebouncePending(true)
     const timer = setTimeout(() => {
       setDebouncedVendor(vendor)
       setDebouncedCompany(company)
-      setDebouncePending(false)
     }, 300)
     return () => clearTimeout(timer)
   }, [vendor, company])
@@ -46,6 +43,7 @@ export default function Reviews() {
 
   const reviews = data?.reviews ?? []
   const hasFilters = vendor !== '' || company !== '' || minUrgency > 0 || churnOnly
+  const debouncePending = vendor !== debouncedVendor || company !== debouncedCompany
 
   function clearFilters() {
     setVendor('')
