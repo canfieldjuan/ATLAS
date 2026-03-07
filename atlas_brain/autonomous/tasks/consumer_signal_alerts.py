@@ -139,14 +139,18 @@ async def _send_alert_email(
     subject = f"Alert: {', '.join(subject_parts)}" if subject_parts else "New Signal Alerts"
 
     # Build signal rows
+    tag = settings.external_data.amazon_associate_tag
     rows = ""
     for s in sorted(signals, key=lambda x: x.get("pain_score") or 0, reverse=True)[:10]:
         is_safety = s.get("safety_flagged")
         badge = '<span style="color:red;font-weight:bold;">SAFETY</span> ' if is_safety else ""
         pain = f"Pain: {s['pain_score']}" if s.get("pain_score") else ""
+        asin = s["asin"]
+        asin_url = f"https://www.amazon.com/dp/{asin}?tag={tag}" if tag else f"https://www.amazon.com/dp/{asin}"
+        asin_link = f"<a href='{asin_url}' style='color:#60a5fa;text-decoration:none;'>{asin}</a>"
         rows += (
             f"<tr>"
-            f"<td style='padding:4px 8px;'>{badge}{s['asin']}</td>"
+            f"<td style='padding:4px 8px;'>{badge}{asin_link}</td>"
             f"<td style='padding:4px 8px;'>{s.get('root_cause') or 'N/A'}</td>"
             f"<td style='padding:4px 8px;'>{pain}</td>"
             f"<td style='padding:4px 8px;'>{s.get('summary', '')[:80]}</td>"

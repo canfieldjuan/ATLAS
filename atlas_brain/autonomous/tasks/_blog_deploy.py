@@ -82,10 +82,10 @@ async def auto_deploy_blog(
         logger.warning(result["error"])
         return result
 
-    # Push
+    # Push current HEAD to the target branch (works even if local branch != target)
     try:
         subprocess.run(
-            ["git", "push", "origin", branch],
+            ["git", "push", "origin", f"HEAD:{branch}"],
             cwd=str(repo_root), check=True, capture_output=True, timeout=60,
         )
         result["pushed"] = True

@@ -17,13 +17,28 @@ class ScrapeTarget:
     """A scrape target loaded from the database.
 
     ``product_slug`` format varies by source:
+
+      URL-slug sources (slug required, embedded in URL):
       - g2: ``salesforce-crm`` -> g2.com/products/salesforce-crm/reviews
       - capterra: ``123456/salesforce`` -> capterra.com/p/123456/salesforce/reviews/
       - trustradius: ``salesforce-crm`` -> trustradius.com/products/salesforce-crm/reviews
-      - reddit: vendor name itself (used as search term, slug is informational)
-      - hackernews: vendor name (used as search term via HN Algolia API)
-      - github: vendor name (used as search term via GitHub REST API)
-      - rss: feed URL (e.g. Google News RSS search URL)
+      - gartner: ``market-slug/vendor-slug`` -> gartner.com/reviews/market/{m}/vendor/{v}/reviews
+      - peerspot: ``monday-com`` -> peerspot.com/products/monday-com-reviews
+      - getapp: ``category/a/product`` -> getapp.com/software/{cat}/a/{slug}/reviews/
+      - producthunt: ``my-product`` -> GraphQL slug + producthunt.com/products/{slug}/reviews
+      - trustpilot: ``monday.com`` -> trustpilot.com/review/monday.com (company domain)
+
+      Search-based sources (slug informational, vendor_name is the search term):
+      - reddit: vendor name (Reddit API search + churn qualifiers)
+      - hackernews: vendor name (HN Algolia API)
+      - github: vendor name (GitHub REST API issues/repos search)
+      - youtube: vendor name (YouTube Data API v3)
+      - stackoverflow: vendor name (Stack Exchange API v2.3)
+      - quora: vendor name (search results + direct question pages)
+      - twitter: vendor name (X search + Web Unlocker)
+
+      Special:
+      - rss: feed URL (e.g. ``https://news.google.com/rss/search?q=salesforce``)
     """
 
     id: str
@@ -87,4 +102,4 @@ def get_all_parsers() -> dict[str, ReviewParser]:
 
 
 # Auto-register parsers on import
-from . import reddit, trustradius, capterra, g2, hackernews, github, rss  # noqa: E402, F401
+from . import reddit, trustradius, capterra, g2, peerspot, getapp, gartner, hackernews, github, rss, youtube, producthunt, trustpilot, stackoverflow, quora, twitter  # noqa: E402, F401

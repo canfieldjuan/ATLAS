@@ -71,11 +71,27 @@ def get_pipeline_llm(
     if llm is not None:
         return llm
 
-    # 4. Auto-activate Ollama
+    # 4. Auto-activate based on configured default backend
     if auto_activate_ollama:
-        try:
-            from ..config import settings
+        from ..config import settings
 
+        # Try vLLM first if configured as default
+        if settings.llm.default_model == "vllm":
+            try:
+                llm_registry.activate(
+                    "vllm",
+                    model=settings.llm.vllm_model,
+                    base_url=settings.llm.vllm_url,
+                )
+                llm = llm_registry.get_active()
+                if llm is not None:
+                    logger.info("Auto-activated vLLM (%s)", settings.llm.vllm_model)
+                    return llm
+            except Exception as e:
+                logger.debug("Could not auto-activate vLLM: %s", e)
+
+        # Fallback to Ollama
+        try:
             llm_registry.activate(
                 "ollama",
                 model=settings.llm.ollama_model,

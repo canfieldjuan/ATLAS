@@ -2,7 +2,7 @@
 Campaign send task.
 
 Runs every 2 minutes.  Finds queued campaign emails past their cancel
-window and sends them via the configured CampaignSender (Resend).
+window and sends them via the configured CampaignSender (Resend or SES).
 Updates campaign + sequence state on success/failure.
 """
 
@@ -153,7 +153,10 @@ async def run(task: ScheduledTask) -> dict:
         c = dict(campaign)
         campaign_id = c["id"]
         sequence_id = c.get("sequence_id")
-        from_email = c.get("from_email") or cfg.resend_from_email
+        from_email = (
+            c.get("from_email")
+            or (cfg.ses_from_email if cfg.sender_type == "ses" else cfg.resend_from_email)
+        )
 
         if not from_email:
             logger.warning("No from_email for campaign %s, skipping", campaign_id)
@@ -265,8 +268,9 @@ async def run(task: ScheduledTask) -> dict:
 
             sent_count += 1
             logger.info(
-                "Sent campaign %s (step %s) to %s via Resend: %s",
-                campaign_id, c.get("step_number"), c["recipient_email"], esp_message_id,
+                "Sent campaign %s (step %s) to %s via %s: %s",
+                campaign_id, c.get("step_number"), c["recipient_email"],
+                cfg.sender_type.upper(), esp_message_id,
             )
 
         except Exception as exc:

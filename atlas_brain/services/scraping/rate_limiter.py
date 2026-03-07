@@ -24,6 +24,15 @@ _DEFAULT_RPM: dict[str, int] = {
     "hn.algolia.com": 100,
     "api.github.com": 25,
     "news.google.com": 10,
+    # Phase 2 sources
+    "gartner.com": 4,
+    "trustpilot.com": 6,
+    "getapp.com": 8,
+    "producthunt.com": 20,
+    "youtube.googleapis.com": 50,
+    "quora.com": 4,
+    "api.stackexchange.com": 25,
+    "peerspot.com": 4,
 }
 
 _MIN_RPM = 1
@@ -88,6 +97,15 @@ class DomainRateLimiter:
         rpm_map["hn.algolia.com"] = _clamp_rpm(cfg.hackernews_rpm)
         rpm_map["api.github.com"] = _clamp_rpm(cfg.github_rpm)
         rpm_map["news.google.com"] = _clamp_rpm(cfg.rss_rpm)
+        # Phase 2 sources
+        rpm_map["gartner.com"] = _clamp_rpm(cfg.gartner_rpm)
+        rpm_map["trustpilot.com"] = _clamp_rpm(cfg.trustpilot_rpm)
+        rpm_map["getapp.com"] = _clamp_rpm(cfg.getapp_rpm)
+        rpm_map["producthunt.com"] = _clamp_rpm(cfg.producthunt_rpm)
+        rpm_map["youtube.googleapis.com"] = _clamp_rpm(cfg.youtube_rpm)
+        rpm_map["quora.com"] = _clamp_rpm(cfg.quora_rpm)
+        rpm_map["api.stackexchange.com"] = _clamp_rpm(cfg.stackoverflow_rpm)
+        rpm_map["peerspot.com"] = _clamp_rpm(cfg.peerspot_rpm)
         return cls(rpm_map)
 
     async def acquire(self, domain: str) -> None:

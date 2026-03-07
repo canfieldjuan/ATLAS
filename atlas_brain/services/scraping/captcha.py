@@ -27,6 +27,7 @@ class CaptchaType(enum.Enum):
     NONE = "none"
     DATADOME = "datadome"        # G2
     CLOUDFLARE = "cloudflare"    # Capterra
+    AKAMAI = "akamai"            # Gartner
 
 
 def detect_captcha(response_text: str, status_code: int) -> CaptchaType:
@@ -39,20 +40,27 @@ def detect_captcha(response_text: str, status_code: int) -> CaptchaType:
     Returns:
         CaptchaType indicating which challenge was found (or NONE).
     """
-    if status_code != 403:
-        return CaptchaType.NONE
-
     body = response_text.lower()
 
-    # DataDome: JS challenge page served by captcha-delivery.com
-    if "captcha-delivery.com" in body and "var dd=" in body:
+    # DataDome: JS challenge page served by captcha-delivery.com (always 403)
+    if status_code == 403 and "captcha-delivery.com" in body and "var dd=" in body:
         return CaptchaType.DATADOME
 
-    # Cloudflare managed challenge / JS challenge
-    if ("attention required" in body or "just a moment" in body) and (
-        "cloudflare" in body or "_cf_chl_opt" in body or "challenge-platform" in body
-    ):
-        return CaptchaType.CLOUDFLARE
+    # Cloudflare managed challenge / JS challenge (403 or 429)
+    if status_code in (403, 429):
+        if ("attention required" in body or "just a moment" in body) and (
+            "cloudflare" in body or "_cf_chl_opt" in body or "challenge-platform" in body
+        ):
+            return CaptchaType.CLOUDFLARE
+
+    # Akamai Bot Manager challenge (Gartner, etc.)
+    # Akamai returns 403 with a JS challenge page containing sensor_data
+    # collection scripts and _abck cookie setup.
+    if status_code in (403, 429):
+        if ("_abck" in body or "ak_bmsc" in body
+                or "sensor_data" in body
+                or ("akamai" in body and "bot" in body)):
+            return CaptchaType.AKAMAI
 
     return CaptchaType.NONE
 
@@ -326,6 +334,15 @@ class CaptchaSolver:
             }
             if proxy_url:
                 task["proxy"] = _convert_proxy_for_capsolver(proxy_url)
+
+        elif captcha_type == CaptchaType.AKAMAI:
+            # CapSolver AntiAkamaiTask (limited support -- prefer 2Captcha)
+            task = {
+                "type": "AntiAkamaiBMPTask",
+                "websiteURL": page_url,
+            }
+            if proxy_url:
+                task["proxy"] = _convert_proxy_for_capsolver(proxy_url)
         else:
             raise ValueError(f"Unsupported captcha type for CapSolver: {captcha_type}")
 
@@ -455,6 +472,15 @@ class CaptchaSolver:
                 task["data"] = cf["cdata"]
             if cf.get("pagedata"):
                 task["pagedata"] = cf["pagedata"]
+
+        elif captcha_type == CaptchaType.AKAMAI:
+            # 2Captcha AkamaiBMPTask -- solves Akamai Bot Manager challenge
+            # and returns _abck + bm_sz cookies
+            task = {
+                "type": "AkamaiBMPTask",
+                "websiteURL": page_url,
+                **proxy_fields,
+            }
         else:
             raise ValueError(f"Unsupported captcha type for 2Captcha: {captcha_type}")
 

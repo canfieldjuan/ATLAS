@@ -1,9 +1,11 @@
 """
-Capterra parser for B2B review scraping.
+GetApp parser for B2B review scraping.
 
-URL pattern: capterra.com/p/{id}/{slug}/reviews/
-Strategy: Web Unlocker first, then JSON-LD extraction, fall back to HTML parsing.
-Residential proxy required (Cloudflare protected).
+URL pattern: getapp.com/software/{category-slug}/a/{product-slug}/reviews/?page={n}
+Owned by Gartner (same family as Capterra) -- similar HTML structure.
+Strategy: Web Unlocker first (Cloudflare protected), then JSON-LD extraction,
+fall back to HTML parsing via curl_cffi HTTP client.
+Residential proxy required.
 """
 
 from __future__ import annotations
@@ -21,20 +23,20 @@ from bs4 import BeautifulSoup
 from ..client import AntiDetectionClient
 from . import ScrapeResult, ScrapeTarget, register_parser
 
-logger = logging.getLogger("atlas.services.scraping.parsers.capterra")
+logger = logging.getLogger("atlas.services.scraping.parsers.getapp")
 
-_DOMAIN = "capterra.com"
-_BASE_URL = "https://www.capterra.com/p"
+_DOMAIN = "getapp.com"
+_BASE_URL = "https://www.getapp.com/software"
 
 
-class CapterraParser:
-    """Parse Capterra review pages using JSON-LD or HTML fallback."""
+class GetAppParser:
+    """Parse GetApp review pages using JSON-LD or HTML fallback."""
 
-    source_name = "capterra"
+    source_name = "getapp"
     prefer_residential = True
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
-        """Scrape Capterra reviews -- Web Unlocker first, then HTTP client."""
+        """Scrape GetApp reviews -- Web Unlocker first, then HTTP client."""
         from atlas_brain.config import settings
 
         # Priority 1: Bright Data Web Unlocker (handles Cloudflare automatically)
@@ -67,7 +69,7 @@ class CapterraParser:
     # ------------------------------------------------------------------
 
     async def _scrape_web_unlocker(self, target: ScrapeTarget) -> ScrapeResult:
-        """Scrape Capterra via Bright Data Web Unlocker proxy."""
+        """Scrape GetApp via Bright Data Web Unlocker proxy."""
         import httpx
         from atlas_brain.config import settings
 
@@ -78,8 +80,7 @@ class CapterraParser:
         seen_ids: set[str] = set()
 
         for page in range(1, target.max_pages + 1):
-            base_path = f"{_BASE_URL}/{target.product_slug}/reviews/"
-            url = base_path if page == 1 else f"{base_path}?page={page}"
+            url = _build_url(target.product_slug, page)
 
             headers = {
                 "User-Agent": (
@@ -107,15 +108,13 @@ class CapterraParser:
                     continue
 
                 page_reviews = _parse_json_ld(resp.text, target, seen_ids)
-                if page_reviews:
-                    _supplement_pros_cons_from_html(resp.text, page_reviews)
-                else:
+                if not page_reviews:
                     page_reviews = _parse_html(resp.text, target, seen_ids)
 
                 if not page_reviews:
                     if page == 1:
                         logger.warning(
-                            "Capterra Web Unlocker page 1 returned 0 reviews for %s",
+                            "GetApp Web Unlocker page 1 returned 0 reviews for %s",
                             target.product_slug,
                         )
                     break
@@ -125,7 +124,7 @@ class CapterraParser:
             except Exception as exc:
                 errors.append(f"Page {page}: {exc}")
                 logger.warning(
-                    "Capterra Web Unlocker page %d failed for %s: %s",
+                    "GetApp Web Unlocker page %d failed for %s: %s",
                     page, target.product_slug, exc,
                 )
                 break
@@ -133,17 +132,17 @@ class CapterraParser:
             await asyncio.sleep(random.uniform(2.0, 5.0))
 
         logger.info(
-            "Capterra Web Unlocker scrape for %s: %d reviews from %d pages",
+            "GetApp Web Unlocker scrape for %s: %d reviews from %d pages",
             target.vendor_name, len(reviews), pages_scraped,
         )
         return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors)
 
     # ------------------------------------------------------------------
-    # HTTP client path (curl_cffi + residential proxy + CAPTCHA)
+    # HTTP client path (curl_cffi + residential proxy)
     # ------------------------------------------------------------------
 
     async def _scrape_http(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
-        """Scrape Capterra via curl_cffi HTTP client."""
+        """Scrape GetApp via curl_cffi HTTP client."""
         reviews: list[dict] = []
         errors: list[str] = []
         pages_scraped = 0
@@ -151,14 +150,14 @@ class CapterraParser:
 
         consecutive_empty = 0
         for page in range(1, target.max_pages + 1):
-            # Capterra URL: /p/{id}/{slug}/reviews/ or /p/{id}/{slug}/reviews/?page={n}
-            base_path = f"{_BASE_URL}/{target.product_slug}/reviews/"
-            url = base_path if page == 1 else f"{base_path}?page={page}"
+            url = _build_url(target.product_slug, page)
 
             referer = (
-                f"https://www.google.com/search?q={quote_plus(target.vendor_name)}+capterra+reviews"
+                f"https://www.google.com/search?q={quote_plus(target.vendor_name)}+getapp+reviews"
                 if page == 1
-                else f"{base_path}?page={page - 1}" if page > 2 else base_path
+                else _build_url(target.product_slug, page - 1)
+                if page > 2
+                else _build_url(target.product_slug, 1)
             )
 
             try:
@@ -172,7 +171,7 @@ class CapterraParser:
                 pages_scraped += 1
 
                 if resp.status_code == 403:
-                    errors.append(f"Page {page}: blocked (403) -- CAPTCHA challenge")
+                    errors.append(f"Page {page}: blocked (403) -- Cloudflare challenge")
                     break
                 if resp.status_code == 429:
                     errors.append(f"Page {page}: rate limited (429)")
@@ -192,10 +191,6 @@ class CapterraParser:
                 # Strategy 1: JSON-LD extraction (most reliable)
                 page_reviews = _parse_json_ld(html, target, seen_ids)
 
-                # Supplement JSON-LD reviews with pros/cons from HTML cards
-                if page_reviews:
-                    _supplement_pros_cons_from_html(html, page_reviews)
-
                 # Strategy 2: HTML fallback
                 if not page_reviews:
                     page_reviews = _parse_html(html, target, seen_ids)
@@ -203,7 +198,7 @@ class CapterraParser:
                 if not page_reviews:
                     if page == 1:
                         logger.warning(
-                            "Capterra page 1 returned 0 reviews for %s -- "
+                            "GetApp page 1 returned 0 reviews for %s -- "
                             "JSON-LD and HTML selectors may be stale",
                             target.product_slug,
                         )
@@ -215,86 +210,44 @@ class CapterraParser:
                 if len(reviews) == before:
                     consecutive_empty += 1
                     if consecutive_empty >= 2:
-                        logger.info("Capterra: 2 consecutive pages with no new reviews, stopping")
+                        logger.info("GetApp: 2 consecutive pages with no new reviews, stopping")
                         break
                 else:
                     consecutive_empty = 0
 
             except Exception as exc:
                 errors.append(f"Page {page}: {exc}")
-                logger.warning("Capterra page %d failed for %s: %s", page, target.product_slug, exc)
+                logger.warning("GetApp page %d failed for %s: %s", page, target.product_slug, exc)
                 break
 
         logger.info(
-            "Capterra scrape for %s: %d reviews from %d pages",
+            "GetApp scrape for %s: %d reviews from %d pages",
             target.vendor_name, len(reviews), pages_scraped,
         )
 
         return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors)
 
 
-def _supplement_pros_cons_from_html(html: str, reviews: list[dict]) -> None:
-    """Fill in pros/cons/reviewer_title/reviewer_company from HTML cards for JSON-LD reviews.
+# ------------------------------------------------------------------
+# URL helpers
+# ------------------------------------------------------------------
 
-    JSON-LD captures reviewBody but always leaves pros/cons as None.
-    The HTML cards have proper pros/cons selectors. Match by source_review_id.
-    Modifies reviews in-place; gracefully no-ops if HTML parsing finds nothing.
+def _build_url(product_slug: str, page: int) -> str:
+    """Build a GetApp reviews URL.
+
+    product_slug in DB is ``{category-slug}/a/{product-slug}``
+    (e.g. ``project-management-software/a/monday-com``).
+    Final URL: https://www.getapp.com/software/{category-slug}/a/{product-slug}/reviews/
     """
-    soup = BeautifulSoup(html, "html.parser")
-    cards = soup.select(
-        '[data-testid="review-card"], '
-        '.review-card, '
-        '[class*="ReviewCard"], '
-        'div[class*="review-"][class*="card"]'
-    )
-    if not cards:
-        cards = soup.select('div[id^="review-"], div[class*="review-content"]')
-    if not cards:
-        return
+    base = f"{_BASE_URL}/{product_slug}/reviews/"
+    if page > 1:
+        return f"{base}?page={page}"
+    return base
 
-    # Build a lookup from review_id -> parsed HTML card data
-    html_data: dict[str, dict] = {}
-    for card in cards:
-        card_id = card.get("id", "") or card.get("data-review-id", "")
-        if not card_id:
-            card_id = hashlib.sha256(card.get_text(strip=True)[:200].encode()).hexdigest()[:16]
 
-        pros = None
-        for section in card.select('[class*="pros"], [class*="Pros"], [data-testid*="pros"]'):
-            text = section.get_text(strip=True)
-            if text:
-                pros = text[:5000]
-        cons = None
-        for section in card.select('[class*="cons"], [class*="Cons"], [data-testid*="cons"]'):
-            text = section.get_text(strip=True)
-            if text:
-                cons = text[:5000]
-
-        reviewer_title = _get_text(card, '[class*="title"], [class*="job"]')
-        reviewer_company = _get_text(card, '[class*="company"], [class*="org"]')
-
-        html_data[card_id] = {
-            "pros": pros,
-            "cons": cons,
-            "reviewer_title": reviewer_title,
-            "reviewer_company": reviewer_company,
-        }
-
-    # Match JSON-LD reviews to HTML cards and fill gaps
-    for review in reviews:
-        rid = review.get("source_review_id", "")
-        card_data = html_data.get(rid)
-        if not card_data:
-            continue
-        if review.get("pros") is None and card_data["pros"]:
-            review["pros"] = card_data["pros"]
-        if review.get("cons") is None and card_data["cons"]:
-            review["cons"] = card_data["cons"]
-        if review.get("reviewer_title") is None and card_data["reviewer_title"]:
-            review["reviewer_title"] = card_data["reviewer_title"]
-        if review.get("reviewer_company") is None and card_data["reviewer_company"]:
-            review["reviewer_company"] = card_data["reviewer_company"]
-
+# ------------------------------------------------------------------
+# JSON-LD extraction (primary strategy -- same Gartner schema as Capterra)
+# ------------------------------------------------------------------
 
 def _parse_json_ld(
     html: str, target: ScrapeTarget, seen_ids: set[str]
@@ -322,14 +275,14 @@ def _parse_json_ld(
                 if not isinstance(r, dict):
                     continue
 
-                review_id = r.get("@id", "") or hashlib.sha256(
-                    (r.get("reviewBody", "") or "").encode()
-                ).hexdigest()[:16]
-                if review_id in seen_ids:
-                    continue
-
                 review_body = r.get("reviewBody", "")
                 if not review_body or len(review_body) < 20:
+                    continue
+
+                review_id = r.get("@id", "") or hashlib.sha256(
+                    review_body.encode()
+                ).hexdigest()[:16]
+                if review_id in seen_ids:
                     continue
 
                 seen_ids.add(review_id)
@@ -352,9 +305,26 @@ def _parse_json_ld(
                 # Extract date
                 reviewed_at = r.get("datePublished")
 
+                # GetApp JSON-LD may include pros/cons in named sub-properties
+                pros = None
+                cons = None
+                if isinstance(r.get("positiveNotes"), str):
+                    pros = r["positiveNotes"][:5000]
+                elif isinstance(r.get("positiveNotes"), dict):
+                    notes = _extract_itemlist_notes(r["positiveNotes"])
+                    if notes:
+                        pros = "; ".join(notes)[:5000]
+
+                if isinstance(r.get("negativeNotes"), str):
+                    cons = r["negativeNotes"][:5000]
+                elif isinstance(r.get("negativeNotes"), dict):
+                    notes = _extract_itemlist_notes(r["negativeNotes"])
+                    if notes:
+                        cons = "; ".join(notes)[:5000]
+
                 reviews.append({
-                    "source": "capterra",
-                    "source_url": f"https://www.capterra.com/p/{target.product_slug}/reviews/",
+                    "source": "getapp",
+                    "source_url": _build_url(target.product_slug, 1),
                     "source_review_id": review_id,
                     "vendor_name": target.vendor_name,
                     "product_name": target.product_name or item.get("name"),
@@ -363,8 +333,8 @@ def _parse_json_ld(
                     "rating_max": 5,
                     "summary": r.get("name") or r.get("headline"),
                     "review_text": review_body[:10000],
-                    "pros": None,
-                    "cons": None,
+                    "pros": pros,
+                    "cons": cons,
                     "reviewer_name": reviewer_name or None,
                     "reviewer_title": None,
                     "reviewer_company": None,
@@ -373,7 +343,7 @@ def _parse_json_ld(
                     "reviewed_at": reviewed_at,
                     "raw_metadata": {
                         "extraction_method": "json_ld",
-                        "source_weight": 0.9,
+                        "source_weight": 0.85,
                         "source_type": "verified_review_platform",
                     },
                 })
@@ -381,76 +351,98 @@ def _parse_json_ld(
     return reviews
 
 
+def _extract_itemlist_notes(notes_obj: dict) -> list[str]:
+    """Extract note names from a JSON-LD ItemList (Gartner schema)."""
+    items = notes_obj.get("itemListElement", [])
+    if not isinstance(items, list):
+        return []
+    return [item["name"] for item in items if isinstance(item, dict) and item.get("name")]
+
+
+# ------------------------------------------------------------------
+# HTML fallback (similar selectors to Capterra -- same Gartner UI kit)
+# ------------------------------------------------------------------
+
 def _parse_html(
     html: str, target: ScrapeTarget, seen_ids: set[str]
 ) -> list[dict]:
-    """Parse Capterra review page HTML as fallback."""
+    """Parse GetApp review page HTML as fallback."""
     soup = BeautifulSoup(html, "html.parser")
     reviews: list[dict] = []
 
-    # Look for review containers
+    # GetApp review containers -- try specific selectors first, then broader
     review_cards = soup.select(
         '[data-testid="review-card"], '
+        '[data-review-id], '
         '.review-card, '
         '[class*="ReviewCard"], '
         'div[class*="review-"][class*="card"]'
     )
 
     if not review_cards:
-        # Broader fallback
-        review_cards = soup.select('div[id^="review-"], div[class*="review-content"]')
+        # Broader fallback -- GetApp uses similar patterns to Capterra
+        review_cards = soup.select(
+            'div[id^="review-"], '
+            'div[class*="review-content"], '
+            'div[class*="review-listing"], '
+            '[itemtype*="Review"]'
+        )
 
     for card in review_cards:
         try:
-            review = _parse_capterra_card(card, target)
+            review = _parse_getapp_card(card, target)
             if review and review.get("source_review_id") not in seen_ids:
                 seen_ids.add(review["source_review_id"])
                 reviews.append(review)
         except Exception:
-            logger.warning("Failed to parse Capterra review card", exc_info=True)
+            logger.warning("Failed to parse GetApp review card", exc_info=True)
 
     return reviews
 
 
-def _parse_capterra_card(card, target: ScrapeTarget) -> dict | None:
-    """Extract review data from a Capterra review card."""
+def _parse_getapp_card(card, target: ScrapeTarget) -> dict | None:
+    """Extract review data from a GetApp review card."""
     # Review ID
-    review_id = card.get("id", "") or card.get("data-review-id", "")
+    review_id = (
+        card.get("data-review-id", "")
+        or card.get("id", "")
+    )
     if not review_id:
-        review_id = hashlib.sha256(card.get_text(strip=True)[:200].encode()).hexdigest()[:16]
+        review_id = hashlib.sha256(
+            card.get_text(strip=True)[:200].encode()
+        ).hexdigest()[:16]
 
     # Rating (star-based, 1-5)
-    rating = None
-    rating_el = card.select_one('[class*="star"], [class*="rating"], [aria-label*="star"]')
-    if rating_el:
-        aria = rating_el.get("aria-label", "")
-        match = re.search(r"(\d+(?:\.\d+)?)", aria)
-        if match:
-            rating = float(match.group(1))
+    rating = _extract_rating(card)
 
-    # Review text -- Capterra often has Overall, Pros, Cons sections
-    overall_text = ""
-    pros = None
-    cons = None
+    # Review title / summary
+    summary = None
+    title_el = card.select_one(
+        '[class*="review-title"], [class*="ReviewTitle"], '
+        '[itemprop="name"], h3, h4'
+    )
+    if title_el:
+        summary = title_el.get_text(strip=True)[:500]
 
-    for section in card.select('[class*="pros"], [class*="Pros"], [data-testid*="pros"]'):
-        text = section.get_text(strip=True)
-        if text:
-            pros = text[:5000]
-
-    for section in card.select('[class*="cons"], [class*="Cons"], [data-testid*="cons"]'):
-        text = section.get_text(strip=True)
-        if text:
-            cons = text[:5000]
+    # Pros / Cons -- GetApp separates these like Capterra
+    pros = _extract_pros_cons(card, "pros", "like", "best", "advantage")
+    cons = _extract_pros_cons(card, "cons", "dislike", "worst", "disadvantage")
 
     # Overall review text
-    for text_el in card.select('[class*="review-text"], [class*="ReviewText"], [class*="overall"]'):
+    overall_text = ""
+    for text_el in card.select(
+        '[itemprop="reviewBody"], '
+        '[class*="review-text"], '
+        '[class*="ReviewText"], '
+        '[class*="review-body"], '
+        '[class*="overall"]'
+    ):
         text = text_el.get_text(strip=True)
         if text and len(text) > 20:
             overall_text = text[:10000]
             break
 
-    # Combine if no overall text
+    # Combine if no overall text found
     review_text = overall_text
     if not review_text:
         parts = []
@@ -464,28 +456,32 @@ def _parse_capterra_card(card, target: ScrapeTarget) -> dict | None:
         return None
 
     # Reviewer info
-    reviewer_name = _get_text(card, '[class*="reviewer"], [class*="author"]')
-    reviewer_title = _get_text(card, '[class*="title"], [class*="job"]')
+    reviewer_name = _get_text(card, '[class*="reviewer"], [class*="author"], [itemprop="author"]')
+    reviewer_title = _get_text(card, '[class*="title"], [class*="job"], [class*="role"]')
     reviewer_company = _get_text(card, '[class*="company"], [class*="org"]')
     company_size = _get_text(card, '[class*="size"], [class*="employees"]')
-    reviewer_industry = _get_text(card, '[class*="industry"]')
+    reviewer_industry = _get_text(card, '[class*="industry"], [class*="sector"]')
 
     # Date
     reviewed_at = None
-    date_el = card.select_one("time, [class*='date']")
+    date_el = card.select_one("time, [class*='date'], [itemprop='datePublished']")
     if date_el:
-        reviewed_at = date_el.get("datetime") or date_el.get_text(strip=True)
+        reviewed_at = (
+            date_el.get("datetime")
+            or date_el.get("content")
+            or date_el.get_text(strip=True)
+        )
 
     return {
-        "source": "capterra",
-        "source_url": f"https://www.capterra.com/p/{target.product_slug}/reviews/",
+        "source": "getapp",
+        "source_url": _build_url(target.product_slug, 1),
         "source_review_id": review_id,
         "vendor_name": target.vendor_name,
         "product_name": target.product_name,
         "product_category": target.product_category,
         "rating": rating,
         "rating_max": 5,
-        "summary": None,
+        "summary": summary,
         "review_text": review_text,
         "pros": pros,
         "cons": cons,
@@ -497,10 +493,85 @@ def _parse_capterra_card(card, target: ScrapeTarget) -> dict | None:
         "reviewed_at": reviewed_at,
         "raw_metadata": {
             "extraction_method": "html",
-            "source_weight": 0.9,
+            "source_weight": 0.85,
             "source_type": "verified_review_platform",
         },
     }
+
+
+# ------------------------------------------------------------------
+# HTML helper functions
+# ------------------------------------------------------------------
+
+def _extract_rating(card) -> float | None:
+    """Extract star rating from a review card.
+
+    GetApp uses several rating patterns: aria-label with star count,
+    itemprop ratingValue, or class-based filled-star counting.
+    """
+    # Try itemprop first (most structured)
+    rating_el = card.select_one('[itemprop="ratingValue"]')
+    if rating_el:
+        val = rating_el.get("content") or rating_el.get_text(strip=True)
+        if val:
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                pass
+
+    # Try aria-label with numeric rating
+    for el in card.select('[class*="star"], [class*="rating"], [aria-label*="star"]'):
+        aria = el.get("aria-label", "")
+        match = re.search(r"(\d+(?:\.\d+)?)\s*(?:out of|/)\s*\d+", aria)
+        if match:
+            try:
+                return float(match.group(1))
+            except (ValueError, TypeError):
+                pass
+        # Simpler pattern: just a number in the aria label
+        match = re.search(r"(\d+(?:\.\d+)?)", aria)
+        if match:
+            try:
+                rating = float(match.group(1))
+                if 1.0 <= rating <= 5.0:
+                    return rating
+            except (ValueError, TypeError):
+                pass
+
+    # Count filled stars as last resort
+    filled = card.select('[class*="star--filled"], [class*="star-full"], .star.fill')
+    if filled:
+        count = len(filled)
+        if 1 <= count <= 5:
+            return float(count)
+
+    return None
+
+
+def _extract_pros_cons(card, *keywords: str) -> str | None:
+    """Extract pros or cons section from a GetApp review card.
+
+    GetApp structures reviews with labeled sections similar to Capterra.
+    Searches by heading + sibling pattern first, then class-based matching.
+    """
+    # Strategy 1: Heading + sibling pattern
+    for heading in card.select("h5, h4, h3, [class*='heading'], [class*='label'], dt"):
+        text = heading.get_text(strip=True).lower()
+        if any(kw in text for kw in keywords):
+            sibling = heading.find_next_sibling()
+            if sibling:
+                content = sibling.get_text(strip=True)
+                if content and len(content) > 5:
+                    return content[:5000]
+
+    # Strategy 2: Class-based matching
+    for kw in keywords:
+        for el in card.select(f'[class*="{kw}"] p, [class*="{kw}"], [data-testid*="{kw}"]'):
+            text = el.get_text(strip=True)
+            if text and len(text) > 5:
+                return text[:5000]
+
+    return None
 
 
 def _get_text(card, selector: str) -> str | None:
@@ -514,4 +585,4 @@ def _get_text(card, selector: str) -> str | None:
 
 
 # Auto-register
-register_parser(CapterraParser())
+register_parser(GetAppParser())

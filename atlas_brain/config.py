@@ -2135,6 +2135,11 @@ class B2BChurnConfig(BaseSettings):
     blog_auto_deploy_enabled: bool = Field(default=False, description="Auto git-push + Vercel deploy after B2B blog publish")
     blog_auto_deploy_branch: str = Field(default="main", description="Git branch to push B2B blog commits to")
     blog_auto_deploy_hook_url: str = Field(default="", description="Vercel deploy hook URL for B2B blog")
+    # Blog source filtering
+    blog_source_allowlist: str = Field(
+        default="g2,capterra,trustradius,trustpilot,gartner,peerspot,getapp,software_advice,reddit,hackernews,quora",
+        description="Sources to include in blog data queries (excludes stackoverflow, youtube, github)",
+    )
     # Regeneration mode — re-process existing drafts through fixed pipeline
     blog_post_regenerate_mode: bool = Field(default=False, description="When True, regenerate existing draft posts instead of selecting new topics")
 

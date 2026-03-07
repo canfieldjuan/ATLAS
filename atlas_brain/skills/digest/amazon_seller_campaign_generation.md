@@ -43,6 +43,7 @@ You receive a JSON object with:
 - `top_root_causes`: Array of `{cause, count}` -- why products fail (quality, design, durability, packaging, etc.)
 - `channel`: Which channel to generate for -- "email_cold", "email_followup", or "linkedin"
 - `selling`: Object with `{product_name, landing_url, free_report_url, sender_name, sender_title}`
+  - `selling.blog_posts` (optional): Array of `{title, url, topic_type}` -- published category analysis posts relevant to this seller's market. Full URLs ready to embed.
 - `cold_email_context` (only on `email_followup`): `{subject, body}` of the cold email already sent
 
 ## Output
@@ -130,5 +131,7 @@ Lead with manufacturing_insights and top_root_causes. "[X]% of complaints trace 
 14. **Include `selling.free_report_url` naturally in the CTA.** Not on its own line. Woven into a sentence: "I put together the full [category] breakdown here: [url]" or "Grab the report: [url]"
 
 15. **Minimum 4 distinct numbers in the email body.** Pull from: total_reviews, pain_point counts, feature_gap counts, competitive_flow counts, brand health_scores, affected_brands counts. More numbers = more credibility. Sellers are data people.
+
+16. **Blog post linking**: When `selling.blog_posts` is provided, drop ONE blog link per email as a credibility builder alongside the free report CTA. Frame it as published analysis: "We broke down the [category] data here: [url]" or "Full breakdown: [url]". Use a different post in each email (cold vs follow-up) to keep content fresh.
 
 Return ONLY the JSON object, no markdown fences, no explanation.

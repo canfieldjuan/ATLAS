@@ -21,6 +21,7 @@ from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from .campaign_audit import log_campaign_event
+from ._blog_matching import fetch_relevant_blog_posts as _fetch_blog_posts
 
 logger = logging.getLogger("atlas.autonomous.tasks.amazon_seller_campaign_generation")
 
@@ -601,6 +602,13 @@ async def generate_campaigns(
                 "sender_name": cfg.default_sender_name,
                 "sender_title": cfg.default_sender_title,
             }
+
+            # Inject relevant blog posts for content-aligned email links
+            blog_posts = await _fetch_blog_posts(
+                pool, pipeline="consumer", category=category,
+            )
+            if blog_posts:
+                selling_ctx["blog_posts"] = blog_posts
 
             cold_email_content: dict[str, str] | None = None
 

@@ -6,12 +6,14 @@ and insert into b2b_reviews for automatic enrichment pickup.
 Runs as an autonomous task on a configurable interval (default 1 hour).
 """
 
+import asyncio
 import hashlib
 import json
 import logging
 import re
 import time
 import uuid as _uuid
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
 
@@ -150,8 +152,29 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     total_reviews = 0
     total_inserted = 0
     results_summary: list[dict] = []
+    results_lock = asyncio.Lock()
 
+    # Group targets by source for concurrent scraping.
+    # Each source gets its own semaphore to respect rate limits:
+    #   - API sources (youtube, stackoverflow, producthunt, hackernews, github, rss):
+    #     high concurrency — APIs handle it, rate limiter throttles per-domain
+    #   - Web scrape sources (g2, capterra, trustradius, getapp, gartner, peerspot,
+    #     trustpilot, quora, reddit): lower concurrency to avoid proxy overload
+    _API_SOURCES = {"youtube", "stackoverflow", "producthunt", "hackernews", "github", "rss"}
+    _WEB_CONCURRENCY = 4   # Concurrent web scrape targets
+    _API_CONCURRENCY = 10  # Concurrent API targets
+
+    source_sems: dict[str, asyncio.Semaphore] = {}
     for row in targets:
+        src = row["source"]
+        if src not in source_sems:
+            limit = _API_CONCURRENCY if src in _API_SOURCES else _WEB_CONCURRENCY
+            source_sems[src] = asyncio.Semaphore(limit)
+
+    async def _scrape_one(row):
+        """Scrape a single target with per-source concurrency control."""
+        nonlocal total_reviews, total_inserted
+
         raw_meta = row["metadata"] or "{}"
         if isinstance(raw_meta, str):
             try:
@@ -173,140 +196,140 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         parser = get_parser(target.source)
         if not parser:
             logger.warning("No parser for source %r, skipping target %s", target.source, target.id)
-            continue
+            return
 
-        started_at = time.monotonic()
-        batch_id = f"scrape_{target.source}_{target.product_slug}_{int(time.time())}"
+        sem = source_sems.get(target.source, asyncio.Semaphore(2))
+        async with sem:
+            started_at = time.monotonic()
+            batch_id = f"scrape_{target.source}_{target.product_slug}_{int(time.time())}"
 
-        try:
-            result = await parser.scrape(target, client)
-        except Exception as exc:
-            logger.error("Scrape failed for %s/%s: %s", target.source, target.vendor_name, exc)
+            try:
+                result = await parser.scrape(target, client)
+            except Exception as exc:
+                logger.error("Scrape failed for %s/%s: %s", target.source, target.vendor_name, exc)
+                duration_ms = int((time.monotonic() - started_at) * 1000)
+                await _log_scrape(pool, target, "failed", 0, 0, 0, [str(exc)], duration_ms, parser)
+                await pool.execute(
+                    """
+                    UPDATE b2b_scrape_targets
+                    SET last_scraped_at = NOW(), last_scrape_status = 'failed',
+                        last_scrape_reviews = 0, updated_at = NOW()
+                    WHERE id = $1
+                    """,
+                    row["id"],
+                )
+                async with results_lock:
+                    results_summary.append({
+                        "source": target.source,
+                        "vendor": target.vendor_name,
+                        "status": "failed",
+                        "error": str(exc),
+                    })
+                return
+
+            # Relevance filter
+            filtered_count = 0
+            if (cfg.relevance_filter_enabled
+                    and target.source not in STRUCTURED_SOURCES
+                    and result.reviews):
+                original_count = len(result.reviews)
+                result.reviews, filtered_count = filter_reviews(
+                    result.reviews, target.vendor_name, cfg.relevance_threshold,
+                )
+                if filtered_count:
+                    logger.info(
+                        "Relevance filter: kept %d/%d for %s/%s",
+                        len(result.reviews), original_count,
+                        target.source, target.vendor_name,
+                    )
+
+            # Insert reviews + fire enrichment immediately (background task)
+            inserted = 0
+            if result.reviews:
+                inserted = await _insert_reviews(pool, result.reviews, batch_id)
+
+                # Fire enrichment NOW — don't wait for it, let vLLM chew
+                if inserted > 0:
+                    asyncio.create_task(
+                        _fire_enrichment(batch_id, target.source, target.vendor_name),
+                        name=f"enrich_{batch_id}",
+                    )
+
+                # Mark synthetic aggregate reviews as not_applicable
+                synthetic_keys = [
+                    _make_dedup_key(
+                        r["source"], r["vendor_name"],
+                        r.get("source_review_id"),
+                        r.get("reviewer_name"),
+                        r.get("reviewed_at"),
+                    )
+                    for r in result.reviews
+                    if r.get("raw_metadata", {}).get("extraction_method") == "jsonld_aggregate"
+                ]
+                if synthetic_keys:
+                    await pool.execute(
+                        """
+                        UPDATE b2b_reviews
+                        SET enrichment_status = 'not_applicable'
+                        WHERE dedup_key = ANY($1::text[])
+                          AND enrichment_status = 'pending'
+                        """,
+                        synthetic_keys,
+                    )
+
             duration_ms = int((time.monotonic() - started_at) * 1000)
 
-            # Log failure
-            await _log_scrape(pool, target, "failed", 0, 0, 0, [str(exc)], duration_ms, parser)
-
-            # Update target status
+            # Log + update target
+            scrape_errors = list(result.errors)
+            if filtered_count:
+                scrape_errors.append(f"relevance_filtered={filtered_count}")
+            await _log_scrape(
+                pool, target, result.status,
+                len(result.reviews) + filtered_count, inserted, result.pages_scraped,
+                scrape_errors, duration_ms, parser,
+            )
             await pool.execute(
                 """
                 UPDATE b2b_scrape_targets
-                SET last_scraped_at = NOW(), last_scrape_status = 'failed',
-                    last_scrape_reviews = 0, updated_at = NOW()
+                SET last_scraped_at = NOW(), last_scrape_status = $2,
+                    last_scrape_reviews = $3, updated_at = NOW()
                 WHERE id = $1
                 """,
-                row["id"],
+                row["id"], result.status, inserted,
             )
-            results_summary.append({
-                "source": target.source,
-                "vendor": target.vendor_name,
-                "status": "failed",
-                "error": str(exc),
-            })
-            continue
 
-        # Relevance filter: drop noise from social media sources
-        filtered_count = 0
-        if (cfg.relevance_filter_enabled
-                and target.source not in STRUCTURED_SOURCES
-                and result.reviews):
-            original_count = len(result.reviews)
-            result.reviews, filtered_count = filter_reviews(
-                result.reviews, target.vendor_name, cfg.relevance_threshold,
+            async with results_lock:
+                total_reviews += len(result.reviews) + filtered_count
+                total_inserted += inserted
+                results_summary.append({
+                    "source": target.source,
+                    "vendor": target.vendor_name,
+                    "status": result.status,
+                    "found": len(result.reviews) + filtered_count,
+                    "inserted": inserted,
+                    "filtered": filtered_count,
+                    "pages": result.pages_scraped,
+                })
+
+            logger.info(
+                "Scraped %s/%s: %d found, %d inserted (%s) in %dms",
+                target.source, target.vendor_name,
+                len(result.reviews), inserted, result.status, duration_ms,
             )
-            if filtered_count:
-                logger.info(
-                    "Relevance filter: kept %d/%d for %s/%s",
-                    len(result.reviews), original_count,
-                    target.source, target.vendor_name,
-                )
 
-        # Insert reviews and enrich inline
-        inserted = 0
-        if result.reviews:
-            inserted = await _insert_reviews(pool, result.reviews, batch_id)
+    # Fire all targets concurrently (per-source semaphores handle throttling)
+    logger.info(
+        "Scraping %d targets concurrently (API: %d concurrent, Web: %d concurrent)",
+        len(targets), _API_CONCURRENCY, _WEB_CONCURRENCY,
+    )
+    await asyncio.gather(
+        *[_scrape_one(row) for row in targets],
+        return_exceptions=True,
+    )
 
-            # Enrich newly inserted reviews immediately (don't wait for scheduler)
-            if inserted > 0:
-                try:
-                    from .b2b_enrichment import enrich_batch
-                    enrich_result = await enrich_batch(batch_id)
-                    logger.info(
-                        "Inline enrichment for %s/%s: %s",
-                        target.source, target.vendor_name, enrich_result,
-                    )
-                except Exception as enrich_exc:
-                    logger.warning(
-                        "Inline enrichment failed for %s/%s (scheduler will retry): %s",
-                        target.source, target.vendor_name, enrich_exc,
-                    )
-
-            # Mark synthetic aggregate reviews as not_applicable for enrichment
-            synthetic_keys = [
-                _make_dedup_key(
-                    r["source"], r["vendor_name"],
-                    r.get("source_review_id"),
-                    r.get("reviewer_name"),
-                    r.get("reviewed_at"),
-                )
-                for r in result.reviews
-                if r.get("raw_metadata", {}).get("extraction_method") == "jsonld_aggregate"
-            ]
-            if synthetic_keys:
-                await pool.execute(
-                    """
-                    UPDATE b2b_reviews
-                    SET enrichment_status = 'not_applicable'
-                    WHERE dedup_key = ANY($1::text[])
-                      AND enrichment_status = 'pending'
-                    """,
-                    synthetic_keys,
-                )
-                logger.info(
-                    "Marked %d synthetic aggregate reviews as not_applicable",
-                    len(synthetic_keys),
-                )
-
-        duration_ms = int((time.monotonic() - started_at) * 1000)
-        total_reviews += len(result.reviews) + filtered_count
-        total_inserted += inserted
-
-        # Log to b2b_scrape_log
-        scrape_errors = list(result.errors)
-        if filtered_count:
-            scrape_errors.append(f"relevance_filtered={filtered_count}")
-        await _log_scrape(
-            pool, target, result.status,
-            len(result.reviews) + filtered_count, inserted, result.pages_scraped,
-            scrape_errors, duration_ms, parser,
-        )
-
-        # Update target status
-        await pool.execute(
-            """
-            UPDATE b2b_scrape_targets
-            SET last_scraped_at = NOW(), last_scrape_status = $2,
-                last_scrape_reviews = $3, updated_at = NOW()
-            WHERE id = $1
-            """,
-            row["id"], result.status, inserted,
-        )
-
-        results_summary.append({
-            "source": target.source,
-            "vendor": target.vendor_name,
-            "status": result.status,
-            "found": len(result.reviews) + filtered_count,
-            "inserted": inserted,
-            "filtered": filtered_count,
-            "pages": result.pages_scraped,
-        })
-
-        logger.info(
-            "Scraped %s/%s: %d found, %d inserted (%s) in %dms",
-            target.source, target.vendor_name,
-            len(result.reviews), inserted, result.status, duration_ms,
-        )
+    # Enrichment fires as background tasks per-target (see _fire_enrichment).
+    # No need to wait — vLLM handles concurrent requests natively.
+    # The b2b_enrichment scheduler task catches any stragglers every 30s.
 
     return {
         "_skip_synthesis": True,
@@ -315,6 +338,26 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "total_reviews_inserted": total_inserted,
         "results": results_summary,
     }
+
+
+async def _fire_enrichment(batch_id: str, source: str, vendor: str) -> None:
+    """Fire-and-forget enrichment for a single scrape batch.
+
+    Runs as a background asyncio task so scraping continues unblocked.
+    vLLM with PagedAttention handles concurrent requests natively.
+    """
+    try:
+        from .b2b_enrichment import enrich_batch
+        result = await enrich_batch(batch_id)
+        logger.info(
+            "Enrichment done for %s/%s: %s",
+            source, vendor, result,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Background enrichment failed for %s/%s (scheduler retries): %s",
+            source, vendor, exc,
+        )
 
 
 _MIN_ENRICHABLE_TEXT_LEN = 80  # Reviews shorter than this can't produce useful enrichment
@@ -326,8 +369,13 @@ async def _insert_reviews(pool, reviews: list[dict], batch_id: str) -> int:
     skipped_short = 0
     for r in reviews:
         # Gate: don't insert reviews with no meaningful text body
+        # Combine review_text + pros + cons for length check (some sources
+        # put the substance in pros/cons rather than the main body)
         review_text = r.get("review_text") or ""
-        if len(review_text) < _MIN_ENRICHABLE_TEXT_LEN:
+        pros = r.get("pros") or ""
+        cons = r.get("cons") or ""
+        combined_len = len(review_text) + len(pros) + len(cons)
+        if combined_len < _MIN_ENRICHABLE_TEXT_LEN:
             skipped_short += 1
             continue
 
