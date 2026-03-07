@@ -1,9 +1,23 @@
+type ChartValue = string | number | null | undefined
+type ChartDatum = Record<string, ChartValue>
+
+interface ChartSeries {
+  dataKey: string
+  color?: string
+}
+
+interface ChartConfig {
+  bars?: ChartSeries[]
+  x_key?: string
+  [key: string]: unknown
+}
+
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
   title: string
-  data: Record<string, any>[]
-  config: Record<string, any>
+  data: ChartDatum[]
+  config: ChartConfig
 }
 
 export interface BlogPost {
