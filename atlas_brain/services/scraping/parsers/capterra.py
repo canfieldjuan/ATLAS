@@ -280,10 +280,21 @@ def _supplement_pros_cons_from_html(html: str, reviews: list[dict]) -> None:
             "reviewer_company": reviewer_company,
         }
 
-    # Match JSON-LD reviews to HTML cards and fill gaps
+    # Match JSON-LD reviews to HTML cards and fill gaps.
+    # JSON-LD @id may be a full URL like "https://www.capterra.com/reviews/12345"
+    # while HTML card id may be "review-12345" or just "12345". Also try
+    # content-hash fallback when IDs don't match.
     for review in reviews:
         rid = review.get("source_review_id", "")
         card_data = html_data.get(rid)
+        if not card_data:
+            # Try matching by trailing numeric segment (e.g. ".../12345" -> "12345")
+            rid_tail = rid.rsplit("/", 1)[-1] if "/" in rid else rid
+            for cid, cdata in html_data.items():
+                # Match "12345" == "12345" or "review-12345" ends with "12345"
+                if cid == rid_tail or cid.endswith(f"-{rid_tail}") or rid_tail.endswith(cid):
+                    card_data = cdata
+                    break
         if not card_data:
             continue
         if review.get("pros") is None and card_data["pros"]:

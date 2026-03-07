@@ -202,7 +202,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
 _MIN_REVIEW_TEXT_LENGTH = 80  # Skip LLM calls for reviews shorter than this
 
-# Verified review platforms — every review gets full extraction (skip triage).
+# Verified review platforms -- every review gets full extraction (skip triage).
 _VERIFIED_SOURCES = frozenset({
     "g2", "capterra", "gartner", "trustradius",
     "peerspot", "getapp", "software_advice", "trustpilot",
@@ -230,7 +230,7 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
         if is_verified:
             # Verified sources: skip triage, go straight to full extraction.
             # Every review on these platforms has signal worth extracting.
-            logger.debug("Verified source %s for %s — skipping triage", source, review_id)
+            logger.debug("Verified source %s for %s -- skipping triage", source, review_id)
         else:
             # Stage 1: Fast triage — is this review worth full extraction?
             triage = await asyncio.wait_for(

@@ -146,10 +146,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             # (not already inside a markdown link)
             raw = content["content"]
             if affiliate_url in raw:
-                import re as _re
                 # Match the URL when NOT preceded by ]( (already a markdown link)
-                raw = _re.sub(
-                    r'(?<!\]\()' + _re.escape(affiliate_url) + r'(?!\))',
+                raw = re.sub(
+                    r'(?<!\]\()' + re.escape(affiliate_url) + r'(?!\))',
                     md_link,
                     raw,
                 )
@@ -1115,6 +1114,7 @@ async def _gather_data(
     elif topic_type == "pain_point_roundup":
         category = topic_ctx["category"]
         # Per-vendor pain breakdown from raw reviews
+        sources = _blog_source_allowlist()
         vendor_pains = await pool.fetch(
             """
             SELECT
@@ -1127,11 +1127,12 @@ async def _gather_data(
                 )::numeric, 1) AS avg_urgency
             FROM b2b_reviews
             WHERE product_category = $1 AND enrichment_status = 'enriched'
+              AND source = ANY($2)
             GROUP BY vendor_name, enrichment->>'pain_categories'
             ORDER BY review_count DESC
             LIMIT 30
             """,
-            category,
+            category, sources,
         )
         # Aggregate top pain per vendor
         vendor_pain_map: dict[str, dict] = {}
@@ -1161,6 +1162,7 @@ async def _gather_data(
 
     elif topic_type == "best_fit_guide":
         category = topic_ctx["category"]
+        sources = _blog_source_allowlist()
         # Fetch all profiles in category
         vendor_rows = await pool.fetch(
             "SELECT DISTINCT vendor_name FROM b2b_product_profiles WHERE product_category = $1",
@@ -1173,8 +1175,8 @@ async def _gather_data(
             if p:
                 # Also pull avg rating from raw reviews
                 rating_row = await pool.fetchrow(
-                    "SELECT ROUND(AVG(rating)::numeric, 1) AS avg_rating, COUNT(*) AS cnt FROM b2b_reviews WHERE vendor_name = $1 AND rating IS NOT NULL",
-                    vn,
+                    "SELECT ROUND(AVG(rating)::numeric, 1) AS avg_rating, COUNT(*) AS cnt FROM b2b_reviews WHERE vendor_name = $1 AND rating IS NOT NULL AND source = ANY($2)",
+                    vn, sources,
                 )
                 profiles.append({
                     "vendor": vn,
@@ -1234,6 +1236,7 @@ async def _gather_data(
         data["quotes"] = quotes if not isinstance(quotes, Exception) else []
 
     # Data context metadata -- scoped to vendor(s) from this topic
+    ctx_sources = _blog_source_allowlist()
     vendor_names: list[str] = []
     if topic_ctx.get("vendor"):
         vendor_names.append(topic_ctx["vendor"])
@@ -1246,8 +1249,8 @@ async def _gather_data(
     # For category-level topics, pull all vendors in the category
     if not vendor_names and topic_ctx.get("category"):
         cat_rows = await pool.fetch(
-            "SELECT DISTINCT vendor_name FROM b2b_reviews WHERE product_category = $1",
-            topic_ctx["category"],
+            "SELECT DISTINCT vendor_name FROM b2b_reviews WHERE product_category = $1 AND source = ANY($2)",
+            topic_ctx["category"], ctx_sources,
         )
         vendor_names = [r["vendor_name"] for r in cat_rows]
 
@@ -1261,9 +1264,9 @@ async def _gather_data(
                 MIN(imported_at)::date AS earliest,
                 MAX(imported_at)::date AS latest
             FROM b2b_reviews
-            WHERE vendor_name = ANY($1)
+            WHERE vendor_name = ANY($1) AND source = ANY($2)
             """,
-            vendor_names,
+            vendor_names, ctx_sources,
         )
     else:
         ctx_row = await pool.fetchrow(
@@ -1275,7 +1278,9 @@ async def _gather_data(
                 MIN(imported_at)::date AS earliest,
                 MAX(imported_at)::date AS latest
             FROM b2b_reviews
-            """
+            WHERE source = ANY($1)
+            """,
+            ctx_sources,
         )
     data["data_context"] = {
         "total_reviews_analyzed": ctx_row["total_reviews"] if ctx_row else 0,
@@ -1626,7 +1631,7 @@ async def _fetch_source_distribution(pool, vendor_names: list[str]) -> dict[str,
     """Return review counts by source platform for the given vendors."""
     if not vendor_names:
         return {"sources": [], "verified_count": 0, "community_count": 0}
-    sources = _blog_source_allowlist()
+    allowed = _blog_source_allowlist()
     rows = await pool.fetch(
         """
         SELECT COALESCE(source, 'unknown') AS src, COUNT(*) AS cnt
@@ -1636,7 +1641,7 @@ async def _fetch_source_distribution(pool, vendor_names: list[str]) -> dict[str,
         GROUP BY source
         ORDER BY cnt DESC
         """,
-        vendor_names, sources,
+        vendor_names, allowed,
     )
     sources = [{"name": r["src"], "count": r["cnt"]} for r in rows]
     verified = sum(r["cnt"] for r in rows if r["src"].lower().replace(" ", "_") in _VERIFIED_SOURCES)
@@ -1663,7 +1668,8 @@ def _check_data_sufficiency(topic_type: str, data: dict[str, Any]) -> dict[str, 
     quotes = data.get("quotes", [])
 
     # Universal: at least 2 quotable reviews
-    if len(quotes) < 2:
+    # (pricing_reality_check builds quotes from pricing_reviews in the blueprint)
+    if topic_type != "pricing_reality_check" and len(quotes) < 2:
         return {"sufficient": False, "reason": f"Only {len(quotes)} quotable reviews (need 2+)"}
 
     # Single-vendor types: product profile must exist
@@ -1686,6 +1692,13 @@ def _check_data_sufficiency(topic_type: str, data: dict[str, Any]) -> dict[str, 
     if topic_type == "switching_story":
         if not data.get("switch_reviews"):
             return {"sufficient": False, "reason": "No switching reviews found"}
+
+    # Showdowns: both vendor profiles must exist
+    if topic_type == "vendor_showdown":
+        if not data.get("profile_a"):
+            return {"sufficient": False, "reason": "No product profile for vendor A"}
+        if not data.get("profile_b"):
+            return {"sufficient": False, "reason": "No product profile for vendor B"}
 
     # Multi-vendor types: at least 2 vendor profiles
     if topic_type in _MULTI_VENDOR_TYPES:
@@ -2963,7 +2976,7 @@ async def build_manual_topic_ctx(
 ) -> dict[str, Any]:
     """Construct topic_ctx for a manually requested blog post.
 
-    Bypasses _select_topic() dedup — always builds context even if a post
+    Bypasses _select_topic() dedup -- always builds context even if a post
     for this vendor+month already exists.
     """
     month_suffix = date.today().strftime("%Y-%m")
