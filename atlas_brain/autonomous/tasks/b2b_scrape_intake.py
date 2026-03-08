@@ -20,6 +20,7 @@ from typing import Any
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from ...services.scraping.target_validation import parse_source_allowlist
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_scrape_intake")
 
@@ -112,6 +113,7 @@ SELECT id, source, vendor_name, product_name, product_slug,
        product_category, max_pages, metadata
 FROM b2b_scrape_targets
 WHERE enabled = true
+    AND source = ANY($3::text[])
   AND (last_scraped_at IS NULL
        OR last_scraped_at < NOW() - make_interval(hours => scrape_interval_hours))
   AND (last_scrape_status IS NULL
@@ -134,16 +136,20 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     # Import here to avoid circular imports and lazy-load curl_cffi
     from ...services.scraping.client import get_scrape_client
-    from ...services.scraping.parsers import ScrapeTarget, get_parser
+    from ...services.scraping.parsers import ScrapeTarget, get_all_parsers, get_parser
     from ...services.scraping.relevance import STRUCTURED_SOURCES, filter_reviews
 
     client = get_scrape_client()
+    allowed_sources = parse_source_allowlist(cfg.source_allowlist)
+    if not allowed_sources:
+        allowed_sources = list(get_all_parsers().keys())
 
     # Fetch due targets
     targets = await pool.fetch(
         _TARGET_QUERY,
         cfg.blocked_cooldown_hours,
         cfg.max_targets_per_run,
+        allowed_sources,
     )
 
     if not targets:

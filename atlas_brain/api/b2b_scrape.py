@@ -14,6 +14,8 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from ..config import settings
+from ..services.scraping.target_validation import is_source_allowed, validate_target_input
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.b2b_scrape")
@@ -98,9 +100,24 @@ async def create_target(body: ScrapeTargetCreate) -> dict:
 
     from ..services.scraping.parsers import get_all_parsers
 
+    source = body.source.strip().lower()
     valid_sources = set(get_all_parsers().keys())
-    if body.source not in valid_sources:
+    if source not in valid_sources:
         raise HTTPException(status_code=400, detail=f"Invalid source. Must be one of: {valid_sources}")
+    if not is_source_allowed(source, settings.b2b_scrape.source_allowlist):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Source '{source}' is currently disabled by ATLAS_B2B_SCRAPE_SOURCE_ALLOWLIST",
+        )
+
+    try:
+        source, product_slug = validate_target_input(source, body.product_slug)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    vendor_name = body.vendor_name.strip()
+    product_name = body.product_name.strip() if body.product_name else None
+    product_category = body.product_category.strip() if body.product_category else None
 
     try:
         row = await pool.fetchrow(
@@ -112,15 +129,15 @@ async def create_target(body: ScrapeTargetCreate) -> dict:
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
             RETURNING id, source, vendor_name, product_slug, enabled, created_at
             """,
-            body.source, body.vendor_name, body.product_name, body.product_slug,
-            body.product_category, body.max_pages, body.enabled, body.priority,
+            source, vendor_name, product_name, product_slug,
+            product_category, body.max_pages, body.enabled, body.priority,
             body.scrape_interval_hours, json.dumps(body.metadata),
         )
     except Exception as exc:
         if "idx_b2b_scrape_targets_dedup" in str(exc):
             raise HTTPException(
                 status_code=409,
-                detail=f"Target already exists for {body.source}/{body.product_slug}",
+                detail=f"Target already exists for {source}/{product_slug}",
             )
         logger.error("Failed to create scrape target: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to create target")
@@ -214,6 +231,14 @@ async def trigger_scrape(target_id: UUID) -> dict:
     )
     if not row:
         raise HTTPException(status_code=404, detail="Target not found")
+    if not is_source_allowed(row["source"], settings.b2b_scrape.source_allowlist):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Source '{row['source']}' is currently disabled by "
+                "ATLAS_B2B_SCRAPE_SOURCE_ALLOWLIST"
+            ),
+        )
 
     # Import and run inline
     from ..services.scraping.client import get_scrape_client

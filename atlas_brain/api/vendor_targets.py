@@ -9,9 +9,10 @@ import logging
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from ..auth.dependencies import AuthUser, optional_auth
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.vendor_targets")
@@ -119,7 +120,10 @@ async def list_vendor_targets(
 
 
 @router.post("", status_code=201)
-async def create_vendor_target(body: VendorTargetCreate):
+async def create_vendor_target(
+    body: VendorTargetCreate,
+    user: AuthUser | None = Depends(optional_auth),
+):
     """Add a new vendor or challenger target."""
     pool = _pool_or_503()
 
@@ -148,6 +152,24 @@ async def create_vendor_target(body: VendorTargetCreate):
         body.status,
         body.notes,
     )
+
+    # Auto-sync to tracked_vendors so dashboard scoping works
+    if user:
+        vendors_to_track = [body.company_name]
+        if body.competitors_tracked:
+            vendors_to_track.extend(body.competitors_tracked)
+        for vname in vendors_to_track:
+            await pool.execute(
+                """
+                INSERT INTO tracked_vendors (account_id, vendor_name, track_mode)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (account_id, vendor_name) DO NOTHING
+                """,
+                user.account_id,
+                vname,
+                "competitor" if vname != body.company_name else "own",
+            )
+        logger.info("Synced %d vendors to tracked_vendors for account %s", len(vendors_to_track), user.account_id)
 
     return dict(row)
 
