@@ -15,6 +15,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from ..services.vendor_registry import resolve_vendor_name
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.b2b_reviews")
@@ -97,12 +98,15 @@ async def import_b2b_reviews(reviews: list[B2BReviewInput]) -> dict:
             r.reviewer_name, r.reviewed_at,
         )
 
+        # Resolve to canonical vendor name (dedup key uses raw value above)
+        canonical_vendor = await resolve_vendor_name(r.vendor_name)
+
         rows.append((
             dedup_key,
             r.source,
             r.source_url,
             r.source_review_id,
-            r.vendor_name,
+            canonical_vendor,
             r.product_name,
             r.product_category,
             r.rating,

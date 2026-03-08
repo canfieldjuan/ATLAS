@@ -20,7 +20,8 @@ from typing import Any
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
-from ...services.scraping.target_validation import parse_source_allowlist
+from ...services.scraping.sources import API_SOURCES, parse_source_allowlist
+from ...services.vendor_registry import resolve_vendor_name
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_scrape_intake")
 
@@ -166,7 +167,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     #     high concurrency — APIs handle it, rate limiter throttles per-domain
     #   - Web scrape sources (g2, capterra, trustradius, getapp, gartner, peerspot,
     #     trustpilot, quora, reddit): lower concurrency to avoid proxy overload
-    _API_SOURCES = {"youtube", "stackoverflow", "producthunt", "hackernews", "github", "rss"}
+    _API_SOURCES = API_SOURCES
     _WEB_CONCURRENCY = 4   # Concurrent web scrape targets
     _API_CONCURRENCY = 10  # Concurrent API targets
 
@@ -394,12 +395,15 @@ async def _insert_reviews(pool, reviews: list[dict], batch_id: str) -> int:
             r.get("reviewed_at"),
         )
 
+        # Resolve to canonical vendor name (dedup key uses raw value above)
+        canonical_vendor = await resolve_vendor_name(r["vendor_name"])
+
         rows.append((
             dedup_key,
             r["source"],
             r.get("source_url"),
             r.get("source_review_id"),
-            r["vendor_name"],
+            canonical_vendor,
             r.get("product_name"),
             r.get("product_category"),
             r.get("rating"),

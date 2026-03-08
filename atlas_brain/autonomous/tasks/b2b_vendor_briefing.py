@@ -18,11 +18,12 @@ import logging
 from datetime import date
 from typing import Any
 
-import httpx
-
 from ...config import settings
+from ...services.campaign_sender import get_campaign_sender
+from ...services.vendor_registry import resolve_vendor_name
 from ...storage.database import get_db_pool
 from ...templates.email.vendor_briefing import render_vendor_briefing_html
+from .campaign_suppression import is_suppressed
 
 logger = logging.getLogger("atlas.b2b.vendor_briefing")
 
@@ -308,11 +309,37 @@ async def send_vendor_briefing(
     briefing_html: str,
     briefing_data: dict,
 ) -> dict | None:
-    """Send a vendor briefing email via Resend and persist to DB."""
+    """Send a vendor briefing email via CampaignSender and persist to DB."""
     cfg = settings.campaign_sequence
     if not cfg.resend_api_key or not cfg.resend_from_email:
         logger.warning("Resend not configured -- cannot send briefing")
         return None
+
+    # Canonicalize vendor name for consistent DB storage
+    vendor_name = await resolve_vendor_name(vendor_name)
+
+    pool = get_db_pool()
+
+    # Suppression check
+    if pool.is_initialized:
+        suppressed = await is_suppressed(pool, email=to_email)
+        if suppressed:
+            logger.info("Suppressed briefing to %s (vendor=%s)", to_email, vendor_name)
+            try:
+                await pool.execute(
+                    """
+                    INSERT INTO b2b_vendor_briefings
+                        (vendor_name, recipient_email, subject, briefing_data, status)
+                    VALUES ($1, $2, $3, $4::jsonb, 'suppressed')
+                    """,
+                    vendor_name,
+                    to_email,
+                    f"Churn Intelligence Briefing: {vendor_name}",
+                    json.dumps(briefing_data, default=str),
+                )
+            except Exception as exc:
+                logger.warning("Failed to persist suppressed record: %s", exc)
+            return None
 
     sender_name = settings.b2b_churn.vendor_briefing_sender_name
     from_addr = f"{sender_name} <{cfg.resend_from_email}>"
@@ -322,28 +349,23 @@ async def send_vendor_briefing(
     status = "sent"
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(
-                "https://api.resend.com/emails",
-                headers={
-                    "Authorization": f"Bearer {cfg.resend_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "from": from_addr,
-                    "to": [to_email],
-                    "subject": subject,
-                    "html": briefing_html,
-                },
-            )
-            resp.raise_for_status()
-            resend_id = resp.json().get("id")
+        sender = get_campaign_sender()
+        result = await sender.send(
+            to=to_email,
+            from_email=from_addr,
+            subject=subject,
+            body=briefing_html,
+            tags=[
+                {"name": "type", "value": "vendor_briefing"},
+                {"name": "vendor", "value": vendor_name},
+            ],
+        )
+        resend_id = result.get("id")
     except Exception as exc:
         logger.warning("Failed to send briefing to %s: %s", to_email, exc)
         status = "failed"
 
     # Persist delivery record
-    pool = get_db_pool()
     if pool.is_initialized:
         try:
             await pool.execute(
@@ -369,15 +391,120 @@ async def send_vendor_briefing(
 
 
 # ---------------------------------------------------------------------------
+# Recipient resolution
+# ---------------------------------------------------------------------------
+
+async def resolve_briefing_recipient(
+    pool: Any, vendor_name: str
+) -> dict[str, str] | None:
+    """Resolve the best contact for a vendor briefing.
+
+    Lookup priority:
+    1. vendor_targets (active vendor_retention with contact_email)
+    2. prospects (active, verified/probabilistic email, best seniority)
+    """
+    # Priority 1: vendor_targets
+    row = await pool.fetchrow(
+        """
+        SELECT contact_email AS email, contact_name AS name,
+               contact_role AS role
+        FROM vendor_targets
+        WHERE LOWER(company_name) = LOWER($1)
+          AND target_mode = 'vendor_retention'
+          AND status = 'active'
+          AND contact_email IS NOT NULL
+        LIMIT 1
+        """,
+        vendor_name,
+    )
+    if row:
+        return {
+            "email": row["email"],
+            "name": row["name"] or "",
+            "role": row["role"] or "",
+            "source": "vendor_target",
+        }
+
+    # Priority 2: prospects
+    row = await pool.fetchrow(
+        """
+        SELECT email, first_name || ' ' || last_name AS name,
+               title AS role
+        FROM prospects
+        WHERE LOWER(company_name) = LOWER($1)
+          AND status = 'active'
+          AND email IS NOT NULL
+          AND email_status IN ('verified', 'probabilistic')
+        ORDER BY CASE seniority
+            WHEN 'c_suite' THEN 1
+            WHEN 'owner' THEN 2
+            WHEN 'founder' THEN 2
+            WHEN 'vp' THEN 3
+            WHEN 'head' THEN 4
+            WHEN 'director' THEN 4
+            WHEN 'manager' THEN 5
+            WHEN 'senior' THEN 6
+            ELSE 7
+        END ASC
+        LIMIT 1
+        """,
+        vendor_name,
+    )
+    if row:
+        return {
+            "email": row["email"],
+            "name": row["name"] or "",
+            "role": row["role"] or "",
+            "source": "prospect",
+        }
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Cooldown check
+# ---------------------------------------------------------------------------
+
+async def _check_cooldown(
+    pool: Any, vendor_name: str, cooldown_days: int
+) -> bool:
+    """Return True if a recent briefing exists (should skip)."""
+    row = await pool.fetchval(
+        """
+        SELECT EXISTS(
+            SELECT 1 FROM b2b_vendor_briefings
+            WHERE LOWER(vendor_name) = LOWER($1)
+              AND status NOT IN ('failed', 'suppressed')
+              AND created_at > NOW() - make_interval(days => $2)
+        )
+        """,
+        vendor_name,
+        cooldown_days,
+    )
+    return bool(row)
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
 async def generate_and_send_briefing(
     *,
     vendor_name: str,
-    to_email: str,
+    to_email: str | None = None,
 ) -> dict[str, Any]:
     """Build, render, send, and return summary for a vendor briefing."""
+    pool = get_db_pool()
+
+    # Auto-resolve recipient if not provided
+    if to_email is None:
+        if not pool.is_initialized:
+            return {"error": "Database not ready -- cannot resolve recipient"}
+        contact = await resolve_briefing_recipient(pool, vendor_name)
+        if not contact:
+            return {"error": f"No contact found for vendor: {vendor_name}"}
+        to_email = contact["email"]
+
     briefing_data = await build_vendor_briefing(vendor_name)
     if not briefing_data:
         return {"error": f"No data found for vendor: {vendor_name}"}
@@ -392,7 +519,7 @@ async def generate_and_send_briefing(
     )
 
     if result is None:
-        return {"error": "Failed to send briefing email (check Resend config)"}
+        return {"error": "Failed to send briefing email (check Resend config or suppression)"}
 
     return {
         "vendor_name": vendor_name,
@@ -407,4 +534,94 @@ async def generate_and_send_briefing(
             "has_named_accounts": bool(briefing_data.get("named_accounts")),
             "has_feature_gaps": bool(briefing_data.get("top_feature_gaps")),
         },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Batch sender
+# ---------------------------------------------------------------------------
+
+async def send_batch_briefings() -> dict[str, Any]:
+    """Send briefings to all eligible vendor targets with contacts."""
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        return {"error": "Database not ready"}
+
+    cfg = settings.b2b_churn
+    max_batch = cfg.vendor_briefing_max_per_batch
+    cooldown_days = cfg.vendor_briefing_cooldown_days
+
+    # Fetch eligible vendor targets
+    rows = await pool.fetch(
+        """
+        SELECT company_name, contact_email, contact_name, contact_role
+        FROM vendor_targets
+        WHERE target_mode = 'vendor_retention'
+          AND status = 'active'
+          AND contact_email IS NOT NULL
+        ORDER BY company_name
+        LIMIT $1
+        """,
+        max_batch,
+    )
+
+    sent = 0
+    skipped_cooldown = 0
+    skipped_suppressed = 0
+    skipped_no_data = 0
+    failed = 0
+    details: list[dict] = []
+
+    for row in rows:
+        vendor_name = row["company_name"]
+        to_email = row["contact_email"]
+
+        # Cooldown check
+        if await _check_cooldown(pool, vendor_name, cooldown_days):
+            skipped_cooldown += 1
+            details.append({"vendor": vendor_name, "status": "skipped_cooldown"})
+            continue
+
+        # Suppression check
+        suppressed = await is_suppressed(pool, email=to_email)
+        if suppressed:
+            skipped_suppressed += 1
+            details.append({"vendor": vendor_name, "status": "skipped_suppressed"})
+            continue
+
+        # Build briefing data
+        briefing_data = await build_vendor_briefing(vendor_name)
+        if not briefing_data:
+            skipped_no_data += 1
+            details.append({"vendor": vendor_name, "status": "skipped_no_data"})
+            continue
+
+        # Render and send
+        briefing_html = render_vendor_briefing_html(briefing_data)
+        result = await send_vendor_briefing(
+            to_email=to_email,
+            vendor_name=vendor_name,
+            briefing_html=briefing_html,
+            briefing_data=briefing_data,
+        )
+
+        if result is None:
+            failed += 1
+            details.append({"vendor": vendor_name, "status": "failed"})
+        else:
+            sent += 1
+            details.append({
+                "vendor": vendor_name,
+                "status": "sent",
+                "to": to_email,
+                "resend_id": result.get("resend_id"),
+            })
+
+    return {
+        "sent": sent,
+        "skipped_cooldown": skipped_cooldown,
+        "skipped_suppressed": skipped_suppressed,
+        "skipped_no_data": skipped_no_data,
+        "failed": failed,
+        "details": details,
     }

@@ -485,6 +485,14 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to start MCP client: %s", e)
 
+    # Warm vendor registry cache for B2B vendor name resolution
+    try:
+        from .services.vendor_registry import _ensure_cache as _warm_vendor_cache
+        await _warm_vendor_cache()
+        logger.info("Vendor registry cache warmed")
+    except Exception as e:
+        logger.debug("Vendor registry cache warm skipped: %s", e)
+
     # Start ASR server if voice is enabled, auto-start is on, and ASR isn't already running
     asr_process = None
     if settings.voice.enabled and settings.voice.auto_start_asr and settings.voice.asr_url:

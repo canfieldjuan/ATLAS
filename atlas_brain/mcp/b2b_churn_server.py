@@ -24,6 +24,9 @@ Tools:
     manage_scrape_target     -- update target settings (enabled, priority, pages, interval, metadata)
     delete_scrape_target     -- remove a scrape target and its logs
     list_affiliate_partners  -- list affiliate partner configurations
+    list_vendors_registry    -- list all canonical vendors and their aliases
+    add_vendor_to_registry   -- add a new vendor to the canonical registry
+    add_vendor_alias         -- add an alias to an existing vendor
 
 Run:
     python -m atlas_brain.mcp.b2b_churn_server          # stdio
@@ -57,12 +60,9 @@ VALID_REPORT_TYPES = (
     "challenger_intel",
 )
 
-VALID_SOURCES = (
-    "g2", "capterra", "trustradius", "reddit",
-    "gartner", "getapp", "github", "hackernews",
-    "peerspot", "producthunt", "quora", "rss",
-    "stackoverflow", "trustpilot", "twitter", "youtube",
-)
+from atlas_brain.services.scraping.sources import ALL_SOURCES
+
+VALID_SOURCES = ALL_SOURCES
 
 
 def _is_uuid(value: str) -> bool:
@@ -877,7 +877,7 @@ async def list_scrape_targets(
     """
     limit = max(1, min(limit, 100))
     if source and source not in VALID_SOURCES:
-        return json.dumps({"error": f"source must be one of {VALID_SOURCES}", "targets": [], "count": 0})
+        return json.dumps({"error": f"source must be one of {sorted(s.value for s in VALID_SOURCES)}", "targets": [], "count": 0})
 
     try:
         from ..storage.database import get_db_pool
@@ -1259,7 +1259,7 @@ async def add_scrape_target(
     """
     source = source.strip().lower()
     if source not in VALID_SOURCES:
-        return json.dumps({"success": False, "error": f"source must be one of {VALID_SOURCES}"})
+        return json.dumps({"success": False, "error": f"source must be one of {sorted(s.value for s in VALID_SOURCES)}"})
     if not vendor_name or not vendor_name.strip():
         return json.dumps({"success": False, "error": "vendor_name is required"})
     if not product_slug or not product_slug.strip():
@@ -1281,6 +1281,10 @@ async def add_scrape_target(
     max_pages = max(1, min(max_pages, 100))
     priority = max(0, min(priority, 100))
     scrape_interval_hours = max(1, min(scrape_interval_hours, 8760))
+
+    # Resolve to canonical vendor name
+    from ..services.vendor_registry import resolve_vendor_name
+    vendor_name = await resolve_vendor_name(vendor_name)
 
     meta = {}
     if metadata_json:
@@ -1571,6 +1575,123 @@ async def list_affiliate_partners(
     except Exception:
         logger.exception("list_affiliate_partners error")
         return json.dumps({"error": "Internal error", "partners": [], "count": 0})
+
+
+# ---------------------------------------------------------------------------
+# Tool: list_vendors_registry
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def list_vendors_registry(limit: int = 100) -> str:
+    """
+    List all canonical vendors in the vendor registry with their aliases.
+
+    limit: Maximum results (default 100, cap 500)
+    """
+    limit = max(1, min(limit, 500))
+    try:
+        from ..services.vendor_registry import list_vendors
+
+        vendors = await list_vendors()
+        result = [
+            {
+                "id": str(v["id"]),
+                "canonical_name": v["canonical_name"],
+                "aliases": list(v["aliases"]) if isinstance(v["aliases"], list) else [],
+                "created_at": v["created_at"],
+                "updated_at": v["updated_at"],
+            }
+            for v in vendors[:limit]
+        ]
+        return json.dumps({"vendors": result, "count": len(result)}, default=str)
+    except Exception:
+        logger.exception("list_vendors_registry error")
+        return json.dumps({"error": "Internal error", "vendors": [], "count": 0})
+
+
+# ---------------------------------------------------------------------------
+# Tool: add_vendor_to_registry
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def add_vendor_to_registry(
+    canonical_name: str,
+    aliases: Optional[str] = None,
+) -> str:
+    """
+    Add or update a vendor in the canonical vendor registry.
+
+    canonical_name: The official vendor name (e.g. "Salesforce")
+    aliases: Comma-separated lowercase aliases (e.g. "sf,sfdc,salesforce.com")
+    """
+    if not canonical_name or not canonical_name.strip():
+        return json.dumps({"success": False, "error": "canonical_name is required"})
+    try:
+        from ..services.vendor_registry import add_vendor
+
+        alias_list = []
+        if aliases:
+            alias_list = [a.strip() for a in aliases.split(",") if a.strip()]
+
+        row = await add_vendor(canonical_name.strip(), alias_list)
+        return json.dumps({
+            "success": True,
+            "vendor": {
+                "id": str(row["id"]),
+                "canonical_name": row["canonical_name"],
+                "aliases": list(row["aliases"]) if isinstance(row["aliases"], list) else [],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            },
+        }, default=str)
+    except Exception:
+        logger.exception("add_vendor_to_registry error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: add_vendor_alias
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def add_vendor_alias(
+    canonical_name: str,
+    alias: str,
+) -> str:
+    """
+    Add an alias to an existing vendor in the registry.
+
+    canonical_name: Existing canonical vendor name (e.g. "Salesforce")
+    alias: New alias to add (e.g. "salesforce.com")
+    """
+    if not canonical_name or not canonical_name.strip():
+        return json.dumps({"success": False, "error": "canonical_name is required"})
+    if not alias or not alias.strip():
+        return json.dumps({"success": False, "error": "alias is required"})
+    try:
+        from ..services.vendor_registry import add_alias
+
+        row = await add_alias(canonical_name.strip(), alias.strip())
+        if row is None:
+            return json.dumps({
+                "success": False,
+                "error": f"Vendor '{canonical_name}' not found in registry",
+            })
+        return json.dumps({
+            "success": True,
+            "vendor": {
+                "id": str(row["id"]),
+                "canonical_name": row["canonical_name"],
+                "aliases": list(row["aliases"]) if isinstance(row["aliases"], list) else [],
+                "updated_at": row["updated_at"],
+            },
+        }, default=str)
+    except Exception:
+        logger.exception("add_vendor_alias error")
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------

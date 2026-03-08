@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from ..config import settings
 from ..services.scraping.target_validation import is_source_allowed, validate_target_input
+from ..services.vendor_registry import resolve_vendor_name
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.b2b_scrape")
@@ -115,7 +116,7 @@ async def create_target(body: ScrapeTargetCreate) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    vendor_name = body.vendor_name.strip()
+    vendor_name = await resolve_vendor_name(body.vendor_name)
     product_name = body.product_name.strip() if body.product_name else None
     product_category = body.product_category.strip() if body.product_category else None
 

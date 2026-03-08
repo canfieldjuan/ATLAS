@@ -87,6 +87,7 @@ async def import_reviews(reviews: list[dict], dry_run: bool = False,
 
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from atlas_brain.storage.database import get_db_pool
+    from atlas_brain.services.vendor_registry import resolve_vendor_name
 
     pool = get_db_pool()
     await pool.initialize()
@@ -116,6 +117,9 @@ async def import_reviews(reviews: list[dict], dry_run: bool = False,
                 review.get("reviewed_at"),
             )
 
+            # Resolve to canonical vendor name (dedup key uses raw value above)
+            canonical_vendor = await resolve_vendor_name(vendor_name)
+
             reviewed_at = review.get("reviewed_at")
             if reviewed_at and isinstance(reviewed_at, str):
                 try:
@@ -132,7 +136,7 @@ async def import_reviews(reviews: list[dict], dry_run: bool = False,
                 source,
                 review.get("source_url"),
                 review.get("source_review_id"),
-                vendor_name,
+                canonical_vendor,
                 review.get("product_name"),
                 review.get("product_category"),
                 float(review["rating"]) if review.get("rating") is not None else None,

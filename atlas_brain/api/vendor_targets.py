@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ..auth.dependencies import AuthUser, optional_auth
+from ..services.vendor_registry import resolve_vendor_name
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.vendor_targets")
@@ -159,6 +160,7 @@ async def create_vendor_target(
         if body.competitors_tracked:
             vendors_to_track.extend(body.competitors_tracked)
         for vname in vendors_to_track:
+            canonical_vname = await resolve_vendor_name(vname)
             await pool.execute(
                 """
                 INSERT INTO tracked_vendors (account_id, vendor_name, track_mode)
@@ -166,7 +168,7 @@ async def create_vendor_target(
                 ON CONFLICT (account_id, vendor_name) DO NOTHING
                 """,
                 user.account_id,
-                vname,
+                canonical_vname,
                 "competitor" if vname != body.company_name else "own",
             )
         logger.info("Synced %d vendors to tracked_vendors for account %s", len(vendors_to_track), user.account_id)

@@ -17,6 +17,7 @@ from ..autonomous.tasks.b2b_campaign_generation import (
     generate_campaigns as _generate_campaigns,
 )
 from ..config import settings
+from ..services.vendor_registry import resolve_vendor_name
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.b2b_tenant")
@@ -147,6 +148,7 @@ async def add_tracked_vendor(req: AddVendorRequest, user: AuthUser = Depends(req
                 detail="Vendor limit reached. Upgrade your plan for more.",
             )
 
+        canonical_vendor = await resolve_vendor_name(req.vendor_name)
         row = await conn.fetchrow(
             """
             INSERT INTO tracked_vendors (account_id, vendor_name, track_mode, label)
@@ -155,7 +157,7 @@ async def add_tracked_vendor(req: AddVendorRequest, user: AuthUser = Depends(req
             RETURNING id, vendor_name, track_mode, label, added_at
             """,
             acct,
-            req.vendor_name.strip(),
+            canonical_vendor,
             req.track_mode,
             req.label.strip() if req.label else None,
         )
