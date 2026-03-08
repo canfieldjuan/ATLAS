@@ -1,5 +1,6 @@
 import freshsalesDeepDive202603 from './freshsales-deep-dive-2026-03'
 import happyfoxDeepDive202603 from './happyfox-deep-dive-2026-03'
+import migrationFromSentinelone202603 from './migration-from-sentinelone-2026-03'
 type ChartValue = string | number | null | undefined
 type ChartDatum = Record<string, ChartValue>
 
