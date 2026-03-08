@@ -270,16 +270,18 @@ def _build_validated_executive_summary(
     ]
 
     if top_companies:
-        lines.append("Top accounts: " + "; ".join(top_companies) + ".")
+        lines.append("Strongest account-level risk signals: " + "; ".join(top_companies) + ".")
     if top_pains or top_alternatives:
-        pain_text = ", ".join(top_pains[:3]) if top_pains else "mixed issues"
-        alt_text = ", ".join(top_alternatives[:4]) if top_alternatives else "multiple alternatives"
-        lines.append(f"Primary churn drivers are {pain_text}; leading alternatives under evaluation include {alt_text}.")
+        pain_text = _join_summary_terms(top_pains[:3]) if top_pains else "mixed issues"
+        alt_text = _join_summary_terms(top_alternatives[:4]) if top_alternatives else "multiple alternatives"
+        lines.append(
+            f"The dominant churn drivers are {pain_text}. The most visible active alternatives are {alt_text}."
+        )
     if quote:
-        lines.append(f"Representative evidence: \"{quote}\".")
+        lines.append(f"Representative evidence: \"{quote}\"")
 
     lines.append(
-        "Confidence is highest for named account signals and lower for broad market-level conclusions derived from mixed-source aggregates."
+        "Confidence is highest for named account signals; broader market-level conclusions should be treated as directional because source mix still varies across vendors."
     )
     return " ".join(lines)
 
@@ -296,6 +298,18 @@ def _extract_alternative_names(alternatives: list[Any]) -> list[str]:
         if label and label not in names:
             names.append(label)
     return names
+
+
+def _join_summary_terms(items: list[str]) -> str:
+    """Join short label lists into readable executive-summary phrasing."""
+    cleaned = [str(item).strip() for item in items if str(item).strip()]
+    if not cleaned:
+        return ""
+    if len(cleaned) == 1:
+        return cleaned[0]
+    if len(cleaned) == 2:
+        return f"{cleaned[0]} and {cleaned[1]}"
+    return ", ".join(cleaned[:-1]) + f", and {cleaned[-1]}"
 
 
 def _build_buyer_action(vendor: str, pain: str | None, alternatives: list[str]) -> str:
