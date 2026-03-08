@@ -113,7 +113,7 @@ async def _enrich_rows(rows, cfg, pool) -> dict[str, Any]:
     enriched = 0
     failed = 0
 
-    sem = asyncio.Semaphore(100)
+    sem = asyncio.Semaphore(30)
 
     async def _bounded_enrich(row):
         async with sem:
@@ -167,37 +167,65 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     max_batch = min(cfg.enrichment_max_per_batch, 500)
     max_attempts = cfg.enrichment_max_attempts
 
-    rows = await pool.fetch(
-        """
-        WITH batch AS (
-            SELECT id
-            FROM b2b_reviews
-            WHERE enrichment_status = 'pending'
-              AND enrichment_attempts < $1
-            ORDER BY imported_at ASC
-            LIMIT $2
-            FOR UPDATE SKIP LOCKED
-        )
-        UPDATE b2b_reviews r
-        SET enrichment_status = 'enriching'
-        FROM batch
-        WHERE r.id = batch.id
-        RETURNING r.id, r.vendor_name, r.product_name, r.product_category,
-                  r.source, r.raw_metadata,
-                  r.rating, r.rating_max, r.summary, r.review_text, r.pros, r.cons,
-                  r.reviewer_title, r.reviewer_company, r.company_size_raw,
-                  r.reviewer_industry, r.enrichment_attempts
-        """,
-        max_attempts,
-        max_batch,
-    )
+    total_enriched = 0
+    total_failed = 0
+    total_no_signal = 0
+    rounds = 0
 
-    if not rows:
+    while True:
+        rows = await pool.fetch(
+            """
+            WITH batch AS (
+                SELECT id
+                FROM b2b_reviews
+                WHERE enrichment_status = 'pending'
+                  AND enrichment_attempts < $1
+                ORDER BY imported_at ASC
+                LIMIT $2
+                FOR UPDATE SKIP LOCKED
+            )
+            UPDATE b2b_reviews r
+            SET enrichment_status = 'enriching'
+            FROM batch
+            WHERE r.id = batch.id
+            RETURNING r.id, r.vendor_name, r.product_name, r.product_category,
+                      r.source, r.raw_metadata,
+                      r.rating, r.rating_max, r.summary, r.review_text, r.pros, r.cons,
+                      r.reviewer_title, r.reviewer_company, r.company_size_raw,
+                      r.reviewer_industry, r.enrichment_attempts
+            """,
+            max_attempts,
+            max_batch,
+        )
+
+        if not rows:
+            break
+
+        result = await _enrich_rows(rows, cfg, pool)
+        total_enriched += result.get("enriched", 0)
+        batch_failed = result.get("failed", 0)
+        total_failed += batch_failed
+        total_no_signal += result.get("no_signal", 0)
+        rounds += 1
+
+        # If most of the batch failed, vLLM is likely overwhelmed — stop the loop
+        if batch_failed > len(rows) * 0.5:
+            logger.warning("B2B enrichment: >50%% failures in batch (%d/%d), stopping loop",
+                           batch_failed, len(rows))
+            break
+
+        await asyncio.sleep(2)  # breathing room between batches
+
+    if rounds == 0:
         return {"_skip_synthesis": "No B2B reviews to enrich"}
 
-    result = await _enrich_rows(rows, cfg, pool)
-    result["_skip_synthesis"] = "B2B enrichment complete"
-    return result
+    return {
+        "enriched": total_enriched,
+        "failed": total_failed,
+        "no_signal": total_no_signal,
+        "rounds": rounds,
+        "_skip_synthesis": "B2B enrichment complete",
+    }
 
 
 _MIN_REVIEW_TEXT_LENGTH = 80  # Skip LLM calls for reviews shorter than this
