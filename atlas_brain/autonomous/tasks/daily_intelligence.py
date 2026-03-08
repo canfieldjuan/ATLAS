@@ -113,6 +113,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     analysis = call_llm_with_skill(
         "digest/daily_intelligence", payload,
         max_tokens=cfg.intelligence_max_tokens, temperature=cfg.intelligence_temperature,
+        workload="synthesis",
     )
     if not analysis:
         return {"_skip_synthesis": "LLM analysis failed"}

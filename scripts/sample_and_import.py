@@ -35,6 +35,8 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+from atlas_brain.pipelines.comparisons import sanitize_metadata_brand
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
@@ -116,13 +118,14 @@ def extract_brand(details) -> str:
             details = json.loads(details)
         except (json.JSONDecodeError, TypeError):
             return ""
-    return (
+    brand = (
         details.get("Brand", "")
         or details.get("brand", "")
         or details.get("Manufacturer", "")
         or details.get("manufacturer", "")
         or ""
-    ).strip()
+    )
+    return sanitize_metadata_brand(brand)
 
 
 def normalize_brand(brand: str) -> str:

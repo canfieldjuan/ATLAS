@@ -14,6 +14,8 @@ import sys
 import time
 from pathlib import Path
 
+from atlas_brain.pipelines.comparisons import sanitize_metadata_brand
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("match_metadata_extra")
 
@@ -44,13 +46,14 @@ ON CONFLICT (asin) DO NOTHING
 def extract_brand(details) -> str:
     if not details or not isinstance(details, dict):
         return ""
-    return (
+    brand = (
         details.get("Brand", "")
         or details.get("brand", "")
         or details.get("Manufacturer", "")
         or details.get("manufacturer", "")
         or ""
     )
+    return sanitize_metadata_brand(brand)
 
 
 def safe_float(val):
@@ -80,7 +83,7 @@ def parse_2023_item(item: dict, asin: str) -> tuple:
         except (json.JSONDecodeError, TypeError):
             details = {}
 
-    brand = extract_brand(details) or item.get("brand", "")
+    brand = extract_brand(details) or sanitize_metadata_brand(item.get("brand", ""))
     features = item.get("features") or []
     description = item.get("description") or []
     categories = item.get("categories") or []
@@ -110,7 +113,7 @@ def parse_2018_item(item: dict, asin: str) -> tuple:
     - 'category' list instead of 'categories'
     - 'feature' list instead of 'features'
     """
-    brand = item.get("brand", "")
+    brand = sanitize_metadata_brand(item.get("brand", ""))
     price_str = item.get("price", "")
     price = None
     if isinstance(price_str, str):

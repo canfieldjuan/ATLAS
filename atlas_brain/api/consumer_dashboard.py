@@ -1218,7 +1218,12 @@ async def get_brand_detail(request: Request, brand_name: str, user: AuthUser = D
         bname, *t_extra,
     )
 
-    from ..pipelines.comparisons import ADJACENCY_DIRECTIONS, load_known_brands, normalize_brand
+    from ..pipelines.comparisons import (
+        ADJACENCY_DIRECTIONS,
+        load_known_brands,
+        normalize_brand,
+        normalize_canonical_brand,
+    )
 
     known_brands = await load_known_brands(pool)
 
@@ -1747,7 +1752,9 @@ async def get_competitive_flows(
                     other = normalize_brand(raw_other, known_brands)
                     if not other:
                         continue
-                    reviewed_norm = normalize_brand(reviewed_brand, known_brands) or reviewed_brand
+                    reviewed_norm = normalize_canonical_brand(reviewed_brand, known_brands)
+                    if not reviewed_norm:
+                        continue
                     # Skip self-references
                     if other.lower() == reviewed_norm.lower():
                         continue
@@ -1766,7 +1773,9 @@ async def get_competitive_flows(
                     other = normalize_brand(raw_other, known_brands)
                     if not other:
                         continue
-                    reviewed_norm = normalize_brand(reviewed_brand, known_brands) or reviewed_brand
+                    reviewed_norm = normalize_canonical_brand(reviewed_brand, known_brands)
+                    if not reviewed_norm:
+                        continue
                     if other.lower() == reviewed_norm.lower():
                         continue
                     _add_flow(reviewed_norm, other, "considered", row["rating"])

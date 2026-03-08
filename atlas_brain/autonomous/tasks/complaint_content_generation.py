@@ -50,7 +50,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     from ...pipelines.llm import get_pipeline_llm
 
-    llm = get_pipeline_llm(prefer_cloud=True, try_openrouter=True, auto_activate_ollama=False)
+    llm = get_pipeline_llm(workload="synthesis", try_openrouter=True, auto_activate_ollama=False)
     if llm is None:
         # Last resort: try active LLM
         from ...services import llm_registry

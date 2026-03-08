@@ -90,7 +90,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     from ...pipelines.notify import send_pipeline_notification
 
     llm = get_pipeline_llm(
-        prefer_cloud=True,
+        workload="synthesis",
         try_openrouter=True,
         auto_activate_ollama=False,
         openrouter_model=cfg.blog_post_openrouter_model,

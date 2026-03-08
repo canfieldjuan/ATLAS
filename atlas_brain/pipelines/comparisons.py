@@ -9,8 +9,11 @@ Used by: subcategory_intelligence, amazon_seller_campaign_generation,
 competitive_intelligence, blog_post_generation, consumer_dashboard.
 """
 
+import re
 import logging
 from typing import Any
+
+from ..config import settings
 
 logger = logging.getLogger("atlas.pipelines.comparisons")
 
@@ -33,28 +36,120 @@ COMPETITOR_NOISE = {
 }
 
 
+def _comparison_cfg():
+    return settings.comparison_normalization
+
+
+def _parse_csv_config(raw: str) -> list[str]:
+    return [item.strip().lower() for item in raw.split(",") if item.strip()]
+
+
+def _contains_suspicious_term(value: str, terms: list[str]) -> bool:
+    for term in terms:
+        if not term:
+            continue
+        if " " in term:
+            if term in value:
+                return True
+            continue
+        if len(term) >= 4 and term in value:
+            return True
+        pattern = rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])"
+        if re.search(pattern, value):
+            return True
+    return False
+
+
+def is_trusted_known_brand(raw: str, product_count: int | None = None) -> bool:
+    """Return True when a canonical brand value is safe to trust."""
+    cleaned = " ".join(raw.strip().split())
+    if not cleaned:
+        return False
+
+    lowered = cleaned.lower()
+    cfg = _comparison_cfg()
+    invalid_known_brands = _parse_csv_config(cfg.invalid_known_brands)
+    suspicious_singleton_terms = _parse_csv_config(cfg.suspicious_singleton_terms)
+
+    if lowered in COMPETITOR_NOISE:
+        return False
+    if lowered in invalid_known_brands:
+        return False
+    if cleaned.isdigit():
+        return False
+    if not any(ch.isalpha() for ch in cleaned):
+        return False
+    if len(cleaned) > cfg.known_brand_max_length:
+        return False
+    if len(cleaned.split()) > cfg.known_brand_max_words:
+        return False
+
+    if product_count is not None and product_count <= cfg.suspicious_singleton_max_products:
+        if any(ch in cleaned for ch in cfg.suspicious_singleton_chars):
+            return False
+        if any(ch.isdigit() for ch in cleaned) and " " in cleaned:
+            return False
+        if _contains_suspicious_term(lowered, suspicious_singleton_terms):
+            return False
+
+    return True
+
+
 async def load_known_brands(pool) -> dict[str, str]:
     """Fetch known brands from product_metadata. Returns {lowercase: original_casing}."""
     rows = await pool.fetch(
-        "SELECT DISTINCT brand FROM product_metadata "
-        "WHERE brand IS NOT NULL AND brand != ''"
+        "SELECT brand, COUNT(*) AS product_count FROM product_metadata "
+        "WHERE brand IS NOT NULL AND brand != '' GROUP BY brand"
     )
     return {
         r["brand"].lower(): r["brand"]
         for r in rows
-        if r["brand"].lower() not in COMPETITOR_NOISE
+        if is_trusted_known_brand(r["brand"], r["product_count"])
     }
+
+
+def normalize_canonical_brand(raw: str, known_brands: dict[str, str]) -> str | None:
+    """Normalize a trusted canonical brand from product_metadata."""
+    cleaned = " ".join(raw.strip().split())
+    if not cleaned:
+        return None
+
+    lowered = cleaned.lower()
+    if lowered in known_brands:
+        return known_brands[lowered]
+
+    words = cleaned.split()
+    for n in range(min(len(words), 4), 0, -1):
+        prefix = " ".join(words[:n]).lower()
+        if prefix in known_brands:
+            return known_brands[prefix]
+
+    return None
+
+
+def sanitize_metadata_brand(raw: str) -> str:
+    """Sanitize a metadata-derived canonical brand before DB insertion."""
+    cleaned = " ".join(raw.strip().split())
+    if not cleaned:
+        return ""
+    if not is_trusted_known_brand(cleaned):
+        return ""
+    return cleaned
 
 
 def normalize_brand(raw: str, known_brands: dict[str, str]) -> str | None:
     """Normalize a raw product/brand name. Returns None if it should be filtered."""
-    raw = raw.strip()
+    raw = " ".join(raw.strip().split())
     if not raw:
         return None
 
     lowered = raw.lower()
+    cfg = _comparison_cfg()
+    invalid_known_brands = _parse_csv_config(cfg.invalid_known_brands)
 
     if lowered in COMPETITOR_NOISE:
+        return None
+    if lowered in invalid_known_brands:
         return None
     if raw.isdigit():
         return None
@@ -108,7 +203,9 @@ def normalize_competitive_flows(
             continue
 
         # Normalize the reviewed brand too
-        normalized_reviewed = normalize_brand(reviewed_brand, known_brands) if reviewed_brand else None
+        normalized_reviewed = normalize_canonical_brand(reviewed_brand, known_brands) if reviewed_brand else None
+        if not normalized_reviewed and reviewed_brand and not known_brands:
+            normalized_reviewed = normalize_brand(reviewed_brand, known_brands)
         if not normalized_reviewed:
             continue
 

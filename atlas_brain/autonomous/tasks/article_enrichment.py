@@ -243,7 +243,8 @@ async def _classify_soram(
     text = call_llm_with_skill(
         "digest/soram_classification", payload,
         max_tokens=512, temperature=0.1,
-        prefer_cloud=True, try_openrouter=False, auto_activate_ollama=True,
+        workload="triage",
+        try_openrouter=False, auto_activate_ollama=True,
     )
     if not text:
         return None

@@ -27,6 +27,8 @@ from pathlib import Path
 import pyarrow.parquet as pq
 from huggingface_hub import hf_hub_download
 
+from atlas_brain.pipelines.comparisons import sanitize_metadata_brand
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("match_product_metadata")
 
@@ -83,13 +85,14 @@ def extract_brand(details) -> str:
             return ""
     if not isinstance(details, dict):
         return ""
-    return (
+    brand = (
         details.get("Brand", "")
         or details.get("brand", "")
         or details.get("Manufacturer", "")
         or details.get("manufacturer", "")
         or ""
     )
+    return sanitize_metadata_brand(brand)
 
 
 def download_shard(shard_idx: int, shard_pattern: str) -> Path:

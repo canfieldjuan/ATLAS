@@ -110,6 +110,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 call_llm_with_skill,
                 "digest/complaint_analysis", payload,
                 max_tokens=cfg.complaint_analysis_max_tokens, temperature=0.4,
+                workload="synthesis",
                 response_format={"type": "json_object"},
             ),
             timeout=300,

@@ -420,7 +420,7 @@ async def generate_post(
     # Get LLM
     from ..pipelines.llm import get_pipeline_llm
     llm = get_pipeline_llm(
-        prefer_cloud=True,
+        workload="synthesis",
         try_openrouter=True,
         auto_activate_ollama=False,
         openrouter_model=cfg.blog_post_openrouter_model,

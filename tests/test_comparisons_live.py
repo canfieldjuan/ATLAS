@@ -16,10 +16,14 @@ from atlas_brain.pipelines.comparisons import (
     ADJACENCY_DIRECTIONS,
     COMPETITOR_NOISE,
     fetch_competitive_flows,
+    is_trusted_known_brand,
     load_known_brands,
     normalize_brand,
+    normalize_canonical_brand,
     normalize_competitive_flows,
+    sanitize_metadata_brand,
 )
+from atlas_brain.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +47,19 @@ async def db_pool():
 
 
 class TestNormalizeBrand:
+    @pytest.fixture(autouse=True)
+    def _reset_comparison_settings(self):
+        cfg = settings.comparison_normalization
+        original_invalid = cfg.invalid_known_brands
+        original_terms = cfg.suspicious_singleton_terms
+        original_chars = cfg.suspicious_singleton_chars
+        original_max_products = cfg.suspicious_singleton_max_products
+        yield
+        cfg.invalid_known_brands = original_invalid
+        cfg.suspicious_singleton_terms = original_terms
+        cfg.suspicious_singleton_chars = original_chars
+        cfg.suspicious_singleton_max_products = original_max_products
+
     def test_noise_filtered(self):
         assert normalize_brand("amazon", {}) is None
         assert normalize_brand("charger", {}) is None
@@ -68,6 +85,33 @@ class TestNormalizeBrand:
 
     def test_digit_filtered(self):
         assert normalize_brand("123", {}) is None
+
+    def test_invalid_known_brand_filtered(self):
+        settings.comparison_normalization.invalid_known_brands = "ipad,magsafe"
+        assert normalize_brand("iPad", {}) is None
+        assert normalize_brand("MagSafe", {}) is None
+
+    def test_sanitize_metadata_brand_filters_invalid_exact_values(self):
+        settings.comparison_normalization.invalid_known_brands = "ipad,magsafe,mx master 2s,blade grinder"
+        assert sanitize_metadata_brand("IPAD") == ""
+        assert sanitize_metadata_brand("MagSafe") == ""
+        assert sanitize_metadata_brand("MX Master 2S") == ""
+        assert sanitize_metadata_brand("Blade Grinder") == ""
+
+    def test_sanitize_metadata_brand_keeps_legit_brand(self):
+        assert sanitize_metadata_brand("Hamilton Beach") == "Hamilton Beach"
+
+    def test_normalize_canonical_brand_requires_trusted_known_brand(self):
+        known = {"hamilton beach": "Hamilton Beach"}
+        assert normalize_canonical_brand("Hamilton Beach", known) == "Hamilton Beach"
+        assert normalize_canonical_brand("IPAD", known) is None
+
+    def test_trusted_known_brand_rejects_suspicious_singleton(self):
+        settings.comparison_normalization.invalid_known_brands = "ipad"
+        settings.comparison_normalization.suspicious_singleton_terms = "cloth"
+        assert is_trusted_known_brand("IPAD", 1) is False
+        assert is_trusted_known_brand("iPadCleaningCloth", 1) is False
+        assert is_trusted_known_brand("Case Logic", 20) is True
 
 
 class TestNormalizeCompetitiveFlows:
@@ -252,6 +296,24 @@ async def test_load_known_brands(db_pool):
         assert k == k.lower(), f"Key should be lowercase: {k}"
         assert v.strip() != "", f"Value should be non-empty: {v}"
         logger.info("  Known brand: %s -> %s", k, v)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_load_known_brands_excludes_live_dirty_brand_rows(db_pool):
+    """Dirty product_metadata brands should not become trusted canonical brands."""
+    raw_rows = await db_pool.fetch(
+        "SELECT DISTINCT lower(brand) AS brand_key FROM product_metadata "
+        "WHERE brand IS NOT NULL AND brand != '' "
+        "AND lower(brand) IN ('ipad', 'ipadcleaningcloth')"
+    )
+    if not raw_rows:
+        pytest.skip("No known dirty canonical brand rows in current DB")
+
+    known = await load_known_brands(db_pool)
+    dirty_keys = {row["brand_key"] for row in raw_rows}
+    for brand_key in dirty_keys:
+        assert brand_key not in known, f"Dirty canonical brand leaked into known_brands: {brand_key}"
 
 
 @pytest.mark.asyncio
