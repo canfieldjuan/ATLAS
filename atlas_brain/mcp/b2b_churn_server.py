@@ -39,6 +39,9 @@ from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
+from ..config import settings
+from ..services.scraping.target_validation import is_source_allowed, validate_target_input
+
 logger = logging.getLogger("atlas.mcp.b2b_churn")
 
 VALID_REPORT_TYPES = (
@@ -46,6 +49,10 @@ VALID_REPORT_TYPES = (
     "vendor_scorecard",
     "displacement_report",
     "category_overview",
+    "exploratory_overview",
+    "vendor_comparison",
+    "account_comparison",
+    "account_deep_dive",
     "vendor_retention",
     "challenger_intel",
 )
@@ -1250,12 +1257,26 @@ async def add_scrape_target(
         stackoverflow: '{"sites": "stackoverflow,softwarerecs", "min_score": 1}'
         rss: '{"feed_urls": ["https://..."], "keywords": ["migration","switching"]}'
     """
+    source = source.strip().lower()
     if source not in VALID_SOURCES:
         return json.dumps({"success": False, "error": f"source must be one of {VALID_SOURCES}"})
     if not vendor_name or not vendor_name.strip():
         return json.dumps({"success": False, "error": "vendor_name is required"})
     if not product_slug or not product_slug.strip():
         return json.dumps({"success": False, "error": "product_slug is required"})
+    if not is_source_allowed(source, settings.b2b_scrape.source_allowlist):
+        return json.dumps({
+            "success": False,
+            "error": (
+                f"Source '{source}' is currently disabled by "
+                "ATLAS_B2B_SCRAPE_SOURCE_ALLOWLIST"
+            ),
+        })
+
+    try:
+        source, product_slug = validate_target_input(source, product_slug)
+    except ValueError as exc:
+        return json.dumps({"success": False, "error": str(exc)})
 
     max_pages = max(1, min(max_pages, 100))
     priority = max(0, min(priority, 100))
@@ -1278,7 +1299,7 @@ async def add_scrape_target(
         # Check for duplicate
         existing = await pool.fetchrow(
             "SELECT id FROM b2b_scrape_targets WHERE source = $1 AND product_slug = $2",
-            source, product_slug.strip(),
+            source, product_slug,
         )
         if existing:
             return json.dumps({
@@ -1297,7 +1318,7 @@ async def add_scrape_target(
             source,
             vendor_name.strip(),
             product_name.strip() if product_name else None,
-            product_slug.strip(),
+            product_slug,
             product_category.strip() if product_category else None,
             max_pages,
             priority,

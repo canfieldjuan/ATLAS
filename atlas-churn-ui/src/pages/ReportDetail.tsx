@@ -105,7 +105,7 @@ function StatObject({ obj }: { obj: Record<string, unknown> }) {
 
 /** Known scalar metadata keys that should render inline, not in a card */
 const SCALAR_KEYS = new Set([
-  'vendor_name', 'challenger_name', 'report_date', 'window_days',
+  'vendor_name', 'challenger_name', 'primary_vendor', 'comparison_vendor', 'report_date', 'window_days',
   'signal_count', 'high_urgency_count', 'medium_urgency_count',
 ])
 
@@ -176,6 +176,9 @@ export default function ReportDetail() {
   if (!report) return <PageError error={new Error('Report not found')} />
 
   const badgeColor = REPORT_TYPE_COLORS[report.report_type] ?? 'bg-slate-500/20 text-slate-400'
+  const title = ['vendor_comparison', 'account_comparison'].includes(report.report_type) && report.vendor_filter && report.category_filter
+    ? `${report.vendor_filter} vs ${report.category_filter}`
+    : (report.vendor_filter ?? report.report_type.replace(/_/g, ' '))
 
   // Split intelligence_data into scalars (rendered as stat row) and rich fields
   const intel = report.intelligence_data ?? {}
@@ -206,7 +209,7 @@ export default function ReportDetail() {
           {report.report_type.replace(/_/g, ' ')}
         </span>
         <h1 className="text-2xl font-bold text-white">
-          {report.vendor_filter ?? report.report_type.replace(/_/g, ' ')}
+          {title}
         </h1>
         <p className="text-sm text-slate-400 mt-1">
           {report.report_date ?? report.created_at}

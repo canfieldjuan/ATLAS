@@ -86,6 +86,7 @@ export interface Report {
   report_type: string
   executive_summary: string | null
   vendor_filter: string | null
+  category_filter?: string | null
   status: string | null
   created_at: string | null
 }

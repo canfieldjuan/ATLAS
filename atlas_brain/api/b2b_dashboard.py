@@ -13,6 +13,7 @@ import uuid as _uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
 from ..auth.dependencies import AuthUser, optional_auth
@@ -23,6 +24,26 @@ logger = logging.getLogger("atlas.api.b2b_dashboard")
 EXPORT_ROW_LIMIT = 10_000
 
 router = APIRouter(prefix="/b2b/dashboard", tags=["b2b-dashboard"])
+
+
+class VendorComparisonRequest(BaseModel):
+    primary_vendor: str = Field(..., min_length=1, max_length=200)
+    comparison_vendor: str = Field(..., min_length=1, max_length=200)
+    window_days: int = Field(90, ge=1, le=3650)
+    persist: bool = True
+
+
+class AccountComparisonRequest(BaseModel):
+    primary_company: str = Field(..., min_length=1, max_length=200)
+    comparison_company: str = Field(..., min_length=1, max_length=200)
+    window_days: int = Field(90, ge=1, le=3650)
+    persist: bool = True
+
+
+class AccountDeepDiveRequest(BaseModel):
+    company_name: str = Field(..., min_length=1, max_length=200)
+    window_days: int = Field(90, ge=1, le=3650)
+    persist: bool = True
 
 
 def _safe_json(val):
@@ -413,9 +434,97 @@ VALID_REPORT_TYPES = (
     "vendor_scorecard",
     "displacement_report",
     "category_overview",
+    "exploratory_overview",
+    "vendor_comparison",
+    "account_comparison",
+    "account_deep_dive",
     "vendor_retention",
     "challenger_intel",
 )
+
+
+@router.post("/reports/compare")
+async def generate_comparison_report(
+    body: VendorComparisonRequest,
+    user: AuthUser | None = Depends(optional_auth),
+):
+    pool = _pool_or_503()
+    primary_vendor = body.primary_vendor.strip()
+    comparison_vendor = body.comparison_vendor.strip()
+    if not primary_vendor or not comparison_vendor:
+        raise HTTPException(status_code=400, detail="Both vendors are required")
+    if primary_vendor.lower() == comparison_vendor.lower():
+        raise HTTPException(status_code=400, detail="Choose two different vendors")
+    if user:
+        tracked = await pool.fetchval(
+            "SELECT 1 FROM tracked_vendors WHERE account_id = $1::uuid AND vendor_name ILIKE $2 LIMIT 1",
+            user.account_id,
+            primary_vendor,
+        )
+        if not tracked:
+            raise HTTPException(status_code=403, detail="Primary vendor must be in your tracked vendor list")
+    from ..autonomous.tasks.b2b_churn_intelligence import generate_vendor_comparison_report
+
+    report = await generate_vendor_comparison_report(
+        pool,
+        primary_vendor,
+        comparison_vendor,
+        window_days=body.window_days,
+        persist=body.persist,
+    )
+    if not report:
+        raise HTTPException(status_code=404, detail="Insufficient comparison data for the selected vendors")
+    return report
+
+
+@router.post("/reports/compare-companies")
+async def generate_account_comparison_report(
+    body: AccountComparisonRequest,
+    user: AuthUser | None = Depends(optional_auth),
+):
+    pool = _pool_or_503()
+    primary_company = body.primary_company.strip()
+    comparison_company = body.comparison_company.strip()
+    if not primary_company or not comparison_company:
+        raise HTTPException(status_code=400, detail="Both companies are required")
+    if primary_company.lower() == comparison_company.lower():
+        raise HTTPException(status_code=400, detail="Choose two different companies")
+    from ..autonomous.tasks.b2b_churn_intelligence import generate_company_comparison_report
+
+    report = await generate_company_comparison_report(
+        pool,
+        primary_company,
+        comparison_company,
+        window_days=body.window_days,
+        persist=body.persist,
+        account_id=(user.account_id if user else None),
+    )
+    if not report:
+        raise HTTPException(status_code=404, detail="Insufficient company comparison data for the selected accounts")
+    return report
+
+
+@router.post("/reports/company-deep-dive")
+async def generate_account_deep_dive_report(
+    body: AccountDeepDiveRequest,
+    user: AuthUser | None = Depends(optional_auth),
+):
+    pool = _pool_or_503()
+    company_name = body.company_name.strip()
+    if not company_name:
+        raise HTTPException(status_code=400, detail="Company name is required")
+    from ..autonomous.tasks.b2b_churn_intelligence import generate_company_deep_dive_report
+
+    report = await generate_company_deep_dive_report(
+        pool,
+        company_name,
+        window_days=body.window_days,
+        persist=body.persist,
+        account_id=(user.account_id if user else None),
+    )
+    if not report:
+        raise HTTPException(status_code=404, detail="No company-level churn data found for the selected account")
+    return report
 
 
 @router.get("/reports")
@@ -434,7 +543,9 @@ async def list_reports(
     idx = 1
 
     if user:
-        conditions.append(f"vendor_filter IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
+        conditions.append(
+            f"(vendor_filter IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid) OR account_id = ${idx}::uuid)"
+        )
         params.append(user.account_id)
         idx += 1
 
@@ -455,7 +566,7 @@ async def list_reports(
     rows = await pool.fetch(
         f"""
         SELECT id, report_date, report_type, executive_summary,
-               vendor_filter, status, created_at
+             vendor_filter, category_filter, status, created_at
         FROM b2b_intelligence
         {where}
         ORDER BY report_date DESC
@@ -471,6 +582,7 @@ async def list_reports(
             "report_type": r["report_type"],
             "executive_summary": r["executive_summary"],
             "vendor_filter": r["vendor_filter"],
+            "category_filter": r["category_filter"],
             "status": r["status"],
             "created_at": str(r["created_at"]) if r["created_at"] else None,
         }
@@ -498,7 +610,9 @@ async def get_report(report_id: str, user: AuthUser | None = Depends(optional_au
     if not row:
         raise HTTPException(status_code=404, detail="Report not found")
 
-    if user and row["vendor_filter"]:
+    if user and row["account_id"] == user.account_id:
+        pass
+    elif user and row["vendor_filter"]:
         is_tracked = await pool.fetchval(
             "SELECT 1 FROM tracked_vendors WHERE account_id = $1::uuid AND vendor_name = $2",
             user.account_id, row["vendor_filter"],

@@ -6,7 +6,7 @@ import { PageError } from '../components/ErrorBoundary'
 import UpgradeGate from '../components/UpgradeGate'
 import useApiData from '../hooks/useApiData'
 import { usePlanGate } from '../hooks/usePlanGate'
-import { fetchReports } from '../api/client'
+import { fetchReports, generateAccountComparisonReport, generateAccountDeepDiveReport, generateVendorComparisonReport } from '../api/client'
 import { useState } from 'react'
 import type { Report } from '../types'
 
@@ -15,6 +15,10 @@ export const REPORT_TYPE_COLORS: Record<string, string> = {
   vendor_scorecard: 'bg-violet-500/20 text-violet-400',
   displacement_report: 'bg-amber-500/20 text-amber-400',
   category_overview: 'bg-emerald-500/20 text-emerald-400',
+  exploratory_overview: 'bg-slate-500/20 text-slate-300',
+  vendor_comparison: 'bg-fuchsia-500/20 text-fuchsia-300',
+  account_comparison: 'bg-rose-500/20 text-rose-300',
+  account_deep_dive: 'bg-pink-500/20 text-pink-300',
   vendor_retention: 'bg-orange-500/20 text-orange-400',
   challenger_intel: 'bg-purple-500/20 text-purple-400',
 }
@@ -38,6 +42,14 @@ export default function Reports() {
   const navigate = useNavigate()
   const { canAccessReports } = usePlanGate()
   const [typeFilter, setTypeFilter] = useState('')
+  const [primaryVendor, setPrimaryVendor] = useState('')
+  const [comparisonVendor, setComparisonVendor] = useState('')
+  const [primaryCompany, setPrimaryCompany] = useState('')
+  const [comparisonCompany, setComparisonCompany] = useState('')
+  const [deepDiveCompany, setDeepDiveCompany] = useState('')
+  const [creatingComparison, setCreatingComparison] = useState(false)
+  const [creatingAccountComparison, setCreatingAccountComparison] = useState(false)
+  const [creatingAccountDeepDive, setCreatingAccountDeepDive] = useState(false)
 
   const { data, loading, error, refresh, refreshing } = useApiData(
     () => fetchReports({ report_type: typeFilter || undefined, limit: 50 }),
@@ -45,6 +57,82 @@ export default function Reports() {
   )
 
   const reports = data?.reports ?? []
+
+  async function handleCreateComparison() {
+    if (!primaryVendor.trim() || !comparisonVendor.trim()) {
+      alert('Enter both vendors to compare')
+      return
+    }
+    setCreatingComparison(true)
+    try {
+      const result = await generateVendorComparisonReport({
+        primary_vendor: primaryVendor.trim(),
+        comparison_vendor: comparisonVendor.trim(),
+        persist: true,
+      })
+      const reportId = typeof result.report_id === 'string' ? result.report_id : ''
+      setPrimaryVendor('')
+      setComparisonVendor('')
+      refresh()
+      if (reportId) {
+        navigate(`/reports/${reportId}`)
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Comparison generation failed')
+    } finally {
+      setCreatingComparison(false)
+    }
+  }
+
+  async function handleCreateAccountComparison() {
+    if (!primaryCompany.trim() || !comparisonCompany.trim()) {
+      alert('Enter both companies to compare')
+      return
+    }
+    setCreatingAccountComparison(true)
+    try {
+      const result = await generateAccountComparisonReport({
+        primary_company: primaryCompany.trim(),
+        comparison_company: comparisonCompany.trim(),
+        persist: true,
+      })
+      const reportId = typeof result.report_id === 'string' ? result.report_id : ''
+      setPrimaryCompany('')
+      setComparisonCompany('')
+      refresh()
+      if (reportId) {
+        navigate(`/reports/${reportId}`)
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Account comparison generation failed')
+    } finally {
+      setCreatingAccountComparison(false)
+    }
+  }
+
+  async function handleCreateAccountDeepDive() {
+    if (!deepDiveCompany.trim()) {
+      alert('Enter a company for the account deep dive')
+      return
+    }
+    setCreatingAccountDeepDive(true)
+    try {
+      const result = await generateAccountDeepDiveReport({
+        company_name: deepDiveCompany.trim(),
+        persist: true,
+      })
+      const reportId = typeof result.report_id === 'string' ? result.report_id : ''
+      setDeepDiveCompany('')
+      refresh()
+      if (reportId) {
+        navigate(`/reports/${reportId}`)
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Account deep dive generation failed')
+    } finally {
+      setCreatingAccountDeepDive(false)
+    }
+  }
 
   if (!canAccessReports) {
     return (
@@ -71,6 +159,10 @@ export default function Reports() {
             <option value="vendor_scorecard">Vendor Scorecard</option>
             <option value="displacement_report">Displacement Report</option>
             <option value="category_overview">Category Overview</option>
+            <option value="exploratory_overview">Exploratory Overview</option>
+            <option value="vendor_comparison">Vendor Comparison</option>
+            <option value="account_comparison">Account Comparison</option>
+            <option value="account_deep_dive">Account Deep Dive</option>
             <option value="vendor_retention">Vendor Retention</option>
             <option value="challenger_intel">Challenger Intel</option>
           </select>
@@ -81,6 +173,87 @@ export default function Reports() {
           >
             <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
             Refresh
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+          <div className="flex-1">
+            <label className="block text-xs font-medium text-slate-400 mb-1">Primary vendor</label>
+            <input
+              value={primaryVendor}
+              onChange={(e) => setPrimaryVendor(e.target.value)}
+              placeholder="Example: Salesforce"
+              className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+            />
+          </div>
+          <div className="flex-1">
+            <label className="block text-xs font-medium text-slate-400 mb-1">Comparison vendor</label>
+            <input
+              value={comparisonVendor}
+              onChange={(e) => setComparisonVendor(e.target.value)}
+              placeholder="Example: HubSpot"
+              className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+            />
+          </div>
+          <button
+            onClick={handleCreateComparison}
+            disabled={creatingComparison}
+            className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-fuchsia-500/15 text-fuchsia-300 text-sm font-medium hover:bg-fuchsia-500/25 transition-colors disabled:opacity-50"
+          >
+            {creatingComparison ? 'Generating...' : 'Create Comparison'}
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+          <div className="flex-1">
+            <label className="block text-xs font-medium text-slate-400 mb-1">Account deep dive company</label>
+            <input
+              value={deepDiveCompany}
+              onChange={(e) => setDeepDiveCompany(e.target.value)}
+              placeholder="Example: DataPulse Analytics"
+              className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+            />
+          </div>
+          <button
+            onClick={handleCreateAccountDeepDive}
+            disabled={creatingAccountDeepDive}
+            className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-pink-500/15 text-pink-300 text-sm font-medium hover:bg-pink-500/25 transition-colors disabled:opacity-50"
+          >
+            {creatingAccountDeepDive ? 'Generating...' : 'Create Account Deep Dive'}
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+          <div className="flex-1">
+            <label className="block text-xs font-medium text-slate-400 mb-1">Primary company</label>
+            <input
+              value={primaryCompany}
+              onChange={(e) => setPrimaryCompany(e.target.value)}
+              placeholder="Example: DataPulse Analytics"
+              className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+            />
+          </div>
+          <div className="flex-1">
+            <label className="block text-xs font-medium text-slate-400 mb-1">Comparison company</label>
+            <input
+              value={comparisonCompany}
+              onChange={(e) => setComparisonCompany(e.target.value)}
+              placeholder="Example: FinEdge Capital"
+              className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+            />
+          </div>
+          <button
+            onClick={handleCreateAccountComparison}
+            disabled={creatingAccountComparison}
+            className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-rose-500/15 text-rose-300 text-sm font-medium hover:bg-rose-500/25 transition-colors disabled:opacity-50"
+          >
+            {creatingAccountComparison ? 'Generating...' : 'Create Account Comparison'}
           </button>
         </div>
       </div>
@@ -122,8 +295,12 @@ export default function Reports() {
                 </span>
                 <FileBarChart className="h-4 w-4 text-slate-500" />
               </div>
-              {r.vendor_filter && (
-                <p className="text-sm text-white font-medium mb-1">{r.vendor_filter}</p>
+              {(r.vendor_filter || r.category_filter) && (
+                <p className="text-sm text-white font-medium mb-1">
+                  {['vendor_comparison', 'account_comparison'].includes(r.report_type) && r.vendor_filter && r.category_filter
+                    ? `${r.vendor_filter} vs ${r.category_filter}`
+                    : r.vendor_filter}
+                </p>
               )}
               <p className="text-sm text-slate-400 line-clamp-2">
                 {r.executive_summary ?? 'No summary available'}

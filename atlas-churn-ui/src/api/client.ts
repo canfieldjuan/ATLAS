@@ -176,6 +176,32 @@ export async function fetchReports(params?: {
   return get<{ reports: Report[]; count: number }>(BASE, '/reports', params)
 }
 
+export async function generateVendorComparisonReport(body: {
+  primary_vendor: string
+  comparison_vendor: string
+  window_days?: number
+  persist?: boolean
+}) {
+  return post<Record<string, unknown>>(BASE, '/reports/compare', body)
+}
+
+export async function generateAccountComparisonReport(body: {
+  primary_company: string
+  comparison_company: string
+  window_days?: number
+  persist?: boolean
+}) {
+  return post<Record<string, unknown>>(BASE, '/reports/compare-companies', body)
+}
+
+export async function generateAccountDeepDiveReport(body: {
+  company_name: string
+  window_days?: number
+  persist?: boolean
+}) {
+  return post<Record<string, unknown>>(BASE, '/reports/company-deep-dive', body)
+}
+
 export async function fetchReport(reportId: string) {
   return get<ReportDetail>(BASE, `/reports/${reportId}`)
 }
