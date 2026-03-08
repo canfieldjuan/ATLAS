@@ -83,7 +83,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     from ...pipelines.notify import send_pipeline_notification
 
     llm = get_pipeline_llm(
-        prefer_cloud=True,
+        workload="synthesis",
         try_openrouter=True,
         auto_activate_ollama=False,
         openrouter_model=cfg.blog_post_openrouter_model,
@@ -856,8 +856,8 @@ def _blueprint_migration_report(ctx: dict, data: dict) -> PostBlueprint:
     dest_counts: dict[str, int] = {}
     for f in all_flows:
         if f.get("direction") == "switched_to":
-            dest = f.get("competitor", "")
-            dest_counts[dest] = dest_counts.get(dest, 0) + f.get("mentions", 0)
+            dest = f.get("to_brand", "")
+            dest_counts[dest] = dest_counts.get(dest, 0) + f.get("count", 0)
 
     top_dests = sorted(dest_counts.items(), key=lambda x: x[1], reverse=True)[:8]
     flow_chart_data = [
@@ -880,8 +880,8 @@ def _blueprint_migration_report(ctx: dict, data: dict) -> PostBlueprint:
     source_counts: dict[str, int] = {}
     for f in all_flows:
         if f.get("direction") == "switched_to":
-            src = f.get("source_brand", "")
-            source_counts[src] = source_counts.get(src, 0) + f.get("mentions", 0)
+            src = f.get("from_brand", "")
+            source_counts[src] = source_counts.get(src, 0) + f.get("count", 0)
 
     top_sources = sorted(source_counts.items(), key=lambda x: x[1], reverse=True)[:8]
     source_chart_data = [
@@ -1089,7 +1089,7 @@ def _build_flow_data(
     flows = data.get("flows", [])
     relevant = [
         f for f in flows
-        if f.get("source_brand") in (brand_a, brand_b)
+        if f.get("from_brand") in (brand_a, brand_b)
         and f.get("direction") == "switched_to"
     ]
     if not relevant:
@@ -1097,8 +1097,8 @@ def _build_flow_data(
 
     agg: dict[str, int] = {}
     for f in relevant:
-        label = f"{f['source_brand']} -> {f['competitor']}"
-        agg[label] = agg.get(label, 0) + f.get("mentions", 0)
+        label = f"{f['from_brand']} -> {f['to_brand']}"
+        agg[label] = agg.get(label, 0) + f.get("count", 0)
 
     top = sorted(agg.items(), key=lambda x: x[1], reverse=True)[:6]
     return [{"name": label, "mentions": count} for label, count in top]

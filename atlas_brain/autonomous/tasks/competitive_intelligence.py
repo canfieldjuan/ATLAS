@@ -114,11 +114,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not fetchers["brand_health"]:
         return {"_skip_synthesis": "No brand data to analyze"}
 
-    # Post-process: normalize competitor names and feature requests
-    if fetchers["competitive_flows"]:
-        fetchers["competitive_flows"] = await _normalize_competitors(
-            fetchers["competitive_flows"], pool
-        )
+    # Post-process: normalize feature requests
+    # (competitive_flows already normalized by fetch_competitive_flows)
     if fetchers["feature_gaps"]:
         fetchers["feature_gaps"] = _normalize_feature_requests(fetchers["feature_gaps"])
 
@@ -159,6 +156,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 payload,
                 max_tokens=cfg.competitive_intelligence_max_tokens,
                 temperature=0.4,
+                workload="synthesis",
                 response_format={"type": "json_object"},
             ),
             timeout=300,
@@ -317,34 +315,14 @@ async def _fetch_brand_health(pool) -> list[dict[str, Any]]:
 
 async def _fetch_competitive_flows(pool) -> list[dict[str, Any]]:
     """Brand-to-brand customer migration from product_comparisons."""
-    rows = await pool.fetch(
-        """
-        SELECT
-            pm.brand AS source_brand,
-            comp->>'product_name' AS competitor,
-            comp->>'direction' AS direction,
-            count(*) AS mentions
-        FROM product_reviews pr
-        JOIN product_metadata pm ON pm.asin = pr.asin
-        CROSS JOIN jsonb_array_elements(pr.deep_extraction->'product_comparisons') AS comp
-        WHERE pr.deep_enrichment_status = 'enriched'
-          AND pm.brand IS NOT NULL AND pm.brand != ''
-          AND jsonb_array_length(pr.deep_extraction->'product_comparisons') > 0
-        GROUP BY pm.brand, comp->>'product_name', comp->>'direction'
-        HAVING count(*) >= 2
-        ORDER BY count(*) DESC
-        LIMIT 500
-        """
+    from ...pipelines.comparisons import fetch_competitive_flows
+
+    return await fetch_competitive_flows(
+        pool,
+        where_clause="pm.brand IS NOT NULL AND pm.brand != ''",
+        min_mentions=2,
+        limit=500,
     )
-    return [
-        {
-            "source_brand": r["source_brand"],
-            "competitor": r["competitor"],
-            "direction": r["direction"],
-            "mentions": r["mentions"],
-        }
-        for r in rows
-    ]
 
 
 async def _fetch_feature_gaps(pool) -> list[dict[str, Any]]:
@@ -562,67 +540,8 @@ async def _fetch_prior_reports(pool, limit: int = 3) -> list[dict[str, Any]]:
 # Post-processing normalization
 # ------------------------------------------------------------------
 
-_COMPETITOR_NOISE = {
-    "competitor", "brand", "other", "another", "generic", "cheap",
-    "remote", "device", "product", "unit", "model", "version",
-    "itunes", "youtube", "amazon", "forum", "ebay", "walmart",
-    "microsoft vista", "windows", "mac os", "other brand",
-    "another product", "cheap one", "other one",
-    "2 button version", "button", "cable", "adapter", "charger",
-}
 
-
-async def _normalize_competitors(flows: list[dict[str, Any]], pool) -> list[dict[str, Any]]:
-    """Clean up competitor names: noise filter, case dedup, brand-aware collapse."""
-    # Fetch known brands from product_metadata (lowercase key -> original casing)
-    brand_rows = await pool.fetch(
-        "SELECT DISTINCT brand FROM product_metadata "
-        "WHERE brand IS NOT NULL AND brand != ''"
-    )
-    known_brands = {r["brand"].lower(): r["brand"] for r in brand_rows}
-
-    merged: dict[tuple[str, str, str], dict[str, Any]] = {}
-
-    for flow in flows:
-        raw = (flow.get("competitor") or "").strip()
-        if not raw:
-            continue
-
-        lowered = raw.lower()
-
-        # Filter noise
-        if lowered in _COMPETITOR_NOISE:
-            continue
-        if raw.isdigit():
-            continue
-
-        # Brand-aware collapse: if first word matches a known brand, normalize
-        # to just the brand name (drop model number / spec details)
-        words = raw.split()
-        first_lower = words[0].lower()
-
-        # Filter short names unless they match a known brand (e.g. "LG")
-        if len(raw) < 3 and first_lower not in known_brands:
-            continue
-        if first_lower in known_brands:
-            normalized = known_brands[first_lower]  # Preserve original DB casing
-        else:
-            # Simple case normalization
-            normalized = raw.title()
-
-        key = (flow.get("source_brand", ""), normalized, flow.get("direction", ""))
-        if key in merged:
-            merged[key]["mentions"] += flow.get("mentions", 0)
-        else:
-            merged[key] = {
-                "source_brand": flow.get("source_brand", ""),
-                "competitor": normalized,
-                "direction": flow.get("direction", ""),
-                "mentions": flow.get("mentions", 0),
-            }
-
-    result = sorted(merged.values(), key=lambda x: x["mentions"], reverse=True)
-    return result
+# _normalize_competitors and _COMPETITOR_NOISE moved to atlas_brain.pipelines.comparisons
 
 
 def _normalize_feature_requests(gaps: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -717,7 +636,7 @@ async def _upsert_brand_intelligence(
     flows_by_brand: dict[str, list] = {}
     for flow in parsed.get("competitive_flows", []):
         if isinstance(flow, dict):
-            brand = flow.get("source_brand", "")
+            brand = flow.get("from_brand", "")
             if brand:
                 flows_by_brand.setdefault(brand, []).append(flow)
 

@@ -27,7 +27,7 @@ You will receive a JSON object with these sections:
   - `repurchase_yes`, `repurchase_no` (would_repurchase counts)
   - `safety_flagged_count` (reviews where safety_flag.flagged is true)
 - `competitive_flows`: Array of brand-to-brand customer migration signals, each with:
-  - `source_brand` (the reviewing brand), `competitor` (product/brand mentioned), `direction` (switched_to/considered/switched_from), `mentions` (count)
+  - `from_brand` (origin brand), `to_brand` (destination brand), `direction` (switched_to/switched_from/compared/avoided/considered/recommended), `is_directional` (true for switched_to/switched_from), `count` (number of mentions)
 - `feature_gaps`: Array of most-requested features across all products, each with:
   - `category`, `feature`, `mentions`, `avg_pain_score`
 - `buyer_personas`: Array of buyer segment clusters, each with:
@@ -74,9 +74,9 @@ Respond with a JSON object containing these fields:
   "analysis_text": "A narrative summary of the complaint vulnerability landscape (under 600 words). Leads with the most critical finding. Frame everything as risk/vulnerability, not health. This goes to push notification.",
   "competitive_flows": [
     {
-      "source_brand": "Brand X",
-      "competitor": "Brand Y",
-      "mentions": 15,
+      "from_brand": "Brand X",
+      "to_brand": "Brand Y",
+      "count": 15,
       "primary_reason": "Better durability at similar price point",
       "direction": "switched_to"
     }

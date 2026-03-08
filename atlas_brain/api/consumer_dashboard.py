@@ -1218,14 +1218,26 @@ async def get_brand_detail(request: Request, brand_name: str, user: AuthUser = D
         bname, *t_extra,
     )
 
+    from ..pipelines.comparisons import ADJACENCY_DIRECTIONS, load_known_brands, normalize_brand
+
+    known_brands = await load_known_brands(pool)
+
     comp_counter: dict[str, dict] = {}
     for row in flow_rows:
         comps = _safe_json(row["comparisons"])
         if isinstance(comps, list):
             for comp in comps:
                 if isinstance(comp, dict):
-                    other = comp.get("product_name") or comp.get("product", "Unknown")
                     direction = comp.get("direction", "compared")
+                    if direction in ADJACENCY_DIRECTIONS:
+                        continue
+                    raw_other = comp.get("product_name") or comp.get("product", "")
+                    other = normalize_brand(raw_other, known_brands)
+                    if not other:
+                        continue
+                    # Skip self-references
+                    if other.lower() == bname.lower():
+                        continue
                     key = f"{other}|{direction}"
                     if key not in comp_counter:
                         comp_counter[key] = {"brand": other, "direction": direction, "count": 0, "ratings": []}
@@ -1716,25 +1728,48 @@ async def get_competitive_flows(
         if rating is not None:
             flow_map[key]["ratings"].append(float(rating))
 
+    from ..pipelines.comparisons import ADJACENCY_DIRECTIONS, load_known_brands, normalize_brand
+
+    known_brands = await load_known_brands(pool)
+
     for row in rows:
-        from_brand = row["brand"] or "Unknown"
+        reviewed_brand = row["brand"] or "Unknown"
 
         # product_comparisons
         comps = _safe_json(row["comparisons"])
         if isinstance(comps, list):
             for comp in comps:
                 if isinstance(comp, dict):
-                    to_brand = comp.get("product_name") or comp.get("product", "Unknown")
                     comp_direction = comp.get("direction", "compared")
-                    _add_flow(from_brand, to_brand, comp_direction, row["rating"])
+                    if comp_direction in ADJACENCY_DIRECTIONS:
+                        continue
+                    raw_other = comp.get("product_name") or comp.get("product", "")
+                    other = normalize_brand(raw_other, known_brands)
+                    if not other:
+                        continue
+                    reviewed_norm = normalize_brand(reviewed_brand, known_brands) or reviewed_brand
+                    # Skip self-references
+                    if other.lower() == reviewed_norm.lower():
+                        continue
+                    # Direction-aware from/to resolution
+                    if comp_direction == "switched_from":
+                        _add_flow(other, reviewed_norm, comp_direction, row["rating"])
+                    else:
+                        _add_flow(reviewed_norm, other, comp_direction, row["rating"])
 
         # consideration_set (rejected alternatives)
         cset = _safe_json(row["considerations"])
         if isinstance(cset, list):
             for item in cset:
                 if isinstance(item, dict):
-                    to_brand = item.get("product", "Unknown")
-                    _add_flow(from_brand, to_brand, "considered", row["rating"])
+                    raw_other = item.get("product", "")
+                    other = normalize_brand(raw_other, known_brands)
+                    if not other:
+                        continue
+                    reviewed_norm = normalize_brand(reviewed_brand, known_brands) or reviewed_brand
+                    if other.lower() == reviewed_norm.lower():
+                        continue
+                    _add_flow(reviewed_norm, other, "considered", row["rating"])
 
     flows = sorted(
         [

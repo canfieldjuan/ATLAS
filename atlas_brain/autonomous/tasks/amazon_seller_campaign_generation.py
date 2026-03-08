@@ -162,40 +162,15 @@ async def _aggregate_category_intelligence(pool, category: str) -> dict[str, Any
     ]
 
     # Competitive flows from deep_extraction->'product_comparisons'
-    flow_rows = await pool.fetch(
-        """
-        SELECT
-            comp->>'product_name' AS from_brand,
-            comp->>'product' AS to_brand,
-            COALESCE(comp->>'direction', 'compared') AS direction,
-            COUNT(*) AS count
-        FROM product_reviews,
-             jsonb_array_elements(
-                 CASE jsonb_typeof(deep_extraction->'product_comparisons')
-                      WHEN 'array' THEN deep_extraction->'product_comparisons'
-                      ELSE '[]'::jsonb
-                 END
-             ) AS comp
-        WHERE source_category = $1
-          AND deep_enrichment_status = 'enriched'
-          AND deep_extraction->'product_comparisons' IS NOT NULL
-        GROUP BY comp->>'product_name', comp->>'product', comp->>'direction'
-        HAVING COUNT(*) >= 2
-        ORDER BY COUNT(*) DESC
-        LIMIT 15
-        """,
-        category,
+    from ...pipelines.comparisons import fetch_competitive_flows
+
+    competitive_flows = await fetch_competitive_flows(
+        pool,
+        where_clause="pr.source_category = $1",
+        params=[category],
+        min_mentions=2,
+        limit=15,
     )
-    competitive_flows = [
-        {
-            "from_brand": r["from_brand"] or "",
-            "to_brand": r["to_brand"] or "",
-            "direction": r["direction"],
-            "count": r["count"],
-        }
-        for r in flow_rows
-        if r["from_brand"] or r["to_brand"]
-    ]
 
     # Brand health: compute score from repurchase + safety rates
     brand_health = []
@@ -322,7 +297,7 @@ async def _save_intelligence_snapshot(pool, intel: dict[str, Any]) -> None:
             brand_health, safety_signals, manufacturing_insights,
             top_root_causes
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-        ON CONFLICT (category, snapshot_date) DO UPDATE SET
+        ON CONFLICT (category, COALESCE(subcategory, ''), snapshot_date) DO UPDATE SET
             total_reviews = EXCLUDED.total_reviews,
             total_brands = EXCLUDED.total_brands,
             total_products = EXCLUDED.total_products,

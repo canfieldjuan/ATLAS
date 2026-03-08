@@ -215,12 +215,12 @@ def _format_parsed(parsed: dict[str, Any], fallback: str) -> str:
         items = []
         for flow in comp_flows[:5]:
             if isinstance(flow, dict):
-                frm = flow.get("source_brand", "")
-                to = flow.get("competitor", "")
+                frm = flow.get("from_brand", "")
+                to = flow.get("to_brand", "")
                 if not frm and not to:
                     continue
                 reason = flow.get("primary_reason", "")
-                vol = flow.get("mentions", "")
+                vol = flow.get("count", "")
                 line = f"- {frm} -> {to}"
                 if vol:
                     line += f" ({vol} mentions)"
