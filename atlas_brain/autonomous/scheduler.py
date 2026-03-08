@@ -614,6 +614,19 @@ class TaskScheduler:
                 "notify_tags": "package,consumer",
             },
         },
+        {
+            "name": "subcategory_intelligence",
+            "description": "Daily subcategory intelligence reports for Amazon product categories",
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": None,
+            "timeout_seconds": 600,
+            "metadata": {
+                "builtin_handler": "subcategory_intelligence",
+                "notify_priority": "default",
+                "notify_tags": "brain,bar_chart",
+            },
+        },
     ]
 
     async def _ensure_default_tasks(self) -> None:
@@ -644,6 +657,7 @@ class TaskScheduler:
                 "b2b_campaign_generation": settings.b2b_campaign.schedule_cron,
                 "amazon_seller_campaign_generation": settings.seller_campaign.schedule_cron,
                 "b2b_blog_post_generation": settings.b2b_churn.blog_post_cron,
+                "subcategory_intelligence": settings.subcategory_intelligence.schedule_cron,
             }
 
             # Merge pipeline interval overrides from registry
@@ -785,6 +799,7 @@ class TaskScheduler:
                 "b2b_campaign_generation": settings.b2b_campaign.schedule_cron,
                 "amazon_seller_campaign_generation": settings.seller_campaign.schedule_cron,
                 "b2b_blog_post_generation": settings.b2b_churn.blog_post_cron,
+                "subcategory_intelligence": settings.subcategory_intelligence.schedule_cron,
             }
 
             # Merge pipeline cron overrides

@@ -45,6 +45,7 @@ _BUILTIN_TASKS = [
     ("consumer_signal_alerts", "run", "consumer_signal_alerts"),
     ("trial_nurture", "run", "trial_nurture"),
     ("product_metadata_sync", "run", "product_metadata_sync"),
+    ("subcategory_intelligence", "run", "subcategory_intelligence"),
 ]
 
 
