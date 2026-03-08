@@ -45,6 +45,7 @@ import safetyComputerAccessoriesPeripherals202603 from './safety-computer-access
 import safetyStrengthTrainingEquipment202603 from './safety-strength-training-equipment-2026-03'
 import safetyElectronics202603 from './safety-electronics-2026-03'
 import safetyCycling202603 from './safety-cycling-2026-03'
+import safetySkatesSkateboardsScooters202603 from './safety-skates-skateboards-scooters-2026-03'
 
 export const POSTS: BlogPost[] = [
   amazonReviewMonitoringTools,
@@ -60,4 +61,5 @@ export const POSTS: BlogPost[] = [
   safetyStrengthTrainingEquipment202603,
   safetyElectronics202603,
   safetyCycling202603,
+  safetySkatesSkateboardsScooters202603,
 ].sort((a, b) => b.date.localeCompare(a.date))
