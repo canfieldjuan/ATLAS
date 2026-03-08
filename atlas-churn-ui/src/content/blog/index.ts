@@ -1,3 +1,4 @@
+import freshsalesDeepDive202603 from './freshsales-deep-dive-2026-03'
 type ChartValue = string | number | null | undefined
 type ChartDatum = Record<string, ChartValue>
 
