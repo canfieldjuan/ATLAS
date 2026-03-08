@@ -108,6 +108,11 @@ class VLLMLLM(BaseModelService):
         response_format = kwargs.get("response_format")
         if response_format is not None:
             fmt_type = str(response_format.get("type", "")).lower() if isinstance(response_format, dict) else ""
+            if guided_json is not None and settings.llm.vllm_guided_json_enabled:
+                logger.debug(
+                    "Skipping response_format because guided_json structured outputs are enabled for vLLM",
+                )
+                return payload
             # json_object is lightweight (just ensures valid JSON) -- always allow.
             # json_schema requires guided decoding -- gate behind vllm_guided_json_enabled.
             if fmt_type == "json_schema" and not settings.llm.vllm_guided_json_enabled:
@@ -148,15 +153,22 @@ class VLLMLLM(BaseModelService):
             content = message.get("content", "").strip()
 
             logger.info(
-                "vLLM chat: tokens=%s, content_len=%d",
+                "vLLM chat: tokens=%s, content_len=%d, finish_reason=%s",
                 data.get("usage", {}),
                 len(content),
+                choice.get("finish_reason"),
             )
 
             return {
                 "response": content,
                 "message": {"role": "assistant", "content": content},
+                "finish_reason": choice.get("finish_reason"),
+                "usage": data.get("usage", {}),
             }
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:500] if hasattr(e, 'response') else ""
+            logger.error("vLLM chat error: %s | body=%s", e, body)
+            raise
         except httpx.HTTPError as e:
             logger.error("vLLM chat error: %s", e)
             raise

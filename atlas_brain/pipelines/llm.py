@@ -22,88 +22,164 @@ logger = logging.getLogger("atlas.pipelines.llm")
 # ------------------------------------------------------------------
 
 
+def _resolve_workload(workload: str):
+    """Try to resolve an LLM for a specific workload type.
+
+    Returns the LLM instance or None if no suitable model is initialized.
+    """
+    from ..services.llm_router import (
+        get_triage_llm, get_draft_llm, get_reasoning_llm,
+    )
+
+    if workload == "triage":
+        return get_triage_llm()
+
+    if workload == "draft":
+        return get_draft_llm()
+
+    if workload in ("synthesis", "reasoning"):
+        # Both prefer Sonnet-class models: reasoning first, draft as fallback
+        llm = get_reasoning_llm()
+        if llm is not None:
+            logger.debug("Using reasoning LLM for workload '%s'", workload)
+            return llm
+        llm = get_draft_llm()
+        if llm is not None:
+            logger.debug("Using draft LLM for workload '%s'", workload)
+            return llm
+        return None
+
+    if workload == "local_fast":
+        from ..services import llm_registry
+        return llm_registry.get_active()
+
+    logger.warning("Unknown workload: '%s'", workload)
+    return None
+
+
+def _try_openrouter(openrouter_model: str | None = None):
+    """Try to activate OpenRouter as a fallback. Returns LLM or None."""
+    from ..services import llm_registry
+
+    or_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not or_key:
+        return None
+    try:
+        llm_registry.activate(
+            "openrouter",
+            model=openrouter_model or "deepseek/deepseek-chat-v3-0324",
+            api_key=or_key,
+        )
+        llm = llm_registry.get_active()
+        if llm is not None:
+            logger.info("Using OpenRouter LLM")
+            return llm
+    except Exception as e:
+        logger.debug("OpenRouter fallback failed: %s", e)
+    return None
+
+
+def _activate_local_llm():
+    """Try to activate vLLM or Ollama as a local fallback. Returns LLM or None."""
+    from ..config import settings
+    from ..services import llm_registry
+
+    if settings.llm.default_model == "vllm":
+        try:
+            llm_registry.activate(
+                "vllm",
+                model=settings.llm.vllm_model,
+                base_url=settings.llm.vllm_url,
+            )
+            llm = llm_registry.get_active()
+            if llm is not None:
+                logger.info("Auto-activated vLLM (%s)", settings.llm.vllm_model)
+                return llm
+        except Exception as e:
+            logger.debug("Could not auto-activate vLLM: %s", e)
+
+    try:
+        llm_registry.activate(
+            "ollama",
+            model=settings.llm.ollama_model,
+            base_url=settings.llm.ollama_url,
+            timeout=settings.llm.ollama_timeout,
+        )
+        llm = llm_registry.get_active()
+        if llm is not None:
+            logger.info("Auto-activated Ollama LLM")
+            return llm
+    except Exception as e:
+        logger.warning("Could not auto-activate Ollama LLM: %s", e)
+    return None
+
+
 def get_pipeline_llm(
     *,
+    workload: str | None = None,
     prefer_cloud: bool = True,
     try_openrouter: bool = True,
     auto_activate_ollama: bool = True,
     openrouter_model: str | None = None,
 ):
-    """Resolve an LLM instance using a configurable fallback chain.
+    """Resolve an LLM instance for pipeline tasks.
 
-    1. Triage LLM (Anthropic) if ``prefer_cloud``
-    2. OpenRouter (DeepSeek) if ``try_openrouter`` and OPENROUTER_API_KEY set
-    3. Active LLM from registry
-    4. Auto-activate Ollama if ``auto_activate_ollama``
+    When *workload* is set, routes to the appropriate model singleton:
+        triage     -> Haiku (cheap classification)
+        draft      -> Sonnet (email drafts)
+        synthesis  -> Sonnet (reports, blog posts, content generation)
+        reasoning  -> Sonnet (cross-domain reasoning)
+        local_fast -> local Ollama/vLLM only
 
+    When workload is None, falls back to legacy prefer_cloud chain.
     Returns the LLM instance or None.
     """
     from ..services import llm_registry
 
-    # 1. Triage (Anthropic)
+    # --- Workload-based routing (preferred) ---
+    if workload is not None:
+        llm = _resolve_workload(workload)
+        if llm is not None:
+            return llm
+        # Workload model unavailable; try OpenRouter fallback
+        if workload != "local_fast" and try_openrouter:
+            llm = _try_openrouter(openrouter_model)
+            if llm is not None:
+                return llm
+        # For synthesis/reasoning, triage (Haiku) is a last resort with warning
+        if workload in ("synthesis", "reasoning"):
+            from ..services.llm_router import get_triage_llm
+            llm = get_triage_llm()
+            if llm is not None:
+                logger.warning(
+                    "Falling back to triage LLM (Haiku) for '%s' workload "
+                    "-- enable reasoning or draft LLM for better results",
+                    workload,
+                )
+                return llm
+        if auto_activate_ollama and workload not in ("triage", "draft"):
+            return _activate_local_llm()
+        return None
+
+    # --- Legacy prefer_cloud routing (no workload specified) ---
     if prefer_cloud:
         from ..services.llm_router import get_triage_llm
-
         llm = get_triage_llm()
         if llm is not None:
             logger.debug("Using triage LLM (Anthropic)")
             return llm
 
-    # 2. OpenRouter
     if try_openrouter:
-        or_key = os.environ.get("OPENROUTER_API_KEY", "")
-        if or_key:
-            try:
-                llm_registry.activate(
-                    "openrouter",
-                    model=openrouter_model or "deepseek/deepseek-chat-v3-0324",
-                    api_key=or_key,
-                )
-                llm = llm_registry.get_active()
-                if llm is not None:
-                    logger.info("Using OpenRouter LLM")
-                    return llm
-            except Exception as e:
-                logger.debug("OpenRouter fallback failed: %s", e)
+        llm = _try_openrouter(openrouter_model)
+        if llm is not None:
+            return llm
 
-    # 3. Active LLM
     llm = llm_registry.get_active()
     if llm is not None:
         return llm
 
-    # 4. Auto-activate based on configured default backend
     if auto_activate_ollama:
-        from ..config import settings
-
-        # Try vLLM first if configured as default
-        if settings.llm.default_model == "vllm":
-            try:
-                llm_registry.activate(
-                    "vllm",
-                    model=settings.llm.vllm_model,
-                    base_url=settings.llm.vllm_url,
-                )
-                llm = llm_registry.get_active()
-                if llm is not None:
-                    logger.info("Auto-activated vLLM (%s)", settings.llm.vllm_model)
-                    return llm
-            except Exception as e:
-                logger.debug("Could not auto-activate vLLM: %s", e)
-
-        # Fallback to Ollama
-        try:
-            llm_registry.activate(
-                "ollama",
-                model=settings.llm.ollama_model,
-                base_url=settings.llm.ollama_url,
-                timeout=settings.llm.ollama_timeout,
-            )
-            llm = llm_registry.get_active()
-            if llm is not None:
-                logger.info("Auto-activated Ollama LLM")
-                return llm
-        except Exception as e:
-            logger.warning("Could not auto-activate Ollama LLM: %s", e)
+        return _activate_local_llm()
 
     return None
 
@@ -226,10 +302,12 @@ def call_llm_with_skill(
     *,
     max_tokens: int = 4096,
     temperature: float = 0.4,
+    workload: str | None = None,
     prefer_cloud: bool = True,
     try_openrouter: bool = True,
     auto_activate_ollama: bool = True,
     response_format: dict[str, Any] | None = None,
+    guided_json: dict[str, Any] | None = None,
 ) -> str | None:
     """Load a skill, resolve an LLM, call it, clean the output.
 
@@ -245,6 +323,7 @@ def call_llm_with_skill(
         return None
 
     llm = get_pipeline_llm(
+        workload=workload,
         prefer_cloud=prefer_cloud,
         try_openrouter=try_openrouter,
         auto_activate_ollama=auto_activate_ollama,
@@ -264,6 +343,8 @@ def call_llm_with_skill(
     kwargs: dict[str, Any] = {}
     if response_format is not None:
         kwargs["response_format"] = response_format
+    if guided_json is not None:
+        kwargs["guided_json"] = guided_json
 
     try:
         result = llm.chat(
