@@ -60,16 +60,18 @@ def normalize_brand(raw: str, known_brands: dict[str, str]) -> str | None:
         return None
 
     words = raw.split()
-    first_lower = words[0].lower()
 
     # Filter short names unless they match a known brand (e.g. "LG")
-    if len(raw) < 3 and first_lower not in known_brands:
+    if len(raw) < 3 and lowered not in known_brands:
         return None
 
-    # Brand-aware collapse: if first word matches a known brand, normalize
-    # to just the brand name (drop model number / spec details)
-    if first_lower in known_brands:
-        return known_brands[first_lower]
+    # Brand-aware collapse: try longest prefix first so multi-word brands
+    # like "Hamilton Beach" match before single-word "Hamilton" would.
+    # Cap at 4 words — no real brand is longer than that.
+    for n in range(min(len(words), 4), 0, -1):
+        prefix = " ".join(words[:n]).lower()
+        if prefix in known_brands:
+            return known_brands[prefix]
 
     return raw.title()
 
