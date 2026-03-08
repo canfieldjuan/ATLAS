@@ -563,11 +563,23 @@ def _build_vendor_context(vendor_name: str, signals: list[dict]) -> dict[str, An
             if label:
                 gap_counts[label] = gap_counts.get(label, 0) + 1
 
+    # Quotable phrases from enrichment
+    quote_list: list[str] = []
+    for s in signals:
+        phrases = _parse_json_field(s.get("quotable_phrases"))
+        for phrase in phrases:
+            text = phrase if isinstance(phrase, str) else (
+                phrase.get("text", "") if isinstance(phrase, dict) else ""
+            )
+            if text and text not in quote_list:
+                quote_list.append(text)
+
     # Timeline signals
     timeline_count = sum(1 for s in signals if s.get("contract_end"))
 
     return {
         "vendor_name": vendor_name,
+        "key_quotes": quote_list[:8],
         "signal_summary": {
             "total_signals": total,
             "high_urgency_count": high_urgency,
@@ -641,6 +653,29 @@ async def _compute_vendor_trend(
     except Exception:
         logger.debug("Failed to compute trend for %s", vendor_name)
         return None
+
+
+_CONTACT_ROLE_MAP: dict[str, str] = {
+    "vp customer success": "economic_buyer",
+    "head of customer success": "economic_buyer",
+    "vp cs": "economic_buyer",
+    "chief customer officer": "economic_buyer",
+    "head of product": "decision_maker",
+    "vp product": "decision_maker",
+    "cpo": "decision_maker",
+    "vp sales": "economic_buyer",
+    "head of sales": "economic_buyer",
+    "cro": "economic_buyer",
+    "head of competitive intelligence": "evaluator",
+    "vp marketing": "decision_maker",
+}
+
+
+def _map_role_type(contact_role: str | None) -> str:
+    """Map a raw contact title to an enum role_type value."""
+    if not contact_role:
+        return "economic_buyer"
+    return _CONTACT_ROLE_MAP.get(contact_role.lower(), "economic_buyer")
 
 
 async def _generate_vendor_campaigns(
@@ -787,8 +822,8 @@ async def _generate_vendor_campaigns(
                         best.get("contract_end"),
                         best.get("decision_timeline"),
                         best.get("buying_stage"),
-                        target.get("contact_role"),
-                        json.dumps([]),
+                        _map_role_type(target.get("contact_role")),
+                        json.dumps(vendor_ctx.get("key_quotes", [])),
                         review_ids[:20] or None,
                         channel,
                         content.get("subject", ""),
@@ -811,12 +846,25 @@ async def _generate_vendor_campaigns(
         # Create campaign sequence for the cold email (if sequences enabled)
         if cold_email_content and settings.campaign_sequence.enabled:
             try:
+                seq_context = {
+                    **vendor_ctx,
+                    "contact_name": target.get("contact_name"),
+                    "contact_role": target.get("contact_role"),
+                    "tier": target.get("tier", "report"),
+                    "recipient_type": "vendor_retention",
+                    "selling": {
+                        "sender_name": cfg.default_sender_name,
+                        "sender_company": cfg.default_sender_company,
+                        "booking_url": cfg.default_booking_url,
+                        **({"blog_posts": vendor_blog_urls} if vendor_blog_urls else {}),
+                    },
+                }
                 seq_id = await _create_sequence_for_cold_email(
                     pool,
                     company_name=vendor_name,
                     batch_id=batch_id,
                     partner_id=None,
-                    context=vendor_ctx,
+                    context=seq_context,
                     cold_email_subject=cold_email_content.get("subject", ""),
                     cold_email_body=cold_email_content.get("body", ""),
                 )
@@ -924,8 +972,20 @@ def _build_challenger_context(challenger_name: str, signals: list[dict]) -> dict
                 if reason and reason not in feature_mentions:
                     feature_mentions.append(reason)
 
+    # Quotable phrases from enrichment
+    quote_list: list[str] = []
+    for s in signals:
+        phrases = _parse_json_field(s.get("quotable_phrases"))
+        for phrase in phrases:
+            text = phrase if isinstance(phrase, str) else (
+                phrase.get("text", "") if isinstance(phrase, dict) else ""
+            )
+            if text and text not in quote_list:
+                quote_list.append(text)
+
     return {
         "challenger_name": challenger_name,
+        "key_quotes": quote_list[:8],
         "signal_summary": {
             "total_leads": total,
             "by_buying_stage": {
@@ -1108,8 +1168,8 @@ async def _generate_challenger_campaigns(
                         best.get("contract_end"),
                         best.get("decision_timeline"),
                         best.get("buying_stage"),
-                        target.get("contact_role"),
-                        json.dumps([]),
+                        _map_role_type(target.get("contact_role")),
+                        json.dumps(challenger_ctx.get("key_quotes", [])),
                         review_ids[:20] or None,
                         channel,
                         content.get("subject", ""),
@@ -1132,12 +1192,25 @@ async def _generate_challenger_campaigns(
         # Create campaign sequence for the cold email (if sequences enabled)
         if cold_email_content and settings.campaign_sequence.enabled:
             try:
+                seq_context = {
+                    **challenger_ctx,
+                    "contact_name": target.get("contact_name"),
+                    "contact_role": target.get("contact_role"),
+                    "tier": target.get("tier", "report"),
+                    "recipient_type": "challenger_intel",
+                    "selling": {
+                        "sender_name": cfg.default_sender_name,
+                        "sender_company": cfg.default_sender_company,
+                        "booking_url": cfg.default_booking_url,
+                        **({"blog_posts": challenger_blog_urls} if challenger_blog_urls else {}),
+                    },
+                }
                 seq_id = await _create_sequence_for_cold_email(
                     pool,
                     company_name=challenger_name,
                     batch_id=batch_id,
                     partner_id=None,
-                    context=challenger_ctx,
+                    context=seq_context,
                     cold_email_subject=cold_email_content.get("subject", ""),
                     cold_email_body=cold_email_content.get("body", ""),
                 )

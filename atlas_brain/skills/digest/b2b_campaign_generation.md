@@ -41,9 +41,9 @@ Return a JSON object with the generated content. The structure depends on the ch
 ### email_cold
 ```json
 {
-  "subject": "Short, compelling email subject line",
-  "body": "Full email body (200-400 words)",
-  "cta": "Clear call to action"
+  "subject": "Under 50 characters, compelling subject line",
+  "body": "HTML email body (75-150 words MAXIMUM)",
+  "cta": "Clear call to action (separate from body)"
 }
 ```
 
@@ -59,9 +59,9 @@ Return a JSON object with the generated content. The structure depends on the ch
 ### email_followup
 ```json
 {
-  "subject": "Follow-up email subject (different angle from cold email)",
-  "body": "Follow-up email body (150-300 words, sent 7 days after cold email)",
-  "cta": "Call to action"
+  "subject": "Under 50 characters, different angle from cold email",
+  "body": "HTML follow-up email body (75-125 words MAXIMUM)",
+  "cta": "Call to action (separate from body)"
 }
 ```
 
@@ -112,5 +112,13 @@ Return a JSON object with the generated content. The structure depends on the ch
    - `executive`: Open with the business impact number (churn cost, seat count x price delta, contract renewal risk). Close with strategic positioning.
    - `technical`: Open with the specific feature gap or integration failure. Include the migration path or technical comparison. Close with an evaluation offer.
    - `operations`: Open with the support/reliability pain (ticket volume, downtime incidents, team complaints). Close with workflow improvement and team productivity gains.
+
+18. **HARD WORD LIMIT**: email_cold body MUST be 75-150 words. email_followup body MUST be 75-125 words. If the body exceeds the word limit, you have failed this task. Count carefully.
+
+19. **HTML body**: The `body` field must be valid minimal HTML. Use only `<p>`, `<br>`, and `<a>` tags. No `<div>`, `<table>`, `<img>`, or inline styles.
+
+20. **Subject line length**: Subject lines MUST be under 50 characters for mobile preview.
+
+21. **CTA is separate**: The `cta` field is a standalone call-to-action string. The body should end naturally leading into the CTA. Include the affiliate/booking URL as an `<a>` tag at the end of the body, not in the `cta` field.
 
 Return ONLY the JSON object, no markdown fences, no explanation.

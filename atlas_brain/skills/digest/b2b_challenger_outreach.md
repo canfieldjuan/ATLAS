@@ -28,8 +28,10 @@ You receive a JSON object with:
   - `incumbents_losing`: Array of `{name, count}` -- which competitors are losing these accounts
   - `seat_count_signals`: Object `{large_500plus, mid_100_499, small_under_100}` with counts
   - `feature_mentions`: Array of strings -- features of the challenger product mentioned positively
+- `key_quotes`: Array of strings -- verbatim evidence phrases from enrichment (e.g. "finally switching after 2 years of broken promises", "evaluated 3 alternatives last quarter"). Use 1-2 as inline proof points.
 - `tier`: "report" | "dashboard" | "api"
 - `selling`: Object with `{sender_name, sender_company, booking_url}`
+  - `selling.blog_posts` (optional): Array of `{title, url, topic_type}` -- published analysis posts relevant to this challenger's space. Full URLs ready to embed.
 - `channel`: "email_cold" | "email_followup"
 - `cold_email_context` (only on `email_followup`): `{subject, body}` of the cold email already sent
 
@@ -40,18 +42,18 @@ Return a JSON object:
 ### email_cold
 ```json
 {
-  "subject": "Short, compelling subject line",
-  "body": "Full email body (200-350 words)",
-  "cta": "Clear call to action"
+  "subject": "Under 50 characters, curiosity-driven",
+  "body": "HTML email body (50-125 words MAXIMUM)",
+  "cta": "Clear call to action (separate from body)"
 }
 ```
 
 ### email_followup
 ```json
 {
-  "subject": "Follow-up subject (different angle)",
-  "body": "Follow-up body (150-250 words)",
-  "cta": "Call to action"
+  "subject": "Under 50 characters, different angle",
+  "body": "HTML follow-up body (75-150 words MAXIMUM)",
+  "cta": "Call to action (separate from body)"
 }
 ```
 
@@ -95,10 +97,24 @@ Return a JSON object:
 
 15. **Subject lines**: Curiosity-driven. Good: "12 companies evaluating your product right now" -- Bad: "Grow your pipeline with our intent data"
 
-16. **Competitive awareness angle** — subtly let the challenger know that incumbents also receive intelligence:
+16. **Competitive awareness angle** -- subtly let the challenger know that incumbents also receive intelligence:
     - **email_cold**: Include ONE brief sentence mid-email. Example framing: "Incumbents are also being alerted with defensive intelligence on at-risk accounts. The advantage goes to whoever acts first." Keep it matter-of-fact, not urgent.
     - **email_followup**: Be slightly more concrete. Frame as first-mover advantage: "The vendors losing these accounts are getting churn alerts and retention playbooks. These leads have a window -- the question is whether your team reaches them before the save campaign does." Keep to 1-2 sentences within the displacement section (Rule 12).
     - **Never make it the headline or subject line.** It supports the pitch, it isn't the pitch.
     - **Never frame it as a threat or create false urgency.** Tone is "this is how competitive intelligence works" -- informational, not manipulative.
+
+17. **HARD WORD LIMIT**: email_cold body MUST be 50-125 words. email_followup body MUST be 75-150 words. If the body exceeds the word limit, you have failed this task. Count carefully.
+
+18. **HTML body**: The `body` field must be valid minimal HTML. Use only `<p>`, `<br>`, and `<a>` tags. No `<div>`, `<table>`, `<img>`, or inline styles. Keep formatting clean and lightweight.
+
+19. **Subject line length**: Subject lines MUST be under 50 characters. Shorter is better for mobile preview.
+
+20. **CTA is separate**: The `cta` field is a standalone call-to-action string (e.g. "Book a 15-min pipeline review"). The body should end with a natural lead-in to the CTA. Include `selling.booking_url` as an `<a>` tag at the end of the body, not in the `cta` field.
+
+21. **Null contact_name**: If `contact_name` is null, do NOT use a greeting like "Hi," or "Hello,". Open directly with the hook sentence.
+
+22. **Blog post linking**: When `selling.blog_posts` is provided, reference ONE relevant post per email as published analysis. Frame naturally. Do NOT link all posts in one email.
+
+23. **Key quotes**: When `key_quotes` is provided and non-empty, weave 1-2 quotes into the body as inline evidence. Frame as market intelligence, never attribute to individuals. Example: "Buyers are saying 'finally switching after 2 years of broken promises' -- a pattern across 8 of the leads we flagged."
 
 Return ONLY the JSON object, no markdown fences, no explanation.

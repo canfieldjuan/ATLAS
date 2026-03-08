@@ -135,6 +135,10 @@ async def _generate_next_step(
         skill_name = "digest/b2b_onboarding_sequence"
     elif recipient_type == "amazon_seller":
         skill_name = "digest/amazon_seller_campaign_sequence"
+    elif recipient_type == "vendor_retention":
+        skill_name = "digest/b2b_vendor_sequence"
+    elif recipient_type == "challenger_intel":
+        skill_name = "digest/b2b_challenger_sequence"
     else:
         skill_name = "digest/b2b_campaign_sequence"
     skill = get_skill_registry().get(skill_name)
@@ -343,9 +347,16 @@ async def run(task: ScheduledTask) -> dict:
             continue
 
         # Derive target_mode from metadata returned by _generate_next_step
-        is_seller = content.get("_recipient_type") == "amazon_seller"
-        target_mode = "amazon_seller" if is_seller else "churning_company"
-        product_category = content.get("_category") if is_seller else None
+        _rtype = content.get("_recipient_type")
+        if _rtype == "amazon_seller":
+            target_mode = "amazon_seller"
+        elif _rtype == "vendor_retention":
+            target_mode = "vendor_retention"
+        elif _rtype == "challenger_intel":
+            target_mode = "challenger_intel"
+        else:
+            target_mode = "churning_company"
+        product_category = content.get("_category") if _rtype == "amazon_seller" else None
 
         # Insert new campaign row as queued
         campaign_id = await pool.fetchval(
