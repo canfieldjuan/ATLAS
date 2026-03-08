@@ -120,7 +120,7 @@ class LLMConfig(BaseSettings):
     vllm_model: str = Field(default="Qwen/Qwen3-14B-AWQ", description="vLLM model name")
     vllm_url: str = Field(default="http://localhost:8082", description="vLLM API base URL")
     vllm_guided_json_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enable guided/structured JSON decoding for vLLM requests. "
             "Disable to avoid xgrammar/nanobind leak issues in affected vLLM builds."
@@ -2076,9 +2076,61 @@ class B2BChurnConfig(BaseSettings):
     # Intelligence aggregation
     intelligence_enabled: bool = Field(default=True, description="Enable churn intelligence aggregation")
     intelligence_cron: str = Field(default="0 21 * * *", description="Daily churn intelligence (9 PM)")
-    intelligence_max_tokens: int = Field(default=8192, description="Max output tokens for churn intelligence LLM call")
+    intelligence_max_tokens: int = Field(default=16384, description="Max output tokens for churn intelligence LLM call")
     intelligence_window_days: int = Field(default=30, description="Days of enriched reviews to analyze")
     intelligence_min_reviews: int = Field(default=3, description="Min reviews per vendor to include")
+    intelligence_source_allowlist: str = Field(
+        default="g2,capterra,trustradius,trustpilot,reddit,hackernews,quora",
+        description="Sources allowed in churn intelligence aggregation (comma-separated)",
+    )
+    intelligence_executive_sources: str = Field(
+        default="g2,capterra,trustradius",
+        description="High-signal sources for executive-facing outputs (weekly_churn_feed, displacement, timeline)",
+    )
+    intelligence_exploratory_enabled: bool = Field(
+        default=True,
+        description="Enable exploratory_overview generation when the LLM payload fits the context budget",
+    )
+    intelligence_exploratory_max_tokens: int = Field(
+        default=4096,
+        description="Max output tokens for exploratory_overview LLM generation",
+    )
+    intelligence_exploratory_char_budget: int = Field(
+        default=100000,
+        description="Approximate JSON character budget for exploratory_overview input payload trimming",
+    )
+    intelligence_exploratory_vendor_limit: int = Field(
+        default=18,
+        description="Max vendor score rows to include in exploratory_overview payload",
+    )
+    intelligence_exploratory_high_intent_limit: int = Field(
+        default=8,
+        description="Max high-intent company rows to include in exploratory_overview payload",
+    )
+    intelligence_exploratory_generic_limit: int = Field(
+        default=12,
+        description="Max rows per generic exploratory dataset such as pain, displacement, and feature gaps",
+    )
+    intelligence_exploratory_quote_vendor_limit: int = Field(
+        default=10,
+        description="Max vendor quote bundles to include in exploratory_overview payload",
+    )
+    intelligence_exploratory_quotes_per_vendor: int = Field(
+        default=2,
+        description="Max quotes to keep per vendor in exploratory_overview payload",
+    )
+    intelligence_exploratory_use_case_limit: int = Field(
+        default=8,
+        description="Max rows per use-case distribution subtype in exploratory_overview payload",
+    )
+    intelligence_exploratory_company_limit: int = Field(
+        default=5,
+        description="Max company entries to keep per vendor in exploratory_overview payload",
+    )
+    intelligence_exploratory_prior_report_limit: int = Field(
+        default=1,
+        description="Max prior reports to include in exploratory_overview payload",
+    )
 
     # Churn thresholds
     high_churn_urgency_threshold: int = Field(default=7, description="Urgency score >= this = high churn risk")
@@ -2137,7 +2189,7 @@ class B2BChurnConfig(BaseSettings):
     blog_auto_deploy_hook_url: str = Field(default="", description="Vercel deploy hook URL for B2B blog")
     # Blog source filtering
     blog_source_allowlist: str = Field(
-        default="g2,capterra,trustradius,trustpilot,gartner,peerspot,getapp,software_advice,reddit,hackernews,quora",
+        default="g2,capterra,trustradius,trustpilot,reddit,hackernews,quora",
         description="Sources to include in blog data queries (excludes stackoverflow, youtube, github)",
     )
     # Regeneration mode — re-process existing drafts through fixed pipeline
@@ -2170,6 +2222,10 @@ class B2BScrapeConfig(BaseSettings):
     # Schedule
     intake_interval_seconds: int = Field(default=3600, description="Scrape polling interval (1 hour)")
     max_targets_per_run: int = Field(default=5, description="Max targets to scrape per run")
+    source_allowlist: str = Field(
+        default="g2,capterra,trustradius,trustpilot,reddit,hackernews,quora",
+        description="Sources allowed for automated scrape intake (comma-separated)",
+    )
 
     # Proxies (comma-separated URLs)
     proxy_datacenter_urls: str = Field(default="", description="Datacenter proxy URLs (comma-separated)")
@@ -2376,6 +2432,39 @@ class AmazonSellerCampaignConfig(BaseSettings):
     product_name: str = Field(default="Atlas Seller Intelligence", description="Product name used in outreach")
     landing_url: str = Field(default="", description="Dashboard landing page URL")
     free_report_url: str = Field(default="", description="Free category report URL template")
+
+
+class SubcategoryIntelligenceConfig(BaseSettings):
+    """Subcategory-level intelligence report configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_SUBCATEGORY_INTEL_", env_file=".env", extra="ignore",
+    )
+
+    enabled: bool = Field(default=False, description="Enable subcategory intelligence reports")
+    schedule_cron: str = Field(default="30 22 * * *", description="Report generation schedule (daily 10:30 PM)")
+    min_products: int = Field(default=5, ge=1, description="Min products to qualify a subcategory")
+    min_reviews: int = Field(default=100, ge=10, description="Min enriched reviews to qualify")
+    max_subcategories_per_run: int = Field(default=10, ge=1, description="Max subcategories per run")
+    max_tokens: int = Field(default=4096, description="Max tokens per LLM generation call")
+    temperature: float = Field(default=0.4, description="LLM sampling temperature")
+    target_subcategories: list[str] = Field(default=[], description="Explicit subcategories (empty = auto-discover)")
+    dedup_days: int = Field(default=1, ge=1, description="Days before regenerating same subcategory")
+
+
+class ComparisonNormalizationConfig(BaseSettings):
+    """Competitive flow brand normalization configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_COMPARISON_NORMALIZATION_", env_file=(".env", ".env.local"), extra="ignore",
+    )
+
+    known_brand_max_words: int = Field(default=4, ge=1, le=8, description="Max words allowed for trusted canonical brands")
+    known_brand_max_length: int = Field(default=40, ge=4, le=120, description="Max character length allowed for trusted canonical brands")
+    suspicious_singleton_max_products: int = Field(default=1, ge=0, le=10, description="Apply suspicious singleton filtering to canonical brands with product counts at or below this threshold")
+    invalid_known_brands: str = Field(default="", description="Comma-separated exact brand values to reject from canonical and comparison normalization")
+    suspicious_singleton_terms: str = Field(default="", description="Comma-separated product-type terms that indicate a singleton canonical brand is likely dirty")
+    suspicious_singleton_chars: str = Field(default=",!?:;", description="Characters that make singleton canonical brands suspicious")
 
 
 class ApolloConfig(BaseSettings):
@@ -2776,7 +2865,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="ATLAS_",
-        env_file=".env",
+        env_file=(".env", ".env.local"),
         env_nested_delimiter="__",
         extra="ignore",
     )
@@ -2851,6 +2940,8 @@ class Settings(BaseSettings):
     b2b_campaign: B2BCampaignConfig = Field(default_factory=B2BCampaignConfig)
     campaign_sequence: CampaignSequenceConfig = Field(default_factory=CampaignSequenceConfig)
     seller_campaign: AmazonSellerCampaignConfig = Field(default_factory=AmazonSellerCampaignConfig)
+    subcategory_intelligence: SubcategoryIntelligenceConfig = Field(default_factory=SubcategoryIntelligenceConfig)
+    comparison_normalization: ComparisonNormalizationConfig = Field(default_factory=ComparisonNormalizationConfig)
     apollo: ApolloConfig = Field(default_factory=ApolloConfig)
     openai_compat: OpenAICompatConfig = Field(default_factory=OpenAICompatConfig)
     ftl_tracing: FTLTracingConfig = Field(default_factory=FTLTracingConfig)
