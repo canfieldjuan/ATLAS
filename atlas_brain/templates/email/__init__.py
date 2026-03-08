@@ -19,6 +19,8 @@ from .invoice import (
     render_invoice_text,
 )
 
+from .vendor_briefing import render_vendor_briefing_html
+
 __all__ = [
     "BUSINESS_NAME",
     "BUSINESS_PHONE",
@@ -30,4 +32,5 @@ __all__ = [
     "format_residential_proposal",
     "render_invoice_html",
     "render_invoice_text",
+    "render_vendor_briefing_html",
 ]

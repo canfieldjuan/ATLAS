@@ -2195,6 +2195,11 @@ class B2BChurnConfig(BaseSettings):
     # Regeneration mode — re-process existing drafts through fixed pipeline
     blog_post_regenerate_mode: bool = Field(default=False, description="When True, regenerate existing draft posts instead of selecting new topics")
 
+    # Vendor intelligence briefings
+    vendor_briefing_enabled: bool = Field(default=True, description="Enable vendor intelligence briefing emails")
+    vendor_briefing_booking_url: str = Field(default="https://cal.com/atlas-intel/15min", description="Booking URL for briefing CTA button")
+    vendor_briefing_sender_name: str = Field(default="Atlas Intelligence", description="Display name for briefing sender")
+
 
 class B2BAlertConfig(BaseSettings):
     """B2B churn signal spike alert configuration."""
