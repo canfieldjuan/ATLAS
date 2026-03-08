@@ -1,26 +1,6 @@
 services:
-  # PostgreSQL database with pgvector for conversation persistence + RAG
-  postgres:
-    image: pgvector/pgvector:pg16
-    container_name: atlas_postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${ATLAS_DB_USER:-atlas}
-      POSTGRES_PASSWORD: ${ATLAS_DB_PASSWORD:-atlas_dev_password}
-      POSTGRES_DB: ${ATLAS_DB_DATABASE:-atlas}
-    ports:
-      - "5432:5432"
-    volumes:
-      - atlas_postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${ATLAS_DB_USER:-atlas} -d ${ATLAS_DB_DATABASE:-atlas}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
   # NocoDB — browser UI over the CRM tables in Atlas's local Postgres.
-  # NC_DB = Docker Postgres (atlas DB) for NocoDB's metadata (nc_* tables).
-  # CRM data source = same Postgres via Docker bridge.
+  # Connects to native Postgres on the host via host.docker.internal.
   # Admin UI: http://localhost:8090
   nocodb:
     image: nocodb/nocodb:latest
@@ -33,10 +13,7 @@ services:
     volumes:
       - atlas_nocodb_data:/usr/app/data
     environment:
-      NC_DB: "pg://postgres:5432?u=${ATLAS_DB_USER:-atlas}&p=${ATLAS_DB_PASSWORD:-atlas_dev_password}&d=${ATLAS_DB_DATABASE:-atlas}"
-    depends_on:
-      postgres:
-        condition: service_healthy
+      NC_DB: "pg://host.docker.internal:5433?u=${ATLAS_DB_USER:-atlas}&p=${ATLAS_DB_PASSWORD:-atlas_dev_password}&d=${ATLAS_DB_DATABASE:-atlas}"
 
   brain:
     build: .
@@ -46,18 +23,16 @@ services:
       - ./atlas_brain:/app/atlas_brain
       - ./logs:/app/logs
       - ./models:/app/models
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      # Database connection
+      # Database connection (native Postgres on host)
       ATLAS_DB_ENABLED: "true"
-      ATLAS_DB_HOST: postgres
-      ATLAS_DB_PORT: "5432"
+      ATLAS_DB_HOST: host.docker.internal
+      ATLAS_DB_PORT: "5433"
       ATLAS_DB_DATABASE: ${ATLAS_DB_DATABASE:-atlas}
       ATLAS_DB_USER: ${ATLAS_DB_USER:-atlas}
       ATLAS_DB_PASSWORD: ${ATLAS_DB_PASSWORD:-atlas_dev_password}
-      # NocoDB UI: http://localhost:8090 (no token needed — brain uses direct asyncpg)
-    depends_on:
-      postgres:
-        condition: service_healthy
     deploy:
       resources:
         reservations:
@@ -66,9 +41,6 @@ services:
               count: all
               capabilities: [gpu]
     container_name: atlas_brain
-    # The command is already specified in the Dockerfile's CMD,
-    # but you could override it here if needed.
 
 volumes:
-  atlas_postgres_data:
   atlas_nocodb_data:

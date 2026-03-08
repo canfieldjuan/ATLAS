@@ -1021,13 +1021,13 @@ async def list_tenant_campaigns(
     if scope != "TRUE":
         # b2b_campaigns uses company_name, but we scope via metadata.vendor_name
         conditions.append(
-            f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx})"
+            f"bc.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx})"
         )
         params.extend(t_params)
         idx += 1
 
     if status:
-        conditions.append(f"status = ${idx}")
+        conditions.append(f"bc.status = ${idx}")
         params.append(status)
         idx += 1
 
@@ -1037,18 +1037,25 @@ async def list_tenant_campaigns(
 
     rows = await pool.fetch(
         f"""
-        SELECT id, company_name, vendor_name, channel, subject,
-               status, approved_at, sent_at, created_at
-        FROM b2b_campaigns
+        SELECT bc.id, bc.company_name, bc.vendor_name, bc.channel, bc.subject,
+               bc.status, bc.approved_at, bc.sent_at, bc.created_at,
+               bc.recipient_email, cs.company_context
+        FROM b2b_campaigns bc
+        LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id
         {where}
-        ORDER BY created_at DESC
+        ORDER BY bc.created_at DESC
         LIMIT ${idx}
         """,
         *params,
     )
 
-    campaigns = [
-        {
+    campaigns = []
+    for r in rows:
+        cc = r.get("company_context")
+        persona = None
+        if cc and isinstance(cc, dict):
+            persona = cc.get("target_persona")
+        campaigns.append({
             "id": str(r["id"]),
             "company_name": r["company_name"],
             "vendor_name": r["vendor_name"],
@@ -1058,9 +1065,9 @@ async def list_tenant_campaigns(
             "approved_at": str(r["approved_at"]) if r["approved_at"] else None,
             "sent_at": str(r["sent_at"]) if r["sent_at"] else None,
             "created_at": str(r["created_at"]) if r["created_at"] else None,
-        }
-        for r in rows
-    ]
+            "recipient_email": r["recipient_email"],
+            "target_persona": persona,
+        })
 
     return {"campaigns": campaigns, "count": len(campaigns)}
 

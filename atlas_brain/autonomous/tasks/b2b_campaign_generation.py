@@ -1353,6 +1353,8 @@ _PERSONA_PAIN_FILTER: dict[str, set[str]] = {
     "executive": {"pricing", "cost", "scalability", "reliability"},
     "technical": {"features", "ux", "integration", "security", "performance"},
     "operations": {"support", "reliability", "usability", "service"},
+    "evaluator": {"features", "ux", "integration", "usability", "performance", "pricing"},
+    "champion": {"support", "usability", "reliability", "features", "service"},
 }
 
 # Quote keywords for filtering key_quotes per persona
@@ -1360,6 +1362,8 @@ _PERSONA_QUOTE_KEYWORDS: dict[str, list[str]] = {
     "executive": ["cost", "price", "budget", "roi", "renewal", "money", "expensive", "contract", "spend"],
     "technical": ["feature", "bug", "api", "migration", "workaround", "integration", "missing", "broken", "limitation"],
     "operations": ["support", "ticket", "downtime", "complaint", "productivity", "team", "workflow", "response time", "sla"],
+    "evaluator": ["evaluate", "compare", "alternative", "demo", "trial", "requirement", "criteria", "shortlist", "selection", "vendor"],
+    "champion": ["team", "adoption", "rollout", "training", "onboarding", "user", "daily", "workflow", "productivity", "frustrat"],
 }
 
 # Persona -> role_type mapping (controls tone via existing skill Rule #3)
@@ -1367,6 +1371,8 @@ _PERSONA_ROLE_TYPE: dict[str, str] = {
     "executive": "economic_buyer",
     "technical": "evaluator",
     "operations": "champion",
+    "evaluator": "evaluator",
+    "champion": "champion",
 }
 
 # Context fields to emphasize per persona
@@ -1374,6 +1380,8 @@ _PERSONA_EMPHASIS: dict[str, list[str]] = {
     "executive": ["urgency", "seat_count", "contract_end", "decision_timeline"],
     "technical": ["feature_gaps", "integration_stack", "competitors_considering"],
     "operations": ["pain_categories", "key_quotes"],
+    "evaluator": ["feature_gaps", "competitors_considering", "integration_stack", "pain_categories"],
+    "champion": ["pain_categories", "key_quotes", "urgency"],
 }
 
 

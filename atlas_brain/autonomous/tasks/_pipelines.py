@@ -329,6 +329,15 @@ register_pipeline(PipelineConfig(
     enabled_key="apollo.enabled",
     tasks=[
         TaskDef(
+            name="vendor_target_enrichment",
+            module="vendor_target_enrichment",
+            schedule_type="cron",
+            timeout_seconds=900,
+            description="Enrich vendor/challenger targets with Apollo.io contacts",
+            metadata={"builtin_handler": "vendor_target_enrichment"},
+            cron_config_key="apollo.vendor_enrichment_cron",
+        ),
+        TaskDef(
             name="prospect_enrichment",
             module="prospect_enrichment",
             schedule_type="cron",

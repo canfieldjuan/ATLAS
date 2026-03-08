@@ -50,6 +50,24 @@ _PERSONA_TITLE_MAP: dict[str, list[str]] = {
         "director of operations", "director of customer success",
         "vp of customer success", "vp of operations", "vp of sales",
     ],
+    "evaluator": [
+        "procurement", "purchasing", "sourcing", "vendor management",
+        "it manager", "solutions architect", "systems administrator",
+        "project manager", "program manager", "business analyst",
+        "director of it", "manager of it", "head of procurement",
+        "revops", "revenue operations", "sales operations", "sales ops",
+        "marketing ops", "marketing operations", "business systems",
+        "gtm systems", "go-to-market", "crm admin", "crm manager",
+        "salesforce admin", "hubspot admin", "systems manager",
+    ],
+    "champion": [
+        "team lead", "manager", "senior manager", "group manager",
+        "department head", "supervisor", "coordinator",
+        "account manager", "customer success manager",
+        "implementation manager", "adoption manager",
+        "crm specialist", "salesforce specialist", "hubspot specialist",
+        "sales enablement", "revenue enablement",
+    ],
 }
 
 # Seniority ranking for tiebreaking

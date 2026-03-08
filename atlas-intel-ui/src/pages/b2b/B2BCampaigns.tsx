@@ -85,6 +85,32 @@ export default function B2BCampaigns() {
       render: r => <span className="text-slate-400">{r.channel}</span>,
     },
     {
+      key: 'recipient',
+      header: 'Recipient',
+      render: r => r.recipient_email
+        ? <span className="text-slate-300 text-xs truncate max-w-[180px] block">{r.recipient_email}</span>
+        : <span className="text-slate-600 text-xs">--</span>,
+    },
+    {
+      key: 'persona',
+      header: 'Persona',
+      render: r => {
+        if (!r.target_persona) return <span className="text-slate-600 text-xs">--</span>
+        const colors: Record<string, string> = {
+          executive: 'text-amber-400 bg-amber-900/20',
+          technical: 'text-blue-400 bg-blue-900/20',
+          operations: 'text-emerald-400 bg-emerald-900/20',
+          evaluator: 'text-purple-400 bg-purple-900/20',
+          champion: 'text-pink-400 bg-pink-900/20',
+        }
+        return (
+          <span className={`text-xs px-2 py-0.5 rounded ${colors[r.target_persona] || 'text-slate-400 bg-slate-700/30'}`}>
+            {r.target_persona}
+          </span>
+        )
+      },
+    },
+    {
       key: 'subject',
       header: 'Subject',
       render: r => <span className="text-slate-400 truncate max-w-xs block">{r.subject || '--'}</span>,

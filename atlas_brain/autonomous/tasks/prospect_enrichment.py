@@ -6,7 +6,8 @@ Discovers companies from two sources:
   1. Proactive: high-urgency companies from b2b_reviews
   2. Reactive: campaign_sequences with NULL recipient_email
 
-For each company: org enrich -> people search -> bulk enrich -> upsert prospects.
+For each company: search_people by name (FREE) -> reveal_person (1 credit each) -> upsert prospects.
+Org data comes from person reveal responses, not a separate enrich_organization call.
 Respects credit budget (max_credits_per_run) and org cache TTL (org_cache_days).
 """
 
@@ -125,8 +126,8 @@ async def _enrich_company(pool, apollo, cfg, company: dict[str, str], credits_us
     # People search by company name (FREE — no credits)
     people = await apollo.search_people(company_name=raw, seniorities=cfg.target_seniorities)
     if not people:
-        # Widen to manager level and retry once
-        people = await apollo.search_people(company_name=raw, seniorities=["manager"])
+        # Widen to any seniority and retry once
+        people = await apollo.search_people(company_name=raw, seniorities=["senior", "entry"])
 
     if not people:
         stats["people_found"] = 0
@@ -258,7 +259,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         try:
             spent, stats = await _enrich_company(pool, apollo, cfg, company, total_credits)
             total_credits += spent
-            if stats.get("org_found"):
+            if stats.get("prospects_created", 0) > 0:
                 enriched_companies += 1
             total_prospects += stats.get("prospects_created", 0)
             results.append(stats)

@@ -250,6 +250,8 @@ export interface B2BCampaign {
   approved_at: string | null
   sent_at: string | null
   created_at: string | null
+  recipient_email: string | null
+  target_persona: string | null
 }
 
 export interface DashboardOverview {

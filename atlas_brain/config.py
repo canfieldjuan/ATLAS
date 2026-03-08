@@ -2076,7 +2076,7 @@ class B2BChurnConfig(BaseSettings):
     # Intelligence aggregation
     intelligence_enabled: bool = Field(default=True, description="Enable churn intelligence aggregation")
     intelligence_cron: str = Field(default="0 21 * * *", description="Daily churn intelligence (9 PM)")
-    intelligence_max_tokens: int = Field(default=4096, description="Max output tokens for churn intelligence LLM call")
+    intelligence_max_tokens: int = Field(default=8192, description="Max output tokens for churn intelligence LLM call")
     intelligence_window_days: int = Field(default=30, description="Days of enriched reviews to analyze")
     intelligence_min_reviews: int = Field(default=3, description="Min reviews per vendor to include")
 
@@ -2260,7 +2260,7 @@ class B2BCampaignConfig(BaseSettings):
 
     enabled: bool = Field(default=False, description="Enable B2B campaign engine")
     min_opportunity_score: int = Field(default=70, ge=0, le=100, description="Min opportunity score to target")
-    require_decision_maker: bool = Field(default=True, description="Only target decision makers")
+    require_decision_maker: bool = Field(default=False, description="Require decision-maker flag on reviews (False = full buying committee)")
     max_campaigns_per_run: int = Field(default=20, ge=1, description="Max campaigns per generation run")
     channels: list[str] = Field(
         default=["email_cold", "linkedin", "email_followup"],
@@ -2279,8 +2279,8 @@ class B2BCampaignConfig(BaseSettings):
         description="Campaign target mode: vendor_retention | challenger_intel | churning_company",
     )
     personas: list[str] = Field(
-        default=["executive", "technical", "operations"],
-        description="Persona types to generate campaigns for in churning_company mode",
+        default=["executive", "technical", "operations", "evaluator", "champion"],
+        description="Persona types to generate campaigns for (buying committee coverage)",
     )
 
 
@@ -2389,10 +2389,9 @@ class ApolloConfig(BaseSettings):
     api_key: str = Field(default="", description="Apollo.io API key")
     max_prospects_per_company: int = Field(default=5, ge=1, le=10, description="Max people to enrich per company")
     target_seniorities: list[str] = Field(
-        default=["c_suite", "owner", "founder", "vp", "head", "director"],
-        description="Apollo seniority levels to target",
+        default=["c_suite", "owner", "founder", "vp", "head", "director", "manager"],
+        description="Apollo seniority levels to target (buying committee breadth)",
     )
-    enrich_batch_size: int = Field(default=10, ge=1, le=10, description="People per bulk_match call (max 10)")
     min_urgency_score: float = Field(default=6.5, ge=0, le=10, description="Min urgency score for proactive enrichment")
     org_cache_days: int = Field(default=30, ge=1, description="Days before re-enriching a cached org")
     max_credits_per_run: int = Field(default=200, ge=1, description="Max Apollo credits per enrichment run")
@@ -2403,6 +2402,8 @@ class ApolloConfig(BaseSettings):
     )
     enrichment_cron: str = Field(default="0 20 * * *", description="Prospect enrichment schedule (daily 8 PM)")
     matching_interval_seconds: int = Field(default=3600, ge=300, description="Prospect-to-sequence matching interval")
+    max_vendor_credits_per_run: int = Field(default=50, ge=1, description="Max Apollo credits per vendor target enrichment run")
+    vendor_enrichment_cron: str = Field(default="30 19 * * *", description="Vendor target enrichment schedule (daily 7:30 PM)")
 
 
 class TemporalPatternConfig(BaseSettings):
