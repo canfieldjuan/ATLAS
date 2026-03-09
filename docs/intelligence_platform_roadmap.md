@@ -194,6 +194,21 @@ Phase 2 deferred scope:
 14. Verify config: `ATLAS_B2B_WEBHOOK_ENABLED=true` enables delivery, `false` skips
 15. Verify validation: invalid event_types rejected, empty event_types rejected, duplicate URL rejected (409)
 
+**Phase 5 Sprint 2** (PDF intelligence report export): fpdf2 installed.
+
+1. AST parse: `python -c "import ast; ast.parse(open('atlas_brain/services/b2b/pdf_renderer.py').read())"`
+2. Import check: `python -c "from atlas_brain.services.b2b.pdf_renderer import render_report_pdf"`
+3. Smoke test: generate PDFs for all 5 report families (churn feed, scorecard, comparison, deep dive, generic)
+4. Verify PDF header: output starts with `%PDF`
+5. Test REST: `GET /b2b/dashboard/reports/{id}/pdf` returns `application/pdf` with `Content-Disposition` header
+6. Test access control: unauthenticated user can access, tracked-vendor check enforced
+7. Test 404: nonexistent report_id returns 404
+8. Test 400: invalid UUID returns 400
+9. Test MCP: `export_report_pdf` returns JSON with `filename`, `size_bytes`, `content_base64`
+10. Verify base64 decode: `base64.b64decode(content_base64)` produces valid PDF bytes
+11. Non-ASCII check: `grep -rP '[\x80-\xFF]' atlas_brain/services/b2b/pdf_renderer.py` returns empty
+12. Verify fpdf2 in requirements.txt
+
 ---
 
 ## Line Reference Verification (March 2026)
