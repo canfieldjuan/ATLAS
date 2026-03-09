@@ -179,7 +179,7 @@ def render_vendor_briefing_html(briefing: dict) -> str:
 
     quote_blocks = ""
     for q in evidence:
-        quote_text = _safe(q) if isinstance(q, str) else _safe(q.get("text", "") if isinstance(q, dict) else str(q))
+        quote_text = _safe(q) if isinstance(q, str) else _safe(q.get("quote", q.get("text", "")) if isinstance(q, dict) else str(q))
         if quote_text:
             quote_blocks += f"""
             <table cellpadding="0" cellspacing="0" border="0" style="width:100%;margin-bottom:12px;">

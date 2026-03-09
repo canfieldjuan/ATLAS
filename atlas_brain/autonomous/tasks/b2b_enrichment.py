@@ -19,6 +19,7 @@ from typing import Any
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from ...services.scraping.sources import VERIFIED_SOURCES as _VERIFIED_SOURCES
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_enrichment")
 
@@ -231,10 +232,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 _MIN_REVIEW_TEXT_LENGTH = 80  # Skip LLM calls for reviews shorter than this
 
 # Verified review platforms -- every review gets full extraction (skip triage).
-_VERIFIED_SOURCES = frozenset({
-    "g2", "capterra", "gartner", "trustradius",
-    "peerspot", "getapp", "software_advice", "trustpilot",
-})
 
 
 async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
@@ -260,37 +257,39 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
             # Every review on these platforms has signal worth extracting.
             logger.debug("Verified source %s for %s -- skipping triage", source, review_id)
         else:
-            # Stage 1: Fast triage — is this review worth full extraction?
-            triage = await asyncio.wait_for(
+            # Stage 1: Fast triage -- is this review worth full extraction?
+            triage, triage_model_id = await asyncio.wait_for(
                 _triage_review(row, local_only),
                 timeout=30,
             )
 
             if triage is None:
                 # Triage failed (no LLM, skill missing, parse error).
-                # Don't fall through to full extraction — that will likely fail too.
+                # Don't fall through to full extraction -- that will likely fail too.
                 # Leave as pending for retry on next cycle.
                 logger.debug("Triage returned None for %s, deferring to next cycle", review_id)
                 await _increment_attempts(pool, review_id, row["enrichment_attempts"], max_attempts)
                 return False
 
             if not triage.get("signal", True):
-                # No churn signal — skip full extraction
+                # No churn signal -- skip full extraction
                 await pool.execute(
                     """
                     UPDATE b2b_reviews
                     SET enrichment_status = 'no_signal',
                         enrichment_attempts = enrichment_attempts + 1,
-                        enrichment = $1
+                        enrichment = $1,
+                        enrichment_model = $3
                     WHERE id = $2
                     """,
                     json.dumps({"triage": triage}),
                     review_id,
+                    triage_model_id,
                 )
                 return False
 
         # Stage 2: Full 47-field extraction (only for reviews that passed triage)
-        result = await asyncio.wait_for(
+        result, model_id = await asyncio.wait_for(
             _classify_review_async(row, local_only, max_tokens, truncate_length),
             timeout=120,
         )
@@ -302,12 +301,14 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
                 SET enrichment = $1,
                     enrichment_status = 'enriched',
                     enrichment_attempts = enrichment_attempts + 1,
-                    enriched_at = $2
+                    enriched_at = $2,
+                    enrichment_model = $4
                 WHERE id = $3
                 """,
                 json.dumps(result),
                 datetime.now(timezone.utc),
                 review_id,
+                model_id,
             )
 
             # Fire ntfy notification for high-urgency signals (must never
@@ -394,11 +395,11 @@ def _build_classify_payload(row, truncate_length: int = 3000) -> dict[str, Any]:
     }
 
 
-async def _triage_review(row, local_only: bool) -> dict[str, Any] | None:
+async def _triage_review(row, local_only: bool) -> tuple[dict[str, Any] | None, str | None]:
     """Fast LLM triage: does this review contain churn signals worth extracting?
 
-    Returns {"signal": bool, "confidence": int, "reason": str} or None on error.
-    ~50 tokens output — runs 5-10x faster than full extraction.
+    Returns ({"signal": bool, "confidence": int, "reason": str}, model_id) or (None, None) on error.
+    ~50 tokens output -- runs 5-10x faster than full extraction.
     """
     from ...skills import get_skill_registry
     from ...services.protocols import Message
@@ -406,14 +407,16 @@ async def _triage_review(row, local_only: bool) -> dict[str, Any] | None:
 
     skill = get_skill_registry().get("digest/b2b_churn_triage")
     if not skill:
-        # Triage skill missing — fall through to full extraction
-        return None
+        # Triage skill missing -- fall through to full extraction
+        return None, None
 
     llm = get_pipeline_llm(prefer_cloud=False, try_openrouter=False, auto_activate_ollama=True)
     if llm is None:
-        return None
+        return None, None
 
-    # Compact payload — triage doesn't need all fields
+    model_id = getattr(llm, "model_id", None) or getattr(llm, "model", None)
+
+    # Compact payload -- triage doesn't need all fields
     review_text = (row.get("review_text") or "")[:1500]
     payload = json.dumps({
         "vendor_name": row["vendor_name"],
@@ -440,20 +443,23 @@ async def _triage_review(row, local_only: bool) -> dict[str, Any] | None:
             text = result.get("response", "").strip()
 
         if not text:
-            return None
+            return None, model_id
         text = clean_llm_output(text)
         parsed = json.loads(text)
         if isinstance(parsed, dict) and "signal" in parsed:
-            return parsed
+            return parsed, model_id
     except (json.JSONDecodeError, Exception):
         pass
-    # On any failure, return None (fall through to full extraction — safe default)
-    return None
+    # On any failure, return None (fall through to full extraction -- safe default)
+    return None, model_id
 
 
 async def _classify_review_async(row, local_only: bool, max_tokens: int,
-                                  truncate_length: int = 3000) -> dict[str, Any] | None:
-    """Async LLM call -- no thread pool, pure async for maximum vLLM throughput."""
+                                  truncate_length: int = 3000) -> tuple[dict[str, Any] | None, str | None]:
+    """Async LLM call -- no thread pool, pure async for maximum vLLM throughput.
+
+    Returns (enrichment_dict, model_id) tuple.
+    """
     from ...skills import get_skill_registry
     from ...services.protocols import Message
     from ...pipelines.llm import get_pipeline_llm, clean_llm_output
@@ -461,7 +467,7 @@ async def _classify_review_async(row, local_only: bool, max_tokens: int,
     skill = get_skill_registry().get("digest/b2b_churn_extraction")
     if not skill:
         logger.warning("Skill 'digest/b2b_churn_extraction' not found")
-        return None
+        return None, None
 
     llm = get_pipeline_llm(
         prefer_cloud=False,
@@ -470,7 +476,9 @@ async def _classify_review_async(row, local_only: bool, max_tokens: int,
     )
     if llm is None:
         logger.warning("No LLM available for B2B churn extraction")
-        return None
+        return None, None
+
+    model_id = getattr(llm, "model_id", None) or getattr(llm, "model", None)
 
     payload = _build_classify_payload(row, truncate_length)
     messages = [
@@ -490,21 +498,21 @@ async def _classify_review_async(row, local_only: bool, max_tokens: int,
             text = result.get("response", "").strip()
 
         if not text:
-            return None
+            return None, model_id
         text = clean_llm_output(text)
         parsed = json.loads(text)
         if not isinstance(parsed, dict):
-            return None
-        return parsed
+            return None, model_id
+        return parsed, model_id
     except json.JSONDecodeError:
         logger.warning(
             "Failed to parse B2B enrichment JSON for review %s (vendor=%s)",
             row["id"], row["vendor_name"],
         )
-        return None
+        return None, model_id
     except Exception:
         logger.exception("B2B enrichment LLM call failed")
-        return None
+        return None, None
 
 
 _KNOWN_PAIN_CATEGORIES = {

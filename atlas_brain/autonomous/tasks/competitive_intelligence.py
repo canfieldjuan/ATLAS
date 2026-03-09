@@ -24,6 +24,12 @@ from ...storage.models import ScheduledTask
 
 logger = logging.getLogger("atlas.autonomous.tasks.competitive_intelligence")
 
+# Category filter expression matching blog topic selection (categories->>2 granular)
+_CAT_EXPR = (
+    "COALESCE(REPLACE(pm.categories->>2, '&amp;', '&'),"
+    " REPLACE(pm.categories->>1, '&amp;', '&'), pr.source_category)"
+)
+
 
 async def run(task: ScheduledTask) -> dict[str, Any]:
     """Autonomous task handler: daily competitive intelligence."""
@@ -261,10 +267,15 @@ async def _fetch_data_context(pool) -> dict[str, Any]:
     }
 
 
-async def _fetch_brand_health(pool) -> list[dict[str, Any]]:
+async def _fetch_brand_health(pool, *, category: str | None = None) -> list[dict[str, Any]]:
     """Per-brand health: reviews, rating, pain, severity, repurchase, safety."""
+    cat_filter = ""
+    params: list = []
+    if category:
+        cat_filter = f"AND {_CAT_EXPR} = $1"
+        params = [category]
     rows = await pool.fetch(
-        """
+        f"""
         SELECT
             pm.brand,
             count(*) AS total_reviews,
@@ -288,10 +299,12 @@ async def _fetch_brand_health(pool) -> list[dict[str, Any]]:
         JOIN product_metadata pm ON pm.asin = pr.asin
         WHERE pr.deep_enrichment_status = 'enriched'
           AND pm.brand IS NOT NULL AND pm.brand != ''
+          {cat_filter}
         GROUP BY pm.brand
         HAVING count(*) >= 5
         ORDER BY count(*) DESC
-        """
+        """,
+        *params,
     )
     return [
         {
@@ -313,28 +326,35 @@ async def _fetch_brand_health(pool) -> list[dict[str, Any]]:
     ]
 
 
-async def _fetch_competitive_flows(pool) -> list[dict[str, Any]]:
+async def _fetch_competitive_flows(pool, *, category: str | None = None) -> list[dict[str, Any]]:
     """Brand-to-brand customer migration from product_comparisons."""
     from ...pipelines.comparisons import fetch_competitive_flows
 
+    where = "pm.brand IS NOT NULL AND pm.brand != ''"
+    params: list = []
+    if category:
+        where += f" AND {_CAT_EXPR} = $1"
+        params = [category]
     return await fetch_competitive_flows(
         pool,
-        where_clause="pm.brand IS NOT NULL AND pm.brand != ''",
+        where_clause=where,
+        params=params,
         min_mentions=2,
         limit=500,
     )
 
 
-async def _fetch_feature_gaps(pool) -> list[dict[str, Any]]:
+async def _fetch_feature_gaps(pool, *, category: str | None = None) -> list[dict[str, Any]]:
     """Most-requested features across all products."""
+    cat_filter = ""
+    params: list = []
+    if category:
+        cat_filter = f"AND {_CAT_EXPR} = $1"
+        params = [category]
     rows = await pool.fetch(
-        """
+        f"""
         SELECT
-            COALESCE(
-                REPLACE(pm.categories->>2, '&amp;', '&'),
-                REPLACE(pm.categories->>1, '&amp;', '&'),
-                pr.source_category
-            ) AS category,
+            {_CAT_EXPR} AS category,
             feat AS feature,
             count(*) AS mentions,
             avg(pr.pain_score) AS avg_pain_score
@@ -343,11 +363,13 @@ async def _fetch_feature_gaps(pool) -> list[dict[str, Any]]:
         CROSS JOIN jsonb_array_elements_text(pr.deep_extraction->'feature_requests') AS feat
         WHERE pr.deep_enrichment_status = 'enriched'
           AND jsonb_array_length(pr.deep_extraction->'feature_requests') > 0
+          {cat_filter}
         GROUP BY category, feat
         HAVING count(*) >= 2
         ORDER BY count(*) DESC
         LIMIT 500
-        """
+        """,
+        *params,
     )
     return [
         {
@@ -360,16 +382,17 @@ async def _fetch_feature_gaps(pool) -> list[dict[str, Any]]:
     ]
 
 
-async def _fetch_buyer_personas(pool) -> list[dict[str, Any]]:
+async def _fetch_buyer_personas(pool, *, category: str | None = None) -> list[dict[str, Any]]:
     """Buyer segment clusters from buyer_context + expertise/budget."""
+    cat_filter = ""
+    params: list = []
+    if category:
+        cat_filter = f"AND {_CAT_EXPR} = $1"
+        params = [category]
     rows = await pool.fetch(
-        """
+        f"""
         SELECT
-            COALESCE(
-                REPLACE(pm.categories->>2, '&amp;', '&'),
-                REPLACE(pm.categories->>1, '&amp;', '&'),
-                pr.source_category
-            ) AS category,
+            {_CAT_EXPR} AS category,
             pr.deep_extraction->'buyer_context'->>'buyer_type' AS buyer_type,
             pr.deep_extraction->'buyer_context'->>'use_case' AS use_case,
             pr.deep_extraction->'buyer_context'->>'price_sentiment' AS price_sentiment,
@@ -382,6 +405,7 @@ async def _fetch_buyer_personas(pool) -> list[dict[str, Any]]:
         LEFT JOIN product_metadata pm ON pm.asin = pr.asin
         WHERE pr.deep_enrichment_status = 'enriched'
           AND pr.deep_extraction->'buyer_context' IS NOT NULL
+          {cat_filter}
         GROUP BY
             category,
             pr.deep_extraction->'buyer_context'->>'buyer_type',
@@ -392,7 +416,8 @@ async def _fetch_buyer_personas(pool) -> list[dict[str, Any]]:
         HAVING count(*) >= 3
         ORDER BY count(*) DESC
         LIMIT 500
-        """
+        """,
+        *params,
     )
     return [
         {
@@ -410,10 +435,15 @@ async def _fetch_buyer_personas(pool) -> list[dict[str, Any]]:
     ]
 
 
-async def _fetch_sentiment_landscape(pool) -> list[dict[str, Any]]:
+async def _fetch_sentiment_landscape(pool, *, category: str | None = None) -> list[dict[str, Any]]:
     """Per-brand sentiment on specific aspects."""
+    cat_filter = ""
+    params: list = []
+    if category:
+        cat_filter = f"AND {_CAT_EXPR} = $1"
+        params = [category]
     rows = await pool.fetch(
-        """
+        f"""
         SELECT
             pm.brand,
             asp->>'aspect' AS aspect,
@@ -425,10 +455,12 @@ async def _fetch_sentiment_landscape(pool) -> list[dict[str, Any]]:
         WHERE pr.deep_enrichment_status = 'enriched'
           AND pm.brand IS NOT NULL AND pm.brand != ''
           AND jsonb_array_length(pr.deep_extraction->'sentiment_aspects') > 0
+          {cat_filter}
         GROUP BY pm.brand, asp->>'aspect', asp->>'sentiment'
         ORDER BY count(*) DESC
         LIMIT 500
-        """
+        """,
+        *params,
     )
     return [
         {
@@ -441,10 +473,15 @@ async def _fetch_sentiment_landscape(pool) -> list[dict[str, Any]]:
     ]
 
 
-async def _fetch_safety_signals(pool) -> list[dict[str, Any]]:
+async def _fetch_safety_signals(pool, *, category: str | None = None) -> list[dict[str, Any]]:
     """Per-brand safety-flagged reviews with consequence_severity breakdown."""
+    cat_filter = ""
+    params: list = []
+    if category:
+        cat_filter = f"AND {_CAT_EXPR} = $1"
+        params = [category]
     rows = await pool.fetch(
-        """
+        f"""
         SELECT
             pm.brand,
             pr.deep_extraction->>'consequence_severity' AS consequence,
@@ -454,10 +491,12 @@ async def _fetch_safety_signals(pool) -> list[dict[str, Any]]:
         WHERE pr.deep_enrichment_status = 'enriched'
           AND (pr.deep_extraction->'safety_flag'->>'flagged')::boolean IS TRUE
           AND pm.brand IS NOT NULL AND pm.brand != ''
+          {cat_filter}
         GROUP BY pm.brand, pr.deep_extraction->>'consequence_severity'
         ORDER BY count(*) DESC
         LIMIT 500
-        """
+        """,
+        *params,
     )
     return [
         {
@@ -469,10 +508,54 @@ async def _fetch_safety_signals(pool) -> list[dict[str, Any]]:
     ]
 
 
-async def _fetch_loyalty_churn(pool) -> list[dict[str, Any]]:
-    """Per-brand loyalty depth x replacement behavior cross-tab."""
+async def _fetch_safety_products(pool, *, category: str | None = None) -> list[dict[str, Any]]:
+    """Top products (ASINs) by safety-flag count with product title."""
+    cat_filter = ""
+    params: list = []
+    if category:
+        cat_filter = f"AND {_CAT_EXPR} = $1"
+        params = [category]
     rows = await pool.fetch(
-        """
+        f"""
+        SELECT
+            pm.asin,
+            pm.title AS product_title,
+            pm.brand,
+            count(*) AS safety_flags,
+            round(avg(pr.pain_score), 1) AS avg_pain
+        FROM product_reviews pr
+        JOIN product_metadata pm ON pm.asin = pr.asin
+        WHERE pr.deep_enrichment_status = 'enriched'
+          AND (pr.deep_extraction->'safety_flag'->>'flagged')::boolean IS TRUE
+          AND pm.brand IS NOT NULL AND pm.brand != ''
+          {cat_filter}
+        GROUP BY pm.asin, pm.title, pm.brand
+        ORDER BY count(*) DESC
+        LIMIT 15
+        """,
+        *params,
+    )
+    return [
+        {
+            "asin": r["asin"],
+            "product_title": r["product_title"],
+            "brand": r["brand"],
+            "safety_flags": r["safety_flags"],
+            "avg_pain": float(r["avg_pain"]) if r["avg_pain"] else None,
+        }
+        for r in rows
+    ]
+
+
+async def _fetch_loyalty_churn(pool, *, category: str | None = None) -> list[dict[str, Any]]:
+    """Per-brand loyalty depth x replacement behavior cross-tab."""
+    cat_filter = ""
+    params: list = []
+    if category:
+        cat_filter = f"AND {_CAT_EXPR} = $1"
+        params = [category]
+    rows = await pool.fetch(
+        f"""
         SELECT
             pm.brand,
             pr.deep_extraction->>'brand_loyalty_depth' AS loyalty,
@@ -482,13 +565,15 @@ async def _fetch_loyalty_churn(pool) -> list[dict[str, Any]]:
         JOIN product_metadata pm ON pm.asin = pr.asin
         WHERE pr.deep_enrichment_status = 'enriched'
           AND pm.brand IS NOT NULL AND pm.brand != ''
+          {cat_filter}
         GROUP BY pm.brand,
             pr.deep_extraction->>'brand_loyalty_depth',
             pr.deep_extraction->>'replacement_behavior'
         HAVING count(*) >= 2
         ORDER BY count(*) DESC
         LIMIT 500
-        """
+        """,
+        *params,
     )
     return [
         {

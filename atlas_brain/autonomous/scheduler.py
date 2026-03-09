@@ -627,6 +627,15 @@ class TaskScheduler:
                 "notify_tags": "brain,bar_chart",
             },
         },
+        {
+            "name": "b2b_vendor_briefing",
+            "description": "Send weekly vendor intelligence briefings to active vendor_targets",
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": "0 9 * * 1",
+            "timeout_seconds": 300,
+            "metadata": {"builtin_handler": "b2b_vendor_briefing"},
+        },
     ]
 
     async def _ensure_default_tasks(self) -> None:

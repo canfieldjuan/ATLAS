@@ -101,7 +101,7 @@ class HomeAssistantConfig(BaseSettings):
 class LLMConfig(BaseSettings):
     """LLM (reasoning model) configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_LLM_")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_LLM_", env_file=".env", extra="ignore")
 
     # Backend selection: "llama-cpp", "transformers-flash", "ollama", "together", "cloud", or "hybrid"
     default_model: str = Field(default="llama-cpp", description="Default LLM backend")
@@ -2087,6 +2087,15 @@ class B2BChurnConfig(BaseSettings):
         default="g2,capterra,trustradius",
         description="High-signal sources for executive-facing outputs (weekly_churn_feed, displacement, timeline)",
     )
+    intelligence_llm_backend: str = Field(
+        default="vllm",
+        description=(
+            "LLM backend for intelligence synthesis. "
+            "'vllm' = local vLLM (primary) with Anthropic fallback. "
+            "'anthropic' = Anthropic Sonnet only. "
+            "'auto' = use the default synthesis workload routing."
+        ),
+    )
     intelligence_exploratory_enabled: bool = Field(
         default=True,
         description="Enable exploratory_overview generation when the LLM payload fits the context budget",
@@ -2199,6 +2208,8 @@ class B2BChurnConfig(BaseSettings):
     vendor_briefing_enabled: bool = Field(default=True, description="Enable vendor intelligence briefing emails")
     vendor_briefing_booking_url: str = Field(default="https://cal.com/atlas-intel/15min", description="Booking URL for briefing CTA button")
     vendor_briefing_sender_name: str = Field(default="Atlas Intelligence", description="Display name for briefing sender")
+    vendor_briefing_cooldown_days: int = Field(default=7, description="Min days between briefings to same vendor")
+    vendor_briefing_max_per_batch: int = Field(default=20, description="Max briefings per batch send run")
 
 
 class B2BAlertConfig(BaseSettings):
@@ -2380,6 +2391,14 @@ class CampaignSequenceConfig(BaseSettings):
     ses_secret_access_key: str = Field(default="", description="AWS secret key")
     ses_configuration_set: str = Field(default="", description="SES Configuration Set name for tracking")
     ses_from_email: str = Field(default="", description="Verified sender for SES")
+
+    # CAN-SPAM compliance
+    unsubscribe_base_url: str = Field(
+        default="", description="Base URL for one-click unsubscribe endpoint",
+    )
+    company_address: str = Field(
+        default="", description="Physical mailing address for CAN-SPAM footer",
+    )
 
     # Smart send scheduling
     send_window_start: str = Field(default="09:00", description="Earliest send time (HH:MM)")

@@ -101,10 +101,10 @@ INSERT INTO b2b_reviews (
     rating, rating_max, summary, review_text, pros, cons,
     reviewer_name, reviewer_title, reviewer_company,
     company_size_raw, reviewer_industry, reviewed_at,
-    import_batch_id, raw_metadata
+    import_batch_id, raw_metadata, parser_version
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-    $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
+    $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
 )
 ON CONFLICT (dedup_key) DO NOTHING
 """
@@ -252,8 +252,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
             # Insert reviews + fire enrichment immediately (background task)
             inserted = 0
+            pv = getattr(parser, 'version', None)
             if result.reviews:
-                inserted = await _insert_reviews(pool, result.reviews, batch_id)
+                inserted = await _insert_reviews(pool, result.reviews, batch_id, parser_version=pv)
 
                 # Fire enrichment NOW — don't wait for it, let vLLM chew
                 if inserted > 0:
@@ -370,7 +371,7 @@ async def _fire_enrichment(batch_id: str, source: str, vendor: str) -> None:
 _MIN_ENRICHABLE_TEXT_LEN = 80  # Reviews shorter than this can't produce useful enrichment
 
 
-async def _insert_reviews(pool, reviews: list[dict], batch_id: str) -> int:
+async def _insert_reviews(pool, reviews: list[dict], batch_id: str, parser_version: str | None = None) -> int:
     """Insert reviews into b2b_reviews with dedup. Returns count of new inserts."""
     rows = []
     skipped_short = 0
@@ -420,6 +421,7 @@ async def _insert_reviews(pool, reviews: list[dict], batch_id: str) -> int:
             reviewed_at_ts,
             batch_id,
             json.dumps(r.get("raw_metadata", {})),
+            parser_version,
         ))
 
     if skipped_short:
@@ -449,13 +451,14 @@ async def _log_scrape(
 ) -> None:
     """Insert a record into b2b_scrape_log."""
     proxy_type = "residential" if parser.prefer_residential else "none"
+    pv = getattr(parser, 'version', None)
     try:
         await pool.execute(
             """
             INSERT INTO b2b_scrape_log
                 (target_id, source, status, reviews_found, reviews_inserted,
-                 pages_scraped, errors, duration_ms, proxy_type)
-            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
+                 pages_scraped, errors, duration_ms, proxy_type, parser_version)
+            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)
             """,
             _uuid.UUID(target.id),
             target.source,
@@ -466,6 +469,7 @@ async def _log_scrape(
             json.dumps(errors),
             duration_ms,
             proxy_type,
+            pv,
         )
     except Exception:
         logger.warning("Failed to log scrape result", exc_info=True)

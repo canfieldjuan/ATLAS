@@ -71,6 +71,7 @@ class StackOverflowParser:
 
     source_name = "stackoverflow"
     prefer_residential = False
+    version = "stackoverflow:1"
 
     # --------------------------------------------------------------------- #
     # Internal helpers

@@ -461,6 +461,8 @@ async def _classify_and_plan(emails: list[dict[str, Any]]) -> int:
 # Campaign reply detection
 # ---------------------------------------------------------------------------
 
+_NEGATIVE_REPLY_KW = {"unsubscribe", "stop", "remove", "opt out"}
+
 
 async def _detect_campaign_replies(pool, emails: list[dict[str, Any]]) -> int:
     """Detect replies to campaign emails by matching message headers.
@@ -552,6 +554,78 @@ async def _detect_campaign_replies(pool, emails: list[dict[str, Any]]) -> int:
                 sender=e.get("from", ""),
                 sequence_id=str(sequence_id),
             )
+
+            # -- CRM contact + vendor target from campaign reply --
+            try:
+                _name, sender_email = email.utils.parseaddr(e.get("from", ""))
+                if sender_email:
+                    from ...services.crm_provider import get_crm_provider
+
+                    crm = get_crm_provider()
+                    contact = await crm.create_contact({
+                        "email": sender_email,
+                        "full_name": _name or None,
+                        "contact_type": "lead",
+                        "source": "campaign_reply",
+                        "source_ref": str(sequence_id),
+                    })
+                    contact_id = contact.get("id")
+                    if contact_id:
+                        await crm.log_interaction(
+                            contact_id=contact_id,
+                            interaction_type="email",
+                            summary=body_text[:500],
+                            intent="campaign_reply",
+                        )
+
+                    # Auto-enroll as vendor target (skip for negative replies)
+                    body_lower = (e.get("body_text") or "").lower()
+                    is_negative = any(kw in body_lower for kw in _NEGATIVE_REPLY_KW)
+                    company_name = row.get("company_name", "")
+
+                    if not is_negative and company_name:
+                        existing_target = await pool.fetchrow(
+                            """
+                            SELECT id, status FROM vendor_targets
+                            WHERE LOWER(company_name) = LOWER($1)
+                            LIMIT 1
+                            """,
+                            company_name,
+                        )
+                        if existing_target:
+                            if existing_target["status"] != "active":
+                                await pool.execute(
+                                    """
+                                    UPDATE vendor_targets
+                                    SET status = 'active', updated_at = NOW()
+                                    WHERE id = $1
+                                    """,
+                                    existing_target["id"],
+                                )
+                                logger.info(
+                                    "Reactivated vendor_target %s for %s",
+                                    existing_target["id"], company_name,
+                                )
+                        else:
+                            await pool.execute(
+                                """
+                                INSERT INTO vendor_targets
+                                    (company_name, target_mode, status,
+                                     contact_email, contact_name, created_at, updated_at)
+                                VALUES ($1, 'vendor_retention', 'active',
+                                        $2, $3, NOW(), NOW())
+                                """,
+                                company_name, sender_email, _name or None,
+                            )
+                            logger.info(
+                                "Created vendor_target for %s from campaign reply",
+                                company_name,
+                            )
+            except Exception as vt_exc:
+                logger.warning(
+                    "CRM/vendor-target creation failed for reply %s: %s",
+                    e.get("id"), vt_exc,
+                )
 
             reply_count += 1
             logger.info(
@@ -997,24 +1071,22 @@ async def run(task: ScheduledTask) -> dict:
     if not cfg.enabled:
         return {"_skip_synthesis": "Email intake disabled"}
 
-    # Check IMAP is configured
-    from ...services.email_provider import IMAPEmailProvider
+    # Get email provider (IMAP preferred, Gmail API fallback)
+    from ...services.email_provider import get_email_provider
 
-    provider = IMAPEmailProvider()
-    if not provider.is_configured():
-        return {"_skip_synthesis": "IMAP not configured"}
+    provider = get_email_provider()
 
     query = settings.tools.gmail_query
     max_results = settings.tools.gmail_max_results
 
-    # 1. Fetch unread email metadata via IMAP
+    # 1. Fetch unread email metadata
     try:
         messages = await provider.list_messages(
             query=query, max_results=max_results,
         )
     except Exception as e:
         logger.error("Email intake: failed to list messages: %s", e)
-        return {"_skip_synthesis": f"IMAP error: {type(e).__name__}"}
+        return {"_skip_synthesis": f"Email read error: {type(e).__name__}"}
 
     if not messages:
         return {"_skip_synthesis": True, "new_emails": 0}

@@ -16,13 +16,15 @@ not double-synthesize.
 import asyncio
 import json
 import logging
+import math
+import uuid as _uuid
 from datetime import date, datetime, timezone
 from typing import Any
 
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
-from ...services.scraping.sources import parse_source_allowlist, display_name as _source_display_name
+from ...services.scraping.sources import parse_source_allowlist, display_name as _source_display_name, VERIFIED_SOURCES
 from ...services.vendor_registry import (
     resolve_vendor_name_cached,
     _ensure_cache as _warm_vendor_cache,
@@ -109,16 +111,18 @@ def _validate_report(
     """
     warnings: list[str] = []
 
-    # Build lookup of real quotes from source data
+    # Build lookup of real quotes from source data (handles both str and dict quotes)
     real_quotes: set[str] = set()
     for h in source_high_intent:
         for q in h.get("quotes", []):
-            if isinstance(q, str):
-                real_quotes.add(q)
+            text = _quote_text(q)
+            if text:
+                real_quotes.add(text)
     for qe in source_quotable:
         for q in qe.get("quotes", []):
-            if isinstance(q, str):
-                real_quotes.add(q)
+            text = _quote_text(q)
+            if text:
+                real_quotes.add(text)
 
     # 1. Summary vendor check -- warn if exec summary names a vendor not in feed
     exec_summary = parsed.get("executive_summary", "")
@@ -405,7 +409,7 @@ def _build_deterministic_vendor_feed(
     pain_lookup: dict[str, list[dict]],
     competitor_lookup: dict[str, list[dict]],
     feature_gap_lookup: dict[str, list[dict]],
-    quote_lookup: dict[str, list[str]],
+    quote_lookup: dict[str, list],
     budget_lookup: dict[str, dict],
     sentiment_lookup: dict[str, dict[str, int]],
     buyer_auth_lookup: dict[str, dict],
@@ -513,9 +517,9 @@ def _build_deterministic_vendor_feed(
         # Displacement targets (top 3)
         top_displacement = [{"competitor": c["name"], "mentions": c["mentions"]} for c in comp_entries[:3]]
 
-        # Quotes
+        # Quotes (items may be dicts with review_id or plain strings)
         quotes = quote_lookup.get(vendor, [])
-        key_quote = quotes[0] if quotes else None
+        key_quote = _quote_text(quotes[0]) if quotes else None
         evidence = quotes[:3]
 
         # Dominant buyer role
@@ -614,32 +618,65 @@ def _infer_driver_from_reasons(reasons: list[str], fallback: str = "other") -> s
     return fallback
 
 
+def _compute_displacement_confidence(
+    mention_count: int,
+    source_distribution: dict[str, int],
+) -> float:
+    """Evidence-based confidence score for a displacement edge.
+
+    Three equally-weighted signals (each 0-1, averaged):
+      - mention_weight:  log-scaled mention count (caps at 20)
+      - source_weight:   number of distinct sources (3+ = 1.0)
+      - quality_weight:  proportion from VERIFIED_SOURCES
+    """
+    _VERIFIED = {s.value for s in VERIFIED_SOURCES}
+
+    # Mention weight: log2(count)/log2(20), capped at 1.0
+    mention_weight = min(math.log2(max(mention_count, 1)) / math.log2(20), 1.0)
+
+    # Source diversity: n_sources / 3, capped at 1.0
+    n_sources = len(source_distribution)
+    source_weight = min(n_sources / 3.0, 1.0)
+
+    # Quality weight: fraction of mentions from verified sources
+    total = sum(source_distribution.values()) or 1
+    verified_total = sum(
+        cnt for src, cnt in source_distribution.items() if src in _VERIFIED
+    )
+    quality_weight = verified_total / total
+
+    score = (mention_weight + source_weight + quality_weight) / 3.0
+    return round(score, 2)
+
+
 def _pick_displacement_quote(
     *,
     vendor: str,
     competitor: str,
     reasons: list[str],
-    quote_lookup: dict[str, list[str]],
+    quote_lookup: dict[str, list],
 ) -> str | None:
     """Choose a quote matching the competitor or reason text when possible."""
     quotes = quote_lookup.get(vendor, [])
     competitor_l = competitor.lower()
-    for quote in quotes:
-        if competitor_l in quote.lower():
-            return quote
+    for q in quotes:
+        text = _quote_text(q) or ""
+        if competitor_l in text.lower():
+            return text
     for reason in reasons:
         for token in reason.lower().split():
             if len(token) >= 5:
-                for quote in quotes:
-                    if token in quote.lower():
-                        return quote
-    return quotes[0] if quotes else None
+                for q in quotes:
+                    text = _quote_text(q) or ""
+                    if token in text.lower():
+                        return text
+    return _quote_text(quotes[0]) if quotes else None
 
 
 def _build_deterministic_displacement_map(
     competitive_disp: list[dict[str, Any]],
     competitor_reasons: list[dict[str, Any]],
-    quote_lookup: dict[str, list[str]],
+    quote_lookup: dict[str, list],
     *,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
@@ -846,13 +883,18 @@ def _trim_quote_bundles(
     *,
     outer_limit: int,
     quote_limit: int,
+    strip_ids: bool = False,
 ) -> list[dict[str, Any]]:
-    """Trim quote bundles while preserving vendor labels."""
+    """Trim quote bundles while preserving vendor labels.
+
+    When *strip_ids* is True, returns plain strings (for LLM payloads).
+    """
     trimmed: list[dict[str, Any]] = []
     for row in rows[:outer_limit]:
+        raw_quotes = list(row.get("quotes") or [])[:quote_limit]
         trimmed.append({
             "vendor": row.get("vendor"),
-            "quotes": list(row.get("quotes") or [])[:quote_limit],
+            "quotes": _strip_quote_ids(raw_quotes) if strip_ids else raw_quotes,
         })
     return trimmed
 
@@ -979,6 +1021,7 @@ def _build_exploratory_payload(
                 quotable_evidence,
                 outer_limit=quote_vendor_limit,
                 quote_limit=quote_limit,
+                strip_ids=True,
             ),
             "budget_signals": budget_signals[:generic_limit],
             "use_case_distribution": _trim_use_case_distribution(
@@ -1032,6 +1075,20 @@ def _build_exploratory_payload(
     return payload, payload_size
 
 
+def _quote_text(q: Any) -> str | None:
+    """Extract plain quote text from a quote item (dict or string)."""
+    if isinstance(q, str):
+        return q
+    if isinstance(q, dict):
+        return q.get("quote")
+    return None
+
+
+def _strip_quote_ids(quotes: list) -> list[str]:
+    """Strip review_ids from quote dicts, returning plain strings for LLM payloads."""
+    return [t for q in quotes if (t := _quote_text(q))]
+
+
 def _safe_json(value: Any, default: Any = None) -> Any:
     """Safely deserialize a JSON value, returning *default* on failure."""
     if default is None:
@@ -1073,7 +1130,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     prior_limit = cfg.prior_reports_limit
     today = date.today()
 
-    # Gather all 17 data sources + data_context in parallel
+    # Gather all 17 data sources + data_context + provenance + displacement provenance in parallel
     (
         vendor_scores, high_intent, competitive_disp,
         pain_dist, feature_gaps,
@@ -1081,7 +1138,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         churning_companies, quotable_evidence,
         budget_signals, use_case_dist, sentiment_traj,
         buyer_auth, timeline_signals, competitor_reasons,
-        keyword_spikes, data_context,
+        keyword_spikes, data_context, vendor_provenance,
+        displacement_provenance,
     ) = await asyncio.gather(
         _fetch_vendor_churn_scores(pool, window_days, min_reviews),
         _fetch_high_intent_companies(pool, urgency_threshold, window_days),
@@ -1101,6 +1159,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _fetch_competitor_reasons(pool, window_days),
         _fetch_keyword_spikes(pool),
         _fetch_data_context(pool, window_days),
+        _fetch_vendor_provenance(pool, window_days),
+        _fetch_displacement_provenance(pool, window_days),
         return_exceptions=True,
     )
 
@@ -1135,6 +1195,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if isinstance(data_context, Exception):
         logger.warning("data_context fetch failed: %s", data_context)
         data_context = {}
+    if isinstance(vendor_provenance, Exception):
+        logger.warning("vendor_provenance fetch failed: %s", vendor_provenance)
+        vendor_provenance = {}
+    if isinstance(displacement_provenance, Exception):
+        logger.warning("displacement_provenance fetch failed: %s", displacement_provenance)
+        displacement_provenance = {}
 
     # Check if there's enough data
     if not vendor_scores and not high_intent:
@@ -1304,6 +1370,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         competitor_reasons,
         quote_lookup,
     )
+
+    # Enrich displacement edges with provenance and confidence
+    for edge in deterministic_displacement_map:
+        prov_key = (edge["from_vendor"], edge["to_vendor"])
+        prov = displacement_provenance.get(prov_key, {})
+        src_dist = prov.get("source_distribution", {})
+        edge["source_distribution"] = src_dist
+        edge["sample_review_ids"] = prov.get("sample_review_ids", [])
+        edge["confidence_score"] = _compute_displacement_confidence(
+            edge["mention_count"], src_dist,
+        )
+
     deterministic_category_overview = _build_deterministic_category_overview(
         vendor_scores,
         pain_lookup=pain_lookup,
@@ -1338,15 +1416,24 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     exec_summary = parsed.get("executive_summary", "")
     exploratory_persisted = False
 
+    # Provenance for intelligence reports
+    report_source_review_count = data_context.get("reviews_in_analysis_window")
+    report_source_dist = json.dumps(
+        {src: info["reviews"] for src, info in data_context.get("source_distribution", {}).items()}
+    )
+
+    displacement_report_id = None
     try:
         async with pool.transaction() as conn:
             for report_type, data in report_types:
-                await conn.execute(
+                rid = await conn.fetchval(
                     """
                     INSERT INTO b2b_intelligence (
                         report_date, report_type, intelligence_data,
-                        executive_summary, data_density, status, llm_model
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                        executive_summary, data_density, status, llm_model,
+                        source_review_count, source_distribution
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    RETURNING id
                     """,
                     today,
                     report_type,
@@ -1355,7 +1442,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     data_density,
                     "published",
                     llm_model_id,
+                    report_source_review_count,
+                    report_source_dist,
                 )
+                if report_type == "displacement_report":
+                    displacement_report_id = rid
     except Exception:
         logger.exception("Failed to store intelligence reports (rolled back)")
 
@@ -1371,8 +1462,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 """
                 INSERT INTO b2b_intelligence (
                     report_date, report_type, intelligence_data,
-                    executive_summary, data_density, status, llm_model
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    executive_summary, data_density, status, llm_model,
+                    source_review_count, source_distribution
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 """,
                 today,
                 "exploratory_overview",
@@ -1381,10 +1473,57 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 json.dumps({**json.loads(data_density), "scope": "exploratory"}),
                 "published",
                 llm_model_id,
+                report_source_review_count,
+                report_source_dist,
             )
             exploratory_persisted = True
         except Exception:
             logger.exception("Failed to store exploratory_overview")
+
+    # Persist displacement edges to first-class table
+    displacement_edges_persisted = 0
+    try:
+        async with pool.transaction() as conn:
+            for edge in deterministic_displacement_map:
+                sample_ids = [
+                    _uuid.UUID(rid) for rid in edge.get("sample_review_ids", [])
+                    if rid
+                ]
+                await conn.execute(
+                    """
+                    INSERT INTO b2b_displacement_edges (
+                        from_vendor, to_vendor, mention_count,
+                        primary_driver, signal_strength, key_quote,
+                        source_distribution, sample_review_ids,
+                        confidence_score, computed_date, report_id
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::uuid[], $9, $10, $11)
+                    ON CONFLICT (from_vendor, to_vendor, computed_date)
+                    DO UPDATE SET
+                        mention_count = EXCLUDED.mention_count,
+                        primary_driver = EXCLUDED.primary_driver,
+                        signal_strength = EXCLUDED.signal_strength,
+                        key_quote = EXCLUDED.key_quote,
+                        source_distribution = EXCLUDED.source_distribution,
+                        sample_review_ids = EXCLUDED.sample_review_ids,
+                        confidence_score = EXCLUDED.confidence_score,
+                        report_id = EXCLUDED.report_id
+                    """,
+                    edge["from_vendor"],
+                    edge["to_vendor"],
+                    edge["mention_count"],
+                    edge.get("primary_driver"),
+                    edge.get("signal_strength"),
+                    edge.get("key_quote"),
+                    json.dumps(edge.get("source_distribution", {})),
+                    sample_ids,
+                    edge.get("confidence_score", 0),
+                    today,
+                    displacement_report_id,
+                )
+                displacement_edges_persisted += 1
+    except Exception:
+        displacement_edges_persisted = 0
+        logger.exception("Failed to persist displacement edges")
 
     # Upsert per-vendor churn signals
     upsert_failures = await _upsert_churn_signals(
@@ -1394,7 +1533,57 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         budget_lookup, use_case_lookup, integration_lookup,
         sentiment_lookup, buyer_auth_lookup, timeline_lookup,
         keyword_spike_lookup,
+        provenance_lookup=vendor_provenance,
     )
+
+    # Persist company signals to first-class table
+    company_signals_persisted = 0
+    try:
+        async with pool.transaction() as conn:
+            for hi in high_intent:
+                review_id = None
+                if hi.get("review_id"):
+                    try:
+                        review_id = _uuid.UUID(hi["review_id"])
+                    except (ValueError, TypeError):
+                        pass
+                await conn.execute(
+                    """
+                    INSERT INTO b2b_company_signals (
+                        company_name, vendor_name, urgency_score,
+                        pain_category, buyer_role, decision_maker,
+                        seat_count, contract_end, buying_stage,
+                        review_id, source, last_seen_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
+                    ON CONFLICT (company_name, vendor_name)
+                    DO UPDATE SET
+                        urgency_score = GREATEST(b2b_company_signals.urgency_score, EXCLUDED.urgency_score),
+                        pain_category = COALESCE(EXCLUDED.pain_category, b2b_company_signals.pain_category),
+                        buyer_role = COALESCE(EXCLUDED.buyer_role, b2b_company_signals.buyer_role),
+                        decision_maker = COALESCE(EXCLUDED.decision_maker, b2b_company_signals.decision_maker),
+                        seat_count = COALESCE(EXCLUDED.seat_count, b2b_company_signals.seat_count),
+                        contract_end = COALESCE(EXCLUDED.contract_end, b2b_company_signals.contract_end),
+                        buying_stage = COALESCE(EXCLUDED.buying_stage, b2b_company_signals.buying_stage),
+                        review_id = COALESCE(EXCLUDED.review_id, b2b_company_signals.review_id),
+                        source = COALESCE(EXCLUDED.source, b2b_company_signals.source),
+                        last_seen_at = EXCLUDED.last_seen_at
+                    """,
+                    hi.get("company", ""),
+                    hi.get("vendor", ""),
+                    hi.get("urgency"),
+                    hi.get("pain"),
+                    hi.get("role_level"),
+                    hi.get("decision_maker"),
+                    hi.get("seat_count"),
+                    hi.get("contract_end"),
+                    hi.get("buying_stage"),
+                    review_id,
+                    hi.get("source"),
+                )
+                company_signals_persisted += 1
+    except Exception:
+        company_signals_persisted = 0
+        logger.exception("Failed to persist company signals")
 
     # Send ntfy notification
     await _send_notification(task, parsed, high_intent)
@@ -1411,6 +1600,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "report_types": len(report_types) + (1 if exploratory_persisted else 0),
         "fetcher_failures": fetcher_failures,
         "upsert_failures": upsert_failures,
+        "displacement_edges_persisted": displacement_edges_persisted,
+        "company_signals_persisted": company_signals_persisted,
     }
 
 
@@ -1517,6 +1708,67 @@ async def _fetch_data_context(pool, window_days: int) -> dict[str, Any]:
     }
 
 
+async def _fetch_vendor_provenance(pool, window_days: int) -> dict[str, dict]:
+    """Per-vendor provenance: source distribution, sample review IDs, and review window.
+
+    Returns {vendor_name: {"source_distribution": {...}, "sample_review_ids": [...],
+             "review_window_start": dt, "review_window_end": dt}}.
+    """
+    sources = _intelligence_source_allowlist()
+    filters = _eligible_review_filters(window_param=1, source_param=2)
+
+    # Source distribution per vendor
+    dist_rows = await pool.fetch(
+        f"""
+        SELECT vendor_name, source, count(*) AS cnt
+        FROM b2b_reviews
+        WHERE {filters}
+        GROUP BY vendor_name, source
+        """,
+        window_days,
+        sources,
+    )
+    dist: dict[str, dict[str, int]] = {}
+    for r in dist_rows:
+        dist.setdefault(r["vendor_name"], {})[r["source"]] = r["cnt"]
+
+    # Sample review IDs (top 50 by urgency) + window per vendor
+    sample_rows = await pool.fetch(
+        f"""
+        SELECT vendor_name,
+            (ARRAY_AGG(id ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST))[1:50]
+                AS sample_ids,
+            MIN(enriched_at) AS window_start,
+            MAX(enriched_at) AS window_end
+        FROM b2b_reviews
+        WHERE {filters}
+        GROUP BY vendor_name
+        """,
+        window_days,
+        sources,
+    )
+
+    result: dict[str, dict] = {}
+    for r in sample_rows:
+        vendor = r["vendor_name"]
+        result[vendor] = {
+            "source_distribution": dist.get(vendor, {}),
+            "sample_review_ids": r["sample_ids"] or [],
+            "review_window_start": r["window_start"],
+            "review_window_end": r["window_end"],
+        }
+    # Fill in vendors that appear in dist but not in sample (shouldn't happen, but safe)
+    for vendor in dist:
+        if vendor not in result:
+            result[vendor] = {
+                "source_distribution": dist[vendor],
+                "sample_review_ids": [],
+                "review_window_start": None,
+                "review_window_end": None,
+            }
+    return result
+
+
 async def _fetch_vendor_churn_scores(pool, window_days: int, min_reviews: int) -> list[dict[str, Any]]:
     """Per-vendor health metrics from enriched reviews."""
     sources = _intelligence_source_allowlist()
@@ -1584,14 +1836,18 @@ async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days
     filters = _eligible_review_filters(window_param=2, source_param=3)
     rows = await pool.fetch(
         f"""
-        SELECT reviewer_company, vendor_name, product_category,
+        SELECT id AS review_id, source,
+            reviewer_company, vendor_name, product_category,
             enrichment->'reviewer_context'->>'role_level' AS role_level,
             (enrichment->'reviewer_context'->>'decision_maker')::boolean AS is_dm,
             (enrichment->>'urgency_score')::numeric AS urgency,
             enrichment->>'pain_category' AS pain,
             enrichment->'competitors_mentioned' AS alternatives,
             enrichment->'quotable_phrases' AS quotes,
-            enrichment->'contract_context'->>'contract_value_signal' AS value_signal
+            enrichment->'contract_context'->>'contract_value_signal' AS value_signal,
+            enrichment->'budget_signals'->>'seat_count' AS seat_count,
+            enrichment->'timeline'->>'contract_end' AS contract_end,
+            enrichment->'buyer_authority'->>'buying_stage' AS buying_stage
         FROM b2b_reviews
         WHERE {filters}
           AND (enrichment->>'urgency_score')::numeric >= $1
@@ -1608,6 +1864,13 @@ async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days
             urgency = float(r["urgency"]) if r["urgency"] is not None else 0
         except (ValueError, TypeError):
             urgency = 0
+        # Parse seat_count safely
+        seat_count = None
+        if r["seat_count"]:
+            try:
+                seat_count = int(r["seat_count"])
+            except (ValueError, TypeError):
+                pass
         results.append({
             "company": r["reviewer_company"],
             "vendor": r["vendor_name"],
@@ -1619,6 +1882,11 @@ async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days
             "alternatives": _safe_json(r["alternatives"]),
             "quotes": _safe_json(r["quotes"]),
             "contract_signal": r["value_signal"],
+            "review_id": str(r["review_id"]) if r["review_id"] else None,
+            "source": r["source"],
+            "seat_count": seat_count,
+            "contract_end": r["contract_end"],
+            "buying_stage": r["buying_stage"],
         })
     return results
 
@@ -1662,6 +1930,56 @@ async def _fetch_competitive_displacement(pool, window_days: int) -> list[dict[s
     ]
     results.sort(key=lambda x: x["mention_count"], reverse=True)
     return results
+
+
+async def _fetch_displacement_provenance(pool, window_days: int) -> dict[tuple[str, str], dict]:
+    """Per-edge source distribution and sample review IDs for confidence scoring.
+
+    Returns a dict keyed by ``(from_vendor, to_vendor)`` with:
+      - ``source_distribution``: ``{source: count}``
+      - ``sample_review_ids``:   list of UUID strings (top 20 by urgency)
+    """
+    sources = _intelligence_source_allowlist()
+    filters = _eligible_review_filters(window_param=1, source_param=2, alias="r")
+    rows = await pool.fetch(
+        f"""
+        SELECT r.vendor_name,
+            comp.value->>'name' AS competitor,
+            r.source,
+            count(*) AS cnt,
+            array_agg(r.id ORDER BY (r.enrichment->>'urgency_score')::numeric DESC NULLS LAST)
+                FILTER (WHERE r.id IS NOT NULL) AS review_ids
+        FROM b2b_reviews r
+        CROSS JOIN LATERAL jsonb_array_elements(r.enrichment->'competitors_mentioned') AS comp(value)
+        WHERE {filters}
+        GROUP BY r.vendor_name, comp.value->>'name', r.source
+        HAVING count(*) >= 1
+        ORDER BY cnt DESC
+        """,
+        window_days,
+        sources,
+    )
+
+    # Aggregate by canonicalized (from_vendor, to_vendor)
+    result: dict[tuple[str, str], dict] = {}
+    for r in rows:
+        vendor = _canonicalize_vendor(r["vendor_name"] or "")
+        competitor = _canonicalize_competitor(r["competitor"] or "")
+        if not vendor or not competitor or vendor.lower() == competitor.lower():
+            continue
+        key = (vendor, competitor)
+        if key not in result:
+            result[key] = {"source_distribution": {}, "sample_review_ids": []}
+        entry = result[key]
+        source = r["source"] or "unknown"
+        entry["source_distribution"][source] = entry["source_distribution"].get(source, 0) + r["cnt"]
+        # Collect review IDs (cap at 20 per edge)
+        rids = r["review_ids"] or []
+        for rid in rids:
+            if len(entry["sample_review_ids"]) < 20 and str(rid) not in entry["sample_review_ids"]:
+                entry["sample_review_ids"].append(str(rid))
+
+    return result
 
 
 async def _fetch_pain_distribution(pool, window_days: int) -> list[dict[str, Any]]:
@@ -1833,13 +2151,16 @@ async def _fetch_churning_companies(pool, window_days: int) -> list[dict[str, An
 
 
 async def _fetch_quotable_evidence(pool, window_days: int, *, min_urgency: float = 6) -> list[dict[str, Any]]:
-    """Top quotable phrases per vendor (highest urgency, deduplicated)."""
+    """Top quotable phrases per vendor (highest urgency, deduplicated).
+
+    Each quote is a dict with 'quote', 'urgency', and 'review_id' for provenance.
+    """
     sources = _executive_source_list()
     filters = _eligible_review_filters(window_param=1, source_param=3)
     rows = await pool.fetch(
         f"""
         WITH ranked_quotes AS (
-            SELECT vendor_name, phrase.value AS quote,
+            SELECT vendor_name, id AS review_id, phrase.value AS quote,
                 (enrichment->>'urgency_score')::numeric AS urgency,
                 ROW_NUMBER() OVER (
                     PARTITION BY vendor_name
@@ -1852,7 +2173,14 @@ async def _fetch_quotable_evidence(pool, window_days: int, *, min_urgency: float
             WHERE {filters}
               AND (enrichment->>'urgency_score')::numeric >= $2
         )
-        SELECT vendor_name, jsonb_agg(quote ORDER BY urgency DESC) AS quotes
+        SELECT vendor_name,
+            jsonb_agg(
+                jsonb_build_object(
+                    'quote', quote,
+                    'urgency', urgency,
+                    'review_id', review_id
+                ) ORDER BY urgency DESC
+            ) AS quotes
         FROM ranked_quotes WHERE rn <= 15
         GROUP BY vendor_name
         """,
@@ -2521,7 +2849,7 @@ async def _upsert_churn_signals(
     price_lookup: dict[str, float],
     dm_lookup: dict[str, float],
     company_lookup: dict[str, list[dict]],
-    quote_lookup: dict[str, list[str]],
+    quote_lookup: dict[str, list],
     budget_lookup: dict[str, dict] | None = None,
     use_case_lookup: dict[str, list[dict]] | None = None,
     integration_lookup: dict[str, list[dict]] | None = None,
@@ -2529,8 +2857,9 @@ async def _upsert_churn_signals(
     buyer_auth_lookup: dict[str, dict] | None = None,
     timeline_lookup: dict[str, list[dict]] | None = None,
     keyword_spike_lookup: dict[str, dict] | None = None,
+    provenance_lookup: dict[str, dict] | None = None,
 ) -> int:
-    """Upsert b2b_churn_signals (25 columns incl. keyword signals). Returns failure count."""
+    """Upsert b2b_churn_signals (29 columns incl. provenance). Returns failure count."""
     now = datetime.now(timezone.utc)
     budget_lookup = budget_lookup or {}
     use_case_lookup = use_case_lookup or {}
@@ -2539,6 +2868,7 @@ async def _upsert_churn_signals(
     buyer_auth_lookup = buyer_auth_lookup or {}
     timeline_lookup = timeline_lookup or {}
     keyword_spike_lookup = keyword_spike_lookup or {}
+    provenance_lookup = provenance_lookup or {}
     failures = 0
 
     for vs in vendor_scores:
@@ -2549,6 +2879,8 @@ async def _upsert_churn_signals(
         recommend_yes = vs.get("recommend_yes", 0)
         recommend_no = vs.get("recommend_no", 0)
         nps = ((recommend_yes - recommend_no) / total * 100) if total > 0 else None
+
+        prov = provenance_lookup.get(vendor, {})
 
         try:
             kw_data = keyword_spike_lookup.get(vendor, {})
@@ -2566,10 +2898,12 @@ async def _upsert_churn_signals(
                     buyer_authority_summary, timeline_summary,
                     keyword_spike_count, keyword_spike_keywords,
                     keyword_trend_summary,
+                    source_distribution, sample_review_ids,
+                    review_window_start, review_window_end,
                     last_computed_at
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
                           $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
-                          $22, $23, $24, $25)
+                          $22, $23, $24, $25, $26, $27, $28, $29)
                 ON CONFLICT (vendor_name, COALESCE(product_category, '')) DO UPDATE SET
                     total_reviews = EXCLUDED.total_reviews,
                     negative_reviews = EXCLUDED.negative_reviews,
@@ -2593,6 +2927,10 @@ async def _upsert_churn_signals(
                     keyword_spike_count = EXCLUDED.keyword_spike_count,
                     keyword_spike_keywords = EXCLUDED.keyword_spike_keywords,
                     keyword_trend_summary = EXCLUDED.keyword_trend_summary,
+                    source_distribution = EXCLUDED.source_distribution,
+                    sample_review_ids = EXCLUDED.sample_review_ids,
+                    review_window_start = EXCLUDED.review_window_start,
+                    review_window_end = EXCLUDED.review_window_end,
                     last_computed_at = EXCLUDED.last_computed_at
                 """,
                 vendor,
@@ -2619,6 +2957,10 @@ async def _upsert_churn_signals(
                 kw_data.get("spike_count", 0),
                 json.dumps(kw_data.get("spike_keywords", [])),
                 json.dumps(kw_data.get("trend_summary", {})),
+                json.dumps(prov.get("source_distribution", {})),
+                prov.get("sample_review_ids", []),
+                prov.get("review_window_start"),
+                prov.get("review_window_end"),
                 now,
             )
         except Exception:

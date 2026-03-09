@@ -22,6 +22,7 @@ from ...config import settings
 from ...services.campaign_sender import get_campaign_sender
 from ...services.vendor_registry import resolve_vendor_name
 from ...storage.database import get_db_pool
+from ...storage.models import ScheduledTask
 from ...templates.email.vendor_briefing import render_vendor_briefing_html
 from .campaign_suppression import is_suppressed
 
@@ -130,8 +131,12 @@ async def build_vendor_briefing(vendor_name: str) -> dict[str, Any] | None:
     evidence = briefing.get("evidence") or []
     if len(evidence) < 2:
         extra_quotes = await _fetch_high_urgency_quotes(pool, vendor_name, limit=5)
-        # Deduplicate against existing evidence
-        existing = set(evidence)
+        # Deduplicate against existing evidence (evidence items may be dicts or strings)
+        existing: set[str] = set()
+        for e in evidence:
+            text = e.get("quote", e) if isinstance(e, dict) else e
+            if isinstance(text, str):
+                existing.add(text)
         for q in extra_quotes:
             if q not in existing:
                 evidence.append(q)
@@ -625,3 +630,18 @@ async def send_batch_briefings() -> dict[str, Any]:
         "failed": failed,
         "details": details,
     }
+
+
+# ---------------------------------------------------------------------------
+# Scheduled task entry-point
+# ---------------------------------------------------------------------------
+
+async def run(task: ScheduledTask) -> dict:
+    """Run vendor briefings as a scheduled task."""
+    cfg = settings.b2b_churn
+    if not cfg.vendor_briefing_enabled:
+        return {"_skip_synthesis": True, "skipped": "vendor_briefing_enabled=false"}
+
+    result = await send_batch_briefings()
+    result["_skip_synthesis"] = True
+    return result

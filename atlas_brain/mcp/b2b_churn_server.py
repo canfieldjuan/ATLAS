@@ -15,6 +15,8 @@ Tools:
     search_reviews           -- search enriched reviews with flexible filters
     get_review               -- fetch a single review with full enrichment
     get_pipeline_status      -- enrichment pipeline health snapshot
+    get_source_health        -- per-source scrape reliability metrics with trend comparison
+    get_source_capabilities  -- capability profiles (access patterns, anti-bot, proxy, quality)
     list_scrape_targets      -- view scrape target configuration and status
     get_product_profile      -- fetch pre-computed product knowledge card
     match_products_tool      -- find best alternatives for a churning company
@@ -27,6 +29,8 @@ Tools:
     list_vendors_registry    -- list all canonical vendors and their aliases
     add_vendor_to_registry   -- add a new vendor to the canonical registry
     add_vendor_alias         -- add an alias to an existing vendor
+    list_displacement_edges  -- query persisted competitive displacement edges
+    get_displacement_history -- time-series of edge strength for a vendor pair
 
 Run:
     python -m atlas_brain.mcp.b2b_churn_server          # stdio
@@ -855,6 +859,217 @@ async def get_pipeline_status() -> str:
     except Exception as exc:
         logger.exception("get_pipeline_status error")
         return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_source_health
+# ---------------------------------------------------------------------------
+
+_SOURCE_HEALTH_SQL = """
+WITH current_window AS (
+    SELECT
+        source,
+        COUNT(*)                                            AS total_scrapes,
+        COUNT(*) FILTER (WHERE status = 'success')          AS success_count,
+        COUNT(*) FILTER (WHERE status = 'partial')          AS partial_count,
+        COUNT(*) FILTER (WHERE status = 'failed')           AS failed_count,
+        COUNT(*) FILTER (WHERE status = 'blocked')          AS blocked_count,
+        AVG(reviews_found)                                  AS avg_reviews_found,
+        AVG(reviews_inserted)                               AS avg_reviews_inserted,
+        AVG(duration_ms)                                    AS avg_duration_ms,
+        PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95_duration_ms,
+        MAX(started_at) FILTER (WHERE status = 'success')   AS last_success_at,
+        MAX(started_at)                                     AS last_scrape_at
+    FROM b2b_scrape_log
+    WHERE started_at >= NOW() - make_interval(days => $1)
+    {source_filter_current}
+    GROUP BY source
+),
+prev_window AS (
+    SELECT
+        source,
+        COUNT(*)                                            AS total_scrapes,
+        COUNT(*) FILTER (WHERE status = 'success')          AS success_count,
+        COUNT(*) FILTER (WHERE status = 'blocked')          AS blocked_count,
+        AVG(reviews_found)                                  AS avg_reviews_found
+    FROM b2b_scrape_log
+    WHERE started_at >= NOW() - make_interval(days => $1 * 2)
+      AND started_at <  NOW() - make_interval(days => $1)
+    {source_filter_prev}
+    GROUP BY source
+),
+target_counts AS (
+    SELECT source, COUNT(*) FILTER (WHERE enabled) AS active_targets
+    FROM b2b_scrape_targets
+    {target_filter}
+    GROUP BY source
+)
+SELECT
+    c.source, c.total_scrapes, c.success_count, c.partial_count,
+    c.failed_count, c.blocked_count, c.avg_reviews_found,
+    c.avg_reviews_inserted, c.avg_duration_ms, c.p95_duration_ms,
+    c.last_success_at, c.last_scrape_at,
+    COALESCE(t.active_targets, 0)  AS active_targets,
+    p.total_scrapes                AS prev_total_scrapes,
+    p.success_count                AS prev_success_count,
+    p.blocked_count                AS prev_blocked_count,
+    p.avg_reviews_found            AS prev_avg_reviews_found
+FROM current_window c
+LEFT JOIN prev_window p USING (source)
+LEFT JOIN target_counts t USING (source)
+ORDER BY c.total_scrapes DESC
+"""
+
+
+@mcp.tool()
+async def get_source_health(
+    window_days: int = 7,
+    source: Optional[str] = None,
+) -> str:
+    """
+    Per-source scrape reliability metrics with trend comparison.
+
+    Aggregates b2b_scrape_log over a configurable window and computes
+    success/block rates, yield, duration, and recency per review source.
+    Includes trend deltas vs the previous equivalent window.
+
+    window_days: Aggregation window in days (1-30, default 7)
+    source: Filter to a single source (g2, capterra, trustradius, etc.)
+    """
+    window_days = max(1, min(window_days, 30))
+    if source:
+        source = source.strip().lower()
+        if source not in VALID_SOURCES:
+            return json.dumps({
+                "success": False,
+                "error": f"source must be one of {sorted(s.value for s in VALID_SOURCES)}",
+            })
+
+    try:
+        from ..storage.database import get_db_pool
+        from ..services.scraping.sources import display_name as source_display_name
+
+        pool = get_db_pool()
+
+        if source:
+            sql = _SOURCE_HEALTH_SQL.format(
+                source_filter_current="AND source = $2",
+                source_filter_prev="AND source = $2",
+                target_filter="WHERE source = $2",
+            )
+            rows = await pool.fetch(sql, window_days, source)
+        else:
+            sql = _SOURCE_HEALTH_SQL.format(
+                source_filter_current="",
+                source_filter_prev="",
+                target_filter="",
+            )
+            rows = await pool.fetch(sql, window_days)
+
+        def _float(v):
+            if v is None:
+                return None
+            try:
+                return float(v)
+            except (ValueError, TypeError):
+                return None
+
+        sources_list = []
+        for r in rows:
+            total = r["total_scrapes"] or 1
+            success_rate = round(r["success_count"] / total, 3)
+            block_rate = round(r["blocked_count"] / total, 3)
+
+            prev_total = r["prev_total_scrapes"] or 0
+            prev_success_rate = round(r["prev_success_count"] / max(prev_total, 1), 3) if prev_total else None
+            prev_block_rate = round(r["prev_blocked_count"] / max(prev_total, 1), 3) if prev_total else None
+
+            sources_list.append({
+                "source": r["source"],
+                "display_name": source_display_name(r["source"]),
+                "total_scrapes": r["total_scrapes"],
+                "success_count": r["success_count"],
+                "partial_count": r["partial_count"],
+                "failed_count": r["failed_count"],
+                "blocked_count": r["blocked_count"],
+                "success_rate": success_rate,
+                "block_rate": block_rate,
+                "avg_reviews_found": _float(r["avg_reviews_found"]),
+                "avg_reviews_inserted": _float(r["avg_reviews_inserted"]),
+                "avg_duration_ms": _float(r["avg_duration_ms"]),
+                "p95_duration_ms": _float(r["p95_duration_ms"]),
+                "last_success_at": r["last_success_at"],
+                "last_scrape_at": r["last_scrape_at"],
+                "active_targets": r["active_targets"],
+                "trend": {
+                    "prev_window_scrapes": prev_total,
+                    "prev_success_rate": prev_success_rate,
+                    "prev_block_rate": prev_block_rate,
+                    "prev_avg_reviews_found": _float(r["prev_avg_reviews_found"]),
+                    "success_rate_delta": round(success_rate - prev_success_rate, 3) if prev_success_rate is not None else None,
+                    "block_rate_delta": round(block_rate - prev_block_rate, 3) if prev_block_rate is not None else None,
+                },
+            })
+
+        total_scrapes = sum(s["total_scrapes"] for s in sources_list)
+        total_success = sum(s["success_count"] for s in sources_list)
+        total_blocked = sum(s["blocked_count"] for s in sources_list)
+
+        result = {
+            "success": True,
+            "window_days": window_days,
+            "sources": sources_list,
+            "summary": {
+                "total_sources": len(sources_list),
+                "total_scrapes": total_scrapes,
+                "overall_success_rate": round(total_success / max(total_scrapes, 1), 3),
+                "overall_block_rate": round(total_blocked / max(total_scrapes, 1), 3),
+                "worst_source": min(sources_list, key=lambda s: s["success_rate"])["source"] if sources_list else None,
+                "best_source": max(sources_list, key=lambda s: s["success_rate"])["source"] if sources_list else None,
+            },
+        }
+
+        return json.dumps(result, default=str)
+    except Exception as exc:
+        logger.exception("get_source_health error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_source_capabilities
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_source_capabilities(
+    source: Optional[str] = None,
+) -> str:
+    """
+    Get capability profiles for scrape sources.
+
+    Returns access patterns, anti-bot protection, proxy requirements,
+    data quality tier, and concurrency class for each source.
+
+    source: Optional source name to filter (e.g. "g2", "reddit"). Returns all if omitted.
+    """
+    from ..services.scraping.capabilities import get_all_capabilities, get_capability
+
+    if source:
+        source = source.strip().lower()
+        profile = get_capability(source)
+        if not profile:
+            return json.dumps({
+                "success": False,
+                "error": f"Unknown source '{source}'. Use without source param to list all.",
+            })
+        return json.dumps({"success": True, "profile": profile.to_dict()})
+
+    all_profiles = get_all_capabilities()
+    return json.dumps({
+        "success": True,
+        "total": len(all_profiles),
+        "profiles": [p.to_dict() for p in all_profiles.values()],
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -1692,6 +1907,168 @@ async def add_vendor_alias(
     except Exception:
         logger.exception("add_vendor_alias error")
         return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Displacement edges + company signals
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def list_displacement_edges(
+    from_vendor: Optional[str] = None,
+    to_vendor: Optional[str] = None,
+    min_strength: Optional[str] = None,
+    min_confidence: Optional[float] = None,
+    window_days: int = 90,
+    limit: int = 50,
+) -> str:
+    """
+    Query persisted competitive displacement edges (vendor A -> vendor B flows).
+
+    from_vendor: Filter by source vendor losing customers (case-insensitive partial match)
+    to_vendor: Filter by destination vendor gaining customers (case-insensitive partial match)
+    min_strength: Minimum signal strength: 'strong', 'moderate', or 'emerging'
+    min_confidence: Minimum confidence score (0.0-1.0)
+    window_days: Only edges computed within this many days (default 90)
+    limit: Max results (default 50, max 200)
+    """
+    limit = min(max(limit, 1), 200)
+    strength_order = {"strong": 3, "moderate": 2, "emerging": 1}
+    if min_strength and min_strength not in strength_order:
+        return json.dumps({"error": f"Invalid min_strength: {min_strength}. Use strong/moderate/emerging"})
+
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"error": "Database not ready"})
+
+        conditions = ["computed_date > NOW() - make_interval(days => $1)"]
+        params: list = [window_days]
+        idx = 2
+
+        if from_vendor:
+            conditions.append(f"from_vendor ILIKE '%' || ${idx} || '%'")
+            params.append(from_vendor)
+            idx += 1
+
+        if to_vendor:
+            conditions.append(f"to_vendor ILIKE '%' || ${idx} || '%'")
+            params.append(to_vendor)
+            idx += 1
+
+        if min_strength:
+            min_val = strength_order[min_strength]
+            allowed = [k for k, v in strength_order.items() if v >= min_val]
+            conditions.append(f"signal_strength = ANY(${idx}::text[])")
+            params.append(allowed)
+            idx += 1
+
+        if min_confidence is not None:
+            conditions.append(f"confidence_score >= ${idx}")
+            params.append(min_confidence)
+            idx += 1
+
+        where = " AND ".join(conditions)
+
+        rows = await pool.fetch(
+            f"""
+            SELECT id, from_vendor, to_vendor, mention_count,
+                   primary_driver, signal_strength, key_quote,
+                   source_distribution, sample_review_ids,
+                   confidence_score, computed_date, report_id, created_at
+            FROM b2b_displacement_edges
+            WHERE {where}
+            ORDER BY confidence_score DESC, mention_count DESC
+            LIMIT ${idx}
+            """,
+            *params,
+            limit,
+        )
+
+        edges = []
+        for r in rows:
+            edges.append({
+                "id": str(r["id"]),
+                "from_vendor": r["from_vendor"],
+                "to_vendor": r["to_vendor"],
+                "mention_count": r["mention_count"],
+                "primary_driver": r["primary_driver"],
+                "signal_strength": r["signal_strength"],
+                "key_quote": r["key_quote"],
+                "source_distribution": _safe_json(r["source_distribution"]),
+                "sample_review_ids": [str(rid) for rid in (r["sample_review_ids"] or [])],
+                "confidence_score": float(r["confidence_score"]) if r["confidence_score"] else 0,
+                "computed_date": str(r["computed_date"]),
+                "report_id": str(r["report_id"]) if r["report_id"] else None,
+                "created_at": str(r["created_at"]),
+            })
+
+        return json.dumps({"edges": edges, "count": len(edges)}, default=str)
+    except Exception:
+        logger.exception("list_displacement_edges error")
+        return json.dumps({"error": "Internal error"})
+
+
+@mcp.tool()
+async def get_displacement_history(
+    from_vendor: str,
+    to_vendor: str,
+    window_days: int = 365,
+) -> str:
+    """
+    Time-series of displacement edge strength for a specific vendor pair.
+
+    from_vendor: Source vendor (exact match, case-insensitive)
+    to_vendor: Destination vendor (exact match, case-insensitive)
+    window_days: How far back to look (default 365)
+    """
+    if not from_vendor or not to_vendor:
+        return json.dumps({"error": "Both from_vendor and to_vendor are required"})
+
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"error": "Database not ready"})
+
+        rows = await pool.fetch(
+            """
+            SELECT computed_date, mention_count, signal_strength,
+                   confidence_score, primary_driver, key_quote
+            FROM b2b_displacement_edges
+            WHERE LOWER(from_vendor) = LOWER($1)
+              AND LOWER(to_vendor) = LOWER($2)
+              AND computed_date > NOW() - make_interval(days => $3)
+            ORDER BY computed_date ASC
+            """,
+            from_vendor,
+            to_vendor,
+            window_days,
+        )
+
+        history = []
+        for r in rows:
+            history.append({
+                "computed_date": str(r["computed_date"]),
+                "mention_count": r["mention_count"],
+                "signal_strength": r["signal_strength"],
+                "confidence_score": float(r["confidence_score"]) if r["confidence_score"] else 0,
+                "primary_driver": r["primary_driver"],
+                "key_quote": r["key_quote"],
+            })
+
+        return json.dumps({
+            "from_vendor": from_vendor,
+            "to_vendor": to_vendor,
+            "window_days": window_days,
+            "history": history,
+            "data_points": len(history),
+        }, default=str)
+    except Exception:
+        logger.exception("get_displacement_history error")
+        return json.dumps({"error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------

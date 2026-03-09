@@ -53,6 +53,7 @@ class QuoraParser:
 
     source_name = "quora"
     prefer_residential = True
+    version = "quora:1"
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
         """Scrape Quora -- Web Unlocker first, then HTTP client fallback."""

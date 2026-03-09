@@ -12,7 +12,8 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse
 
 from ..config import settings
 from ..storage.database import get_db_pool
@@ -21,6 +22,26 @@ from ..autonomous.tasks.campaign_audit import log_campaign_event
 logger = logging.getLogger("atlas.api.campaign_webhooks")
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
+
+
+@router.get("/unsubscribe", response_class=HTMLResponse)
+async def unsubscribe(email: str = Query(..., description="Email to unsubscribe")):
+    """One-click unsubscribe endpoint. Adds email to suppression list."""
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    from ..autonomous.tasks.campaign_suppression import add_suppression
+
+    await add_suppression(pool, email=email, reason="unsubscribe", source="recipient")
+
+    logger.info("Unsubscribe processed for %s", email)
+    return (
+        "<html><body style='font-family:sans-serif;text-align:center;padding:60px;'>"
+        "<h2>You have been unsubscribed</h2>"
+        "<p>You will no longer receive campaign emails from us.</p>"
+        "</body></html>"
+    )
 
 
 def _verify_svix_signature(

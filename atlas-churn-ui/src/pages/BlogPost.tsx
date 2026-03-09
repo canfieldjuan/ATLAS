@@ -156,6 +156,24 @@ export default function BlogPost() {
             <p className="mt-3 text-xs text-slate-600">Affiliate link — see disclosure above</p>
           </div>
         )}
+
+        {/* Generic CTA — shown when no affiliate partner */}
+        {!cta.show && (
+          <div className="mt-16 p-8 bg-slate-800/60 border border-slate-700/50 rounded-xl text-center">
+            <h2 className="text-xl font-bold mb-2">Want churn intelligence on vendors in this space?</h2>
+            <p className="text-slate-400 mb-6">
+              We track real-time switching signals across 200+ B2B software vendors. See which accounts are actively evaluating alternatives.
+            </p>
+            <a
+              href={(post.data_context?.booking_url as string) || 'https://cal.com/atlas-intel/15min'}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-block px-6 py-3 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-semibold transition-colors"
+            >
+              Book a 15-Min Intel Briefing
+            </a>
+          </div>
+        )}
       </article>
     </PublicLayout>
   )

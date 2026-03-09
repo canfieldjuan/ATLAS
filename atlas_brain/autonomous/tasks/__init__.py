@@ -46,6 +46,7 @@ _BUILTIN_TASKS = [
     ("trial_nurture", "run", "trial_nurture"),
     ("product_metadata_sync", "run", "product_metadata_sync"),
     ("subcategory_intelligence", "run", "subcategory_intelligence"),
+    ("b2b_vendor_briefing", "run", "b2b_vendor_briefing"),
 ]
 
 

@@ -10,15 +10,11 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
-_SEARCH_SOURCES = frozenset({
-    "reddit",
-    "hackernews",
-    "github",
-    "youtube",
-    "stackoverflow",
-    "quora",
-    "twitter",
-})
+from .sources import (
+    SEARCH_SOURCES as _SEARCH_SOURCES,
+    parse_source_allowlist,
+    is_source_allowed,
+)
 
 _SLUG_RULES: dict[str, tuple[re.Pattern[str], str]] = {
     "g2": (re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*"), "asana"),
@@ -36,19 +32,6 @@ _SLUG_RULES: dict[str, tuple[re.Pattern[str], str]] = {
     "producthunt": (re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*"), "asana"),
     "trustpilot": (re.compile(r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}"), "asana.com"),
 }
-
-
-def parse_source_allowlist(raw: str) -> list[str]:
-    """Return a normalized source allowlist from a comma-separated string."""
-    return [part.strip().lower() for part in raw.split(",") if part.strip()]
-
-
-def is_source_allowed(source: str, allowlist_raw: str) -> bool:
-    """Return True when *source* is allowed by the configured allowlist."""
-    allowed = parse_source_allowlist(allowlist_raw)
-    if not allowed:
-        return True
-    return source.strip().lower() in allowed
 
 
 def validate_target_input(source: str, product_slug: str) -> tuple[str, str]:

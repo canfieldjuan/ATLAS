@@ -35,6 +35,7 @@ class TrustpilotParser:
 
     source_name = "trustpilot"
     prefer_residential = True
+    version = "trustpilot:1"
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
         """Scrape Trustpilot reviews -- Web Unlocker first, then HTTP client."""

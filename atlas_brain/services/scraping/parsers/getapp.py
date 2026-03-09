@@ -34,6 +34,7 @@ class GetAppParser:
 
     source_name = "getapp"
     prefer_residential = True
+    version = "getapp:1"
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
         """Scrape GetApp reviews -- Web Unlocker first, then HTTP client."""

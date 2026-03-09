@@ -309,10 +309,11 @@ async def trigger_scrape(target_id: UUID) -> dict:
 
     # Insert reviews
     inserted = 0
+    pv = getattr(parser, 'version', None)
     if result.reviews:
         from ..autonomous.tasks.b2b_scrape_intake import _insert_reviews
         batch_id = f"manual_{target.source}_{target.product_slug}_{int(_time.time())}"
-        inserted = await _insert_reviews(pool, result.reviews, batch_id)
+        inserted = await _insert_reviews(pool, result.reviews, batch_id, parser_version=pv)
 
     duration_ms = int((_time.monotonic() - started_at) * 1000)
 
@@ -427,9 +428,10 @@ async def trigger_scrape_all(
             total_filtered += filtered_count
 
         inserted = 0
+        pv = getattr(parser, 'version', None)
         if result.reviews:
             batch_id = f"bulk_{target.source}_{target.product_slug}_{int(_time.time())}"
-            inserted = await _insert_reviews(pool, result.reviews, batch_id)
+            inserted = await _insert_reviews(pool, result.reviews, batch_id, parser_version=pv)
             total_inserted += inserted
 
         duration_ms = int((_time.monotonic() - started_at) * 1000)
@@ -473,16 +475,17 @@ async def _write_scrape_log(
 ) -> None:
     """Write a record to b2b_scrape_log for observability."""
     proxy_type = "residential" if parser.prefer_residential else "none"
+    pv = getattr(parser, 'version', None)
     try:
         await pool.execute(
             """
             INSERT INTO b2b_scrape_log
                 (target_id, source, status, reviews_found, reviews_inserted,
-                 pages_scraped, errors, duration_ms, proxy_type)
-            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
+                 pages_scraped, errors, duration_ms, proxy_type, parser_version)
+            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)
             """,
             target_id, source, status, reviews_found, reviews_inserted,
-            pages_scraped, json.dumps(errors), duration_ms, proxy_type,
+            pages_scraped, json.dumps(errors), duration_ms, proxy_type, pv,
         )
     except Exception:
         logger.warning("Failed to write scrape log", exc_info=True)

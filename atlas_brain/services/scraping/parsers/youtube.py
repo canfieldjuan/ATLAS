@@ -75,6 +75,7 @@ class YouTubeParser:
 
     source_name = "youtube"
     prefer_residential = False  # API-based, no proxy needed
+    version = "youtube:1"
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
         """Search for vendor-related videos and scrape comment threads."""

@@ -62,6 +62,7 @@ class RedditParser:
 
     source_name = "reddit"
     prefer_residential = False  # No proxy needed
+    version = "reddit:1"
 
     def __init__(self) -> None:
         self._token: str | None = None

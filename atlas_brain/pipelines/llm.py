@@ -53,6 +53,12 @@ def _resolve_workload(workload: str):
         from ..services import llm_registry
         return llm_registry.get_active()
 
+    if workload == "vllm":
+        return _activate_vllm()
+
+    if workload == "anthropic":
+        return _anthropic_fallback()
+
     logger.warning("Unknown workload: '%s'", workload)
     return None
 
@@ -114,6 +120,56 @@ def _activate_local_llm():
     return None
 
 
+def _activate_vllm():
+    """Activate vLLM only (no Ollama fallback). Returns LLM or None."""
+    from ..config import settings
+    from ..services import llm_registry
+
+    try:
+        llm_registry.activate(
+            "vllm",
+            model=settings.llm.vllm_model,
+            base_url=settings.llm.vllm_url,
+        )
+        llm = llm_registry.get_active()
+        if llm is not None:
+            logger.info("Activated vLLM (%s)", settings.llm.vllm_model)
+            return llm
+    except Exception as e:
+        logger.error("Could not activate vLLM: %s", e)
+    return None
+
+
+def _anthropic_fallback():
+    """Activate Anthropic Sonnet as cloud fallback. Returns LLM or None."""
+    from ..config import settings
+
+    api_key = (
+        settings.llm.anthropic_api_key
+        or os.environ.get("ANTHROPIC_API_KEY")
+        or os.environ.get("ATLAS_LLM_ANTHROPIC_API_KEY", "")
+    )
+    if not api_key:
+        logger.warning("Anthropic fallback skipped: no API key configured")
+        return None
+    from ..services import llm_registry
+
+    model = settings.llm.anthropic_model
+    try:
+        llm_registry.activate(
+            "anthropic",
+            model=model,
+            api_key=api_key,
+        )
+        llm = llm_registry.get_active()
+        if llm is not None:
+            logger.warning("vLLM unavailable, falling back to Anthropic Sonnet")
+            return llm
+    except Exception as e:
+        logger.error("Anthropic fallback failed: %s", e)
+    return None
+
+
 def get_pipeline_llm(
     *,
     workload: str | None = None,
@@ -129,7 +185,9 @@ def get_pipeline_llm(
         draft      -> Sonnet (email drafts)
         synthesis  -> Sonnet (reports, blog posts, content generation)
         reasoning  -> Sonnet (cross-domain reasoning)
-        local_fast -> local Ollama/vLLM only
+        local_fast -> local vLLM/Ollama only
+        vllm       -> vLLM primary, Anthropic fallback (no Ollama)
+        anthropic  -> Anthropic primary, vLLM fallback (no Ollama)
 
     When workload is None, falls back to legacy prefer_cloud chain.
     Returns the LLM instance or None.
@@ -141,8 +199,25 @@ def get_pipeline_llm(
         llm = _resolve_workload(workload)
         if llm is not None:
             return llm
+        # local_fast: only local models
+        if workload == "local_fast":
+            if auto_activate_ollama:
+                return _activate_local_llm()
+            return None
+        # vllm: fall back to Anthropic (no Ollama, no OpenRouter)
+        if workload == "vllm":
+            llm = _anthropic_fallback()
+            if llm is not None:
+                return llm
+            return None
+        # anthropic: fall back to vLLM (no Ollama, no OpenRouter)
+        if workload == "anthropic":
+            llm = _activate_vllm()
+            if llm is not None:
+                return llm
+            return None
         # Workload model unavailable; try OpenRouter fallback
-        if workload != "local_fast" and try_openrouter:
+        if try_openrouter:
             llm = _try_openrouter(openrouter_model)
             if llm is not None:
                 return llm

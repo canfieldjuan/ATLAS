@@ -44,7 +44,7 @@ Return a JSON object:
 ```json
 {
   "subject": "Under 50 characters, curiosity-driven",
-  "body": "HTML email body (50-125 words MAXIMUM)",
+  "body": "<p>First paragraph hook.</p><p>Data and insight.</p><p>CTA lead-in with booking link.</p>",
   "cta": "Clear call to action (separate from body)"
 }
 ```
@@ -53,7 +53,7 @@ Return a JSON object:
 ```json
 {
   "subject": "Under 50 characters, different angle",
-  "body": "HTML follow-up body (75-150 words MAXIMUM)",
+  "body": "<p>Reference prior email.</p><p>New competitive data.</p><p>CTA lead-in with booking link.</p>",
   "cta": "Call to action (separate from body)"
 }
 ```
@@ -99,15 +99,15 @@ Return a JSON object:
 
 14. **Subject lines** should be curiosity-driven, not salesy. Good: "47 of your accounts this month" -- Bad: "Reduce churn with our platform"
 
-15. **Competitive awareness angle** -- subtly let the vendor know that intelligence reaches both sides:
-    - **email_cold**: Include ONE brief sentence mid-email, matter-of-fact tone. Example framing: "This intelligence reaches both sides of the table -- the vendors who can act on it and the competitors who will." Do NOT elaborate or threaten. Just state it and move on.
-    - **email_followup**: Be slightly more concrete. Frame as a timing observation: "The competitors gaining your accounts also have access to intent data showing which of your customers are in-market. The question is who moves first." Keep it to 1-2 sentences, woven naturally into the competitive displacement section (Rule 11).
-    - **Never make it the headline or subject line.** It's supporting context, not the hook.
-    - **Never frame it as a threat.** Tone is informational -- "this is how the market works now."
+15. **Competitive awareness angle** -- one sentence per email, no more:
+    - **email_cold**: Include ONE sentence mid-email: "Your competitors receive the same class of intelligence on their at-risk accounts." Adapt to fit naturally but keep under 20 words. Do NOT say "both sides of the table." Do NOT elaborate.
+    - **email_followup**: ONE sentence in the displacement section: "The challengers gaining these accounts are already acting on intent data -- this is about response time." Adapt naturally, keep under 25 words. Do NOT say "who moves first."
+    - **Never make it the headline or subject line.** It supports the pitch, it is not the pitch.
+    - **Never frame it as a threat.** Tone is informational.
 
-16. **HARD WORD LIMIT**: email_cold body MUST be 50-125 words. email_followup body MUST be 75-150 words. If the body exceeds the word limit, you have failed this task. Count carefully.
+16. **WORD LIMIT (strictly enforced post-generation)**: email_cold body: 50-125 words. email_followup body: 75-150 words. A 100-word email is 5-6 short sentences. When in doubt, cut a sentence. Exceeding the limit triggers an automatic rewrite request.
 
-17. **HTML body**: The `body` field must be valid minimal HTML. Use only `<p>`, `<br>`, and `<a>` tags. No `<div>`, `<table>`, `<img>`, or inline styles. Keep formatting clean and lightweight.
+17. **HTML body (mandatory)**: The `body` field MUST be valid HTML. Use ONLY `<p>`, `<br>`, `<strong>`, and `<a>` tags. Do NOT use markdown syntax (`**`, `*`, `#`, `-` lists). Do NOT use `<div>`, `<table>`, `<img>`, or inline styles. Every paragraph must be wrapped in `<p>` tags.
 
 18. **Subject line length**: Subject lines MUST be under 50 characters. Shorter is better for mobile preview.
 

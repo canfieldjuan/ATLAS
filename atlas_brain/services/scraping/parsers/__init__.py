@@ -76,6 +76,7 @@ class ReviewParser(Protocol):
 
     source_name: str
     prefer_residential: bool
+    version: str
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
         """Scrape reviews for the given target."""
@@ -99,6 +100,12 @@ def get_parser(source: str) -> ReviewParser | None:
 def get_all_parsers() -> dict[str, ReviewParser]:
     """Get all registered parsers."""
     return dict(_PARSERS)
+
+
+def get_parser_version(source: str) -> str | None:
+    """Get the version string for a parser by source name."""
+    parser = _PARSERS.get(source)
+    return getattr(parser, 'version', None) if parser else None
 
 
 # Auto-register parsers on import

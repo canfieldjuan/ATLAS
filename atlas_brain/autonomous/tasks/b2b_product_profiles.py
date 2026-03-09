@@ -244,6 +244,7 @@ async def _fetch_aggregate_metrics(pool, window_days: int, min_reviews: int) -> 
 
     Groups by vendor_name only (not product_category) to produce one profile
     per vendor. The most common product_category is selected via MODE().
+    Also collects provenance: sample_review_ids, review_window_start/end.
     """
     rows = await pool.fetch(
         """
@@ -254,7 +255,11 @@ async def _fetch_aggregate_metrics(pool, window_days: int, min_reviews: int) -> 
                AVG(CASE WHEN (enrichment->>'would_recommend')::boolean THEN 1.0 ELSE 0.0 END)
                    FILTER (WHERE enrichment->>'would_recommend' IS NOT NULL) AS recommend_rate,
                AVG((enrichment->>'urgency_score')::numeric)
-                   FILTER (WHERE enrichment->>'urgency_score' IS NOT NULL) AS avg_urgency
+                   FILTER (WHERE enrichment->>'urgency_score' IS NOT NULL) AS avg_urgency,
+               (ARRAY_AGG(id ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST))[1:50]
+                   AS sample_review_ids,
+               MIN(enriched_at) AS review_window_start,
+               MAX(enriched_at) AS review_window_end
         FROM b2b_reviews
         WHERE enrichment_status = 'enriched'
           AND enriched_at > NOW() - make_interval(days => $1)
@@ -272,7 +277,28 @@ async def _fetch_aggregate_metrics(pool, window_days: int, min_reviews: int) -> 
             "avg_rating": round(_safe_float(r["avg_rating"]), 2),
             "recommend_rate": round(_safe_float(r["recommend_rate"]), 2) if r["recommend_rate"] is not None else None,
             "avg_urgency": round(_safe_float(r["avg_urgency"]), 1) if r["avg_urgency"] is not None else None,
+            "sample_review_ids": r["sample_review_ids"] or [],
+            "review_window_start": r["review_window_start"],
+            "review_window_end": r["review_window_end"],
         }
+    return result
+
+
+async def _fetch_source_distribution(pool, window_days: int) -> dict[str, dict[str, int]]:
+    """Per-vendor review source distribution: {vendor: {source: count}}."""
+    rows = await pool.fetch(
+        """
+        SELECT vendor_name, source, count(*) AS cnt
+        FROM b2b_reviews
+        WHERE enrichment_status = 'enriched'
+          AND enriched_at > NOW() - make_interval(days => $1)
+        GROUP BY vendor_name, source
+        """,
+        window_days,
+    )
+    result: dict[str, dict[str, int]] = {}
+    for r in rows:
+        result.setdefault(r["vendor_name"], {})[r["source"]] = r["cnt"]
     return result
 
 
@@ -506,7 +532,7 @@ async def _synthesize_profile(
 
 
 async def _upsert_profile(pool, profile: dict) -> None:
-    """Insert or update a product profile row."""
+    """Insert or update a product profile row (20 columns incl. provenance)."""
     await pool.execute(
         """
         INSERT INTO b2b_product_profiles (
@@ -515,14 +541,20 @@ async def _upsert_profile(pool, profile: dict) -> None:
             total_reviews_analyzed, avg_rating, recommend_rate, avg_urgency,
             primary_use_cases, typical_company_size, typical_industries,
             top_integrations, commonly_compared_to, commonly_switched_from,
-            profile_summary, last_computed_at
+            profile_summary,
+            source_distribution, sample_review_ids,
+            review_window_start, review_window_end,
+            last_computed_at
         ) VALUES (
             $1, $2,
             $3::jsonb, $4::jsonb, $5::jsonb,
             $6, $7, $8, $9,
             $10::jsonb, $11::jsonb, $12::jsonb,
             $13::jsonb, $14::jsonb, $15::jsonb,
-            $16, NOW()
+            $16,
+            $17::jsonb, $18,
+            $19, $20,
+            NOW()
         )
         ON CONFLICT (vendor_name, COALESCE(product_category, ''))
         DO UPDATE SET
@@ -540,6 +572,10 @@ async def _upsert_profile(pool, profile: dict) -> None:
             commonly_compared_to = EXCLUDED.commonly_compared_to,
             commonly_switched_from = EXCLUDED.commonly_switched_from,
             profile_summary = EXCLUDED.profile_summary,
+            source_distribution = EXCLUDED.source_distribution,
+            sample_review_ids = EXCLUDED.sample_review_ids,
+            review_window_start = EXCLUDED.review_window_start,
+            review_window_end = EXCLUDED.review_window_end,
             last_computed_at = NOW()
         """,
         profile["vendor_name"],
@@ -558,6 +594,10 @@ async def _upsert_profile(pool, profile: dict) -> None:
         json.dumps(profile["commonly_compared_to"]),
         json.dumps(profile["commonly_switched_from"]),
         profile.get("profile_summary"),
+        json.dumps(profile.get("source_distribution", {})),
+        profile.get("sample_review_ids", []),
+        profile.get("review_window_start"),
+        profile.get("review_window_end"),
     )
 
 
@@ -591,6 +631,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         competitive_data,
         integration_data,
         aggregate_metrics,
+        source_dist_data,
     ) = await asyncio.gather(
         _fetch_satisfaction_by_area(pool, window_days),
         _fetch_pain_distribution(pool, window_days),
@@ -599,6 +640,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _fetch_competitive_flows(pool, window_days),
         _fetch_integration_stacks(pool, window_days),
         _fetch_aggregate_metrics(pool, window_days, min_reviews),
+        _fetch_source_distribution(pool, window_days),
     )
 
     if not aggregate_metrics:
@@ -667,6 +709,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 "commonly_compared_to": compared_to,
                 "commonly_switched_from": switched_from,
                 "profile_summary": summary,
+                "source_distribution": source_dist_data.get(vendor_name, {}),
+                "sample_review_ids": metrics.get("sample_review_ids", []),
+                "review_window_start": metrics.get("review_window_start"),
+                "review_window_end": metrics.get("review_window_end"),
             }
 
             await _upsert_profile(pool, profile)

@@ -8,6 +8,7 @@ Updates campaign + sequence state on success/failure.
 
 import logging
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from ...config import settings
@@ -20,6 +21,43 @@ logger = logging.getLogger("atlas.autonomous.tasks.campaign_send")
 # After this many consecutive send failures, mark campaign as draft
 # so it stops being retried.
 _MAX_SEND_ATTEMPTS = 3
+
+
+def _build_unsub_url(base_url: str, recipient_email: str) -> str:
+    """Build unsubscribe URL with email parameter (URL-encoded)."""
+    sep = "&" if "?" in base_url else "?"
+    return f"{base_url}{sep}email={quote(recipient_email, safe='')}"
+
+
+def _wrap_with_footer(body: str, recipient_email: str, cfg) -> str:
+    """Append CAN-SPAM compliant footer to campaign email body."""
+    if not cfg.unsubscribe_base_url and not cfg.company_address:
+        return body
+
+    parts = []
+    if cfg.company_address:
+        parts.append(cfg.company_address)
+    if cfg.unsubscribe_base_url:
+        unsub_url = _build_unsub_url(cfg.unsubscribe_base_url, recipient_email)
+        parts.append(f'<a href="{unsub_url}" style="color:#999;">Unsubscribe</a>')
+
+    footer = (
+        '<p style="font-size:11px;color:#999;margin-top:24px;border-top:1px solid #eee;padding-top:8px;">'
+        + "<br>".join(parts)
+        + "</p>"
+    )
+    return body + footer
+
+
+def _unsub_headers(base_url: str, recipient_email: str) -> dict[str, str]:
+    """Build List-Unsubscribe headers for email."""
+    if not base_url:
+        return {}
+    unsub_url = _build_unsub_url(base_url, recipient_email)
+    return {
+        "List-Unsubscribe": f"<{unsub_url}>",
+        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+    }
 
 
 def _parse_window(cfg) -> tuple[int, int]:
@@ -184,11 +222,20 @@ async def run(task: ScheduledTask) -> dict:
             continue
 
         try:
+            # CAN-SPAM: inject unsubscribe footer + headers
+            send_body = _wrap_with_footer(
+                c.get("body", ""), c["recipient_email"], cfg,
+            )
+            extra_headers = _unsub_headers(
+                cfg.unsubscribe_base_url, c["recipient_email"],
+            )
+
             result = await sender.send(
                 to=c["recipient_email"],
                 from_email=from_email,
                 subject=c.get("subject", ""),
-                body=c.get("body", ""),
+                body=send_body,
+                headers=extra_headers or None,
                 tags=[
                     {"name": "company", "value": c.get("company_name", "")},
                     {"name": "step", "value": str(c.get("step_number", 1))},

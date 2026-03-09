@@ -10,6 +10,7 @@ import io
 import json
 import logging
 import uuid as _uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -17,6 +18,8 @@ from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
 from ..auth.dependencies import AuthUser, optional_auth
+from ..services.scraping.capabilities import get_capability
+from ..services.scraping.sources import ALL_SOURCES, ReviewSource, display_name as source_display_name
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.b2b_dashboard")
@@ -843,6 +846,169 @@ async def get_pipeline_status(user: AuthUser | None = Depends(optional_auth)):
 
 
 # ---------------------------------------------------------------------------
+# GET /source-health
+# ---------------------------------------------------------------------------
+
+_SOURCE_HEALTH_SQL = """
+WITH current_window AS (
+    SELECT
+        source,
+        COUNT(*)                                            AS total_scrapes,
+        COUNT(*) FILTER (WHERE status = 'success')          AS success_count,
+        COUNT(*) FILTER (WHERE status = 'partial')          AS partial_count,
+        COUNT(*) FILTER (WHERE status = 'failed')           AS failed_count,
+        COUNT(*) FILTER (WHERE status = 'blocked')          AS blocked_count,
+        AVG(reviews_found)                                  AS avg_reviews_found,
+        AVG(reviews_inserted)                               AS avg_reviews_inserted,
+        AVG(duration_ms)                                    AS avg_duration_ms,
+        PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95_duration_ms,
+        MAX(started_at) FILTER (WHERE status = 'success')   AS last_success_at,
+        MAX(started_at)                                     AS last_scrape_at
+    FROM b2b_scrape_log
+    WHERE started_at >= NOW() - make_interval(days => $1)
+    {source_filter_current}
+    GROUP BY source
+),
+prev_window AS (
+    SELECT
+        source,
+        COUNT(*)                                            AS total_scrapes,
+        COUNT(*) FILTER (WHERE status = 'success')          AS success_count,
+        COUNT(*) FILTER (WHERE status = 'blocked')          AS blocked_count,
+        AVG(reviews_found)                                  AS avg_reviews_found
+    FROM b2b_scrape_log
+    WHERE started_at >= NOW() - make_interval(days => $1 * 2)
+      AND started_at <  NOW() - make_interval(days => $1)
+    {source_filter_prev}
+    GROUP BY source
+),
+target_counts AS (
+    SELECT source, COUNT(*) FILTER (WHERE enabled) AS active_targets
+    FROM b2b_scrape_targets
+    {target_filter}
+    GROUP BY source
+)
+SELECT
+    c.source, c.total_scrapes, c.success_count, c.partial_count,
+    c.failed_count, c.blocked_count, c.avg_reviews_found,
+    c.avg_reviews_inserted, c.avg_duration_ms, c.p95_duration_ms,
+    c.last_success_at, c.last_scrape_at,
+    COALESCE(t.active_targets, 0)  AS active_targets,
+    p.total_scrapes                AS prev_total_scrapes,
+    p.success_count                AS prev_success_count,
+    p.blocked_count                AS prev_blocked_count,
+    p.avg_reviews_found            AS prev_avg_reviews_found
+FROM current_window c
+LEFT JOIN prev_window p USING (source)
+LEFT JOIN target_counts t USING (source)
+ORDER BY c.total_scrapes DESC
+"""
+
+
+def _build_source_health_query(source: str | None):
+    """Return (sql, params) for the source-health CTE query."""
+    if source:
+        sql = _SOURCE_HEALTH_SQL.format(
+            source_filter_current="AND source = $2",
+            source_filter_prev="AND source = $2",
+            target_filter="WHERE source = $2",
+        )
+        return sql, [source]
+    sql = _SOURCE_HEALTH_SQL.format(
+        source_filter_current="",
+        source_filter_prev="",
+        target_filter="",
+    )
+    return sql, []
+
+
+def _row_to_source_dict(r) -> dict:
+    """Convert a DB row to a source-health dict with computed rates."""
+    total = r["total_scrapes"] or 1
+    success_rate = round(r["success_count"] / total, 3)
+    block_rate = round(r["blocked_count"] / total, 3)
+
+    prev_total = r["prev_total_scrapes"] or 0
+    prev_success_rate = round(r["prev_success_count"] / max(prev_total, 1), 3) if prev_total else None
+    prev_block_rate = round(r["prev_blocked_count"] / max(prev_total, 1), 3) if prev_total else None
+    prev_avg = _safe_float(r["prev_avg_reviews_found"])
+
+    trend = {
+        "prev_window_scrapes": prev_total,
+        "prev_success_rate": prev_success_rate,
+        "prev_block_rate": prev_block_rate,
+        "prev_avg_reviews_found": prev_avg,
+        "success_rate_delta": round(success_rate - prev_success_rate, 3) if prev_success_rate is not None else None,
+        "block_rate_delta": round(block_rate - prev_block_rate, 3) if prev_block_rate is not None else None,
+    }
+
+    cap = get_capability(r["source"])
+    capabilities = cap.to_dict() if cap else None
+
+    return {
+        "source": r["source"],
+        "display_name": source_display_name(r["source"]),
+        "total_scrapes": r["total_scrapes"],
+        "success_count": r["success_count"],
+        "partial_count": r["partial_count"],
+        "failed_count": r["failed_count"],
+        "blocked_count": r["blocked_count"],
+        "success_rate": success_rate,
+        "block_rate": block_rate,
+        "avg_reviews_found": _safe_float(r["avg_reviews_found"]),
+        "avg_reviews_inserted": _safe_float(r["avg_reviews_inserted"]),
+        "avg_duration_ms": _safe_float(r["avg_duration_ms"]),
+        "p95_duration_ms": _safe_float(r["p95_duration_ms"]),
+        "last_success_at": str(r["last_success_at"]) if r["last_success_at"] else None,
+        "last_scrape_at": str(r["last_scrape_at"]) if r["last_scrape_at"] else None,
+        "active_targets": r["active_targets"],
+        "capabilities": capabilities,
+        "trend": trend,
+    }
+
+
+@router.get("/source-health")
+async def get_source_health(
+    window_days: int = Query(7, ge=1, le=30),
+    source: Optional[str] = Query(None),
+):
+    pool = _pool_or_503()
+
+    if source:
+        source = source.strip().lower()
+        if source not in ALL_SOURCES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid source. Must be one of: {sorted(s.value for s in ALL_SOURCES)}",
+            )
+
+    sql, extra_params = _build_source_health_query(source)
+    rows = await pool.fetch(sql, window_days, *extra_params)
+
+    sources_list = [_row_to_source_dict(r) for r in rows]
+
+    total_scrapes = sum(s["total_scrapes"] for s in sources_list)
+    total_success = sum(s["success_count"] for s in sources_list)
+    total_blocked = sum(s["blocked_count"] for s in sources_list)
+
+    summary = {
+        "total_sources": len(sources_list),
+        "total_scrapes": total_scrapes,
+        "overall_success_rate": round(total_success / max(total_scrapes, 1), 3),
+        "overall_block_rate": round(total_blocked / max(total_scrapes, 1), 3),
+        "worst_source": min(sources_list, key=lambda s: s["success_rate"])["source"] if sources_list else None,
+        "best_source": max(sources_list, key=lambda s: s["success_rate"])["source"] if sources_list else None,
+    }
+
+    return {
+        "window_days": window_days,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "sources": sources_list,
+        "summary": summary,
+    }
+
+
+# ---------------------------------------------------------------------------
 # CSV helpers
 # ---------------------------------------------------------------------------
 
@@ -869,6 +1035,177 @@ def _csv_response(rows: list[dict], filename: str) -> StreamingResponse:
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /displacement-edges
+# ---------------------------------------------------------------------------
+
+
+@router.get("/displacement-edges")
+async def list_displacement_edges(
+    from_vendor: Optional[str] = Query(None),
+    to_vendor: Optional[str] = Query(None),
+    min_strength: Optional[str] = Query(None),
+    min_confidence: Optional[float] = Query(None, ge=0, le=1),
+    window_days: int = Query(90, ge=1, le=3650),
+    limit: int = Query(50, ge=1, le=200),
+    user: AuthUser | None = Depends(optional_auth),
+):
+    pool = _pool_or_503()
+    strength_order = {"strong": 3, "moderate": 2, "emerging": 1}
+    if min_strength and min_strength not in strength_order:
+        raise HTTPException(400, f"Invalid min_strength: {min_strength}")
+
+    conditions: list[str] = ["computed_date > NOW() - make_interval(days => $1)"]
+    params: list = [window_days]
+    idx = 2
+
+    if user:
+        conditions.append(
+            f"(from_vendor IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)"
+            f" OR to_vendor IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid))"
+        )
+        params.append(user.account_id)
+        idx += 1
+
+    if from_vendor:
+        conditions.append(f"from_vendor ILIKE '%' || ${idx} || '%'")
+        params.append(from_vendor)
+        idx += 1
+
+    if to_vendor:
+        conditions.append(f"to_vendor ILIKE '%' || ${idx} || '%'")
+        params.append(to_vendor)
+        idx += 1
+
+    if min_strength:
+        min_val = strength_order[min_strength]
+        allowed = [k for k, v in strength_order.items() if v >= min_val]
+        conditions.append(f"signal_strength = ANY(${idx}::text[])")
+        params.append(allowed)
+        idx += 1
+
+    if min_confidence is not None:
+        conditions.append(f"confidence_score >= ${idx}")
+        params.append(min_confidence)
+        idx += 1
+
+    where = " AND ".join(conditions)
+
+    rows = await pool.fetch(
+        f"""
+        SELECT id, from_vendor, to_vendor, mention_count,
+               primary_driver, signal_strength, key_quote,
+               source_distribution, confidence_score,
+               computed_date, report_id, created_at
+        FROM b2b_displacement_edges
+        WHERE {where}
+        ORDER BY confidence_score DESC, mention_count DESC
+        LIMIT ${idx}
+        """,
+        *params,
+        limit,
+    )
+
+    edges = []
+    for r in rows:
+        edges.append({
+            "id": str(r["id"]),
+            "from_vendor": r["from_vendor"],
+            "to_vendor": r["to_vendor"],
+            "mention_count": r["mention_count"],
+            "primary_driver": r["primary_driver"],
+            "signal_strength": r["signal_strength"],
+            "key_quote": r["key_quote"],
+            "source_distribution": _safe_json(r["source_distribution"]),
+            "confidence_score": _safe_float(r["confidence_score"], 0),
+            "computed_date": str(r["computed_date"]),
+            "report_id": str(r["report_id"]) if r["report_id"] else None,
+        })
+
+    return {"edges": edges, "count": len(edges)}
+
+
+# ---------------------------------------------------------------------------
+# GET /company-signals
+# ---------------------------------------------------------------------------
+
+
+@router.get("/company-signals")
+async def list_company_signals(
+    vendor_name: Optional[str] = Query(None),
+    company_name: Optional[str] = Query(None),
+    min_urgency: float = Query(0, ge=0, le=10),
+    decision_makers_only: bool = Query(False),
+    window_days: int = Query(90, ge=1, le=3650),
+    limit: int = Query(50, ge=1, le=200),
+    user: AuthUser | None = Depends(optional_auth),
+):
+    pool = _pool_or_503()
+    conditions: list[str] = ["last_seen_at > NOW() - make_interval(days => $1)"]
+    params: list = [window_days]
+    idx = 2
+
+    if user:
+        conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
+        params.append(user.account_id)
+        idx += 1
+
+    if vendor_name:
+        conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
+        params.append(vendor_name)
+        idx += 1
+
+    if company_name:
+        conditions.append(f"company_name ILIKE '%' || ${idx} || '%'")
+        params.append(company_name)
+        idx += 1
+
+    if min_urgency > 0:
+        conditions.append(f"urgency_score >= ${idx}")
+        params.append(min_urgency)
+        idx += 1
+
+    if decision_makers_only:
+        conditions.append("decision_maker = true")
+
+    where = " AND ".join(conditions)
+
+    rows = await pool.fetch(
+        f"""
+        SELECT id, company_name, vendor_name, urgency_score,
+               pain_category, buyer_role, decision_maker,
+               seat_count, contract_end, buying_stage,
+               source, first_seen_at, last_seen_at
+        FROM b2b_company_signals
+        WHERE {where}
+        ORDER BY urgency_score DESC
+        LIMIT ${idx}
+        """,
+        *params,
+        limit,
+    )
+
+    signals = []
+    for r in rows:
+        signals.append({
+            "id": str(r["id"]),
+            "company_name": r["company_name"],
+            "vendor_name": r["vendor_name"],
+            "urgency_score": _safe_float(r["urgency_score"], 0),
+            "pain_category": r["pain_category"],
+            "buyer_role": r["buyer_role"],
+            "decision_maker": r["decision_maker"],
+            "seat_count": r["seat_count"],
+            "contract_end": r["contract_end"],
+            "buying_stage": r["buying_stage"],
+            "source": r["source"],
+            "first_seen_at": str(r["first_seen_at"]) if r["first_seen_at"] else None,
+            "last_seen_at": str(r["last_seen_at"]) if r["last_seen_at"] else None,
+        })
+
+    return {"signals": signals, "count": len(signals)}
 
 
 # ---------------------------------------------------------------------------
@@ -1116,3 +1453,55 @@ async def export_high_intent(
         })
 
     return _csv_response(data, "high_intent_leads.csv")
+
+
+# ---------------------------------------------------------------------------
+# GET /export/source-health  (CSV)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/export/source-health")
+async def export_source_health(
+    window_days: int = Query(7, ge=1, le=30),
+    source: Optional[str] = Query(None),
+):
+    pool = _pool_or_503()
+
+    if source:
+        source = source.strip().lower()
+        if source not in ALL_SOURCES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid source. Must be one of: {sorted(s.value for s in ALL_SOURCES)}",
+            )
+
+    sql, extra_params = _build_source_health_query(source)
+    rows = await pool.fetch(sql, window_days, *extra_params)
+
+    data = []
+    for r in rows:
+        total = r["total_scrapes"] or 1
+        prev_total = r["prev_total_scrapes"] or 0
+        data.append({
+            "source": r["source"],
+            "display_name": source_display_name(r["source"]),
+            "total_scrapes": r["total_scrapes"],
+            "success_count": r["success_count"],
+            "partial_count": r["partial_count"],
+            "failed_count": r["failed_count"],
+            "blocked_count": r["blocked_count"],
+            "success_rate": round(r["success_count"] / total, 3),
+            "block_rate": round(r["blocked_count"] / total, 3),
+            "avg_reviews_found": _safe_float(r["avg_reviews_found"], ""),
+            "avg_reviews_inserted": _safe_float(r["avg_reviews_inserted"], ""),
+            "avg_duration_ms": _safe_float(r["avg_duration_ms"], ""),
+            "p95_duration_ms": _safe_float(r["p95_duration_ms"], ""),
+            "last_success_at": str(r["last_success_at"]) if r["last_success_at"] else "",
+            "last_scrape_at": str(r["last_scrape_at"]) if r["last_scrape_at"] else "",
+            "active_targets": r["active_targets"],
+            "prev_window_scrapes": prev_total,
+            "prev_success_rate": round(r["prev_success_count"] / max(prev_total, 1), 3) if prev_total else "",
+            "prev_block_rate": round(r["prev_blocked_count"] / max(prev_total, 1), 3) if prev_total else "",
+        })
+
+    return _csv_response(data, "source_health.csv")

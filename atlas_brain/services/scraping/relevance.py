@@ -75,7 +75,7 @@ _CHURN_CAP = 0.35
 _NOISE_CAP = -0.45
 
 # Structured review sources that bypass the filter entirely
-STRUCTURED_SOURCES = frozenset({"g2", "capterra", "trustradius"})
+from .sources import STRUCTURED_SOURCES
 
 
 # ---------------------------------------------------------------------------

@@ -39,6 +39,7 @@ class GartnerParser:
 
     source_name = "gartner"
     prefer_residential = True
+    version = "gartner:1"
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
         """Scrape Gartner Peer Insights -- Web Unlocker first, then HTTP."""

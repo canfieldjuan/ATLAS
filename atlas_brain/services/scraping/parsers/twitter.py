@@ -101,6 +101,7 @@ class TwitterParser:
 
     source_name = "twitter"
     prefer_residential = True  # X blocks aggressively
+    version = "twitter:1"
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
         reviews: list[dict] = []

@@ -17,6 +17,7 @@ from ..storage.database import get_db_pool
 from ..autonomous.tasks.b2b_vendor_briefing import (
     build_vendor_briefing,
     generate_and_send_briefing,
+    send_batch_briefings,
 )
 from ..templates.email.vendor_briefing import render_vendor_briefing_html
 
@@ -55,7 +56,7 @@ class PreviewRequest(BaseModel):
 
 class GenerateRequest(BaseModel):
     vendor_name: str = Field(..., min_length=1)
-    to_email: str = Field(..., min_length=3)
+    to_email: str | None = Field(None, min_length=3)
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +99,20 @@ async def generate_briefing(
 
     if "error" in result:
         raise HTTPException(status_code=422, detail=result["error"])
+
+    return result
+
+
+@router.post("/send-batch")
+async def send_batch(user: AuthUser | None = Depends(optional_auth)):
+    """Send briefings to all eligible vendor targets."""
+    if not settings.b2b_churn.vendor_briefing_enabled:
+        raise HTTPException(status_code=403, detail="Vendor briefings disabled")
+
+    result = await send_batch_briefings()
+
+    if "error" in result:
+        raise HTTPException(status_code=503, detail=result["error"])
 
     return result
 

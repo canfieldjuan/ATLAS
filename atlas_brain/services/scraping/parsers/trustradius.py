@@ -44,6 +44,7 @@ class TrustRadiusParser:
 
     source_name = "trustradius"
     prefer_residential = True
+    version = "trustradius:1"
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
         """Scrape TrustRadius reviews for the given product."""

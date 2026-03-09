@@ -69,16 +69,27 @@ Data sets:
   "executive_summary": "150-word max briefing",
   "weekly_churn_feed": [
     {
-      "company": "MUST be from known_companies",
       "vendor": "",
-      "urgency": 0,
-      "pain": "",
-      "alternatives_evaluating": [],
-      "key_quote": "Verbatim from this company's quotes in high_intent_companies. Null if none.",
+      "category": "",
+      "total_reviews": 0,
+      "churn_signal_density": 0.0,
+      "avg_urgency": 0.0,
+      "sample_size_confidence": "high|medium|low",
+      "churn_pressure_score": 0.0,
+      "top_pain": "",
+      "pain_breakdown": [{"category": "", "count": 0}],
+      "top_feature_gaps": [""],
+      "dm_churn_rate": 0.0,
+      "price_complaint_rate": 0.0,
+      "dominant_buyer_role": "",
+      "top_displacement_targets": [{"competitor": "", "mentions": 0}],
+      "key_quote": "Verbatim from quotable_evidence. Null if none.",
       "evidence": ["1-3 verbatim quotes from quotable_evidence"],
+      "sentiment_direction": "declining|stable|improving|insufficient_history",
+      "trend": "worsening|improving|stable|new",
+      "budget_context": {},
       "action_recommendation": "Buyer-facing recommendation",
-      "buyer_role": "",
-      "buyer_authority": false
+      "named_accounts": [{"company": "", "urgency": 0}]
     }
   ],
   "vendor_scorecards": [
@@ -171,9 +182,12 @@ Data sets:
 - Every vendor_scorecard claim must match its sample_size_confidence level.
 
 ### weekly_churn_feed
-- Rank by urgency (highest first), then decision_maker status
-- Only include urgency >= 7 or decision_maker=true with urgency >= 5
-- action_recommendation: buyer-facing ("Companies on [vendor] evaluating alternatives should negotiate pricing before renewal" — NOT "offer pricing concessions")
+- Vendor-level entries (NOT per-company). Each entry represents one vendor's aggregate churn pressure.
+- Rank by churn_pressure_score (highest first)
+- Include if churn_signal_density >= 15% OR avg_urgency >= 6 OR dm_churn_rate >= 0.3
+- named_accounts: companies with identified churn intent on this vendor (may be empty)
+- action_recommendation: buyer-facing ("Teams on [vendor] should..." -- NOT vendor-facing)
+- Note: the deterministic builder overrides LLM output for this section
 
 ### vendor_scorecards
 - Always include `total_reviews` and `sample_size_confidence`

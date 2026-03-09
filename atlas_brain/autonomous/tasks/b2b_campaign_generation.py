@@ -11,6 +11,7 @@ Returns _skip_synthesis.
 
 import json
 import logging
+import re
 import uuid as _uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -21,6 +22,159 @@ from ...storage.models import ScheduledTask
 from .campaign_audit import log_campaign_event
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_campaign_generation")
+
+# ---------------------------------------------------------------------------
+# Input sanitization
+# ---------------------------------------------------------------------------
+
+_PLACEHOLDER_NAMES = frozenset({
+    "john smith", "jane doe", "john doe", "jane smith",
+    "test user", "test contact", "sample contact",
+    "first last", "name here",
+})
+
+
+def _sanitize_contact_name(name: str | None) -> str | None:
+    """Return None for placeholder/seed contact names."""
+    if not name:
+        return None
+    if name.strip().lower() in _PLACEHOLDER_NAMES:
+        return None
+    return name.strip()
+
+
+# ---------------------------------------------------------------------------
+# Post-generation validation
+# ---------------------------------------------------------------------------
+
+_WORD_LIMITS: dict[str, tuple[int, int]] = {
+    "email_cold": (50, 150),
+    "email_followup": (75, 150),
+    "linkedin": (0, 100),
+}
+
+_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+_MD_ITALIC_RE = re.compile(r"(?<!\w)\*([^*]+)\*(?!\w)")
+_MD_HEADING_RE = re.compile(r"^#{1,3}\s+", re.MULTILINE)
+_MD_LIST_RE = re.compile(r"^[-*]\s+", re.MULTILINE)
+_PLACEHOLDER_RE = re.compile(r"\[(?:Name|Company|Your Name|First Name|Title)\]|\{\{.+?\}\}")
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _ensure_html(body: str) -> str:
+    """Convert markdown artifacts to minimal HTML."""
+    # Bold: **text** -> <strong>text</strong>
+    body = _MD_BOLD_RE.sub(r"<strong>\1</strong>", body)
+    # Italic: *text* -> <em>text</em>
+    body = _MD_ITALIC_RE.sub(r"<em>\1</em>", body)
+    # Strip markdown headings
+    body = _MD_HEADING_RE.sub("", body)
+    # Strip markdown list markers
+    body = _MD_LIST_RE.sub("", body)
+
+    # Wrap in <p> tags if missing
+    if "<p>" not in body.lower():
+        paragraphs = [p.strip() for p in body.split("\n\n") if p.strip()]
+        if not paragraphs:
+            # Single block -- split on double newline or treat as one paragraph
+            lines = [ln.strip() for ln in body.strip().splitlines() if ln.strip()]
+            if len(lines) > 1:
+                paragraphs = lines
+            else:
+                paragraphs = [body.strip()]
+        body = "".join(f"<p>{p}</p>" for p in paragraphs)
+
+    return body
+
+
+def _truncate_to_limit(body: str, max_words: int) -> str:
+    """Truncate body to max_words at the nearest sentence/paragraph boundary."""
+    plain = _HTML_TAG_RE.sub(" ", body)
+    words = plain.split()
+    if len(words) <= max_words:
+        return body
+
+    # Strategy 1: split on </p>, accumulate whole paragraphs
+    parts = re.split(r"(</p>)", body)
+    result = []
+    word_count = 0
+    for part in parts:
+        part_plain = _HTML_TAG_RE.sub(" ", part).strip()
+        part_words = len(part_plain.split()) if part_plain else 0
+        if word_count + part_words > max_words and result:
+            break
+        result.append(part)
+        word_count += part_words
+
+    truncated = "".join(result)
+
+    # Strategy 2: if still over (single giant paragraph), hard-truncate
+    truncated_plain = _HTML_TAG_RE.sub(" ", truncated)
+    if len(truncated_plain.split()) > max_words:
+        # Take first max_words from the plain text, find last sentence end
+        kept_words = plain.split()[:max_words]
+        kept_text = " ".join(kept_words)
+        # Try to cut at last period
+        last_period = kept_text.rfind(". ")
+        if last_period > len(kept_text) // 2:
+            kept_text = kept_text[: last_period + 1]
+        truncated = f"<p>{kept_text}</p>"
+
+    # Ensure we close any open <p> tag
+    if truncated.count("<p>") > truncated.count("</p>"):
+        truncated += "</p>"
+    return truncated if truncated.strip() else body
+
+
+def _validate_campaign_content(
+    parsed: dict[str, Any], channel: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Validate and fix campaign content. Returns (fixed_content, issues_dict)."""
+    issues: dict[str, Any] = {}
+
+    # Required fields
+    for field in ("subject", "body", "cta"):
+        if not parsed.get(field) or not isinstance(parsed[field], str):
+            issues["missing_field"] = field
+            return parsed, issues
+
+    subject = parsed["subject"].strip()
+    body = parsed["body"].strip()
+    cta = parsed["cta"].strip()
+
+    # Subject length: truncate at word boundary if over 60 chars
+    if len(subject) > 60:
+        words = subject.split()
+        truncated = []
+        for w in words:
+            candidate = " ".join(truncated + [w])
+            if len(candidate) > 57:
+                break
+            truncated.append(w)
+        subject = " ".join(truncated)
+
+    # HTML enforcement
+    body = _ensure_html(body)
+
+    # Placeholder detection
+    if _PLACEHOLDER_RE.search(body):
+        issues["placeholders"] = True
+        return parsed, issues
+
+    # Word count
+    limits = _WORD_LIMITS.get(channel)
+    if limits:
+        plain = _HTML_TAG_RE.sub(" ", body)
+        wc = len(plain.split())
+        _, max_words = limits
+        if wc > max_words:
+            issues["word_count"] = wc
+            issues["max_words"] = max_words
+            # Apply truncation as fallback (caller may retry first)
+            body = _truncate_to_limit(body, max_words)
+
+    parsed = {**parsed, "subject": subject, "body": body, "cta": cta}
+    return parsed, issues
 
 # Reuse scoring constants from b2b_affiliates
 _ROLE_SCORES = {
@@ -769,7 +923,7 @@ async def _generate_vendor_campaigns(
         for channel in ["email_cold", "email_followup"]:
             payload = {
                 **vendor_ctx,
-                "contact_name": target.get("contact_name"),
+                "contact_name": _sanitize_contact_name(target.get("contact_name")),
                 "contact_role": target.get("contact_role"),
                 "tier": target.get("tier", "report"),
                 "selling": {
@@ -848,7 +1002,7 @@ async def _generate_vendor_campaigns(
             try:
                 seq_context = {
                     **vendor_ctx,
-                    "contact_name": target.get("contact_name"),
+                    "contact_name": _sanitize_contact_name(target.get("contact_name")),
                     "contact_role": target.get("contact_role"),
                     "tier": target.get("tier", "report"),
                     "recipient_type": "vendor_retention",
@@ -1115,7 +1269,7 @@ async def _generate_challenger_campaigns(
         for channel in ["email_cold", "email_followup"]:
             payload = {
                 **challenger_ctx,
-                "contact_name": target.get("contact_name"),
+                "contact_name": _sanitize_contact_name(target.get("contact_name")),
                 "contact_role": target.get("contact_role"),
                 "tier": target.get("tier", "report"),
                 "selling": {
@@ -1194,7 +1348,7 @@ async def _generate_challenger_campaigns(
             try:
                 seq_context = {
                     **challenger_ctx,
-                    "contact_name": target.get("contact_name"),
+                    "contact_name": _sanitize_contact_name(target.get("contact_name")),
                     "contact_role": target.get("contact_role"),
                     "tier": target.get("tier", "report"),
                     "recipient_type": "challenger_intel",
@@ -1559,23 +1713,21 @@ def _match_partner(
 # ------------------------------------------------------------------
 
 
-async def _generate_content(
+async def _call_llm(
     llm,
     system_prompt: str,
-    payload: dict[str, Any],
+    user_content: str,
     max_tokens: int,
     temperature: float,
-) -> dict[str, Any] | None:
-    """Call LLM with campaign generation skill and parse response."""
-    from ...pipelines.llm import clean_llm_output
+) -> str | None:
+    """Low-level LLM call. Returns raw text or None."""
     from ...services.protocols import Message
 
     messages = [
         Message(role="system", content=system_prompt),
-        Message(role="user", content=json.dumps(payload, indent=2, default=str)),
+        Message(role="user", content=user_content),
     ]
 
-    text = ""
     try:
         if hasattr(llm, "chat_async"):
             text = (await llm.chat_async(
@@ -1595,21 +1747,80 @@ async def _generate_content(
                 timeout=120,
             )
             text = result.get("response", "").strip()
+        return text or None
+    except Exception:
+        logger.exception("Campaign generation LLM call failed")
+        return None
+
+
+async def _generate_content(
+    llm,
+    system_prompt: str,
+    payload: dict[str, Any],
+    max_tokens: int,
+    temperature: float,
+) -> dict[str, Any] | None:
+    """Call LLM, validate output, retry once if word count exceeded."""
+    from ...pipelines.llm import clean_llm_output
+
+    channel = payload.get("channel", "")
+    last_wc = 0
+    last_max = 0
+
+    for attempt in range(2):
+        user_content = json.dumps(payload, indent=2, default=str)
+
+        # On retry, prepend a revision instruction
+        if attempt == 1:
+            user_content = (
+                f"REVISION REQUIRED: The previous body was {last_wc} words "
+                f"but MUST be under {last_max} words. Rewrite the body "
+                f"shorter -- cut sentences, not words. Return the same JSON "
+                f"format.\n\n{user_content}"
+            )
+
+        text = await _call_llm(llm, system_prompt, user_content, max_tokens, temperature)
         if not text:
             return None
 
-        text = clean_llm_output(text)
-        parsed = json.loads(text)
+        try:
+            text = clean_llm_output(text)
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse campaign generation JSON: %.200s", text)
+            return None
 
         if not isinstance(parsed, dict) or "body" not in parsed:
             logger.warning("Campaign generation missing 'body' field")
             return None
 
-        return parsed
+        # Validate and fix
+        validated, issues = _validate_campaign_content(parsed, channel)
 
-    except json.JSONDecodeError:
-        logger.warning("Failed to parse campaign generation JSON: %.200s", text)
-        return None
-    except Exception:
-        logger.exception("Campaign generation LLM call failed")
-        return None
+        if issues.get("missing_field"):
+            logger.warning("Campaign missing required field: %s", issues["missing_field"])
+            return None
+
+        if issues.get("placeholders"):
+            logger.warning("Campaign body contains placeholder brackets, rejecting")
+            return None
+
+        if issues.get("word_count") and attempt == 0:
+            # Retry with correction prompt
+            last_wc = issues["word_count"]
+            last_max = issues["max_words"]
+            logger.info(
+                "Campaign body %d words (max %d), retrying with correction",
+                last_wc, last_max,
+            )
+            continue
+
+        if issues.get("word_count"):
+            logger.warning(
+                "Campaign body still %d words after retry, truncated to %d",
+                issues["word_count"], issues["max_words"],
+            )
+
+        return validated
+
+    return None

@@ -30,7 +30,10 @@ for _mod in (
     sys.modules.setdefault(_mod, MagicMock())
 
 from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+    _build_deterministic_vendor_feed,
+    _build_validated_executive_summary,
     _canonicalize_competitor,
+    _compute_churn_pressure_score,
     _executive_source_list,
     _validate_report,
 )
@@ -175,38 +178,39 @@ class TestValidateReportQuotes:
 
 
 class TestValidateReportSummaryCheck:
-    def test_summary_company_not_in_feed_warns(self):
-        """Company in exec summary but missing from weekly_churn_feed => warning."""
+    def test_summary_vendor_in_feed_no_warn(self):
+        """Vendor in both exec summary and feed => no warning."""
         parsed = {
-            "executive_summary": "Acme Corp shows high churn intent this period.",
-            "weekly_churn_feed": [],  # Acme not in feed
+            "executive_summary": "Zendesk shows elevated churn pressure this period.",
+            "weekly_churn_feed": [{"vendor": "Zendesk"}],
             "displacement_map": [],
             "timeline_hot_list": [],
         }
         warnings = _validate_report(
             parsed,
-            source_high_intent=[{"company": "Acme Corp", "quotes": []}],
+            source_high_intent=[],
             source_quotable=[],
             source_displacement=[],
             report_date=date(2026, 3, 7),
         )
-        assert any("Acme Corp" in w and "not in weekly_churn_feed" in w for w in warnings)
+        assert not any("not in weekly_churn_feed" in w for w in warnings)
 
-    def test_summary_company_in_feed_no_warn(self):
-        """Company in both exec summary and feed => no warning."""
+    def test_empty_feed_no_crash(self):
+        """Empty feed with summary mentioning a vendor => no crash."""
         parsed = {
-            "executive_summary": "Acme Corp shows high churn intent this period.",
-            "weekly_churn_feed": [{"company": "Acme Corp"}],
+            "executive_summary": "Zendesk shows elevated churn pressure.",
+            "weekly_churn_feed": [],
             "displacement_map": [],
             "timeline_hot_list": [],
         }
         warnings = _validate_report(
             parsed,
-            source_high_intent=[{"company": "Acme Corp", "quotes": []}],
+            source_high_intent=[],
             source_quotable=[],
             source_displacement=[],
             report_date=date(2026, 3, 7),
         )
+        # Should not crash, no warnings about vendors since feed is empty
         assert not any("not in weekly_churn_feed" in w for w in warnings)
 
 
@@ -325,3 +329,181 @@ class TestExecutiveSourceList:
         mock_settings.b2b_churn.intelligence_executive_sources = " g2 , capterra , trustradius "
         result = _executive_source_list()
         assert result == ["g2", "capterra", "trustradius"]
+
+
+# ---------------------------------------------------------------------------
+# Vendor-level churn pressure score
+# ---------------------------------------------------------------------------
+
+
+def _make_vendor_score(vendor: str, category: str = "Helpdesk",
+                       total_reviews: int = 60, churn_intent: int = 20,
+                       avg_urgency: float = 5.0) -> dict:
+    return {
+        "vendor_name": vendor,
+        "product_category": category,
+        "total_reviews": total_reviews,
+        "churn_intent": churn_intent,
+        "avg_urgency": avg_urgency,
+        "avg_rating_normalized": 0.5,
+        "recommend_yes": 10,
+        "recommend_no": 5,
+        "positive_review_pct": 50.0,
+    }
+
+
+def _empty_lookups(**overrides) -> dict:
+    """Return a dict of all empty lookups for _build_deterministic_vendor_feed."""
+    defaults = {
+        "pain_lookup": {},
+        "competitor_lookup": {},
+        "feature_gap_lookup": {},
+        "quote_lookup": {},
+        "budget_lookup": {},
+        "sentiment_lookup": {},
+        "buyer_auth_lookup": {},
+        "dm_lookup": {},
+        "price_lookup": {},
+        "company_lookup": {},
+        "keyword_spike_lookup": {},
+        "prior_reports": [],
+    }
+    defaults.update(overrides)
+    return defaults
+
+
+class TestChurnPressureScore:
+    def test_zero_inputs(self):
+        score = _compute_churn_pressure_score(
+            churn_density=0, avg_urgency=0, dm_churn_rate=0,
+            displacement_mention_count=0, price_complaint_rate=0,
+            total_reviews=100,
+        )
+        assert score == 0.0
+
+    def test_maximum_inputs(self):
+        score = _compute_churn_pressure_score(
+            churn_density=100.0, avg_urgency=10.0, dm_churn_rate=1.0,
+            displacement_mention_count=50, price_complaint_rate=1.0,
+            total_reviews=100,
+        )
+        assert score == 100.0
+
+    def test_low_confidence_penalty(self):
+        kwargs = dict(churn_density=50.0, avg_urgency=7.0, dm_churn_rate=0.5,
+                      displacement_mention_count=10, price_complaint_rate=0.3)
+        high = _compute_churn_pressure_score(**kwargs, total_reviews=100)
+        low = _compute_churn_pressure_score(**kwargs, total_reviews=10)
+        assert low < high
+
+    def test_medium_confidence(self):
+        kwargs = dict(churn_density=40.0, avg_urgency=5.0, dm_churn_rate=0.4,
+                      displacement_mention_count=5, price_complaint_rate=0.2)
+        high = _compute_churn_pressure_score(**kwargs, total_reviews=60)
+        med = _compute_churn_pressure_score(**kwargs, total_reviews=30)
+        assert med < high
+        assert med == round(high * 0.85, 1)
+
+
+class TestVendorFeedRanking:
+    def test_descending_score_order(self):
+        """Vendor feed entries must be sorted by churn_pressure_score DESC."""
+        vendors = [
+            _make_vendor_score("LowVendor", total_reviews=60, churn_intent=10, avg_urgency=3.0),
+            _make_vendor_score("HighVendor", total_reviews=60, churn_intent=30, avg_urgency=8.0),
+            _make_vendor_score("MidVendor", total_reviews=60, churn_intent=20, avg_urgency=6.0),
+        ]
+        lookups = _empty_lookups(
+            dm_lookup={"LowVendor": 0.1, "HighVendor": 0.7, "MidVendor": 0.4},
+            price_lookup={"LowVendor": 0.1, "HighVendor": 0.5, "MidVendor": 0.3},
+        )
+        feed = _build_deterministic_vendor_feed(vendors, **lookups)
+        scores = [e["churn_pressure_score"] for e in feed]
+        assert scores == sorted(scores, reverse=True)
+        assert feed[0]["vendor"] == "HighVendor"
+
+    def test_multi_category_aggregation(self):
+        """Same vendor in two categories should merge into one entry."""
+        vendors = [
+            _make_vendor_score("Mailchimp", category="Marketing Automation",
+                               total_reviews=90, churn_intent=40, avg_urgency=4.3),
+            _make_vendor_score("Mailchimp", category="Email Marketing",
+                               total_reviews=26, churn_intent=12, avg_urgency=5.6),
+        ]
+        lookups = _empty_lookups(
+            dm_lookup={"Mailchimp": 0.5},
+            price_lookup={"Mailchimp": 0.4},
+        )
+        feed = _build_deterministic_vendor_feed(vendors, **lookups)
+        assert len(feed) == 1
+        entry = feed[0]
+        assert entry["vendor"] == "Mailchimp"
+        # Reviews summed: 90 + 26 = 116
+        assert entry["total_reviews"] == 116
+        # Churn density from merged totals: (40+12)/116 * 100 = 44.8%
+        assert entry["churn_signal_density"] == 44.8
+        # Weighted avg urgency: (4.3*90 + 5.6*26) / 116 = 4.59 -> 4.6
+        assert entry["avg_urgency"] == 4.6
+        # Dominant category: Marketing Automation (90 > 26)
+        assert entry["category"] == "Marketing Automation"
+
+
+class TestVendorFeedNamedAccounts:
+    def test_named_accounts_populated(self):
+        """When company_lookup has data, named_accounts should be populated."""
+        vendors = [_make_vendor_score("Zendesk", avg_urgency=7.0, churn_intent=25)]
+        lookups = _empty_lookups(
+            company_lookup={"Zendesk": [{"company": "BrightPath", "urgency": 9}]},
+            dm_lookup={"Zendesk": 0.5},
+            price_lookup={"Zendesk": 0.4},
+        )
+        feed = _build_deterministic_vendor_feed(vendors, **lookups)
+        assert len(feed) == 1
+        assert feed[0]["named_accounts"] == [{"company": "BrightPath", "urgency": 9}]
+
+
+class TestVendorFeedNoCompanyRequired:
+    def test_works_with_empty_company_lookup(self):
+        """Feed should work fine with no company data at all."""
+        vendors = [_make_vendor_score("Jira", avg_urgency=7.0, churn_intent=25)]
+        lookups = _empty_lookups(
+            dm_lookup={"Jira": 0.5},
+            price_lookup={"Jira": 0.3},
+        )
+        feed = _build_deterministic_vendor_feed(vendors, **lookups)
+        assert len(feed) == 1
+        assert feed[0]["vendor"] == "Jira"
+        assert feed[0]["named_accounts"] == []
+        assert feed[0]["churn_pressure_score"] > 0
+
+
+class TestVendorExecutiveSummary:
+    @patch("atlas_brain.autonomous.tasks.b2b_churn_intelligence.settings")
+    def test_uses_vendor_language(self, mock_settings):
+        """Executive summary should say 'vendors under elevated churn pressure'."""
+        mock_settings.b2b_churn.intelligence_executive_sources = "g2,capterra"
+        feed = [
+            {
+                "vendor": "Zendesk",
+                "churn_signal_density": 38.6,
+                "total_reviews": 59,
+                "avg_urgency": 7.2,
+                "top_pain": "pricing",
+                "pain_breakdown": [{"category": "pricing", "count": 42}],
+                "top_displacement_targets": [{"competitor": "Freshdesk", "mentions": 12}],
+                "key_quote": "We switched because pricing doubled.",
+                "named_accounts": [],
+            },
+        ]
+        summary = _build_validated_executive_summary(
+            {"weekly_churn_feed": feed},
+            data_context={
+                "enrichment_period": {"earliest": "2026-03-01", "latest": "2026-03-07"},
+                "source_distribution": {"g2": {"reviews": 40, "high_urgency": 5}},
+            },
+            executive_sources=["g2", "capterra"],
+        )
+        assert "vendors under elevated churn pressure" in summary
+        assert "account signals" not in summary
+        assert "Strongest vendor-level churn signals" in summary
+        assert "Zendesk" in summary

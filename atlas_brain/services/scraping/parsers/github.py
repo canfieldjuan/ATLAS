@@ -30,6 +30,7 @@ class GitHubParser:
 
     source_name = "github"
     prefer_residential = False
+    version = "github:1"
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
         """Scrape GitHub for issues/repos related to the vendor."""

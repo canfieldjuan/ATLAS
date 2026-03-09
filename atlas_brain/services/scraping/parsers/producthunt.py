@@ -145,6 +145,7 @@ class ProductHuntParser:
 
     source_name = "producthunt"
     prefer_residential = False  # API-based primary path needs no proxy
+    version = "producthunt:1"
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
         """Scrape ProductHunt reviews -- GraphQL API first, HTML fallback."""

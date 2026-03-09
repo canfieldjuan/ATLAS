@@ -32,6 +32,7 @@ class CapterraParser:
 
     source_name = "capterra"
     prefer_residential = True
+    version = "capterra:1"
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
         """Scrape Capterra reviews -- Web Unlocker first, then HTTP client."""

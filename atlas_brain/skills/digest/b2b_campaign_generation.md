@@ -42,7 +42,7 @@ Return a JSON object with the generated content. The structure depends on the ch
 ```json
 {
   "subject": "Under 50 characters, compelling subject line",
-  "body": "HTML email body (75-150 words MAXIMUM)",
+  "body": "<p>Personalized hook referencing pain.</p><p>Value prop with data.</p><p>CTA lead-in with link.</p>",
   "cta": "Clear call to action (separate from body)"
 }
 ```
@@ -60,7 +60,7 @@ Return a JSON object with the generated content. The structure depends on the ch
 ```json
 {
   "subject": "Under 50 characters, different angle from cold email",
-  "body": "HTML follow-up email body (75-125 words MAXIMUM)",
+  "body": "<p>Brief callback to cold email.</p><p>New angle with data.</p><p>CTA lead-in with link.</p>",
   "cta": "Call to action (separate from body)"
 }
 ```
@@ -113,9 +113,9 @@ Return a JSON object with the generated content. The structure depends on the ch
    - `technical`: Open with the specific feature gap or integration failure. Include the migration path or technical comparison. Close with an evaluation offer.
    - `operations`: Open with the support/reliability pain (ticket volume, downtime incidents, team complaints). Close with workflow improvement and team productivity gains.
 
-18. **HARD WORD LIMIT**: email_cold body MUST be 75-150 words. email_followup body MUST be 75-125 words. If the body exceeds the word limit, you have failed this task. Count carefully.
+18. **WORD LIMIT (strictly enforced post-generation)**: email_cold body: 75-150 words. email_followup body: 75-125 words. A 100-word email is 5-6 short sentences. When in doubt, cut a sentence. Exceeding the limit triggers an automatic rewrite request.
 
-19. **HTML body**: The `body` field must be valid minimal HTML. Use only `<p>`, `<br>`, and `<a>` tags. No `<div>`, `<table>`, `<img>`, or inline styles.
+19. **HTML body (mandatory)**: The `body` field MUST be valid HTML. Use ONLY `<p>`, `<br>`, `<strong>`, and `<a>` tags. Do NOT use markdown syntax (`**`, `*`, `#`, `-` lists). Do NOT use `<div>`, `<table>`, `<img>`, or inline styles. Every paragraph must be wrapped in `<p>` tags.
 
 20. **Subject line length**: Subject lines MUST be under 50 characters for mobile preview.
 

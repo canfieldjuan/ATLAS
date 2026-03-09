@@ -267,6 +267,8 @@ async def _find_brand_showdown_candidates(pool) -> list[dict[str, Any]]:
         FROM brand_stats a
         JOIN brand_stats b ON a.category = b.category AND a.brand < b.brand
         WHERE abs(a.avg_pain - b.avg_pain) > 1.5
+          AND LEAST(a.review_count, b.review_count)::float
+              / GREATEST(a.review_count, b.review_count) >= 0.1
         ORDER BY (a.review_count + b.review_count) DESC
         LIMIT 10
         """
@@ -355,7 +357,12 @@ async def _find_migration_candidates(pool) -> list[dict[str, Any]]:
 
 
 async def _find_safety_candidates(pool) -> list[dict[str, Any]]:
-    """Find categories with safety-flagged reviews."""
+    """Find categories with safety-flagged reviews.
+
+    Requires >= 2 distinct brands with safety flags and >= 3 distinct
+    products with metadata to ensure the generated post has enough
+    data density for charts and product-level analysis.
+    """
     rows = await pool.fetch(
         """
         SELECT
@@ -365,13 +372,17 @@ async def _find_safety_candidates(pool) -> list[dict[str, Any]]:
                 pr.source_category
             ) AS category,
             count(*) AS safety_count,
-            avg(pr.pain_score) AS avg_pain
+            avg(pr.pain_score) AS avg_pain,
+            count(DISTINCT pm.brand) FILTER (WHERE pm.brand IS NOT NULL AND pm.brand != '') AS brand_count,
+            count(DISTINCT pm.asin) FILTER (WHERE pm.asin IS NOT NULL) AS product_count
         FROM product_reviews pr
         LEFT JOIN product_metadata pm ON pm.asin = pr.asin
         WHERE pr.deep_enrichment_status = 'enriched'
           AND (pr.deep_extraction->'safety_flag'->>'flagged')::boolean IS TRUE
         GROUP BY category
         HAVING count(*) >= 5
+           AND count(DISTINCT pm.brand) FILTER (WHERE pm.brand IS NOT NULL AND pm.brand != '') >= 2
+           AND count(DISTINCT pm.asin) FILTER (WHERE pm.asin IS NOT NULL) >= 3
         ORDER BY count(*) DESC
         LIMIT 10
         """
@@ -381,6 +392,8 @@ async def _find_safety_candidates(pool) -> list[dict[str, Any]]:
             "category": r["category"],
             "safety_count": r["safety_count"],
             "avg_pain": round(float(r["avg_pain"]), 1),
+            "brand_count": r["brand_count"],
+            "product_count": r["product_count"],
         }
         for r in rows
     ]
@@ -439,6 +452,7 @@ async def _gather_data(
         _fetch_competitive_flows,
         _fetch_feature_gaps,
         _fetch_safety_signals,
+        _fetch_safety_products,
         _fetch_loyalty_churn,
         _fetch_sentiment_landscape,
     )
@@ -446,12 +460,14 @@ async def _gather_data(
 
     data: dict[str, Any] = {}
 
+    cat = topic_ctx.get("category")
+
     if topic_type == "brand_showdown":
         brand_health, flows, sentiment, loyalty = await asyncio.gather(
-            _fetch_brand_health(pool),
-            _fetch_competitive_flows(pool),
-            _fetch_sentiment_landscape(pool),
-            _fetch_loyalty_churn(pool),
+            _fetch_brand_health(pool, category=cat),
+            _fetch_competitive_flows(pool, category=cat),
+            _fetch_sentiment_landscape(pool, category=cat),
+            _fetch_loyalty_churn(pool, category=cat),
             return_exceptions=True,
         )
         data["brand_health"] = brand_health if not isinstance(brand_health, Exception) else []
@@ -461,9 +477,9 @@ async def _gather_data(
 
     elif topic_type == "complaint_roundup":
         cat_stats, prod_stats, feature_gaps = await asyncio.gather(
-            _fetch_category_stats(pool),
-            _fetch_product_stats(pool),
-            _fetch_feature_gaps(pool),
+            _fetch_category_stats(pool, category=cat),
+            _fetch_product_stats(pool, category=cat),
+            _fetch_feature_gaps(pool, category=cat),
             return_exceptions=True,
         )
         data["category_stats"] = cat_stats if not isinstance(cat_stats, Exception) else []
@@ -472,9 +488,9 @@ async def _gather_data(
 
     elif topic_type == "migration_report":
         flows, brand_health, feature_gaps = await asyncio.gather(
-            _fetch_competitive_flows(pool),
-            _fetch_brand_health(pool),
-            _fetch_feature_gaps(pool),
+            _fetch_competitive_flows(pool, category=cat),
+            _fetch_brand_health(pool, category=cat),
+            _fetch_feature_gaps(pool, category=cat),
             return_exceptions=True,
         )
         data["flows"] = flows if not isinstance(flows, Exception) else []
@@ -482,13 +498,15 @@ async def _gather_data(
         data["feature_gaps"] = feature_gaps if not isinstance(feature_gaps, Exception) else []
 
     elif topic_type == "safety_spotlight":
-        safety, brand_health, cat_stats = await asyncio.gather(
-            _fetch_safety_signals(pool),
-            _fetch_brand_health(pool),
-            _fetch_category_stats(pool),
+        safety, safety_prods, brand_health, cat_stats = await asyncio.gather(
+            _fetch_safety_signals(pool, category=cat),
+            _fetch_safety_products(pool, category=cat),
+            _fetch_brand_health(pool, category=cat),
+            _fetch_category_stats(pool, category=cat),
             return_exceptions=True,
         )
         data["safety"] = safety if not isinstance(safety, Exception) else []
+        data["safety_products"] = safety_prods if not isinstance(safety_prods, Exception) else []
         data["brand_health"] = brand_health if not isinstance(brand_health, Exception) else []
         data["category_stats"] = cat_stats if not isinstance(cat_stats, Exception) else []
 
@@ -499,18 +517,38 @@ async def _gather_data(
         logger.warning("Failed to fetch quotable phrases, continuing without", exc_info=True)
         data["quotes"] = []
 
-    # Data context metadata
-    ctx_row = await pool.fetchrow(
-        """
-        SELECT
-            count(*) AS total_reviews,
-            count(*) FILTER (WHERE deep_enrichment_status = 'enriched') AS deep_enriched,
-            min(reviewed_at)::date AS earliest,
-            max(reviewed_at)::date AS latest
-        FROM product_reviews
-        WHERE enrichment_status = 'enriched'
-        """
-    )
+    # Data context metadata (scoped to category when available)
+    if cat:
+        _ce = (
+            "COALESCE(REPLACE(pm.categories->>2, '&amp;', '&'),"
+            " REPLACE(pm.categories->>1, '&amp;', '&'), pr.source_category)"
+        )
+        ctx_row = await pool.fetchrow(
+            f"""
+            SELECT
+                count(*) AS total_reviews,
+                count(*) FILTER (WHERE pr.deep_enrichment_status = 'enriched') AS deep_enriched,
+                min(pr.reviewed_at)::date AS earliest,
+                max(pr.reviewed_at)::date AS latest
+            FROM product_reviews pr
+            LEFT JOIN product_metadata pm ON pm.asin = pr.asin
+            WHERE pr.enrichment_status = 'enriched'
+              AND {_ce} = $1
+            """,
+            cat,
+        )
+    else:
+        ctx_row = await pool.fetchrow(
+            """
+            SELECT
+                count(*) AS total_reviews,
+                count(*) FILTER (WHERE deep_enrichment_status = 'enriched') AS deep_enriched,
+                min(reviewed_at)::date AS earliest,
+                max(reviewed_at)::date AS latest
+            FROM product_reviews
+            WHERE enrichment_status = 'enriched'
+            """
+        )
     data["data_context"] = {
         "total_reviews_analyzed": ctx_row["total_reviews"] if ctx_row else 0,
         "deep_enriched_count": ctx_row["deep_enriched"] if ctx_row else 0,
@@ -743,11 +781,8 @@ def _blueprint_brand_showdown(ctx: dict, data: dict) -> PostBlueprint:
 def _blueprint_complaint_roundup(ctx: dict, data: dict) -> PostBlueprint:
     category = ctx["category"]
 
-    # Filter product stats to this category
-    products = [
-        p for p in data.get("product_stats", [])
-        if (p.get("category") or "").lower() == category.lower()
-    ][:10]
+    # Data already scoped to category by _gather_data
+    products = data.get("product_stats", [])[:10]
 
     # Top products by pain chart
     # _fetch_product_stats returns "avg_pain_score" (not "avg_pain") and no "brand" key
@@ -773,11 +808,8 @@ def _blueprint_complaint_roundup(ctx: dict, data: dict) -> PostBlueprint:
         },
     )
 
-    # Feature gaps chart
-    gaps = [
-        g for g in data.get("feature_gaps", [])
-        if (g.get("category") or "").lower() == category.lower()
-    ][:6]
+    # Feature gaps chart (already scoped to category by _gather_data)
+    gaps = data.get("feature_gaps", [])[:6]
     gap_chart_data = [
         {"name": g["feature"][:30], "mentions": g["mentions"]}
         for g in gaps
@@ -976,32 +1008,88 @@ def _blueprint_safety_spotlight(ctx: dict, data: dict) -> PostBlueprint:
         for name, count in top_brands
     ]
 
-    brand_chart = ChartSpec(
-        chart_id="safety-brands-bar",
-        chart_type="bar",
-        title=f"Safety Flags by Brand in {category}",
-        data=brand_chart_data,
-        config={
-            "x_key": "name",
-            "bars": [{"dataKey": "safety_flags", "color": "#f87171"}],
-        },
-    )
+    charts: list[ChartSpec] = []
 
-    # Consequence severity chart
+    # Only emit the brand chart when there are 3+ brands -- a 1-2 bar chart
+    # looks empty.  For thin brand sets, fold stats into the section prose.
+    use_brand_chart = len(brand_chart_data) >= 3
+    if use_brand_chart:
+        charts.append(ChartSpec(
+            chart_id="safety-brands-bar",
+            chart_type="bar",
+            title=f"Safety Flags by Brand in {category}",
+            data=brand_chart_data,
+            config={
+                "x_key": "name",
+                "bars": [{"dataKey": "safety_flags", "color": "#f87171"}],
+            },
+        ))
+
+    # Product-level breakdown chart
+    safety_products = data.get("safety_products", [])[:10]
+    if safety_products:
+        product_chart_data = [
+            {
+                "name": p["product_title"][:40],
+                "safety_flags": p["safety_flags"],
+            }
+            for p in safety_products
+        ]
+        charts.append(ChartSpec(
+            chart_id="safety-products-bar",
+            chart_type="horizontal_bar",
+            title=f"Most Flagged Products in {category}",
+            data=product_chart_data,
+            config={
+                "x_key": "name",
+                "bars": [{"dataKey": "safety_flags", "color": "#ef4444"}],
+            },
+        ))
+
+    # Consequence severity chart -- filter out nonsensical labels
+    _CONSEQUENCE_LABELS = {
+        "safety_concern": "Safety Concern",
+        "inconvenience": "Inconvenience",
+        "financial_loss": "Financial Loss",
+        "workflow_impact": "Workflow Disruption",
+        "health_impact": "Health Impact",
+        "property_damage": "Property Damage",
+        "unspecified": "Unspecified",
+    }
+    _CONSEQUENCE_EXCLUDE = {"none", "positive_impact"}
     cons_chart_data = [
-        {"name": k, "count": v}
+        {"name": _CONSEQUENCE_LABELS.get(k, k.replace("_", " ").title()), "count": v}
         for k, v in sorted(consequence_dist.items(), key=lambda x: x[1], reverse=True)
+        if k not in _CONSEQUENCE_EXCLUDE
     ]
-    cons_chart = ChartSpec(
-        chart_id="consequence-bar",
-        chart_type="horizontal_bar",
-        title="Safety Issues by Severity",
-        data=cons_chart_data,
-        config={
-            "x_key": "name",
-            "bars": [{"dataKey": "count", "color": "#fbbf24"}],
-        },
-    )
+    if cons_chart_data:
+        charts.append(ChartSpec(
+            chart_id="consequence-bar",
+            chart_type="horizontal_bar",
+            title="Safety Issues by Severity",
+            data=cons_chart_data,
+            config={
+                "x_key": "name",
+                "bars": [{"dataKey": "count", "color": "#fbbf24"}],
+            },
+        ))
+
+    # Build brand summary for the section prose
+    if use_brand_chart:
+        brand_section_summary = f"Top {len(brand_chart_data)} brands by safety flags."
+        brand_section_stats: dict[str, Any] = {}
+    else:
+        # Inline the brand stats so the LLM can write them as prose
+        brand_lines = ", ".join(
+            f"{name} ({count} flags)" for name, count in top_brands
+        )
+        brand_section_summary = (
+            f"Safety flags by brand: {brand_lines}. "
+            f"Write these as prose rather than referencing a chart."
+        )
+        brand_section_stats = {
+            "brands": [{"name": n, "safety_flags": c} for n, c in top_brands],
+        }
 
     sections = [
         SectionSpec(
@@ -1022,15 +1110,39 @@ def _blueprint_safety_spotlight(ctx: dict, data: dict) -> PostBlueprint:
             id="brands",
             heading="Which Brands Have the Most Safety Concerns?",
             goal="Rank brands by safety flag count",
-            chart_ids=["safety-brands-bar"],
-            data_summary=f"Top {len(brand_chart_data)} brands by safety flags.",
+            chart_ids=["safety-brands-bar"] if use_brand_chart else [],
+            key_stats=brand_section_stats,
+            data_summary=brand_section_summary,
         ),
-        SectionSpec(
-            id="severity",
-            heading="How Serious Are These Issues?",
-            goal="Break down by consequence severity",
-            chart_ids=["consequence-bar"],
-            data_summary=f"Distribution of consequence severity across {ctx['safety_count']} flagged reviews.",
+        *(
+            [SectionSpec(
+                id="products",
+                heading="Which Specific Products Are Most Flagged?",
+                goal="Name the specific product models with highest safety flags so readers know what to watch out for",
+                chart_ids=["safety-products-bar"],
+                key_stats={
+                    "top_products": [
+                        {"title": p["product_title"], "brand": p["brand"],
+                         "safety_flags": p["safety_flags"],
+                         "avg_pain": p.get("avg_pain")}
+                        for p in safety_products[:6]
+                    ],
+                },
+                data_summary=(
+                    f"Top {len(safety_products)} products by safety flags. "
+                    f"Highest: {safety_products[0]['product_title'][:40]} "
+                    f"with {safety_products[0]['safety_flags']} flags."
+                ),
+            )] if safety_products else []
+        ),
+        *(
+            [SectionSpec(
+                id="severity",
+                heading="How Serious Are These Issues?",
+                goal="Break down by consequence severity",
+                chart_ids=["consequence-bar"],
+                data_summary=f"Distribution of consequence severity across {ctx['safety_count']} flagged reviews.",
+            )] if cons_chart_data else []
         ),
         SectionSpec(
             id="takeaway",
@@ -1047,7 +1159,7 @@ def _blueprint_safety_spotlight(ctx: dict, data: dict) -> PostBlueprint:
         tags=[category, "safety", "consumer-protection", "reviews"],
         data_context=data["data_context"],
         sections=sections,
-        charts=[brand_chart, cons_chart],
+        charts=charts,
         quotable_phrases=data.get("quotes", []),
     )
 

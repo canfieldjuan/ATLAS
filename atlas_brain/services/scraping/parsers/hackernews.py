@@ -38,6 +38,7 @@ class HackerNewsParser:
 
     source_name = "hackernews"
     prefer_residential = False
+    version = "hackernews:1"
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
         """Scrape HN for stories/comments mentioning the vendor."""

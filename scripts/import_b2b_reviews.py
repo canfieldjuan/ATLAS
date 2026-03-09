@@ -39,10 +39,10 @@ INSERT INTO b2b_reviews (
     rating, rating_max, summary, review_text, pros, cons,
     reviewer_name, reviewer_title, reviewer_company,
     company_size_raw, reviewer_industry, reviewed_at,
-    import_batch_id, raw_metadata
+    import_batch_id, raw_metadata, parser_version
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-    $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
+    $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
 )
 ON CONFLICT (dedup_key) DO NOTHING
 """
@@ -153,6 +153,7 @@ async def import_reviews(reviews: list[dict], dry_run: bool = False,
                 reviewed_at,
                 batch_id,
                 json.dumps(metadata),
+                None,  # parser_version: N/A for file imports
             ))
 
         if rows:

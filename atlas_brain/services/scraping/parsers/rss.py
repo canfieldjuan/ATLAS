@@ -48,6 +48,7 @@ class RSSParser:
 
     source_name = "rss"
     prefer_residential = False
+    version = "rss:1"
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
         """Scrape RSS feeds for articles mentioning the vendor."""

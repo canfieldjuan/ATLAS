@@ -27,14 +27,14 @@ from typing import Any
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from ...services.scraping.sources import VERIFIED_SOURCES, parse_source_allowlist
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_blog_post_generation")
 
 
 def _blog_source_allowlist() -> list[str]:
     """Return the configured source allowlist as a list for SQL ANY() binding."""
-    raw = settings.b2b_churn.blog_source_allowlist
-    return [s.strip().lower() for s in raw.split(",") if s.strip()]
+    return parse_source_allowlist(settings.b2b_churn.blog_source_allowlist)
 
 
 # -- dataclasses (same structure as consumer blog pipeline) --------
@@ -355,7 +355,7 @@ async def _select_topic(pool, max_per_run: int = 1) -> tuple[str, dict[str, Any]
         slug = f"{_slugify(pair['vendor_a'])}-vs-{_slugify(pair['vendor_b'])}-{month_suffix}"
         # Weight reviews heavily — popular pairs are most interesting to readers.
         # pain_diff is a bonus, not the primary driver.
-        score = pair["total_reviews"] + pair["pain_diff"] * 50
+        score = (pair["total_reviews"] + pair["pain_diff"] * 50) * 1.5
         raw_candidates.append((slug, score, "vendor_showdown", {**pair, "slug": slug}))
 
     for cr in churn_reports:
@@ -365,7 +365,7 @@ async def _select_topic(pool, max_per_run: int = 1) -> tuple[str, dict[str, Any]
 
     for mig in migrations:
         slug = f"migration-from-{_slugify(mig['vendor'])}-{month_suffix}"
-        score = mig["switch_count"] * mig["review_total"]
+        score = mig["switch_count"] * mig["review_total"] * 1.5
         raw_candidates.append((slug, score, "migration_guide", {**mig, "slug": slug}))
 
     for dd in deep_dives:
@@ -1292,6 +1292,7 @@ async def _gather_data(
             else "dates unavailable"
         ),
         "report_date": str(date.today()),
+        "booking_url": settings.b2b_campaign.default_booking_url,
     }
 
     # Store the full topic_ctx so regeneration can reconstruct blueprints
@@ -1622,10 +1623,6 @@ async def _fetch_affiliate_partner_by_category(pool, category: str) -> dict[str,
     return dict(row)
 
 
-# Source values that correspond to verified review platforms (identity-verified reviewers).
-# Must match actual values in b2b_reviews.source column (lowercase).
-_VERIFIED_SOURCES = {"g2", "capterra", "gartner", "trustradius", "peerspot", "getapp", "software_advice", "trustpilot"}
-
 
 async def _fetch_source_distribution(pool, vendor_names: list[str]) -> dict[str, Any]:
     """Return review counts by source platform for the given vendors."""
@@ -1644,8 +1641,8 @@ async def _fetch_source_distribution(pool, vendor_names: list[str]) -> dict[str,
         vendor_names, allowed,
     )
     sources = [{"name": r["src"], "count": r["cnt"]} for r in rows]
-    verified = sum(r["cnt"] for r in rows if r["src"].lower().replace(" ", "_") in _VERIFIED_SOURCES)
-    community = sum(r["cnt"] for r in rows if r["src"].lower().replace(" ", "_") not in _VERIFIED_SOURCES)
+    verified = sum(r["cnt"] for r in rows if r["src"].lower().replace(" ", "_") in VERIFIED_SOURCES)
+    community = sum(r["cnt"] for r in rows if r["src"].lower().replace(" ", "_") not in VERIFIED_SOURCES)
     return {"sources": sources, "verified_count": verified, "community_count": community}
 
 

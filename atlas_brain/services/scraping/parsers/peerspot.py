@@ -48,6 +48,7 @@ class PeerSpotParser:
 
     source_name = "peerspot"
     prefer_residential = True
+    version = "peerspot:1"
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
         """Scrape PeerSpot reviews -- Web Unlocker first, then HTTP client."""

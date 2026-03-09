@@ -19,6 +19,12 @@ from ...storage.models import ScheduledTask
 
 logger = logging.getLogger("atlas.autonomous.tasks.complaint_analysis")
 
+# Category filter expression matching blog topic selection (categories->>2 granular)
+_CAT_EXPR = (
+    "COALESCE(REPLACE(pm.categories->>2, '&amp;', '&'),"
+    " REPLACE(pm.categories->>1, '&amp;', '&'), pr.source_category)"
+)
+
 
 async def run(task: ScheduledTask) -> dict[str, Any]:
     """Autonomous task handler: daily complaint analysis."""
@@ -210,39 +216,58 @@ async def _fetch_data_context(pool) -> dict[str, Any]:
     }
 
 
-async def _fetch_category_stats(pool) -> list[dict[str, Any]]:
-    """Aggregate enriched reviews by source_category (all enriched, no time window).
+async def _fetch_category_stats(pool, *, category: str | None = None) -> list[dict[str, Any]]:
+    """Aggregate enriched reviews by category (all enriched, no time window).
 
     Uses a single bulk query for root cause distributions instead of N+1.
+    When category is given, JOINs product_metadata and uses the granular
+    COALESCE expression instead of source_category.
     """
+    if category:
+        cat_group = _CAT_EXPR
+        join_clause = "LEFT JOIN product_metadata pm ON pm.asin = pr.asin"
+        cat_filter = f"AND {_CAT_EXPR} = $1"
+        params: list = [category]
+    else:
+        cat_group = "pr.source_category"
+        join_clause = ""
+        cat_filter = ""
+        params = []
+
     rows, rc_rows = await asyncio.gather(
         pool.fetch(
-            """
+            f"""
             SELECT
-                source_category AS category,
+                {cat_group} AS category,
                 count(*) AS total_enriched,
-                count(*) FILTER (WHERE severity = 'critical') AS critical_count,
-                count(*) FILTER (WHERE severity = 'major') AS major_count,
-                count(*) FILTER (WHERE severity = 'minor') AS minor_count,
-                avg(pain_score) AS avg_pain_score,
-                mode() WITHIN GROUP (ORDER BY root_cause) AS top_root_cause,
-                min(reviewed_at)::date AS earliest_review,
-                max(reviewed_at)::date AS latest_review
-            FROM product_reviews
-            WHERE enrichment_status = 'enriched'
-            GROUP BY source_category
+                count(*) FILTER (WHERE pr.severity = 'critical') AS critical_count,
+                count(*) FILTER (WHERE pr.severity = 'major') AS major_count,
+                count(*) FILTER (WHERE pr.severity = 'minor') AS minor_count,
+                avg(pr.pain_score) AS avg_pain_score,
+                mode() WITHIN GROUP (ORDER BY pr.root_cause) AS top_root_cause,
+                min(pr.reviewed_at)::date AS earliest_review,
+                max(pr.reviewed_at)::date AS latest_review
+            FROM product_reviews pr
+            {join_clause}
+            WHERE pr.enrichment_status = 'enriched'
+              {cat_filter}
+            GROUP BY category
             ORDER BY count(*) DESC
             """,
+            *params,
         ),
         pool.fetch(
-            """
-            SELECT source_category AS category, root_cause, count(*) AS cnt
-            FROM product_reviews
-            WHERE enrichment_status = 'enriched'
-              AND root_cause IS NOT NULL
-            GROUP BY source_category, root_cause
-            ORDER BY source_category, cnt DESC
+            f"""
+            SELECT {cat_group} AS category, pr.root_cause, count(*) AS cnt
+            FROM product_reviews pr
+            {join_clause}
+            WHERE pr.enrichment_status = 'enriched'
+              AND pr.root_cause IS NOT NULL
+              {cat_filter}
+            GROUP BY category, pr.root_cause
+            ORDER BY category, cnt DESC
             """,
+            *params,
         ),
     )
 
@@ -269,26 +294,41 @@ async def _fetch_category_stats(pool) -> list[dict[str, Any]]:
     return result
 
 
-async def _fetch_product_stats(pool) -> list[dict[str, Any]]:
+async def _fetch_product_stats(pool, *, category: str | None = None) -> list[dict[str, Any]]:
     """Aggregate by ASIN for products with 5+ complaints (all enriched, no time window).
 
     Uses bulk queries instead of per-ASIN sub-queries to avoid N+1 pattern.
     4 queries total instead of 4*N (was ~14k queries for 3,710 ASINs).
+    When category is given, JOINs product_metadata and filters to that category.
     """
+    if category:
+        cat_group = _CAT_EXPR
+        join_clause = "LEFT JOIN product_metadata pm ON pm.asin = pr.asin"
+        cat_filter = f"AND {_CAT_EXPR} = $1"
+        params: list = [category]
+    else:
+        cat_group = "pr.source_category"
+        join_clause = ""
+        cat_filter = ""
+        params = []
+
     rows = await pool.fetch(
-        """
+        f"""
         SELECT
-            asin,
-            source_category AS category,
+            pr.asin,
+            {cat_group} AS category,
             count(*) AS complaint_count,
-            avg(pain_score) AS avg_pain_score,
-            avg(rating) AS avg_rating
-        FROM product_reviews
-        WHERE enrichment_status = 'enriched'
-        GROUP BY asin, source_category
+            avg(pr.pain_score) AS avg_pain_score,
+            avg(pr.rating) AS avg_rating
+        FROM product_reviews pr
+        {join_clause}
+        WHERE pr.enrichment_status = 'enriched'
+          {cat_filter}
+        GROUP BY pr.asin, category
         HAVING count(*) >= 5
-        ORDER BY avg(pain_score) DESC
+        ORDER BY avg(pr.pain_score) DESC
         """,
+        *params,
     )
     if not rows:
         return []

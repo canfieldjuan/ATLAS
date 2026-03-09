@@ -32,6 +32,7 @@ class G2Parser:
 
     source_name = "g2"
     prefer_residential = True
+    version = "g2:1"
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
         """Scrape G2 reviews -- Web Unlocker first, then browser, then HTTP."""
