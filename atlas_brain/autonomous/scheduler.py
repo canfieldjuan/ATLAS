@@ -520,6 +520,15 @@ class TaskScheduler:
             "metadata": {"builtin_handler": "campaign_analytics_refresh"},
         },
         {
+            "name": "b2b_score_calibration",
+            "description": "Weekly calibration of opportunity scores from campaign outcomes",
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": "0 4 * * 0",
+            "timeout_seconds": 120,
+            "metadata": {"builtin_handler": "b2b_score_calibration"},
+        },
+        {
             "name": "amazon_seller_campaign_generation",
             "description": "Generate outreach campaigns targeting Amazon sellers with category intelligence",
             "task_type": "builtin",

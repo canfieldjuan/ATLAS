@@ -35,6 +35,18 @@ Tools:
     list_vendor_use_cases    -- query vendor use cases (modules mentioned in reviews)
     list_vendor_integrations -- query vendor integrations (tools mentioned in reviews)
     list_vendor_buyer_profiles -- query aggregated buyer authority profiles per vendor
+    get_vendor_history       -- daily health snapshots for a vendor over time
+    list_change_events       -- structural change events with vendor/type filters
+    compare_vendor_periods   -- compare a vendor's health between two dates
+    record_campaign_outcome  -- record business outcome for a campaign sequence
+    get_signal_effectiveness -- correlate signal dimensions with campaign outcomes
+    create_data_correction   -- record an analyst correction (suppress, flag, override, merge, reclassify)
+    list_data_corrections    -- list/filter recorded data corrections
+    revert_data_correction   -- revert a previously applied correction
+    get_calibration_weights  -- view score calibration weights from outcome data
+    trigger_score_calibration -- manually trigger score recalibration
+    list_webhook_subscriptions -- list webhook subscriptions with delivery stats
+    send_test_webhook_tool   -- send a test payload to verify webhook connectivity
 
 Run:
     python -m atlas_brain.mcp.b2b_churn_server          # stdio
@@ -80,6 +92,15 @@ def _is_uuid(value: str) -> bool:
         return True
     except (ValueError, AttributeError):
         return False
+
+
+def _suppress_predicate(entity_type: str, id_expr: str = "id") -> str:
+    """SQL predicate excluding entities with active suppress corrections."""
+    return (
+        f"NOT EXISTS (SELECT 1 FROM data_corrections dc"
+        f" WHERE dc.entity_type = '{entity_type}' AND dc.entity_id = {id_expr}"
+        f" AND dc.correction_type = 'suppress' AND dc.status = 'applied')"
+    )
 
 
 def _safe_json(val):
@@ -165,6 +186,7 @@ async def list_churn_signals(
             params.append(category)
             idx += 1
 
+        conditions.append(_suppress_predicate('churn_signal'))
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         capped = min(limit, 100)
         params.append(capped)
@@ -231,10 +253,11 @@ async def get_churn_signal(
 
         if product_category:
             row = await pool.fetchrow(
-                """
+                f"""
                 SELECT * FROM b2b_churn_signals
                 WHERE vendor_name ILIKE '%' || $1 || '%'
                   AND product_category = $2
+                  AND {_suppress_predicate('churn_signal')}
                 ORDER BY avg_urgency_score DESC
                 LIMIT 1
                 """,
@@ -243,9 +266,10 @@ async def get_churn_signal(
             )
         else:
             row = await pool.fetchrow(
-                """
+                f"""
                 SELECT * FROM b2b_churn_signals
                 WHERE vendor_name ILIKE '%' || $1 || '%'
+                  AND {_suppress_predicate('churn_signal')}
                 ORDER BY avg_urgency_score DESC
                 LIMIT 1
                 """,
@@ -328,6 +352,7 @@ async def list_high_intent_companies(
             params.append(vendor_name)
             idx += 1
 
+        conditions.append(_suppress_predicate('review'))
         capped = min(limit, 100)
         params.append(capped)
         where = " AND ".join(conditions)
@@ -408,9 +433,10 @@ async def get_vendor_profile(vendor_name: str) -> str:
 
         # Churn signal
         signal_row = await pool.fetchrow(
-            """
+            f"""
             SELECT * FROM b2b_churn_signals
             WHERE vendor_name ILIKE '%' || $1 || '%'
+              AND {_suppress_predicate('churn_signal')}
             ORDER BY avg_urgency_score DESC
             LIMIT 1
             """,
@@ -419,20 +445,21 @@ async def get_vendor_profile(vendor_name: str) -> str:
 
         # Live review counts
         counts = await pool.fetchrow(
-            """
+            f"""
             SELECT
                 COUNT(*) AS total_reviews,
                 COUNT(*) FILTER (WHERE enrichment_status = 'pending') AS pending_enrichment,
                 COUNT(*) FILTER (WHERE enrichment_status = 'enriched') AS enriched
             FROM b2b_reviews
             WHERE vendor_name ILIKE '%' || $1 || '%'
+              AND {_suppress_predicate('review')}
             """,
             vname,
         )
 
         # Top 5 high-intent companies
         hi_rows = await pool.fetch(
-            """
+            f"""
             SELECT reviewer_company,
                    (enrichment->>'urgency_score')::numeric AS urgency,
                    enrichment->>'pain_category' AS pain
@@ -441,6 +468,7 @@ async def get_vendor_profile(vendor_name: str) -> str:
               AND enrichment_status = 'enriched'
               AND (enrichment->>'urgency_score')::numeric >= 7
               AND reviewer_company IS NOT NULL AND reviewer_company != ''
+              AND {_suppress_predicate('review')}
             ORDER BY (enrichment->>'urgency_score')::numeric DESC
             LIMIT 5
             """,
@@ -449,12 +477,13 @@ async def get_vendor_profile(vendor_name: str) -> str:
 
         # Pain distribution
         pain_rows = await pool.fetch(
-            """
+            f"""
             SELECT enrichment->>'pain_category' AS pain, COUNT(*) AS cnt
             FROM b2b_reviews
             WHERE vendor_name ILIKE '%' || $1 || '%'
               AND enrichment_status = 'enriched'
               AND enrichment->>'pain_category' IS NOT NULL
+              AND {_suppress_predicate('review')}
             GROUP BY enrichment->>'pain_category'
             ORDER BY cnt DESC
             """,
@@ -703,6 +732,7 @@ async def search_reviews(
             params.append(has_churn_intent)
             idx += 1
 
+        conditions.append(_suppress_predicate('review'))
         capped = min(limit, 100)
         params.append(capped)
         where = " AND ".join(conditions)
@@ -765,12 +795,22 @@ async def get_review(review_id: str) -> str:
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
+        rid = _uuid.UUID(review_id)
         row = await pool.fetchrow(
             "SELECT * FROM b2b_reviews WHERE id = $1",
-            _uuid.UUID(review_id),
+            rid,
         )
 
         if not row:
+            return json.dumps({"success": False, "error": "Review not found"})
+
+        suppressed = await pool.fetchval(
+            """SELECT 1 FROM data_corrections
+               WHERE entity_type = 'review' AND entity_id = $1
+                 AND correction_type = 'suppress' AND status = 'applied'""",
+            row["id"],
+        )
+        if suppressed:
             return json.dumps({"success": False, "error": "Review not found"})
 
         review = {
@@ -822,10 +862,12 @@ async def get_pipeline_status() -> str:
         pool = get_db_pool()
 
         # Enrichment counts by status
+        _rev_sup = _suppress_predicate('review')
         status_rows = await pool.fetch(
-            """
+            f"""
             SELECT enrichment_status, COUNT(*) AS cnt
             FROM b2b_reviews
+            WHERE {_rev_sup}
             GROUP BY enrichment_status
             """
         )
@@ -833,11 +875,12 @@ async def get_pipeline_status() -> str:
 
         # Recent imports + last enrichment
         stats = await pool.fetchrow(
-            """
+            f"""
             SELECT
                 COUNT(*) FILTER (WHERE imported_at > NOW() - INTERVAL '24 hours') AS recent_imports_24h,
                 MAX(enriched_at) AS last_enrichment_at
             FROM b2b_reviews
+            WHERE {_rev_sup}
             """
         )
 
@@ -1974,6 +2017,7 @@ async def list_displacement_edges(
             params.append(min_confidence)
             idx += 1
 
+        conditions.append(_suppress_predicate('displacement_edge'))
         where = " AND ".join(conditions)
 
         rows = await pool.fetch(
@@ -2123,6 +2167,7 @@ async def list_vendor_pain_points(
             params.append(min_mentions)
             idx += 1
 
+        conditions.append(_suppress_predicate('pain_point'))
         where = "WHERE " + " AND ".join(conditions) if conditions else ""
 
         rows = await pool.fetch(
@@ -2214,6 +2259,7 @@ async def list_vendor_use_cases(
             params.append(min_mentions)
             idx += 1
 
+        conditions.append(_suppress_predicate('use_case'))
         where = "WHERE " + " AND ".join(conditions) if conditions else ""
 
         rows = await pool.fetch(
@@ -2301,6 +2347,7 @@ async def list_vendor_integrations(
             params.append(min_mentions)
             idx += 1
 
+        conditions.append(_suppress_predicate('integration'))
         where = "WHERE " + " AND ".join(conditions) if conditions else ""
 
         rows = await pool.fetch(
@@ -2392,6 +2439,7 @@ async def list_vendor_buyer_profiles(
             params.append(min_reviews)
             idx += 1
 
+        conditions.append(_suppress_predicate('buyer_profile'))
         where = "WHERE " + " AND ".join(conditions) if conditions else ""
 
         rows = await pool.fetch(
@@ -2430,6 +2478,956 @@ async def list_vendor_buyer_profiles(
     except Exception:
         logger.exception("list_vendor_buyer_profiles error")
         return json.dumps({"error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Historical snapshots & change events
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_vendor_history(
+    vendor_name: str,
+    days: int = 90,
+    limit: int = 90,
+) -> str:
+    """
+    Get daily health snapshots for a vendor over time.
+
+    vendor_name: Vendor name (case-insensitive partial match)
+    days: How many days back to look (default 90)
+    limit: Max snapshots to return (default 90, max 365)
+    """
+    limit = min(max(limit, 1), 365)
+    days = min(max(days, 1), 365)
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"error": "Database not ready"})
+
+        rows = await pool.fetch(
+            """
+            SELECT vendor_name, snapshot_date, total_reviews, churn_intent,
+                   churn_density, avg_urgency, positive_review_pct, recommend_ratio,
+                   top_pain, top_competitor, pain_count, competitor_count,
+                   displacement_edge_count, high_intent_company_count
+            FROM b2b_vendor_snapshots
+            WHERE vendor_name ILIKE '%' || $1 || '%'
+              AND snapshot_date >= CURRENT_DATE - $2::int
+            ORDER BY snapshot_date DESC
+            LIMIT $3
+            """,
+            vendor_name, days, limit,
+        )
+
+        resolved = rows[0]["vendor_name"] if rows else vendor_name
+        snapshots = []
+        for r in rows:
+            snapshots.append({
+                "snapshot_date": str(r["snapshot_date"]),
+                "total_reviews": r["total_reviews"],
+                "churn_intent": r["churn_intent"],
+                "churn_density": float(r["churn_density"]),
+                "avg_urgency": float(r["avg_urgency"]),
+                "positive_review_pct": float(r["positive_review_pct"]) if r["positive_review_pct"] is not None else None,
+                "recommend_ratio": float(r["recommend_ratio"]) if r["recommend_ratio"] is not None else None,
+                "top_pain": r["top_pain"],
+                "top_competitor": r["top_competitor"],
+                "pain_count": r["pain_count"],
+                "competitor_count": r["competitor_count"],
+                "displacement_edge_count": r["displacement_edge_count"],
+                "high_intent_company_count": r["high_intent_company_count"],
+            })
+
+        return json.dumps({"vendor_name": resolved, "snapshots": snapshots, "count": len(snapshots)}, default=str)
+    except Exception:
+        logger.exception("get_vendor_history error")
+        return json.dumps({"error": "Internal error"})
+
+
+@mcp.tool()
+async def list_change_events(
+    vendor_name: Optional[str] = None,
+    event_type: Optional[str] = None,
+    days: int = 30,
+    limit: int = 50,
+) -> str:
+    """
+    List structural change events detected across vendors.
+
+    vendor_name: Filter by vendor (case-insensitive partial match)
+    event_type: Filter by event type (urgency_spike, urgency_drop, churn_density_spike, nps_shift, new_pain_category, new_competitor, review_volume_spike)
+    days: How many days back to look (default 30)
+    limit: Max events to return (default 50, max 200)
+    """
+    limit = min(max(limit, 1), 200)
+    days = min(max(days, 1), 365)
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"error": "Database not ready"})
+
+        conditions: list[str] = ["event_date >= CURRENT_DATE - $1::int"]
+        params: list = [days]
+        idx = 2
+
+        if vendor_name:
+            conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
+            params.append(vendor_name)
+            idx += 1
+
+        if event_type:
+            conditions.append(f"event_type = ${idx}")
+            params.append(event_type)
+            idx += 1
+
+        where = "WHERE " + " AND ".join(conditions)
+
+        rows = await pool.fetch(
+            f"""
+            SELECT vendor_name, event_date, event_type, description,
+                   old_value, new_value, delta, metadata
+            FROM b2b_change_events
+            {where}
+            ORDER BY event_date DESC, created_at DESC
+            LIMIT ${idx}
+            """,
+            *params, limit,
+        )
+
+        events = []
+        for r in rows:
+            events.append({
+                "vendor_name": r["vendor_name"],
+                "event_date": str(r["event_date"]),
+                "event_type": r["event_type"],
+                "description": r["description"],
+                "old_value": float(r["old_value"]) if r["old_value"] is not None else None,
+                "new_value": float(r["new_value"]) if r["new_value"] is not None else None,
+                "delta": float(r["delta"]) if r["delta"] is not None else None,
+                "metadata": _safe_json(r["metadata"]),
+            })
+
+        return json.dumps({"events": events, "count": len(events)}, default=str)
+    except Exception:
+        logger.exception("list_change_events error")
+        return json.dumps({"error": "Internal error"})
+
+
+@mcp.tool()
+async def compare_vendor_periods(
+    vendor_name: str,
+    period_a_days_ago: int = 30,
+    period_b_days_ago: int = 0,
+) -> str:
+    """
+    Compare a vendor's health between two dates.
+
+    vendor_name: Vendor name (case-insensitive partial match)
+    period_a_days_ago: The older snapshot (days ago, default 30)
+    period_b_days_ago: The newer snapshot (days ago, default 0 = today)
+    """
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"error": "Database not ready"})
+
+        async def _nearest_snapshot(target_days_ago: int):
+            return await pool.fetchrow(
+                """
+                SELECT vendor_name, snapshot_date, total_reviews, churn_intent,
+                       churn_density, avg_urgency, positive_review_pct, recommend_ratio,
+                       top_pain, top_competitor, pain_count, competitor_count,
+                       displacement_edge_count, high_intent_company_count
+                FROM b2b_vendor_snapshots
+                WHERE vendor_name ILIKE '%' || $1 || '%'
+                  AND snapshot_date <= CURRENT_DATE - $2::int
+                ORDER BY snapshot_date DESC
+                LIMIT 1
+                """,
+                vendor_name, target_days_ago,
+            )
+
+        snap_a = await _nearest_snapshot(period_a_days_ago)
+        snap_b = await _nearest_snapshot(period_b_days_ago)
+
+        if not snap_a and not snap_b:
+            return json.dumps({"error": f"No snapshots found for vendor matching '{vendor_name}'"})
+
+        def _format(snap):
+            if not snap:
+                return None
+            return {
+                "snapshot_date": str(snap["snapshot_date"]),
+                "total_reviews": snap["total_reviews"],
+                "churn_intent": snap["churn_intent"],
+                "churn_density": float(snap["churn_density"]),
+                "avg_urgency": float(snap["avg_urgency"]),
+                "positive_review_pct": float(snap["positive_review_pct"]) if snap["positive_review_pct"] is not None else None,
+                "recommend_ratio": float(snap["recommend_ratio"]) if snap["recommend_ratio"] is not None else None,
+                "top_pain": snap["top_pain"],
+                "top_competitor": snap["top_competitor"],
+                "pain_count": snap["pain_count"],
+                "competitor_count": snap["competitor_count"],
+                "displacement_edge_count": snap["displacement_edge_count"],
+                "high_intent_company_count": snap["high_intent_company_count"],
+            }
+
+        a_fmt = _format(snap_a)
+        b_fmt = _format(snap_b)
+
+        deltas = {}
+        if a_fmt and b_fmt:
+            for key in ("churn_density", "avg_urgency", "recommend_ratio", "total_reviews",
+                        "churn_intent", "pain_count", "competitor_count",
+                        "displacement_edge_count", "high_intent_company_count"):
+                a_val = a_fmt.get(key)
+                b_val = b_fmt.get(key)
+                if a_val is not None and b_val is not None:
+                    deltas[key] = round(b_val - a_val, 2)
+
+        resolved = (snap_a or snap_b)["vendor_name"]
+        return json.dumps({
+            "vendor_name": resolved,
+            "period_a": a_fmt,
+            "period_b": b_fmt,
+            "deltas": deltas,
+        }, default=str)
+    except Exception:
+        logger.exception("compare_vendor_periods error")
+        return json.dumps({"error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: record_campaign_outcome
+# ---------------------------------------------------------------------------
+
+_VALID_OUTCOMES = {
+    "pending", "meeting_booked", "deal_opened",
+    "deal_won", "deal_lost", "no_opportunity", "disqualified",
+}
+
+
+@mcp.tool()
+async def record_campaign_outcome(
+    sequence_id: str,
+    outcome: str,
+    notes: Optional[str] = None,
+    revenue: Optional[float] = None,
+    recorded_by: str = "mcp",
+) -> str:
+    """
+    Record a business outcome for a campaign sequence.
+
+    sequence_id: UUID of the campaign sequence
+    outcome: One of: pending, meeting_booked, deal_opened, deal_won, deal_lost, no_opportunity, disqualified
+    notes: Optional notes about the outcome
+    revenue: Optional revenue amount (for deal_won)
+    recorded_by: Who recorded this (default "mcp")
+    """
+    if not _is_uuid(sequence_id):
+        return json.dumps({"success": False, "error": "Invalid sequence_id (must be UUID)"})
+
+    if outcome not in _VALID_OUTCOMES:
+        return json.dumps({"success": False, "error": f"Invalid outcome. Must be one of: {sorted(_VALID_OUTCOMES)}"})
+
+    try:
+        from datetime import datetime, timezone
+
+        from ..autonomous.tasks.campaign_audit import log_campaign_event
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+
+        row = await pool.fetchrow(
+            "SELECT id, outcome, outcome_history FROM campaign_sequences WHERE id = $1",
+            _uuid.UUID(sequence_id),
+        )
+        if not row:
+            return json.dumps({"success": False, "error": "Sequence not found"})
+
+        previous = row["outcome"]
+        now = datetime.now(timezone.utc)
+
+        history_entry = {
+            "stage": outcome,
+            "recorded_at": now.isoformat(),
+            "previous": previous,
+            "notes": notes,
+            "recorded_by": recorded_by,
+        }
+        existing_history = row["outcome_history"] if isinstance(row["outcome_history"], list) else []
+        updated_history = existing_history + [history_entry]
+
+        await pool.execute(
+            """
+            UPDATE campaign_sequences
+            SET outcome = $1,
+                outcome_recorded_at = $2,
+                outcome_recorded_by = $3,
+                outcome_notes = $4,
+                outcome_revenue = $5,
+                outcome_history = $6::jsonb,
+                updated_at = NOW()
+            WHERE id = $7
+            """,
+            outcome,
+            now,
+            recorded_by,
+            notes,
+            revenue,
+            json.dumps(updated_history),
+            _uuid.UUID(sequence_id),
+        )
+
+        await log_campaign_event(
+            pool,
+            event_type=f"outcome_{outcome}",
+            source=recorded_by,
+            sequence_id=_uuid.UUID(sequence_id),
+            metadata={
+                "outcome": outcome,
+                "previous": previous,
+                "revenue": revenue,
+                "notes": notes,
+            },
+        )
+
+        return json.dumps({
+            "success": True,
+            "sequence_id": sequence_id,
+            "outcome": outcome,
+            "previous_outcome": previous,
+            "recorded_at": now.isoformat(),
+        })
+    except Exception:
+        logger.exception("record_campaign_outcome error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_signal_effectiveness
+# ---------------------------------------------------------------------------
+
+_GROUP_BY_EXPRESSIONS = {
+    "buying_stage": "bc.buying_stage",
+    "role_type": "bc.role_type",
+    "target_mode": "bc.target_mode",
+    "opportunity_score_bucket": """CASE
+        WHEN bc.opportunity_score >= 90 THEN '90-100'
+        WHEN bc.opportunity_score >= 70 THEN '70-89'
+        WHEN bc.opportunity_score >= 50 THEN '50-69'
+        ELSE 'below_50'
+    END""",
+    "urgency_bucket": """CASE
+        WHEN bc.urgency_score >= 8 THEN 'high_8+'
+        WHEN bc.urgency_score >= 5 THEN 'medium_5-7'
+        ELSE 'low_0-4'
+    END""",
+    "pain_category": "bc.pain_categories->0->>'category'",
+}
+
+
+@mcp.tool()
+async def get_signal_effectiveness(
+    vendor_name: Optional[str] = None,
+    min_sequences: int = 5,
+    group_by: str = "buying_stage",
+) -> str:
+    """
+    Analyze which signal dimensions produce the best campaign outcomes.
+
+    Groups completed campaign sequences by a signal dimension from the
+    originating b2b_campaigns row (step 1 only) and computes outcome rates.
+
+    vendor_name: Optional vendor filter (partial match, case-insensitive)
+    min_sequences: Minimum sequences per group to include (default 5, 1-100)
+    group_by: Signal dimension to group by. Options:
+        buying_stage (default), role_type, target_mode,
+        opportunity_score_bucket, urgency_bucket, pain_category
+    """
+    min_sequences = max(1, min(min_sequences, 100))
+
+    if group_by not in _GROUP_BY_EXPRESSIONS:
+        return json.dumps({
+            "success": False,
+            "error": f"Invalid group_by. Must be one of: {sorted(_GROUP_BY_EXPRESSIONS.keys())}",
+        })
+
+    group_expr = _GROUP_BY_EXPRESSIONS[group_by]
+
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+
+        vendor_filter = ""
+        params: list = [min_sequences]
+        idx = 2
+
+        if vendor_name:
+            vendor_filter = f"AND bc.vendor_name ILIKE '%' || ${idx} || '%'"
+            params.append(vendor_name)
+            idx += 1
+
+        sql = f"""
+        WITH seq_signals AS (
+            SELECT DISTINCT ON (cs.id)
+                cs.id, cs.outcome, cs.outcome_revenue,
+                ({group_expr}) AS signal_group
+            FROM campaign_sequences cs
+            JOIN b2b_campaigns bc ON bc.sequence_id = cs.id
+            WHERE bc.sequence_id IS NOT NULL
+              AND cs.outcome != 'pending'
+              {vendor_filter}
+            ORDER BY cs.id, bc.step_number ASC
+        )
+        SELECT
+            signal_group,
+            COUNT(*) AS total_sequences,
+            COUNT(*) FILTER (WHERE outcome = 'meeting_booked') AS meetings,
+            COUNT(*) FILTER (WHERE outcome = 'deal_opened') AS deals_opened,
+            COUNT(*) FILTER (WHERE outcome = 'deal_won') AS deals_won,
+            COUNT(*) FILTER (WHERE outcome = 'deal_lost') AS deals_lost,
+            COUNT(*) FILTER (WHERE outcome = 'no_opportunity') AS no_opportunity,
+            COUNT(*) FILTER (WHERE outcome = 'disqualified') AS disqualified,
+            ROUND(
+                COUNT(*) FILTER (WHERE outcome IN ('meeting_booked', 'deal_opened', 'deal_won'))::numeric
+                / NULLIF(COUNT(*), 0), 3
+            ) AS positive_outcome_rate,
+            COALESCE(SUM(outcome_revenue) FILTER (WHERE outcome = 'deal_won'), 0) AS total_revenue
+        FROM seq_signals
+        WHERE signal_group IS NOT NULL
+        GROUP BY signal_group
+        HAVING COUNT(*) >= $1
+        ORDER BY positive_outcome_rate DESC
+        """
+
+        rows = await pool.fetch(sql, *params)
+
+        groups = []
+        for r in rows:
+            groups.append({
+                "signal_group": r["signal_group"],
+                "total_sequences": r["total_sequences"],
+                "meetings": r["meetings"],
+                "deals_opened": r["deals_opened"],
+                "deals_won": r["deals_won"],
+                "deals_lost": r["deals_lost"],
+                "no_opportunity": r["no_opportunity"],
+                "disqualified": r["disqualified"],
+                "positive_outcome_rate": float(r["positive_outcome_rate"]) if r["positive_outcome_rate"] is not None else 0.0,
+                "total_revenue": float(r["total_revenue"]),
+            })
+
+        return json.dumps({
+            "success": True,
+            "group_by": group_by,
+            "vendor_filter": vendor_name,
+            "min_sequences": min_sequences,
+            "groups": groups,
+            "total_groups": len(groups),
+        }, default=str)
+    except Exception:
+        logger.exception("get_signal_effectiveness error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: create_data_correction
+# ---------------------------------------------------------------------------
+
+_VALID_ENTITY_TYPES = {
+    "review", "vendor", "displacement_edge", "pain_point",
+    "churn_signal", "buyer_profile", "use_case", "integration",
+}
+_VALID_CORRECTION_TYPES = {"suppress", "flag", "override_field", "merge_vendor", "reclassify"}
+
+
+@mcp.tool()
+async def create_data_correction(
+    entity_type: str,
+    entity_id: str,
+    correction_type: str,
+    reason: str,
+    field_name: Optional[str] = None,
+    old_value: Optional[str] = None,
+    new_value: Optional[str] = None,
+    corrected_by: str = "mcp",
+) -> str:
+    """
+    Record an analyst correction for a data entity.
+
+    entity_type: Type of entity being corrected (review, vendor, displacement_edge,
+        pain_point, churn_signal, buyer_profile, use_case, integration)
+    entity_id: UUID of the entity being corrected
+    correction_type: Type of correction (suppress, flag, override_field, merge_vendor, reclassify)
+    reason: Human explanation for the correction (required)
+    field_name: Which field was changed (required for override_field)
+    old_value: Previous value (optional)
+    new_value: New value (required for override_field)
+    corrected_by: Who made the correction (default: mcp)
+    """
+    if entity_type not in _VALID_ENTITY_TYPES:
+        return json.dumps({
+            "success": False,
+            "error": f"Invalid entity_type. Must be one of: {sorted(_VALID_ENTITY_TYPES)}",
+        })
+    if correction_type not in _VALID_CORRECTION_TYPES:
+        return json.dumps({
+            "success": False,
+            "error": f"Invalid correction_type. Must be one of: {sorted(_VALID_CORRECTION_TYPES)}",
+        })
+    if correction_type == "override_field":
+        if not field_name:
+            return json.dumps({"success": False, "error": "field_name required for override_field"})
+        if new_value is None:
+            return json.dumps({"success": False, "error": "new_value required for override_field"})
+    if not _is_uuid(entity_id):
+        return json.dumps({"success": False, "error": "entity_id must be a valid UUID"})
+    if not reason or not reason.strip():
+        return json.dumps({"success": False, "error": "reason is required"})
+
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+        import uuid as _u
+        entity_uuid = _u.UUID(entity_id)
+
+        row = await pool.fetchrow(
+            """
+            INSERT INTO data_corrections
+                (entity_type, entity_id, correction_type, field_name,
+                 old_value, new_value, reason, corrected_by)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING id, entity_type, entity_id, correction_type, status, created_at
+            """,
+            entity_type,
+            entity_uuid,
+            correction_type,
+            field_name,
+            old_value,
+            new_value,
+            reason,
+            corrected_by,
+        )
+
+        return json.dumps({
+            "success": True,
+            "correction": {
+                "id": str(row["id"]),
+                "entity_type": row["entity_type"],
+                "entity_id": str(row["entity_id"]),
+                "correction_type": row["correction_type"],
+                "status": row["status"],
+                "created_at": str(row["created_at"]),
+            },
+        }, default=str)
+    except Exception:
+        logger.exception("create_data_correction error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: list_data_corrections
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def list_data_corrections(
+    entity_type: Optional[str] = None,
+    entity_id: Optional[str] = None,
+    correction_type: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 50,
+) -> str:
+    """
+    List recorded data corrections with optional filters.
+
+    entity_type: Filter by entity type (review, vendor, etc.)
+    entity_id: Filter by entity UUID
+    correction_type: Filter by correction type (suppress, flag, override_field, etc.)
+    status: Filter by status (applied, reverted, pending_review)
+    limit: Max results (1-200, default 50)
+    """
+    limit = max(1, min(limit, 200))
+
+    if entity_type and entity_type not in _VALID_ENTITY_TYPES:
+        return json.dumps({
+            "success": False,
+            "error": f"Invalid entity_type. Must be one of: {sorted(_VALID_ENTITY_TYPES)}",
+        })
+    if correction_type and correction_type not in _VALID_CORRECTION_TYPES:
+        return json.dumps({
+            "success": False,
+            "error": f"Invalid correction_type. Must be one of: {sorted(_VALID_CORRECTION_TYPES)}",
+        })
+    if entity_id and not _is_uuid(entity_id):
+        return json.dumps({"success": False, "error": "entity_id must be a valid UUID"})
+
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+
+        conditions: list[str] = []
+        params: list = []
+        idx = 1
+
+        if entity_type:
+            conditions.append(f"entity_type = ${idx}")
+            params.append(entity_type)
+            idx += 1
+        if entity_id:
+            import uuid as _u
+            conditions.append(f"entity_id = ${idx}")
+            params.append(_u.UUID(entity_id))
+            idx += 1
+        if correction_type:
+            conditions.append(f"correction_type = ${idx}")
+            params.append(correction_type)
+            idx += 1
+        if status:
+            conditions.append(f"status = ${idx}")
+            params.append(status)
+            idx += 1
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        params.append(limit)
+
+        rows = await pool.fetch(
+            f"""
+            SELECT id, entity_type, entity_id, correction_type, field_name,
+                   old_value, new_value, reason, corrected_by, status,
+                   affected_count, metadata, created_at, reverted_at, reverted_by
+            FROM data_corrections
+            {where}
+            ORDER BY created_at DESC
+            LIMIT ${idx}
+            """,
+            *params,
+        )
+
+        corrections = []
+        for r in rows:
+            corrections.append({
+                "id": str(r["id"]),
+                "entity_type": r["entity_type"],
+                "entity_id": str(r["entity_id"]),
+                "correction_type": r["correction_type"],
+                "field_name": r["field_name"],
+                "old_value": r["old_value"],
+                "new_value": r["new_value"],
+                "reason": r["reason"],
+                "corrected_by": r["corrected_by"],
+                "status": r["status"],
+                "affected_count": r["affected_count"],
+                "metadata": _safe_json(r["metadata"]),
+                "created_at": str(r["created_at"]),
+                "reverted_at": str(r["reverted_at"]) if r["reverted_at"] else None,
+                "reverted_by": r["reverted_by"],
+            })
+
+        return json.dumps({
+            "success": True,
+            "corrections": corrections,
+            "count": len(corrections),
+        }, default=str)
+    except Exception:
+        logger.exception("list_data_corrections error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: revert_data_correction
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def revert_data_correction(
+    correction_id: str,
+    reason: Optional[str] = None,
+    reverted_by: str = "mcp",
+) -> str:
+    """
+    Revert a previously applied data correction.
+
+    correction_id: UUID of the correction to revert
+    reason: Optional explanation for the revert
+    reverted_by: Who reverted the correction (default: mcp)
+    """
+    if not _is_uuid(correction_id):
+        return json.dumps({"success": False, "error": "correction_id must be a valid UUID"})
+
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+        import uuid as _u
+        cid = _u.UUID(correction_id)
+
+        row = await pool.fetchrow(
+            "SELECT id, status FROM data_corrections WHERE id = $1",
+            cid,
+        )
+        if not row:
+            return json.dumps({"success": False, "error": "Correction not found"})
+        if row["status"] != "applied":
+            return json.dumps({
+                "success": False,
+                "error": f"Cannot revert correction with status '{row['status']}' (must be 'applied')",
+            })
+
+        updated = await pool.fetchrow(
+            """
+            UPDATE data_corrections
+            SET status = 'reverted', reverted_at = NOW(), reverted_by = $2
+            WHERE id = $1
+            RETURNING id, status, reverted_at
+            """,
+            cid,
+            reverted_by,
+        )
+
+        return json.dumps({
+            "success": True,
+            "id": str(updated["id"]),
+            "status": updated["status"],
+            "reverted_at": str(updated["reverted_at"]),
+        }, default=str)
+    except Exception:
+        logger.exception("revert_data_correction error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_calibration_weights
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_calibration_weights(
+    dimension: Optional[str] = None,
+    model_version: Optional[int] = None,
+) -> str:
+    """
+    Get current score calibration weights derived from campaign outcomes.
+
+    Calibration weights adjust the static opportunity scoring formula based
+    on observed conversion rates per signal dimension.
+
+    dimension: Filter by dimension (role_type, buying_stage, urgency_bucket, seat_bucket, context_keyword)
+    model_version: Specific version (default: latest)
+    """
+    valid_dims = {"role_type", "buying_stage", "urgency_bucket", "seat_bucket", "context_keyword"}
+    if dimension and dimension not in valid_dims:
+        return json.dumps({"success": False, "error": f"Invalid dimension. Must be one of: {sorted(valid_dims)}"})
+
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+
+        if model_version is None:
+            model_version = await pool.fetchval(
+                "SELECT MAX(model_version) FROM score_calibration_weights"
+            )
+            if model_version is None:
+                return json.dumps({
+                    "success": True,
+                    "weights": [],
+                    "count": 0,
+                    "message": "No calibration data yet. Run calibration after recording campaign outcomes.",
+                })
+
+        conditions = ["model_version = $1"]
+        params: list = [model_version]
+        idx = 2
+
+        if dimension:
+            conditions.append(f"dimension = ${idx}")
+            params.append(dimension)
+            idx += 1
+
+        where = " AND ".join(conditions)
+
+        rows = await pool.fetch(
+            f"""
+            SELECT dimension, dimension_value, total_sequences, positive_outcomes,
+                   deals_won, total_revenue, positive_rate, baseline_rate, lift,
+                   weight_adjustment, static_default, calibrated_at,
+                   sample_window_days, model_version
+            FROM score_calibration_weights
+            WHERE {where}
+            ORDER BY dimension, lift DESC
+            """,
+            *params,
+        )
+
+        weights = []
+        for r in rows:
+            weights.append({
+                "dimension": r["dimension"],
+                "dimension_value": r["dimension_value"],
+                "total_sequences": r["total_sequences"],
+                "positive_outcomes": r["positive_outcomes"],
+                "deals_won": r["deals_won"],
+                "total_revenue": float(r["total_revenue"]),
+                "positive_rate": float(r["positive_rate"]),
+                "baseline_rate": float(r["baseline_rate"]),
+                "lift": float(r["lift"]),
+                "weight_adjustment": float(r["weight_adjustment"]),
+                "static_default": float(r["static_default"]),
+                "calibrated_at": r["calibrated_at"],
+                "sample_window_days": r["sample_window_days"],
+                "model_version": r["model_version"],
+            })
+
+        return json.dumps({
+            "success": True,
+            "model_version": model_version,
+            "weights": weights,
+            "count": len(weights),
+        }, default=str)
+    except Exception:
+        logger.exception("get_calibration_weights error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: trigger_score_calibration
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def trigger_score_calibration(
+    window_days: int = 90,
+) -> str:
+    """
+    Manually trigger score calibration from campaign outcome data.
+
+    Computes conversion rates per signal dimension and derives weight
+    adjustments. Requires at least 20 sequences with recorded outcomes.
+
+    window_days: How far back to look for outcome data (default 90, max 365)
+    """
+    window_days = max(1, min(window_days, 365))
+    try:
+        from ..autonomous.tasks.b2b_score_calibration import calibrate
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        result = await calibrate(pool, window_days=window_days)
+        return json.dumps({"success": True, **result}, default=str)
+    except Exception:
+        logger.exception("trigger_score_calibration error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: list_webhook_subscriptions
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def list_webhook_subscriptions(
+    account_id: Optional[str] = None,
+    enabled_only: bool = True,
+) -> str:
+    """
+    List webhook subscriptions for debugging and monitoring.
+
+    account_id: Optional UUID to filter by specific account
+    enabled_only: If true, only show enabled subscriptions (default true)
+    """
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        conditions = []
+        params: list = []
+        idx = 1
+
+        if account_id:
+            if not _is_uuid(account_id):
+                return json.dumps({"error": "account_id must be a valid UUID"})
+            conditions.append(f"ws.account_id = ${idx}::uuid")
+            params.append(account_id)
+            idx += 1
+
+        if enabled_only:
+            conditions.append("ws.enabled = true")
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+        rows = await pool.fetch(
+            f"""
+            SELECT ws.id, ws.account_id, ws.url, ws.event_types, ws.enabled,
+                   ws.description, ws.created_at,
+                   sa.name AS account_name,
+                   (SELECT COUNT(*) FROM b2b_webhook_delivery_log dl
+                    WHERE dl.subscription_id = ws.id AND dl.delivered_at > NOW() - INTERVAL '7 days') AS recent_deliveries,
+                   (SELECT COUNT(*) FILTER (WHERE dl2.success) FROM b2b_webhook_delivery_log dl2
+                    WHERE dl2.subscription_id = ws.id AND dl2.delivered_at > NOW() - INTERVAL '7 days') AS recent_successes
+            FROM b2b_webhook_subscriptions ws
+            JOIN saas_accounts sa ON sa.id = ws.account_id
+            {where}
+            ORDER BY ws.created_at DESC
+            """,
+            *params,
+        )
+
+        subs = []
+        for r in rows:
+            recent_total = r["recent_deliveries"] or 0
+            subs.append({
+                "id": str(r["id"]),
+                "account_id": str(r["account_id"]),
+                "account_name": r["account_name"],
+                "url": r["url"],
+                "event_types": r["event_types"],
+                "enabled": r["enabled"],
+                "description": r["description"],
+                "created_at": r["created_at"].isoformat(),
+                "recent_deliveries_7d": recent_total,
+                "recent_success_rate_7d": round(r["recent_successes"] / max(recent_total, 1), 3) if recent_total else None,
+            })
+
+        return json.dumps({"subscriptions": subs, "count": len(subs)}, default=str)
+    except Exception:
+        logger.exception("list_webhook_subscriptions error")
+        return json.dumps({"error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: send_test_webhook
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def send_test_webhook_tool(
+    subscription_id: str,
+) -> str:
+    """
+    Send a test payload to a webhook subscription to verify connectivity.
+
+    subscription_id: UUID of the webhook subscription to test
+    """
+    if not _is_uuid(subscription_id):
+        return json.dumps({"error": "subscription_id must be a valid UUID"})
+    try:
+        import uuid as _u
+
+        from ..services.b2b.webhook_dispatcher import send_test_webhook
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        result = await send_test_webhook(pool, _u.UUID(subscription_id))
+        return json.dumps(result, default=str)
+    except Exception:
+        logger.exception("send_test_webhook error")
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------

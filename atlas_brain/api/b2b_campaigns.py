@@ -5,6 +5,7 @@ Provides CRUD, manual campaign generation trigger, approve/reject workflow,
 and KPI stats for the campaign engine.
 """
 
+import json
 import logging
 import uuid as _uuid
 from datetime import datetime, timezone
@@ -74,6 +75,18 @@ class BulkApproveBody(BaseModel):
 class BulkRejectBody(BaseModel):
     campaign_ids: list[str] = Field(max_length=100)
     reason: str | None = None
+
+
+class RecordOutcomeBody(BaseModel):
+    outcome: str = Field(...)
+    notes: str | None = None
+    revenue: float | None = None
+
+
+VALID_OUTCOMES = {
+    "pending", "meeting_booked", "deal_opened",
+    "deal_won", "deal_lost", "no_opportunity", "disqualified",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -1086,6 +1099,131 @@ async def resume_sequence(sequence_id: UUID):
         pool, event_type="resumed", source="api", sequence_id=sequence_id
     )
     return {"status": "active"}
+
+
+# ---------------------------------------------------------------------------
+# Outcome tracking
+# ---------------------------------------------------------------------------
+
+
+@router.post("/sequences/{sequence_id}/outcome")
+async def record_outcome(
+    sequence_id: UUID,
+    body: RecordOutcomeBody,
+    user: AuthUser | None = Depends(optional_auth),
+):
+    """Record a business outcome for a campaign sequence."""
+    if body.outcome not in VALID_OUTCOMES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid outcome. Must be one of: {sorted(VALID_OUTCOMES)}",
+        )
+
+    pool = _pool_or_503()
+
+    row = await pool.fetchrow(
+        "SELECT id, outcome, outcome_history FROM campaign_sequences WHERE id = $1",
+        sequence_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Sequence not found")
+
+    previous = row["outcome"]
+    recorded_by = f"api:{user.user_id}" if user else "api"
+    now = datetime.now(timezone.utc)
+
+    # Build history entry and append to existing array
+    history_entry = {
+        "stage": body.outcome,
+        "recorded_at": now.isoformat(),
+        "previous": previous,
+        "notes": body.notes,
+        "recorded_by": recorded_by,
+    }
+    existing_history = row["outcome_history"] if isinstance(row["outcome_history"], list) else []
+    updated_history = existing_history + [history_entry]
+
+    await pool.execute(
+        """
+        UPDATE campaign_sequences
+        SET outcome = $1,
+            outcome_recorded_at = $2,
+            outcome_recorded_by = $3,
+            outcome_notes = $4,
+            outcome_revenue = $5,
+            outcome_history = $6::jsonb,
+            updated_at = NOW()
+        WHERE id = $7
+        """,
+        body.outcome,
+        now,
+        recorded_by,
+        body.notes,
+        body.revenue,
+        json.dumps(updated_history),
+        sequence_id,
+    )
+
+    await log_campaign_event(
+        pool,
+        event_type=f"outcome_{body.outcome}",
+        source=recorded_by,
+        sequence_id=sequence_id,
+        metadata={
+            "outcome": body.outcome,
+            "previous": previous,
+            "revenue": body.revenue,
+            "notes": body.notes,
+        },
+    )
+
+    return {
+        "status": "recorded",
+        "sequence_id": str(sequence_id),
+        "outcome": body.outcome,
+        "previous_outcome": previous,
+        "recorded_at": now.isoformat(),
+    }
+
+
+@router.get("/sequences/{sequence_id}/outcome")
+async def get_outcome(
+    sequence_id: UUID,
+    user: AuthUser | None = Depends(optional_auth),
+):
+    """Get the current outcome for a campaign sequence."""
+    pool = _pool_or_503()
+
+    row = await pool.fetchrow(
+        """
+        SELECT cs.id, cs.company_name, cs.outcome, cs.outcome_recorded_at,
+               cs.outcome_recorded_by, cs.outcome_notes, cs.outcome_revenue,
+               cs.outcome_history
+        FROM campaign_sequences cs
+        WHERE cs.id = $1
+        """,
+        sequence_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Sequence not found")
+
+    history = row["outcome_history"]
+    if isinstance(history, str):
+        try:
+            history = json.loads(history)
+        except (json.JSONDecodeError, TypeError):
+            history = []
+
+    return {
+        "sequence_id": str(row["id"]),
+        "company_name": row["company_name"],
+        "outcome": row["outcome"],
+        "outcome_recorded_at": row["outcome_recorded_at"].isoformat() if row["outcome_recorded_at"] else None,
+        "outcome_recorded_by": row["outcome_recorded_by"],
+        "outcome_notes": row["outcome_notes"],
+        "outcome_revenue": float(row["outcome_revenue"]) if row["outcome_revenue"] is not None else None,
+        "outcome_history": history,
+    }
 
 
 # ---------------------------------------------------------------------------

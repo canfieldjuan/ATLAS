@@ -26,6 +26,13 @@ logger = logging.getLogger("atlas.api.b2b_dashboard")
 
 EXPORT_ROW_LIMIT = 10_000
 
+VALID_ENTITY_TYPES = {
+    "review", "vendor", "displacement_edge", "pain_point",
+    "churn_signal", "buyer_profile", "use_case", "integration",
+}
+VALID_CORRECTION_TYPES = {"suppress", "flag", "override_field", "merge_vendor", "reclassify"}
+VALID_CORRECTION_STATUSES = {"applied", "reverted", "pending_review"}
+
 router = APIRouter(prefix="/b2b/dashboard", tags=["b2b-dashboard"])
 
 
@@ -47,6 +54,21 @@ class AccountDeepDiveRequest(BaseModel):
     company_name: str = Field(..., min_length=1, max_length=200)
     window_days: int = Field(90, ge=1, le=3650)
     persist: bool = True
+
+
+class CreateCorrectionBody(BaseModel):
+    entity_type: str = Field(...)
+    entity_id: str = Field(...)
+    correction_type: str = Field(...)
+    field_name: str | None = None
+    old_value: str | None = None
+    new_value: str | None = None
+    reason: str = Field(..., min_length=1, max_length=2000)
+    metadata: dict | None = None
+
+
+class RevertCorrectionBody(BaseModel):
+    reason: str | None = None
 
 
 def _safe_json(val):
@@ -75,6 +97,15 @@ def _pool_or_503():
     if not pool.is_initialized:
         raise HTTPException(status_code=503, detail="Database not ready")
     return pool
+
+
+def _suppress_predicate(entity_type: str, id_expr: str = "id") -> str:
+    """Return a SQL predicate that excludes entities with active suppress corrections."""
+    return (
+        f"NOT EXISTS (SELECT 1 FROM data_corrections dc"
+        f" WHERE dc.entity_type = '{entity_type}' AND dc.entity_id = {id_expr}"
+        f" AND dc.correction_type = 'suppress' AND dc.status = 'applied')"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +146,7 @@ async def list_signals(
         params.append(category)
         idx += 1
 
+    conditions.append(_suppress_predicate('churn_signal'))
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     capped = min(limit, 100)
     params.append(capped)
@@ -180,6 +212,7 @@ async def get_signal(
             SELECT * FROM b2b_churn_signals
             WHERE vendor_name ILIKE '%' || $1 || '%'
               AND product_category = ${pidx}
+              AND {_suppress_predicate('churn_signal')}
               {scope}
             ORDER BY avg_urgency_score DESC
             LIMIT 1
@@ -192,6 +225,7 @@ async def get_signal(
             f"""
             SELECT * FROM b2b_churn_signals
             WHERE vendor_name ILIKE '%' || $1 || '%'
+              AND {_suppress_predicate('churn_signal')}
               {scope}
             ORDER BY avg_urgency_score DESC
             LIMIT 1
@@ -262,6 +296,7 @@ async def list_high_intent(
         params.append(vendor_name)
         idx += 1
 
+    conditions.append(_suppress_predicate('review'))
     capped = min(limit, 100)
     params.append(capped)
     where = " AND ".join(conditions)
@@ -329,9 +364,10 @@ async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(o
             raise HTTPException(status_code=403, detail="Vendor not in your tracked list")
 
     signal_row = await pool.fetchrow(
-        """
+        f"""
         SELECT * FROM b2b_churn_signals
         WHERE vendor_name ILIKE '%' || $1 || '%'
+          AND {_suppress_predicate('churn_signal')}
         ORDER BY avg_urgency_score DESC
         LIMIT 1
         """,
@@ -339,19 +375,20 @@ async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(o
     )
 
     counts = await pool.fetchrow(
-        """
+        f"""
         SELECT
             COUNT(*) AS total_reviews,
             COUNT(*) FILTER (WHERE enrichment_status = 'pending') AS pending_enrichment,
             COUNT(*) FILTER (WHERE enrichment_status = 'enriched') AS enriched
         FROM b2b_reviews
         WHERE vendor_name ILIKE '%' || $1 || '%'
+          AND {_suppress_predicate('review')}
         """,
         vname,
     )
 
     hi_rows = await pool.fetch(
-        """
+        f"""
         SELECT reviewer_company,
                (enrichment->>'urgency_score')::numeric AS urgency,
                enrichment->>'pain_category' AS pain
@@ -360,6 +397,7 @@ async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(o
           AND enrichment_status = 'enriched'
           AND (enrichment->>'urgency_score')::numeric >= 7
           AND reviewer_company IS NOT NULL AND reviewer_company != ''
+          AND {_suppress_predicate('review')}
         ORDER BY (enrichment->>'urgency_score')::numeric DESC
         LIMIT 5
         """,
@@ -367,12 +405,13 @@ async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(o
     )
 
     pain_rows = await pool.fetch(
-        """
+        f"""
         SELECT enrichment->>'pain_category' AS pain, COUNT(*) AS cnt
         FROM b2b_reviews
         WHERE vendor_name ILIKE '%' || $1 || '%'
           AND enrichment_status = 'enriched'
           AND enrichment->>'pain_category' IS NOT NULL
+          AND {_suppress_predicate('review')}
         GROUP BY enrichment->>'pain_category'
         ORDER BY cnt DESC
         LIMIT 50
@@ -694,6 +733,7 @@ async def search_reviews(
         params.append(has_churn_intent)
         idx += 1
 
+    conditions.append(_suppress_predicate('review'))
     capped = min(limit, 100)
     params.append(capped)
     where = " AND ".join(conditions)
@@ -752,6 +792,15 @@ async def get_review(review_id: str, user: AuthUser | None = Depends(optional_au
     if not row:
         raise HTTPException(status_code=404, detail="Review not found")
 
+    suppressed = await pool.fetchval(
+        """SELECT 1 FROM data_corrections
+           WHERE entity_type = 'review' AND entity_id = $1
+             AND correction_type = 'suppress' AND status = 'applied'""",
+        row["id"],
+    )
+    if suppressed:
+        raise HTTPException(status_code=404, detail="Review not found")
+
     if user:
         is_tracked = await pool.fetchval(
             "SELECT 1 FROM tracked_vendors WHERE account_id = $1::uuid AND vendor_name ILIKE $2",
@@ -795,11 +844,12 @@ async def get_pipeline_status(user: AuthUser | None = Depends(optional_auth)):
     pool = _pool_or_503()
 
     # Build vendor scope clause for authenticated users
-    vendor_scope = ""
+    _rev_sup = _suppress_predicate('review')
+    vendor_scope = f" WHERE {_rev_sup}"
     scrape_scope = ""
     scope_params: list = []
     if user:
-        vendor_scope = " WHERE vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)"
+        vendor_scope = f" WHERE vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid) AND {_rev_sup}"
         scrape_scope = " WHERE vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)"
         scope_params = [user.account_id]
 
@@ -1091,6 +1141,7 @@ async def list_displacement_edges(
         params.append(min_confidence)
         idx += 1
 
+    conditions.append(_suppress_predicate('displacement_edge'))
     where = " AND ".join(conditions)
 
     rows = await pool.fetch(
@@ -1252,6 +1303,7 @@ async def list_vendor_pain_points(
         params.append(min_mentions)
         idx += 1
 
+    conditions.append(_suppress_predicate('pain_point'))
     where = "WHERE " + " AND ".join(conditions) if conditions else ""
 
     rows = await pool.fetch(
@@ -1336,6 +1388,7 @@ async def list_vendor_use_cases(
         params.append(min_mentions)
         idx += 1
 
+    conditions.append(_suppress_predicate('use_case'))
     where = "WHERE " + " AND ".join(conditions) if conditions else ""
 
     rows = await pool.fetch(
@@ -1416,6 +1469,7 @@ async def list_vendor_integrations(
         params.append(min_mentions)
         idx += 1
 
+    conditions.append(_suppress_predicate('integration'))
     where = "WHERE " + " AND ".join(conditions) if conditions else ""
 
     rows = await pool.fetch(
@@ -1499,6 +1553,7 @@ async def list_vendor_buyer_profiles(
         params.append(min_reviews)
         idx += 1
 
+    conditions.append(_suppress_predicate('buyer_profile'))
     where = "WHERE " + " AND ".join(conditions) if conditions else ""
 
     rows = await pool.fetch(
@@ -1534,6 +1589,438 @@ async def list_vendor_buyer_profiles(
         })
 
     return {"profiles": items, "count": len(items)}
+
+
+# ---------------------------------------------------------------------------
+# GET /vendor-history
+# ---------------------------------------------------------------------------
+
+
+@router.get("/vendor-history")
+async def get_vendor_history(
+    vendor_name: str = Query(...),
+    days: int = Query(90, ge=1, le=365),
+    limit: int = Query(90, ge=1, le=365),
+    user: AuthUser | None = Depends(optional_auth),
+):
+    pool = _pool_or_503()
+    rows = await pool.fetch(
+        """
+        SELECT vendor_name, snapshot_date, total_reviews, churn_intent,
+               churn_density, avg_urgency, positive_review_pct, recommend_ratio,
+               top_pain, top_competitor, pain_count, competitor_count,
+               displacement_edge_count, high_intent_company_count
+        FROM b2b_vendor_snapshots
+        WHERE vendor_name ILIKE '%' || $1 || '%'
+          AND snapshot_date >= CURRENT_DATE - $2::int
+        ORDER BY snapshot_date DESC
+        LIMIT $3
+        """,
+        vendor_name, days, limit,
+    )
+    resolved = rows[0]["vendor_name"] if rows else vendor_name
+    snapshots = []
+    for r in rows:
+        snapshots.append({
+            "snapshot_date": str(r["snapshot_date"]),
+            "total_reviews": r["total_reviews"],
+            "churn_intent": r["churn_intent"],
+            "churn_density": _safe_float(r["churn_density"], 0),
+            "avg_urgency": _safe_float(r["avg_urgency"], 0),
+            "positive_review_pct": _safe_float(r["positive_review_pct"]),
+            "recommend_ratio": _safe_float(r["recommend_ratio"]),
+            "top_pain": r["top_pain"],
+            "top_competitor": r["top_competitor"],
+            "pain_count": r["pain_count"],
+            "competitor_count": r["competitor_count"],
+            "displacement_edge_count": r["displacement_edge_count"],
+            "high_intent_company_count": r["high_intent_company_count"],
+        })
+    return {"vendor_name": resolved, "snapshots": snapshots, "count": len(snapshots)}
+
+
+# ---------------------------------------------------------------------------
+# GET /change-events
+# ---------------------------------------------------------------------------
+
+
+@router.get("/change-events")
+async def list_change_events(
+    vendor_name: Optional[str] = Query(None),
+    event_type: Optional[str] = Query(None),
+    days: int = Query(30, ge=1, le=365),
+    limit: int = Query(50, ge=1, le=200),
+    user: AuthUser | None = Depends(optional_auth),
+):
+    pool = _pool_or_503()
+    conditions: list[str] = ["event_date >= CURRENT_DATE - $1::int"]
+    params: list = [days]
+    idx = 2
+
+    if vendor_name:
+        conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
+        params.append(vendor_name)
+        idx += 1
+
+    if event_type:
+        conditions.append(f"event_type = ${idx}")
+        params.append(event_type)
+        idx += 1
+
+    where = "WHERE " + " AND ".join(conditions)
+
+    rows = await pool.fetch(
+        f"""
+        SELECT vendor_name, event_date, event_type, description,
+               old_value, new_value, delta, metadata
+        FROM b2b_change_events
+        {where}
+        ORDER BY event_date DESC, created_at DESC
+        LIMIT ${idx}
+        """,
+        *params, limit,
+    )
+
+    events = []
+    for r in rows:
+        events.append({
+            "vendor_name": r["vendor_name"],
+            "event_date": str(r["event_date"]),
+            "event_type": r["event_type"],
+            "description": r["description"],
+            "old_value": _safe_float(r["old_value"]),
+            "new_value": _safe_float(r["new_value"]),
+            "delta": _safe_float(r["delta"]),
+            "metadata": _safe_json(r["metadata"]),
+        })
+
+    return {"events": events, "count": len(events)}
+
+
+# ---------------------------------------------------------------------------
+# GET /change-events/summary
+# ---------------------------------------------------------------------------
+
+
+@router.get("/change-events/summary")
+async def change_events_summary(
+    days: int = Query(7, ge=1, le=90),
+    user: AuthUser | None = Depends(optional_auth),
+):
+    pool = _pool_or_503()
+
+    # Count by event type
+    type_rows = await pool.fetch(
+        """
+        SELECT event_type, count(*) AS cnt
+        FROM b2b_change_events
+        WHERE event_date >= CURRENT_DATE - $1::int
+        GROUP BY event_type
+        ORDER BY cnt DESC
+        """,
+        days,
+    )
+    by_type = {r["event_type"]: r["cnt"] for r in type_rows}
+    total = sum(by_type.values())
+
+    # Most active vendors
+    vendor_rows = await pool.fetch(
+        """
+        SELECT vendor_name, count(*) AS cnt
+        FROM b2b_change_events
+        WHERE event_date >= CURRENT_DATE - $1::int
+        GROUP BY vendor_name
+        ORDER BY cnt DESC
+        LIMIT 10
+        """,
+        days,
+    )
+    most_active = [{"vendor_name": r["vendor_name"], "event_count": r["cnt"]} for r in vendor_rows]
+
+    return {
+        "period_days": days,
+        "total_events": total,
+        "by_type": by_type,
+        "most_active_vendors": most_active,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /compare-vendor-periods
+# ---------------------------------------------------------------------------
+
+
+@router.get("/compare-vendor-periods")
+async def compare_vendor_periods(
+    vendor_name: str = Query(...),
+    period_a_days_ago: int = Query(30, ge=0, le=365),
+    period_b_days_ago: int = Query(0, ge=0, le=365),
+    user: AuthUser | None = Depends(optional_auth),
+):
+    pool = _pool_or_503()
+
+    async def _nearest_snapshot(target_days_ago: int):
+        return await pool.fetchrow(
+            """
+            SELECT vendor_name, snapshot_date, total_reviews, churn_intent,
+                   churn_density, avg_urgency, positive_review_pct, recommend_ratio,
+                   top_pain, top_competitor, pain_count, competitor_count,
+                   displacement_edge_count, high_intent_company_count
+            FROM b2b_vendor_snapshots
+            WHERE vendor_name ILIKE '%' || $1 || '%'
+              AND snapshot_date <= CURRENT_DATE - $2::int
+            ORDER BY snapshot_date DESC
+            LIMIT 1
+            """,
+            vendor_name, target_days_ago,
+        )
+
+    snap_a = await _nearest_snapshot(period_a_days_ago)
+    snap_b = await _nearest_snapshot(period_b_days_ago)
+
+    if not snap_a and not snap_b:
+        raise HTTPException(status_code=404, detail=f"No snapshots found for vendor matching '{vendor_name}'")
+
+    def _format(snap):
+        if not snap:
+            return None
+        return {
+            "snapshot_date": str(snap["snapshot_date"]),
+            "total_reviews": snap["total_reviews"],
+            "churn_intent": snap["churn_intent"],
+            "churn_density": _safe_float(snap["churn_density"], 0),
+            "avg_urgency": _safe_float(snap["avg_urgency"], 0),
+            "positive_review_pct": _safe_float(snap["positive_review_pct"]),
+            "recommend_ratio": _safe_float(snap["recommend_ratio"]),
+            "top_pain": snap["top_pain"],
+            "top_competitor": snap["top_competitor"],
+            "pain_count": snap["pain_count"],
+            "competitor_count": snap["competitor_count"],
+            "displacement_edge_count": snap["displacement_edge_count"],
+            "high_intent_company_count": snap["high_intent_company_count"],
+        }
+
+    a_fmt = _format(snap_a)
+    b_fmt = _format(snap_b)
+
+    deltas = {}
+    if a_fmt and b_fmt:
+        for key in ("churn_density", "avg_urgency", "recommend_ratio", "total_reviews",
+                    "churn_intent", "pain_count", "competitor_count",
+                    "displacement_edge_count", "high_intent_company_count"):
+            a_val = a_fmt.get(key)
+            b_val = b_fmt.get(key)
+            if a_val is not None and b_val is not None:
+                deltas[key] = round(b_val - a_val, 2)
+
+    resolved = (snap_a or snap_b)["vendor_name"]
+    return {
+        "vendor_name": resolved,
+        "period_a": a_fmt,
+        "period_b": b_fmt,
+        "deltas": deltas,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /signal-effectiveness
+# ---------------------------------------------------------------------------
+
+_SIGNAL_GROUP_EXPRESSIONS = {
+    "buying_stage": "bc.buying_stage",
+    "role_type": "bc.role_type",
+    "target_mode": "bc.target_mode",
+    "opportunity_score_bucket": """CASE
+        WHEN bc.opportunity_score >= 90 THEN '90-100'
+        WHEN bc.opportunity_score >= 70 THEN '70-89'
+        WHEN bc.opportunity_score >= 50 THEN '50-69'
+        ELSE 'below_50'
+    END""",
+    "urgency_bucket": """CASE
+        WHEN bc.urgency_score >= 8 THEN 'high_8+'
+        WHEN bc.urgency_score >= 5 THEN 'medium_5-7'
+        ELSE 'low_0-4'
+    END""",
+    "pain_category": "bc.pain_categories->0->>'category'",
+}
+
+
+@router.get("/signal-effectiveness")
+async def signal_effectiveness(
+    vendor_name: Optional[str] = Query(None),
+    min_sequences: int = Query(5, ge=1, le=100),
+    group_by: str = Query("buying_stage"),
+    user: AuthUser | None = Depends(optional_auth),
+):
+    """Correlate signal dimensions with campaign outcomes."""
+    if group_by not in _SIGNAL_GROUP_EXPRESSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid group_by. Must be one of: {sorted(_SIGNAL_GROUP_EXPRESSIONS.keys())}",
+        )
+
+    pool = _pool_or_503()
+    group_expr = _SIGNAL_GROUP_EXPRESSIONS[group_by]
+
+    conditions: list[str] = [
+        "bc.sequence_id IS NOT NULL",
+        "cs.outcome != 'pending'",
+    ]
+    params: list = [min_sequences]
+    idx = 2
+
+    if user:
+        conditions.append(
+            f"bc.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)"
+        )
+        params.append(user.account_id)
+        idx += 1
+
+    if vendor_name:
+        conditions.append(f"bc.vendor_name ILIKE '%' || ${idx} || '%'")
+        params.append(vendor_name)
+        idx += 1
+
+    where = " AND ".join(conditions)
+
+    sql = f"""
+    WITH seq_signals AS (
+        SELECT DISTINCT ON (cs.id)
+            cs.id, cs.outcome, cs.outcome_revenue,
+            ({group_expr}) AS signal_group
+        FROM campaign_sequences cs
+        JOIN b2b_campaigns bc ON bc.sequence_id = cs.id
+        WHERE {where}
+        ORDER BY cs.id, bc.step_number ASC
+    )
+    SELECT
+        signal_group,
+        COUNT(*) AS total_sequences,
+        COUNT(*) FILTER (WHERE outcome = 'meeting_booked') AS meetings,
+        COUNT(*) FILTER (WHERE outcome = 'deal_opened') AS deals_opened,
+        COUNT(*) FILTER (WHERE outcome = 'deal_won') AS deals_won,
+        COUNT(*) FILTER (WHERE outcome = 'deal_lost') AS deals_lost,
+        COUNT(*) FILTER (WHERE outcome = 'no_opportunity') AS no_opportunity,
+        COUNT(*) FILTER (WHERE outcome = 'disqualified') AS disqualified,
+        ROUND(
+            COUNT(*) FILTER (WHERE outcome IN ('meeting_booked', 'deal_opened', 'deal_won'))::numeric
+            / NULLIF(COUNT(*), 0), 3
+        ) AS positive_outcome_rate,
+        COALESCE(SUM(outcome_revenue) FILTER (WHERE outcome = 'deal_won'), 0) AS total_revenue
+    FROM seq_signals
+    WHERE signal_group IS NOT NULL
+    GROUP BY signal_group
+    HAVING COUNT(*) >= $1
+    ORDER BY positive_outcome_rate DESC
+    """
+
+    rows = await pool.fetch(sql, *params)
+
+    groups = []
+    for r in rows:
+        groups.append({
+            "signal_group": r["signal_group"],
+            "total_sequences": r["total_sequences"],
+            "meetings": r["meetings"],
+            "deals_opened": r["deals_opened"],
+            "deals_won": r["deals_won"],
+            "deals_lost": r["deals_lost"],
+            "no_opportunity": r["no_opportunity"],
+            "disqualified": r["disqualified"],
+            "positive_outcome_rate": _safe_float(r["positive_outcome_rate"], 0.0),
+            "total_revenue": _safe_float(r["total_revenue"], 0.0),
+        })
+
+    return {
+        "group_by": group_by,
+        "vendor_filter": vendor_name,
+        "min_sequences": min_sequences,
+        "groups": groups,
+        "total_groups": len(groups),
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /calibration-weights
+# ---------------------------------------------------------------------------
+
+
+@router.get("/calibration-weights")
+async def get_calibration_weights(
+    dimension: Optional[str] = Query(None),
+    model_version: Optional[int] = Query(None),
+    user: AuthUser | None = Depends(optional_auth),
+):
+    """View score calibration weights derived from campaign outcomes."""
+    valid_dims = {"role_type", "buying_stage", "urgency_bucket", "seat_bucket", "context_keyword"}
+    if dimension and dimension not in valid_dims:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid dimension. Must be one of: {sorted(valid_dims)}",
+        )
+
+    pool = _pool_or_503()
+
+    if model_version is None:
+        model_version = await pool.fetchval(
+            "SELECT MAX(model_version) FROM score_calibration_weights"
+        )
+        if model_version is None:
+            return {
+                "weights": [],
+                "count": 0,
+                "model_version": None,
+                "message": "No calibration data yet",
+            }
+
+    conditions: list[str] = ["model_version = $1"]
+    params: list = [model_version]
+    idx = 2
+
+    if dimension:
+        conditions.append(f"dimension = ${idx}")
+        params.append(dimension)
+        idx += 1
+
+    where = " AND ".join(conditions)
+
+    rows = await pool.fetch(
+        f"""
+        SELECT dimension, dimension_value, total_sequences, positive_outcomes,
+               deals_won, total_revenue, positive_rate, baseline_rate, lift,
+               weight_adjustment, static_default, calibrated_at,
+               sample_window_days, model_version
+        FROM score_calibration_weights
+        WHERE {where}
+        ORDER BY dimension, lift DESC
+        """,
+        *params,
+    )
+
+    weights = []
+    for r in rows:
+        weights.append({
+            "dimension": r["dimension"],
+            "dimension_value": r["dimension_value"],
+            "total_sequences": r["total_sequences"],
+            "positive_outcomes": r["positive_outcomes"],
+            "deals_won": r["deals_won"],
+            "total_revenue": _safe_float(r["total_revenue"], 0.0),
+            "positive_rate": _safe_float(r["positive_rate"], 0.0),
+            "baseline_rate": _safe_float(r["baseline_rate"], 0.0),
+            "lift": _safe_float(r["lift"], 1.0),
+            "weight_adjustment": _safe_float(r["weight_adjustment"], 0.0),
+            "static_default": _safe_float(r["static_default"], 0.0),
+            "calibrated_at": r["calibrated_at"].isoformat() if r["calibrated_at"] else None,
+            "sample_window_days": r["sample_window_days"],
+            "model_version": r["model_version"],
+        })
+
+    return {
+        "model_version": model_version,
+        "weights": weights,
+        "count": len(weights),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1573,6 +2060,7 @@ async def export_signals(
         params.append(category)
         idx += 1
 
+    conditions.append(_suppress_predicate('churn_signal'))
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
     rows = await pool.fetch(
@@ -1663,6 +2151,7 @@ async def export_reviews(
         params.append(has_churn_intent)
         idx += 1
 
+    conditions.append(_suppress_predicate('review'))
     where = " AND ".join(conditions)
 
     rows = await pool.fetch(
@@ -1732,6 +2221,7 @@ async def export_high_intent(
         params.append(vendor_name)
         idx += 1
 
+    conditions.append(_suppress_predicate('review'))
     where = " AND ".join(conditions)
 
     rows = await pool.fetch(
@@ -1833,3 +2323,501 @@ async def export_source_health(
         })
 
     return _csv_response(data, "source_health.csv")
+
+
+# ---------------------------------------------------------------------------
+# Webhook subscription management
+# ---------------------------------------------------------------------------
+
+VALID_WEBHOOK_EVENT_TYPES = {"change_event", "churn_alert", "report_generated", "signal_update"}
+
+
+class CreateWebhookBody(BaseModel):
+    url: str = Field(..., min_length=8, max_length=2000)
+    secret: str = Field(..., min_length=16, max_length=256)
+    event_types: list[str] = Field(...)
+    description: str | None = None
+
+
+@router.post("/webhooks")
+async def create_webhook(
+    body: CreateWebhookBody,
+    user: AuthUser | None = Depends(optional_auth),
+):
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    pool = _pool_or_503()
+
+    # Validate URL scheme (prevent SSRF)
+    if not body.url.startswith(("https://", "http://")):
+        raise HTTPException(status_code=400, detail="url must begin with https:// or http://")
+
+    # Validate event types
+    invalid = set(body.event_types) - VALID_WEBHOOK_EVENT_TYPES
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid event_types: {sorted(invalid)}. Must be from: {sorted(VALID_WEBHOOK_EVENT_TYPES)}",
+        )
+    if not body.event_types:
+        raise HTTPException(status_code=400, detail="event_types must not be empty")
+
+    try:
+        row = await pool.fetchrow(
+            """
+            INSERT INTO b2b_webhook_subscriptions (account_id, url, secret, event_types, description)
+            VALUES ($1::uuid, $2, $3, $4, $5)
+            RETURNING id, account_id, url, event_types, enabled, description, created_at
+            """,
+            user.account_id,
+            body.url,
+            body.secret,
+            body.event_types,
+            body.description,
+        )
+    except Exception as exc:
+        if "uq_webhook_account_url" in str(exc):
+            raise HTTPException(status_code=409, detail="Webhook URL already registered for this account")
+        raise
+
+    return {
+        "id": str(row["id"]),
+        "account_id": str(row["account_id"]),
+        "url": row["url"],
+        "event_types": row["event_types"],
+        "enabled": row["enabled"],
+        "description": row["description"],
+        "created_at": row["created_at"].isoformat(),
+    }
+
+
+@router.get("/webhooks")
+async def list_webhooks(
+    user: AuthUser | None = Depends(optional_auth),
+):
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    pool = _pool_or_503()
+
+    rows = await pool.fetch(
+        """
+        SELECT id, url, event_types, enabled, description, created_at, updated_at
+        FROM b2b_webhook_subscriptions
+        WHERE account_id = $1::uuid
+        ORDER BY created_at DESC
+        """,
+        user.account_id,
+    )
+
+    webhooks = []
+    for r in rows:
+        webhooks.append({
+            "id": str(r["id"]),
+            "url": r["url"],
+            "event_types": r["event_types"],
+            "enabled": r["enabled"],
+            "description": r["description"],
+            "created_at": r["created_at"].isoformat(),
+            "updated_at": r["updated_at"].isoformat(),
+        })
+
+    return {"webhooks": webhooks, "count": len(webhooks)}
+
+
+@router.get("/webhooks/{webhook_id}")
+async def get_webhook(
+    webhook_id: str,
+    user: AuthUser | None = Depends(optional_auth),
+):
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    pool = _pool_or_503()
+
+    try:
+        wid = _uuid.UUID(webhook_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="webhook_id must be a valid UUID")
+
+    row = await pool.fetchrow(
+        """
+        SELECT id, url, event_types, enabled, description, created_at, updated_at
+        FROM b2b_webhook_subscriptions
+        WHERE id = $1 AND account_id = $2::uuid
+        """,
+        wid, user.account_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Webhook not found")
+
+    return {
+        "id": str(row["id"]),
+        "url": row["url"],
+        "event_types": row["event_types"],
+        "enabled": row["enabled"],
+        "description": row["description"],
+        "created_at": row["created_at"].isoformat(),
+        "updated_at": row["updated_at"].isoformat(),
+    }
+
+
+@router.delete("/webhooks/{webhook_id}")
+async def delete_webhook(
+    webhook_id: str,
+    user: AuthUser | None = Depends(optional_auth),
+):
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    pool = _pool_or_503()
+
+    try:
+        wid = _uuid.UUID(webhook_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="webhook_id must be a valid UUID")
+
+    result = await pool.execute(
+        "DELETE FROM b2b_webhook_subscriptions WHERE id = $1 AND account_id = $2::uuid",
+        wid, user.account_id,
+    )
+    if result == "DELETE 0":
+        raise HTTPException(status_code=404, detail="Webhook not found")
+
+    return {"deleted": True, "id": webhook_id}
+
+
+@router.get("/webhooks/{webhook_id}/deliveries")
+async def list_webhook_deliveries(
+    webhook_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    user: AuthUser | None = Depends(optional_auth),
+):
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    pool = _pool_or_503()
+
+    try:
+        wid = _uuid.UUID(webhook_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="webhook_id must be a valid UUID")
+
+    # Verify ownership
+    owns = await pool.fetchval(
+        "SELECT 1 FROM b2b_webhook_subscriptions WHERE id = $1 AND account_id = $2::uuid",
+        wid, user.account_id,
+    )
+    if not owns:
+        raise HTTPException(status_code=404, detail="Webhook not found")
+
+    rows = await pool.fetch(
+        """
+        SELECT id, event_type, status_code, duration_ms, attempt, success, error, delivered_at
+        FROM b2b_webhook_delivery_log
+        WHERE subscription_id = $1
+        ORDER BY delivered_at DESC
+        LIMIT $2
+        """,
+        wid, limit,
+    )
+
+    deliveries = []
+    for r in rows:
+        deliveries.append({
+            "id": str(r["id"]),
+            "event_type": r["event_type"],
+            "status_code": r["status_code"],
+            "duration_ms": r["duration_ms"],
+            "attempt": r["attempt"],
+            "success": r["success"],
+            "error": r["error"],
+            "delivered_at": r["delivered_at"].isoformat(),
+        })
+
+    return {"deliveries": deliveries, "count": len(deliveries)}
+
+
+@router.post("/webhooks/{webhook_id}/test")
+async def test_webhook(
+    webhook_id: str,
+    user: AuthUser | None = Depends(optional_auth),
+):
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    pool = _pool_or_503()
+
+    try:
+        wid = _uuid.UUID(webhook_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="webhook_id must be a valid UUID")
+
+    # Verify ownership
+    owns = await pool.fetchval(
+        "SELECT 1 FROM b2b_webhook_subscriptions WHERE id = $1 AND account_id = $2::uuid",
+        wid, user.account_id,
+    )
+    if not owns:
+        raise HTTPException(status_code=404, detail="Webhook not found")
+
+    from ..services.b2b.webhook_dispatcher import send_test_webhook
+    result = await send_test_webhook(pool, wid)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# POST /corrections -- Create a data correction
+# ---------------------------------------------------------------------------
+
+
+@router.post("/corrections")
+async def create_correction(
+    body: CreateCorrectionBody,
+    user: AuthUser | None = Depends(optional_auth),
+):
+    pool = _pool_or_503()
+
+    if body.entity_type not in VALID_ENTITY_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid entity_type. Must be one of: {sorted(VALID_ENTITY_TYPES)}",
+        )
+    if body.correction_type not in VALID_CORRECTION_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid correction_type. Must be one of: {sorted(VALID_CORRECTION_TYPES)}",
+        )
+    if body.correction_type == "override_field":
+        if not body.field_name:
+            raise HTTPException(status_code=400, detail="field_name required for override_field")
+        if body.new_value is None:
+            raise HTTPException(status_code=400, detail="new_value required for override_field")
+
+    try:
+        entity_uuid = _uuid.UUID(body.entity_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="entity_id must be a valid UUID")
+
+    corrected_by = f"api:{user.user_id}" if user else "analyst"
+    meta = json.dumps(body.metadata) if body.metadata else "{}"
+
+    row = await pool.fetchrow(
+        """
+        INSERT INTO data_corrections
+            (entity_type, entity_id, correction_type, field_name,
+             old_value, new_value, reason, corrected_by, metadata)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+        RETURNING id, entity_type, entity_id, correction_type, status, created_at
+        """,
+        body.entity_type,
+        entity_uuid,
+        body.correction_type,
+        body.field_name,
+        body.old_value,
+        body.new_value,
+        body.reason,
+        corrected_by,
+        meta,
+    )
+
+    return {
+        "id": str(row["id"]),
+        "entity_type": row["entity_type"],
+        "entity_id": str(row["entity_id"]),
+        "correction_type": row["correction_type"],
+        "status": row["status"],
+        "created_at": row["created_at"].isoformat(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /corrections -- List corrections with filters
+# ---------------------------------------------------------------------------
+
+
+@router.get("/corrections")
+async def list_corrections(
+    entity_type: Optional[str] = Query(None),
+    entity_id: Optional[str] = Query(None),
+    correction_type: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    user: AuthUser | None = Depends(optional_auth),
+):
+    pool = _pool_or_503()
+    conditions: list[str] = []
+    params: list = []
+    idx = 1
+
+    if entity_type:
+        if entity_type not in VALID_ENTITY_TYPES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid entity_type. Must be one of: {sorted(VALID_ENTITY_TYPES)}",
+            )
+        conditions.append(f"entity_type = ${idx}")
+        params.append(entity_type)
+        idx += 1
+
+    if entity_id:
+        try:
+            eid = _uuid.UUID(entity_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="entity_id must be a valid UUID")
+        conditions.append(f"entity_id = ${idx}")
+        params.append(eid)
+        idx += 1
+
+    if correction_type:
+        if correction_type not in VALID_CORRECTION_TYPES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid correction_type. Must be one of: {sorted(VALID_CORRECTION_TYPES)}",
+            )
+        conditions.append(f"correction_type = ${idx}")
+        params.append(correction_type)
+        idx += 1
+
+    if status:
+        if status not in VALID_CORRECTION_STATUSES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid status. Must be one of: {sorted(VALID_CORRECTION_STATUSES)}",
+            )
+        conditions.append(f"status = ${idx}")
+        params.append(status)
+        idx += 1
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    params.append(limit)
+
+    rows = await pool.fetch(
+        f"""
+        SELECT id, entity_type, entity_id, correction_type, field_name,
+               old_value, new_value, reason, corrected_by, status,
+               affected_count, metadata, created_at, reverted_at, reverted_by
+        FROM data_corrections
+        {where}
+        ORDER BY created_at DESC
+        LIMIT ${idx}
+        """,
+        *params,
+    )
+
+    corrections = []
+    for r in rows:
+        corrections.append({
+            "id": str(r["id"]),
+            "entity_type": r["entity_type"],
+            "entity_id": str(r["entity_id"]),
+            "correction_type": r["correction_type"],
+            "field_name": r["field_name"],
+            "old_value": r["old_value"],
+            "new_value": r["new_value"],
+            "reason": r["reason"],
+            "corrected_by": r["corrected_by"],
+            "status": r["status"],
+            "affected_count": r["affected_count"],
+            "metadata": _safe_json(r["metadata"]),
+            "created_at": r["created_at"].isoformat(),
+            "reverted_at": r["reverted_at"].isoformat() if r["reverted_at"] else None,
+            "reverted_by": r["reverted_by"],
+        })
+
+    return {"corrections": corrections, "count": len(corrections)}
+
+
+# ---------------------------------------------------------------------------
+# GET /corrections/{correction_id} -- Get single correction
+# ---------------------------------------------------------------------------
+
+
+@router.get("/corrections/{correction_id}")
+async def get_correction(
+    correction_id: str,
+    user: AuthUser | None = Depends(optional_auth),
+):
+    pool = _pool_or_503()
+
+    try:
+        cid = _uuid.UUID(correction_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="correction_id must be a valid UUID")
+
+    row = await pool.fetchrow(
+        """
+        SELECT id, entity_type, entity_id, correction_type, field_name,
+               old_value, new_value, reason, corrected_by, status,
+               affected_count, metadata, created_at, reverted_at, reverted_by
+        FROM data_corrections
+        WHERE id = $1
+        """,
+        cid,
+    )
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Correction not found")
+
+    return {
+        "id": str(row["id"]),
+        "entity_type": row["entity_type"],
+        "entity_id": str(row["entity_id"]),
+        "correction_type": row["correction_type"],
+        "field_name": row["field_name"],
+        "old_value": row["old_value"],
+        "new_value": row["new_value"],
+        "reason": row["reason"],
+        "corrected_by": row["corrected_by"],
+        "status": row["status"],
+        "affected_count": row["affected_count"],
+        "metadata": _safe_json(row["metadata"]),
+        "created_at": row["created_at"].isoformat(),
+        "reverted_at": row["reverted_at"].isoformat() if row["reverted_at"] else None,
+        "reverted_by": row["reverted_by"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /corrections/{correction_id}/revert -- Revert a correction
+# ---------------------------------------------------------------------------
+
+
+@router.post("/corrections/{correction_id}/revert")
+async def revert_correction(
+    correction_id: str,
+    body: RevertCorrectionBody,
+    user: AuthUser | None = Depends(optional_auth),
+):
+    pool = _pool_or_503()
+
+    try:
+        cid = _uuid.UUID(correction_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="correction_id must be a valid UUID")
+
+    row = await pool.fetchrow(
+        "SELECT id, status FROM data_corrections WHERE id = $1",
+        cid,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Correction not found")
+    if row["status"] != "applied":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot revert correction with status '{row['status']}' (must be 'applied')",
+        )
+
+    reverted_by = f"api:{user.user_id}" if user else "analyst"
+
+    updated = await pool.fetchrow(
+        """
+        UPDATE data_corrections
+        SET status = 'reverted', reverted_at = NOW(), reverted_by = $2
+        WHERE id = $1
+        RETURNING id, status, reverted_at
+        """,
+        cid,
+        reverted_by,
+    )
+
+    return {
+        "id": str(updated["id"]),
+        "status": updated["status"],
+        "reverted_at": updated["reverted_at"].isoformat(),
+    }

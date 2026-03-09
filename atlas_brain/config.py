@@ -2204,6 +2204,12 @@ class B2BChurnConfig(BaseSettings):
     # Regeneration mode -- re-process existing drafts through fixed pipeline
     blog_post_regenerate_mode: bool = Field(default=False, description="When True, regenerate existing draft posts instead of selecting new topics")
 
+    # Historical snapshots
+    snapshot_enabled: bool = Field(default=True, description="Enable daily vendor health snapshots")
+    snapshot_retention_days: int = Field(default=365, description="Days to retain vendor snapshots")
+    change_detection_enabled: bool = Field(default=True, description="Enable structural change event detection")
+    change_event_retention_days: int = Field(default=365, description="Days to retain change events")
+
     # Vendor intelligence briefings
     vendor_briefing_enabled: bool = Field(default=True, description="Enable vendor intelligence briefing emails")
     vendor_briefing_booking_url: str = Field(default="https://churnsignals.co", description="Booking URL for briefing CTA button")
@@ -2232,6 +2238,21 @@ class B2BAlertConfig(BaseSettings):
     urgency_spike_threshold: float = Field(default=1.5, description="Avg urgency increase to trigger alert")
     cooldown_hours: int = Field(default=24, description="Min hours between alerts for same vendor")
     interval_seconds: int = Field(default=3600, description="Alert check interval (1 hour)")
+
+
+class B2BWebhookConfig(BaseSettings):
+    """B2B outbound webhook delivery configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_B2B_WEBHOOK_", env_file=".env", extra="ignore"
+    )
+
+    enabled: bool = Field(default=False, description="Enable outbound webhook delivery")
+    timeout_seconds: int = Field(default=10, ge=1, le=30, description="HTTP timeout per delivery")
+    max_retries: int = Field(default=3, ge=0, le=5, description="Max retry attempts on failure")
+    retry_delay_seconds: int = Field(default=5, ge=1, le=600, description="Delay between retries")
+    max_payload_bytes: int = Field(default=65536, description="Max payload size in bytes")
+    delivery_log_retention_days: int = Field(default=30, ge=1, le=365, description="Days to keep delivery logs")
 
 
 class B2BScrapeConfig(BaseSettings):
@@ -2969,6 +2990,7 @@ class Settings(BaseSettings):
     external_data: ExternalDataConfig = Field(default_factory=ExternalDataConfig)
     b2b_churn: B2BChurnConfig = Field(default_factory=B2BChurnConfig)
     b2b_alert: B2BAlertConfig = Field(default_factory=B2BAlertConfig)
+    b2b_webhook: B2BWebhookConfig = Field(default_factory=B2BWebhookConfig)
     b2b_scrape: B2BScrapeConfig = Field(default_factory=B2BScrapeConfig)
     b2b_campaign: B2BCampaignConfig = Field(default_factory=B2BCampaignConfig)
     campaign_sequence: CampaignSequenceConfig = Field(default_factory=CampaignSequenceConfig)

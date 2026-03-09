@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import quote
 
 import httpx
+import jwt as pyjwt
 
 from ...config import settings
 from ...services.campaign_sender import get_campaign_sender
@@ -29,6 +31,44 @@ from ...templates.email.vendor_briefing import render_vendor_briefing_html
 from .campaign_suppression import is_suppressed
 
 logger = logging.getLogger("atlas.b2b.vendor_briefing")
+
+
+# ---------------------------------------------------------------------------
+# Gate token helpers
+# ---------------------------------------------------------------------------
+
+def create_gate_token(vendor_name: str) -> str:
+    """Create a signed JWT for the briefing email gate."""
+    jwt_cfg = settings.saas_auth
+    now = datetime.now(timezone.utc)
+    expiry_days = settings.b2b_churn.vendor_briefing_gate_expiry_days
+    payload = {
+        "vendor_name": vendor_name,
+        "type": "briefing_gate",
+        "iat": now,
+        "exp": now + timedelta(days=expiry_days),
+    }
+    return pyjwt.encode(payload, jwt_cfg.jwt_secret, algorithm=jwt_cfg.jwt_algorithm)
+
+
+def build_gate_url(vendor_name: str) -> str:
+    """Build the full gate URL for a vendor briefing."""
+    base = settings.b2b_churn.vendor_briefing_gate_base_url.rstrip("/")
+    token = create_gate_token(vendor_name)
+    return f"{base}?vendor={quote(vendor_name)}&ref={token}"
+
+
+async def _is_first_briefing(pool: Any, vendor_name: str) -> bool:
+    """Return True if no successful briefing has ever been sent for this vendor."""
+    count = await pool.fetchval(
+        """
+        SELECT COUNT(*) FROM b2b_vendor_briefings
+        WHERE LOWER(vendor_name) = LOWER($1)
+          AND status NOT IN ('failed', 'suppressed')
+        """,
+        vendor_name,
+    )
+    return (count or 0) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -730,6 +770,11 @@ async def generate_and_send_briefing(
     if not briefing_data:
         return {"error": f"No data found for vendor: {vendor_name}"}
 
+    # First briefing to this vendor -> redacted prospect mode with gate CTA
+    if pool.is_initialized and await _is_first_briefing(pool, vendor_name):
+        briefing_data["prospect_mode"] = True
+        briefing_data["gate_url"] = build_gate_url(vendor_name)
+
     briefing_html = render_vendor_briefing_html(briefing_data)
 
     result = await send_vendor_briefing(
@@ -816,6 +861,11 @@ async def send_batch_briefings() -> dict[str, Any]:
             skipped_no_data += 1
             details.append({"vendor": vendor_name, "status": "skipped_no_data"})
             continue
+
+        # First briefing to this vendor -> redacted prospect mode with gate CTA
+        if await _is_first_briefing(pool, vendor_name):
+            briefing_data["prospect_mode"] = True
+            briefing_data["gate_url"] = build_gate_url(vendor_name)
 
         # Render and send
         briefing_html = render_vendor_briefing_html(briefing_data)

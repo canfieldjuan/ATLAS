@@ -131,6 +131,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 )
                 alerts_sent += 1
 
+                # Dispatch webhook for churn alert (vendor-level data only, no account info)
+                try:
+                    from ...services.b2b.webhook_dispatcher import dispatch_webhooks
+                    await dispatch_webhooks(pool, "churn_alert", vendor_name, {
+                        "metric": metric_name,
+                        "baseline": baseline_value,
+                        "current": current_value,
+                        "delta": delta,
+                    })
+                except Exception:
+                    logger.debug("Webhook dispatch skipped for churn alert")
+
                 # Update baseline and last_alerted_at
                 await pool.execute(
                     """

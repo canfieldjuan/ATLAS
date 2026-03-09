@@ -263,33 +263,140 @@ def _safe_float(val, default=None):
 from ._blog_matching import fetch_relevant_blog_posts as _fetch_blog_posts
 
 
+# ---------------------------------------------------------------------------
+# Calibration weight cache
+# ---------------------------------------------------------------------------
+
+import time as _time
+
+_calibration_cache: dict[str, dict[str, float]] = {}
+_calibration_cache_ts: float = 0.0
+_CALIBRATION_CACHE_TTL = 3600  # 1 hour
+
+
+def _get_calibration_adjustments() -> dict[str, dict[str, float]]:
+    """Return cached calibration adjustments {dimension: {value: adjustment}}.
+
+    Returns empty dict if cache is stale or not loaded (caller uses static defaults).
+    Cache is populated by _load_calibration_weights() which must be awaited separately.
+    """
+    global _calibration_cache, _calibration_cache_ts
+    if _time.monotonic() - _calibration_cache_ts > _CALIBRATION_CACHE_TTL:
+        return {}
+    return _calibration_cache
+
+
+async def load_calibration_weights() -> bool:
+    """Load latest calibration weights from DB into module cache.
+
+    Called at the start of generate_campaigns(). Returns True if weights were loaded.
+    """
+    global _calibration_cache, _calibration_cache_ts
+    try:
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return False
+
+        latest_version = await pool.fetchval(
+            "SELECT MAX(model_version) FROM score_calibration_weights"
+        )
+        if latest_version is None:
+            return False
+
+        rows = await pool.fetch(
+            """
+            SELECT dimension, dimension_value, weight_adjustment
+            FROM score_calibration_weights
+            WHERE model_version = $1
+            """,
+            latest_version,
+        )
+
+        cache: dict[str, dict[str, float]] = {}
+        for r in rows:
+            dim = r["dimension"]
+            if dim not in cache:
+                cache[dim] = {}
+            cache[dim][r["dimension_value"]] = float(r["weight_adjustment"])
+
+        _calibration_cache = cache
+        _calibration_cache_ts = _time.monotonic()
+        return True
+    except Exception:
+        logger.debug("Could not load calibration weights", exc_info=True)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Scoring
+# ---------------------------------------------------------------------------
+
+
 def _compute_score(row: dict) -> int:
-    """Compute opportunity score (0-100) from enrichment signals."""
+    """Compute opportunity score (0-100) from enrichment signals.
+
+    Blends static defaults with calibration adjustments when available.
+    Calibration adjustments are additive point shifts derived from observed
+    outcome conversion rates (see b2b_score_calibration.py).
+    """
+    cal = _get_calibration_adjustments()
     score = 0.0
+
+    # Urgency component (max 30 pts)
     urgency = _safe_float(row.get("urgency"), 0)
-    score += max(0, min(30, (urgency - 5) * 6))
+    urgency_pts = max(0, min(30, (urgency - 5) * 6))
+    if cal.get("urgency_bucket"):
+        bucket = "high" if urgency >= 8 else ("medium" if urgency >= 5 else "low")
+        urgency_pts += cal["urgency_bucket"].get(bucket, 0)
+    score += max(0, min(30, urgency_pts))
 
+    # Role component (max ~20 pts)
+    role_pts = 0.0
     if row.get("is_dm"):
-        score += 20
+        role_pts = 20
+        if cal.get("role_type"):
+            role_pts += cal["role_type"].get("decision_maker", 0)
     elif row.get("role_type") in _ROLE_SCORES:
-        score += _ROLE_SCORES[row["role_type"]]
+        role_val = row["role_type"]
+        role_pts = _ROLE_SCORES[role_val]
+        if cal.get("role_type"):
+            role_pts += cal["role_type"].get(role_val, 0)
+    score += max(0, role_pts)
 
+    # Buying stage component (max ~25 pts)
     buying_stage = row.get("buying_stage") or ""
-    score += _STAGE_SCORES.get(buying_stage, 0)
+    stage_pts = _STAGE_SCORES.get(buying_stage, 0)
+    if cal.get("buying_stage"):
+        stage_pts += cal["buying_stage"].get(buying_stage, 0)
+    score += max(0, stage_pts)
 
+    # Seat count component (max ~15 pts)
     seat_count = row.get("seat_count")
+    seat_pts = 0.0
     if seat_count is not None:
         if seat_count >= 500:
-            score += 15
+            seat_pts = 15
+            seat_bucket = "500+"
         elif seat_count >= 100:
-            score += 10
+            seat_pts = 10
+            seat_bucket = "100-499"
         elif seat_count >= 20:
-            score += 5
+            seat_pts = 5
+            seat_bucket = "20-99"
+        else:
+            seat_bucket = "small"
+        if cal.get("seat_bucket"):
+            seat_pts += cal["seat_bucket"].get(seat_bucket, 0)
+    score += max(0, seat_pts)
 
+    # Mention context component (max ~10 pts)
     mention_context = (row.get("mention_context") or "").lower()
     for keyword, pts in _CONTEXT_SCORES.items():
         if keyword in mention_context:
-            score += pts
+            context_pts = pts
+            if cal.get("context_keyword"):
+                context_pts += cal["context_keyword"].get(keyword, 0)
+            score += max(0, context_pts)
             break
 
     return int(min(100, max(0, score)))
@@ -441,6 +548,9 @@ async def generate_campaigns(
     """
     cfg = settings.b2b_campaign
     mode = target_mode or cfg.target_mode
+
+    # Load calibration weights into cache (best-effort, falls back to static defaults)
+    await load_calibration_weights()
 
     if mode == "vendor_retention":
         return await _generate_vendor_campaigns(

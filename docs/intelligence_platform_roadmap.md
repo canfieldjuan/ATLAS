@@ -46,24 +46,24 @@ Phase 2 deferred scope:
 
 | Item | Status | What's There | Key Gaps |
 |------|--------|-------------|----------|
-| Snapshots | **PARTIAL** | `b2b_keyword_signals` is a true weekly time-series with rolling averages and spike detection. Intelligence reports are date-stamped. `b2b_displacement_edges` is append-only with `computed_date` (new -- enables displacement trend queries). | `b2b_churn_signals` and `b2b_product_profiles` are upsert-overwritten -- no history. No vendor health snapshot table. |
-| Change events | **PARTIAL** | Trend labels (new/worsening/improving/stable) computed per-run by comparing to prior report. Keyword spike detection. High-urgency real-time ntfy alerts. | Trends embedded in report JSONB, not persisted as queryable events. No event log table. No structural change detection (new competitor, new displacement edge). |
-| Historical queries | **PARTIAL** | Prior report comparison (1 cycle back). Keyword rolling averages over 4 weeks. `get_displacement_history` MCP tool enables time-series queries for specific vendor pairs. Pain points, use cases, and integrations track `first_seen_at`/`last_seen_at` but are UPSERT (current-state, not time-series). | Cannot query "vendor X's churn density 3 months ago." No arbitrary historical range queries for most entities. |
+| Snapshots | **DONE** | `b2b_vendor_snapshots` table: daily append-only vendor health snapshots (churn density, urgency, recommend ratio, pain/competitor counts, displacement edges, high-intent companies). UPSERT per vendor per day. Configurable retention (default 365 days). Keyword signals and displacement edges also time-series. | `b2b_product_profiles` still upsert-overwritten (low ROI for snapshots). |
+| Change events | **DONE** | `b2b_change_events` table: structural change event log (urgency spikes/drops, churn density spikes, NPS shifts, new pain categories, new competitors, review volume spikes). Detected by comparing today's data against prior snapshot. Append-only, configurable retention. | No pressure_score_spike or dm_churn_spike detection yet (deferred). |
+| Historical queries | **DONE** | `get_vendor_history` MCP tool + dashboard endpoint for time-series queries. `list_change_events` MCP tool + dashboard endpoint with type/vendor filters. `compare_vendor_periods` MCP tool for two-date comparison. `change-events/summary` dashboard endpoint for aggregated view. Prior tools (displacement history, keyword rolling averages) still available. | No cross-vendor trend correlation queries. |
 
 ### Phase 4: Action Feedback Loop
 
 | Item | Status | What's There | Key Gaps |
 |------|--------|-------------|----------|
-| Campaign outcome tracking | **PARTIAL** | Full ESP webhook ingestion (opened, clicked, bounced, complained). Reply detection with intent classification. `campaign_funnel_stats` materialized view. Campaign audit log. | No meeting_booked, deal_stage, closed_won/lost, pipeline_stage tracking. Campaign outcomes don't connect back to originating churn signals. |
+| Campaign outcome tracking | **DONE** (Sprint 1) | Full ESP webhook ingestion (opened, clicked, bounced, complained). Reply detection with intent classification. `campaign_funnel_stats` materialized view. Campaign audit log. **Sprint 1:** Outcome columns on `campaign_sequences` (migration 104). REST + MCP outcome recording. Signal effectiveness analysis (group by buying_stage, role_type, target_mode, score bucket, pain category). `outcome_history` JSONB tracks stage progression. Audit log `outcome_*` events. | Score calibration from outcomes (Sprint 2). CRM event ingestion (Sprint 3). |
 | CRM event ingestion | **MISSING** | -- | No pipeline reads CRM events back into intelligence. No external CRM integration (HubSpot, Salesforce, Pipedrive). |
-| Score calibration | **MISSING** | Static `opportunity_score` formula exists. No learning. | Campaign outcomes never update scoring. No A/B testing or calibration infrastructure. |
+| Score calibration | **DONE** (Sprint 2) | `score_calibration_weights` table (migration 106). Weekly `b2b_score_calibration` autonomous task computes per-dimension conversion rates from outcomes, derives lift and weight adjustments. `_compute_score()` in campaign generation blends static defaults with calibrated weights (module-level cache, 1h TTL). MCP tools: `get_calibration_weights`, `trigger_score_calibration`. Dashboard: `GET /calibration-weights`. Capped at +/- 50% of static default to prevent wild swings. Requires 20+ sequences with outcomes before producing weights. | A/B testing infrastructure (deferred). |
 
 ### Phase 5: Thin Delivery Surfaces
 
 | Item | Status | What's There | Key Gaps |
 |------|--------|-------------|----------|
 | API-first intelligence | **EXISTS** | Full REST API (dashboard, tenant, campaigns). B2B Churn MCP: 29 tools (was 25, +3 vendor entity tools in Sprint 2, +1 buyer profiles in Sprint 3). Intelligence MCP: 17 tools. All vendor entity tools support `min_confidence` filter (Sprint 4). | -- |
-| Alternate delivery | **PARTIAL** | Email digest (weekly tenant reports via Resend). CSV export (signals, reviews, high-intent). ntfy push notifications. | No PDF export. No webhook outbound. No CRM sync. No Slack/Teams integration. |
+| Alternate delivery | **PARTIAL** | Email digest (weekly tenant reports via Resend). CSV export (signals, reviews, high-intent). ntfy push notifications. **Sprint 1:** Webhook outbound delivery (migration 107). `b2b_webhook_subscriptions` + `b2b_webhook_delivery_log` tables. Per-tenant webhook CRUD (6 REST endpoints). HMAC-SHA256 payload signing. Retry with backoff. Delivery log with success/failure tracking. Wired into change event detection and churn alert pipeline. MCP tools: `list_webhook_subscriptions`, `send_test_webhook_tool`. Config: `B2BWebhookConfig` (enable, timeout, retries). | No PDF export. No CRM sync. No Slack/Teams integration. |
 | UI logic leakage | **CLEAN** | Frontend is display-only. All scoring, aggregation, analysis happen server-side. | -- |
 
 ### Phase 6: Analyst Controls
@@ -71,7 +71,7 @@ Phase 2 deferred scope:
 | Item | Status | What's There | Key Gaps |
 |------|--------|-------------|----------|
 | Correction tools | **PARTIAL** | Campaign suppression management (CRUD). Campaign review queue (bulk approve/reject). Scrape target management (CRUD + MCP). Blog post admin (draft/edit/publish). Vendor alias management (MCP: `add_vendor_alias`, `add_vendor_to_registry`). | No vendor merge tool. No source suppression/quality control. No review-level correction/flagging. |
-| Correction persistence | **PARTIAL** | `campaign_audit_log` (immutable campaign events). `campaign_suppressions` (manual overrides). | No general-purpose `data_corrections` table. No audit trail for intelligence corrections. |
+| Correction persistence | **DONE** (Sprints 1+2) | `campaign_audit_log` (immutable campaign events). `campaign_suppressions` (manual overrides). `data_corrections` table (general-purpose, 8 entity types, 5 correction types, full audit trail). REST CRUD endpoints (4). MCP tools (3). Sprint 2: all downstream SELECT queries filter by active suppress corrections via NOT EXISTS subqueries (16 review fetchers, 15 dashboard queries, 12 MCP tool queries). | Vendor merge application, field-level override reads. |
 
 ### Overall Score
 
@@ -80,10 +80,10 @@ Phase 2 deferred scope:
 | Phase 0 | **90%** | Canonical source enum, vendor registry, provenance fields, source health metrics all delivered. Ingest-time normalization is the remaining gap. |
 | Phase 1 | **90%** | Orchestration, telemetry, capability profiles, parser versioning all exist. Minor telemetry gaps (proxy IP, CAPTCHA solve time). |
 | Phase 2 | **95%** | Sprints 1-4 complete: displacement edges, company signals, pain points, use cases, integrations, buyer profiles are first-class tables. Confidence scoring on all derived tables (edges, pain points, use cases, integrations, buyer profiles). Identity resolution still partial. Reviewer personas deferred (low ROI). |
-| Phase 3 | **30%** | Displacement edges now provide one time-series entity. Keyword signals have rolling averages. Core vendor metrics still overwritten in place. |
-| Phase 4 | 15% | Campaign delivery is tracked but the feedback loop back to scoring is completely absent. |
-| Phase 5 | **70%** | API-first is solid (28 + 17 = 45 MCP tools). Missing PDF, webhooks, and CRM push. UI is already clean. |
-| Phase 6 | **30%** | Campaign-side + vendor alias controls exist. Intelligence-side corrections still missing. |
+| Phase 3 | **85%** | Daily vendor health snapshots, structural change event detection, historical query tools (MCP + dashboard). Displacement edges and keyword signals also time-series. Missing: product profile snapshots, cross-vendor correlation. |
+| Phase 4 | **70%** | Sprints 1-2 complete: outcome tracking, signal effectiveness, score calibration from outcomes. CRM event ingestion remains. |
+| Phase 5 | **80%** | API-first is solid (28 + 17 = 45 MCP tools). Sprint 1: webhook outbound delivery with per-tenant subscriptions, HMAC signing, retry, delivery log. Missing PDF export and CRM sync. UI is already clean. |
+| Phase 6 | **65%** | Campaign-side + vendor alias controls exist. Sprint 1 complete: `data_corrections` table, REST CRUD, MCP tools, audit trail. Sprint 2 complete: correction-aware queries on all entity tables (reviews, signals, displacement edges, pain points, use cases, integrations, buyer profiles). |
 
 ### What's Strong Today
 
@@ -98,8 +98,7 @@ Phase 2 deferred scope:
 ### Biggest Structural Gaps
 
 1. **No feedback loop** -- campaign outcomes never improve signal scoring
-2. **No historical depth** -- core vendor metrics overwritten in place, no snapshots (displacement edges are the exception)
-3. **No company identity resolution** -- company names are free-text, no alias/merge system
+2. **No company identity resolution** -- company names are free-text, no alias/merge system
 
 ### Testing checkpoint
 
@@ -116,6 +115,73 @@ Phase 2 deferred scope:
 3. Test dashboard endpoints: `GET /b2b/dashboard/vendor-pain-points`, `GET /b2b/dashboard/vendor-use-cases`, `GET /b2b/dashboard/vendor-integrations`, `GET /b2b/dashboard/vendor-buyer-profiles` (all support `min_confidence` filter)
 4. Verify existing JSONB columns (`top_pain_categories`, `top_use_cases`, `top_integration_stacks`) still written (backwards compatible)
 5. Verify all tests pass: `python -m pytest tests/test_b2b_intelligence_validation.py -x`
+
+**Phase 4 Sprint 1** (campaign outcome tracking + signal effectiveness): Migration 104 applied.
+
+1. Verify columns: `\d campaign_sequences` shows outcome, outcome_recorded_at, outcome_recorded_by, outcome_notes, outcome_revenue, outcome_history
+2. Test REST: `POST /b2b/campaigns/sequences/{id}/outcome` with `{"outcome": "meeting_booked"}`, verify 200 + audit log entry
+3. Test REST: `GET /b2b/campaigns/sequences/{id}/outcome` returns outcome + history
+4. Test MCP: `record_campaign_outcome` tool records outcome and returns success
+5. Test MCP: `get_signal_effectiveness` tool with group_by options (buying_stage, role_type, etc.)
+6. Test dashboard: `GET /b2b/dashboard/signal-effectiveness` with tenant scoping
+7. Verify outcome_history JSONB accumulates entries on repeated updates
+8. Verify `campaign_audit_log` has `outcome_*` event types
+
+**Phase 6 Sprint 1** (data corrections infrastructure): Migration 105 applied.
+
+1. Verify table: `\d data_corrections` shows all columns, constraints (chk_correction_type, chk_correction_status, chk_entity_type), indexes
+2. Test REST: `POST /b2b/dashboard/corrections` with `{"entity_type": "review", "entity_id": "<uuid>", "correction_type": "suppress", "reason": "Bad data"}`, verify 200
+3. Test REST: `GET /b2b/dashboard/corrections` with filters (entity_type, correction_type, status), verify filtered results
+4. Test REST: `GET /b2b/dashboard/corrections/{id}` returns full correction with metadata
+5. Test REST: `POST /b2b/dashboard/corrections/{id}/revert` sets status=reverted, populates reverted_at/reverted_by
+6. Test MCP: `create_data_correction` tool records correction and returns success
+7. Test MCP: `list_data_corrections` tool with filters matches REST output
+8. Test MCP: `revert_data_correction` tool reverts applied correction, rejects non-applied
+9. Verify validation: invalid entity_type, correction_type, missing required fields all return errors
+10. Verify corrected_by: REST sets `api:{user_id}` when authed, `analyst` when not; MCP defaults to `mcp`
+
+**Phase 6 Sprint 2** (correction application logic): NOT EXISTS subqueries added to all read paths.
+
+1. Create a suppress correction: `POST /b2b/dashboard/corrections` with entity_type=review, entity_id=<uuid>, correction_type=suppress
+2. Verify `GET /b2b/dashboard/reviews` no longer returns the suppressed review
+3. Verify `GET /b2b/dashboard/reviews/{id}` for the suppressed review returns 404
+4. Verify `GET /b2b/dashboard/high-intent` excludes the suppressed review
+5. Verify `GET /b2b/dashboard/signals` excludes suppressed churn signals
+6. Verify MCP `search_reviews` excludes suppressed reviews
+7. Verify MCP `get_review` for suppressed review returns "Review not found"
+8. Verify MCP `get_pipeline_status` counts exclude suppressed reviews
+9. Revert the correction: `POST /b2b/dashboard/corrections/{id}/revert`
+10. Verify the review reappears in all queries after revert
+
+**Phase 4 Sprint 2** (score calibration from outcomes): Migration 106 applied.
+
+1. Verify table: `\d score_calibration_weights` shows all columns, UNIQUE constraint, CHECK on dimension
+2. Verify autonomous task registered: `b2b_score_calibration` in scheduler (cron: `0 4 * * 0` = Sunday 4AM)
+3. Test MCP: `trigger_score_calibration` with insufficient data returns `calibrated: false` with reason
+4. Record 20+ outcomes on sequences, then trigger calibration -- verify weights populated
+5. Test MCP: `get_calibration_weights` returns weights grouped by dimension with lift values
+6. Test dashboard: `GET /b2b/dashboard/calibration-weights` returns same data with optional dimension filter
+7. Verify `_compute_score()` loads weights from cache and adjusts scoring (log before/after for a known row)
+8. Verify weight_adjustment capped at +/- 50% of static_default (no wild swings)
+9. Verify model_version increments on each calibration run
+
+**Phase 5 Sprint 1** (webhook outbound delivery): Migration 107 applied.
+
+1. Verify tables: `\d b2b_webhook_subscriptions` shows all columns, UNIQUE constraint on (account_id, url)
+2. Verify tables: `\d b2b_webhook_delivery_log` shows all columns, FK to subscriptions
+3. Test REST: `POST /b2b/dashboard/webhooks` creates subscription (requires auth), verify 200
+4. Test REST: `GET /b2b/dashboard/webhooks` lists account's subscriptions
+5. Test REST: `GET /b2b/dashboard/webhooks/{id}` returns subscription details
+6. Test REST: `DELETE /b2b/dashboard/webhooks/{id}` deletes subscription + cascade delivery logs
+7. Test REST: `GET /b2b/dashboard/webhooks/{id}/deliveries` returns delivery log
+8. Test REST: `POST /b2b/dashboard/webhooks/{id}/test` sends test payload and returns success/failure
+9. Test MCP: `list_webhook_subscriptions` returns subscriptions with 7-day delivery stats
+10. Test MCP: `send_test_webhook_tool` delivers test payload to subscription URL
+11. Verify HMAC signing: `X-Atlas-Signature` header matches `sha256=HMAC(secret, payload)`
+12. Verify webhook dispatch wired into `_detect_change_events()` in b2b_churn_intelligence.py
+13. Verify webhook dispatch wired into churn alert pipeline in b2b_churn_alert.py
+14. Verify config: `ATLAS_B2B_WEBHOOK_ENABLED=true` enables delivery, `false` skips
+15. Verify validation: invalid event_types rejected, empty event_types rejected, duplicate URL rejected (409)
 
 ---
 

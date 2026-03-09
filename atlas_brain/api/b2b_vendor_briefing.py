@@ -5,8 +5,7 @@ Preview, generate+send, email gate, and list sent briefings.
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
-from urllib.parse import quote
+from datetime import datetime
 from uuid import UUID
 
 import jwt as pyjwt
@@ -18,7 +17,9 @@ from ..config import settings
 from ..services.crm_provider import get_crm_provider
 from ..storage.database import get_db_pool
 from ..autonomous.tasks.b2b_vendor_briefing import (
+    build_gate_url,
     build_vendor_briefing,
+    create_gate_token,
     generate_and_send_briefing,
     send_batch_briefings,
     send_vendor_briefing,
@@ -58,19 +59,6 @@ def _row_to_dict(row) -> dict:
 _jwt_cfg = settings.saas_auth
 
 
-def create_gate_token(vendor_name: str) -> str:
-    """Create a signed JWT for the briefing email gate (7-day expiry)."""
-    now = datetime.now(timezone.utc)
-    expiry_days = settings.b2b_churn.vendor_briefing_gate_expiry_days
-    payload = {
-        "vendor_name": vendor_name,
-        "type": "briefing_gate",
-        "iat": now,
-        "exp": now + timedelta(days=expiry_days),
-    }
-    return pyjwt.encode(payload, _jwt_cfg.jwt_secret, algorithm=_jwt_cfg.jwt_algorithm)
-
-
 def decode_gate_token(token: str) -> dict:
     """Decode and validate a briefing gate token. Raises HTTPException on failure."""
     try:
@@ -86,13 +74,6 @@ def decode_gate_token(token: str) -> dict:
         raise HTTPException(status_code=400, detail="Invalid token type")
 
     return claims
-
-
-def build_gate_url(vendor_name: str) -> str:
-    """Build the full gate URL for a vendor briefing."""
-    base = settings.b2b_churn.vendor_briefing_gate_base_url.rstrip("/")
-    token = create_gate_token(vendor_name)
-    return f"{base}?vendor={quote(vendor_name)}&ref={token}"
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +169,7 @@ async def briefing_gate(body: GateRequest):
         """,
         email,
     )
-    if count and count >= 10:
+    if count and count >= 3:
         raise HTTPException(status_code=429, detail="Too many requests -- try again tomorrow")
 
     # Suppression check

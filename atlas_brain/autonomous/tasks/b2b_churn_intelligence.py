@@ -95,6 +95,11 @@ def _eligible_review_filters(*, window_param: int | None = 1, source_param: int 
         parts.append(f"{p}enriched_at > NOW() - make_interval(days => ${window_param})")
     parts.append(f"{p}source = ANY(${source_param}::text[])")
     parts.append(f"COALESCE({p}raw_metadata->>'extraction_method', '') != 'jsonld_aggregate'")
+    parts.append(
+        f"NOT EXISTS (SELECT 1 FROM data_corrections dc"
+        f" WHERE dc.entity_type = 'review' AND dc.entity_id = {p}id"
+        f" AND dc.correction_type = 'suppress' AND dc.status = 'applied')"
+    )
     return "\n          AND ".join(parts)
 
 
@@ -1107,6 +1112,213 @@ def _safe_json(value: Any, default: Any = None) -> Any:
     return default
 
 
+async def _persist_vendor_snapshots(
+    pool,
+    vendor_scores: list[dict[str, Any]],
+    pain_lookup: dict[str, list[dict]],
+    competitor_lookup: dict[str, list[dict]],
+    high_intent: list[dict[str, Any]],
+    today: date,
+) -> int:
+    """Persist daily vendor health snapshots and clean up old data."""
+    cfg = settings.b2b_churn
+
+    # Build per-vendor high-intent counts
+    hi_counts: dict[str, int] = {}
+    for hi in high_intent:
+        vendor = hi.get("vendor", "")
+        if vendor:
+            hi_counts[vendor] = hi_counts.get(vendor, 0) + 1
+
+    # Fetch displacement edge counts for today (count edges where vendor is the source)
+    disp_rows = await pool.fetch(
+        "SELECT from_vendor, count(*) AS cnt FROM b2b_displacement_edges "
+        "WHERE computed_date = $1 GROUP BY from_vendor",
+        today,
+    )
+    disp_counts: dict[str, int] = {r["from_vendor"]: r["cnt"] for r in disp_rows}
+
+    persisted = 0
+    for row in vendor_scores:
+        vendor = _canonicalize_vendor(row.get("vendor_name") or "")
+        if not vendor:
+            continue
+        total_reviews = int(row.get("total_reviews") or 0)
+        churn_intent = int(row.get("churn_intent") or 0)
+        churn_density = round((churn_intent * 100.0 / total_reviews), 1) if total_reviews else 0.0
+        avg_urgency = round(float(row.get("avg_urgency") or 0), 1)
+        positive_pct = row.get("positive_review_pct")
+        recommend_yes = int(row.get("recommend_yes") or 0)
+        recommend_no = int(row.get("recommend_no") or 0)
+        recommend_ratio = round(((recommend_yes - recommend_no) / total_reviews) * 100, 1) if total_reviews else 0.0
+
+        pains = pain_lookup.get(vendor, [])
+        top_pain = (pains[0] if pains else {}).get("category")
+        comps = competitor_lookup.get(vendor, [])
+        top_competitor = comps[0]["name"] if comps else None
+
+        try:
+            await pool.execute(
+                """
+                INSERT INTO b2b_vendor_snapshots (
+                    vendor_name, snapshot_date, total_reviews, churn_intent,
+                    churn_density, avg_urgency, positive_review_pct, recommend_ratio,
+                    top_pain, top_competitor, pain_count, competitor_count,
+                    displacement_edge_count, high_intent_company_count
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                ON CONFLICT (vendor_name, snapshot_date) DO UPDATE SET
+                    total_reviews = EXCLUDED.total_reviews,
+                    churn_intent = EXCLUDED.churn_intent,
+                    churn_density = EXCLUDED.churn_density,
+                    avg_urgency = EXCLUDED.avg_urgency,
+                    positive_review_pct = EXCLUDED.positive_review_pct,
+                    recommend_ratio = EXCLUDED.recommend_ratio,
+                    top_pain = EXCLUDED.top_pain,
+                    top_competitor = EXCLUDED.top_competitor,
+                    pain_count = EXCLUDED.pain_count,
+                    competitor_count = EXCLUDED.competitor_count,
+                    displacement_edge_count = EXCLUDED.displacement_edge_count,
+                    high_intent_company_count = EXCLUDED.high_intent_company_count
+                """,
+                vendor, today, total_reviews, churn_intent,
+                churn_density, avg_urgency,
+                float(positive_pct) if positive_pct is not None else None,
+                recommend_ratio,
+                top_pain, top_competitor,
+                len(pains), len(comps),
+                disp_counts.get(vendor, 0),
+                hi_counts.get(vendor, 0),
+            )
+            persisted += 1
+        except Exception:
+            logger.warning("Failed to persist snapshot for vendor %s", vendor)
+
+    # Retention cleanup
+    await pool.execute(
+        "DELETE FROM b2b_vendor_snapshots WHERE snapshot_date < CURRENT_DATE - $1::int",
+        cfg.snapshot_retention_days,
+    )
+    await pool.execute(
+        "DELETE FROM b2b_change_events WHERE event_date < CURRENT_DATE - $1::int",
+        cfg.change_event_retention_days,
+    )
+
+    return persisted
+
+
+async def _detect_change_events(
+    pool,
+    vendor_scores: list[dict[str, Any]],
+    pain_lookup: dict[str, list[dict]],
+    competitor_lookup: dict[str, list[dict]],
+    today: date,
+) -> int:
+    """Compare today's vendor data against prior snapshots and log change events."""
+    detected = 0
+
+    for row in vendor_scores:
+        vendor = _canonicalize_vendor(row.get("vendor_name") or "")
+        if not vendor:
+            continue
+
+        # Fetch most recent prior snapshot
+        prior = await pool.fetchrow(
+            "SELECT * FROM b2b_vendor_snapshots "
+            "WHERE vendor_name = $1 AND snapshot_date < $2 "
+            "ORDER BY snapshot_date DESC LIMIT 1",
+            vendor, today,
+        )
+        if not prior:
+            continue
+
+        # Compute current metrics inline (same as _persist_vendor_snapshots)
+        total_reviews = int(row.get("total_reviews") or 0)
+        churn_intent = int(row.get("churn_intent") or 0)
+        churn_density = round((churn_intent * 100.0 / total_reviews), 1) if total_reviews else 0.0
+        avg_urgency = round(float(row.get("avg_urgency") or 0), 1)
+        recommend_yes = int(row.get("recommend_yes") or 0)
+        recommend_no = int(row.get("recommend_no") or 0)
+        recommend_ratio = round(((recommend_yes - recommend_no) / total_reviews) * 100, 1) if total_reviews else 0.0
+
+        pains = pain_lookup.get(vendor, [])
+        top_pain = (pains[0] if pains else {}).get("category")
+        comps = competitor_lookup.get(vendor, [])
+        top_competitor = comps[0]["name"] if comps else None
+
+        events: list[tuple[str, str, float | None, float | None, float | None]] = []
+
+        # Urgency spike/drop (threshold: 1.0)
+        prior_urg = float(prior["avg_urgency"] or 0)
+        urg_delta = avg_urgency - prior_urg
+        if urg_delta >= 1.0:
+            events.append(("urgency_spike", f"Avg urgency rose from {prior_urg} to {avg_urgency}", prior_urg, avg_urgency, urg_delta))
+        elif urg_delta <= -1.0:
+            events.append(("urgency_drop", f"Avg urgency fell from {prior_urg} to {avg_urgency}", prior_urg, avg_urgency, urg_delta))
+
+        # Churn density spike (threshold: 5.0 pp)
+        prior_cd = float(prior["churn_density"] or 0)
+        cd_delta = churn_density - prior_cd
+        if cd_delta >= 5.0:
+            events.append(("churn_density_spike", f"Churn density rose from {prior_cd}% to {churn_density}%", prior_cd, churn_density, cd_delta))
+
+        # NPS / recommend ratio shift (threshold: 10 pp)
+        prior_rr = float(prior["recommend_ratio"] or 0)
+        rr_delta = recommend_ratio - prior_rr
+        if abs(rr_delta) >= 10.0:
+            direction = "improved" if rr_delta > 0 else "declined"
+            events.append(("nps_shift", f"Recommend ratio {direction} from {prior_rr} to {recommend_ratio}", prior_rr, recommend_ratio, rr_delta))
+
+        # Review volume spike (threshold: 25%)
+        prior_tr = int(prior["total_reviews"] or 0)
+        if prior_tr > 0:
+            vol_pct = ((total_reviews - prior_tr) / prior_tr) * 100
+            if vol_pct >= 25.0:
+                events.append(("review_volume_spike", f"Review count jumped from {prior_tr} to {total_reviews} (+{vol_pct:.0f}%)", float(prior_tr), float(total_reviews), vol_pct))
+
+        # New pain category
+        prior_pain = prior["top_pain"]
+        if top_pain and prior_pain and top_pain != prior_pain:
+            events.append(("new_pain_category", f"Top pain shifted from '{prior_pain}' to '{top_pain}'", None, None, None))
+
+        # New competitor
+        prior_comp = prior["top_competitor"]
+        if top_competitor and prior_comp and top_competitor != prior_comp:
+            events.append(("new_competitor", f"Top competitor shifted from '{prior_comp}' to '{top_competitor}'", None, None, None))
+
+        webhook_events: list[tuple[str, dict]] = []
+        for event_type, description, old_val, new_val, delta in events:
+            try:
+                await pool.execute(
+                    """
+                    INSERT INTO b2b_change_events (vendor_name, event_date, event_type, description, old_value, new_value, delta)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    """,
+                    vendor, today, event_type, description, old_val, new_val, delta,
+                )
+                detected += 1
+                webhook_events.append((vendor, {
+                    "event_type": event_type,
+                    "vendor_name": vendor,
+                    "description": description,
+                    "old_value": old_val,
+                    "new_value": new_val,
+                    "delta": delta,
+                    "event_date": str(today),
+                }))
+            except Exception:
+                logger.warning("Failed to persist change event %s for %s", event_type, vendor)
+
+        # Dispatch webhooks for change events (fire-and-forget, never raises)
+        if webhook_events:
+            try:
+                from ...services.b2b.webhook_dispatcher import dispatch_webhooks_multi
+                await dispatch_webhooks_multi(pool, "change_event", webhook_events)
+            except Exception:
+                logger.debug("Webhook dispatch skipped for change events")
+
+    return detected
+
+
 async def run(task: ScheduledTask) -> dict[str, Any]:
     """Autonomous task handler: weekly B2B churn intelligence."""
     cfg = settings.b2b_churn
@@ -1783,6 +1995,22 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         buyer_profiles_persisted = 0
         logger.exception("Failed to persist buyer profiles")
 
+    # Persist vendor health snapshots + detect change events
+    snapshots_persisted = 0
+    change_events_detected = 0
+    if cfg.snapshot_enabled:
+        try:
+            snapshots_persisted = await _persist_vendor_snapshots(
+                pool, vendor_scores, pain_lookup, competitor_lookup,
+                high_intent, today,
+            )
+            if cfg.change_detection_enabled:
+                change_events_detected = await _detect_change_events(
+                    pool, vendor_scores, pain_lookup, competitor_lookup, today,
+                )
+        except Exception:
+            logger.exception("Failed to persist vendor snapshots / change events")
+
     # Send ntfy notification
     await _send_notification(task, parsed, high_intent)
 
@@ -1804,6 +2032,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "use_cases_persisted": use_cases_persisted,
         "integrations_persisted": integrations_persisted,
         "buyer_profiles_persisted": buyer_profiles_persisted,
+        "snapshots_persisted": snapshots_persisted,
+        "change_events_detected": change_events_detected,
     }
 
 
