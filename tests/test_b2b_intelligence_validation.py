@@ -34,6 +34,7 @@ from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
     _build_validated_executive_summary,
     _canonicalize_competitor,
     _compute_churn_pressure_score,
+    _compute_evidence_confidence,
     _executive_source_list,
     _validate_report,
 )
@@ -507,3 +508,39 @@ class TestVendorExecutiveSummary:
         assert "account signals" not in summary
         assert "Strongest vendor-level churn signals" in summary
         assert "Zendesk" in summary
+
+
+# ---------------------------------------------------------------------------
+# Evidence confidence scoring (renamed from _compute_displacement_confidence)
+# ---------------------------------------------------------------------------
+
+
+class TestEvidenceConfidence:
+    def test_zero_mentions(self):
+        """Zero mentions should return 0.0 confidence."""
+        assert _compute_evidence_confidence(0, {}) == 0.0
+
+    def test_high_confidence(self):
+        """20+ mentions from 3+ verified sources should yield >= 0.9."""
+        dist = {"g2": 10, "capterra": 8, "trustradius": 5}
+        score = _compute_evidence_confidence(23, dist)
+        assert score >= 0.9
+
+    def test_single_unverified_source(self):
+        """Single unverified source should yield < 0.4."""
+        score = _compute_evidence_confidence(3, {"reddit": 3})
+        assert score < 0.4
+
+    def test_mixed_sources_mid_range(self):
+        """Mix of verified + unverified at moderate volume -> mid-range."""
+        dist = {"g2": 4, "reddit": 3}
+        score = _compute_evidence_confidence(7, dist)
+        assert 0.3 < score < 0.8
+
+    def test_returns_float_in_range(self):
+        """Score should always be a float in [0.0, 1.0]."""
+        for mentions in (0, 1, 5, 20, 100):
+            for dist in ({}, {"g2": mentions}, {"reddit": 1, "g2": 2}):
+                score = _compute_evidence_confidence(mentions, dist)
+                assert isinstance(score, float)
+                assert 0.0 <= score <= 1.0

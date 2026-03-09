@@ -31,6 +31,9 @@ Tools:
     add_vendor_alias         -- add an alias to an existing vendor
     list_displacement_edges  -- query persisted competitive displacement edges
     get_displacement_history -- time-series of edge strength for a vendor pair
+    list_vendor_pain_points  -- query aggregated vendor pain points with confidence
+    list_vendor_use_cases    -- query vendor use cases (modules mentioned in reviews)
+    list_vendor_integrations -- query vendor integrations (tools mentioned in reviews)
 
 Run:
     python -m atlas_brain.mcp.b2b_churn_server          # stdio
@@ -2068,6 +2071,252 @@ async def get_displacement_history(
         }, default=str)
     except Exception:
         logger.exception("get_displacement_history error")
+        return json.dumps({"error": "Internal error"})
+
+
+@mcp.tool()
+async def list_vendor_pain_points(
+    vendor_name: Optional[str] = None,
+    pain_category: Optional[str] = None,
+    min_confidence: Optional[float] = None,
+    min_mentions: Optional[int] = None,
+    limit: int = 50,
+) -> str:
+    """
+    Query vendor pain points aggregated from review intelligence.
+
+    vendor_name: Filter by vendor (case-insensitive partial match)
+    pain_category: Exact pain category (pricing, support, features, ux, reliability, performance, integration, security, onboarding, other)
+    min_confidence: Minimum confidence score (0.0-1.0)
+    min_mentions: Minimum mention count
+    limit: Max results (default 50, max 200)
+    """
+    limit = min(max(limit, 1), 200)
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"error": "Database not ready"})
+
+        conditions: list[str] = []
+        params: list = []
+        idx = 1
+
+        if vendor_name:
+            conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
+            params.append(vendor_name)
+            idx += 1
+
+        if pain_category:
+            conditions.append(f"pain_category = ${idx}")
+            params.append(pain_category)
+            idx += 1
+
+        if min_confidence is not None:
+            conditions.append(f"confidence_score >= ${idx}")
+            params.append(min_confidence)
+            idx += 1
+
+        if min_mentions is not None:
+            conditions.append(f"mention_count >= ${idx}")
+            params.append(min_mentions)
+            idx += 1
+
+        where = "WHERE " + " AND ".join(conditions) if conditions else ""
+
+        rows = await pool.fetch(
+            f"""
+            SELECT id, vendor_name, pain_category, mention_count,
+                   primary_count, secondary_count, minor_count,
+                   avg_urgency, avg_rating,
+                   source_distribution, sample_review_ids,
+                   confidence_score, first_seen_at, last_seen_at
+            FROM b2b_vendor_pain_points
+            {where}
+            ORDER BY mention_count DESC
+            LIMIT ${idx}
+            """,
+            *params,
+            limit,
+        )
+
+        items = []
+        for r in rows:
+            items.append({
+                "id": str(r["id"]),
+                "vendor_name": r["vendor_name"],
+                "pain_category": r["pain_category"],
+                "mention_count": r["mention_count"],
+                "primary_count": r["primary_count"],
+                "secondary_count": r["secondary_count"],
+                "minor_count": r["minor_count"],
+                "avg_urgency": float(r["avg_urgency"]) if r["avg_urgency"] else 0,
+                "avg_rating": float(r["avg_rating"]) if r["avg_rating"] else 0,
+                "source_distribution": _safe_json(r["source_distribution"]),
+                "sample_review_ids": [str(rid) for rid in (r["sample_review_ids"] or [])],
+                "confidence_score": float(r["confidence_score"]) if r["confidence_score"] else 0,
+                "first_seen_at": str(r["first_seen_at"]) if r["first_seen_at"] else None,
+                "last_seen_at": str(r["last_seen_at"]) if r["last_seen_at"] else None,
+            })
+
+        return json.dumps({"pain_points": items, "count": len(items)}, default=str)
+    except Exception:
+        logger.exception("list_vendor_pain_points error")
+        return json.dumps({"error": "Internal error"})
+
+
+@mcp.tool()
+async def list_vendor_use_cases(
+    vendor_name: Optional[str] = None,
+    use_case_name: Optional[str] = None,
+    min_mentions: Optional[int] = None,
+    limit: int = 50,
+) -> str:
+    """
+    Query vendor use cases (modules/features mentioned in reviews).
+
+    vendor_name: Filter by vendor (case-insensitive partial match)
+    use_case_name: Filter by use case name (case-insensitive partial match)
+    min_mentions: Minimum mention count
+    limit: Max results (default 50, max 200)
+    """
+    limit = min(max(limit, 1), 200)
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"error": "Database not ready"})
+
+        conditions: list[str] = []
+        params: list = []
+        idx = 1
+
+        if vendor_name:
+            conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
+            params.append(vendor_name)
+            idx += 1
+
+        if use_case_name:
+            conditions.append(f"use_case_name ILIKE '%' || ${idx} || '%'")
+            params.append(use_case_name)
+            idx += 1
+
+        if min_mentions is not None:
+            conditions.append(f"mention_count >= ${idx}")
+            params.append(min_mentions)
+            idx += 1
+
+        where = "WHERE " + " AND ".join(conditions) if conditions else ""
+
+        rows = await pool.fetch(
+            f"""
+            SELECT id, vendor_name, use_case_name, mention_count,
+                   avg_urgency, lock_in_distribution,
+                   source_distribution, sample_review_ids,
+                   first_seen_at, last_seen_at
+            FROM b2b_vendor_use_cases
+            {where}
+            ORDER BY mention_count DESC
+            LIMIT ${idx}
+            """,
+            *params,
+            limit,
+        )
+
+        items = []
+        for r in rows:
+            items.append({
+                "id": str(r["id"]),
+                "vendor_name": r["vendor_name"],
+                "use_case_name": r["use_case_name"],
+                "mention_count": r["mention_count"],
+                "avg_urgency": float(r["avg_urgency"]) if r["avg_urgency"] else 0,
+                "lock_in_distribution": _safe_json(r["lock_in_distribution"]),
+                "source_distribution": _safe_json(r["source_distribution"]),
+                "sample_review_ids": [str(rid) for rid in (r["sample_review_ids"] or [])],
+                "first_seen_at": str(r["first_seen_at"]) if r["first_seen_at"] else None,
+                "last_seen_at": str(r["last_seen_at"]) if r["last_seen_at"] else None,
+            })
+
+        return json.dumps({"use_cases": items, "count": len(items)}, default=str)
+    except Exception:
+        logger.exception("list_vendor_use_cases error")
+        return json.dumps({"error": "Internal error"})
+
+
+@mcp.tool()
+async def list_vendor_integrations(
+    vendor_name: Optional[str] = None,
+    integration_name: Optional[str] = None,
+    min_mentions: Optional[int] = None,
+    limit: int = 50,
+) -> str:
+    """
+    Query vendor integrations (tools/services mentioned in reviews).
+
+    vendor_name: Filter by vendor (case-insensitive partial match)
+    integration_name: Filter by integration name (case-insensitive partial match)
+    min_mentions: Minimum mention count
+    limit: Max results (default 50, max 200)
+    """
+    limit = min(max(limit, 1), 200)
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"error": "Database not ready"})
+
+        conditions: list[str] = []
+        params: list = []
+        idx = 1
+
+        if vendor_name:
+            conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
+            params.append(vendor_name)
+            idx += 1
+
+        if integration_name:
+            conditions.append(f"integration_name ILIKE '%' || ${idx} || '%'")
+            params.append(integration_name)
+            idx += 1
+
+        if min_mentions is not None:
+            conditions.append(f"mention_count >= ${idx}")
+            params.append(min_mentions)
+            idx += 1
+
+        where = "WHERE " + " AND ".join(conditions) if conditions else ""
+
+        rows = await pool.fetch(
+            f"""
+            SELECT id, vendor_name, integration_name, mention_count,
+                   source_distribution, sample_review_ids,
+                   first_seen_at, last_seen_at
+            FROM b2b_vendor_integrations
+            {where}
+            ORDER BY mention_count DESC
+            LIMIT ${idx}
+            """,
+            *params,
+            limit,
+        )
+
+        items = []
+        for r in rows:
+            items.append({
+                "id": str(r["id"]),
+                "vendor_name": r["vendor_name"],
+                "integration_name": r["integration_name"],
+                "mention_count": r["mention_count"],
+                "source_distribution": _safe_json(r["source_distribution"]),
+                "sample_review_ids": [str(rid) for rid in (r["sample_review_ids"] or [])],
+                "first_seen_at": str(r["first_seen_at"]) if r["first_seen_at"] else None,
+                "last_seen_at": str(r["last_seen_at"]) if r["last_seen_at"] else None,
+            })
+
+        return json.dumps({"integrations": items, "count": len(items)}, default=str)
+    except Exception:
+        logger.exception("list_vendor_integrations error")
         return json.dumps({"error": "Internal error"})
 
 

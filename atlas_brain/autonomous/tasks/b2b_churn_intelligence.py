@@ -618,11 +618,11 @@ def _infer_driver_from_reasons(reasons: list[str], fallback: str = "other") -> s
     return fallback
 
 
-def _compute_displacement_confidence(
+def _compute_evidence_confidence(
     mention_count: int,
     source_distribution: dict[str, int],
 ) -> float:
-    """Evidence-based confidence score for a displacement edge.
+    """Evidence-based confidence score for provenance-tracked entities.
 
     Three equally-weighted signals (each 0-1, averaged):
       - mention_weight:  log-scaled mention count (caps at 20)
@@ -1140,6 +1140,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         buyer_auth, timeline_signals, competitor_reasons,
         keyword_spikes, data_context, vendor_provenance,
         displacement_provenance,
+        pain_provenance, use_case_provenance, integration_provenance,
     ) = await asyncio.gather(
         _fetch_vendor_churn_scores(pool, window_days, min_reviews),
         _fetch_high_intent_companies(pool, urgency_threshold, window_days),
@@ -1161,6 +1162,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _fetch_data_context(pool, window_days),
         _fetch_vendor_provenance(pool, window_days),
         _fetch_displacement_provenance(pool, window_days),
+        _fetch_pain_provenance(pool, window_days),
+        _fetch_use_case_provenance(pool, window_days),
+        _fetch_integration_provenance(pool, window_days),
         return_exceptions=True,
     )
 
@@ -1201,6 +1205,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if isinstance(displacement_provenance, Exception):
         logger.warning("displacement_provenance fetch failed: %s", displacement_provenance)
         displacement_provenance = {}
+    if isinstance(pain_provenance, Exception):
+        logger.warning("pain_provenance fetch failed: %s", pain_provenance)
+        pain_provenance = {}
+    if isinstance(use_case_provenance, Exception):
+        logger.warning("use_case_provenance fetch failed: %s", use_case_provenance)
+        use_case_provenance = {}
+    if isinstance(integration_provenance, Exception):
+        logger.warning("integration_provenance fetch failed: %s", integration_provenance)
+        integration_provenance = {}
 
     # Check if there's enough data
     if not vendor_scores and not high_intent:
@@ -1378,7 +1391,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         src_dist = prov.get("source_distribution", {})
         edge["source_distribution"] = src_dist
         edge["sample_review_ids"] = prov.get("sample_review_ids", [])
-        edge["confidence_score"] = _compute_displacement_confidence(
+        edge["confidence_score"] = _compute_evidence_confidence(
             edge["mention_count"], src_dist,
         )
 
@@ -1585,6 +1598,126 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         company_signals_persisted = 0
         logger.exception("Failed to persist company signals")
 
+    # Persist vendor pain points to first-class table
+    pain_points_persisted = 0
+    try:
+        async with pool.transaction() as conn:
+            for (vendor, pain_cat), prov in pain_provenance.items():
+                sample_ids = [
+                    _uuid.UUID(rid) for rid in prov.get("sample_review_ids", [])
+                    if rid
+                ]
+                confidence = _compute_evidence_confidence(
+                    prov["mention_count"],
+                    prov.get("source_distribution", {}),
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO b2b_vendor_pain_points (
+                        vendor_name, pain_category, mention_count,
+                        primary_count, secondary_count, minor_count,
+                        avg_urgency, avg_rating,
+                        source_distribution, sample_review_ids,
+                        confidence_score, last_seen_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::uuid[], $11, NOW())
+                    ON CONFLICT (vendor_name, pain_category) DO UPDATE SET
+                        mention_count = EXCLUDED.mention_count,
+                        primary_count = EXCLUDED.primary_count,
+                        secondary_count = EXCLUDED.secondary_count,
+                        minor_count = EXCLUDED.minor_count,
+                        avg_urgency = EXCLUDED.avg_urgency,
+                        avg_rating = EXCLUDED.avg_rating,
+                        source_distribution = EXCLUDED.source_distribution,
+                        sample_review_ids = EXCLUDED.sample_review_ids,
+                        confidence_score = EXCLUDED.confidence_score,
+                        last_seen_at = EXCLUDED.last_seen_at
+                    """,
+                    vendor,
+                    pain_cat,
+                    prov["mention_count"],
+                    prov.get("primary_count", 0),
+                    prov.get("secondary_count", 0),
+                    prov.get("minor_count", 0),
+                    prov.get("avg_urgency"),
+                    prov.get("avg_rating"),
+                    json.dumps(prov.get("source_distribution", {})),
+                    sample_ids,
+                    confidence,
+                )
+                pain_points_persisted += 1
+    except Exception:
+        pain_points_persisted = 0
+        logger.exception("Failed to persist vendor pain points")
+
+    # Persist vendor use cases to first-class table
+    use_cases_persisted = 0
+    try:
+        async with pool.transaction() as conn:
+            for (vendor, use_case_name), prov in use_case_provenance.items():
+                sample_ids = [
+                    _uuid.UUID(rid) for rid in prov.get("sample_review_ids", [])
+                    if rid
+                ]
+                await conn.execute(
+                    """
+                    INSERT INTO b2b_vendor_use_cases (
+                        vendor_name, use_case_name, mention_count,
+                        avg_urgency, lock_in_distribution,
+                        source_distribution, sample_review_ids, last_seen_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7::uuid[], NOW())
+                    ON CONFLICT (vendor_name, use_case_name) DO UPDATE SET
+                        mention_count = EXCLUDED.mention_count,
+                        avg_urgency = EXCLUDED.avg_urgency,
+                        lock_in_distribution = EXCLUDED.lock_in_distribution,
+                        source_distribution = EXCLUDED.source_distribution,
+                        sample_review_ids = EXCLUDED.sample_review_ids,
+                        last_seen_at = EXCLUDED.last_seen_at
+                    """,
+                    vendor,
+                    use_case_name,
+                    prov["mention_count"],
+                    prov.get("avg_urgency"),
+                    json.dumps(prov.get("lock_in_distribution", {})),
+                    json.dumps(prov.get("source_distribution", {})),
+                    sample_ids,
+                )
+                use_cases_persisted += 1
+    except Exception:
+        use_cases_persisted = 0
+        logger.exception("Failed to persist vendor use cases")
+
+    # Persist vendor integrations to first-class table
+    integrations_persisted = 0
+    try:
+        async with pool.transaction() as conn:
+            for (vendor, integration_name), prov in integration_provenance.items():
+                sample_ids = [
+                    _uuid.UUID(rid) for rid in prov.get("sample_review_ids", [])
+                    if rid
+                ]
+                await conn.execute(
+                    """
+                    INSERT INTO b2b_vendor_integrations (
+                        vendor_name, integration_name, mention_count,
+                        source_distribution, sample_review_ids, last_seen_at
+                    ) VALUES ($1, $2, $3, $4, $5::uuid[], NOW())
+                    ON CONFLICT (vendor_name, integration_name) DO UPDATE SET
+                        mention_count = EXCLUDED.mention_count,
+                        source_distribution = EXCLUDED.source_distribution,
+                        sample_review_ids = EXCLUDED.sample_review_ids,
+                        last_seen_at = EXCLUDED.last_seen_at
+                    """,
+                    vendor,
+                    integration_name,
+                    prov["mention_count"],
+                    json.dumps(prov.get("source_distribution", {})),
+                    sample_ids,
+                )
+                integrations_persisted += 1
+    except Exception:
+        integrations_persisted = 0
+        logger.exception("Failed to persist vendor integrations")
+
     # Send ntfy notification
     await _send_notification(task, parsed, high_intent)
 
@@ -1602,6 +1735,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "upsert_failures": upsert_failures,
         "displacement_edges_persisted": displacement_edges_persisted,
         "company_signals_persisted": company_signals_persisted,
+        "pain_points_persisted": pain_points_persisted,
+        "use_cases_persisted": use_cases_persisted,
+        "integrations_persisted": integrations_persisted,
     }
 
 
@@ -1976,6 +2112,283 @@ async def _fetch_displacement_provenance(pool, window_days: int) -> dict[tuple[s
         # Collect review IDs (cap at 20 per edge)
         rids = r["review_ids"] or []
         for rid in rids:
+            if len(entry["sample_review_ids"]) < 20 and str(rid) not in entry["sample_review_ids"]:
+                entry["sample_review_ids"].append(str(rid))
+
+    return result
+
+
+# ------------------------------------------------------------------
+# Provenance fetchers for first-class entity tables (Sprint 2)
+# ------------------------------------------------------------------
+
+
+async def _fetch_pain_provenance(
+    pool, window_days: int,
+) -> dict[tuple[str, str], dict]:
+    """Per-vendor/pain_category provenance for the b2b_vendor_pain_points table.
+
+    Returns ``{(vendor, pain_category): {mention_count, primary_count,
+    secondary_count, minor_count, avg_urgency, avg_rating,
+    source_distribution, sample_review_ids}}``.
+    """
+    sources = _intelligence_source_allowlist()
+    filters = _eligible_review_filters(window_param=1, source_param=2, alias="r")
+
+    # 1. Core counts + averages grouped by vendor, pain_category, source
+    core_rows = await pool.fetch(
+        f"""
+        SELECT r.vendor_name,
+            r.enrichment->>'pain_category' AS pain_category,
+            r.source,
+            count(*) AS cnt,
+            avg((r.enrichment->>'urgency_score')::numeric) AS avg_urgency,
+            avg(r.rating) AS avg_rating,
+            array_agg(r.id ORDER BY (r.enrichment->>'urgency_score')::numeric DESC NULLS LAST)
+                FILTER (WHERE r.id IS NOT NULL) AS review_ids
+        FROM b2b_reviews r
+        WHERE {filters}
+          AND r.enrichment->>'pain_category' IS NOT NULL
+        GROUP BY r.vendor_name, r.enrichment->>'pain_category', r.source
+        """,
+        window_days,
+        sources,
+    )
+
+    # 2. Severity breakdown from the pain_categories array
+    severity_rows = await pool.fetch(
+        f"""
+        SELECT r.vendor_name,
+            p.value->>'category' AS pain_category,
+            p.value->>'severity' AS severity,
+            count(*) AS cnt
+        FROM b2b_reviews r
+        CROSS JOIN LATERAL jsonb_array_elements(
+            COALESCE(r.enrichment->'pain_categories', '[]'::jsonb)
+        ) AS p(value)
+        WHERE {filters}
+          AND p.value->>'category' IS NOT NULL
+        GROUP BY r.vendor_name, p.value->>'category', p.value->>'severity'
+        """,
+        window_days,
+        sources,
+    )
+
+    result: dict[tuple[str, str], dict] = {}
+
+    # Aggregate core rows
+    for r in core_rows:
+        vendor = _canonicalize_vendor(r["vendor_name"] or "")
+        pain = r["pain_category"] or ""
+        if not vendor or not pain:
+            continue
+        key = (vendor, pain)
+        if key not in result:
+            result[key] = {
+                "mention_count": 0,
+                "primary_count": 0,
+                "secondary_count": 0,
+                "minor_count": 0,
+                "avg_urgency": 0.0,
+                "avg_rating": 0.0,
+                "source_distribution": {},
+                "sample_review_ids": [],
+                "_urgency_sum": 0.0,
+                "_rating_sum": 0.0,
+                "_total": 0,
+            }
+        entry = result[key]
+        cnt = r["cnt"]
+        entry["mention_count"] += cnt
+        entry["_total"] += cnt
+        entry["_urgency_sum"] += float(r["avg_urgency"] or 0) * cnt
+        entry["_rating_sum"] += float(r["avg_rating"] or 0) * cnt
+        source = r["source"] or "unknown"
+        entry["source_distribution"][source] = (
+            entry["source_distribution"].get(source, 0) + cnt
+        )
+        for rid in (r["review_ids"] or []):
+            if len(entry["sample_review_ids"]) < 20 and str(rid) not in entry["sample_review_ids"]:
+                entry["sample_review_ids"].append(str(rid))
+
+    # Aggregate severity breakdown
+    for r in severity_rows:
+        vendor = _canonicalize_vendor(r["vendor_name"] or "")
+        pain = r["pain_category"] or ""
+        if not vendor or not pain:
+            continue
+        key = (vendor, pain)
+        if key not in result:
+            continue  # only augment keys from core query
+        severity = (r["severity"] or "").lower()
+        cnt = r["cnt"]
+        if severity == "primary":
+            result[key]["primary_count"] += cnt
+        elif severity == "secondary":
+            result[key]["secondary_count"] += cnt
+        elif severity == "minor":
+            result[key]["minor_count"] += cnt
+
+    # Finalize averages and clean internal fields
+    for entry in result.values():
+        total = entry.pop("_total", 0) or 1
+        entry["avg_urgency"] = round(entry.pop("_urgency_sum", 0) / total, 1)
+        entry["avg_rating"] = round(entry.pop("_rating_sum", 0) / total, 2)
+
+    return result
+
+
+async def _fetch_use_case_provenance(
+    pool, window_days: int,
+) -> dict[tuple[str, str], dict]:
+    """Per-vendor/module provenance for the b2b_vendor_use_cases table.
+
+    Returns ``{(vendor, module_name): {mention_count, avg_urgency,
+    lock_in_distribution, source_distribution, sample_review_ids}}``.
+    """
+    sources = _intelligence_source_allowlist()
+    filters = _eligible_review_filters(window_param=1, source_param=2, alias="r")
+
+    # 1. Module mentions with source + urgency + sample IDs
+    module_rows = await pool.fetch(
+        f"""
+        SELECT r.vendor_name,
+            mod.value #>> '{{}}' AS module_name,
+            r.source,
+            count(*) AS cnt,
+            avg((r.enrichment->>'urgency_score')::numeric) AS avg_urgency,
+            array_agg(r.id ORDER BY (r.enrichment->>'urgency_score')::numeric DESC NULLS LAST)
+                FILTER (WHERE r.id IS NOT NULL) AS review_ids
+        FROM b2b_reviews r
+        CROSS JOIN LATERAL jsonb_array_elements(
+            COALESCE(r.enrichment->'use_case'->'modules_mentioned', '[]'::jsonb)
+        ) AS mod(value)
+        WHERE {filters}
+        GROUP BY r.vendor_name, mod.value #>> '{{}}', r.source
+        """,
+        window_days,
+        sources,
+    )
+
+    # 2. Lock-in distribution per vendor/module
+    lock_rows = await pool.fetch(
+        f"""
+        SELECT r.vendor_name,
+            mod.value #>> '{{}}' AS module_name,
+            r.enrichment->'use_case'->>'lock_in_level' AS lock_in_level,
+            count(*) AS cnt
+        FROM b2b_reviews r
+        CROSS JOIN LATERAL jsonb_array_elements(
+            COALESCE(r.enrichment->'use_case'->'modules_mentioned', '[]'::jsonb)
+        ) AS mod(value)
+        WHERE {filters}
+          AND r.enrichment->'use_case'->>'lock_in_level' IS NOT NULL
+        GROUP BY r.vendor_name, mod.value #>> '{{}}', r.enrichment->'use_case'->>'lock_in_level'
+        """,
+        window_days,
+        sources,
+    )
+
+    result: dict[tuple[str, str], dict] = {}
+
+    for r in module_rows:
+        vendor = _canonicalize_vendor(r["vendor_name"] or "")
+        module = r["module_name"] or ""
+        if not vendor or not module:
+            continue
+        key = (vendor, module)
+        if key not in result:
+            result[key] = {
+                "mention_count": 0,
+                "avg_urgency": 0.0,
+                "lock_in_distribution": {},
+                "source_distribution": {},
+                "sample_review_ids": [],
+                "_urgency_sum": 0.0,
+                "_total": 0,
+            }
+        entry = result[key]
+        cnt = r["cnt"]
+        entry["mention_count"] += cnt
+        entry["_total"] += cnt
+        entry["_urgency_sum"] += float(r["avg_urgency"] or 0) * cnt
+        source = r["source"] or "unknown"
+        entry["source_distribution"][source] = (
+            entry["source_distribution"].get(source, 0) + cnt
+        )
+        for rid in (r["review_ids"] or []):
+            if len(entry["sample_review_ids"]) < 20 and str(rid) not in entry["sample_review_ids"]:
+                entry["sample_review_ids"].append(str(rid))
+
+    for r in lock_rows:
+        vendor = _canonicalize_vendor(r["vendor_name"] or "")
+        module = r["module_name"] or ""
+        key = (vendor, module)
+        if key not in result:
+            continue
+        level = r["lock_in_level"] or "unknown"
+        result[key]["lock_in_distribution"][level] = (
+            result[key]["lock_in_distribution"].get(level, 0) + r["cnt"]
+        )
+
+    for entry in result.values():
+        total = entry.pop("_total", 0) or 1
+        entry["avg_urgency"] = round(entry.pop("_urgency_sum", 0) / total, 1)
+
+    return result
+
+
+async def _fetch_integration_provenance(
+    pool, window_days: int,
+) -> dict[tuple[str, str], dict]:
+    """Per-vendor/integration provenance for the b2b_vendor_integrations table.
+
+    Returns ``{(vendor, tool_name): {mention_count, source_distribution,
+    sample_review_ids}}``.
+    """
+    sources = _intelligence_source_allowlist()
+    filters = _eligible_review_filters(window_param=1, source_param=2, alias="r")
+
+    rows = await pool.fetch(
+        f"""
+        SELECT r.vendor_name,
+            tool.value #>> '{{}}' AS tool_name,
+            r.source,
+            count(*) AS cnt,
+            array_agg(r.id ORDER BY (r.enrichment->>'urgency_score')::numeric DESC NULLS LAST)
+                FILTER (WHERE r.id IS NOT NULL) AS review_ids
+        FROM b2b_reviews r
+        CROSS JOIN LATERAL jsonb_array_elements(
+            COALESCE(r.enrichment->'use_case'->'integration_stack', '[]'::jsonb)
+        ) AS tool(value)
+        WHERE {filters}
+        GROUP BY r.vendor_name, tool.value #>> '{{}}', r.source
+        """,
+        window_days,
+        sources,
+    )
+
+    result: dict[tuple[str, str], dict] = {}
+    for r in rows:
+        vendor = _canonicalize_vendor(r["vendor_name"] or "")
+        tool = r["tool_name"] or ""
+        if not vendor or not tool:
+            continue
+        key = (vendor, tool)
+        if key not in result:
+            result[key] = {
+                "mention_count": 0,
+                "source_distribution": {},
+                "sample_review_ids": [],
+            }
+        entry = result[key]
+        cnt = r["cnt"]
+        entry["mention_count"] += cnt
+        source = r["source"] or "unknown"
+        entry["source_distribution"][source] = (
+            entry["source_distribution"].get(source, 0) + cnt
+        )
+        for rid in (r["review_ids"] or []):
             if len(entry["sample_review_ids"]) < 20 and str(rid) not in entry["sample_review_ids"]:
                 entry["sample_review_ids"].append(str(rid))
 

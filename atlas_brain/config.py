@@ -2344,6 +2344,7 @@ class B2BCampaignConfig(BaseSettings):
     max_tokens: int = Field(default=2048, description="Max tokens per LLM generation call")
     temperature: float = Field(default=0.7, description="LLM sampling temperature")
     default_sender_name: str = Field(default="", description="Sender name for outreach")
+    default_sender_title: str = Field(default="", description="Sender title for outreach")
     default_sender_company: str = Field(default="", description="Sender company name for outreach")
     default_booking_url: str = Field(default="", description="Default booking/calendar URL for outreach CTAs")
     target_mode: str = Field(

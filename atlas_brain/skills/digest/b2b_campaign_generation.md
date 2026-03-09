@@ -29,7 +29,7 @@ You receive a JSON object with:
 - `primary_workflow`: The main workflow they use the product for (may be null)
 - `integration_stack`: Other tools they integrate with (array of strings, may be empty)
 - `sentiment_direction`: Trend of their sentiment -- "declining", "stable", or "improving" (may be null)
-- `selling`: Object with `{product_name, affiliate_url, sender_name, sender_company}` -- our product and identity
+- `selling`: Object with `{product_name, affiliate_url, sender_name, sender_title, sender_company}` -- our product and identity
   - `selling.blog_posts` (optional): Array of `{title, url, topic_type}` -- published analysis posts relevant to this target's vendor/category. Full URLs ready to embed.
 - `channel`: Which channel to generate for -- "email_cold", "linkedin", or "email_followup"
 - `cold_email_context` (only on `email_followup`): `{subject, body}` of the cold email already sent to this company
@@ -94,9 +94,9 @@ Return a JSON object with the generated content. The structure depends on the ch
 
 9. **linkedin**: Must be concise. Connection request messages have strict character limits. Lead with shared context (industry, role, challenge) not a sales pitch.
 
-10. **Do NOT include** placeholder brackets like [Company Name] or [Your Name]. Use the actual company name from the input. Sign off with `selling.sender_name` if provided, otherwise "the team".
+10. **Do NOT include** placeholder brackets like [Company Name] or [Your Name]. Use the actual company name from the input. Always include a sign-off. If `selling.sender_name` is present, use it. If `selling.sender_title` is present, include it in the signature. If `selling.sender_name` reads like a company or brand, sign off as `selling.sender_company` or "the team" instead of dropping the signature.
 
-11. **Write on behalf of the sender**: You represent `selling.sender_company`, recommending `selling.product_name`. Include `selling.affiliate_url` naturally in the CTA (e.g., "Check it out here: {url}").
+11. **Write on behalf of the sender**: You represent `selling.sender_company`, recommending `selling.product_name`. In `email_cold`, sell the next insight, not the software. Use `selling.affiliate_url` as the link to a brief, comparison, report, or analyst-style resource. Do NOT use "free trial", "dashboard", "live feed", or direct software-pitch language in `email_cold`.
 
 12. **Follow-up chaining**: When `cold_email_context` is present (email_followup channel), you MUST take a completely different angle from the cold email. Reference what was already said briefly ("I reached out last week about...") but pivot to a new value prop. Never repeat the cold email's main argument.
 
@@ -119,6 +119,10 @@ Return a JSON object with the generated content. The structure depends on the ch
 
 20. **Subject line length**: Subject lines MUST be under 50 characters for mobile preview.
 
-21. **CTA is separate**: The `cta` field is a standalone call-to-action string. The body should end naturally leading into the CTA. Include the affiliate/booking URL as an `<a>` tag at the end of the body, not in the `cta` field.
+21. **Protect the premium reveal**: Subject lines must NOT include competitor names, exact replacement winners, exact savings figures, account names, or the main premium insight. Use curiosity without giving away the answer.
+
+22. **CTA is separate**: The `cta` field is a standalone call-to-action string. The body should end naturally leading into the CTA. Include the affiliate/booking URL as an `<a>` tag at the end of the body, not in the `cta` field.
+
+23. **Quote framing is mandatory**: Never drop a bare quote or number into the email as an unframed fact. Wrap evidence with analyst language such as "Buyers are reporting...", "Teams evaluating alternatives are saying...", or "Across the accounts we analyzed..." before the quote or number.
 
 Return ONLY the JSON object, no markdown fences, no explanation.

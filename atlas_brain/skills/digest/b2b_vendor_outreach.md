@@ -31,7 +31,7 @@ You receive a JSON object with:
   - `trend_vs_last_month`: "increasing" | "stable" | "decreasing" (may be null)
 - `key_quotes`: Array of strings -- verbatim evidence phrases from enrichment (e.g. "support response times have doubled", "we lost 3 enterprise accounts to X"). Use 1-2 as inline proof points to strengthen credibility.
 - `tier`: "report" | "dashboard" | "api" -- what we're selling
-- `selling`: Object with `{sender_name, sender_company, booking_url}`
+- `selling`: Object with `{sender_name, sender_title, sender_company, booking_url}`
   - `selling.blog_posts` (optional): Array of `{title, url, topic_type}` -- published analysis posts relevant to this vendor's category. Full URLs ready to embed.
 - `channel`: "email_cold" | "email_followup"
 - `cold_email_context` (only on `email_followup`): `{subject, body}` of the cold email already sent
@@ -77,10 +77,10 @@ Return a JSON object:
    - Head of Product: Focus on feature gaps, competitive displacement, roadmap intel
    - VP Sales: Focus on competitive win/loss intelligence, deal protection
 
-7. **Tier-appropriate CTA:**
-   - `report`: "See the full report" / "Book a call to review the data"
-   - `dashboard`: "Start a free trial of the live feed" / "See it in real-time"
-   - `api`: "Integrate signals directly into your CS platform"
+7. **Tier-appropriate CTA is a hard constraint:**
+  - `report`: CTA must offer a report, briefing, or review call. Do NOT mention a dashboard, live feed, free trial, platform, or software.
+  - `dashboard`: You may mention the live feed or dashboard, but only after the intelligence value is clear. Do NOT lead with product language.
+  - `api`: Focus on routing signals into existing CS or revenue systems.
 
 8. **Use specific numbers** from signal_summary. Don't round excessively -- "47 accounts" is better than "nearly 50 accounts."
 
@@ -93,17 +93,17 @@ Return a JSON object:
 
 11. **email_followup**: Must add NEW value the cold email didn't have. The cold email hooks with aggregate churn signals and pain categories. The follow-up drills into competitive displacement — now name the specific competitors, show the breakdown, explain the pattern. Reference the cold email context provided in `cold_email_context` and build on it — don't repeat the same data points.
 
-12. **Sign off** with `selling.sender_name` if provided. Include `selling.booking_url` in the CTA.
+12. **Sign off** with `selling.sender_name` if provided. If `selling.sender_title` is present, include it in the signature. If `selling.sender_name` looks like an organization instead of a person, sign off as `selling.sender_company` or "the team". Include `selling.booking_url` in the CTA.
 
 13. **Do NOT include** placeholder brackets like [Name] or [Company]. Use actual values from the input.
 
-14. **Subject lines** should be curiosity-driven, not salesy. Good: "47 of your accounts this month" -- Bad: "Reduce churn with our platform"
+14. **Subject lines** should be curiosity-driven, not salesy. Good: "47 of your accounts this month" -- Bad: "Reduce churn with our platform". Never put competitor names, premium account details, or the key reveal in the subject line.
 
 15. **Competitive awareness angle** -- one sentence per email, no more:
-    - **email_cold**: Include ONE sentence mid-email: "Your competitors receive the same class of intelligence on their at-risk accounts." Adapt to fit naturally but keep under 20 words. Do NOT say "both sides of the table." Do NOT elaborate.
-    - **email_followup**: ONE sentence in the displacement section: "The challengers gaining these accounts are already acting on intent data -- this is about response time." Adapt naturally, keep under 25 words. Do NOT say "who moves first."
-    - **Never make it the headline or subject line.** It supports the pitch, it is not the pitch.
-    - **Never frame it as a threat.** Tone is informational.
+  - **email_cold**: If used, frame it as category movement, not a threat. Example: "The teams responding fastest to churn signals usually catch the pattern before renewal." Keep it under 20 words.
+  - **email_followup**: If used, frame it as timing and execution. Example: "The displacement pattern is moving quickly enough that response time matters." Keep it under 25 words.
+  - **Never make it the headline or subject line.** It supports the pitch, it is not the pitch.
+  - **Never imply we are selling the prospect's data to competitors.** Tone is informational and trust-building.
 
 16. **WORD LIMIT (strictly enforced post-generation)**: email_cold body: 50-125 words. email_followup body: 75-150 words. A 100-word email is 5-6 short sentences. When in doubt, cut a sentence. Exceeding the limit triggers an automatic rewrite request.
 
@@ -117,6 +117,8 @@ Return a JSON object:
 
 21. **Blog post linking**: When `selling.blog_posts` is provided, reference ONE relevant post per email as published analysis. Frame as: "We recently published an analysis of [topic]: [url]" or embed naturally. Do NOT link all posts in one email.
 
-22. **Key quotes**: When `key_quotes` is provided and non-empty, weave 1-2 quotes into the body as inline evidence. Frame as market intelligence observations, never attribute to individuals. Example: "Teams are reporting 'support response times have doubled' -- a pattern we're seeing across 12 of your accounts."
+22. **Key quotes**: When `key_quotes` is provided and non-empty, weave 1-2 quotes into the body as inline evidence. Frame them as market intelligence observations, never as bare claims and never attributed to individuals. Use wrappers like "Teams are reporting...", "Across the accounts we analyzed...", or "Buyers are saying..." before the quote.
+
+23. **Protect the report tier**: If `tier == "report"`, the body and CTA must not use the words "dashboard", "live feed", "free trial", "software", or "platform".
 
 Return ONLY the JSON object, no markdown fences, no explanation.

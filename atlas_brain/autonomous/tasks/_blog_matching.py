@@ -90,7 +90,7 @@ async def fetch_relevant_blog_posts(
     try:
         rows = await pool.fetch(
             """
-            SELECT title, slug, topic_type, tags->>0 AS first_tag
+            SELECT title, slug, topic_type, tags
             FROM blog_posts
             WHERE status = 'published'
               AND topic_type = ANY($1::text[])
@@ -114,15 +114,19 @@ async def fetch_relevant_blog_posts(
         score = 0
         slug = (row["slug"] or "").lower()
         title = (row["title"] or "").lower()
-        first_tag = (row["first_tag"] or "").lower()
+        tags = row["tags"] or []
+        if isinstance(tags, list):
+            tags_text = " ".join(str(tag).lower() for tag in tags if tag)
+        else:
+            tags_text = str(tags).lower()
 
-        # Category match: tag[0] contains category keyword
-        if cat_lower and (cat_lower in first_tag or cat_lower in slug):
+        # Category match across tags, slug, and title.
+        if cat_lower and (cat_lower in tags_text or cat_lower in slug or cat_lower in title):
             score += 2
 
-        # Name match: vendor or brand name appears in slug or title
+        # Name match: vendor or brand name appears in tags, slug, or title.
         for term in search_terms:
-            if term in slug or term in title:
+            if term in tags_text or term in slug or term in title:
                 score += 3
                 break  # one name match is enough
 

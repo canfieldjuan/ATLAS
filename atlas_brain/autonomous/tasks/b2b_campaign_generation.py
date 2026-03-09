@@ -43,6 +43,33 @@ def _sanitize_contact_name(name: str | None) -> str | None:
     return name.strip()
 
 
+def _build_selling_context(
+    *,
+    sender_name: str,
+    sender_title: str,
+    sender_company: str,
+    booking_url: str = "",
+    product_name: str = "",
+    affiliate_url: str = "",
+    blog_posts: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build selling context without hard-coded fallbacks."""
+    selling = {
+        "sender_name": sender_name,
+        "sender_title": sender_title,
+        "sender_company": sender_company,
+    }
+    if booking_url:
+        selling["booking_url"] = booking_url
+    if product_name:
+        selling["product_name"] = product_name
+    if affiliate_url:
+        selling["affiliate_url"] = affiliate_url
+    if blog_posts:
+        selling["blog_posts"] = blog_posts
+    return selling
+
+
 # ---------------------------------------------------------------------------
 # Post-generation validation
 # ---------------------------------------------------------------------------
@@ -59,6 +86,9 @@ _MD_HEADING_RE = re.compile(r"^#{1,3}\s+", re.MULTILINE)
 _MD_LIST_RE = re.compile(r"^[-*]\s+", re.MULTILINE)
 _PLACEHOLDER_RE = re.compile(r"\[(?:Name|Company|Your Name|First Name|Title)\]|\{\{.+?\}\}")
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+_REPORT_TIER_BANNED = re.compile(
+    r"\b(dashboard|live feed|free trial|software|platform)\b", re.IGNORECASE,
+)
 
 
 def _ensure_html(body: str) -> str:
@@ -127,7 +157,7 @@ def _truncate_to_limit(body: str, max_words: int) -> str:
 
 
 def _validate_campaign_content(
-    parsed: dict[str, Any], channel: str,
+    parsed: dict[str, Any], channel: str, tier: str = "",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Validate and fix campaign content. Returns (fixed_content, issues_dict)."""
     issues: dict[str, Any] = {}
@@ -172,6 +202,16 @@ def _validate_campaign_content(
             issues["max_words"] = max_words
             # Apply truncation as fallback (caller may retry first)
             body = _truncate_to_limit(body, max_words)
+
+    # Report-tier banned words: strip from body + cta
+    if tier == "report":
+        for text_field in (body, cta):
+            if _REPORT_TIER_BANNED.search(text_field):
+                issues["report_tier_violation"] = True
+                break
+        # Auto-fix: replace banned phrases
+        body = _REPORT_TIER_BANNED.sub("intelligence brief", body)
+        cta = _REPORT_TIER_BANNED.sub("brief", cta)
 
     parsed = {**parsed, "subject": subject, "body": body, "cta": cta}
     return parsed, issues
@@ -519,13 +559,14 @@ async def _generate_churning_company_campaigns(
         blog_urls = await _fetch_blog_posts(
             pool, pipeline="b2b", vendor_name=base_context.get("churning_from"), category=base_context.get("category"),
         )
-        base_context["selling"] = {
-            "product_name": partner["product_name"],
-            "affiliate_url": partner["affiliate_url"],
-            "sender_name": cfg.default_sender_name,
-            "sender_company": cfg.default_sender_company,
-            **({"blog_posts": blog_urls} if blog_urls else {}),
-        }
+        base_context["selling"] = _build_selling_context(
+            sender_name=cfg.default_sender_name,
+            sender_title=cfg.default_sender_title,
+            sender_company=cfg.default_sender_company,
+            product_name=partner["product_name"],
+            affiliate_url=partner["affiliate_url"],
+            blog_posts=blog_urls,
+        )
         partner_id = partner["id"]
 
         # Generate per-persona sequences
@@ -926,12 +967,13 @@ async def _generate_vendor_campaigns(
                 "contact_name": _sanitize_contact_name(target.get("contact_name")),
                 "contact_role": target.get("contact_role"),
                 "tier": target.get("tier", "report"),
-                "selling": {
-                    "sender_name": cfg.default_sender_name,
-                    "sender_company": cfg.default_sender_company,
-                    "booking_url": cfg.default_booking_url,
-                    **({"blog_posts": vendor_blog_urls} if vendor_blog_urls else {}),
-                },
+                "selling": _build_selling_context(
+                    sender_name=cfg.default_sender_name,
+                    sender_title=cfg.default_sender_title,
+                    sender_company=cfg.default_sender_company,
+                    booking_url=cfg.default_booking_url,
+                    blog_posts=vendor_blog_urls,
+                ),
                 "channel": channel,
             }
             if channel == "email_followup" and cold_email_content:
@@ -1006,12 +1048,13 @@ async def _generate_vendor_campaigns(
                     "contact_role": target.get("contact_role"),
                     "tier": target.get("tier", "report"),
                     "recipient_type": "vendor_retention",
-                    "selling": {
-                        "sender_name": cfg.default_sender_name,
-                        "sender_company": cfg.default_sender_company,
-                        "booking_url": cfg.default_booking_url,
-                        **({"blog_posts": vendor_blog_urls} if vendor_blog_urls else {}),
-                    },
+                    "selling": _build_selling_context(
+                        sender_name=cfg.default_sender_name,
+                        sender_title=cfg.default_sender_title,
+                        sender_company=cfg.default_sender_company,
+                        booking_url=cfg.default_booking_url,
+                        blog_posts=vendor_blog_urls,
+                    ),
                 }
                 seq_id = await _create_sequence_for_cold_email(
                     pool,
@@ -1272,12 +1315,13 @@ async def _generate_challenger_campaigns(
                 "contact_name": _sanitize_contact_name(target.get("contact_name")),
                 "contact_role": target.get("contact_role"),
                 "tier": target.get("tier", "report"),
-                "selling": {
-                    "sender_name": cfg.default_sender_name,
-                    "sender_company": cfg.default_sender_company,
-                    "booking_url": cfg.default_booking_url,
-                    **({"blog_posts": challenger_blog_urls} if challenger_blog_urls else {}),
-                },
+                "selling": _build_selling_context(
+                    sender_name=cfg.default_sender_name,
+                    sender_title=cfg.default_sender_title,
+                    sender_company=cfg.default_sender_company,
+                    booking_url=cfg.default_booking_url,
+                    blog_posts=challenger_blog_urls,
+                ),
                 "channel": channel,
             }
             if channel == "email_followup" and cold_email_content:
@@ -1352,12 +1396,13 @@ async def _generate_challenger_campaigns(
                     "contact_role": target.get("contact_role"),
                     "tier": target.get("tier", "report"),
                     "recipient_type": "challenger_intel",
-                    "selling": {
-                        "sender_name": cfg.default_sender_name,
-                        "sender_company": cfg.default_sender_company,
-                        "booking_url": cfg.default_booking_url,
-                        **({"blog_posts": challenger_blog_urls} if challenger_blog_urls else {}),
-                    },
+                    "selling": _build_selling_context(
+                        sender_name=cfg.default_sender_name,
+                        sender_title=cfg.default_sender_title,
+                        sender_company=cfg.default_sender_company,
+                        booking_url=cfg.default_booking_url,
+                        blog_posts=challenger_blog_urls,
+                    ),
                 }
                 seq_id = await _create_sequence_for_cold_email(
                     pool,
@@ -1764,6 +1809,7 @@ async def _generate_content(
     from ...pipelines.llm import clean_llm_output
 
     channel = payload.get("channel", "")
+    tier = payload.get("tier", "")
     last_wc = 0
     last_max = 0
 
@@ -1795,7 +1841,7 @@ async def _generate_content(
             return None
 
         # Validate and fix
-        validated, issues = _validate_campaign_content(parsed, channel)
+        validated, issues = _validate_campaign_content(parsed, channel, tier=tier)
 
         if issues.get("missing_field"):
             logger.warning("Campaign missing required field: %s", issues["missing_field"])

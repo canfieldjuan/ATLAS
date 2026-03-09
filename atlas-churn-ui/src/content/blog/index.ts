@@ -18,6 +18,7 @@ interface ChartConfig {
 interface AffiliatePartner {
   name?: string
   product_name?: string
+  slug?: string
 }
 
 interface BlogDataContext {
@@ -47,4 +48,8 @@ export interface BlogPost {
   data_context?: BlogDataContext
 }
 
-export const POSTS: BlogPost[] = []
+export const POSTS: BlogPost[] = [
+  freshsalesDeepDive202603,
+  happyfoxDeepDive202603,
+  migrationFromSentinelone202603,
+]

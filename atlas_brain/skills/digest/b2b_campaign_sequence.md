@@ -83,9 +83,10 @@ Respond with ONLY this JSON (no markdown fences, no extra text):
 - Use the recipient's company name naturally, not mechanically
 - The CTA should be ONE clear action (reply, book a call, visit a link)
 - Body should be valid HTML (use <p>, <br>, <a> tags) but keep formatting minimal -- no heavy templates
-- Sign off with the sender's name from the selling context
+- Sign off with the sender's name from the selling context. If a sender title is available, include it. If the sender name reads like a brand or company, sign off with the sender company or "the team" instead of dropping the signature.
 - angle_reasoning is for internal debugging -- be honest about what signal drove your decision
 - If this is a break-up email (last step), make it clear you won't email again unless they respond
-- If the original email included a competitive awareness angle (both sides having access to intelligence), maintain that thread naturally in follow-ups when relevant to the chosen strategy -- but don't force it. It's a supporting detail, not a repeated talking point.
+- Do not reuse adversarial competitive-awareness lines. If market timing matters, frame it as buyer activity or category movement, never as "your competitors get this too".
 - When the selling context includes `blog_posts`, reference ONE blog link per email as published analysis. Rotate posts across sequence steps -- never repeat the same post link in two emails. Frame as: "We recently published..." or "Our latest analysis covers..."
 - When the company context includes `target_persona`, maintain persona-consistent tone across all steps: `executive` = ROI/TCO/strategic focus with `economic_buyer` tone; `technical` = feature gaps/integration/migration with `evaluator` tone; `operations` = support quality/reliability/team productivity with `champion` tone. Match `role_type` from the context if present.
+- Subject lines must stay under 50 characters and must not reveal competitor names, premium account details, or the main paid insight.
