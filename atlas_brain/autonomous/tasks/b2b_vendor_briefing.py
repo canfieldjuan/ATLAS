@@ -558,7 +558,13 @@ async def send_vendor_briefing(
 
     sender_name = settings.b2b_churn.vendor_briefing_sender_name
     from_addr = f"{sender_name} <{cfg.resend_from_email}>"
-    subject = f"Churn Intelligence Briefing: {vendor_name}"
+
+    if briefing_data.get("prospect_mode"):
+        subject = f"{vendor_name} -- Churn Signals Detected"
+    elif briefing_data.get("is_gated_delivery"):
+        subject = f"Your {vendor_name} Churn Intelligence Report"
+    else:
+        subject = f"Churn Intelligence Briefing: {vendor_name}"
 
     resend_id: str | None = None
     status = "sent"

@@ -28,8 +28,9 @@ const Methodology = lazy(() => import('./pages/Methodology'))
 const BlogReview = lazy(() => import('./pages/BlogReview'))
 const CampaignReview = lazy(() => import('./pages/CampaignReview'))
 const Prospects = lazy(() => import('./pages/Prospects'))
+const Report = lazy(() => import('./pages/Report'))
 
-const PUBLIC_PATHS = ['/blog', '/landing', '/login', '/signup', '/forgot-password', '/reset-password', '/methodology']
+const PUBLIC_PATHS = ['/blog', '/landing', '/login', '/signup', '/forgot-password', '/reset-password', '/methodology', '/report']
 
 function isPublicPath(pathname: string): boolean {
   return PUBLIC_PATHS.some(p => pathname === p || pathname.startsWith(p + '/'))
@@ -59,6 +60,7 @@ export default function App() {
           <Route path="/signup" element={renderLazyRoute(Signup)} />
           <Route path="/forgot-password" element={renderLazyRoute(ForgotPassword)} />
           <Route path="/reset-password" element={renderLazyRoute(ResetPassword)} />
+          <Route path="/report" element={renderLazyRoute(Report)} />
         </Routes>
       </ErrorBoundary>
     )

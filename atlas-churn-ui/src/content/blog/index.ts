@@ -56,4 +56,8 @@ export const POSTS: BlogPost[] = [
   freshsalesDeepDive202603,
   happyfoxDeepDive202603,
   migrationFromSentinelone202603,
+  realCostOfAmazonWebServices202603,
+  amazonWebServicesVsGoogleCloudPlatform202603,
+  amazonWebServicesDeepDive202603,
+  googleCloudPlatformDeepDive202603,
 ]

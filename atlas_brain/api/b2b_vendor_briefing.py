@@ -188,7 +188,7 @@ async def briefing_gate(body: GateRequest):
         """,
         email,
     )
-    if count and count >= 3:
+    if count and count >= 10:
         raise HTTPException(status_code=429, detail="Too many requests -- try again tomorrow")
 
     # Suppression check
