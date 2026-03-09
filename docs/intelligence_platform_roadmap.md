@@ -70,7 +70,7 @@ Phase 2 deferred scope:
 
 | Item | Status | What's There | Key Gaps |
 |------|--------|-------------|----------|
-| Correction tools | **PARTIAL** | Campaign suppression management (CRUD). Campaign review queue (bulk approve/reject). Scrape target management (CRUD + MCP). Blog post admin (draft/edit/publish). Vendor alias management (MCP: `add_vendor_alias`, `add_vendor_to_registry`). | No vendor merge tool. No source suppression/quality control. No review-level correction/flagging. |
+| Correction tools | **PARTIAL** | Campaign suppression management (CRUD). Campaign review queue (bulk approve/reject). Scrape target management (CRUD + MCP). Blog post admin (draft/edit/publish). Vendor alias management (MCP: `add_vendor_alias`, `add_vendor_to_registry`). Vendor merge execution (Sprint 3): `merge_vendor` correction type renames vendor across 17 tables in a transaction, adds old name as alias, invalidates cache. | No source suppression/quality control. No review-level correction/flagging beyond suppress. |
 | Correction persistence | **DONE** (Sprints 1+2) | `campaign_audit_log` (immutable campaign events). `campaign_suppressions` (manual overrides). `data_corrections` table (general-purpose, 8 entity types, 5 correction types, full audit trail). REST CRUD endpoints (4). MCP tools (3). Sprint 2: all downstream SELECT queries filter by active suppress corrections via NOT EXISTS subqueries (16 review fetchers, 15 dashboard queries, 12 MCP tool queries). | Vendor merge application, field-level override reads. |
 
 ### Overall Score
@@ -83,7 +83,7 @@ Phase 2 deferred scope:
 | Phase 3 | **85%** | Daily vendor health snapshots, structural change event detection, historical query tools (MCP + dashboard). Displacement edges and keyword signals also time-series. Missing: product profile snapshots, cross-vendor correlation. |
 | Phase 4 | **70%** | Sprints 1-2 complete: outcome tracking, signal effectiveness, score calibration from outcomes. CRM event ingestion remains. |
 | Phase 5 | **80%** | API-first is solid (28 + 17 = 45 MCP tools). Sprint 1: webhook outbound delivery with per-tenant subscriptions, HMAC signing, retry, delivery log. Missing PDF export and CRM sync. UI is already clean. |
-| Phase 6 | **65%** | Campaign-side + vendor alias controls exist. Sprint 1 complete: `data_corrections` table, REST CRUD, MCP tools, audit trail. Sprint 2 complete: correction-aware queries on all entity tables (reviews, signals, displacement edges, pain points, use cases, integrations, buyer profiles). |
+| Phase 6 | **75%** | Campaign-side + vendor alias controls exist. Sprint 1: `data_corrections` table, REST CRUD, MCP tools, audit trail. Sprint 2: correction-aware queries on all entity tables. Sprint 3: vendor merge execution across 17 tables with alias registration. |
 
 ### What's Strong Today
 
@@ -152,6 +152,17 @@ Phase 2 deferred scope:
 8. Verify MCP `get_pipeline_status` counts exclude suppressed reviews
 9. Revert the correction: `POST /b2b/dashboard/corrections/{id}/revert`
 10. Verify the review reappears in all queries after revert
+
+**Phase 6 Sprint 3** (vendor merge execution): merge_vendor correction type now executes real merges.
+
+1. Create merge_vendor correction: `POST /b2b/dashboard/corrections` with entity_type=vendor, entity_id=<any uuid>, correction_type=merge_vendor, old_value="Source Vendor", new_value="Target Vendor", reason="Duplicate"
+2. Verify affected_count is populated on the correction record
+3. Verify metadata contains per-table counts (table_counts)
+4. Verify `b2b_reviews` rows with old vendor_name now show target vendor_name
+5. Verify `b2b_vendors` target entry has old name as alias
+6. Verify vendor cache invalidated (resolve_vendor_name returns canonical for old name)
+7. Test MCP: `create_data_correction` with correction_type=merge_vendor returns merge info
+8. Test validation: merge_vendor without old_value/new_value returns error
 
 **Phase 4 Sprint 2** (score calibration from outcomes): Migration 106 applied.
 

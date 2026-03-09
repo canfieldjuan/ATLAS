@@ -2588,6 +2588,12 @@ async def create_correction(
             raise HTTPException(status_code=400, detail="field_name required for override_field")
         if body.new_value is None:
             raise HTTPException(status_code=400, detail="new_value required for override_field")
+    if body.correction_type == "merge_vendor":
+        if not body.old_value or not body.new_value:
+            raise HTTPException(
+                status_code=400,
+                detail="merge_vendor requires old_value (source vendor) and new_value (target vendor)",
+            )
 
     try:
         entity_uuid = _uuid.UUID(body.entity_id)
@@ -2616,8 +2622,19 @@ async def create_correction(
         meta,
     )
 
+    correction_id = row["id"]
+
+    # Execute vendor merge if applicable
+    if body.correction_type == "merge_vendor":
+        from ..services.b2b.vendor_merge import execute_vendor_merge
+        merge_result = await execute_vendor_merge(pool, body.old_value, body.new_value)
+        await pool.execute(
+            "UPDATE data_corrections SET affected_count = $1, metadata = $2 WHERE id = $3",
+            merge_result["total_affected"], json.dumps(merge_result), correction_id,
+        )
+
     return {
-        "id": str(row["id"]),
+        "id": str(correction_id),
         "entity_type": row["entity_type"],
         "entity_id": str(row["entity_id"]),
         "correction_type": row["correction_type"],

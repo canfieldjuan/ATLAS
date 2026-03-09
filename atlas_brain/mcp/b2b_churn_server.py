@@ -2986,6 +2986,12 @@ async def create_data_correction(
             return json.dumps({"success": False, "error": "field_name required for override_field"})
         if new_value is None:
             return json.dumps({"success": False, "error": "new_value required for override_field"})
+    if correction_type == "merge_vendor":
+        if not old_value or not new_value:
+            return json.dumps({
+                "success": False,
+                "error": "merge_vendor requires old_value (source vendor) and new_value (target vendor)",
+            })
     if not _is_uuid(entity_id):
         return json.dumps({"success": False, "error": "entity_id must be a valid UUID"})
     if not reason or not reason.strip():
@@ -3015,17 +3021,34 @@ async def create_data_correction(
             corrected_by,
         )
 
-        return json.dumps({
+        correction_id = row["id"]
+
+        # Execute vendor merge if applicable
+        merge_info = None
+        if correction_type == "merge_vendor":
+            from ..services.b2b.vendor_merge import execute_vendor_merge
+            merge_result = await execute_vendor_merge(pool, old_value, new_value)
+            await pool.execute(
+                "UPDATE data_corrections SET affected_count = $1, metadata = $2 WHERE id = $3",
+                merge_result["total_affected"], json.dumps(merge_result), correction_id,
+            )
+            merge_info = merge_result
+
+        result = {
             "success": True,
             "correction": {
-                "id": str(row["id"]),
+                "id": str(correction_id),
                 "entity_type": row["entity_type"],
                 "entity_id": str(row["entity_id"]),
                 "correction_type": row["correction_type"],
                 "status": row["status"],
                 "created_at": str(row["created_at"]),
             },
-        }, default=str)
+        }
+        if merge_info:
+            result["merge"] = merge_info
+
+        return json.dumps(result, default=str)
     except Exception:
         logger.exception("create_data_correction error")
         return json.dumps({"success": False, "error": "Internal error"})
