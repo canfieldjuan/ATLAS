@@ -2206,7 +2206,7 @@ class B2BChurnConfig(BaseSettings):
 
     # Vendor intelligence briefings
     vendor_briefing_enabled: bool = Field(default=True, description="Enable vendor intelligence briefing emails")
-    vendor_briefing_booking_url: str = Field(default="https://cal.com/atlas-intel/15min", description="Booking URL for briefing CTA button")
+    vendor_briefing_booking_url: str = Field(default="https://churnsignals.co", description="Booking URL for briefing CTA button")
     vendor_briefing_sender_name: str = Field(default="Atlas Intelligence", description="Display name for briefing sender")
     vendor_briefing_cooldown_days: int = Field(default=7, description="Min days between briefings to same vendor")
     vendor_briefing_max_per_batch: int = Field(default=20, description="Max briefings per batch send run")

@@ -117,7 +117,7 @@ def render_vendor_briefing_html(briefing: dict) -> str:
         briefing.get("report_date"), date.today().isoformat()
     )
     booking_url = _safe(
-        briefing.get("booking_url"), "https://cal.com/atlas-intel/15min"
+        briefing.get("booking_url"), "https://churnsignals.co"
     )
 
     # Section 3: key metrics
