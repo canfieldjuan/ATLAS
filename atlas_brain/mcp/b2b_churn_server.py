@@ -47,6 +47,7 @@ Tools:
     trigger_score_calibration -- manually trigger score recalibration
     list_webhook_subscriptions -- list webhook subscriptions with delivery stats
     send_test_webhook_tool   -- send a test payload to verify webhook connectivity
+    export_report_pdf        -- export a B2B intelligence report as PDF
 
 Run:
     python -m atlas_brain.mcp.b2b_churn_server          # stdio
@@ -3029,7 +3030,7 @@ async def create_data_correction(
             from ..services.b2b.vendor_merge import execute_vendor_merge
             merge_result = await execute_vendor_merge(pool, old_value, new_value)
             await pool.execute(
-                "UPDATE data_corrections SET affected_count = $1, metadata = $2 WHERE id = $3",
+                "UPDATE data_corrections SET affected_count = $1, metadata = $2::jsonb WHERE id = $3",
                 merge_result["total_affected"], json.dumps(merge_result), correction_id,
             )
             merge_info = merge_result
@@ -3451,6 +3452,73 @@ async def send_test_webhook_tool(
     except Exception:
         logger.exception("send_test_webhook error")
         return json.dumps({"success": False, "error": "Internal error"})
+
+
+@mcp.tool()
+async def export_report_pdf(report_id: str) -> str:
+    """Export a B2B intelligence report as a PDF download link.
+
+    Returns base64-encoded PDF bytes so MCP clients can save the file locally.
+
+    Args:
+        report_id: UUID of the report from b2b_intelligence table.
+    """
+    if not _is_uuid(report_id):
+        return json.dumps({"error": "report_id must be a valid UUID"})
+    try:
+        import base64
+        import uuid as _u
+
+        from ..services.b2b.pdf_renderer import render_report_pdf
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"error": "Database not ready"})
+
+        row = await pool.fetchrow(
+            "SELECT * FROM b2b_intelligence WHERE id = $1",
+            _u.UUID(report_id),
+        )
+        if not row:
+            return json.dumps({"error": "Report not found"})
+
+        intel_data = row["intelligence_data"]
+        if isinstance(intel_data, str):
+            try:
+                intel_data = json.loads(intel_data)
+            except (json.JSONDecodeError, TypeError):
+                intel_data = {}
+
+        density = row["data_density"]
+        if isinstance(density, str):
+            try:
+                density = json.loads(density)
+            except (json.JSONDecodeError, TypeError):
+                density = {}
+
+        pdf_bytes = render_report_pdf(
+            report_type=row["report_type"],
+            vendor_filter=row["vendor_filter"],
+            category_filter=row["category_filter"],
+            report_date=row["report_date"],
+            executive_summary=row["executive_summary"],
+            intelligence_data=intel_data,
+            data_density=density,
+        )
+
+        vendor = row["vendor_filter"] or row["report_type"]
+        filename = f"atlas-report-{vendor}-{row['report_date'] or 'latest'}.pdf"
+        filename = filename.replace(" ", "-").lower()
+
+        return json.dumps({
+            "filename": filename,
+            "size_bytes": len(pdf_bytes),
+            "content_base64": base64.b64encode(pdf_bytes).decode(),
+        })
+    except Exception:
+        logger.exception("export_report_pdf error")
+        return json.dumps({"error": "Failed to generate PDF"})
 
 
 # ---------------------------------------------------------------------------

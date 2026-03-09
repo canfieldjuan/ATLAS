@@ -678,6 +678,59 @@ async def get_report(report_id: str, user: AuthUser | None = Depends(optional_au
 
 
 # ---------------------------------------------------------------------------
+# GET /reports/{report_id}/pdf
+# ---------------------------------------------------------------------------
+
+
+@router.get("/reports/{report_id}/pdf")
+async def export_report_pdf(report_id: str, user: AuthUser | None = Depends(optional_auth)):
+    """Download a B2B intelligence report as PDF."""
+    try:
+        rid = _uuid.UUID(report_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid report_id (must be UUID)")
+
+    pool = _pool_or_503()
+    row = await pool.fetchrow("SELECT * FROM b2b_intelligence WHERE id = $1", rid)
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    # Access control (same as get_report)
+    if user and row["account_id"] == user.account_id:
+        pass
+    elif user and row["vendor_filter"]:
+        is_tracked = await pool.fetchval(
+            "SELECT 1 FROM tracked_vendors WHERE account_id = $1::uuid AND vendor_name = $2",
+            user.account_id, row["vendor_filter"],
+        )
+        if not is_tracked:
+            raise HTTPException(status_code=403, detail="Report vendor not in your tracked list")
+
+    from ..services.b2b.pdf_renderer import render_report_pdf
+
+    pdf_bytes = render_report_pdf(
+        report_type=row["report_type"],
+        vendor_filter=row["vendor_filter"],
+        category_filter=row["category_filter"],
+        report_date=row["report_date"],
+        executive_summary=row["executive_summary"],
+        intelligence_data=_safe_json(row["intelligence_data"]),
+        data_density=_safe_json(row["data_density"]),
+    )
+
+    vendor = row["vendor_filter"] or row["report_type"]
+    filename = f"atlas-report-{vendor}-{row['report_date'] or 'latest'}.pdf"
+    filename = filename.replace(" ", "-").lower()
+
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ---------------------------------------------------------------------------
 # GET /reviews
 # ---------------------------------------------------------------------------
 
@@ -2629,7 +2682,7 @@ async def create_correction(
         from ..services.b2b.vendor_merge import execute_vendor_merge
         merge_result = await execute_vendor_merge(pool, body.old_value, body.new_value)
         await pool.execute(
-            "UPDATE data_corrections SET affected_count = $1, metadata = $2 WHERE id = $3",
+            "UPDATE data_corrections SET affected_count = $1, metadata = $2::jsonb WHERE id = $3",
             merge_result["total_affected"], json.dumps(merge_result), correction_id,
         )
 
