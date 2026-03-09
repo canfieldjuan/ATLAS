@@ -34,6 +34,7 @@ Tools:
     list_vendor_pain_points  -- query aggregated vendor pain points with confidence
     list_vendor_use_cases    -- query vendor use cases (modules mentioned in reviews)
     list_vendor_integrations -- query vendor integrations (tools mentioned in reviews)
+    list_vendor_buyer_profiles -- query aggregated buyer authority profiles per vendor
 
 Run:
     python -m atlas_brain.mcp.b2b_churn_server          # stdio
@@ -1442,12 +1443,12 @@ async def add_scrape_target(
     """
     Add a new scrape target to monitor a vendor on a review source.
 
-    source: Review source — one of: g2, capterra, trustradius, reddit, gartner,
+    source: Review source -- one of: g2, capterra, trustradius, reddit, gartner,
             getapp, github, hackernews, peerspot, producthunt, quora, rss,
             stackoverflow, trustpilot, twitter, youtube
     vendor_name: Vendor/company name (e.g. "Salesforce")
     product_slug: Format depends on source type:
-        URL-slug sources (required — used in URL construction):
+        URL-slug sources (required -- used in URL construction):
           g2: "salesforce-crm"
           capterra: "61368/Salesforce" (numeric-id/name)
           trustradius: "salesforce-crm"
@@ -1456,7 +1457,7 @@ async def add_scrape_target(
           getapp: "project-management-software/a/monday-com" (category/a/product)
           producthunt: "my-product" (GraphQL slug)
           trustpilot: "monday.com" (company domain)
-        Search sources (informational — vendor_name is used for search):
+        Search sources (informational -- vendor_name is used for search):
           reddit, hackernews, github, youtube, stackoverflow, quora, twitter:
           use vendor name as slug (e.g. "salesforce")
         Special:
@@ -2169,6 +2170,7 @@ async def list_vendor_pain_points(
 async def list_vendor_use_cases(
     vendor_name: Optional[str] = None,
     use_case_name: Optional[str] = None,
+    min_confidence: Optional[float] = None,
     min_mentions: Optional[int] = None,
     limit: int = 50,
 ) -> str:
@@ -2177,6 +2179,7 @@ async def list_vendor_use_cases(
 
     vendor_name: Filter by vendor (case-insensitive partial match)
     use_case_name: Filter by use case name (case-insensitive partial match)
+    min_confidence: Minimum confidence score (0.0-1.0)
     min_mentions: Minimum mention count
     limit: Max results (default 50, max 200)
     """
@@ -2201,6 +2204,11 @@ async def list_vendor_use_cases(
             params.append(use_case_name)
             idx += 1
 
+        if min_confidence is not None:
+            conditions.append(f"confidence_score >= ${idx}")
+            params.append(min_confidence)
+            idx += 1
+
         if min_mentions is not None:
             conditions.append(f"mention_count >= ${idx}")
             params.append(min_mentions)
@@ -2213,7 +2221,7 @@ async def list_vendor_use_cases(
             SELECT id, vendor_name, use_case_name, mention_count,
                    avg_urgency, lock_in_distribution,
                    source_distribution, sample_review_ids,
-                   first_seen_at, last_seen_at
+                   confidence_score, first_seen_at, last_seen_at
             FROM b2b_vendor_use_cases
             {where}
             ORDER BY mention_count DESC
@@ -2234,6 +2242,7 @@ async def list_vendor_use_cases(
                 "lock_in_distribution": _safe_json(r["lock_in_distribution"]),
                 "source_distribution": _safe_json(r["source_distribution"]),
                 "sample_review_ids": [str(rid) for rid in (r["sample_review_ids"] or [])],
+                "confidence_score": float(r["confidence_score"]) if r["confidence_score"] else 0,
                 "first_seen_at": str(r["first_seen_at"]) if r["first_seen_at"] else None,
                 "last_seen_at": str(r["last_seen_at"]) if r["last_seen_at"] else None,
             })
@@ -2248,6 +2257,7 @@ async def list_vendor_use_cases(
 async def list_vendor_integrations(
     vendor_name: Optional[str] = None,
     integration_name: Optional[str] = None,
+    min_confidence: Optional[float] = None,
     min_mentions: Optional[int] = None,
     limit: int = 50,
 ) -> str:
@@ -2256,6 +2266,7 @@ async def list_vendor_integrations(
 
     vendor_name: Filter by vendor (case-insensitive partial match)
     integration_name: Filter by integration name (case-insensitive partial match)
+    min_confidence: Minimum confidence score (0.0-1.0)
     min_mentions: Minimum mention count
     limit: Max results (default 50, max 200)
     """
@@ -2280,6 +2291,11 @@ async def list_vendor_integrations(
             params.append(integration_name)
             idx += 1
 
+        if min_confidence is not None:
+            conditions.append(f"confidence_score >= ${idx}")
+            params.append(min_confidence)
+            idx += 1
+
         if min_mentions is not None:
             conditions.append(f"mention_count >= ${idx}")
             params.append(min_mentions)
@@ -2291,7 +2307,7 @@ async def list_vendor_integrations(
             f"""
             SELECT id, vendor_name, integration_name, mention_count,
                    source_distribution, sample_review_ids,
-                   first_seen_at, last_seen_at
+                   confidence_score, first_seen_at, last_seen_at
             FROM b2b_vendor_integrations
             {where}
             ORDER BY mention_count DESC
@@ -2310,6 +2326,7 @@ async def list_vendor_integrations(
                 "mention_count": r["mention_count"],
                 "source_distribution": _safe_json(r["source_distribution"]),
                 "sample_review_ids": [str(rid) for rid in (r["sample_review_ids"] or [])],
+                "confidence_score": float(r["confidence_score"]) if r["confidence_score"] else 0,
                 "first_seen_at": str(r["first_seen_at"]) if r["first_seen_at"] else None,
                 "last_seen_at": str(r["last_seen_at"]) if r["last_seen_at"] else None,
             })
@@ -2317,6 +2334,101 @@ async def list_vendor_integrations(
         return json.dumps({"integrations": items, "count": len(items)}, default=str)
     except Exception:
         logger.exception("list_vendor_integrations error")
+        return json.dumps({"error": "Internal error"})
+
+
+@mcp.tool()
+async def list_vendor_buyer_profiles(
+    vendor_name: Optional[str] = None,
+    role_type: Optional[str] = None,
+    buying_stage: Optional[str] = None,
+    min_confidence: Optional[float] = None,
+    min_reviews: Optional[int] = None,
+    limit: int = 50,
+) -> str:
+    """
+    Query aggregated buyer authority profiles per vendor.
+
+    vendor_name: Filter by vendor (case-insensitive partial match)
+    role_type: Filter by role type (economic_buyer, champion, evaluator, end_user, unknown)
+    buying_stage: Filter by buying stage (active_purchase, evaluation, renewal_decision, post_purchase, unknown)
+    min_confidence: Minimum confidence score (0.0-1.0)
+    min_reviews: Minimum review count
+    limit: Max results (default 50, max 200)
+    """
+    limit = min(max(limit, 1), 200)
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"error": "Database not ready"})
+
+        conditions: list[str] = []
+        params: list = []
+        idx = 1
+
+        if vendor_name:
+            conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
+            params.append(vendor_name)
+            idx += 1
+
+        if role_type:
+            conditions.append(f"role_type = ${idx}")
+            params.append(role_type)
+            idx += 1
+
+        if buying_stage:
+            conditions.append(f"buying_stage = ${idx}")
+            params.append(buying_stage)
+            idx += 1
+
+        if min_confidence is not None:
+            conditions.append(f"confidence_score >= ${idx}")
+            params.append(min_confidence)
+            idx += 1
+
+        if min_reviews is not None:
+            conditions.append(f"review_count >= ${idx}")
+            params.append(min_reviews)
+            idx += 1
+
+        where = "WHERE " + " AND ".join(conditions) if conditions else ""
+
+        rows = await pool.fetch(
+            f"""
+            SELECT id, vendor_name, role_type, buying_stage,
+                   review_count, dm_count, avg_urgency,
+                   source_distribution, sample_review_ids,
+                   confidence_score, first_seen_at, last_seen_at
+            FROM b2b_vendor_buyer_profiles
+            {where}
+            ORDER BY review_count DESC
+            LIMIT ${idx}
+            """,
+            *params,
+            limit,
+        )
+
+        profiles = []
+        for r in rows:
+            profiles.append({
+                "id": str(r["id"]),
+                "vendor_name": r["vendor_name"],
+                "role_type": r["role_type"],
+                "buying_stage": r["buying_stage"],
+                "review_count": r["review_count"],
+                "dm_count": r["dm_count"],
+                "avg_urgency": float(r["avg_urgency"]) if r["avg_urgency"] is not None else None,
+                "source_distribution": _safe_json(r["source_distribution"]),
+                "sample_review_ids": [str(rid) for rid in (r["sample_review_ids"] or [])],
+                "confidence_score": float(r["confidence_score"]) if r["confidence_score"] else 0,
+                "first_seen_at": str(r["first_seen_at"]) if r["first_seen_at"] else None,
+                "last_seen_at": str(r["last_seen_at"]) if r["last_seen_at"] else None,
+            })
+
+        return json.dumps({"profiles": profiles, "count": len(profiles)}, default=str)
+    except Exception:
+        logger.exception("list_vendor_buyer_profiles error")
         return json.dumps({"error": "Internal error"})
 
 

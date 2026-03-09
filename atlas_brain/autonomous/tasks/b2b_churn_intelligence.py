@@ -22,6 +22,7 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from ...config import settings
+from ...services.company_normalization import normalize_company_name
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from ...services.scraping.sources import parse_source_allowlist, display_name as _source_display_name, VERIFIED_SOURCES
@@ -1130,7 +1131,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     prior_limit = cfg.prior_reports_limit
     today = date.today()
 
-    # Gather all 17 data sources + data_context + provenance + displacement provenance in parallel
+    # Gather all 17 data sources + data_context + provenance in parallel
     (
         vendor_scores, high_intent, competitive_disp,
         pain_dist, feature_gaps,
@@ -1141,6 +1142,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         keyword_spikes, data_context, vendor_provenance,
         displacement_provenance,
         pain_provenance, use_case_provenance, integration_provenance,
+        buyer_profile_provenance,
     ) = await asyncio.gather(
         _fetch_vendor_churn_scores(pool, window_days, min_reviews),
         _fetch_high_intent_companies(pool, urgency_threshold, window_days),
@@ -1165,6 +1167,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _fetch_pain_provenance(pool, window_days),
         _fetch_use_case_provenance(pool, window_days),
         _fetch_integration_provenance(pool, window_days),
+        _fetch_buyer_profile_provenance(pool, window_days),
         return_exceptions=True,
     )
 
@@ -1214,6 +1217,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if isinstance(integration_provenance, Exception):
         logger.warning("integration_provenance fetch failed: %s", integration_provenance)
         integration_provenance = {}
+    if isinstance(buyer_profile_provenance, Exception):
+        logger.warning("buyer_profile_provenance fetch failed: %s", buyer_profile_provenance)
+        buyer_profile_provenance = {}
 
     # Check if there's enough data
     if not vendor_scores and not high_intent:
@@ -1581,7 +1587,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         source = COALESCE(EXCLUDED.source, b2b_company_signals.source),
                         last_seen_at = EXCLUDED.last_seen_at
                     """,
-                    hi.get("company", ""),
+                    normalize_company_name(hi.get("company", "")),
                     hi.get("vendor", ""),
                     hi.get("urgency"),
                     hi.get("pain"),
@@ -1658,19 +1664,25 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     _uuid.UUID(rid) for rid in prov.get("sample_review_ids", [])
                     if rid
                 ]
+                confidence = _compute_evidence_confidence(
+                    prov["mention_count"],
+                    prov.get("source_distribution", {}),
+                )
                 await conn.execute(
                     """
                     INSERT INTO b2b_vendor_use_cases (
                         vendor_name, use_case_name, mention_count,
                         avg_urgency, lock_in_distribution,
-                        source_distribution, sample_review_ids, last_seen_at
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7::uuid[], NOW())
+                        source_distribution, sample_review_ids,
+                        confidence_score, last_seen_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7::uuid[], $8, NOW())
                     ON CONFLICT (vendor_name, use_case_name) DO UPDATE SET
                         mention_count = EXCLUDED.mention_count,
                         avg_urgency = EXCLUDED.avg_urgency,
                         lock_in_distribution = EXCLUDED.lock_in_distribution,
                         source_distribution = EXCLUDED.source_distribution,
                         sample_review_ids = EXCLUDED.sample_review_ids,
+                        confidence_score = EXCLUDED.confidence_score,
                         last_seen_at = EXCLUDED.last_seen_at
                     """,
                     vendor,
@@ -1680,6 +1692,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     json.dumps(prov.get("lock_in_distribution", {})),
                     json.dumps(prov.get("source_distribution", {})),
                     sample_ids,
+                    confidence,
                 )
                 use_cases_persisted += 1
     except Exception:
@@ -1695,16 +1708,22 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     _uuid.UUID(rid) for rid in prov.get("sample_review_ids", [])
                     if rid
                 ]
+                confidence = _compute_evidence_confidence(
+                    prov["mention_count"],
+                    prov.get("source_distribution", {}),
+                )
                 await conn.execute(
                     """
                     INSERT INTO b2b_vendor_integrations (
                         vendor_name, integration_name, mention_count,
-                        source_distribution, sample_review_ids, last_seen_at
-                    ) VALUES ($1, $2, $3, $4, $5::uuid[], NOW())
+                        source_distribution, sample_review_ids,
+                        confidence_score, last_seen_at
+                    ) VALUES ($1, $2, $3, $4, $5::uuid[], $6, NOW())
                     ON CONFLICT (vendor_name, integration_name) DO UPDATE SET
                         mention_count = EXCLUDED.mention_count,
                         source_distribution = EXCLUDED.source_distribution,
                         sample_review_ids = EXCLUDED.sample_review_ids,
+                        confidence_score = EXCLUDED.confidence_score,
                         last_seen_at = EXCLUDED.last_seen_at
                     """,
                     vendor,
@@ -1712,11 +1731,57 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     prov["mention_count"],
                     json.dumps(prov.get("source_distribution", {})),
                     sample_ids,
+                    confidence,
                 )
                 integrations_persisted += 1
     except Exception:
         integrations_persisted = 0
         logger.exception("Failed to persist vendor integrations")
+
+    # Persist buyer profiles to first-class table
+    buyer_profiles_persisted = 0
+    try:
+        async with pool.transaction() as conn:
+            for (vendor, role_type, buying_stage), prov in buyer_profile_provenance.items():
+                sample_ids = [
+                    _uuid.UUID(rid) for rid in prov.get("sample_review_ids", [])
+                    if rid
+                ]
+                confidence = _compute_evidence_confidence(
+                    prov["review_count"],
+                    prov.get("source_distribution", {}),
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO b2b_vendor_buyer_profiles (
+                        vendor_name, role_type, buying_stage,
+                        review_count, dm_count, avg_urgency,
+                        source_distribution, sample_review_ids,
+                        confidence_score, last_seen_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::uuid[], $9, NOW())
+                    ON CONFLICT (vendor_name, role_type, buying_stage) DO UPDATE SET
+                        review_count = EXCLUDED.review_count,
+                        dm_count = EXCLUDED.dm_count,
+                        avg_urgency = EXCLUDED.avg_urgency,
+                        source_distribution = EXCLUDED.source_distribution,
+                        sample_review_ids = EXCLUDED.sample_review_ids,
+                        confidence_score = EXCLUDED.confidence_score,
+                        last_seen_at = EXCLUDED.last_seen_at
+                    """,
+                    vendor,
+                    role_type,
+                    buying_stage,
+                    prov["review_count"],
+                    prov["dm_count"],
+                    prov.get("avg_urgency"),
+                    json.dumps(prov.get("source_distribution", {})),
+                    sample_ids,
+                    confidence,
+                )
+                buyer_profiles_persisted += 1
+    except Exception:
+        buyer_profiles_persisted = 0
+        logger.exception("Failed to persist buyer profiles")
 
     # Send ntfy notification
     await _send_notification(task, parsed, high_intent)
@@ -1738,6 +1803,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "pain_points_persisted": pain_points_persisted,
         "use_cases_persisted": use_cases_persisted,
         "integrations_persisted": integrations_persisted,
+        "buyer_profiles_persisted": buyer_profiles_persisted,
     }
 
 
@@ -2391,6 +2457,81 @@ async def _fetch_integration_provenance(
         for rid in (r["review_ids"] or []):
             if len(entry["sample_review_ids"]) < 20 and str(rid) not in entry["sample_review_ids"]:
                 entry["sample_review_ids"].append(str(rid))
+
+    return result
+
+
+async def _fetch_buyer_profile_provenance(
+    pool, window_days: int,
+) -> dict[tuple[str, str, str], dict]:
+    """Per-vendor/role_type/buying_stage provenance for buyer profiles.
+
+    Returns ``{(vendor, role_type, buying_stage): {review_count, dm_count,
+    avg_urgency, source_distribution, sample_review_ids}}``.
+    """
+    sources = _intelligence_source_allowlist()
+    filters = _eligible_review_filters(window_param=1, source_param=2)
+
+    rows = await pool.fetch(
+        f"""
+        SELECT vendor_name,
+            COALESCE(enrichment->'buyer_authority'->>'role_type', 'unknown') AS role_type,
+            COALESCE(enrichment->'buyer_authority'->>'buying_stage', 'unknown') AS buying_stage,
+            source,
+            count(*) AS cnt,
+            count(*) FILTER (
+                WHERE (enrichment->'buyer_authority'->>'decision_maker')::boolean IS TRUE
+            ) AS dm_cnt,
+            avg((enrichment->>'urgency_score')::numeric) AS avg_urg,
+            array_agg(id ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST)
+                FILTER (WHERE id IS NOT NULL) AS review_ids
+        FROM b2b_reviews
+        WHERE {filters}
+          AND enrichment->'buyer_authority' IS NOT NULL
+          AND enrichment->'buyer_authority' != 'null'::jsonb
+        GROUP BY vendor_name,
+            enrichment->'buyer_authority'->>'role_type',
+            enrichment->'buyer_authority'->>'buying_stage',
+            source
+        """,
+        window_days,
+        sources,
+    )
+
+    result: dict[tuple[str, str, str], dict] = {}
+    for r in rows:
+        vendor = _canonicalize_vendor(r["vendor_name"] or "")
+        role = r["role_type"] or "unknown"
+        stage = r["buying_stage"] or "unknown"
+        if not vendor:
+            continue
+        key = (vendor, role, stage)
+        if key not in result:
+            result[key] = {
+                "review_count": 0,
+                "dm_count": 0,
+                "avg_urgency": 0.0,
+                "source_distribution": {},
+                "sample_review_ids": [],
+                "_weighted_urgency_sum": 0.0,
+            }
+        entry = result[key]
+        cnt = r["cnt"]
+        entry["review_count"] += cnt
+        entry["dm_count"] += r["dm_cnt"]
+        entry["_weighted_urgency_sum"] += float(r["avg_urg"] or 0) * cnt
+        source = r["source"] or "unknown"
+        entry["source_distribution"][source] = (
+            entry["source_distribution"].get(source, 0) + cnt
+        )
+        for rid in (r["review_ids"] or []):
+            if len(entry["sample_review_ids"]) < 20 and str(rid) not in entry["sample_review_ids"]:
+                entry["sample_review_ids"].append(str(rid))
+
+    # Compute weighted avg urgency
+    for entry in result.values():
+        total = entry["review_count"]
+        entry["avg_urgency"] = round(entry.pop("_weighted_urgency_sum") / total, 1) if total else 0.0
 
     return result
 

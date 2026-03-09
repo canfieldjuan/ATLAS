@@ -1301,6 +1301,7 @@ async def list_vendor_pain_points(
 async def list_vendor_use_cases(
     vendor_name: Optional[str] = Query(None),
     use_case_name: Optional[str] = Query(None),
+    min_confidence: float = Query(0, ge=0, le=1),
     min_mentions: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     user: AuthUser | None = Depends(optional_auth),
@@ -1325,6 +1326,11 @@ async def list_vendor_use_cases(
         params.append(use_case_name)
         idx += 1
 
+    if min_confidence > 0:
+        conditions.append(f"confidence_score >= ${idx}")
+        params.append(min_confidence)
+        idx += 1
+
     if min_mentions > 0:
         conditions.append(f"mention_count >= ${idx}")
         params.append(min_mentions)
@@ -1337,7 +1343,7 @@ async def list_vendor_use_cases(
         SELECT id, vendor_name, use_case_name, mention_count,
                avg_urgency, lock_in_distribution,
                source_distribution, sample_review_ids,
-               first_seen_at, last_seen_at
+               confidence_score, first_seen_at, last_seen_at
         FROM b2b_vendor_use_cases
         {where}
         ORDER BY mention_count DESC
@@ -1358,6 +1364,7 @@ async def list_vendor_use_cases(
             "lock_in_distribution": _safe_json(r["lock_in_distribution"]),
             "source_distribution": _safe_json(r["source_distribution"]),
             "sample_review_ids": [str(rid) for rid in (r["sample_review_ids"] or [])],
+            "confidence_score": _safe_float(r["confidence_score"], 0),
             "first_seen_at": str(r["first_seen_at"]) if r["first_seen_at"] else None,
             "last_seen_at": str(r["last_seen_at"]) if r["last_seen_at"] else None,
         })
@@ -1374,6 +1381,7 @@ async def list_vendor_use_cases(
 async def list_vendor_integrations(
     vendor_name: Optional[str] = Query(None),
     integration_name: Optional[str] = Query(None),
+    min_confidence: float = Query(0, ge=0, le=1),
     min_mentions: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     user: AuthUser | None = Depends(optional_auth),
@@ -1398,6 +1406,11 @@ async def list_vendor_integrations(
         params.append(integration_name)
         idx += 1
 
+    if min_confidence > 0:
+        conditions.append(f"confidence_score >= ${idx}")
+        params.append(min_confidence)
+        idx += 1
+
     if min_mentions > 0:
         conditions.append(f"mention_count >= ${idx}")
         params.append(min_mentions)
@@ -1409,7 +1422,7 @@ async def list_vendor_integrations(
         f"""
         SELECT id, vendor_name, integration_name, mention_count,
                source_distribution, sample_review_ids,
-               first_seen_at, last_seen_at
+               confidence_score, first_seen_at, last_seen_at
         FROM b2b_vendor_integrations
         {where}
         ORDER BY mention_count DESC
@@ -1428,11 +1441,99 @@ async def list_vendor_integrations(
             "mention_count": r["mention_count"],
             "source_distribution": _safe_json(r["source_distribution"]),
             "sample_review_ids": [str(rid) for rid in (r["sample_review_ids"] or [])],
+            "confidence_score": _safe_float(r["confidence_score"], 0),
             "first_seen_at": str(r["first_seen_at"]) if r["first_seen_at"] else None,
             "last_seen_at": str(r["last_seen_at"]) if r["last_seen_at"] else None,
         })
 
     return {"integrations": items, "count": len(items)}
+
+
+# ---------------------------------------------------------------------------
+# GET /vendor-buyer-profiles
+# ---------------------------------------------------------------------------
+
+
+@router.get("/vendor-buyer-profiles")
+async def list_vendor_buyer_profiles(
+    vendor_name: Optional[str] = Query(None),
+    role_type: Optional[str] = Query(None),
+    buying_stage: Optional[str] = Query(None),
+    min_confidence: float = Query(0, ge=0, le=1),
+    min_reviews: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    user: AuthUser | None = Depends(optional_auth),
+):
+    pool = _pool_or_503()
+    conditions: list[str] = []
+    params: list = []
+    idx = 1
+
+    if user:
+        conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
+        params.append(user.account_id)
+        idx += 1
+
+    if vendor_name:
+        conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
+        params.append(vendor_name)
+        idx += 1
+
+    if role_type:
+        conditions.append(f"role_type = ${idx}")
+        params.append(role_type)
+        idx += 1
+
+    if buying_stage:
+        conditions.append(f"buying_stage = ${idx}")
+        params.append(buying_stage)
+        idx += 1
+
+    if min_confidence > 0:
+        conditions.append(f"confidence_score >= ${idx}")
+        params.append(min_confidence)
+        idx += 1
+
+    if min_reviews > 0:
+        conditions.append(f"review_count >= ${idx}")
+        params.append(min_reviews)
+        idx += 1
+
+    where = "WHERE " + " AND ".join(conditions) if conditions else ""
+
+    rows = await pool.fetch(
+        f"""
+        SELECT id, vendor_name, role_type, buying_stage,
+               review_count, dm_count, avg_urgency,
+               source_distribution, sample_review_ids,
+               confidence_score, first_seen_at, last_seen_at
+        FROM b2b_vendor_buyer_profiles
+        {where}
+        ORDER BY review_count DESC
+        LIMIT ${idx}
+        """,
+        *params,
+        limit,
+    )
+
+    items = []
+    for r in rows:
+        items.append({
+            "id": str(r["id"]),
+            "vendor_name": r["vendor_name"],
+            "role_type": r["role_type"],
+            "buying_stage": r["buying_stage"],
+            "review_count": r["review_count"],
+            "dm_count": r["dm_count"],
+            "avg_urgency": _safe_float(r["avg_urgency"], 0),
+            "source_distribution": _safe_json(r["source_distribution"]),
+            "sample_review_ids": [str(rid) for rid in (r["sample_review_ids"] or [])],
+            "confidence_score": _safe_float(r["confidence_score"], 0),
+            "first_seen_at": str(r["first_seen_at"]) if r["first_seen_at"] else None,
+            "last_seen_at": str(r["last_seen_at"]) if r["last_seen_at"] else None,
+        })
+
+    return {"profiles": items, "count": len(items)}
 
 
 # ---------------------------------------------------------------------------
