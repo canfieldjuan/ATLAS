@@ -22,22 +22,23 @@ Audit performed against the live codebase. Each phase item rated as **EXISTS**, 
 | Scrape telemetry | **EXISTS** | `b2b_scrape_log` table: target_id, source, status, reviews_found/inserted, pages_scraped, errors (JSONB), duration_ms, proxy_type, started_at. | Specific proxy IP, CAPTCHA solve time, and block type classification not persisted. |
 | Parser versioning | **EXISTS** | Migration 098 adds `parser_version` to `b2b_scrape_log`. Each parser reports its version string. Enables selective re-extraction when parsers improve. | No automatic re-processing trigger. |
 
-### Phase 2: Canonical Intelligence Model -- IN PROGRESS (Sprint 1 complete)
+### Phase 2: Canonical Intelligence Model -- IN PROGRESS (Sprint 2 complete)
 
 | Item | Status | What's There | Remaining Gaps |
 |------|--------|-------------|----------|
-| Canonical entities | **PARTIAL** | `b2b_churn_signals` (per-vendor), `b2b_product_profiles` (vendor knowledge cards), `b2b_keyword_signals` (search volume), `b2b_alert_baselines`. **Sprint 1 adds:** `b2b_displacement_edges` (append-only time-series, migration 099) and `b2b_company_signals` (UPSERT per company-vendor, migration 099). | Pain points, use cases, integrations, reviewer personas still in JSONB. |
+| Canonical entities | **PARTIAL** | `b2b_churn_signals` (per-vendor), `b2b_product_profiles` (vendor knowledge cards), `b2b_keyword_signals` (search volume), `b2b_alert_baselines`. **Sprint 1:** `b2b_displacement_edges` (append-only time-series, migration 099), `b2b_company_signals` (UPSERT per company-vendor, migration 099). **Sprint 2:** `b2b_vendor_pain_points` (UPSERT per vendor-category with confidence scoring, migration 100), `b2b_vendor_use_cases` (UPSERT per vendor-module, migration 100), `b2b_vendor_integrations` (UPSERT per vendor-tool, migration 100). | Reviewer personas still in JSONB. |
 | Identity resolution | **PARTIAL** | DB-backed `b2b_vendor_registry` with aliases (Phase 0). `_canonicalize_vendor()` / `_canonicalize_competitor()` applied at synthesis. Review-level dedup via SHA-256 dedup_key. | No vendor merge system. No fuzzy matching. No company-level identity resolution. |
-| Confidence scoring | **PARTIAL** | `confidence_score NUMERIC(3,2)` column on `b2b_displacement_edges`. Evidence-based 3-signal scoring (`_compute_displacement_confidence`): mention weight (log-scaled), source diversity, verified source proportion. Source distribution and sample review IDs persisted per edge. | Confidence not yet on `b2b_company_signals`, `b2b_churn_signals`, or `b2b_product_profiles`. Not propagated through full aggregation chain. |
+| Confidence scoring | **PARTIAL** | Evidence-based 3-signal scoring (`_compute_evidence_confidence`, renamed from `_compute_displacement_confidence`): mention weight (log-scaled), source diversity, verified source proportion. Applied to `b2b_displacement_edges` (Sprint 1) and `b2b_vendor_pain_points` (Sprint 2). Source distribution and sample review IDs persisted on all Sprint 1+2 tables. | Confidence not yet on `b2b_company_signals`, `b2b_churn_signals`, or `b2b_product_profiles`. Not propagated through full aggregation chain. |
 
-**Phase 2 Sprint 1 (displacement edges + company signals) is code-complete but NOT YET TESTED against a live intelligence run.** Migration 099 has not been applied to production DB. The next intelligence run will be the first live validation.
+**Phase 2 Sprint 1** (displacement edges + company signals): Migration 099 applied, live-validated.
 
-Phase 2 Sprint 2+ scope (deferred):
-- Pain point tables (promote from JSONB)
-- Integration/use-case tables
+**Phase 2 Sprint 2** (pain points + use cases + integrations): Migration 100 applied. Three provenance fetchers wired into `asyncio.gather` (20->23 concurrent). Three UPSERT persistence blocks with confidence scoring on pain points. Three new MCP tools (`list_vendor_pain_points`, `list_vendor_use_cases`, `list_vendor_integrations`). Three new dashboard endpoints (`/vendor-pain-points`, `/vendor-use-cases`, `/vendor-integrations`). CHECK constraint on pain_category matches actual enrichment values (pricing, support, features, ux, reliability, performance, integration, security, onboarding, other). **Awaiting first live intelligence run for validation.**
+
+Phase 2 Sprint 3+ scope (deferred):
 - Reviewer persona aggregations
 - Company-level identity resolution (fuzzy matching, aliases)
 - Full entity graph edges (vendor -> strong_in_use_case, vendor -> weak_on_pain_category)
+- Retroactive confidence scoring on use cases and integrations (source_distribution already persisted)
 
 ### Phase 3: Historical Memory
 
@@ -45,7 +46,7 @@ Phase 2 Sprint 2+ scope (deferred):
 |------|--------|-------------|----------|
 | Snapshots | **PARTIAL** | `b2b_keyword_signals` is a true weekly time-series with rolling averages and spike detection. Intelligence reports are date-stamped. `b2b_displacement_edges` is append-only with `computed_date` (new -- enables displacement trend queries). | `b2b_churn_signals` and `b2b_product_profiles` are upsert-overwritten -- no history. No vendor health snapshot table. |
 | Change events | **PARTIAL** | Trend labels (new/worsening/improving/stable) computed per-run by comparing to prior report. Keyword spike detection. High-urgency real-time ntfy alerts. | Trends embedded in report JSONB, not persisted as queryable events. No event log table. No structural change detection (new competitor, new displacement edge). |
-| Historical queries | **PARTIAL** | Prior report comparison (1 cycle back). Keyword rolling averages over 4 weeks. `get_displacement_history` MCP tool enables time-series queries for specific vendor pairs (new). | Cannot query "vendor X's churn density 3 months ago." No arbitrary historical range queries for most entities. |
+| Historical queries | **PARTIAL** | Prior report comparison (1 cycle back). Keyword rolling averages over 4 weeks. `get_displacement_history` MCP tool enables time-series queries for specific vendor pairs. Pain points, use cases, and integrations track `first_seen_at`/`last_seen_at` but are UPSERT (current-state, not time-series). | Cannot query "vendor X's churn density 3 months ago." No arbitrary historical range queries for most entities. |
 
 ### Phase 4: Action Feedback Loop
 
@@ -59,7 +60,7 @@ Phase 2 Sprint 2+ scope (deferred):
 
 | Item | Status | What's There | Key Gaps |
 |------|--------|-------------|----------|
-| API-first intelligence | **EXISTS** | Full REST API (dashboard, tenant, campaigns). B2B Churn MCP: 25 tools (was 18, +2 displacement edges, +5 vendor registry/source tools). Intelligence MCP: 17 tools. | -- |
+| API-first intelligence | **EXISTS** | Full REST API (dashboard, tenant, campaigns). B2B Churn MCP: 28 tools (was 25, +3 vendor pain/use-case/integration tools in Sprint 2). Intelligence MCP: 17 tools. | -- |
 | Alternate delivery | **PARTIAL** | Email digest (weekly tenant reports via Resend). CSV export (signals, reviews, high-intent). ntfy push notifications. | No PDF export. No webhook outbound. No CRM sync. No Slack/Teams integration. |
 | UI logic leakage | **CLEAN** | Frontend is display-only. All scoring, aggregation, analysis happen server-side. | -- |
 
@@ -76,17 +77,17 @@ Phase 2 Sprint 2+ scope (deferred):
 |-------|-------|---------|
 | Phase 0 | **90%** | Canonical source enum, vendor registry, provenance fields, source health metrics all delivered. Ingest-time normalization is the remaining gap. |
 | Phase 1 | **90%** | Orchestration, telemetry, capability profiles, parser versioning all exist. Minor telemetry gaps (proxy IP, CAPTCHA solve time). |
-| Phase 2 | **45%** | Sprint 1 complete: displacement edges + company signals are first-class tables with confidence scoring. Pain points, use cases, personas still in JSONB. Identity resolution still partial. **Not yet tested against live run.** |
+| Phase 2 | **65%** | Sprint 1+2 complete: displacement edges, company signals, pain points, use cases, integrations are first-class tables. Confidence scoring on edges + pain points. Reviewer personas still in JSONB. Identity resolution still partial. |
 | Phase 3 | **30%** | Displacement edges now provide one time-series entity. Keyword signals have rolling averages. Core vendor metrics still overwritten in place. |
 | Phase 4 | 15% | Campaign delivery is tracked but the feedback loop back to scoring is completely absent. |
-| Phase 5 | **70%** | API-first is solid (25 + 17 = 42 MCP tools). Missing PDF, webhooks, and CRM push. UI is already clean. |
+| Phase 5 | **70%** | API-first is solid (28 + 17 = 45 MCP tools). Missing PDF, webhooks, and CRM push. UI is already clean. |
 | Phase 6 | **30%** | Campaign-side + vendor alias controls exist. Intelligence-side corrections still missing. |
 
 ### What's Strong Today
 
 1. **Source orchestration** -- priority scheduling, retry, cooldown, concurrency, proxy fallback
 2. **Scrape telemetry** -- every run logged with status, duration, proxy type, yield, parser version
-3. **API-first delivery** -- full REST + 42 MCP tools, no intelligence logic in frontend
+3. **API-first delivery** -- full REST + 45 MCP tools, no intelligence logic in frontend
 4. **Campaign lifecycle** -- ESP webhooks, reply detection, audit log, funnel analytics
 5. **Consumer brand normalization** -- `comparisons.py` pipeline is production-grade
 6. **Canonical source identity** -- `ReviewSource` enum, display names, classification sets used everywhere
@@ -96,28 +97,29 @@ Phase 2 Sprint 2+ scope (deferred):
 
 1. **No feedback loop** -- campaign outcomes never improve signal scoring
 2. **No historical depth** -- core vendor metrics overwritten in place, no snapshots (displacement edges are the exception)
-3. **Remaining JSONB entities** -- pain points, use cases, integrations, reviewer personas not yet first-class
+3. **Reviewer personas still in JSONB** -- pain points, use cases, and integrations promoted in Sprint 2; reviewer personas remain
 4. **No company identity resolution** -- company names are free-text, no alias/merge system
-5. **Phase 2 untested** -- Sprint 1 code is complete but migration 099 not applied, no live intelligence run yet
+5. **Sprint 2 awaiting live run** -- migration 100 applied, code complete, needs first intelligence run to validate persistence counts
 
 ### Testing checkpoint
 
-Phase 2 Sprint 1 is a good stopping point for end-to-end validation before continuing to Sprint 2. Testing plan:
+**Sprint 1** (displacement edges + company signals): Validated -- migration 099 applied, tables populated.
 
-1. Apply migration 099 to the database
-2. Verify tables and indexes exist (`\d b2b_displacement_edges`, `\d b2b_company_signals`)
-3. Trigger a manual intelligence run and verify:
-   - `displacement_edges_persisted > 0` in the return dict
-   - `company_signals_persisted > 0` in the return dict
-   - `SELECT count(*) FROM b2b_displacement_edges` returns rows
-   - `SELECT count(*) FROM b2b_company_signals` returns rows
-   - Confidence scores are reasonable (0.0-1.0 range, higher for multi-source edges)
-   - Source distribution JSONB is populated per edge
-   - Sample review IDs reference real `b2b_reviews` rows
-4. Test MCP tools: `list_displacement_edges`, `get_displacement_history`
-5. Test dashboard endpoints: `GET /b2b/dashboard/displacement-edges`, `GET /b2b/dashboard/company-signals`
-6. Verify existing intelligence report JSONB still includes displacement data (backwards compatible)
-7. Verify existing tests still pass (28 validation + 22 keyword = 50 tests passing)
+**Sprint 2** (pain points + use cases + integrations): Migration 100 applied, tables created. Testing plan:
+
+1. Trigger a manual intelligence run and verify:
+   - `pain_points_persisted > 0`, `use_cases_persisted > 0`, `integrations_persisted > 0` in return dict
+   - `SELECT count(*) FROM b2b_vendor_pain_points` returns rows
+   - `SELECT count(*) FROM b2b_vendor_use_cases` returns rows
+   - `SELECT count(*) FROM b2b_vendor_integrations` returns rows
+   - Pain point confidence scores in 0.0-1.0 range
+   - `source_distribution` JSONB populated on all 3 tables
+   - `sample_review_ids` reference real `b2b_reviews` rows
+   - Pain categories match CHECK constraint (pricing, support, features, ux, reliability, performance, integration, security, onboarding, other)
+2. Test MCP tools: `list_vendor_pain_points`, `list_vendor_use_cases`, `list_vendor_integrations`
+3. Test dashboard endpoints: `GET /b2b/dashboard/vendor-pain-points`, `GET /b2b/dashboard/vendor-use-cases`, `GET /b2b/dashboard/vendor-integrations`
+4. Verify existing JSONB columns (`top_pain_categories`, `top_use_cases`, `top_integration_stacks`) still written (backwards compatible)
+5. Verify all tests pass: `python -m pytest tests/test_b2b_intelligence_validation.py -x` (33 tests)
 
 ---
 
