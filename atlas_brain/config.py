@@ -2201,7 +2201,7 @@ class B2BChurnConfig(BaseSettings):
         default="g2,capterra,trustradius,trustpilot,reddit,hackernews,quora",
         description="Sources to include in blog data queries (excludes stackoverflow, youtube, github)",
     )
-    # Regeneration mode — re-process existing drafts through fixed pipeline
+    # Regeneration mode -- re-process existing drafts through fixed pipeline
     blog_post_regenerate_mode: bool = Field(default=False, description="When True, regenerate existing draft posts instead of selecting new topics")
 
     # Vendor intelligence briefings
@@ -2210,6 +2210,14 @@ class B2BChurnConfig(BaseSettings):
     vendor_briefing_sender_name: str = Field(default="Atlas Intelligence", description="Display name for briefing sender")
     vendor_briefing_cooldown_days: int = Field(default=7, description="Min days between briefings to same vendor")
     vendor_briefing_max_per_batch: int = Field(default=20, description="Max briefings per batch send run")
+
+    # Analyst enrichment (OpenRouter)
+    openrouter_api_key: str = Field(default="", description="OpenRouter API key for analyst enrichment")
+    briefing_analyst_model: str = Field(default="moonshotai/kimi-k2.5", description="OpenRouter model for briefing analyst summary")
+
+    # Briefing gate (email capture for full report)
+    vendor_briefing_gate_base_url: str = Field(default="https://churnsignals.co/report", description="Base URL for briefing gate landing page")
+    vendor_briefing_gate_expiry_days: int = Field(default=7, description="Gate token expiry in days")
 
 
 class B2BAlertConfig(BaseSettings):
@@ -2591,7 +2599,7 @@ class AlertMonitorConfig(BaseSettings):
 
 
 class NewsIntelligenceConfig(BaseSettings):
-    """News intelligence configuration — entity-level pressure signal detection.
+    """News intelligence configuration -- entity-level pressure signal detection.
 
     Monitors a watchlist of entities (public companies, sports teams, markets,
     crypto, or custom topics) via the NewsAPI and identifies which ones are
@@ -2609,7 +2617,7 @@ class NewsIntelligenceConfig(BaseSettings):
     enabled: bool = Field(default=False, description="Enable daily news intelligence analysis")
     api_key: str | None = Field(default=None, description="NewsAPI.org API key (newsapi.org/register)")
 
-    # Watchlist — primary entity configuration
+    # Watchlist -- primary entity configuration
     watchlist: str = Field(
         default=(
             '[{"name":"Apple Inc","type":"company","query":"Apple AAPL supply chain earnings","ticker":"AAPL"},'
@@ -2627,7 +2635,7 @@ class NewsIntelligenceConfig(BaseSettings):
     topics: str = Field(
         default="",
         description=(
-            "Comma-separated plain-text topics (simple mode — used only when watchlist is empty). "
+            "Comma-separated plain-text topics (simple mode -- used only when watchlist is empty). "
             "Prefer the watchlist for entity-specific tracking."
         ),
     )
@@ -2648,7 +2656,7 @@ class NewsIntelligenceConfig(BaseSettings):
     pressure_velocity_threshold: float = Field(
         default=1.5, ge=1.0, le=10.0,
         description=(
-            "Minimum volume growth multiplier to flag a pressure signal — "
+            "Minimum volume growth multiplier to flag a pressure signal -- "
             "1.5 means 50% more articles than the recent daily average"
         ),
     )
@@ -2661,14 +2669,14 @@ class NewsIntelligenceConfig(BaseSettings):
     sentiment_enabled: bool = Field(
         default=True,
         description=(
-            "Score sentiment shift per entity — a sudden increase in negative (or positive) "
+            "Score sentiment shift per entity -- a sudden increase in negative (or positive) "
             "tone often precedes a meaningful movement"
         ),
     )
     source_diversity_enabled: bool = Field(
         default=True,
         description=(
-            "Score source diversity — when a story spreads from niche outlets to mainstream "
+            "Score source diversity -- when a story spreads from niche outlets to mainstream "
             "the diversity score rises, strengthening the pressure signal"
         ),
     )
@@ -2676,7 +2684,7 @@ class NewsIntelligenceConfig(BaseSettings):
         default=1.3, ge=1.0, le=10.0,
         description=(
             "Minimum composite pressure score to flag a signal. "
-            "Composite = velocity × sentiment_factor × diversity_factor × linguistic_factor. "
+            "Composite = velocity * sentiment_factor * diversity_factor * linguistic_factor. "
             "Lower than velocity_threshold because extra dimensions add confirmation."
         ),
     )
@@ -2686,35 +2694,35 @@ class NewsIntelligenceConfig(BaseSettings):
         default=True,
         description=(
             "Enable linguistic pre-indicator pattern analysis. "
-            "Detects language patterns that statistically appear before major movements — "
+            "Detects language patterns that statistically appear before major movements -- "
             "hedging, deflection, insider sourcing, and escalation language."
         ),
     )
     linguistic_hedge_enabled: bool = Field(
         default=True,
         description=(
-            "Detect hedging/uncertainty language ('reportedly', 'could', 'may', 'sources say') — "
+            "Detect hedging/uncertainty language ('reportedly', 'could', 'may', 'sources say') -- "
             "builds before unconfirmed information goes mainstream"
         ),
     )
     linguistic_deflection_enabled: bool = Field(
         default=True,
         description=(
-            "Detect deflection/denial language ('denies', 'dismisses', 'refuses to comment') — "
+            "Detect deflection/denial language ('denies', 'dismisses', 'refuses to comment') -- "
             "denial clusters often appear immediately before a story breaks"
         ),
     )
     linguistic_insider_enabled: bool = Field(
         default=True,
         description=(
-            "Detect insider/source language ('people familiar with the matter', 'anonymous sources') — "
+            "Detect insider/source language ('people familiar with the matter', 'anonymous sources') -- "
             "indicates information leakage before official disclosure"
         ),
     )
     linguistic_escalation_enabled: bool = Field(
         default=True,
         description=(
-            "Detect escalation/urgency language ('breaking', 'crisis', 'urgent', 'imminent') — "
+            "Detect escalation/urgency language ('breaking', 'crisis', 'urgent', 'imminent') -- "
             "urgency words in trade press before mainstream indicates accelerating pressure"
         ),
     )
@@ -2722,26 +2730,26 @@ class NewsIntelligenceConfig(BaseSettings):
         default=True,
         description=(
             "Detect moral permission language ('must be stopped', 'for the greater good', "
-            "'no option but') — grants readers permission to act against prior values, "
+            "'no option but') -- grants readers permission to act against prior values, "
             "often appears before coordinated pressure campaigns"
         ),
     )
     linguistic_certainty_enabled: bool = Field(
         default=True,
         description=(
-            "Detect certainty/moral panic language ('undeniable', 'settled', 'always', 'never') — "
+            "Detect certainty/moral panic language ('undeniable', 'settled', 'always', 'never') -- "
             "absolute language combined with emotional triggers precedes coordinated narratives"
         ),
     )
     linguistic_dissociation_enabled: bool = Field(
         default=True,
         description=(
-            "Detect we/us → they/them language shifts and label-based framing ('these people', "
-            "'their kind', 'outsiders') — group identity dissociation builds before major events"
+            "Detect we/us -> they/them language shifts and label-based framing ('these people', "
+            "'their kind', 'outsiders') -- group identity dissociation builds before major events"
         ),
     )
 
-    # SORAM Framework (Chase Hughes) — 5 societal pressure channels
+    # SORAM Framework (Chase Hughes) -- 5 societal pressure channels
     soram_enabled: bool = Field(
         default=True,
         description=(
@@ -2753,7 +2761,7 @@ class NewsIntelligenceConfig(BaseSettings):
     soram_societal_enabled: bool = Field(
         default=True,
         description=(
-            "SORAM Societal: detect coordinated threat/fear framing across outlets — "
+            "SORAM Societal: detect coordinated threat/fear framing across outlets -- "
             "a sudden obsession with a specific 'threat' or 'misinformation' topic across "
             "unrelated platforms signals a coordinated pressure campaign"
         ),
@@ -2761,28 +2769,28 @@ class NewsIntelligenceConfig(BaseSettings):
     soram_operational_enabled: bool = Field(
         default=True,
         description=(
-            "SORAM Operational: detect drills, simulations, and readiness exercises in coverage — "
+            "SORAM Operational: detect drills, simulations, and readiness exercises in coverage -- "
             "an increase in 'exercise' and 'preparedness' language often precedes actual events"
         ),
     )
     soram_regulatory_enabled: bool = Field(
         default=True,
         description=(
-            "SORAM Regulatory: detect new emergency powers, executive orders, or rule changes — "
+            "SORAM Regulatory: detect new emergency powers, executive orders, or rule changes -- "
             "quietly introduced regulations that are only useful if a certain crisis occurs"
         ),
     )
     soram_alignment_enabled: bool = Field(
         default=True,
         description=(
-            "SORAM Alignment: detect scripted consensus — when government, media, and tech "
+            "SORAM Alignment: detect scripted consensus -- when government, media, and tech "
             "begin using the exact same phrasing simultaneously (coordinated messaging)"
         ),
     )
     soram_media_novelty_enabled: bool = Field(
         default=True,
         description=(
-            "SORAM Media Novelty: detect novelty hijacking — a constant stream of 'breaking' "
+            "SORAM Media Novelty: detect novelty hijacking -- a constant stream of 'breaking' "
             "and unrelated urgent news keeps the brain in high suggestibility, often preceding "
             "a major coordinated narrative push"
         ),
@@ -2808,14 +2816,14 @@ class NewsIntelligenceConfig(BaseSettings):
         default=False,
         description=(
             "Monitor State Secretary of State filings for new business formations near watched entities. "
-            "Requires custom regional integration — see docs for setup."
+            "Requires custom regional integration -- see docs for setup."
         ),
     )
     county_recorder_enabled: bool = Field(
         default=False,
         description=(
             "Monitor county recorder / building permit data for commercial development signals. "
-            "Requires custom regional integration — see docs for setup."
+            "Requires custom regional integration -- see docs for setup."
         ),
     )
     bls_enabled: bool = Field(
@@ -2867,7 +2875,7 @@ class NewsIntelligenceConfig(BaseSettings):
     )
     schedule_hour: int = Field(
         default=5, ge=0, le=23,
-        description="Hour of day (0–23, local time) to run the daily intelligence analysis",
+        description="Hour of day (0-23, local time) to run the daily intelligence analysis",
     )
 
     # Output

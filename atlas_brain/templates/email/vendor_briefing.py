@@ -126,6 +126,17 @@ def render_vendor_briefing_html(briefing: dict) -> str:
     review_count = _safe(briefing.get("review_count", 0), "0")
     dm_rate = _fmt_pct(briefing.get("dm_churn_rate", 0))
 
+    # Analyst enrichment fields
+    headline = briefing.get("headline", "")
+    executive_summary = briefing.get("executive_summary", "")
+    pain_labels = briefing.get("pain_labels") or {}
+    cta_hook = briefing.get("cta_hook", "")
+    cta_description = briefing.get("cta_description", "")
+    displacement_qualifier = briefing.get("displacement_qualifier", "")
+    gate_url = briefing.get("gate_url", "")
+    is_gated_delivery = briefing.get("is_gated_delivery", False)
+    prospect_mode = briefing.get("prospect_mode", False)
+
     # Section 4: pain breakdown
     pains = briefing.get("pain_breakdown") or []
     pains = pains[:5]
@@ -138,16 +149,17 @@ def render_vendor_briefing_html(briefing: dict) -> str:
 
     pain_rows = ""
     for p in pains:
-        cat = _safe(p.get("category"), "Other")
+        raw_cat = p.get("category", "Other")
+        cat = _safe(pain_labels.get(raw_cat, raw_cat), "Other")
         try:
             cnt = int(p.get("count", 0))
         except (TypeError, ValueError):
             cnt = 0
-        color = _pain_color(cat)
+        color = _pain_color(raw_cat)
         width = _bar_width(cnt, max_pain)
         pain_rows += f"""
         <tr>
-          <td style="padding:4px 8px 4px 0;font-size:14px;color:#333;width:120px;white-space:nowrap;">{cat}</td>
+          <td style="padding:4px 8px 4px 0;font-size:14px;color:#333;width:180px;white-space:nowrap;">{cat}</td>
           <td style="padding:4px 0;">
             <table cellpadding="0" cellspacing="0" border="0" style="width:100%;">
               <tr>
@@ -162,6 +174,14 @@ def render_vendor_briefing_html(briefing: dict) -> str:
     # Section 5: displacement
     displacements = briefing.get("top_displacement_targets") or []
     displacements = displacements[:5]
+
+    displacement_qual_html = ""
+    if displacement_qualifier:
+        dq_escaped = escape(displacement_qualifier)
+        displacement_qual_html = (
+            f'<div style="margin-top:8px;font-size:12px;color:#888;'
+            f'font-style:italic;">{dq_escaped}</div>'
+        )
 
     displacement_rows = ""
     for d in displacements:
@@ -195,24 +215,59 @@ def render_vendor_briefing_html(briefing: dict) -> str:
     named_accounts = briefing.get("named_accounts") or []
     named_accounts_html = ""
     if named_accounts:
-        account_rows = ""
-        for acct in named_accounts[:8]:
-            company = _safe(acct.get("company"), "Unknown")
-            urg = acct.get("urgency", 0)
-            try:
-                urg_val = float(urg)
-            except (TypeError, ValueError):
-                urg_val = 0
-            if urg_val >= 8:
-                badge_color = "#e74c3c"
-                badge_label = "Critical"
-            elif urg_val >= 6:
-                badge_color = "#f39c12"
-                badge_label = "High"
-            else:
-                badge_color = "#3498db"
-                badge_label = "Watch"
-            account_rows += f"""
+        if prospect_mode:
+            # Redacted version for sales/demo -- show count + risk levels only
+            critical = sum(
+                1 for a in named_accounts
+                if float(a.get("urgency", 0)) >= 8
+            )
+            high = sum(
+                1 for a in named_accounts
+                if 6 <= float(a.get("urgency", 0)) < 8
+            )
+            watch = len(named_accounts) - critical - high
+            risk_parts = []
+            if critical:
+                risk_parts.append(f"{critical} critical")
+            if high:
+                risk_parts.append(f"{high} high")
+            if watch:
+                risk_parts.append(f"{watch} watch")
+            risk_text = ", ".join(risk_parts)
+
+            named_accounts_html = f"""
+        <!-- Named Accounts (redacted) -->
+        <table cellpadding="0" cellspacing="0" border="0" style="width:100%;margin-bottom:28px;">
+          <tr><td style="padding:0 24px;">
+            <h3 style="margin:0 0 12px;font-size:16px;color:#1a2332;">Accounts at Risk</h3>
+            <div style="background:#fafafa;border:1px solid #eee;border-radius:6px;padding:16px 20px;text-align:center;">
+              <div style="font-size:28px;font-weight:700;color:#1a2332;">{len(named_accounts)}</div>
+              <div style="font-size:13px;color:#888;margin-top:4px;">enterprise accounts flagged</div>
+              <div style="font-size:13px;color:#555;margin-top:8px;">{risk_text}</div>
+              <div style="font-size:12px;color:#999;margin-top:10px;font-style:italic;">Full account list available in paid briefing</div>
+            </div>
+          </td></tr>
+        </table>"""
+        else:
+            # Full version for paying clients
+            account_rows = ""
+            for acct in named_accounts[:8]:
+                company = _safe(acct.get("company"), "Unknown")
+                urg = acct.get("urgency", 0)
+                try:
+                    urg_val = float(urg)
+                except (TypeError, ValueError):
+                    urg_val = 0
+                if urg_val >= 8:
+                    badge_color = "#e74c3c"
+                    badge_label = "Critical"
+                elif urg_val >= 6:
+                    badge_color = "#f39c12"
+                    badge_label = "High"
+                else:
+                    badge_color = "#3498db"
+                    badge_label = "Watch"
+                account_rows += f"""
             <tr>
               <td style="padding:6px 12px;font-size:14px;color:#333;border-bottom:1px solid #eee;">{company}</td>
               <td style="padding:6px 12px;text-align:center;border-bottom:1px solid #eee;">
@@ -220,7 +275,7 @@ def render_vendor_briefing_html(briefing: dict) -> str:
               </td>
             </tr>"""
 
-        named_accounts_html = f"""
+            named_accounts_html = f"""
         <!-- Named Accounts -->
         <table cellpadding="0" cellspacing="0" border="0" style="width:100%;margin-bottom:28px;">
           <tr><td style="padding:0 24px;">
@@ -258,6 +313,61 @@ def render_vendor_briefing_html(briefing: dict) -> str:
                 </ul>
               </td></tr>
             </table>"""
+
+    # Section 9: CTA content
+    cta_title = escape(cta_hook) if cta_hook else f"Get weekly intelligence for {vendor}"
+    cta_description_html = ""
+    cta_description = briefing.get("cta_description", "")
+    if cta_description:
+        cta_description_html = (
+            '<div style="font-size:14px;color:#555;margin-bottom:16px;">'
+            f'{escape(cta_description)}</div>'
+        )
+    elif not cta_hook:
+        cta_description_html = (
+            '<div style="font-size:14px;color:#555;margin-bottom:16px;">'
+            "See who&#39;s churning, why, and where they&#39;re going -- every week."
+            "</div>"
+        )
+
+    if prospect_mode:
+        cta_button_label = "See the Full Report"
+        cta_button_sub = (
+            '<div style="font-size:12px;color:#888;margin-top:10px;">'
+            "Includes named accounts, full displacement map, and all evidence."
+            "</div>"
+        )
+        cta_link = gate_url or booking_url
+    elif is_gated_delivery:
+        cta_button_label = "Want This Every Week?"
+        cta_button_sub = (
+            '<div style="font-size:13px;color:#555;margin-top:10px;">'
+            "Reply to this email and I&#39;ll set up weekly briefings for you."
+            "</div>"
+        )
+        cta_link = booking_url
+    else:
+        cta_button_label = "Walk Through This Week&#39;s Findings"
+        cta_button_sub = ""
+        cta_link = booking_url
+
+    cta_button_html = (
+        "<!--[if mso]>"
+        f'<v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="{cta_link}"'
+        ' style="height:44px;v-text-anchor:middle;width:280px;" arcsize="12%"'
+        ' stroke="f" fillcolor="#2980b9">'
+        "<w:anchorlock/>"
+        f'<center style="color:#ffffff;font-family:Arial,sans-serif;font-size:15px;'
+        f'font-weight:bold;">{cta_button_label}</center>'
+        "</v:roundrect>"
+        "<![endif]-->"
+        "<!--[if !mso]><!-->"
+        f'<a href="{cta_link}" style="display:inline-block;padding:12px 32px;'
+        "background:#2980b9;color:#ffffff;text-decoration:none;border-radius:6px;"
+        f'font-size:15px;font-weight:600;">{cta_button_label}</a>'
+        "<!--<![endif]-->"
+        f"{cta_button_sub}"
+    )
 
     # -----------------------------------------------------------------------
     # Assemble full document
@@ -313,6 +423,24 @@ def render_vendor_briefing_html(briefing: dict) -> str:
     </td>
   </tr>
 
+  {"" if not headline else f'''
+  <!-- Headline -->
+  <tr>
+    <td style="padding:16px 24px 0;">
+      <div style="font-size:17px;font-weight:700;color:#2c3e50;line-height:1.3;">{escape(headline)}</div>
+    </td>
+  </tr>
+  '''}
+
+  {"" if not executive_summary else f'''
+  <!-- Executive Summary -->
+  <tr>
+    <td style="padding:12px 24px 4px;">
+      <div style="font-size:14px;color:#444;line-height:1.6;border-left:3px solid #2980b9;padding-left:14px;">{escape(executive_summary)}</div>
+    </td>
+  </tr>
+  '''}
+
   <!-- Divider -->
   <tr><td style="padding:0 24px;"><hr style="border:none;border-top:1px solid #eee;margin:0;"></td></tr>
 
@@ -361,7 +489,7 @@ def render_vendor_briefing_html(briefing: dict) -> str:
   {"" if not displacement_rows else f'''
   <tr>
     <td style="padding:20px 24px;">
-      <h3 style="margin:0 0 14px;font-size:16px;color:#1a2332;">Where They're Going</h3>
+      <h3 style="margin:0 0 14px;font-size:16px;color:#1a2332;">Where They&#39;re Going</h3>
       <table cellpadding="0" cellspacing="0" border="0" style="width:100%;border:1px solid #eee;border-radius:6px;overflow:hidden;">
         <tr style="background:#f8f9fa;">
           <th style="padding:8px 12px;text-align:left;font-size:12px;color:#888;font-weight:600;text-transform:uppercase;">Competitor</th>
@@ -369,6 +497,7 @@ def render_vendor_briefing_html(briefing: dict) -> str:
         </tr>
         {displacement_rows}
       </table>
+      {displacement_qual_html}
     </td>
   </tr>
   '''}
@@ -393,17 +522,9 @@ def render_vendor_briefing_html(briefing: dict) -> str:
       <table cellpadding="0" cellspacing="0" border="0" style="width:100%;background:#f0f4f8;border-radius:8px;">
         <tr>
           <td style="padding:24px;text-align:center;">
-            <div style="font-size:16px;color:#1a2332;font-weight:600;margin-bottom:8px;">Get weekly intelligence for {vendor}</div>
-            <div style="font-size:14px;color:#555;margin-bottom:16px;">See who's churning, why, and where they're going -- every week.</div>
-            <!--[if mso]>
-            <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="{booking_url}" style="height:44px;v-text-anchor:middle;width:260px;" arcsize="12%" stroke="f" fillcolor="#2980b9">
-              <w:anchorlock/>
-              <center style="color:#ffffff;font-family:Arial,sans-serif;font-size:15px;font-weight:bold;">Book a 15-Minute Strategy Call</center>
-            </v:roundrect>
-            <![endif]-->
-            <!--[if !mso]><!-->
-            <a href="{booking_url}" style="display:inline-block;padding:12px 32px;background:#2980b9;color:#ffffff;text-decoration:none;border-radius:6px;font-size:15px;font-weight:600;">Book a 15-Minute Strategy Call</a>
-            <!--<![endif]-->
+            <div style="font-size:16px;color:#1a2332;font-weight:600;margin-bottom:8px;">{cta_title}</div>
+            {cta_description_html}
+            {cta_button_html}
           </td>
         </tr>
       </table>

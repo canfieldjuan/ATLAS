@@ -12,6 +12,10 @@ interface ChartConfig {
   [key: string]: unknown
 }
 
+interface BlogDataContext {
+  [key: string]: unknown
+}
+
 export interface ChartSpec {
   chart_id: string
   chart_type: 'bar' | 'horizontal_bar' | 'radar' | 'line'
@@ -30,6 +34,7 @@ export interface BlogPost {
   content: string
   charts?: ChartSpec[]
   topic_type?: string
+  data_context?: BlogDataContext
 }
 
 import amazonReviewMonitoringTools from './amazon-review-monitoring-tools-2026-03'

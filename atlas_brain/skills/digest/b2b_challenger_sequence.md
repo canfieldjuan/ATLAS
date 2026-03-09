@@ -86,7 +86,7 @@ Respond with ONLY this JSON (no markdown fences, no extra text):
 - NEVER repeat the same subject line or opening as a previous email in the sequence
 - NEVER copy-paste content from previous emails -- each step must be fresh
 - **HARD WORD LIMIT**: Follow-up body under 100 words. Break-up body under 60 words. If the body exceeds the limit, you have failed this task.
-- **Subject lines** MUST be under 50 characters
+- **Subject lines** MUST be under 50 characters. NEVER use spam trigger words: "urgent", "urgency", "act now", "limited time", "alert", "warning", "immediate", "free", "guaranteed".
 - Body must be valid HTML -- use `<p>`, `<br>`, `<a>` tags only. No heavy templates.
 - Use the recipient's company name naturally, not mechanically
 - The CTA should be ONE clear action (reply, book a call, visit a link)

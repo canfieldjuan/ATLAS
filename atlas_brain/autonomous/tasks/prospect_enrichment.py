@@ -13,33 +13,14 @@ Respects credit budget (max_credits_per_run) and org cache TTL (org_cache_days).
 
 import json
 import logging
-import re
 from typing import Any
 
 from ...config import settings
+from ...services.company_normalization import normalize_company_name as _normalize_company
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 
 logger = logging.getLogger("atlas.autonomous.tasks.prospect_enrichment")
-
-# Legal suffixes to strip for normalization
-_LEGAL_SUFFIXES = re.compile(
-    r"\b(inc|incorporated|llc|ltd|limited|corp|corporation|co|company|plc|gmbh|ag|sa|srl|pty|nv|bv)\b\.?",
-    re.IGNORECASE,
-)
-_MULTI_SPACE = re.compile(r"\s+")
-
-
-_TRAILING_PUNCT = re.compile(r"[,.\-;:]+$")
-
-
-def _normalize_company(name: str) -> str:
-    """Lowercase, strip legal suffixes, collapse whitespace, strip trailing punctuation."""
-    n = name.lower().strip()
-    n = _LEGAL_SUFFIXES.sub("", n)
-    n = _MULTI_SPACE.sub(" ", n).strip()
-    n = _TRAILING_PUNCT.sub("", n).strip()
-    return n
 
 
 async def _discover_companies(pool, cfg) -> list[dict[str, str]]:
@@ -112,7 +93,7 @@ async def _enrich_company(pool, apollo, cfg, company: dict[str, str], credits_us
     credits = 0
     stats: dict[str, Any] = {"company": raw, "prospects_created": 0}
 
-    # Check org cache — skip if recently processed (even if no prospects found)
+    # Check org cache -- skip if recently processed (even if no prospects found)
     cached = await pool.fetchrow(
         "SELECT id, status, enriched_at FROM prospect_org_cache WHERE company_name_norm = $1",
         norm,
@@ -123,7 +104,7 @@ async def _enrich_company(pool, apollo, cfg, company: dict[str, str], credits_us
         stats["skipped"] = "previously_not_found"
         return credits, stats
 
-    # People search by company name (FREE — no credits)
+    # People search by company name (FREE -- no credits)
     people = await apollo.search_people(company_name=raw, seniorities=cfg.target_seniorities)
     if not people:
         # Widen to any seniority and retry once

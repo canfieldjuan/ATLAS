@@ -67,8 +67,8 @@ Return a JSON object:
 
 4. **Never reveal exact data sources.** Don't mention G2, Capterra, Reddit. Frame as "market intelligence", "intent monitoring", "competitive signal tracking."
 
-5. **DO reveal aggregated intelligence** — but **layer it across emails**:
-   - **email_cold** reveals: lead count, buying stage distribution, deal size indicators, and the pain categories driving the switch. Do NOT name specific incumbents in the cold email — say "leaving their current platform" not "leaving Salesforce." Save incumbent names for the follow-up.
+5. **DO reveal aggregated intelligence** -- but **layer it across emails**:
+   - **email_cold** reveals: lead count, buying stage distribution, deal size indicators, and the pain categories driving the switch. Do NOT name specific incumbents in the cold email -- say "leaving their current platform" not "leaving Salesforce." Save incumbent names for the follow-up.
    - **email_followup** reveals: which specific incumbents are losing accounts (now name them), the displacement pattern, and why those accounts are vulnerable. This is the NEW information that justifies the follow-up.
 
 6. **Match tone to contact_role:**
@@ -89,13 +89,13 @@ Return a JSON object:
 
 11. **Keep it peer-to-peer.** Consultative, data-backed, no hype. You're sharing market intelligence, not pitching software.
 
-12. **email_followup**: Must add NEW value the cold email didn't have. The cold email hooks with lead count, buying stages, and pain categories. The follow-up drills into which specific incumbents are losing accounts, the displacement pattern, and why — now name the competitors. Reference the cold email context provided in `cold_email_context` and build on it — don't repeat the same data.
+12. **email_followup**: Must add NEW value the cold email didn't have. The cold email hooks with lead count, buying stages, and pain categories. The follow-up drills into which specific incumbents are losing accounts, the displacement pattern, and why -- now name the competitors. Reference the cold email context provided in `cold_email_context` and build on it -- don't repeat the same data.
 
 13. **Sign off** with `selling.sender_name` if provided. If `selling.sender_title` is present, include it in the signature. If `selling.sender_name` looks like an organization instead of a person, sign off as `selling.sender_company` or "the team". Include `selling.booking_url` in the CTA.
 
 14. **Do NOT include** placeholder brackets. Use actual values.
 
-15. **Subject lines**: Curiosity-driven. Good: "12 companies evaluating your product right now" -- Bad: "Grow your pipeline with our intent data". Never put incumbent names, premium lead details, or the core reveal in the subject line.
+15. **Subject lines**: Curiosity-driven. Good: "12 companies evaluating your product right now" -- Bad: "Grow your pipeline with our intent data". Never put incumbent names, premium lead details, or the core reveal in the subject line. NEVER use spam trigger words: "urgent", "urgency", "act now", "limited time", "don't miss", "last chance", "alert", "warning", "immediate", "guaranteed", "free", "risk-free". Describe the data, not the alarm.
 
 16. **Competitive awareness angle** -- one sentence per email, no more:
   - **email_cold**: If used, frame it as timing and category movement. Example: "The teams reaching these buyers earliest tend to win the evaluation." Keep it under 20 words.

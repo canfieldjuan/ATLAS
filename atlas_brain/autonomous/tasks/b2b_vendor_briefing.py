@@ -18,6 +18,8 @@ import logging
 from datetime import date
 from typing import Any
 
+import httpx
+
 from ...config import settings
 from ...services.campaign_sender import get_campaign_sender
 from ...services.vendor_registry import resolve_vendor_name
@@ -27,6 +29,209 @@ from ...templates.email.vendor_briefing import render_vendor_briefing_html
 from .campaign_suppression import is_suppressed
 
 logger = logging.getLogger("atlas.b2b.vendor_briefing")
+
+
+# ---------------------------------------------------------------------------
+# Analyst enrichment (Kimi K2.5 via OpenRouter)
+# ---------------------------------------------------------------------------
+
+_ANALYST_SYSTEM_PROMPT = """\
+You are a B2B churn intelligence analyst writing for VP-level readers. Given \
+raw churn data about a software vendor, produce a JSON object with:
+
+1. executive_summary: 2-3 sentences for a VP of Customer Success.
+2. pain_labels: Object mapping raw category codes to professional labels \
+(e.g. "ux" -> "User Experience Complexity").
+3. headline: Under 10 words. Bloomberg-style, not clickbait.
+4. cta_hook: One sentence tying the CTA to the specific risk found \
+(e.g. "Review the pricing-driven churn cluster behind this alert").
+5. displacement_qualifier: If quotes mention competitors not in the \
+displacement table, return a short qualifier (e.g. "Other alternatives \
+appear in qualitative evidence but at lower measured frequency"). \
+Return empty string if no mismatch.
+
+CRITICAL RULES:
+
+TONE MUST MATCH THE METRICS. The input includes a `tone_band` field:
+- "watchlist": Score 0-29, urgency <4. Use language like "meaningful \
+retention risk", "monitor closely", "targeted intervention recommended". \
+Do NOT say "immediate", "urgent", "systemic", or "acute".
+- "active_risk": Score 30-59 OR urgency 4-7. Use "material risk", \
+"active intervention warranted", "accelerating concern".
+- "critical": Score 60+ OR urgency 8+. Use "immediate action required", \
+"acute churn pressure", "executive escalation needed".
+
+If the tone_band says "watchlist" but the data has high-urgency quotes, \
+acknowledge the tension: "While aggregate urgency remains moderate, \
+individual high-risk accounts warrant targeted attention."
+
+ATTRIBUTION RULES:
+- NEVER make direct attribution claims about named accounts. Do NOT write \
+"Meridian Technologies citing $180K as unsustainable."
+- Instead write: "High-risk accounts including Meridian Technologies show \
+pricing-related churn signals, including references to $180K+ annual \
+contract fatigue."
+- Named accounts show signals. They did not make statements to us.
+- Quotes are market intelligence observations, not verified direct \
+attribution from named accounts.
+
+Return ONLY valid JSON. No markdown fences, no explanation."""
+
+_PAIN_LABEL_FALLBACKS = {
+    "pricing": "Pricing and Contract Value Fatigue",
+    "support": "Support Experience Issues",
+    "reliability": "Reliability Concerns",
+    "usability": "User Experience Complexity",
+    "ux": "User Experience Complexity",
+    "features": "Feature Gap Concerns",
+    "performance": "Performance Limitations",
+    "integration": "Integration Friction",
+    "security": "Security and Compliance Concerns",
+    "onboarding": "Onboarding Friction",
+    "migration": "Migration Complexity",
+    "other": "Other or Unspecified Factors",
+}
+
+
+def _tone_band(score: float, urgency: float) -> str:
+    """Determine tone band from churn pressure score and urgency."""
+    if score >= 60 or urgency >= 8:
+        return "critical"
+    if score >= 30 or urgency >= 4:
+        return "active_risk"
+    return "watchlist"
+
+
+def _default_pain_label(category: Any) -> str:
+    """Return a readable pain label without relying on LLM enrichment."""
+    raw = str(category or "other").strip().lower()
+    return _PAIN_LABEL_FALLBACKS.get(raw, raw.replace("_", " ").title())
+
+
+def _build_default_cta_hook(briefing: dict[str, Any]) -> str:
+    """Build a specific CTA hook from the strongest measured signal."""
+    pains = briefing.get("pain_breakdown") or []
+    top_pain = pains[0].get("category") if pains and isinstance(pains[0], dict) else ""
+    pain_label = _default_pain_label(top_pain).lower()
+
+    targets = briefing.get("top_displacement_targets") or []
+    top_target = ""
+    if targets and isinstance(targets[0], dict):
+        top_target = str(targets[0].get("competitor") or "").strip()
+
+    if top_target and top_pain:
+        return (
+            f"Review the {pain_label} signals behind the shift toward "
+            f"{top_target} before the next renewal cycle."
+        )
+    if top_pain:
+        return f"Review the {pain_label} cluster behind this alert to prioritize retention plays."
+    if top_target:
+        return f"Review the accounts trending toward {top_target} to focus retention outreach early."
+    return f"Review this week's measured churn signals for {briefing.get('vendor_name', 'the vendor')}."
+
+
+def _finalize_briefing_presentation(briefing: dict[str, Any]) -> None:
+    """Fill presentation fields deterministically after enrichment."""
+    pain_labels = briefing.get("pain_labels") or {}
+    for pain in briefing.get("pain_breakdown") or []:
+        if not isinstance(pain, dict):
+            continue
+        raw_category = str(pain.get("category") or "").strip()
+        if raw_category and raw_category not in pain_labels:
+            pain_labels[raw_category] = _default_pain_label(raw_category)
+    briefing["pain_labels"] = pain_labels
+
+    if not briefing.get("cta_hook"):
+        briefing["cta_hook"] = _build_default_cta_hook(briefing)
+
+    if briefing.get("cta_hook") and not briefing.get("cta_description"):
+        briefing["cta_description"] = ""
+
+
+async def _enrich_with_analyst_summary(briefing: dict[str, Any]) -> None:
+    """Call Kimi K2.5 to generate analyst summary, headline, and pain labels.
+
+    Mutates *briefing* in place. Fails silently -- the briefing renders fine
+    without enrichment.
+    """
+    api_key = settings.b2b_churn.openrouter_api_key
+    if not api_key:
+        return
+
+    # Build a compact payload (only what the LLM needs)
+    score = float(briefing.get("churn_pressure_score") or 0)
+    urgency = float(briefing.get("avg_urgency") or 0)
+    trend = briefing.get("trend")
+
+    payload = {
+        "vendor_name": briefing.get("vendor_name"),
+        "category": briefing.get("category"),
+        "churn_pressure_score": score,
+        "churn_signal_density": briefing.get("churn_signal_density"),
+        "avg_urgency": urgency,
+        "trend": trend or "stable",
+        "review_count": briefing.get("review_count"),
+        "dm_churn_rate": briefing.get("dm_churn_rate"),
+        "tone_band": _tone_band(score, urgency),
+        "pain_breakdown": briefing.get("pain_breakdown", [])[:5],
+        "top_displacement_targets": briefing.get("top_displacement_targets", [])[:5],
+        "evidence": [
+            (e.get("quote", e) if isinstance(e, dict) else e)
+            for e in (briefing.get("evidence") or [])[:3]
+        ],
+        "named_accounts": briefing.get("named_accounts", [])[:5],
+        "top_feature_gaps": briefing.get("top_feature_gaps", [])[:3],
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.b2b_churn.briefing_analyst_model,
+                    "messages": [
+                        {"role": "system", "content": _ANALYST_SYSTEM_PROMPT},
+                        {"role": "user", "content": json.dumps(payload)},
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 4000,
+                    "reasoning": {"effort": "low"},
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+        content = data["choices"][0]["message"].get("content")
+        if not content:
+            logger.warning("Analyst enrichment returned empty content")
+            return
+
+        result = json.loads(content)
+
+        if result.get("executive_summary"):
+            briefing["executive_summary"] = result["executive_summary"]
+        if result.get("headline"):
+            briefing["headline"] = result["headline"]
+        if result.get("pain_labels") and isinstance(result["pain_labels"], dict):
+            briefing["pain_labels"] = result["pain_labels"]
+        if result.get("cta_hook"):
+            briefing["cta_hook"] = result["cta_hook"]
+        if result.get("displacement_qualifier"):
+            briefing["displacement_qualifier"] = result["displacement_qualifier"]
+
+        logger.info(
+            "Analyst enrichment applied for %s (tone_band=%s)",
+            briefing.get("vendor_name"),
+            payload["tone_band"],
+        )
+
+    except Exception:
+        logger.exception("Analyst enrichment failed (non-fatal)")
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +347,11 @@ async def build_vendor_briefing(vendor_name: str) -> dict[str, Any] | None:
                 evidence.append(q)
                 existing.add(q)
         briefing["evidence"] = evidence
+
+    # Analyst enrichment (Kimi K2.5) -- adds headline, executive_summary,
+    # pain_labels.  Falls back silently if OpenRouter is unavailable.
+    await _enrich_with_analyst_summary(briefing)
+    _finalize_briefing_presentation(briefing)
 
     return briefing
 

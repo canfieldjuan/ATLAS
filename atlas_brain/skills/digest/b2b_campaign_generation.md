@@ -119,7 +119,7 @@ Return a JSON object with the generated content. The structure depends on the ch
 
 20. **Subject line length**: Subject lines MUST be under 50 characters for mobile preview.
 
-21. **Protect the premium reveal**: Subject lines must NOT include competitor names, exact replacement winners, exact savings figures, account names, or the main premium insight. Use curiosity without giving away the answer.
+21. **Protect the premium reveal**: Subject lines must NOT include competitor names, exact replacement winners, exact savings figures, account names, or the main premium insight. Use curiosity without giving away the answer. NEVER use spam trigger words in subjects: "urgent", "urgency", "act now", "limited time", "don't miss", "last chance", "alert", "warning", "immediate", "guaranteed", "free", "risk-free". Describe the data, not the alarm.
 
 22. **CTA is separate**: The `cta` field is a standalone call-to-action string. The body should end naturally leading into the CTA. Include the affiliate/booking URL as an `<a>` tag at the end of the body, not in the `cta` field.
 

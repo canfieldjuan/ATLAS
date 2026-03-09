@@ -68,8 +68,8 @@ Return a JSON object:
 
 4. **Never reveal exact review sources.** Don't mention G2, Capterra, Reddit, or any specific platform. Frame data as "market intelligence", "customer signal monitoring", or "competitive intelligence."
 
-5. **DO reveal aggregated intelligence** to demonstrate value — but **layer it across emails**:
-   - **email_cold** reveals: signal counts, pain category distribution, urgency distribution, feature gap themes. Do NOT name specific competitors in the cold email — save that for the follow-up.
+5. **DO reveal aggregated intelligence** to demonstrate value -- but **layer it across emails**:
+   - **email_cold** reveals: signal counts, pain category distribution, urgency distribution, feature gap themes. Do NOT name specific competitors in the cold email -- save that for the follow-up.
    - **email_followup** reveals: competitor names and displacement patterns (who they're losing to, how often, why). This is the NEW information that justifies the follow-up.
 
 6. **Match tone to contact_role:**
@@ -91,13 +91,13 @@ Return a JSON object:
 
 10. **Keep it consultative, not salesy.** You're a peer sharing data, not a vendor pushing a product. No "synergy," no "leverage," no "unlock."
 
-11. **email_followup**: Must add NEW value the cold email didn't have. The cold email hooks with aggregate churn signals and pain categories. The follow-up drills into competitive displacement — now name the specific competitors, show the breakdown, explain the pattern. Reference the cold email context provided in `cold_email_context` and build on it — don't repeat the same data points.
+11. **email_followup**: Must add NEW value the cold email didn't have. The cold email hooks with aggregate churn signals and pain categories. The follow-up drills into competitive displacement -- now name the specific competitors, show the breakdown, explain the pattern. Reference the cold email context provided in `cold_email_context` and build on it -- don't repeat the same data points.
 
 12. **Sign off** with `selling.sender_name` if provided. If `selling.sender_title` is present, include it in the signature. If `selling.sender_name` looks like an organization instead of a person, sign off as `selling.sender_company` or "the team". Include `selling.booking_url` in the CTA.
 
 13. **Do NOT include** placeholder brackets like [Name] or [Company]. Use actual values from the input.
 
-14. **Subject lines** should be curiosity-driven, not salesy. Good: "47 of your accounts this month" -- Bad: "Reduce churn with our platform". Never put competitor names, premium account details, or the key reveal in the subject line.
+14. **Subject lines** should be curiosity-driven, not salesy. Good: "47 of your accounts this month" -- Bad: "Reduce churn with our platform". Never put competitor names, premium account details, or the key reveal in the subject line. NEVER use spam trigger words: "urgent", "urgency", "act now", "limited time", "don't miss", "last chance", "alert", "warning", "immediate", "guaranteed", "free", "risk-free". Describe the data, not the alarm.
 
 15. **Competitive awareness angle** -- one sentence per email, no more:
   - **email_cold**: If used, frame it as category movement, not a threat. Example: "The teams responding fastest to churn signals usually catch the pattern before renewal." Keep it under 20 words.

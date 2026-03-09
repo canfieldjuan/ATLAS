@@ -89,6 +89,13 @@ _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _REPORT_TIER_BANNED = re.compile(
     r"\b(dashboard|live feed|free trial|software|platform)\b", re.IGNORECASE,
 )
+# Words that trigger spam filters when used in subject lines.
+_SUBJECT_SPAM_TRIGGERS = re.compile(
+    r"\b(urgent|urgency|high.urgency|act now|limited time|don't miss"
+    r"|last chance|exclusive offer|free|risk.free|guaranteed"
+    r"|congratulations|winner|alert|warning|immediate)\b",
+    re.IGNORECASE,
+)
 
 
 def _ensure_html(body: str) -> str:
@@ -171,6 +178,11 @@ def _validate_campaign_content(
     subject = parsed["subject"].strip()
     body = parsed["body"].strip()
     cta = parsed["cta"].strip()
+
+    # Subject spam trigger words: flag for LLM retry
+    spam_match = _SUBJECT_SPAM_TRIGGERS.search(subject)
+    if spam_match:
+        issues["subject_spam_trigger"] = spam_match.group()
 
     # Subject length: truncate at word boundary if over 60 chars
     if len(subject) > 60:
@@ -1818,12 +1830,16 @@ async def _generate_content(
 
         # On retry, prepend a revision instruction
         if attempt == 1:
-            user_content = (
-                f"REVISION REQUIRED: The previous body was {last_wc} words "
-                f"but MUST be under {last_max} words. Rewrite the body "
-                f"shorter -- cut sentences, not words. Return the same JSON "
-                f"format.\n\n{user_content}"
-            )
+            revision = payload.pop("_revision", None)
+            if revision:
+                user_content = f"{revision}\n\n{user_content}"
+            elif last_wc and last_max:
+                user_content = (
+                    f"REVISION REQUIRED: The previous body was {last_wc} words "
+                    f"but MUST be under {last_max} words. Rewrite the body "
+                    f"shorter -- cut sentences, not words. Return the same JSON "
+                    f"format.\n\n{user_content}"
+                )
 
         text = await _call_llm(llm, system_prompt, user_content, max_tokens, temperature)
         if not text:
@@ -1850,6 +1866,20 @@ async def _generate_content(
         if issues.get("placeholders"):
             logger.warning("Campaign body contains placeholder brackets, rejecting")
             return None
+
+        # Retry on spam trigger in subject line
+        if issues.get("subject_spam_trigger") and attempt == 0:
+            logger.info(
+                "Subject contains spam trigger %r, retrying",
+                issues["subject_spam_trigger"],
+            )
+            payload = {**payload, "_revision": (
+                f"REVISION REQUIRED: The subject line contains the spam "
+                f"trigger word '{issues['subject_spam_trigger']}'. Rewrite "
+                f"the subject line without urgency/alarm language. Use "
+                f"curiosity or data-driven phrasing instead."
+            )}
+            continue
 
         if issues.get("word_count") and attempt == 0:
             # Retry with correction prompt

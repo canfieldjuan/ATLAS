@@ -544,3 +544,27 @@ class TestEvidenceConfidence:
                 score = _compute_evidence_confidence(mentions, dist)
                 assert isinstance(score, float)
                 assert 0.0 <= score <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# Company name normalization
+# ---------------------------------------------------------------------------
+
+from atlas_brain.services.company_normalization import normalize_company_name
+
+
+class TestNormalizeCompanyName:
+    def test_strips_inc(self):
+        assert normalize_company_name("Acme Inc") == "acme"
+
+    def test_strips_incorporated_dot(self):
+        assert normalize_company_name("Acme Incorporated.") == "acme"
+
+    def test_strips_llc(self):
+        assert normalize_company_name("ACME LLC") == "acme"
+
+    def test_empty_string(self):
+        assert normalize_company_name("") == ""
+
+    def test_preserves_multi_word(self):
+        assert normalize_company_name("BrightPath Software") == "brightpath software"
