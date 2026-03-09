@@ -3507,9 +3507,11 @@ async def export_report_pdf(report_id: str) -> str:
             data_density=density,
         )
 
+        import re as _re
+
         vendor = row["vendor_filter"] or row["report_type"]
         filename = f"atlas-report-{vendor}-{row['report_date'] or 'latest'}.pdf"
-        filename = filename.replace(" ", "-").lower()
+        filename = _re.sub(r"[^a-z0-9._-]", "-", filename.lower())
 
         return json.dumps({
             "filename": filename,

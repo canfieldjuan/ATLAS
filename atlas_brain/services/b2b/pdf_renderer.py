@@ -35,12 +35,36 @@ def _score_color(score: float) -> tuple[int, int, int]:
     return _CLR_GREEN
 
 
+_UNICODE_MAP = str.maketrans({
+    "\u2014": "--",   # em-dash
+    "\u2013": "-",    # en-dash
+    "\u2018": "'",    # left single quote
+    "\u2019": "'",    # right single quote
+    "\u201c": '"',    # left double quote
+    "\u201d": '"',    # right double quote
+    "\u2026": "...",  # ellipsis
+    "\u2022": "*",    # bullet
+    "\u2122": "(TM)", # trademark
+    "\u00ae": "(R)",  # registered
+    "\u00a9": "(C)",  # copyright
+    "\u200b": "",     # zero-width space
+    "\u00a0": " ",    # non-breaking space
+    "\ufeff": "",     # BOM
+})
+
+
+def _latin1_safe(text: str) -> str:
+    """Replace Unicode characters that Helvetica (latin-1) cannot render."""
+    text = text.translate(_UNICODE_MAP)
+    return text.encode("latin-1", errors="replace").decode("latin-1")
+
+
 def _safe_str(val: Any) -> str:
     if val is None:
         return ""
     if isinstance(val, (dict, list)):
-        return json.dumps(val, default=str)
-    return str(val)
+        return _latin1_safe(json.dumps(val, default=str))
+    return _latin1_safe(str(val))
 
 
 def _safe_list(val: Any) -> list:
@@ -85,7 +109,7 @@ class IntelligenceReportPDF(FPDF):
         self.ln(4)
         self.set_font("Helvetica", "B", 12)
         self.set_text_color(*_CLR_PRIMARY)
-        self.cell(0, 8, title, new_x="LMARGIN", new_y="NEXT")
+        self.cell(0, 8, _latin1_safe(title), new_x="LMARGIN", new_y="NEXT")
         self.set_draw_color(*_CLR_PRIMARY)
         self.line(self.l_margin, self.get_y(), self.l_margin + 40, self.get_y())
         self.ln(3)
@@ -93,40 +117,42 @@ class IntelligenceReportPDF(FPDF):
     def body_text(self, text: str) -> None:
         self.set_font("Helvetica", "", 9)
         self.set_text_color(*_CLR_DARK)
-        self.multi_cell(0, 5, text)
+        self.multi_cell(0, 5, _latin1_safe(text))
         self.ln(2)
 
     def key_value(self, key: str, value: str) -> None:
         self.set_font("Helvetica", "B", 9)
         self.set_text_color(*_CLR_MUTED)
-        self.cell(55, 5, key + ":")
+        self.cell(55, 5, _latin1_safe(key) + ":")
         self.set_font("Helvetica", "", 9)
         self.set_text_color(*_CLR_DARK)
-        self.cell(0, 5, value, new_x="LMARGIN", new_y="NEXT")
+        self.cell(0, 5, _latin1_safe(value), new_x="LMARGIN", new_y="NEXT")
 
     def metric_row(self, label: str, value: str, color: tuple[int, int, int] | None = None) -> None:
         self.set_font("Helvetica", "", 9)
         self.set_text_color(*_CLR_DARK)
-        self.cell(70, 5, label)
+        self.cell(70, 5, _latin1_safe(label))
         self.set_font("Helvetica", "B", 9)
         if color:
             self.set_text_color(*color)
-        self.cell(0, 5, value, new_x="LMARGIN", new_y="NEXT")
+        self.cell(0, 5, _latin1_safe(value), new_x="LMARGIN", new_y="NEXT")
 
     def quote_block(self, text: str) -> None:
         self.set_fill_color(*_CLR_BG_LIGHT)
         self.set_draw_color(*_CLR_RED)
         x = self.get_x()
-        y = self.get_y()
-        # Red left bar
-        self.set_line_width(0.8)
-        self.line(x, y, x, y + 12)
-        self.set_line_width(0.2)
+        y_start = self.get_y()
+        # Render text first so we know the actual height
         self.set_x(x + 4)
         self.set_font("Helvetica", "I", 8)
         self.set_text_color(*_CLR_DARK)
         w = self.w - self.r_margin - x - 4
-        self.multi_cell(w, 4, f'"{text}"')
+        self.multi_cell(w, 4, _latin1_safe(f'"{text}"'))
+        y_end = self.get_y()
+        # Draw red left bar spanning the actual text height
+        self.set_line_width(0.8)
+        self.line(x, y_start, x, y_end)
+        self.set_line_width(0.2)
         self.ln(2)
 
     def simple_table(self, headers: list[str], rows: list[list[str]], col_widths: list[float] | None = None) -> None:
@@ -141,7 +167,7 @@ class IntelligenceReportPDF(FPDF):
         self.set_fill_color(*_CLR_PRIMARY)
         self.set_text_color(*_CLR_WHITE)
         for i, h in enumerate(headers):
-            self.cell(col_widths[i], 6, h, border=1, fill=True)
+            self.cell(col_widths[i], 6, _latin1_safe(h), border=1, fill=True)
         self.ln()
 
         # Data rows
@@ -149,7 +175,7 @@ class IntelligenceReportPDF(FPDF):
         self.set_text_color(*_CLR_DARK)
         for row_data in rows:
             for i, cell in enumerate(row_data):
-                self.cell(col_widths[i], 5, cell[:60], border=1)
+                self.cell(col_widths[i], 5, _latin1_safe(cell[:60]), border=1)
             self.ln()
         self.ln(2)
 
@@ -439,7 +465,7 @@ def render_report_pdf(
 
     pdf.set_font("Helvetica", "B", 16)
     pdf.set_text_color(*_CLR_DARK)
-    pdf.cell(0, 10, title, new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 10, _latin1_safe(title), new_x="LMARGIN", new_y="NEXT")
 
     pdf.set_font("Helvetica", "", 9)
     pdf.set_text_color(*_CLR_MUTED)
@@ -457,11 +483,11 @@ def render_report_pdf(
         for k, v in list(data_density.items())[:4]:
             parts.append(f"{k}: {v}")
         if parts:
-            pdf.cell(0, 4, "Data: " + " | ".join(parts), new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 4, _latin1_safe("Data: " + " | ".join(parts)), new_x="LMARGIN", new_y="NEXT")
             pdf.ln(2)
 
     # -- Main content via type-specific renderer --------------------------------
-    data = intelligence_data or {}
+    data = intelligence_data if intelligence_data is not None else {}
 
     renderer = _RENDERERS.get(report_type)
     if renderer:

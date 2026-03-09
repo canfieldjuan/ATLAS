@@ -9,6 +9,7 @@ import csv
 import io
 import json
 import logging
+import re
 import uuid as _uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -721,7 +722,7 @@ async def export_report_pdf(report_id: str, user: AuthUser | None = Depends(opti
 
     vendor = row["vendor_filter"] or row["report_type"]
     filename = f"atlas-report-{vendor}-{row['report_date'] or 'latest'}.pdf"
-    filename = filename.replace(" ", "-").lower()
+    filename = re.sub(r"[^a-z0-9._-]", "-", filename.lower())
 
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
