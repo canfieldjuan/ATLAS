@@ -225,6 +225,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         concurrent_shifts = await _detect_concurrent_shifts(pool)
         displacement_edges_persisted = await _persist_displacement_edges(pool)
 
+        # Dispatch consumer webhooks for change events + report
+        await _dispatch_consumer_events(
+            pool, fetchers["brand_health"], change_events_detected, concurrent_shifts,
+        )
+
     # Send ntfy notification
     from ...pipelines.notify import send_pipeline_notification
 
@@ -1158,6 +1163,82 @@ async def _detect_concurrent_shifts(pool) -> int:
     if detected:
         logger.info("Detected %d concurrent shifts for %s", detected, today)
     return detected
+
+
+# ------------------------------------------------------------------
+# Webhook dispatch for consumer events
+# ------------------------------------------------------------------
+
+
+async def _dispatch_consumer_events(
+    pool, brand_health: dict, change_events: int, concurrent_shifts: int,
+) -> None:
+    """Dispatch consumer webhook events for change events and report generation."""
+    try:
+        from ...services.b2b.webhook_dispatcher import dispatch_consumer_webhooks
+
+        # Dispatch report_generated for each brand analyzed
+        for brand in brand_health:
+            await dispatch_consumer_webhooks(
+                pool, "consumer_report_generated", brand, {
+                    "event": "report_generated",
+                    "brand": brand,
+                    "metrics": {
+                        k: v for k, v in brand_health[brand].items()
+                        if k in ("avg_rating", "total_reviews", "avg_pain_score",
+                                 "repurchase_yes", "repurchase_no", "safety_flagged_count")
+                    },
+                },
+            )
+
+        # Dispatch change events (already persisted, fetch today's)
+        if change_events > 0:
+            today = date.today()
+            rows = await pool.fetch(
+                """
+                SELECT brand, event_type, description, delta
+                FROM product_change_events
+                WHERE event_date = $1 AND brand != '__market__'
+                """,
+                today,
+            )
+            for r in rows:
+                await dispatch_consumer_webhooks(
+                    pool, "consumer_change_event", r["brand"], {
+                        "event_type": r["event_type"],
+                        "brand": r["brand"],
+                        "description": r["description"],
+                        "delta": float(r["delta"]) if r["delta"] else None,
+                    },
+                )
+
+        # Dispatch concurrent shifts
+        if concurrent_shifts > 0:
+            today = date.today()
+            shifts = await pool.fetch(
+                """
+                SELECT description, delta, metadata
+                FROM product_change_events
+                WHERE event_date = $1 AND brand = '__market__'
+                  AND event_type = 'concurrent_shift'
+                """,
+                today,
+            )
+            for s in shifts:
+                meta = s["metadata"]
+                if isinstance(meta, str):
+                    meta = json.loads(meta)
+                brands = (meta or {}).get("brands", [])
+                for brand in brands:
+                    await dispatch_consumer_webhooks(
+                        pool, "consumer_concurrent_shift", brand, {
+                            "description": s["description"],
+                            "delta": float(s["delta"]) if s["delta"] else None,
+                            "metadata": meta,
+                        },
+                    )
+    except Exception:
+        logger.debug("Consumer webhook dispatch skipped", exc_info=True)
 
 
 # ------------------------------------------------------------------

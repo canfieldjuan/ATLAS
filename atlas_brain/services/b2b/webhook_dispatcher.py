@@ -32,7 +32,11 @@ from ...services.tracing import (
 
 logger = logging.getLogger("atlas.services.b2b.webhook_dispatcher")
 
-VALID_EVENT_TYPES = {"change_event", "churn_alert", "report_generated", "signal_update"}
+VALID_EVENT_TYPES = {
+    "change_event", "churn_alert", "report_generated", "signal_update",
+    # Consumer event types
+    "consumer_change_event", "consumer_report_generated", "consumer_concurrent_shift",
+}
 
 
 async def dispatch_webhooks(
@@ -550,3 +554,79 @@ async def send_test_webhook(pool, subscription_id) -> dict:
         error_type=None if ok else "WebhookTestFailure",
     )
     return response
+
+
+# ---------------------------------------------------------------------------
+# Consumer webhook dispatch (reuses delivery infrastructure, different query)
+# ---------------------------------------------------------------------------
+
+
+async def dispatch_consumer_webhooks(
+    pool,
+    event_type: str,
+    brand_name: str,
+    payload: dict,
+) -> int:
+    """Fan out webhook delivery for consumer intelligence events.
+
+    Finds accounts that track ASINs belonging to *brand_name*, then delivers
+    to each enabled subscription matching *event_type*.  Reuses the same
+    ``b2b_webhook_subscriptions`` table and delivery infrastructure.
+
+    Returns the number of successful deliveries.  Never raises.
+    """
+    try:
+        from ...config import settings
+        cfg = settings.b2b_webhook
+    except Exception:
+        return 0
+
+    if not cfg.enabled:
+        return 0
+
+    if event_type not in VALID_EVENT_TYPES:
+        logger.warning("dispatch_consumer_webhooks: invalid event_type %r", event_type)
+        return 0
+
+    try:
+        # Find subscriptions: accounts tracking ASINs from this brand
+        subs = await pool.fetch(
+            """
+            SELECT DISTINCT ws.id, ws.url, ws.secret, ws.account_id,
+                   COALESCE(ws.channel, 'generic') AS channel,
+                   ws.auth_header
+            FROM b2b_webhook_subscriptions ws
+            JOIN tracked_asins ta ON ta.account_id = ws.account_id
+            JOIN product_metadata pm ON pm.asin = ta.asin
+            WHERE ws.enabled = true
+              AND pm.brand ILIKE '%' || $1 || '%'
+              AND $2 = ANY(ws.event_types)
+            """,
+            brand_name,
+            event_type,
+        )
+
+        if not subs:
+            return 0
+
+        envelope = _build_envelope(event_type, brand_name, payload)
+
+        delivered = 0
+        for sub in subs:
+            channel = sub["channel"]
+            channel_bytes = _format_for_channel(channel, envelope)
+
+            if len(channel_bytes) > cfg.max_payload_bytes:
+                continue
+
+            ok = await _deliver_single(
+                pool, sub, event_type, envelope, channel_bytes, cfg,
+            )
+            if ok:
+                delivered += 1
+
+        return delivered
+
+    except Exception:
+        logger.exception("dispatch_consumer_webhooks error for %s/%s", event_type, brand_name)
+        return 0

@@ -13,6 +13,7 @@ from collections import defaultdict
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from ..auth.dependencies import AuthUser, require_auth, require_plan
@@ -3067,6 +3068,118 @@ async def export_pain_points(
             for r in rows
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# PDF export
+# ---------------------------------------------------------------------------
+
+
+@router.get("/reports/{report_id}/pdf")
+@limiter.limit(_dynamic_limit)
+async def export_market_report_pdf(
+    request: Request,
+    report_id: str,
+    user: AuthUser = Depends(require_auth),
+):
+    """Export a market intelligence report as PDF."""
+    pool = _pool_or_503()
+
+    try:
+        rid = _uuid.UUID(report_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid report ID")
+
+    row = await pool.fetchrow(
+        """
+        SELECT id, report_date, report_type, executive_summary,
+               analysis_text, report_data
+        FROM market_intelligence_reports
+        WHERE id = $1
+        """,
+        rid,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    report = dict(row)
+    # Parse JSONB if needed
+    rd = report.get("report_data")
+    if isinstance(rd, str):
+        try:
+            report["report_data"] = json.loads(rd)
+        except (json.JSONDecodeError, TypeError):
+            report["report_data"] = {}
+
+    from ..services.consumer_pdf_renderer import render_market_report_pdf
+
+    pdf_bytes, filename = render_market_report_pdf(report)
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/brands/{brand_name}/pdf")
+@limiter.limit(_dynamic_limit)
+async def export_brand_report_pdf(
+    request: Request,
+    brand_name: str,
+    days: int = Query(90, ge=7, le=365),
+    user: AuthUser = Depends(require_auth),
+):
+    """Export a brand intelligence scorecard as PDF."""
+    pool = _pool_or_503()
+
+    row = await pool.fetchrow(
+        """
+        SELECT brand, total_reviews, avg_rating, avg_pain_score,
+               repurchase_yes, repurchase_no, health_score, confidence_score,
+               top_complaints, top_feature_requests, competitive_flows,
+               sentiment_breakdown, buyer_profile, positive_aspects,
+               last_computed_at
+        FROM brand_intelligence
+        WHERE brand ILIKE $1
+        LIMIT 1
+        """,
+        brand_name,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Brand not found")
+
+    brand_data = {}
+    for k in row.keys():
+        val = row[k]
+        if isinstance(val, (dict, list)):
+            brand_data[k] = val
+        else:
+            brand_data[k] = val
+
+    # Fetch snapshots for trend chart
+    snapshot_rows = await pool.fetch(
+        """
+        SELECT snapshot_date, total_reviews, avg_rating, avg_pain_score,
+               health_score, safety_count
+        FROM brand_intelligence_snapshots
+        WHERE brand = $1
+          AND snapshot_date >= CURRENT_DATE - $2::int
+        ORDER BY snapshot_date ASC
+        """,
+        row["brand"], days,
+    )
+    snapshots = [dict(s) for s in snapshot_rows]
+
+    from ..services.consumer_pdf_renderer import render_brand_report_pdf
+
+    pdf_bytes, filename = render_brand_report_pdf(brand_data, snapshots=snapshots)
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ---------------------------------------------------------------------------

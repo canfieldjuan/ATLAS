@@ -96,19 +96,17 @@ Automatic `concurrent_shift` event detection.
 
 ---
 
-## Phase 5: Delivery Surfaces -- NOT STARTED
+## Phase 5: Delivery Surfaces -- DONE
 
 **B2B precedent**: Webhook outbound delivery (HMAC-SHA256 signed), PDF export (fpdf2),
 Slack/Teams notifications (Block Kit, Adaptive Cards), email digest (Resend).
 
-**Already done**: CSV/JSON export (3 endpoints), ntfy notifications.
-
-| Item | Status | What's Needed |
-|------|--------|---------------|
-| Webhook delivery | **MISSING** | Reuse `b2b_webhook_subscriptions` infrastructure. Add consumer event types to webhook dispatch. |
-| PDF brand report export | **MISSING** | Extend `pdf_renderer.py` or create consumer-specific renderer. MCP tool: `export_brand_report_pdf`. |
-| Slack/Teams notifications | **MISSING** | Reuse webhook_dispatcher channel formatters. Wire consumer change events into dispatch. |
-| Email digest | **MISSING** | Weekly brand health summary email. Reuse Resend provider. |
+| Item | Status | What's There |
+|------|--------|-------------|
+| Webhook delivery | **DONE** | `dispatch_consumer_webhooks()` in webhook_dispatcher.py. Reuses `b2b_webhook_subscriptions` table + delivery infrastructure (HMAC signing, retry, delivery log). Consumer event types: `consumer_change_event`, `consumer_report_generated`, `consumer_concurrent_shift`. Queries via tracked_asins -> product_metadata brand match. Wired into competitive_intelligence.py `run()`. |
+| PDF export | **DONE** | `consumer_pdf_renderer.py`: `render_market_report_pdf()` (full report) + `render_brand_report_pdf()` (single brand with snapshot trend). REST: `GET /reports/{id}/pdf` + `GET /brands/{name}/pdf`. MCP: `export_market_report_pdf` + `export_brand_report_pdf` (base64 output). |
+| Slack/Teams notifications | **DONE** | Handled by webhook dispatcher channel formatters (Slack Block Kit, Teams Adaptive Cards). Consumer events use the same `_format_for_channel()` dispatcher -- no separate implementation needed. |
+| Email digest | **DONE** | MCP tool `send_brand_health_digest`: HTML email via Resend with brand health leaderboard + recent change events. Configurable top_n and lookback days. |
 
 ---
 
@@ -144,5 +142,5 @@ Phase 5  (delivery surfaces)  -- independent, can be done anytime after Phase 0
 | Phase 0 | **100%** | Brand registry (3,850 seeded), resolution with cache, fuzzy matching, provenance, REST + MCP |
 | Phase 2 | **100%** | Displacement edges, confidence scoring (3-signal), min_confidence filters, REST + MCP |
 | Phase 3 | **100%** | Concurrent event detection, pairwise Pearson r correlation, market-level concurrent_shift events, REST + MCP |
-| Phase 5 | **30%** | CSV export + ntfy done. Missing webhooks, PDF, Slack/Teams, email. |
+| Phase 5 | **100%** | Webhook dispatch (reuses B2B infrastructure), PDF export (market + brand reports), Slack/Teams (via channel formatters), email digest (Resend), CSV/JSON export, ntfy |
 | Phase 6 | **100%** | Brand merge across 6 tables (conflict-aware), mv refresh, alias + cache invalidation, REST + MCP |

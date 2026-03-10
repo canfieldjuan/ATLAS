@@ -42,6 +42,11 @@ Tools:
     add_brand_alias               -- add alias to existing brand
     list_brand_registry           -- list all canonical brands
 
+    -- Consumer Delivery Surfaces --
+    export_market_report_pdf          -- export market intelligence report as PDF
+    export_brand_report_pdf           -- export brand intelligence scorecard as PDF
+    send_brand_health_digest          -- send email digest of brand health summaries
+
     -- Consumer Cross-Brand Correlation --
     list_concurrent_events            -- dates where 3+ brands had same event type
     get_brand_correlation             -- aligned snapshot time-series + Pearson r
@@ -1791,6 +1796,257 @@ async def get_product_displacement_history(
     except Exception:
         logger.exception("get_product_displacement_history error")
         return json.dumps({"error": "Internal error", "history": []})
+
+
+# ---------------------------------------------------------------------------
+# Delivery surfaces (PDF export, email digest)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def export_market_report_pdf(
+    report_id: str,
+) -> str:
+    """Export a market intelligence report as PDF.
+
+    Returns base64-encoded PDF bytes with filename.
+
+    report_id: UUID of the market_intelligence_reports row
+    """
+    import base64
+
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        if not pool:
+            return json.dumps({"error": "Database not ready"})
+
+        if not _is_uuid(report_id):
+            return json.dumps({"error": "report_id must be a valid UUID"})
+
+        import uuid as _uuid
+        row = await pool.fetchrow(
+            """
+            SELECT id, report_date, report_type, executive_summary,
+                   analysis_text, report_data
+            FROM market_intelligence_reports
+            WHERE id = $1
+            """,
+            _uuid.UUID(report_id),
+        )
+        if not row:
+            return json.dumps({"error": "Report not found"})
+
+        report = dict(row)
+        rd = report.get("report_data")
+        if isinstance(rd, str):
+            try:
+                report["report_data"] = json.loads(rd)
+            except (json.JSONDecodeError, TypeError):
+                report["report_data"] = {}
+
+        from ..services.consumer_pdf_renderer import render_market_report_pdf
+
+        pdf_bytes, filename = render_market_report_pdf(report)
+        return json.dumps({
+            "success": True,
+            "filename": filename,
+            "size_bytes": len(pdf_bytes),
+            "pdf_base64": base64.b64encode(pdf_bytes).decode(),
+        })
+    except Exception:
+        logger.exception("export_market_report_pdf error")
+        return json.dumps({"error": "Failed to generate PDF"})
+
+
+@mcp.tool()
+async def export_brand_report_pdf(
+    brand_name: str,
+    days: int = 90,
+) -> str:
+    """Export a brand intelligence scorecard as PDF.
+
+    Returns base64-encoded PDF bytes with filename.
+
+    brand_name: Brand name (case-insensitive match)
+    days: Days of snapshot history to include (default 90)
+    """
+    import base64
+
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        if not pool:
+            return json.dumps({"error": "Database not ready"})
+
+        row = await pool.fetchrow(
+            """
+            SELECT brand, total_reviews, avg_rating, avg_pain_score,
+                   repurchase_yes, repurchase_no, health_score, confidence_score,
+                   top_complaints, top_feature_requests, competitive_flows,
+                   sentiment_breakdown, buyer_profile, positive_aspects,
+                   last_computed_at
+            FROM brand_intelligence
+            WHERE brand ILIKE $1
+            LIMIT 1
+            """,
+            brand_name,
+        )
+        if not row:
+            return json.dumps({"error": f"Brand '{brand_name}' not found"})
+
+        brand_data = dict(row)
+
+        snapshot_rows = await pool.fetch(
+            """
+            SELECT snapshot_date, total_reviews, avg_rating, avg_pain_score,
+                   health_score, safety_count
+            FROM brand_intelligence_snapshots
+            WHERE brand = $1
+              AND snapshot_date >= CURRENT_DATE - $2::int
+            ORDER BY snapshot_date ASC
+            """,
+            row["brand"], days,
+        )
+        snapshots = [dict(s) for s in snapshot_rows]
+
+        from ..services.consumer_pdf_renderer import render_brand_report_pdf
+
+        pdf_bytes, filename = render_brand_report_pdf(brand_data, snapshots=snapshots)
+        return json.dumps({
+            "success": True,
+            "filename": filename,
+            "size_bytes": len(pdf_bytes),
+            "pdf_base64": base64.b64encode(pdf_bytes).decode(),
+        })
+    except Exception:
+        logger.exception("export_brand_report_pdf error")
+        return json.dumps({"error": "Failed to generate PDF"})
+
+
+@mcp.tool()
+async def send_brand_health_digest(
+    recipient_email: str,
+    top_n: int = 10,
+    days: int = 7,
+) -> str:
+    """Send a brand health digest email summarizing recent changes.
+
+    Uses Resend to send an HTML email with top brands by health score,
+    recent change events, and displacement highlights.
+
+    recipient_email: Email address to send the digest to
+    top_n: Number of top brands to include (default 10)
+    days: Lookback period for change events (default 7)
+    """
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        if not pool:
+            return json.dumps({"error": "Database not ready"})
+
+        # Top brands by health score
+        brands = await pool.fetch(
+            """
+            SELECT brand, health_score, avg_rating, avg_pain_score,
+                   total_reviews, confidence_score
+            FROM brand_intelligence
+            ORDER BY health_score DESC NULLS LAST
+            LIMIT $1
+            """,
+            top_n,
+        )
+
+        # Recent change events
+        events = await pool.fetch(
+            """
+            SELECT brand, event_type, description, delta, event_date
+            FROM product_change_events
+            WHERE event_date >= CURRENT_DATE - $1::int
+              AND brand != '__market__'
+            ORDER BY event_date DESC
+            LIMIT 20
+            """,
+            days,
+        )
+
+        # Build HTML
+        html_parts = [
+            "<h2>Atlas Consumer Intelligence -- Weekly Digest</h2>",
+            f"<p>Top {len(brands)} brands by health score, {days}-day change events.</p>",
+            "<h3>Brand Health Leaderboard</h3>",
+            "<table border='1' cellpadding='4' cellspacing='0'>",
+            "<tr><th>Brand</th><th>Health</th><th>Rating</th><th>Pain</th><th>Reviews</th></tr>",
+        ]
+        for b in brands:
+            health = float(b["health_score"] or 0)
+            color = "#27ae60" if health >= 70 else "#f39c12" if health >= 40 else "#e74c3c"
+            html_parts.append(
+                f"<tr><td>{b['brand']}</td>"
+                f"<td style='color:{color};font-weight:bold'>{health:.0f}</td>"
+                f"<td>{float(b['avg_rating'] or 0):.2f}</td>"
+                f"<td>{float(b['avg_pain_score'] or 0):.1f}</td>"
+                f"<td>{b['total_reviews']}</td></tr>"
+            )
+        html_parts.append("</table>")
+
+        if events:
+            html_parts.append(f"<h3>Change Events (last {days} days)</h3>")
+            html_parts.append("<ul>")
+            for e in events:
+                html_parts.append(
+                    f"<li><strong>{e['brand']}</strong> -- {e['event_type']}: "
+                    f"{e['description']} (delta: {float(e['delta'] or 0):.2f})</li>"
+                )
+            html_parts.append("</ul>")
+
+        html_parts.append("<p><em>Generated by Atlas Intelligence</em></p>")
+        html_body = "\n".join(html_parts)
+
+        # Send via Resend
+        from ..config import settings as app_settings
+
+        api_key = getattr(getattr(app_settings, "email", None), "api_key", None)
+        if not api_key:
+            return json.dumps({"error": "Email not configured (no Resend API key)"})
+
+        import httpx
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "from": getattr(
+                        getattr(app_settings, "email", None),
+                        "default_from", "atlas@notifications.local",
+                    ),
+                    "to": [recipient_email],
+                    "subject": f"Atlas Brand Health Digest -- {days}-Day Summary",
+                    "html": html_body,
+                },
+            )
+
+        if 200 <= resp.status_code < 300:
+            return json.dumps({
+                "success": True,
+                "recipient": recipient_email,
+                "brands_included": len(brands),
+                "events_included": len(events),
+            })
+        return json.dumps({
+            "success": False,
+            "error": f"Resend API returned {resp.status_code}: {resp.text[:200]}",
+        })
+
+    except Exception:
+        logger.exception("send_brand_health_digest error")
+        return json.dumps({"error": "Failed to send digest"})
 
 
 # ---------------------------------------------------------------------------
