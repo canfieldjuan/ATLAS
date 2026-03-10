@@ -1,0 +1,137 @@
+{
+  "version": 1,
+  "generated_from": "verified Atlas trace fields",
+  "views": [
+    {
+      "name": "Agent Decision Audit",
+      "description": "User-facing agent spans with business context and reasoning summaries.",
+      "span_names": ["agent.process"],
+      "columns": [
+        "start_time",
+        "status",
+        "duration_ms",
+        "model_name",
+        "metadata.business.workflow",
+        "metadata.reasoning.decision",
+        "metadata.reasoning.summary",
+        "metadata.reasoning.evidence"
+      ]
+    },
+    {
+      "name": "Reasoning Deep Dive",
+      "description": "Cross-domain reasoning runs before actions are executed.",
+      "span_names": ["reasoning.process"],
+      "columns": [
+        "start_time",
+        "status",
+        "metadata.business.event_type",
+        "metadata.business.entity_type",
+        "metadata.business.entity_id",
+        "metadata.reasoning.triage",
+        "metadata.reasoning.summary",
+        "metadata.reasoning.decision",
+        "metadata.reasoning.evidence"
+      ]
+    },
+    {
+      "name": "BI Pipeline Health",
+      "description": "Global and tenant intelligence generation health.",
+      "span_names": ["b2b.churn_intelligence.run", "b2b.tenant_report"],
+      "columns": [
+        "start_time",
+        "span_name",
+        "status",
+        "duration_ms",
+        "metadata.business.workflow",
+        "metadata.business.account_id",
+        "metadata.business.report_type",
+        "metadata.reasoning.evidence",
+        "metadata.reasoning.summary"
+      ]
+    },
+    {
+      "name": "CRM Ingest Ops",
+      "description": "Inbound CRM event ingestion quality and provider split.",
+      "span_names": ["b2b.crm_event.ingest"],
+      "group_by": [
+        "metadata.business.crm_provider",
+        "status"
+      ],
+      "columns": [
+        "start_time",
+        "status",
+        "duration_ms",
+        "metadata.business.crm_provider",
+        "metadata.business.event_type",
+        "metadata.business.account_id",
+        "metadata.reasoning.evidence"
+      ]
+    },
+    {
+      "name": "Webhook Delivery Ops",
+      "description": "Outbound webhook dispatch and test deliveries.",
+      "span_names": ["b2b.webhook.dispatch", "b2b.webhook.test"],
+      "columns": [
+        "start_time",
+        "status",
+        "duration_ms",
+        "metadata.business.workflow",
+        "metadata.business.event_type",
+        "metadata.business.vendor_name",
+        "metadata.business.subscription_id",
+        "metadata.reasoning.evidence"
+      ]
+    },
+    {
+      "name": "PDF Export Ops",
+      "description": "PDF report exports and their supporting context.",
+      "span_names": ["b2b.report.export_pdf"],
+      "columns": [
+        "start_time",
+        "status",
+        "duration_ms",
+        "metadata.business.report_type",
+        "metadata.business.vendor_name",
+        "metadata.reasoning.evidence",
+        "metadata.reasoning.summary"
+      ]
+    },
+    {
+      "name": "Analyst Corrections",
+      "description": "Analyst control actions and correction context.",
+      "span_names": ["b2b.correction.create"],
+      "columns": [
+        "start_time",
+        "status",
+        "metadata.business.account_id",
+        "metadata.business.entity_type",
+        "metadata.business.correction_type",
+        "metadata.business.source_name",
+        "metadata.reasoning.decision",
+        "metadata.reasoning.evidence"
+      ]
+    }
+  ],
+  "alerts": [
+    {
+      "name": "BI pipeline failures",
+      "span_names": ["b2b.churn_intelligence.run", "b2b.tenant_report"],
+      "status": "failed"
+    },
+    {
+      "name": "CRM ingest failures",
+      "span_names": ["b2b.crm_event.ingest"],
+      "status": "failed"
+    },
+    {
+      "name": "Webhook failures",
+      "span_names": ["b2b.webhook.dispatch", "b2b.webhook.test"],
+      "status": "failed"
+    },
+    {
+      "name": "Reasoning failures",
+      "span_names": ["reasoning.process"],
+      "status": "failed"
+    }
+  ]
+}

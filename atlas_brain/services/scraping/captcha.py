@@ -1,8 +1,9 @@
 """
 CAPTCHA detection and solving for B2B review scraping.
 
-Detects DataDome (G2) and Cloudflare (Capterra) challenges from 403 responses,
-then solves them via CapSolver or 2Captcha APIs.
+Detects DataDome, Cloudflare, and Akamai challenges from challenge HTML,
+including challenge pages surfaced with non-403 statuses, then solves them via
+CapSolver or 2Captcha APIs.
 """
 
 from __future__ import annotations
@@ -46,21 +47,30 @@ def detect_captcha(response_text: str, status_code: int) -> CaptchaType:
     if status_code == 403 and "captcha-delivery.com" in body and "var dd=" in body:
         return CaptchaType.DATADOME
 
-    # Cloudflare managed challenge / JS challenge (403 or 429)
-    if status_code in (403, 429):
-        if ("attention required" in body or "just a moment" in body) and (
-            "cloudflare" in body or "_cf_chl_opt" in body or "challenge-platform" in body
-        ):
-            return CaptchaType.CLOUDFLARE
+    # Cloudflare managed challenge / JS challenge.
+    # Some proxy paths surface the challenge page with 200/502/503/504.
+    cloudflare_markers = (
+        "cloudflare" in body
+        or "_cf_chl_opt" in body
+        or "challenge-platform" in body
+        or "cf-browser-verification" in body
+    )
+    cloudflare_challenge_text = (
+        "attention required" in body
+        or "just a moment" in body
+        or "verify you are human" in body
+        or "checking your browser" in body
+        or "challenge-platform" in body
+    )
+    if cloudflare_markers and cloudflare_challenge_text:
+        return CaptchaType.CLOUDFLARE
 
-    # Akamai Bot Manager challenge (Gartner, etc.)
-    # Akamai returns 403 with a JS challenge page containing sensor_data
-    # collection scripts and _abck cookie setup.
-    if status_code in (403, 429):
-        if ("_abck" in body or "ak_bmsc" in body
-                or "sensor_data" in body
-                or ("akamai" in body and "bot" in body)):
-            return CaptchaType.AKAMAI
+    # Akamai Bot Manager challenge (Gartner, etc.) may also be wrapped
+    # by intermediate gateways instead of returning a direct 403.
+    if ("_abck" in body or "ak_bmsc" in body
+            or "sensor_data" in body
+            or ("akamai" in body and "bot" in body)):
+        return CaptchaType.AKAMAI
 
     return CaptchaType.NONE
 
@@ -352,11 +362,21 @@ class CaptchaSolver:
                 f"{base}/createTask",
                 json={"clientKey": self._api_key, "task": task},
             )
-            resp.raise_for_status()
             try:
                 data = resp.json()
             except (ValueError, TypeError):
-                raise RuntimeError(f"CapSolver returned non-JSON response: {resp.status_code}")
+                data = None
+
+        if resp.status_code >= 400:
+            if isinstance(data, dict):
+                raise RuntimeError(
+                    f"CapSolver createTask HTTP {resp.status_code}: "
+                    f"{data.get('errorCode', '?')} -- {data.get('errorDescription', data)}"
+                )
+            raise RuntimeError(f"CapSolver returned non-JSON response: {resp.status_code}")
+
+        if not isinstance(data, dict):
+            raise RuntimeError(f"CapSolver returned non-JSON response: {resp.status_code}")
 
         if data.get("errorId", 0) != 0:
             raise RuntimeError(
@@ -490,11 +510,21 @@ class CaptchaSolver:
                 f"{base}/createTask",
                 json={"clientKey": self._api_key, "task": task},
             )
-            resp.raise_for_status()
             try:
                 data = resp.json()
             except (ValueError, TypeError):
-                raise RuntimeError(f"2Captcha returned non-JSON response: {resp.status_code}")
+                data = None
+
+        if resp.status_code >= 400:
+            if isinstance(data, dict):
+                raise RuntimeError(
+                    f"2Captcha createTask HTTP {resp.status_code}: "
+                    f"{data.get('errorCode', '?')} -- {data.get('errorDescription', data)}"
+                )
+            raise RuntimeError(f"2Captcha returned non-JSON response: {resp.status_code}")
+
+        if not isinstance(data, dict):
+            raise RuntimeError(f"2Captcha returned non-JSON response: {resp.status_code}")
 
         if data.get("errorId", 0) != 0:
             raise RuntimeError(

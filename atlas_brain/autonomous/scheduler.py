@@ -645,6 +645,15 @@ class TaskScheduler:
             "timeout_seconds": 300,
             "metadata": {"builtin_handler": "b2b_vendor_briefing"},
         },
+        {
+            "name": "crm_event_processing",
+            "description": "Process pending CRM events and auto-record campaign outcomes",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": 300,
+            "timeout_seconds": 120,
+            "metadata": {"builtin_handler": "crm_event_processing"},
+        },
     ]
 
     async def _ensure_default_tasks(self) -> None:

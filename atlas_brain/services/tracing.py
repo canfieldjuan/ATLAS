@@ -16,6 +16,7 @@ import json
 import logging
 import time
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -25,6 +26,23 @@ import httpx
 from ..config import settings
 
 logger = logging.getLogger("atlas.tracing")
+
+_TRACE_BUSINESS_KEYS = (
+    "account_id",
+    "product",
+    "workflow",
+    "report_type",
+    "event_type",
+    "crm_provider",
+    "vendor_name",
+    "company_name",
+    "signal_type",
+    "entity_type",
+    "entity_id",
+    "correction_type",
+    "source_name",
+    "subscription_id",
+)
 
 
 @dataclass
@@ -135,6 +153,7 @@ class FTLTracingClient:
         api_endpoint: Optional[str] = None,
         request_headers_sanitized: Optional[dict[str, Any]] = None,
         provider_request_id: Optional[str] = None,
+        reasoning: Optional[str] = None,
     ) -> None:
         """End a span and fire-and-forget the trace payload."""
         if not self._enabled:
@@ -158,6 +177,9 @@ class FTLTracingClient:
             "session_tag": ctx.session_id,
             "metadata": {**ctx.metadata, **(metadata or {})},
         }
+        reasoning_text = _derive_reasoning_text(payload["metadata"], reasoning)
+        if reasoning_text:
+            payload["reasoning"] = reasoning_text
 
         if ctx.parent_span_id:
             payload["parent_trace_id"] = ctx.parent_span_id
@@ -225,6 +247,7 @@ class FTLTracingClient:
         error_message: Optional[str] = None,
         error_type: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
+        reasoning: Optional[str] = None,
     ) -> None:
         """Emit a child span with explicit timestamps.
 
@@ -249,6 +272,9 @@ class FTLTracingClient:
             "session_tag": parent.session_id,
             "metadata": {**(metadata or {})},
         }
+        reasoning_text = _derive_reasoning_text(payload["metadata"], reasoning)
+        if reasoning_text:
+            payload["reasoning"] = reasoning_text
 
         if self._user_id:
             payload["user_id"] = self._user_id
@@ -319,6 +345,98 @@ def _truncate(data: Any, max_chars: int) -> Any:
     if len(s) <= max_chars:
         return data
     return {"_truncated": True, "preview": s[:max_chars]}
+
+
+def _derive_reasoning_text(metadata: dict[str, Any], explicit_reasoning: Optional[str]) -> Optional[str]:
+    """Promote a compact reasoning summary to the top-level trace field."""
+    if explicit_reasoning:
+        text = explicit_reasoning.strip()
+        return text[: settings.ftl_tracing.max_reasoning_chars] if text else None
+    reasoning_meta = metadata.get("reasoning")
+    if not isinstance(reasoning_meta, dict):
+        return None
+    for key in ("summary", "triage", "raw_preview"):
+        value = reasoning_meta.get(key)
+        if isinstance(value, str):
+            text = value.strip()
+            if text:
+                return text[: settings.ftl_tracing.max_reasoning_chars]
+    return None
+
+
+def build_business_trace_context(**kwargs: Any) -> dict[str, Any]:
+    """Build a compact business-context payload for trace metadata."""
+    if not settings.ftl_tracing.capture_business_context:
+        return {}
+
+    payload: dict[str, Any] = {}
+    for key in _TRACE_BUSINESS_KEYS:
+        value = kwargs.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                continue
+            payload[key] = value[:250]
+            continue
+        payload[key] = value
+    return payload
+
+
+def build_reasoning_trace_context(
+    *,
+    decision: Optional[dict[str, Any]] = None,
+    evidence: Optional[dict[str, Any]] = None,
+    triage_reasoning: Optional[str] = None,
+    rationale: Optional[str] = None,
+    raw_reasoning: Optional[str] = None,
+) -> dict[str, Any]:
+    """Build a structured reasoning artifact for trace metadata."""
+    cfg = settings.ftl_tracing
+    if not cfg.capture_reasoning_summaries:
+        return {}
+
+    payload: dict[str, Any] = {}
+    if decision:
+        payload["decision"] = _truncate(_clean_trace_value(decision), 3000)
+    if evidence:
+        payload["evidence"] = _truncate(_clean_trace_value(evidence), 3000)
+    if triage_reasoning:
+        payload["triage"] = triage_reasoning[:cfg.max_reasoning_chars]
+    if rationale:
+        payload["summary"] = rationale[:cfg.max_reasoning_chars]
+    if cfg.capture_raw_reasoning and raw_reasoning:
+        payload["raw_preview"] = raw_reasoning[:cfg.max_reasoning_chars]
+    return payload
+
+
+def _clean_trace_value(value: Any) -> Any:
+    """Normalize trace values to compact JSON-safe structures."""
+    if isinstance(value, dict):
+        cleaned = {}
+        for key, item in value.items():
+            normalized = _clean_trace_value(item)
+            if normalized is not None:
+                cleaned[str(key)] = normalized
+        return cleaned or None
+    if isinstance(value, (list, tuple, set)):
+        cleaned = []
+        for item in value:
+            normalized = _clean_trace_value(item)
+            if normalized is not None:
+                cleaned.append(normalized)
+        return cleaned[:20] or None
+    if isinstance(value, str):
+        text = value.strip()
+        return text[:1000] if text else None
+    if isinstance(value, (bool, int, float)):
+        return value
+    with suppress(Exception):
+        text = str(value).strip()
+        if text:
+            return text[:1000]
+    return None
 
 
 # --- Module-level singleton ---

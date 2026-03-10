@@ -106,6 +106,7 @@ class DomainRateLimiter:
         rpm_map["quora.com"] = _clamp_rpm(cfg.quora_rpm)
         rpm_map["api.stackexchange.com"] = _clamp_rpm(cfg.stackoverflow_rpm)
         rpm_map["peerspot.com"] = _clamp_rpm(cfg.peerspot_rpm)
+        rpm_map["softwareadvice.com"] = _clamp_rpm(cfg.software_advice_rpm)
         return cls(rpm_map)
 
     async def acquire(self, domain: str) -> None:

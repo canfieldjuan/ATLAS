@@ -212,20 +212,40 @@ export default function VendorDetail() {
               {signal.top_competitors && signal.top_competitors.length > 0 && (
                 <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
                   <h3 className="text-sm font-medium text-slate-300 mb-3">Top Competitors</h3>
-                  <ul className="space-y-1">
-                    {signal.top_competitors.map((c, i) => (
-                      <li key={i} className="text-sm text-slate-300">{typeof c === 'string' ? c : JSON.stringify(c)}</li>
-                    ))}
+                  <ul className="space-y-1.5">
+                    {signal.top_competitors.map((c, i) => {
+                      if (typeof c === 'string') return <li key={i} className="text-sm text-slate-300">{c}</li>
+                      const obj = c as Record<string, unknown>
+                      // competitor field may be a stringified JSON object
+                      let name = String(obj.name ?? obj.competitor ?? '')
+                      try { if (name.startsWith('{')) name = (JSON.parse(name) as Record<string, unknown>).name as string ?? name } catch {}
+                      const mentions = Number(obj.mentions ?? obj.count ?? 0)
+                      return (
+                        <li key={i} className="flex items-center justify-between text-sm">
+                          <span className="text-slate-300">{name || `#${i + 1}`}</span>
+                          {mentions > 0 && <span className="text-xs text-slate-500">{mentions} mentions</span>}
+                        </li>
+                      )
+                    })}
                   </ul>
                 </div>
               )}
               {signal.top_feature_gaps && signal.top_feature_gaps.length > 0 && (
                 <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
                   <h3 className="text-sm font-medium text-slate-300 mb-3">Feature Gaps</h3>
-                  <ul className="space-y-1">
-                    {signal.top_feature_gaps.map((g, i) => (
-                      <li key={i} className="text-sm text-slate-300">{typeof g === 'string' ? g : JSON.stringify(g)}</li>
-                    ))}
+                  <ul className="space-y-1.5">
+                    {signal.top_feature_gaps.map((g, i) => {
+                      if (typeof g === 'string') return <li key={i} className="text-sm text-slate-300">{g}</li>
+                      const obj = g as Record<string, unknown>
+                      const label = String(obj.feature ?? obj.name ?? obj.gap ?? obj.area ?? '')
+                      const count = Number(obj.count ?? obj.mentions ?? 0)
+                      return (
+                        <li key={i} className="flex items-center justify-between text-sm">
+                          <span className="text-slate-300">{label || `#${i + 1}`}</span>
+                          {count > 0 && <span className="text-xs text-slate-500">({count})</span>}
+                        </li>
+                      )
+                    })}
                   </ul>
                 </div>
               )}
@@ -267,7 +287,7 @@ export default function VendorDetail() {
                         key={i}
                         className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3"
                       >
-                        {typeof q === 'string' ? q : JSON.stringify(q)}
+                        {typeof q === 'string' ? q : (q as Record<string, unknown>).quote ?? (q as Record<string, unknown>).text ?? ''}
                       </blockquote>
                     ))}
                   </div>

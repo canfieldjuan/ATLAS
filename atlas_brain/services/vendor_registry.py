@@ -14,6 +14,7 @@ aliases) to canonical form, rebuilt every 5 minutes from the DB.
 import asyncio
 import logging
 import time
+from difflib import SequenceMatcher
 from typing import Any
 
 logger = logging.getLogger("atlas.services.vendor_registry")
@@ -50,6 +51,7 @@ _cache_ts: float = 0.0
 _cache_lock: asyncio.Lock | None = None
 _CACHE_TTL_SECONDS = 300  # 5 minutes
 _CACHE_FALLBACK_RETRY_SECONDS = 30  # retry sooner when using bootstrap fallback
+_FUZZY_THRESHOLD = 0.85  # minimum similarity ratio for fuzzy match
 
 
 def _get_lock() -> asyncio.Lock:
@@ -138,17 +140,34 @@ def invalidate_cache() -> None:
 # ---------------------------------------------------------------------------
 
 def _resolve_from_cache(raw: str) -> str:
-    """Resolve a vendor name using the current cache contents."""
+    """Resolve a vendor name using the current cache contents.
+
+    1. Exact match against cache keys (canonical names + aliases).
+    2. Fuzzy fallback: find best match above ``_FUZZY_THRESHOLD`` (0.85).
+    3. Return title-cased original if no match found.
+    """
     stripped = raw.strip()
     if not stripped:
         return stripped
     lowered = stripped.lower()
 
-    # Direct cache hit (alias or canonical)
+    # 1. Direct cache hit (alias or canonical)
     if lowered in _cache:
         return _cache[lowered]
 
-    # Not found -- title-case if all-lowercase, else preserve original casing
+    # 2. Fuzzy fallback -- only for inputs >= 4 chars (short strings match too broadly)
+    if len(lowered) >= 4 and _cache:
+        best_score = 0.0
+        best_canonical = ""
+        for key, canonical in _cache.items():
+            ratio = SequenceMatcher(None, lowered, key).ratio()
+            if ratio > best_score:
+                best_score = ratio
+                best_canonical = canonical
+        if best_score >= _FUZZY_THRESHOLD:
+            return best_canonical
+
+    # 3. Not found -- title-case if all-lowercase, else preserve original casing
     return stripped.title() if stripped.islower() else stripped
 
 
@@ -269,3 +288,113 @@ async def list_vendors() -> list[dict[str, Any]]:
         "FROM b2b_vendors ORDER BY canonical_name"
     )
     return [dict(r) for r in rows]
+
+
+async def fuzzy_search_vendors(
+    query: str,
+    limit: int = 10,
+    min_similarity: float = 0.3,
+) -> list[dict[str, Any]]:
+    """Search vendors using pg_trgm trigram similarity.
+
+    Returns vendors sorted by similarity score (descending).
+    Requires the pg_trgm extension (migration 114).
+    """
+    from ..storage.database import get_db_pool
+
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise RuntimeError("Database pool not initialized")
+
+    query = query.strip()
+    if not query:
+        return []
+
+    limit = max(1, min(limit, 100))
+    min_similarity = max(0.0, min(min_similarity, 1.0))
+
+    rows = await pool.fetch(
+        """
+        SELECT id, canonical_name, aliases,
+               similarity(canonical_name, $1) AS sim_score
+        FROM b2b_vendors
+        WHERE similarity(canonical_name, $1) >= $2
+        ORDER BY sim_score DESC
+        LIMIT $3
+        """,
+        query,
+        min_similarity,
+        limit,
+    )
+    return [
+        {
+            "id": str(r["id"]),
+            "canonical_name": r["canonical_name"],
+            "aliases": list(r["aliases"]) if isinstance(r["aliases"], list) else [],
+            "similarity": round(float(r["sim_score"]), 4),
+        }
+        for r in rows
+    ]
+
+
+async def fuzzy_search_companies(
+    query: str,
+    vendor_name: str | None = None,
+    limit: int = 10,
+    min_similarity: float = 0.3,
+) -> list[dict[str, Any]]:
+    """Search company names using pg_trgm trigram similarity.
+
+    Optionally scoped to a specific vendor.  Returns companies sorted by
+    similarity score (descending).
+    """
+    from ..storage.database import get_db_pool
+
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise RuntimeError("Database pool not initialized")
+
+    query = query.strip()
+    if not query:
+        return []
+
+    limit = max(1, min(limit, 100))
+    min_similarity = max(0.0, min(min_similarity, 1.0))
+
+    if vendor_name:
+        rows = await pool.fetch(
+            """
+            SELECT DISTINCT ON (company_name)
+                   company_name, vendor_name, urgency_score, buying_stage,
+                   similarity(company_name, $1) AS sim_score
+            FROM b2b_company_signals
+            WHERE similarity(company_name, $1) >= $2
+              AND vendor_name ILIKE $4
+            ORDER BY company_name, sim_score DESC
+            LIMIT $3
+            """,
+            query, min_similarity, limit, vendor_name,
+        )
+    else:
+        rows = await pool.fetch(
+            """
+            SELECT DISTINCT ON (company_name)
+                   company_name, vendor_name, urgency_score, buying_stage,
+                   similarity(company_name, $1) AS sim_score
+            FROM b2b_company_signals
+            WHERE similarity(company_name, $1) >= $2
+            ORDER BY company_name, sim_score DESC
+            LIMIT $3
+            """,
+            query, min_similarity, limit,
+        )
+    return [
+        {
+            "company_name": r["company_name"],
+            "vendor_name": r["vendor_name"],
+            "urgency_score": float(r["urgency_score"]) if r["urgency_score"] else None,
+            "buying_stage": r["buying_stage"],
+            "similarity": round(float(r["sim_score"]), 4),
+        }
+        for r in rows
+    ]

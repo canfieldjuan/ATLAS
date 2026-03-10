@@ -82,14 +82,23 @@ def update_blog_index(index_path: Path, slug: str, var_name: str) -> bool:
     else:
         lines.insert(0, import_line)
 
-    # Insert into POSTS array (before ].sort()
+    # Insert into POSTS array — handle both `].sort(` and plain `]` endings
     new_text = "\n".join(lines)
-    new_text = re.sub(
-        r"(].sort\()",
-        f"  {var_name},\n\\1",
-        new_text,
-        count=1,
-    )
+    if re.search(r"].sort\(", new_text):
+        new_text = re.sub(
+            r"(].sort\()",
+            f"  {var_name},\n\\1",
+            new_text,
+            count=1,
+        )
+    else:
+        # Plain array ending: `]\n` or `]\n\n` at end of POSTS
+        new_text = re.sub(
+            r"(?m)^(\])\s*$",
+            f"  {var_name},\n\\1",
+            new_text,
+            count=1,
+        )
 
     index_path.write_text(new_text, encoding="utf-8")
     logger.info("Updated index.ts with %s", slug)
@@ -107,6 +116,12 @@ def build_post_ts(
     charts_json: list[dict],
     content: str,
     data_context: dict | None = None,
+    seo_title: str = "",
+    seo_description: str = "",
+    target_keyword: str = "",
+    secondary_keywords: list[str] | None = None,
+    faq: list[dict] | None = None,
+    related_slugs: list[str] | None = None,
 ) -> tuple[str, str]:
     """Build a complete .ts file for a blog post.
 
@@ -128,7 +143,25 @@ def build_post_ts(
             dc_output["affiliate_url"] = data_context["affiliate_url"]
         if data_context.get("affiliate_partner"):
             dc_output["affiliate_partner"] = data_context["affiliate_partner"]
+        if data_context.get("booking_url"):
+            dc_output["booking_url"] = data_context["booking_url"]
     dc_str = json.dumps(dc_output, indent=2, default=str)
+
+    # Build optional SEO fields
+    seo_lines = ""
+    if seo_title:
+        seo_lines += f"  seo_title: '{escape_js_single(seo_title)}',\n"
+    if seo_description:
+        seo_lines += f"  seo_description: '{escape_js_single(seo_description)}',\n"
+    if target_keyword:
+        seo_lines += f"  target_keyword: '{escape_js_single(target_keyword)}',\n"
+    if secondary_keywords:
+        seo_lines += f"  secondary_keywords: {json.dumps(secondary_keywords)},\n"
+    if faq:
+        faq_str = json.dumps(faq, indent=2, default=str)
+        seo_lines += f"  faq: {faq_str},\n"
+    if related_slugs:
+        seo_lines += f"  related_slugs: {json.dumps(related_slugs)},\n"
 
     ts_content = f"""import type {{ BlogPost }} from './index'
 
@@ -142,7 +175,7 @@ const post: BlogPost = {{
   topic_type: '{topic_type}',
   charts: {charts_str},
   data_context: {dc_str},
-  content: `{escaped_content}`,
+{seo_lines}  content: `{escaped_content}`,
 }}
 
 export default post

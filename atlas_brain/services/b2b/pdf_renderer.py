@@ -14,6 +14,12 @@ from typing import Any
 
 from fpdf import FPDF
 
+from ..tracing import (
+    build_business_trace_context,
+    build_reasoning_trace_context,
+    tracer,
+)
+
 logger = logging.getLogger("atlas.b2b.pdf_renderer")
 
 # -- Brand colors (RGB tuples) ------------------------------------------------
@@ -451,6 +457,17 @@ def render_report_pdf(
     Parameters match the columns of the ``b2b_intelligence`` table.
     Returns raw PDF bytes suitable for streaming via FastAPI.
     """
+    span = tracer.start_span(
+        span_name="b2b.report.export_pdf",
+        operation_type="business_operation",
+        metadata={
+            "business": build_business_trace_context(
+                workflow="report_export",
+                report_type=report_type,
+                vendor_name=vendor_filter,
+            ),
+        },
+    )
     pdf = IntelligenceReportPDF()
     pdf.alias_nb_pages()
     pdf.add_page()
@@ -513,4 +530,21 @@ def render_report_pdf(
     # -- Generate bytes --------------------------------------------------------
     buf = io.BytesIO()
     pdf.output(buf)
-    return buf.getvalue()
+    pdf_bytes = buf.getvalue()
+    tracer.end_span(
+        span,
+        status="completed",
+        output_data={"size_bytes": len(pdf_bytes)},
+        metadata={
+            "reasoning": build_reasoning_trace_context(
+                decision={"report_type": report_type},
+                evidence={
+                    "vendor_filter": vendor_filter,
+                    "category_filter": category_filter,
+                    "data_density_keys": list((data_density or {}).keys())[:10],
+                },
+                rationale=executive_summary,
+            ),
+        },
+    )
+    return pdf_bytes

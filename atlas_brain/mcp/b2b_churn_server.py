@@ -15,10 +15,14 @@ Tools:
     search_reviews           -- search enriched reviews with flexible filters
     get_review               -- fetch a single review with full enrichment
     get_pipeline_status      -- enrichment pipeline health snapshot
+    get_parser_version_status -- per-source parser version status and re-extraction queue
     get_source_health        -- per-source scrape reliability metrics with trend comparison
+    get_source_telemetry     -- CAPTCHA attempts, solve times, block types, proxy usage per source
     get_source_capabilities  -- capability profiles (access patterns, anti-bot, proxy, quality)
+    get_operational_overview -- single snapshot: pipeline, source health, telemetry, recent events
     list_scrape_targets      -- view scrape target configuration and status
     get_product_profile      -- fetch pre-computed product knowledge card
+    get_product_profile_history -- daily product profile snapshots over time
     match_products_tool      -- find best alternatives for a churning company
     list_blog_posts          -- list/filter generated blog posts
     get_blog_post            -- fetch full blog post by ID or slug
@@ -27,6 +31,8 @@ Tools:
     delete_scrape_target     -- remove a scrape target and its logs
     list_affiliate_partners  -- list affiliate partner configurations
     list_vendors_registry    -- list all canonical vendors and their aliases
+    fuzzy_vendor_search      -- fuzzy search vendors by name (trigram similarity, handles typos)
+    fuzzy_company_search     -- fuzzy search companies by name (trigram similarity, vendor-scoped)
     add_vendor_to_registry   -- add a new vendor to the canonical registry
     add_vendor_alias         -- add an alias to an existing vendor
     list_displacement_edges  -- query persisted competitive displacement edges
@@ -41,13 +47,27 @@ Tools:
     record_campaign_outcome  -- record business outcome for a campaign sequence
     get_signal_effectiveness -- correlate signal dimensions with campaign outcomes
     create_data_correction   -- record an analyst correction (suppress, flag, override, merge, reclassify)
-    list_data_corrections    -- list/filter recorded data corrections
+    list_data_corrections    -- list/filter recorded data corrections (corrected_by, date range)
     revert_data_correction   -- revert a previously applied correction
+    get_data_correction      -- fetch single correction by ID with full details
+    get_correction_stats     -- aggregate correction activity (by type, status, entity, top correctors)
+    get_source_correction_impact -- show impact of active source suppressions on review counts
+    get_parser_health        -- parser version distribution and stale review detection
     get_calibration_weights  -- view score calibration weights from outcome data
     trigger_score_calibration -- manually trigger score recalibration
-    list_webhook_subscriptions -- list webhook subscriptions with delivery stats
-    send_test_webhook_tool   -- send a test payload to verify webhook connectivity
+    list_webhook_subscriptions -- list webhook subscriptions with delivery stats (generic/slack/teams/crm channels)
+    send_test_webhook_tool   -- send a test payload to verify webhook connectivity (channel-aware formatting)
+    update_webhook           -- update webhook subscription (toggle enabled, change event_types/url/description)
+    get_webhook_delivery_summary -- aggregate delivery health across all subscriptions
+    list_crm_pushes          -- list CRM push log entries showing intelligence data pushed to external CRMs
     export_report_pdf        -- export a B2B intelligence report as PDF
+    get_outcome_distribution  -- system-wide campaign outcome funnel (counts, percentages, revenue)
+    trigger_score_calibration -- on-demand score recalibration from campaign outcomes
+    list_crm_events          -- list ingested CRM events with filters (date range, status validation)
+    ingest_crm_event         -- manually ingest a CRM event for processing
+    get_crm_enrichment_stats -- CRM event enrichment coverage and effectiveness stats
+    list_concurrent_events   -- find dates where multiple vendors had the same change event
+    get_vendor_correlation   -- pairwise vendor metric correlation with Pearson r
 
 Run:
     python -m atlas_brain.mcp.b2b_churn_server          # stdio
@@ -81,7 +101,7 @@ VALID_REPORT_TYPES = (
     "challenger_intel",
 )
 
-from atlas_brain.services.scraping.sources import ALL_SOURCES
+from atlas_brain.services.scraping.sources import ALL_SOURCES, ReviewSource
 
 VALID_SOURCES = ALL_SOURCES
 
@@ -95,13 +115,8 @@ def _is_uuid(value: str) -> bool:
         return False
 
 
-def _suppress_predicate(entity_type: str, id_expr: str = "id") -> str:
-    """SQL predicate excluding entities with active suppress corrections."""
-    return (
-        f"NOT EXISTS (SELECT 1 FROM data_corrections dc"
-        f" WHERE dc.entity_type = '{entity_type}' AND dc.entity_id = {id_expr}"
-        f" AND dc.correction_type = 'suppress' AND dc.status = 'applied')"
-    )
+from ..services.b2b.corrections import suppress_predicate as _suppress_predicate
+from ..services.b2b.corrections import apply_field_overrides as _apply_field_overrides
 
 
 def _safe_json(val):
@@ -302,9 +317,15 @@ async def get_churn_signal(
             "sentiment_distribution": _safe_json(row["sentiment_distribution"]),
             "buyer_authority_summary": _safe_json(row["buyer_authority_summary"]),
             "timeline_summary": _safe_json(row["timeline_summary"]),
+            "source_distribution": _safe_json(row["source_distribution"]),
+            "sample_review_ids": [str(uid) for uid in (row["sample_review_ids"] or [])],
+            "review_window_start": row["review_window_start"],
+            "review_window_end": row["review_window_end"],
+            "confidence_score": float(row["confidence_score"]) if row["confidence_score"] is not None else 0,
             "last_computed_at": row["last_computed_at"],
             "created_at": row["created_at"],
         }
+        signal = await _apply_field_overrides(pool, "churn_signal", str(row["id"]), signal)
 
         return json.dumps({"success": True, "signal": signal}, default=str)
     except Exception as exc:
@@ -494,7 +515,7 @@ async def get_vendor_profile(vendor_name: str) -> str:
         profile: dict = {"vendor_name": vname}
 
         if signal_row:
-            profile["churn_signal"] = {
+            sig = {
                 "avg_urgency_score": float(signal_row["avg_urgency_score"]) if signal_row["avg_urgency_score"] is not None else 0.0,
                 "churn_intent_count": signal_row["churn_intent_count"],
                 "total_reviews": signal_row["total_reviews"],
@@ -510,8 +531,11 @@ async def get_vendor_profile(vendor_name: str) -> str:
                 "sentiment_distribution": _safe_json(signal_row["sentiment_distribution"]),
                 "buyer_authority_summary": _safe_json(signal_row["buyer_authority_summary"]),
                 "timeline_summary": _safe_json(signal_row["timeline_summary"]),
+                "confidence_score": float(signal_row["confidence_score"]) if signal_row["confidence_score"] is not None else 0,
                 "last_computed_at": signal_row["last_computed_at"],
             }
+            sig = await _apply_field_overrides(pool, "churn_signal", str(signal_row["id"]), sig)
+            profile["churn_signal"] = sig
         else:
             profile["churn_signal"] = None
 
@@ -837,6 +861,7 @@ async def get_review(review_id: str) -> str:
             "enrichment_status": row["enrichment_status"],
             "enriched_at": row["enriched_at"],
         }
+        review = await _apply_field_overrides(pool, "review", str(row["id"]), review)
 
         return json.dumps({"success": True, "review": review}, default=str)
     except Exception as exc:
@@ -907,6 +932,59 @@ async def get_pipeline_status() -> str:
     except Exception as exc:
         logger.exception("get_pipeline_status error")
         return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_parser_version_status
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_parser_version_status() -> str:
+    """
+    Show per-source parser version status and count of reviews needing re-extraction.
+
+    Returns for each source: current parser version, total reviews,
+    count at current version, count at outdated versions, and count with unknown version.
+    Reviews with outdated parser versions are automatically re-queued for enrichment
+    on the next enrichment run.
+    """
+    try:
+        from ..services.scraping.parsers import get_all_parsers
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        parsers = get_all_parsers()
+        sources = []
+        for source_name, parser in sorted(parsers.items()):
+            current_version = getattr(parser, "version", None)
+            if not current_version:
+                continue
+
+            row = await pool.fetchrow(
+                """
+                SELECT COUNT(*) AS total,
+                       COUNT(*) FILTER (WHERE parser_version = $2) AS current_count,
+                       COUNT(*) FILTER (WHERE parser_version IS NOT NULL AND parser_version != $2) AS outdated_count,
+                       COUNT(*) FILTER (WHERE parser_version IS NULL) AS unknown_count
+                FROM b2b_reviews
+                WHERE source = $1
+                """,
+                source_name, current_version,
+            )
+            sources.append({
+                "source": source_name,
+                "current_version": current_version,
+                "total_reviews": row["total"],
+                "current_version_count": row["current_count"],
+                "outdated_version_count": row["outdated_count"],
+                "unknown_version_count": row["unknown_count"],
+            })
+
+        return json.dumps({"sources": sources, "count": len(sources)}, default=str)
+    except Exception:
+        logger.exception("get_parser_version_status error")
+        return json.dumps({"error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -1084,6 +1162,102 @@ async def get_source_health(
 
 
 # ---------------------------------------------------------------------------
+# Tool: get_source_telemetry
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_source_telemetry(
+    window_days: int = 7,
+    source: Optional[str] = None,
+) -> str:
+    """
+    Get CAPTCHA attempts, solve times, block type distribution, and proxy usage per source.
+
+    window_days: How many days back to look (default 7, max 30)
+    source: Filter to a single source (optional)
+    """
+    window_days = min(max(window_days, 1), 30)
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"error": "Database not ready"})
+
+        conditions = ["started_at >= NOW() - make_interval(days => $1)"]
+        params: list = [window_days]
+        idx = 2
+        if source:
+            conditions.append(f"source = ${idx}")
+            params.append(source.strip().lower())
+            idx += 1
+
+        where = " AND ".join(conditions)
+        rows = await pool.fetch(
+            f"""
+            SELECT
+                source,
+                COUNT(*)                                                AS total_scrapes,
+                SUM(COALESCE(captcha_attempts, 0))                      AS total_captcha_attempts,
+                COUNT(*) FILTER (WHERE captcha_attempts > 0)            AS scrapes_with_captcha,
+                AVG(captcha_solve_ms) FILTER (WHERE captcha_solve_ms > 0) AS avg_captcha_solve_ms,
+                MAX(captcha_solve_ms)                                    AS max_captcha_solve_ms,
+                COUNT(*) FILTER (WHERE block_type IS NOT NULL)           AS total_blocks,
+                COUNT(*) FILTER (WHERE block_type = 'captcha')           AS blocks_captcha,
+                COUNT(*) FILTER (WHERE block_type = 'ip_ban')            AS blocks_ip_ban,
+                COUNT(*) FILTER (WHERE block_type = 'rate_limit')        AS blocks_rate_limit,
+                COUNT(*) FILTER (WHERE block_type = 'waf')               AS blocks_waf,
+                COUNT(*) FILTER (WHERE block_type = 'unknown')           AS blocks_unknown,
+                COUNT(*) FILTER (WHERE proxy_type = 'datacenter')        AS proxy_datacenter,
+                COUNT(*) FILTER (WHERE proxy_type = 'residential')       AS proxy_residential,
+                COUNT(*) FILTER (WHERE proxy_type = 'none')              AS proxy_none
+            FROM b2b_scrape_log
+            WHERE {where}
+            GROUP BY source
+            ORDER BY total_captcha_attempts DESC
+            """,
+            *params,
+        )
+
+        sources_out = []
+        for r in rows:
+            total = r["total_scrapes"] or 1
+            sources_out.append({
+                "source": r["source"],
+                "total_scrapes": r["total_scrapes"],
+                "captcha": {
+                    "total_attempts": r["total_captcha_attempts"] or 0,
+                    "scrapes_with_captcha": r["scrapes_with_captcha"],
+                    "captcha_rate": round(r["scrapes_with_captcha"] / total, 3),
+                    "avg_solve_ms": round(float(r["avg_captcha_solve_ms"]), 0) if r["avg_captcha_solve_ms"] else None,
+                    "max_solve_ms": r["max_captcha_solve_ms"],
+                },
+                "blocks": {
+                    "total": r["total_blocks"],
+                    "captcha": r["blocks_captcha"],
+                    "ip_ban": r["blocks_ip_ban"],
+                    "rate_limit": r["blocks_rate_limit"],
+                    "waf": r["blocks_waf"],
+                    "unknown": r["blocks_unknown"],
+                },
+                "proxy_usage": {
+                    "datacenter": r["proxy_datacenter"],
+                    "residential": r["proxy_residential"],
+                    "none": r["proxy_none"],
+                },
+            })
+
+        return json.dumps({
+            "window_days": window_days,
+            "sources": sources_out,
+            "total_sources": len(sources_out),
+        }, default=str)
+    except Exception:
+        logger.exception("get_source_telemetry error")
+        return json.dumps({"error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
 # Tool: get_source_capabilities
 # ---------------------------------------------------------------------------
 
@@ -1118,6 +1292,99 @@ async def get_source_capabilities(
         "total": len(all_profiles),
         "profiles": [p.to_dict() for p in all_profiles.values()],
     })
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_operational_overview
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_operational_overview() -> str:
+    """
+    Single snapshot combining pipeline status, source health, telemetry, and recent events.
+
+    Returns data summary (total reviews, vendors tracked), enrichment pipeline counts,
+    source health summary (7d), CAPTCHA/block telemetry (7d), and 10 most recent change events.
+    """
+    try:
+        import asyncio as _aio
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"error": "Database not ready"})
+
+        pipeline_row, health_rows, telemetry_row, event_rows, review_row = await _aio.gather(
+            pool.fetchrow("""
+                SELECT
+                    COUNT(*) FILTER (WHERE enrichment_status = 'pending')   AS pending,
+                    COUNT(*) FILTER (WHERE enrichment_status = 'enriched')  AS enriched,
+                    COUNT(*) FILTER (WHERE enrichment_status = 'failed')    AS failed,
+                    COUNT(*)                                                 AS total
+                FROM b2b_reviews
+            """),
+            pool.fetch("""
+                SELECT source, COUNT(*) AS total,
+                       COUNT(*) FILTER (WHERE status = 'success') AS success,
+                       COUNT(*) FILTER (WHERE status = 'blocked') AS blocked
+                FROM b2b_scrape_log
+                WHERE started_at >= NOW() - INTERVAL '7 days'
+                GROUP BY source ORDER BY total DESC
+            """),
+            pool.fetchrow("""
+                SELECT
+                    SUM(COALESCE(captcha_attempts, 0)) AS captcha_total,
+                    COUNT(*) FILTER (WHERE block_type IS NOT NULL) AS blocks_total
+                FROM b2b_scrape_log
+                WHERE started_at >= NOW() - INTERVAL '7 days'
+            """),
+            pool.fetch("""
+                SELECT vendor_name, event_type, event_date, description
+                FROM b2b_change_events
+                ORDER BY event_date DESC, created_at DESC
+                LIMIT 10
+            """),
+            pool.fetchrow("""
+                SELECT COUNT(*) AS total_reviews,
+                       COUNT(DISTINCT vendor_name) AS vendors_tracked
+                FROM b2b_reviews
+            """),
+        )
+
+        total_scrapes = sum(r["total"] for r in health_rows)
+        total_success = sum(r["success"] for r in health_rows)
+
+        return json.dumps({
+            "data_summary": {
+                "total_reviews": review_row["total_reviews"],
+                "vendors_tracked": review_row["vendors_tracked"],
+            },
+            "pipeline": {
+                "pending": pipeline_row["pending"],
+                "enriched": pipeline_row["enriched"],
+                "failed": pipeline_row["failed"],
+                "total": pipeline_row["total"],
+            },
+            "source_health_7d": {
+                "total_scrapes": total_scrapes,
+                "overall_success_rate": round(total_success / max(total_scrapes, 1), 3),
+                "sources": [{"source": r["source"], "total": r["total"],
+                             "success_rate": round(r["success"] / max(r["total"], 1), 3)}
+                            for r in health_rows],
+            },
+            "telemetry_7d": {
+                "captcha_attempts": telemetry_row["captcha_total"] or 0,
+                "blocks": telemetry_row["blocks_total"] or 0,
+            },
+            "recent_events": [
+                {"vendor": r["vendor_name"], "type": r["event_type"],
+                 "date": str(r["event_date"]), "description": r["description"]}
+                for r in event_rows
+            ],
+        }, default=str)
+    except Exception:
+        logger.exception("get_operational_overview error")
+        return json.dumps({"error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -1226,7 +1493,7 @@ async def get_product_profile(vendor_name: str) -> str:
                    total_reviews_analyzed, avg_rating, recommend_rate, avg_urgency,
                    primary_use_cases, typical_company_size, typical_industries,
                    top_integrations, commonly_compared_to, commonly_switched_from,
-                   profile_summary, last_computed_at, created_at
+                   profile_summary, confidence_score, last_computed_at, created_at
             FROM b2b_product_profiles
             WHERE vendor_name ILIKE '%' || $1 || '%'
             ORDER BY total_reviews_analyzed DESC
@@ -1256,6 +1523,7 @@ async def get_product_profile(vendor_name: str) -> str:
             "commonly_compared_to": _safe_json(row["commonly_compared_to"]),
             "commonly_switched_from": _safe_json(row["commonly_switched_from"]),
             "profile_summary": row["profile_summary"],
+            "confidence_score": float(row["confidence_score"]) if row["confidence_score"] is not None else 0,
             "last_computed_at": row["last_computed_at"],
             "created_at": row["created_at"],
         }
@@ -1264,6 +1532,88 @@ async def get_product_profile(vendor_name: str) -> str:
     except Exception:
         logger.exception("get_product_profile error")
         return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_product_profile_history
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_product_profile_history(
+    vendor_name: str,
+    days: int = 90,
+    limit: int = 90,
+) -> str:
+    """
+    Get daily product profile snapshots for a vendor over time.
+
+    vendor_name: Vendor name (case-insensitive partial match)
+    days: How many days back to look (default 90)
+    limit: Max snapshots to return (default 90, max 365)
+    """
+    limit = min(max(limit, 1), 365)
+    days = min(max(days, 1), 365)
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"error": "Database not ready"})
+
+        rows = await pool.fetch(
+            """
+            SELECT vendor_name, snapshot_date,
+                   total_reviews_analyzed, avg_rating, recommend_rate, avg_urgency,
+                   strength_count, weakness_count, top_strength, top_weakness,
+                   top_use_case, top_integration,
+                   compared_to_count, switched_from_count,
+                   pain_categories_covered, profile_summary_len
+            FROM b2b_product_profile_snapshots
+            WHERE vendor_name ILIKE '%' || $1 || '%'
+              AND snapshot_date >= CURRENT_DATE - $2::int
+            ORDER BY snapshot_date DESC
+            LIMIT $3
+            """,
+            vendor_name.strip(), days, limit,
+        )
+
+        if not rows:
+            return json.dumps({
+                "vendor_name": vendor_name,
+                "snapshots": [],
+                "count": 0,
+                "message": f"No product profile snapshots found for '{vendor_name}'",
+            })
+
+        resolved = rows[0]["vendor_name"]
+        snapshots = []
+        for r in rows:
+            snapshots.append({
+                "snapshot_date": str(r["snapshot_date"]),
+                "total_reviews_analyzed": r["total_reviews_analyzed"],
+                "avg_rating": float(r["avg_rating"]) if r["avg_rating"] is not None else None,
+                "recommend_rate": float(r["recommend_rate"]) if r["recommend_rate"] is not None else None,
+                "avg_urgency": float(r["avg_urgency"]) if r["avg_urgency"] is not None else None,
+                "strength_count": r["strength_count"],
+                "weakness_count": r["weakness_count"],
+                "top_strength": r["top_strength"],
+                "top_weakness": r["top_weakness"],
+                "top_use_case": r["top_use_case"],
+                "top_integration": r["top_integration"],
+                "compared_to_count": r["compared_to_count"],
+                "switched_from_count": r["switched_from_count"],
+                "pain_categories_covered": r["pain_categories_covered"],
+                "profile_summary_len": r["profile_summary_len"],
+            })
+
+        return json.dumps({
+            "vendor_name": resolved,
+            "snapshots": snapshots,
+            "count": len(snapshots),
+        }, default=str)
+    except Exception:
+        logger.exception("get_product_profile_history error")
+        return json.dumps({"error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -1871,6 +2221,81 @@ async def list_vendors_registry(limit: int = 100) -> str:
     except Exception:
         logger.exception("list_vendors_registry error")
         return json.dumps({"error": "Internal error", "vendors": [], "count": 0})
+
+
+# ---------------------------------------------------------------------------
+# Tool: fuzzy_vendor_search
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def fuzzy_vendor_search(
+    query: str,
+    limit: int = 10,
+    min_similarity: float = 0.3,
+) -> str:
+    """
+    Search vendors by name using fuzzy matching (trigram similarity).
+
+    Finds vendors even with typos or partial names (e.g. "Salesfroce" -> "Salesforce").
+
+    query: Vendor name to search for
+    limit: Max results (default 10, max 100)
+    min_similarity: Minimum similarity threshold 0.0-1.0 (default 0.3)
+    """
+    if not query or not query.strip():
+        return json.dumps({"error": "query is required"})
+    try:
+        from ..services.vendor_registry import fuzzy_search_vendors
+
+        results = await fuzzy_search_vendors(
+            query.strip(), limit=limit, min_similarity=min_similarity,
+        )
+        return json.dumps({"query": query.strip(), "results": results, "count": len(results)}, default=str)
+    except Exception:
+        logger.exception("fuzzy_vendor_search error")
+        return json.dumps({"error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: fuzzy_company_search
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def fuzzy_company_search(
+    query: str,
+    vendor_name: Optional[str] = None,
+    limit: int = 10,
+    min_similarity: float = 0.3,
+) -> str:
+    """
+    Search company names using fuzzy matching (trigram similarity).
+
+    Finds companies even with typos or partial names. Optionally scoped to a vendor.
+
+    query: Company name to search for
+    vendor_name: Optional vendor name to scope the search
+    limit: Max results (default 10, max 100)
+    min_similarity: Minimum similarity threshold 0.0-1.0 (default 0.3)
+    """
+    if not query or not query.strip():
+        return json.dumps({"error": "query is required"})
+    try:
+        from ..services.vendor_registry import fuzzy_search_companies
+
+        results = await fuzzy_search_companies(
+            query.strip(), vendor_name=vendor_name, limit=limit, min_similarity=min_similarity,
+        )
+        return json.dumps({
+            "query": query.strip(),
+            "vendor_filter": vendor_name,
+            "results": results,
+            "count": len(results),
+        }, default=str)
+    except Exception:
+        logger.exception("fuzzy_company_search error")
+        return json.dumps({"error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------
@@ -2703,6 +3128,198 @@ async def compare_vendor_periods(
 
 
 # ---------------------------------------------------------------------------
+# Tool: list_concurrent_events (Cross-vendor trend correlation)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def list_concurrent_events(
+    days: int = 30,
+    event_type: Optional[str] = None,
+    min_vendors: int = 2,
+    limit: int = 50,
+) -> str:
+    """
+    Find dates where multiple vendors had the same change event type.
+
+    Surfaces cross-vendor correlations like 'urgency spiked at 4 vendors on
+    the same day' -- may indicate market-level trends vs vendor-specific issues.
+
+    days: Lookback period (default 30)
+    event_type: Optional filter (urgency_spike, churn_density_spike, nps_shift, etc.)
+    min_vendors: Minimum vendor count to qualify as concurrent (default 2)
+    limit: Max results (default 50)
+    """
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"error": "Database not ready"})
+
+        type_filter = ""
+        params: list = [days, min_vendors, limit]
+        if event_type:
+            type_filter = "AND event_type = $4"
+            params.append(event_type)
+
+        rows = await pool.fetch(
+            f"""
+            SELECT event_date, event_type,
+                   COUNT(DISTINCT vendor_name) AS vendor_count,
+                   ARRAY_AGG(DISTINCT vendor_name ORDER BY vendor_name) AS vendors,
+                   AVG(delta) AS avg_delta,
+                   MIN(delta) AS min_delta,
+                   MAX(delta) AS max_delta
+            FROM b2b_change_events
+            WHERE event_date >= CURRENT_DATE - $1::int
+              {type_filter}
+            GROUP BY event_date, event_type
+            HAVING COUNT(DISTINCT vendor_name) >= $2
+            ORDER BY vendor_count DESC, event_date DESC
+            LIMIT $3
+            """,
+            *params,
+        )
+
+        results = [
+            {
+                "event_date": str(r["event_date"]),
+                "event_type": r["event_type"],
+                "vendor_count": r["vendor_count"],
+                "vendors": r["vendors"],
+                "avg_delta": round(float(r["avg_delta"]), 2) if r["avg_delta"] is not None else None,
+                "min_delta": round(float(r["min_delta"]), 2) if r["min_delta"] is not None else None,
+                "max_delta": round(float(r["max_delta"]), 2) if r["max_delta"] is not None else None,
+            }
+            for r in rows
+        ]
+        return json.dumps({"concurrent_events": results, "total": len(results)}, default=str)
+    except Exception:
+        logger.exception("list_concurrent_events error")
+        return json.dumps({"error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_vendor_correlation (Pairwise vendor trend analysis)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_vendor_correlation(
+    vendor_a: str,
+    vendor_b: str,
+    days: int = 90,
+    metric: str = "churn_density",
+) -> str:
+    """
+    Compare two vendors' metric trends and compute correlation coefficient.
+
+    Returns aligned time-series and Pearson r. Negative correlation (r < -0.5)
+    suggests one vendor gains when the other loses -- potential displacement.
+
+    vendor_a: First vendor name (partial match)
+    vendor_b: Second vendor name (partial match)
+    days: Lookback period (default 90)
+    metric: Metric to correlate (churn_density, avg_urgency, recommend_ratio,
+            total_reviews, displacement_edge_count, high_intent_company_count)
+    """
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"error": "Database not ready"})
+
+        valid_metrics = {
+            "churn_density", "avg_urgency", "recommend_ratio", "total_reviews",
+            "displacement_edge_count", "high_intent_company_count", "pain_count",
+            "competitor_count",
+        }
+        if metric not in valid_metrics:
+            return json.dumps({"error": f"metric must be one of: {sorted(valid_metrics)}"})
+
+        rows = await pool.fetch(
+            f"""
+            SELECT a.snapshot_date,
+                   a.{metric} AS value_a,
+                   b.{metric} AS value_b
+            FROM b2b_vendor_snapshots a
+            JOIN b2b_vendor_snapshots b
+              ON a.snapshot_date = b.snapshot_date
+            WHERE a.vendor_name ILIKE '%' || $1 || '%'
+              AND b.vendor_name ILIKE '%' || $2 || '%'
+              AND a.snapshot_date >= CURRENT_DATE - $3::int
+            ORDER BY a.snapshot_date ASC
+            """,
+            vendor_a, vendor_b, days,
+        )
+
+        if not rows:
+            return json.dumps({"error": "No overlapping snapshots found for these vendors"})
+
+        vals_a = [float(r["value_a"] or 0) for r in rows]
+        vals_b = [float(r["value_b"] or 0) for r in rows]
+
+        # Pearson correlation
+        n = len(vals_a)
+        correlation = None
+        if n >= 3:
+            mean_a = sum(vals_a) / n
+            mean_b = sum(vals_b) / n
+            dx = [v - mean_a for v in vals_a]
+            dy = [v - mean_b for v in vals_b]
+            num = sum(a * b for a, b in zip(dx, dy))
+            den_a = sum(a * a for a in dx) ** 0.5
+            den_b = sum(b * b for b in dy) ** 0.5
+            if den_a > 0 and den_b > 0:
+                correlation = round(num / (den_a * den_b), 4)
+
+        series = [
+            {
+                "date": str(r["snapshot_date"]),
+                "value_a": float(r["value_a"] or 0),
+                "value_b": float(r["value_b"] or 0),
+            }
+            for r in rows
+        ]
+
+        # Recent displacement edges between the pair
+        edge_rows = await pool.fetch(
+            """
+            SELECT from_vendor, to_vendor, mention_count, signal_strength, primary_driver
+            FROM b2b_displacement_edges
+            WHERE (from_vendor ILIKE '%' || $1 || '%' AND to_vendor ILIKE '%' || $2 || '%')
+               OR (from_vendor ILIKE '%' || $2 || '%' AND to_vendor ILIKE '%' || $1 || '%')
+            ORDER BY computed_date DESC
+            LIMIT 5
+            """,
+            vendor_a, vendor_b,
+        )
+        displacement = [
+            {
+                "from_vendor": r["from_vendor"],
+                "to_vendor": r["to_vendor"],
+                "mention_count": r["mention_count"],
+                "signal_strength": r["signal_strength"],
+                "primary_driver": r["primary_driver"],
+            }
+            for r in edge_rows
+        ]
+
+        return json.dumps({
+            "vendor_a": vendor_a,
+            "vendor_b": vendor_b,
+            "metric": metric,
+            "data_points": len(series),
+            "correlation": correlation,
+            "series": series,
+            "displacement_edges": displacement,
+        }, default=str)
+    except Exception:
+        logger.exception("get_vendor_correlation error")
+        return json.dumps({"error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
 # Tool: record_campaign_outcome
 # ---------------------------------------------------------------------------
 
@@ -2937,6 +3554,105 @@ async def get_signal_effectiveness(
         return json.dumps({"success": False, "error": "Internal error"})
 
 
+@mcp.tool()
+async def get_outcome_distribution(
+    vendor_name: Optional[str] = None,
+) -> str:
+    """System-wide campaign outcome distribution (funnel view).
+
+    Returns count and percentage for each outcome state, plus total revenue.
+
+    vendor_name: Optional vendor filter (partial match, case-insensitive).
+    """
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"error": "Database not ready"})
+
+        conditions: list[str] = []
+        params: list = []
+        idx = 1
+
+        if vendor_name:
+            conditions.append(f"bc.vendor_name ILIKE '%' || ${idx} || '%'")
+            params.append(vendor_name)
+            idx += 1
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+        rows = await pool.fetch(
+            f"""
+            SELECT cs.outcome,
+                   COUNT(*) AS count,
+                   COALESCE(SUM(cs.outcome_revenue), 0) AS total_revenue,
+                   MIN(cs.outcome_recorded_at) AS first_recorded,
+                   MAX(cs.outcome_recorded_at) AS last_recorded
+            FROM campaign_sequences cs
+            LEFT JOIN b2b_campaigns bc ON bc.sequence_id = cs.id AND bc.step_number = 1
+            {where}
+            GROUP BY cs.outcome
+            ORDER BY count DESC
+            """,
+            *params,
+        )
+
+        total = sum(r["count"] for r in rows)
+        buckets = []
+        for r in rows:
+            buckets.append({
+                "outcome": r["outcome"],
+                "count": r["count"],
+                "pct": round(r["count"] / total * 100, 1) if total else 0,
+                "total_revenue": float(r["total_revenue"]) if r["total_revenue"] else 0.0,
+                "first_recorded": str(r["first_recorded"]) if r["first_recorded"] else None,
+                "last_recorded": str(r["last_recorded"]) if r["last_recorded"] else None,
+            })
+
+        return json.dumps({
+            "success": True,
+            "total_sequences": total,
+            "vendor_filter": vendor_name,
+            "buckets": buckets,
+        }, default=str)
+    except Exception:
+        logger.exception("get_outcome_distribution error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+@mcp.tool()
+async def trigger_score_calibration(
+    window_days: int = 180,
+) -> str:
+    """Trigger score calibration from campaign outcomes on-demand.
+
+    Recalculates calibration weights based on observed outcome rates per
+    signal dimension. Results are stored in score_calibration_weights.
+
+    window_days: How many days of outcome data to consider (default 180, min 30, max 730).
+    """
+    try:
+        from ..autonomous.tasks.b2b_score_calibration import calibrate
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"error": "Database not ready"})
+
+        window_days = max(30, min(window_days, 730))
+        result = await calibrate(pool, window_days=window_days)
+        return json.dumps({
+            "success": True,
+            "triggered_by": "mcp",
+            "window_days": window_days,
+            **result,
+        }, default=str)
+    except Exception:
+        logger.exception("trigger_score_calibration error")
+        return json.dumps({"success": False, "error": "Calibration failed"})
+
+
 # ---------------------------------------------------------------------------
 # Tool: create_data_correction
 # ---------------------------------------------------------------------------
@@ -2944,8 +3660,10 @@ async def get_signal_effectiveness(
 _VALID_ENTITY_TYPES = {
     "review", "vendor", "displacement_edge", "pain_point",
     "churn_signal", "buyer_profile", "use_case", "integration",
+    "source",
 }
-_VALID_CORRECTION_TYPES = {"suppress", "flag", "override_field", "merge_vendor", "reclassify"}
+_VALID_CORRECTION_TYPES = {"suppress", "flag", "override_field", "merge_vendor", "reclassify", "suppress_source"}
+_KNOWN_SOURCES = {s.value for s in ReviewSource}
 
 
 @mcp.tool()
@@ -2958,19 +3676,24 @@ async def create_data_correction(
     old_value: Optional[str] = None,
     new_value: Optional[str] = None,
     corrected_by: str = "mcp",
+    metadata: Optional[str] = None,
 ) -> str:
     """
     Record an analyst correction for a data entity.
 
     entity_type: Type of entity being corrected (review, vendor, displacement_edge,
-        pain_point, churn_signal, buyer_profile, use_case, integration)
+        pain_point, churn_signal, buyer_profile, use_case, integration, source)
     entity_id: UUID of the entity being corrected
-    correction_type: Type of correction (suppress, flag, override_field, merge_vendor, reclassify)
+    correction_type: Type of correction (suppress, flag, override_field, merge_vendor,
+        reclassify, suppress_source)
     reason: Human explanation for the correction (required)
-    field_name: Which field was changed (required for override_field)
+    field_name: Which field was changed (required for override_field; for suppress_source,
+        optional vendor scope)
     old_value: Previous value (optional)
     new_value: New value (required for override_field)
     corrected_by: Who made the correction (default: mcp)
+    metadata: Optional JSON string with extra data (e.g., '{"source_name": "reddit"}' for
+        suppress_source)
     """
     if entity_type not in _VALID_ENTITY_TYPES:
         return json.dumps({
@@ -2993,6 +3716,28 @@ async def create_data_correction(
                 "success": False,
                 "error": "merge_vendor requires old_value (source vendor) and new_value (target vendor)",
             })
+    if correction_type == "suppress_source":
+        if entity_type != "source":
+            return json.dumps({
+                "success": False,
+                "error": "suppress_source corrections must use entity_type='source'",
+            })
+        meta_dict = {}
+        if metadata:
+            try:
+                meta_dict = json.loads(metadata)
+            except (json.JSONDecodeError, TypeError):
+                return json.dumps({"success": False, "error": "metadata must be valid JSON"})
+        if not meta_dict.get("source_name"):
+            return json.dumps({
+                "success": False,
+                "error": "suppress_source requires metadata with source_name (e.g., '{\"source_name\": \"reddit\"}')",
+            })
+        if meta_dict["source_name"].lower() not in _KNOWN_SOURCES:
+            return json.dumps({
+                "success": False,
+                "error": f"Unknown source '{meta_dict['source_name']}'. Known: {sorted(_KNOWN_SOURCES)}",
+            })
     if not _is_uuid(entity_id):
         return json.dumps({"success": False, "error": "entity_id must be a valid UUID"})
     if not reason or not reason.strip():
@@ -3003,13 +3748,14 @@ async def create_data_correction(
         pool = get_db_pool()
         import uuid as _u
         entity_uuid = _u.UUID(entity_id)
+        meta_json = metadata if metadata else "{}"
 
         row = await pool.fetchrow(
             """
             INSERT INTO data_corrections
                 (entity_type, entity_id, correction_type, field_name,
-                 old_value, new_value, reason, corrected_by)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                 old_value, new_value, reason, corrected_by, metadata)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
             RETURNING id, entity_type, entity_id, correction_type, status, created_at
             """,
             entity_type,
@@ -3020,6 +3766,7 @@ async def create_data_correction(
             new_value,
             reason,
             corrected_by,
+            meta_json,
         )
 
         correction_id = row["id"]
@@ -3066,6 +3813,9 @@ async def list_data_corrections(
     entity_id: Optional[str] = None,
     correction_type: Optional[str] = None,
     status: Optional[str] = None,
+    corrected_by: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     limit: int = 50,
 ) -> str:
     """
@@ -3075,6 +3825,9 @@ async def list_data_corrections(
     entity_id: Filter by entity UUID
     correction_type: Filter by correction type (suppress, flag, override_field, etc.)
     status: Filter by status (applied, reverted, pending_review)
+    corrected_by: Filter by who made the correction (substring match)
+    start_date: Corrections created on or after (ISO 8601)
+    end_date: Corrections created before (ISO 8601)
     limit: Max results (1-200, default 50)
     """
     limit = max(1, min(limit, 200))
@@ -3093,6 +3846,8 @@ async def list_data_corrections(
         return json.dumps({"success": False, "error": "entity_id must be a valid UUID"})
 
     try:
+        from datetime import datetime as _dt
+
         from ..storage.database import get_db_pool
         pool = get_db_pool()
 
@@ -3117,6 +3872,26 @@ async def list_data_corrections(
             conditions.append(f"status = ${idx}")
             params.append(status)
             idx += 1
+        if corrected_by:
+            conditions.append(f"corrected_by ILIKE '%' || ${idx} || '%'")
+            params.append(corrected_by)
+            idx += 1
+        if start_date:
+            try:
+                sd = _dt.fromisoformat(start_date.replace("Z", "+00:00"))
+                conditions.append(f"created_at >= ${idx}")
+                params.append(sd)
+                idx += 1
+            except ValueError:
+                return json.dumps({"error": "Invalid start_date (ISO 8601 expected)"})
+        if end_date:
+            try:
+                ed = _dt.fromisoformat(end_date.replace("Z", "+00:00"))
+                conditions.append(f"created_at < ${idx}")
+                params.append(ed)
+                idx += 1
+            except ValueError:
+                return json.dumps({"error": "Invalid end_date (ISO 8601 expected)"})
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         params.append(limit)
@@ -3222,6 +3997,279 @@ async def revert_data_correction(
         }, default=str)
     except Exception:
         logger.exception("revert_data_correction error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+@mcp.tool()
+async def get_data_correction(
+    correction_id: str,
+) -> str:
+    """Fetch a single data correction by ID with full details.
+
+    correction_id: UUID of the correction to fetch
+    """
+    if not _is_uuid(correction_id):
+        return json.dumps({"error": "correction_id must be a valid UUID"})
+
+    try:
+        import uuid as _u
+
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        row = await pool.fetchrow(
+            """
+            SELECT id, entity_type, entity_id, correction_type, field_name,
+                   old_value, new_value, reason, corrected_by, status,
+                   affected_count, metadata, created_at, reverted_at, reverted_by
+            FROM data_corrections
+            WHERE id = $1
+            """,
+            _u.UUID(correction_id),
+        )
+        if not row:
+            return json.dumps({"error": "Correction not found"})
+
+        return json.dumps({
+            "success": True,
+            "correction": {
+                "id": str(row["id"]),
+                "entity_type": row["entity_type"],
+                "entity_id": str(row["entity_id"]),
+                "correction_type": row["correction_type"],
+                "field_name": row["field_name"],
+                "old_value": row["old_value"],
+                "new_value": row["new_value"],
+                "reason": row["reason"],
+                "corrected_by": row["corrected_by"],
+                "status": row["status"],
+                "affected_count": row["affected_count"],
+                "metadata": _safe_json(row["metadata"]),
+                "created_at": str(row["created_at"]),
+                "reverted_at": str(row["reverted_at"]) if row["reverted_at"] else None,
+                "reverted_by": row["reverted_by"],
+            },
+        }, default=str)
+    except Exception:
+        logger.exception("get_data_correction error")
+        return json.dumps({"error": "Internal error"})
+
+
+@mcp.tool()
+async def get_correction_stats(
+    days: int = 30,
+) -> str:
+    """Aggregate correction activity: counts by type, status, and top correctors.
+
+    days: Window in days (default 30, max 365)
+    """
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"error": "Database not ready"})
+
+        days = max(1, min(days, 365))
+
+        row = await pool.fetchrow(
+            """
+            SELECT
+                COUNT(*) AS total_corrections,
+                COUNT(*) FILTER (WHERE status = 'applied') AS applied,
+                COUNT(*) FILTER (WHERE status = 'reverted') AS reverted,
+                COUNT(*) FILTER (WHERE status = 'pending_review') AS pending_review,
+                COUNT(*) FILTER (WHERE correction_type = 'suppress') AS suppress_count,
+                COUNT(*) FILTER (WHERE correction_type = 'flag') AS flag_count,
+                COUNT(*) FILTER (WHERE correction_type = 'override_field') AS override_count,
+                COUNT(*) FILTER (WHERE correction_type = 'merge_vendor') AS merge_count,
+                COUNT(*) FILTER (WHERE correction_type = 'reclassify') AS reclassify_count,
+                COUNT(*) FILTER (WHERE correction_type = 'suppress_source') AS suppress_source_count,
+                COALESCE(SUM(affected_count), 0) AS total_affected_records,
+                MIN(created_at) AS first_correction_at,
+                MAX(created_at) AS last_correction_at
+            FROM data_corrections
+            WHERE created_at > NOW() - ($1 || ' days')::interval
+            """,
+            str(days),
+        )
+
+        correctors = await pool.fetch(
+            """
+            SELECT corrected_by, COUNT(*) AS count
+            FROM data_corrections
+            WHERE created_at > NOW() - ($1 || ' days')::interval
+            GROUP BY corrected_by
+            ORDER BY count DESC
+            LIMIT 10
+            """,
+            str(days),
+        )
+
+        by_entity = await pool.fetch(
+            """
+            SELECT entity_type, COUNT(*) AS count
+            FROM data_corrections
+            WHERE created_at > NOW() - ($1 || ' days')::interval
+            GROUP BY entity_type
+            ORDER BY count DESC
+            """,
+            str(days),
+        )
+
+        return json.dumps({
+            "success": True,
+            "window_days": days,
+            "total_corrections": row["total_corrections"],
+            "by_status": {
+                "applied": row["applied"],
+                "reverted": row["reverted"],
+                "pending_review": row["pending_review"],
+            },
+            "by_type": {
+                "suppress": row["suppress_count"],
+                "flag": row["flag_count"],
+                "override_field": row["override_count"],
+                "merge_vendor": row["merge_count"],
+                "reclassify": row["reclassify_count"],
+                "suppress_source": row["suppress_source_count"],
+            },
+            "by_entity": [{"entity_type": r["entity_type"], "count": r["count"]} for r in by_entity],
+            "total_affected_records": row["total_affected_records"],
+            "top_correctors": [{"corrected_by": r["corrected_by"], "count": r["count"]} for r in correctors],
+            "first_correction_at": str(row["first_correction_at"]) if row["first_correction_at"] else None,
+            "last_correction_at": str(row["last_correction_at"]) if row["last_correction_at"] else None,
+        }, default=str)
+    except Exception:
+        logger.exception("get_correction_stats error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_source_correction_impact
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_source_correction_impact() -> str:
+    """
+    Show impact of active source suppressions on review counts.
+
+    Returns each active suppress_source correction with the number of enriched
+    reviews that would be excluded by it (globally or vendor-scoped).
+    """
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+
+        rows = await pool.fetch(
+            """
+            SELECT dc.metadata->>'source_name' AS source_name,
+                   dc.field_name AS vendor_scope,
+                   dc.reason,
+                   dc.created_at,
+                   (SELECT COUNT(*) FROM b2b_reviews r
+                    WHERE LOWER(r.source) = LOWER(dc.metadata->>'source_name')
+                      AND (dc.field_name IS NULL OR LOWER(r.vendor_name) = LOWER(dc.field_name))
+                      AND r.enrichment_status = 'enriched'
+                   ) AS affected_review_count
+            FROM data_corrections dc
+            WHERE dc.entity_type = 'source'
+              AND dc.correction_type = 'suppress_source'
+              AND dc.status = 'applied'
+            ORDER BY dc.created_at DESC
+            """,
+        )
+
+        return json.dumps({
+            "success": True,
+            "active_source_suppressions": [
+                {
+                    "source_name": r["source_name"],
+                    "vendor_scope": r["vendor_scope"],
+                    "reason": r["reason"],
+                    "affected_review_count": r["affected_review_count"],
+                    "created_at": r["created_at"],
+                }
+                for r in rows
+            ],
+            "total": len(rows),
+        }, default=str)
+    except Exception:
+        logger.exception("get_source_correction_impact error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_parser_health
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_parser_health() -> str:
+    """
+    Show parser version distribution and identify stale reviews.
+
+    Returns per-source counts of reviews by parser version, the latest version
+    for each source, and a stale count where reviews were parsed by an older
+    version than the latest for that source.
+    """
+    pool = _pool_or_fail()
+    try:
+        rows = await pool.fetch("""
+            WITH version_counts AS (
+                SELECT source,
+                       COALESCE(parser_version, 'unknown') AS parser_version,
+                       COUNT(*) AS review_count
+                FROM b2b_reviews
+                GROUP BY source, COALESCE(parser_version, 'unknown')
+            ),
+            latest AS (
+                SELECT DISTINCT ON (source) source, parser_version AS latest_version
+                FROM b2b_scrape_log
+                WHERE parser_version IS NOT NULL
+                ORDER BY source, started_at DESC
+            )
+            SELECT vc.source, vc.parser_version, vc.review_count,
+                   l.latest_version,
+                   (vc.parser_version != COALESCE(l.latest_version, vc.parser_version))
+                       AS is_stale
+            FROM version_counts vc
+            LEFT JOIN latest l USING (source)
+            ORDER BY vc.source, vc.review_count DESC
+        """)
+
+        sources: dict[str, dict] = {}
+        for r in rows:
+            src = r["source"]
+            if src not in sources:
+                sources[src] = {
+                    "source": src,
+                    "latest_version": r["latest_version"],
+                    "versions": [],
+                    "total_reviews": 0,
+                    "stale_reviews": 0,
+                }
+            entry = sources[src]
+            entry["versions"].append({
+                "parser_version": r["parser_version"],
+                "review_count": r["review_count"],
+                "is_stale": r["is_stale"],
+            })
+            entry["total_reviews"] += r["review_count"]
+            if r["is_stale"]:
+                entry["stale_reviews"] += r["review_count"]
+
+        result = sorted(sources.values(), key=lambda x: x["stale_reviews"], reverse=True)
+        total_stale = sum(s["stale_reviews"] for s in result)
+        return json.dumps({
+            "success": True,
+            "sources": result,
+            "total_stale_reviews": total_stale,
+            "total_sources": len(result),
+        }, default=str)
+    except Exception:
+        logger.exception("get_parser_health error")
         return json.dumps({"success": False, "error": "Internal error"})
 
 
@@ -3387,8 +4435,9 @@ async def list_webhook_subscriptions(
 
         rows = await pool.fetch(
             f"""
-            SELECT ws.id, ws.account_id, ws.url, ws.event_types, ws.enabled,
-                   ws.description, ws.created_at,
+            SELECT ws.id, ws.account_id, ws.url, ws.event_types,
+                   COALESCE(ws.channel, 'generic') AS channel,
+                   ws.enabled, ws.description, ws.created_at,
                    sa.name AS account_name,
                    (SELECT COUNT(*) FROM b2b_webhook_delivery_log dl
                     WHERE dl.subscription_id = ws.id AND dl.delivered_at > NOW() - INTERVAL '7 days') AS recent_deliveries,
@@ -3411,6 +4460,7 @@ async def list_webhook_subscriptions(
                 "account_name": r["account_name"],
                 "url": r["url"],
                 "event_types": r["event_types"],
+                "channel": r["channel"],
                 "enabled": r["enabled"],
                 "description": r["description"],
                 "created_at": r["created_at"].isoformat(),
@@ -3452,6 +4502,247 @@ async def send_test_webhook_tool(
     except Exception:
         logger.exception("send_test_webhook error")
         return json.dumps({"success": False, "error": "Internal error"})
+
+
+@mcp.tool()
+async def update_webhook(
+    subscription_id: str,
+    enabled: Optional[bool] = None,
+    event_types: Optional[str] = None,
+    url: Optional[str] = None,
+    description: Optional[str] = None,
+) -> str:
+    """Update a webhook subscription (toggle enabled, change event_types/url/description).
+
+    subscription_id: UUID of the webhook to update
+    enabled: Set to true/false to enable/disable the webhook
+    event_types: Comma-separated list of event types (change_event, churn_alert, report_generated, signal_update)
+    url: New webhook URL (must start with https:// or http://)
+    description: New description
+    """
+    if not _is_uuid(subscription_id):
+        return json.dumps({"error": "subscription_id must be a valid UUID"})
+
+    _valid_events = {"change_event", "churn_alert", "report_generated", "signal_update"}
+
+    try:
+        import uuid as _u
+
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"error": "Database not ready"})
+
+        sets: list[str] = []
+        params: list = []
+        idx = 1
+
+        if enabled is not None:
+            sets.append(f"enabled = ${idx}")
+            params.append(enabled)
+            idx += 1
+        if event_types is not None:
+            et_list = [e.strip() for e in event_types.split(",") if e.strip()]
+            invalid = set(et_list) - _valid_events
+            if invalid:
+                return json.dumps({"error": f"Invalid event_types: {sorted(invalid)}. Valid: {sorted(_valid_events)}"})
+            if not et_list:
+                return json.dumps({"error": "event_types must not be empty"})
+            sets.append(f"event_types = ${idx}")
+            params.append(et_list)
+            idx += 1
+        if url is not None:
+            if not url.startswith(("https://", "http://")):
+                return json.dumps({"error": "url must begin with https:// or http://"})
+            sets.append(f"url = ${idx}")
+            params.append(url)
+            idx += 1
+        if description is not None:
+            sets.append(f"description = ${idx}")
+            params.append(description)
+            idx += 1
+
+        if not sets:
+            return json.dumps({"error": "No fields to update"})
+
+        sets.append("updated_at = NOW()")
+        params.append(_u.UUID(subscription_id))
+
+        row = await pool.fetchrow(
+            f"""
+            UPDATE b2b_webhook_subscriptions
+            SET {', '.join(sets)}
+            WHERE id = ${idx}
+            RETURNING id, url, event_types, COALESCE(channel, 'generic') AS channel,
+                      enabled, description, updated_at
+            """,
+            *params,
+        )
+        if not row:
+            return json.dumps({"error": "Webhook not found"})
+
+        return json.dumps({
+            "success": True,
+            "webhook": {
+                "id": str(row["id"]),
+                "url": row["url"],
+                "event_types": row["event_types"],
+                "channel": row["channel"],
+                "enabled": row["enabled"],
+                "description": row["description"],
+                "updated_at": row["updated_at"].isoformat(),
+            },
+        }, default=str)
+    except Exception:
+        logger.exception("update_webhook error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+@mcp.tool()
+async def get_webhook_delivery_summary(
+    account_id: Optional[str] = None,
+    days: int = 7,
+) -> str:
+    """Aggregate webhook delivery health across all subscriptions.
+
+    account_id: Optional UUID to filter by account (shows all if omitted)
+    days: Window in days for delivery stats (default 7, max 90)
+    """
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"error": "Database not ready"})
+
+        days = max(1, min(days, 90))
+        conditions = ["ws.enabled = true"]
+        params: list = [str(days)]
+        idx = 2
+
+        if account_id:
+            if not _is_uuid(account_id):
+                return json.dumps({"error": "account_id must be a valid UUID"})
+            conditions.append(f"ws.account_id = ${idx}::uuid")
+            params.append(account_id)
+            idx += 1
+
+        where = " AND ".join(conditions)
+
+        row = await pool.fetchrow(
+            f"""
+            SELECT
+                COUNT(DISTINCT ws.id) AS active_subscriptions,
+                COUNT(dl.id) AS total_deliveries,
+                COUNT(dl.id) FILTER (WHERE dl.success) AS successful,
+                COUNT(dl.id) FILTER (WHERE NOT dl.success) AS failed,
+                AVG(dl.duration_ms) FILTER (WHERE dl.success) AS avg_success_duration_ms,
+                MAX(dl.delivered_at) AS last_delivery_at
+            FROM b2b_webhook_subscriptions ws
+            LEFT JOIN b2b_webhook_delivery_log dl
+                ON dl.subscription_id = ws.id
+                AND dl.delivered_at > NOW() - ($1 || ' days')::interval
+            WHERE {where}
+            """,
+            *params,
+        )
+
+        total = row["total_deliveries"] or 0
+        return json.dumps({
+            "success": True,
+            "window_days": days,
+            "active_subscriptions": row["active_subscriptions"] or 0,
+            "total_deliveries": total,
+            "successful": row["successful"] or 0,
+            "failed": row["failed"] or 0,
+            "success_rate": round((row["successful"] or 0) / max(total, 1), 3) if total else None,
+            "avg_success_duration_ms": round(row["avg_success_duration_ms"], 1) if row["avg_success_duration_ms"] else None,
+            "last_delivery_at": str(row["last_delivery_at"]) if row["last_delivery_at"] else None,
+        }, default=str)
+    except Exception:
+        logger.exception("get_webhook_delivery_summary error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: list_crm_pushes
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def list_crm_pushes(
+    subscription_id: Optional[str] = None,
+    vendor_name: Optional[str] = None,
+    limit: int = 50,
+) -> str:
+    """
+    List CRM push log entries showing what intelligence data was pushed to external CRMs.
+
+    subscription_id: Optional UUID to filter by specific webhook subscription
+    vendor_name: Optional vendor name filter (case-insensitive)
+    limit: Max results (default 50, max 200)
+    """
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        conditions = []
+        params: list = []
+        idx = 1
+
+        if subscription_id:
+            if not _is_uuid(subscription_id):
+                return json.dumps({"error": "subscription_id must be a valid UUID"})
+            conditions.append(f"pl.subscription_id = ${idx}::uuid")
+            params.append(subscription_id)
+            idx += 1
+
+        if vendor_name:
+            conditions.append(f"pl.vendor_name ILIKE ${idx}")
+            params.append(f"%{vendor_name}%")
+            idx += 1
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        limit = max(1, min(limit, 200))
+
+        rows = await pool.fetch(
+            f"""
+            SELECT pl.id, pl.subscription_id, pl.signal_type, pl.vendor_name,
+                   pl.company_name, pl.crm_record_id, pl.crm_record_type,
+                   pl.status, pl.error, pl.pushed_at,
+                   COALESCE(ws.channel, 'generic') AS channel,
+                   ws.url AS webhook_url
+            FROM b2b_crm_push_log pl
+            JOIN b2b_webhook_subscriptions ws ON ws.id = pl.subscription_id
+            {where}
+            ORDER BY pl.pushed_at DESC
+            LIMIT {limit}
+            """,
+            *params,
+        )
+
+        pushes = []
+        for r in rows:
+            pushes.append({
+                "id": str(r["id"]),
+                "subscription_id": str(r["subscription_id"]),
+                "channel": r["channel"],
+                "webhook_url": r["webhook_url"],
+                "signal_type": r["signal_type"],
+                "vendor_name": r["vendor_name"],
+                "company_name": r["company_name"],
+                "crm_record_id": r["crm_record_id"],
+                "crm_record_type": r["crm_record_type"],
+                "status": r["status"],
+                "error": r["error"],
+                "pushed_at": r["pushed_at"].isoformat(),
+            })
+
+        return json.dumps({"pushes": pushes, "count": len(pushes)}, default=str)
+    except Exception:
+        logger.exception("list_crm_pushes error")
+        return json.dumps({"error": "Internal error"})
 
 
 @mcp.tool()
@@ -3521,6 +4812,245 @@ async def export_report_pdf(report_id: str) -> str:
     except Exception:
         logger.exception("export_report_pdf error")
         return json.dumps({"error": "Failed to generate PDF"})
+
+
+@mcp.tool()
+async def list_crm_events(
+    status: Optional[str] = None,
+    crm_provider: Optional[str] = None,
+    company_name: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = 50,
+) -> str:
+    """List ingested CRM events with optional filters.
+
+    Args:
+        status: Filter by processing status (pending, matched, unmatched, skipped).
+        crm_provider: Filter by CRM provider (hubspot, salesforce, pipedrive, generic).
+        company_name: Filter by company name (partial, case-insensitive).
+        start_date: Filter events received on or after (ISO 8601, e.g. 2026-01-01).
+        end_date: Filter events received before (ISO 8601).
+        limit: Max events to return (default 50, max 200).
+    """
+    try:
+        from datetime import datetime as _dt
+
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"error": "Database not ready"})
+
+        _valid_statuses = {"pending", "matched", "unmatched", "skipped"}
+        if status and status not in _valid_statuses:
+            return json.dumps({"error": f"Invalid status. Must be one of: {sorted(_valid_statuses)}"})
+
+        limit = max(1, min(limit, 200))
+        conditions = ["1=1"]
+        params: list = []
+        idx = 1
+
+        if status:
+            conditions.append(f"status = ${idx}")
+            params.append(status)
+            idx += 1
+        if crm_provider:
+            conditions.append(f"crm_provider = ${idx}")
+            params.append(crm_provider)
+            idx += 1
+        if company_name:
+            conditions.append(f"LOWER(company_name) LIKE '%' || LOWER(${idx}) || '%'")
+            params.append(company_name)
+            idx += 1
+        if start_date:
+            try:
+                sd = _dt.fromisoformat(start_date.replace("Z", "+00:00"))
+                conditions.append(f"received_at >= ${idx}")
+                params.append(sd)
+                idx += 1
+            except ValueError:
+                return json.dumps({"error": "Invalid start_date (ISO 8601 expected)"})
+        if end_date:
+            try:
+                ed = _dt.fromisoformat(end_date.replace("Z", "+00:00"))
+                conditions.append(f"received_at < ${idx}")
+                params.append(ed)
+                idx += 1
+            except ValueError:
+                return json.dumps({"error": "Invalid end_date (ISO 8601 expected)"})
+
+        where = " AND ".join(conditions)
+        params.append(limit)
+
+        rows = await pool.fetch(
+            f"""
+            SELECT id, crm_provider, event_type, company_name, contact_email,
+                   deal_stage, deal_amount, status, matched_sequence_id,
+                   outcome_recorded, processing_notes,
+                   event_timestamp, received_at, processed_at
+            FROM b2b_crm_events
+            WHERE {where}
+            ORDER BY received_at DESC
+            LIMIT ${idx}
+            """,
+            *params,
+        )
+
+        events = []
+        for r in rows:
+            events.append({
+                "id": str(r["id"]),
+                "crm_provider": r["crm_provider"],
+                "event_type": r["event_type"],
+                "company_name": r["company_name"],
+                "contact_email": r["contact_email"],
+                "deal_stage": r["deal_stage"],
+                "deal_amount": float(r["deal_amount"]) if r["deal_amount"] else None,
+                "status": r["status"],
+                "matched_sequence_id": str(r["matched_sequence_id"]) if r["matched_sequence_id"] else None,
+                "outcome_recorded": r["outcome_recorded"],
+                "received_at": str(r["received_at"]),
+            })
+
+        return json.dumps({"events": events, "count": len(events)}, default=str)
+    except Exception:
+        logger.exception("list_crm_events error")
+        return json.dumps({"error": "Internal error"})
+
+
+@mcp.tool()
+async def ingest_crm_event(
+    crm_provider: str,
+    event_type: str,
+    company_name: Optional[str] = None,
+    contact_email: Optional[str] = None,
+    deal_stage: Optional[str] = None,
+    deal_amount: Optional[float] = None,
+    deal_id: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> str:
+    """Manually ingest a CRM event for processing.
+
+    The event will be stored and processed by the crm_event_processing task
+    which matches it to campaign sequences and auto-records outcomes.
+
+    Args:
+        crm_provider: CRM source (hubspot, salesforce, pipedrive, generic).
+        event_type: Event type (deal_won, deal_lost, meeting_booked, deal_stage_change, etc.).
+        company_name: Company name for matching to campaign sequences.
+        contact_email: Contact email for matching to campaign sequences.
+        deal_stage: Current deal stage in the CRM.
+        deal_amount: Deal value if available.
+        deal_id: CRM deal/opportunity ID.
+        notes: Optional notes about this event.
+    """
+    valid_providers = {"hubspot", "salesforce", "pipedrive", "generic"}
+    valid_types = {
+        "deal_stage_change", "deal_won", "deal_lost",
+        "meeting_booked", "activity_logged", "contact_updated",
+    }
+    if crm_provider not in valid_providers:
+        return json.dumps({"error": f"crm_provider must be one of {sorted(valid_providers)}"})
+    if event_type not in valid_types:
+        return json.dumps({"error": f"event_type must be one of {sorted(valid_types)}"})
+    if not company_name and not contact_email:
+        return json.dumps({"error": "At least one of company_name or contact_email is required"})
+
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"error": "Database not ready"})
+
+        event_data = {}
+        if notes:
+            event_data["notes"] = notes
+
+        event_id = await pool.fetchval(
+            """
+            INSERT INTO b2b_crm_events (
+                crm_provider, event_type, company_name, contact_email,
+                deal_id, deal_stage, deal_amount, event_data
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+            RETURNING id
+            """,
+            crm_provider, event_type, company_name, contact_email,
+            deal_id, deal_stage, deal_amount,
+            json.dumps(event_data, default=str),
+        )
+
+        return json.dumps({
+            "success": True,
+            "event_id": str(event_id),
+            "status": "pending",
+            "message": "Event ingested. Will be processed by crm_event_processing task.",
+        })
+    except Exception:
+        logger.exception("ingest_crm_event error")
+        return json.dumps({"error": "Failed to ingest CRM event"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_crm_enrichment_stats
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_crm_enrichment_stats() -> str:
+    """
+    Show enrichment coverage and effectiveness stats for CRM events.
+
+    Returns total events, match rates, field coverage (company_name, contact_email),
+    and enrichment counts (cross-event lookups, vendor normalization).
+    """
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"error": "Database not ready"})
+
+        row = await pool.fetchrow(
+            """
+            SELECT
+                COUNT(*) AS total_events,
+                COUNT(*) FILTER (WHERE status = 'matched') AS matched,
+                COUNT(*) FILTER (WHERE status = 'unmatched') AS unmatched,
+                COUNT(*) FILTER (WHERE status = 'skipped') AS skipped,
+                COUNT(*) FILTER (WHERE status = 'pending') AS pending,
+                COUNT(*) FILTER (WHERE status = 'error') AS errored,
+                COUNT(*) FILTER (WHERE company_name IS NOT NULL) AS has_company,
+                COUNT(*) FILTER (WHERE contact_email IS NOT NULL) AS has_email,
+                COUNT(*) FILTER (WHERE company_name IS NULL AND contact_email IS NULL) AS missing_both,
+                COUNT(*) FILTER (WHERE processing_notes LIKE '%[enriched]%') AS enriched_count,
+                COUNT(*) FILTER (WHERE processing_notes LIKE '%[enriched]%' AND status = 'matched') AS enriched_matched
+            FROM b2b_crm_events
+            """
+        )
+
+        total = row["total_events"] or 0
+        return json.dumps({
+            "total_events": total,
+            "matched": row["matched"],
+            "unmatched": row["unmatched"],
+            "skipped": row["skipped"],
+            "pending": row["pending"],
+            "errored": row["errored"],
+            "field_coverage": {
+                "has_company_name": row["has_company"],
+                "has_contact_email": row["has_email"],
+                "missing_both": row["missing_both"],
+            },
+            "enrichment": {
+                "events_enriched": row["enriched_count"],
+                "enriched_then_matched": row["enriched_matched"],
+            },
+            "match_rate": round(row["matched"] / total * 100, 1) if total else 0,
+        })
+    except Exception:
+        logger.exception("get_crm_enrichment_stats error")
+        return json.dumps({"error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------

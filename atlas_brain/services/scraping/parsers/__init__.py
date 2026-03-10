@@ -58,6 +58,10 @@ class ScrapeResult:
     reviews: list[dict[str, Any]]  # b2b_reviews-compatible dicts
     pages_scraped: int
     errors: list[str]
+    # CAPTCHA telemetry (populated from client stats after scrape)
+    captcha_attempts: int = 0
+    captcha_types: list[str] | None = None
+    captcha_solve_ms: int = 0
 
     @property
     def status(self) -> str:
@@ -109,4 +113,4 @@ def get_parser_version(source: str) -> str | None:
 
 
 # Auto-register parsers on import
-from . import reddit, trustradius, capterra, g2, peerspot, getapp, gartner, hackernews, github, rss, youtube, producthunt, trustpilot, stackoverflow, quora, twitter  # noqa: E402, F401
+from . import reddit, trustradius, capterra, g2, peerspot, getapp, gartner, hackernews, github, rss, youtube, producthunt, trustpilot, stackoverflow, quora, twitter, software_advice  # noqa: E402, F401

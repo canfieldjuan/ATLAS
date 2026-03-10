@@ -2,9 +2,10 @@
 Vendor merge execution.
 
 When an analyst creates a ``merge_vendor`` correction, this module renames
-``vendor_name`` across all 17 affected table/column pairs in a single
-transaction, adds the old name as an alias on the target vendor, and
-invalidates the vendor cache.
+``vendor_name`` across all 20 affected table/column pairs in a single
+transaction, refreshes the ``campaign_funnel_stats`` materialized view,
+adds the old name as an alias on the target vendor, and invalidates the
+vendor cache.
 
 Tables with UNIQUE constraints that include vendor_name are handled with a
 two-step approach: first DELETE source rows that would conflict with existing
@@ -25,6 +26,7 @@ _SIMPLE_TARGETS: list[tuple[str, str]] = [
     ("b2b_product_profiles", "vendor_name"),
     ("b2b_vendor_briefings", "vendor_name"),
     ("b2b_change_events", "vendor_name"),
+    ("b2b_scrape_targets", "vendor_name"),
 ]
 
 # Tables WITH UNIQUE constraints involving the vendor column.
@@ -43,6 +45,7 @@ _UNIQUE_TARGETS: list[tuple[str, str, list[str]]] = [
     ("b2b_displacement_edges", "to_vendor", ["from_vendor", "computed_date"]),
     ("tracked_vendors", "vendor_name", ["account_id"]),
     ("b2b_alert_baselines", "vendor_name", ["account_id", "metric"]),
+    ("b2b_product_profile_snapshots", "vendor_name", ["snapshot_date"]),
 ]
 
 
@@ -110,7 +113,16 @@ async def execute_vendor_merge(pool: Any, source_name: str, target_name: str) ->
                 table_counts[f"{table}.{column}"] = upd_count
                 total_updated += upd_count
 
-    # 3. Add old name as alias on target vendor in b2b_vendors.
+    # 3. Refresh materialized view that derives from b2b_campaigns.
+    # Must be done outside the transaction (REFRESH cannot run inside one).
+    try:
+        await pool.execute(
+            "REFRESH MATERIALIZED VIEW CONCURRENTLY campaign_funnel_stats"
+        )
+    except Exception:
+        logger.warning("Failed to refresh campaign_funnel_stats after merge")
+
+    # 4. Add old name as alias on target vendor in b2b_vendors.
     # Done outside the transaction since add_vendor/add_alias acquire their
     # own pool connections.  This is safe: an alias without a merge is harmless,
     # and the alias is idempotent.

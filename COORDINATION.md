@@ -97,3 +97,40 @@ S4 (action planner) ──→ S5 (approval + execution)
 J5 (inbox context)  — independent, enhances S4 output
 J6 (MCP tool)       — independent, can start anytime
 ```
+
+---
+
+## Intelligence Platform Roadmap — Sprint Completion Log
+
+| Sprint | Phase | Status | Key Deliverables |
+|--------|-------|--------|-----------------|
+| Phase 2 Sprint 1 | Phase 2 | DONE | displacement edges + company signals (migration 099) |
+| Phase 2 Sprint 2 | Phase 2 | DONE | pain points + use cases + integrations (migration 100) |
+| Phase 2 Sprint 3 | Phase 2 | DONE | buyer profiles (migration 101) |
+| Phase 2 Sprint 4 | Phase 2 | DONE | confidence scoring close-out (migration 102) |
+| Phase 3 Sprint 4 | Phase 3 | DONE | cross-vendor trend correlation (migration 109, concurrent events, Pearson r) |
+| Phase 4 Sprint 1 | Phase 4 | DONE | campaign outcome tracking + signal effectiveness (migration 104) |
+| Phase 4 Sprint 2 | Phase 4 | DONE | score calibration from outcomes (migration 106) |
+| Phase 4 Sprint 3 | Phase 4 | DONE | CRM event ingestion pipeline (migration 108) |
+| Phase 4 Sprint 4 | Phase 4 | DONE | Salesforce + Pipedrive native webhooks |
+| Phase 5 Sprint 1 | Phase 5 | DONE | webhook outbound delivery (migration 107) |
+| Phase 5 Sprint 2 | Phase 5 | DONE | PDF intelligence report export (fpdf2) |
+| Phase 6 Sprint 1 | Phase 6 | DONE | data corrections infrastructure (migration 105) |
+| Phase 6 Sprint 2 | Phase 6 | DONE | correction application logic (NOT EXISTS subqueries) |
+| Phase 6 Sprint 3 | Phase 6 | DONE | vendor merge execution (17 tables) |
+| Phase 6 Sprint 4 | Phase 6 | DONE | field override reads (single-entity endpoints) |
+| Phase 6 Sprint 5 | Phase 6 | DONE | source quality controls (migration 110, suppress_source) |
+| Phase 0 Sprint 1 | Phase 0 | DONE | dedup key uses canonical vendor_name |
+| Phase 1 Sprint 1 | Phase 1 | DONE | CAPTCHA telemetry + block type classification (migration 111) |
+| Phase 5 Sprint 3 | Phase 5 | DONE | Slack + Teams notification channels (migration 112, Block Kit, Adaptive Cards) |
+| Phase 5 Sprint 4 | Phase 5 | DONE | CRM outbound push (migration 113, HubSpot/Salesforce/Pipedrive channels, push log) |
+| Phase 0/2 Sprint | Phase 0+2 | DONE | Fuzzy vendor + company matching (migration 114, pg_trgm, difflib fallback, REST + MCP) |
+| Phase 1 Sprint 2 | Phase 1 | DONE | Auto re-processing on parser version change (_queue_version_upgrades, REST + MCP) |
+| Phase 3 Sprint 5 | Phase 3 | DONE | Product profile snapshots (migration 115, daily captures, REST + MCP history queries) |
+| Phase 4 Sprint 5 | Phase 4 | DONE | CRM event enrichment (cross-event resolution, vendor normalization, fuzzy matching, REST + MCP stats) |
+| Surface Sprint 1 | Phase 0 | DONE | Source-health telemetry (CAPTCHA, block types, proxy), source capabilities REST, MCP: get_source_telemetry |
+| Surface Sprint 2 | Phase 5 | DONE | Operational overview (pipeline + health + telemetry + events), telemetry timeline, MCP: get_operational_overview |
+| Surface Sprint 3 | Phase 5 | DONE | REST gaps closed: product-profile, displacement-history endpoints |
+| Surface Sprint 4 | Phase 4 | DONE | Action feedback loop surfaces: outcome filter on sequences, outcome distribution, signal-to-outcome attribution, calibration trigger, date-range CRM events, batch created_ids, MCP tools |
+| Surface Sprint 5 | Phase 5 | DONE | Thin delivery surfaces: PATCH webhook update, 7d delivery stats on REST list, delivery filtering (date/success/event_type), delivery summary, MCP update_webhook + get_webhook_delivery_summary |
+| Surface Sprint 6 | Phase 6 | DONE | Analyst control surfaces: corrected_by + date range filters on corrections, correction stats dashboard, MCP get_data_correction + get_correction_stats |

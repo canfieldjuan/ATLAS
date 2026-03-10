@@ -126,7 +126,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             continue
 
         blueprint = _build_blueprint(topic_type, topic_ctx, data)
-        content = _generate_content(llm, blueprint, cfg.blog_post_max_tokens)
+        link_posts = await _fetch_related_for_linking(
+            pool, blueprint.tags, blueprint.slug,
+        )
+        content = _generate_content(
+            llm, blueprint, cfg.blog_post_max_tokens,
+            related_posts=link_posts,
+        )
         if content is None:
             logger.warning("LLM failed for B2B topic %s, skipping", blueprint.slug)
             continue
@@ -254,7 +260,13 @@ async def _regenerate_existing_posts(
 
             data = await _gather_data(pool, topic_type, topic_ctx)
             blueprint = _build_blueprint(topic_type, topic_ctx, data)
-            content = _generate_content(llm, blueprint, cfg.blog_post_max_tokens)
+            link_posts = await _fetch_related_for_linking(
+                pool, blueprint.tags, blueprint.slug,
+            )
+            content = _generate_content(
+                llm, blueprint, cfg.blog_post_max_tokens,
+                related_posts=link_posts,
+            )
             if content is None:
                 logger.warning("Regen: LLM failed for %s, skipping", slug)
                 continue
@@ -1430,6 +1442,7 @@ async def _fetch_churn_signals(pool, vendor_name: str) -> list[dict[str, Any]]:
             feature_gaps = []
 
     results = []
+    seen_cats: set[str] = set()
     for pc in pain_cats[:10]:
         raw_cat = pc.get("category", pc) if isinstance(pc, dict) else str(pc)
         # Handle double-encoded JSON (e.g. '{"category": "features", "severity": "primary"}')
@@ -1440,6 +1453,9 @@ async def _fetch_churn_signals(pool, vendor_name: str) -> list[dict[str, Any]]:
             except (json.JSONDecodeError, TypeError):
                 pass
         cat_name = str(raw_cat)
+        # Skip null/None/empty categories
+        if not cat_name or cat_name in ("None", "null", "none", ""):
+            continue
         count = pc.get("count", 1) if isinstance(pc, dict) else 1
         # Use per-category urgency when available, fall back to vendor average
         cat_urgency = per_cat_urgency.get(cat_name, vendor_avg)
@@ -1451,6 +1467,18 @@ async def _fetch_churn_signals(pool, vendor_name: str) -> list[dict[str, Any]]:
                 fg.get("feature", fg) if isinstance(fg, dict) else str(fg)
                 for fg in feature_gaps[:5]
             ],
+        })
+        seen_cats.add(cat_name)
+
+    # Supplement with categories from enriched reviews not in the aggregate
+    for cat_name, urgency in per_cat_urgency.items():
+        if cat_name in seen_cats or not cat_name or cat_name in ("None", "null", "none"):
+            continue
+        results.append({
+            "pain_category": cat_name,
+            "signal_count": 1,
+            "avg_urgency": urgency,
+            "feature_gaps": [],
         })
     return results
 
@@ -2203,14 +2231,38 @@ def _blueprint_vendor_deep_dive(ctx: dict, data: dict) -> PostBlueprint:
     # Strengths vs weaknesses chart
     strengths = profile.get("strengths", [])
     weaknesses = profile.get("weaknesses", [])
-    if strengths or weaknesses:
+    # When the product profile is too thin, build from review sentiment
+    if len(strengths) + len(weaknesses) < 3 and signals:
+        area_map: dict[str, dict] = {}
+        for s in signals:
+            cat = s.get("pain_category", "")
+            if not cat or cat in ("None", "null", "none"):
+                continue
+            urg = float(s.get("avg_urgency", 0))
+            cnt = int(s.get("signal_count", 1))
+            area_map.setdefault(cat, {"name": cat, "strengths": 0, "weaknesses": 0})
+            if urg >= 3.0:
+                area_map[cat]["weaknesses"] += cnt
+            else:
+                area_map[cat]["strengths"] += cnt
+        sw_data = sorted(area_map.values(), key=lambda x: x["strengths"] + x["weaknesses"], reverse=True)[:8]
+    elif strengths or weaknesses:
+        # Merge by area so each bar shows strength vs weakness evidence
+        area_map: dict[str, dict] = {}
+        for s in strengths[:8]:
+            name = str(s.get("area", s) if isinstance(s, dict) else s)[:30]
+            count = int(s.get("evidence_count", 1)) if isinstance(s, dict) else 1
+            area_map.setdefault(name, {"name": name, "strengths": 0, "weaknesses": 0})
+            area_map[name]["strengths"] += count
+        for w in weaknesses[:8]:
+            name = str(w.get("area", w) if isinstance(w, dict) else w)[:30]
+            count = int(w.get("evidence_count", 1)) if isinstance(w, dict) else 1
+            area_map.setdefault(name, {"name": name, "strengths": 0, "weaknesses": 0})
+            area_map[name]["weaknesses"] += count
+        sw_data = sorted(area_map.values(), key=lambda x: x["strengths"] + x["weaknesses"], reverse=True)[:8]
+    else:
         sw_data = []
-        for s in strengths[:5]:
-            name = s.get("area", s) if isinstance(s, dict) else str(s)
-            sw_data.append({"name": str(name)[:30], "strengths": 1, "weaknesses": 0})
-        for w in weaknesses[:5]:
-            name = w.get("area", w) if isinstance(w, dict) else str(w)
-            sw_data.append({"name": str(name)[:30], "strengths": 0, "weaknesses": 1})
+    if sw_data:
         sw_chart = ChartSpec(
             chart_id="strengths-weaknesses",
             chart_type="horizontal_bar",
@@ -2751,7 +2803,8 @@ def _blueprint_best_fit_guide(ctx: dict, data: dict) -> PostBlueprint:
 # -- Stage 4: Content Generation ----------------------------------
 
 def _generate_content(
-    llm, blueprint: PostBlueprint, max_tokens: int
+    llm, blueprint: PostBlueprint, max_tokens: int,
+    related_posts: list[dict[str, str]] | None = None,
 ) -> dict[str, Any] | None:
     """Single LLM call: blueprint in, {title, description, content} out."""
     from ...pipelines.llm import clean_llm_output, parse_json_response
@@ -2762,7 +2815,7 @@ def _generate_content(
         logger.error("Skill digest/b2b_blog_post_generation not found")
         return None
 
-    payload = {
+    payload: dict[str, Any] = {
         "topic_type": blueprint.topic_type,
         "suggested_title": blueprint.suggested_title,
         "data_context": blueprint.data_context,
@@ -2787,6 +2840,8 @@ def _generate_content(
         ],
         "quotable_phrases": blueprint.quotable_phrases[:5],
     }
+    if related_posts:
+        payload["related_posts"] = related_posts
 
     from ...services.protocols import Message
 
@@ -2809,6 +2864,18 @@ def _generate_content(
             logger.error("LLM response missing required keys: %s", list(parsed.keys()))
             return None
 
+        # Ensure SEO fields have sane defaults if LLM didn't produce them
+        if "seo_title" not in parsed or not parsed["seo_title"]:
+            parsed["seo_title"] = parsed["title"][:60]
+        if "seo_description" not in parsed or not parsed["seo_description"]:
+            parsed["seo_description"] = parsed["description"][:155]
+        if "target_keyword" not in parsed:
+            parsed["target_keyword"] = ""
+        if "secondary_keywords" not in parsed:
+            parsed["secondary_keywords"] = []
+        if "faq" not in parsed or not isinstance(parsed["faq"], list):
+            parsed["faq"] = []
+
         return parsed
     except Exception:
         logger.exception("LLM content generation failed")
@@ -2816,6 +2883,51 @@ def _generate_content(
 
 
 # -- Stage 5: Assembly & Storage ----------------------------------
+
+
+async def _compute_related_slugs(
+    pool, current_slug: str, tags: list[str], limit: int = 4
+) -> list[str]:
+    """Find related blog posts by overlapping tags/category."""
+    if not tags:
+        return []
+    rows = await pool.fetch(
+        """
+        SELECT slug FROM blog_posts
+        WHERE slug != $1
+          AND status IN ('draft', 'published')
+          AND tags::jsonb ?| $2
+        ORDER BY created_at DESC
+        LIMIT $3
+        """,
+        current_slug, tags[:3], limit,
+    )
+    return [r["slug"] for r in rows]
+
+
+async def _fetch_related_for_linking(
+    pool, tags: list[str], current_slug: str = "", limit: int = 6
+) -> list[dict[str, str]]:
+    """Fetch published/draft posts with overlapping tags for internal linking."""
+    if not tags:
+        return []
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT slug, title FROM blog_posts
+            WHERE slug != $1
+              AND status IN ('draft', 'published')
+              AND tags::jsonb ?| $2
+            ORDER BY created_at DESC
+            LIMIT $3
+            """,
+            current_slug, tags[:3], limit,
+        )
+        return [{"slug": r["slug"], "title": r["title"]} for r in rows]
+    except Exception:
+        logger.debug("Failed to fetch related posts for linking", exc_info=True)
+        return []
+
 
 async def _assemble_and_store(
     pool, blueprint: PostBlueprint, content: dict[str, Any], llm
@@ -2829,8 +2941,10 @@ async def _assemble_and_store(
         INSERT INTO blog_posts (
             slug, title, description, topic_type, tags,
             content, charts, data_context,
-            status, llm_model, source_report_date
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'draft',$9,$10)
+            status, llm_model, source_report_date,
+            seo_title, seo_description, target_keyword,
+            secondary_keywords, faq
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'draft',$9,$10,$11,$12,$13,$14,$15)
         ON CONFLICT (slug) DO UPDATE SET
             title = EXCLUDED.title,
             description = EXCLUDED.description,
@@ -2838,7 +2952,12 @@ async def _assemble_and_store(
             charts = EXCLUDED.charts,
             data_context = EXCLUDED.data_context,
             llm_model = EXCLUDED.llm_model,
-            source_report_date = EXCLUDED.source_report_date
+            source_report_date = EXCLUDED.source_report_date,
+            seo_title = EXCLUDED.seo_title,
+            seo_description = EXCLUDED.seo_description,
+            target_keyword = EXCLUDED.target_keyword,
+            secondary_keywords = EXCLUDED.secondary_keywords,
+            faq = EXCLUDED.faq
         WHERE blog_posts.status != 'published'
         RETURNING id
         """,
@@ -2852,6 +2971,11 @@ async def _assemble_and_store(
         json.dumps(blueprint.data_context, default=str),
         str(model_name),
         date.today(),
+        content.get("seo_title", content["title"][:60]),
+        content.get("seo_description", content.get("description", "")[:155]),
+        content.get("target_keyword", ""),
+        json.dumps(content.get("secondary_keywords", []), default=str),
+        json.dumps(content.get("faq", []), default=str),
     )
     if not row:
         logger.warning(
@@ -2860,6 +2984,18 @@ async def _assemble_and_store(
         return ""
     post_id = str(row["id"])
     logger.info("Stored B2B blog draft: slug=%s, id=%s", blueprint.slug, post_id)
+
+    # Compute related posts (same category/vendor overlap)
+    related: list[str] = []
+    try:
+        related = await _compute_related_slugs(pool, blueprint.slug, blueprint.tags)
+        if related:
+            await pool.execute(
+                "UPDATE blog_posts SET related_slugs = $1 WHERE id = $2",
+                json.dumps(related), row["id"],
+            )
+    except Exception:
+        logger.debug("Related slug computation skipped", exc_info=True)
 
     # Write .ts file for the frontend if ui_path is configured
     cfg = settings.b2b_churn
@@ -2870,6 +3006,7 @@ async def _assemble_and_store(
                 blueprint,
                 content,
                 charts_json,
+                related_slugs=related,
             )
         except Exception:
             logger.warning("Failed to write B2B blog UI file", exc_info=True)
@@ -2894,6 +3031,7 @@ def _write_ui_post(
     blueprint: PostBlueprint,
     content: dict[str, Any],
     charts_json: list[dict[str, Any]],
+    related_slugs: list[str] | None = None,
 ) -> None:
     """Write a .ts post file and register it in index.ts."""
     from pathlib import Path
@@ -2916,6 +3054,12 @@ def _write_ui_post(
         charts_json=charts_json,
         content=content["content"],
         data_context=blueprint.data_context,
+        seo_title=content.get("seo_title", ""),
+        seo_description=content.get("seo_description", ""),
+        target_keyword=content.get("target_keyword", ""),
+        secondary_keywords=content.get("secondary_keywords"),
+        faq=content.get("faq"),
+        related_slugs=related_slugs,
     )
 
     post_path = blog_dir / (slug + ".ts")

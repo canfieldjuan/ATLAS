@@ -202,11 +202,20 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         logger.exception("Failed to store competitive intelligence report")
 
     # Upsert brand_intelligence scorecards (only if report stored successfully)
+    snapshots_persisted = 0
+    change_events_detected = 0
     if report_stored:
         await _upsert_brand_intelligence(
             pool, fetchers["brand_health"], parsed,
             safety_signals=fetchers["safety_signals"],
             loyalty_churn=fetchers["loyalty_churn"],
+        )
+        # Persist daily brand snapshots + detect change events
+        snapshots_persisted = await _persist_brand_snapshots(
+            pool, fetchers["brand_health"], parsed,
+        )
+        change_events_detected = await _detect_change_events(
+            pool, fetchers["brand_health"],
         )
 
     # Send ntfy notification
@@ -227,6 +236,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "competitive_flows": len(fetchers["competitive_flows"]),
         "feature_gaps": len(fetchers["feature_gaps"]),
         "insights": len(parsed.get("insights", [])),
+        "snapshots_persisted": snapshots_persisted,
+        "change_events_detected": change_events_detected,
     }
 
 
@@ -817,3 +828,198 @@ async def _upsert_brand_intelligence(
 
     if upserted:
         logger.info("Upserted %d brand intelligence scorecards", upserted)
+
+
+async def _persist_brand_snapshots(
+    pool,
+    brand_health: list[dict[str, Any]],
+    parsed: dict[str, Any],
+) -> int:
+    """Persist daily brand health snapshots (append-only)."""
+    today = date.today()
+    persisted = 0
+
+    scorecards = {
+        sc["brand"]: sc
+        for sc in (parsed.get("brand_vulnerability", []) or parsed.get("brand_scorecards", []))
+        if isinstance(sc, dict) and sc.get("brand")
+    }
+
+    # Fetch trajectory data from materialized view (if it exists)
+    trajectory_by_brand: dict[str, tuple[int, int]] = {}
+    try:
+        traj_rows = await pool.fetch(
+            "SELECT brand, trajectory_positive, trajectory_negative "
+            "FROM mv_brand_summary WHERE brand IS NOT NULL"
+        )
+        for tr in traj_rows:
+            trajectory_by_brand[tr["brand"]] = (
+                tr["trajectory_positive"] or 0,
+                tr["trajectory_negative"] or 0,
+            )
+    except Exception:
+        logger.debug("mv_brand_summary not available for trajectory data", exc_info=True)
+
+    for bd in brand_health:
+        brand = bd.get("brand")
+        if not brand:
+            continue
+        sc = scorecards.get(brand, {})
+        top_complaints = sc.get("top_complaints", [])
+        top_features = sc.get("top_feature_requests", [])
+        flows = sc.get("competitive_flows") or parsed.get("competitive_flows", [])
+        flow_count = sum(1 for f in flows if isinstance(f, dict) and f.get("from_brand") == brand)
+
+        try:
+            await pool.execute(
+                """
+                INSERT INTO brand_intelligence_snapshots (
+                    brand, snapshot_date, total_reviews, avg_rating,
+                    avg_pain_score, health_score,
+                    repurchase_yes, repurchase_no,
+                    complaint_count, safety_count,
+                    top_complaint, top_feature_request,
+                    competitive_flow_count,
+                    trajectory_positive, trajectory_negative
+                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+                ON CONFLICT (brand, snapshot_date) DO UPDATE SET
+                    total_reviews = EXCLUDED.total_reviews,
+                    avg_rating = EXCLUDED.avg_rating,
+                    avg_pain_score = EXCLUDED.avg_pain_score,
+                    health_score = EXCLUDED.health_score,
+                    repurchase_yes = EXCLUDED.repurchase_yes,
+                    repurchase_no = EXCLUDED.repurchase_no,
+                    complaint_count = EXCLUDED.complaint_count,
+                    safety_count = EXCLUDED.safety_count,
+                    top_complaint = EXCLUDED.top_complaint,
+                    top_feature_request = EXCLUDED.top_feature_request,
+                    competitive_flow_count = EXCLUDED.competitive_flow_count,
+                    trajectory_positive = EXCLUDED.trajectory_positive,
+                    trajectory_negative = EXCLUDED.trajectory_negative
+                """,
+                brand, today,
+                bd.get("total_reviews", 0),
+                bd.get("avg_rating"),
+                bd.get("avg_pain_score"),
+                _compute_vulnerability_score(bd),
+                bd.get("repurchase_yes", 0),
+                bd.get("repurchase_no", 0),
+                sum(bd.get("severity_distribution", {}).values()),
+                bd.get("safety_flagged_count", 0),
+                top_complaints[0].get("complaint", "") if top_complaints else None,
+                top_features[0].get("feature", "") if top_features else None,
+                flow_count,
+                trajectory_by_brand.get(brand, (0, 0))[0],
+                trajectory_by_brand.get(brand, (0, 0))[1],
+            )
+            persisted += 1
+        except Exception:
+            logger.warning("Failed to persist brand snapshot for %s", brand, exc_info=True)
+
+    if persisted:
+        logger.info("Persisted %d brand intelligence snapshots for %s", persisted, today)
+    return persisted
+
+
+async def _detect_change_events(
+    pool,
+    brand_health: list[dict[str, Any]],
+) -> int:
+    """Compare today's brand metrics against prior snapshot; log anomalies."""
+    today = date.today()
+    detected = 0
+
+    for bd in brand_health:
+        brand = bd.get("brand")
+        if not brand:
+            continue
+
+        # Fetch most recent prior snapshot
+        prior = await pool.fetchrow(
+            """
+            SELECT avg_pain_score, health_score, safety_count,
+                   repurchase_yes, repurchase_no, avg_rating
+            FROM brand_intelligence_snapshots
+            WHERE brand = $1 AND snapshot_date < $2
+            ORDER BY snapshot_date DESC LIMIT 1
+            """,
+            brand, today,
+        )
+        if not prior:
+            continue
+
+        events: list[tuple[str, str, float | None, float | None, float | None]] = []
+        cur_pain = float(bd.get("avg_pain_score") or 0)
+        old_pain = float(prior["avg_pain_score"] or 0)
+
+        # Pain score spike (>= 1.5 points)
+        if old_pain > 0 and cur_pain - old_pain >= 1.5:
+            events.append((
+                "pain_score_spike",
+                f"{brand} pain score spiked from {old_pain:.1f} to {cur_pain:.1f}",
+                old_pain, cur_pain, cur_pain - old_pain,
+            ))
+
+        # Health score spike (vulnerability increase >= 10 pts on 0-100)
+        cur_health = _compute_vulnerability_score(bd)
+        old_health = float(prior["health_score"] or 0)
+        if old_health > 0 and cur_health - old_health >= 10:
+            events.append((
+                "vulnerability_spike",
+                f"{brand} vulnerability score rose from {old_health:.0f} to {cur_health:.0f}",
+                old_health, cur_health, cur_health - old_health,
+            ))
+
+        # Safety signal emergence (new safety count > 0 when prior was 0)
+        cur_safety = bd.get("safety_flagged_count", 0)
+        old_safety = prior["safety_count"] or 0
+        if cur_safety > 0 and old_safety == 0:
+            events.append((
+                "safety_flag_emergence",
+                f"{brand} gained {cur_safety} safety-flagged reviews (was 0)",
+                float(old_safety), float(cur_safety), float(cur_safety),
+            ))
+
+        # Repurchase rate decline (>= 15 percentage points)
+        cur_yes = bd.get("repurchase_yes", 0)
+        cur_no = bd.get("repurchase_no", 0)
+        old_yes = prior["repurchase_yes"] or 0
+        old_no = prior["repurchase_no"] or 0
+        cur_rate = cur_yes / (cur_yes + cur_no) * 100 if (cur_yes + cur_no) > 0 else 0
+        old_rate = old_yes / (old_yes + old_no) * 100 if (old_yes + old_no) > 0 else 0
+        if old_rate > 0 and old_rate - cur_rate >= 15:
+            events.append((
+                "repurchase_decline",
+                f"{brand} repurchase rate dropped from {old_rate:.0f}% to {cur_rate:.0f}%",
+                old_rate, cur_rate, cur_rate - old_rate,
+            ))
+
+        # Rating drop (>= 0.5 stars)
+        cur_rating = float(bd.get("avg_rating") or 0)
+        old_rating = float(prior["avg_rating"] or 0)
+        if old_rating > 0 and old_rating - cur_rating >= 0.5:
+            events.append((
+                "rating_drop",
+                f"{brand} avg rating dropped from {old_rating:.2f} to {cur_rating:.2f}",
+                old_rating, cur_rating, cur_rating - old_rating,
+            ))
+
+        for event_type, description, old_val, new_val, delta in events:
+            try:
+                await pool.execute(
+                    """
+                    INSERT INTO product_change_events
+                        (brand, event_date, event_type, description,
+                         old_value, new_value, delta)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    """,
+                    brand, today, event_type, description,
+                    old_val, new_val, delta,
+                )
+                detected += 1
+            except Exception:
+                logger.warning("Failed to log change event for %s", brand, exc_info=True)
+
+    if detected:
+        logger.info("Detected %d consumer change events", detected)
+    return detected

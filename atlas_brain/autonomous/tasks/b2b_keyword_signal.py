@@ -16,6 +16,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from ...config import settings
+from ...services.vendor_registry import resolve_vendor_name
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 
@@ -51,9 +52,17 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     rows = await pool.fetch(
         "SELECT DISTINCT vendor_name FROM b2b_scrape_targets WHERE enabled = true"
     )
-    vendors = [r["vendor_name"] for r in rows]
-    if not vendors:
+    vendors_raw = [r["vendor_name"] for r in rows]
+    if not vendors_raw:
         return {"_skip_synthesis": True, "skipped": "no enabled vendors"}
+    # Canonicalize and deduplicate vendor names
+    seen: set[str] = set()
+    vendors: list[str] = []
+    for v in vendors_raw:
+        canon = await resolve_vendor_name(v)
+        if canon not in seen:
+            seen.add(canon)
+            vendors.append(canon)
 
     vendors = vendors[: cfg.keyword_max_vendors_per_run]
 

@@ -2,11 +2,11 @@
 Autonomous task: prospect enrichment via Apollo.io.
 
 Runs daily at 8 PM (before campaign generation at 10 PM).
-Discovers companies from two sources:
-  1. Proactive: high-urgency companies from b2b_reviews
+Discovers vendors from two sources:
+  1. Proactive: vendors with high churn signal volume from b2b_reviews
   2. Reactive: campaign_sequences with NULL recipient_email
 
-For each company: search_people by name (FREE) -> reveal_person (1 credit each) -> upsert prospects.
+For each vendor: search_people by name (FREE) -> reveal_person (1 credit each) -> upsert prospects.
 Org data comes from person reveal responses, not a separate enrich_organization call.
 Respects credit budget (max_credits_per_run) and org cache TTL (org_cache_days).
 """
@@ -22,35 +22,104 @@ from ...storage.models import ScheduledTask
 
 logger = logging.getLogger("atlas.autonomous.tasks.prospect_enrichment")
 
+# Known vendor -> canonical domain mapping.
+# Loaded once from DB at task start; used to validate Apollo search results
+# before spending reveal credits.
+_vendor_domains: dict[str, str] = {}  # norm vendor name -> domain
+
+
+async def _load_vendor_domains(pool) -> None:
+    """Build vendor domain lookup from prospect_org_cache + scrape targets."""
+    global _vendor_domains
+    rows = await pool.fetch(
+        """
+        SELECT company_name_norm, domain
+        FROM prospect_org_cache
+        WHERE status = 'enriched' AND domain IS NOT NULL AND domain <> ''
+        """,
+    )
+    _vendor_domains = {r["company_name_norm"]: r["domain"] for r in rows}
+
+
+def _org_matches_vendor(
+    org_name: str,
+    org_domain: str,
+    vendor_name: str,
+) -> bool:
+    """Check if an Apollo search result actually belongs to the target vendor.
+
+    Uses domain matching (primary) with strict name fallback.
+    Prevents wasting reveal credits on resellers, consultancies, and
+    similarly-named companies.
+    """
+    if not org_name:
+        return False
+    vendor_norm = _normalize_company(vendor_name)
+
+    # 1. Domain check (most reliable)
+    known_domain = _vendor_domains.get(vendor_norm, "")
+    if known_domain and org_domain:
+        # Strip www. and compare
+        od = org_domain.lower().lstrip("www.")
+        kd = known_domain.lower().lstrip("www.")
+        return od == kd
+
+    # 2. No known domain -- exact name match only (zero tolerance for junk).
+    #    Once a vendor is enriched with a real domain, future runs use path 1.
+    import re
+    strip = {
+        "inc", "llc", "ltd", "corp", "co", "company",
+        "the", "a", "an", "and",
+    }
+
+    def _clean(n: str) -> list[str]:
+        n = re.sub(r"\s*\(.*?\)\s*", " ", n.lower())
+        n = re.sub(r"[^\w\s]", " ", n)
+        return [t for t in n.split() if t and t not in strip]
+
+    org_tokens = _clean(org_name)
+    vendor_tokens = _clean(vendor_name)
+    if not vendor_tokens or not org_tokens:
+        return False
+    return org_tokens == vendor_tokens
+
 
 async def _discover_companies(pool, cfg) -> list[dict[str, str]]:
-    """Find companies that need prospect enrichment.
+    """Find vendor companies at risk of losing customers.
+
+    Targets vendors with high churn signal volume -- these are the companies
+    whose customers are complaining, and who (along with their competitors)
+    would pay for this intelligence.
 
     Returns list of {"raw": original_name, "norm": normalized_name}.
     """
     companies: dict[str, str] = {}  # norm -> raw
 
-    # 1. Proactive: high-urgency from enriched b2b_reviews
+    # 1. Proactive: vendors with significant churn signal volume
     rows = await pool.fetch(
         """
-        SELECT DISTINCT reviewer_company
+        SELECT vendor_name, COUNT(*) AS signal_count
         FROM b2b_reviews
         WHERE enrichment_status = 'enriched'
           AND (enrichment->>'urgency_score')::numeric >= $1
-          AND reviewer_company IS NOT NULL
-          AND reviewer_company != ''
-          AND LOWER(TRIM(reviewer_company)) NOT IN (
+          AND vendor_name IS NOT NULL
+          AND vendor_name != ''
+          AND LOWER(TRIM(vendor_name)) NOT IN (
               SELECT company_name_norm FROM prospect_org_cache
-              WHERE status = 'enriched'
+              WHERE status IN ('enriched', 'not_found')
                 AND enriched_at > NOW() - make_interval(days => $2)
           )
+        GROUP BY vendor_name
+        HAVING COUNT(*) >= $3
+        ORDER BY COUNT(*) DESC
         LIMIT 100
         """,
         cfg.min_urgency_score,
         cfg.org_cache_days,
+        cfg.min_churn_signals,
     )
     for r in rows:
-        raw = r["reviewer_company"]
+        raw = r["vendor_name"]
         norm = _normalize_company(raw)
         if norm and norm not in companies:
             companies[norm] = raw
@@ -125,9 +194,22 @@ async def _enrich_company(pool, apollo, cfg, company: dict[str, str], credits_us
         )
         return credits, stats
 
-    # Filter to people with email available
-    with_email = [p for p in people if p.has_email]
+    # Filter: org must actually match the vendor (prevent fuzzy junk)
+    verified = [
+        p for p in people
+        if _org_matches_vendor(p.organization_name, p.organization_domain, raw)
+    ]
+    rejected = len(people) - len(verified)
+    if rejected:
+        logger.info(
+            "Org filter for %s: %d/%d people rejected (wrong org)",
+            raw, rejected, len(people),
+        )
     stats["people_found"] = len(people)
+    stats["org_rejected"] = rejected
+
+    # Filter to people with email available
+    with_email = [p for p in verified if p.has_email]
     stats["people_with_email"] = len(with_email)
 
     if not with_email:
@@ -221,6 +303,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     from ...services.apollo_provider import get_apollo_provider
     apollo = get_apollo_provider()
+
+    # Load known vendor domains for org validation (prevents wasting reveal credits)
+    await _load_vendor_domains(pool)
 
     companies = await _discover_companies(pool, cfg)
     if not companies:

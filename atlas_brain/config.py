@@ -1592,6 +1592,24 @@ class FTLTracingConfig(BaseModel):
     base_url: str = "http://localhost:3000"
     api_key: str = ""  # wak_... key for FTL API
     user_id: str = ""  # FTL user ID for trace ownership
+    capture_business_context: bool = Field(
+        default=True,
+        description="Attach business-intelligence context to FTL traces",
+    )
+    capture_reasoning_summaries: bool = Field(
+        default=True,
+        description="Attach structured reasoning summaries to FTL traces",
+    )
+    capture_raw_reasoning: bool = Field(
+        default=False,
+        description="Include truncated raw reasoning output when available",
+    )
+    max_reasoning_chars: int = Field(
+        default=1200,
+        ge=0,
+        le=10000,
+        description="Maximum characters stored for reasoning previews",
+    )
 
 
 class PersonaConfig(BaseSettings):
@@ -2080,11 +2098,11 @@ class B2BChurnConfig(BaseSettings):
     intelligence_window_days: int = Field(default=30, description="Days of enriched reviews to analyze")
     intelligence_min_reviews: int = Field(default=3, description="Min reviews per vendor to include")
     intelligence_source_allowlist: str = Field(
-        default="g2,capterra,trustradius,trustpilot,reddit,hackernews,quora",
+        default="g2,capterra,trustradius,gartner,peerspot,getapp,software_advice,trustpilot,reddit,hackernews",
         description="Sources allowed in churn intelligence aggregation (comma-separated)",
     )
     intelligence_executive_sources: str = Field(
-        default="g2,capterra,trustradius",
+        default="g2,capterra,trustradius,gartner,peerspot",
         description="High-signal sources for executive-facing outputs (weekly_churn_feed, displacement, timeline)",
     )
     intelligence_llm_backend: str = Field(
@@ -2183,6 +2201,14 @@ class B2BChurnConfig(BaseSettings):
         default="stelterlab/Qwen3-30B-A3B-Instruct-2507-AWQ",
         description="vLLM model for profile synthesis",
     )
+    product_profile_llm_backend: str = Field(
+        default="vllm",
+        description="LLM backend for product profiles: 'vllm' (local) or 'openrouter'",
+    )
+    product_profile_openrouter_model: str = Field(
+        default="moonshotai/kimi-k2.5",
+        description="OpenRouter model for product profile synthesis",
+    )
 
     # Blog post generation
     blog_post_enabled: bool = Field(default=False, description="Enable B2B blog post generation")
@@ -2198,7 +2224,7 @@ class B2BChurnConfig(BaseSettings):
     blog_auto_deploy_hook_url: str = Field(default="", description="Vercel deploy hook URL for B2B blog")
     # Blog source filtering
     blog_source_allowlist: str = Field(
-        default="g2,capterra,trustradius,trustpilot,reddit,hackernews,quora",
+        default="g2,capterra,trustradius,gartner,peerspot,getapp,software_advice,trustpilot,reddit,hackernews",
         description="Sources to include in blog data queries (excludes stackoverflow, youtube, github)",
     )
     # Regeneration mode -- re-process existing drafts through fixed pipeline
@@ -2255,6 +2281,31 @@ class B2BWebhookConfig(BaseSettings):
     delivery_log_retention_days: int = Field(default=30, ge=1, le=365, description="Days to keep delivery logs")
 
 
+class CRMEventConfig(BaseSettings):
+    """Inbound CRM event ingestion configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_CRM_EVENT_", env_file=".env", extra="ignore"
+    )
+
+    enabled: bool = Field(default=False, description="Enable CRM event ingestion")
+    batch_size: int = Field(default=50, ge=1, le=500, description="Events processed per run")
+    # Mapping from CRM deal stages to campaign outcomes
+    stage_outcome_map: dict[str, str] = Field(
+        default={
+            "closed_won": "deal_won",
+            "closed_lost": "deal_lost",
+            "demo_scheduled": "meeting_booked",
+            "meeting_booked": "meeting_booked",
+            "proposal_sent": "deal_opened",
+            "negotiation": "deal_opened",
+            "qualified": "deal_opened",
+            "disqualified": "disqualified",
+        },
+        description="Maps CRM deal stage names to campaign outcome values",
+    )
+
+
 class B2BScrapeConfig(BaseSettings):
     """B2B review scraping pipeline configuration."""
 
@@ -2268,7 +2319,7 @@ class B2BScrapeConfig(BaseSettings):
     intake_interval_seconds: int = Field(default=3600, description="Scrape polling interval (1 hour)")
     max_targets_per_run: int = Field(default=5, description="Max targets to scrape per run")
     source_allowlist: str = Field(
-        default="g2,capterra,trustradius,trustpilot,reddit,hackernews,quora",
+        default="g2,capterra,trustradius,gartner,peerspot,getapp,software_advice,trustpilot,reddit,hackernews",
         description="Sources allowed for automated scrape intake (comma-separated)",
     )
 
@@ -2301,6 +2352,7 @@ class B2BScrapeConfig(BaseSettings):
     stackoverflow_rpm: int = Field(default=25, description="Stack Exchange API requests per minute")
     stackoverflow_api_key: str = Field(default="", description="Stack Exchange API key (10k req/day vs 300)")
     peerspot_rpm: int = Field(default=4, description="PeerSpot requests per minute")
+    software_advice_rpm: int = Field(default=8, description="Software Advice requests per minute")
 
     # Behavioral delays
     min_delay_seconds: float = Field(default=2.0, description="Min delay between requests")
@@ -2326,7 +2378,7 @@ class B2BScrapeConfig(BaseSettings):
     captcha_enabled: bool = Field(default=False, description="Enable CAPTCHA solving for protected sites")
     captcha_provider: str = Field(default="capsolver", description="CAPTCHA solver provider (capsolver or 2captcha)")
     captcha_api_key: str = Field(default="", description="CAPTCHA solver API key")
-    captcha_domains: str = Field(default="g2.com,capterra.com", description="Domains with CAPTCHA solving enabled (comma-separated)")
+    captcha_domains: str = Field(default="g2.com,capterra.com,gartner.com,getapp.com", description="Domains with CAPTCHA solving enabled (comma-separated)")
     captcha_proxy_url: str = Field(default="", description="Sticky/static proxy URL for CAPTCHA solving (same IP for solve + retry)")
     captcha_2captcha_api_key: str = Field(default="", description="2Captcha API key (used as fallback or per-domain override)")
     captcha_2captcha_domains: str = Field(default="", description="Domains that should use 2Captcha instead of primary provider (comma-separated)")
@@ -2347,7 +2399,7 @@ class B2BScrapeConfig(BaseSettings):
         description="Bright Data Web Unlocker proxy URL (bypasses DataDome/Cloudflare automatically)",
     )
     web_unlocker_domains: str = Field(
-        default="g2.com,capterra.com,gartner.com,getapp.com,peerspot.com,quora.com",
+        default="g2.com,capterra.com,gartner.com,getapp.com,peerspot.com,softwareadvice.com,quora.com",
         description="Domains to route through Web Unlocker (comma-separated)",
     )
 
@@ -2530,12 +2582,13 @@ class ApolloConfig(BaseSettings):
 
     enabled: bool = Field(default=False, description="Enable Apollo.io prospect pipeline")
     api_key: str = Field(default="", description="Apollo.io API key")
-    max_prospects_per_company: int = Field(default=5, ge=1, le=10, description="Max people to enrich per company")
+    max_prospects_per_company: int = Field(default=10, ge=1, le=25, description="Max people to enrich per company")
     target_seniorities: list[str] = Field(
         default=["c_suite", "owner", "founder", "vp", "head", "director", "manager"],
         description="Apollo seniority levels to target (buying committee breadth)",
     )
-    min_urgency_score: float = Field(default=6.5, ge=0, le=10, description="Min urgency score for proactive enrichment")
+    min_urgency_score: float = Field(default=3.0, ge=0, le=10, description="Min review urgency score to count as a churn signal")
+    min_churn_signals: int = Field(default=5, ge=1, description="Min churn signals a vendor must have to trigger enrichment")
     org_cache_days: int = Field(default=30, ge=1, description="Days before re-enriching a cached org")
     max_credits_per_run: int = Field(default=200, ge=1, description="Max Apollo credits per enrichment run")
     rate_limit_per_minute: int = Field(default=50, ge=1, description="API calls per minute")
@@ -2991,6 +3044,7 @@ class Settings(BaseSettings):
     b2b_churn: B2BChurnConfig = Field(default_factory=B2BChurnConfig)
     b2b_alert: B2BAlertConfig = Field(default_factory=B2BAlertConfig)
     b2b_webhook: B2BWebhookConfig = Field(default_factory=B2BWebhookConfig)
+    crm_event: CRMEventConfig = Field(default_factory=CRMEventConfig)
     b2b_scrape: B2BScrapeConfig = Field(default_factory=B2BScrapeConfig)
     b2b_campaign: B2BCampaignConfig = Field(default_factory=B2BCampaignConfig)
     campaign_sequence: CampaignSequenceConfig = Field(default_factory=CampaignSequenceConfig)

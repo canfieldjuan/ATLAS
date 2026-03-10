@@ -27,6 +27,15 @@ Tools:
     get_consumer_pipeline_status  -- enrichment pipeline health snapshot
     list_complaint_content        -- generated content (articles, forum posts, email copy)
 
+    -- Consumer History & Change Detection --
+    get_brand_history             -- daily brand health snapshot time-series
+    list_product_change_events    -- anomaly detection events (spikes, drops, emergences)
+
+    -- Consumer Corrections --
+    create_consumer_correction    -- suppress, flag, override, reclassify consumer entities
+    list_consumer_corrections     -- list corrections with filters
+    revert_consumer_correction    -- revert a previously applied correction
+
 Run:
     python -m atlas_brain.mcp.intelligence_server          # stdio
     python -m atlas_brain.mcp.intelligence_server --sse    # SSE HTTP transport
@@ -1165,6 +1174,303 @@ async def list_complaint_content(
     except Exception:
         logger.exception("list_complaint_content error")
         return json.dumps({"error": "Internal error", "content": [], "count": 0})
+
+
+# ---------------------------------------------------------------------------
+# Brand history, change events, corrections
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_brand_history(
+    brand: str,
+    days: int = 90,
+) -> str:
+    """Get daily brand health snapshot time-series.
+
+    Returns historical snapshots of a brand's health metrics including
+    pain score, vulnerability score, repurchase rates, safety counts,
+    and more. Use this to identify trends and turning points.
+
+    Args:
+        brand: Brand name to query
+        days: Number of days of history (default 90, max 730)
+    """
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+        days = max(7, min(days, 730))
+        rows = await pool.fetch(
+            """
+            SELECT snapshot_date, total_reviews, avg_rating, avg_pain_score,
+                   health_score, repurchase_yes, repurchase_no,
+                   complaint_count, safety_count, top_complaint,
+                   top_feature_request, competitive_flow_count,
+                   trajectory_positive, trajectory_negative
+            FROM brand_intelligence_snapshots
+            WHERE brand = $1
+              AND snapshot_date >= CURRENT_DATE - $2::int
+            ORDER BY snapshot_date ASC
+            """,
+            brand, days,
+        )
+        snapshots = [
+            {
+                "date": str(r["snapshot_date"]),
+                "total_reviews": r["total_reviews"],
+                "avg_rating": float(r["avg_rating"]) if r["avg_rating"] else None,
+                "avg_pain_score": float(r["avg_pain_score"]) if r["avg_pain_score"] else None,
+                "health_score": float(r["health_score"]) if r["health_score"] else None,
+                "repurchase_yes": r["repurchase_yes"],
+                "repurchase_no": r["repurchase_no"],
+                "complaint_count": r["complaint_count"],
+                "safety_count": r["safety_count"],
+                "top_complaint": r["top_complaint"],
+            }
+            for r in rows
+        ]
+        return json.dumps({
+            "brand": brand, "days": days,
+            "snapshots": snapshots, "total": len(snapshots),
+        }, default=str)
+    except Exception:
+        logger.exception("get_brand_history error")
+        return json.dumps({"error": "Internal error", "snapshots": []})
+
+
+@mcp.tool()
+async def list_product_change_events(
+    brand: Optional[str] = None,
+    event_type: Optional[str] = None,
+    days: int = 30,
+    limit: int = 50,
+) -> str:
+    """List consumer product change events (anomalies, spikes, emerging signals).
+
+    Detected event types:
+    - pain_score_spike: Pain score increased >= 1.5 points
+    - vulnerability_spike: Vulnerability score rose >= 10 points
+    - safety_flag_emergence: New safety-flagged reviews appeared (was 0)
+    - repurchase_decline: Repurchase rate dropped >= 15 percentage points
+    - rating_drop: Average rating dropped >= 0.5 stars
+
+    Args:
+        brand: Filter by brand name (optional)
+        event_type: Filter by event type (optional)
+        days: Lookback window in days (default 30)
+        limit: Max results (default 50)
+    """
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+        clauses = ["event_date >= CURRENT_DATE - $1::int"]
+        params: list = [days]
+        idx = 2
+        if brand:
+            clauses.append(f"brand = ${idx}")
+            params.append(brand)
+            idx += 1
+        if event_type:
+            clauses.append(f"event_type = ${idx}")
+            params.append(event_type)
+            idx += 1
+        where = " AND ".join(clauses)
+
+        rows = await pool.fetch(
+            f"""
+            SELECT id, brand, asin, event_date, event_type, description,
+                   old_value, new_value, delta
+            FROM product_change_events
+            WHERE {where}
+            ORDER BY event_date DESC
+            LIMIT ${idx}
+            """,
+            *params, limit,
+        )
+        events = [
+            {
+                "id": str(r["id"]),
+                "brand": r["brand"],
+                "event_date": str(r["event_date"]),
+                "event_type": r["event_type"],
+                "description": r["description"],
+                "old_value": float(r["old_value"]) if r["old_value"] else None,
+                "new_value": float(r["new_value"]) if r["new_value"] else None,
+                "delta": float(r["delta"]) if r["delta"] else None,
+            }
+            for r in rows
+        ]
+        return json.dumps({"events": events, "total": len(events)}, default=str)
+    except Exception:
+        logger.exception("list_product_change_events error")
+        return json.dumps({"error": "Internal error", "events": []})
+
+
+@mcp.tool()
+async def create_consumer_correction(
+    entity_type: str,
+    entity_id: str,
+    correction_type: str,
+    reason: str,
+    field_name: Optional[str] = None,
+    old_value: Optional[str] = None,
+    new_value: Optional[str] = None,
+) -> str:
+    """Create a data correction for a consumer entity.
+
+    Supported entity types: product_review, product_pain_point, brand,
+    market_report, complaint_content.
+
+    Supported correction types: suppress, flag, override_field, reclassify.
+
+    Args:
+        entity_type: Type of entity to correct
+        entity_id: UUID of the entity
+        correction_type: Type of correction to apply
+        reason: Human-readable reason for the correction
+        field_name: Required for override_field corrections
+        old_value: Original value (for override_field)
+        new_value: New value (for override_field)
+    """
+    valid_types = {"product_review", "product_pain_point", "brand", "market_report", "complaint_content"}
+    valid_corrections = {"suppress", "flag", "override_field", "reclassify"}
+
+    if entity_type not in valid_types:
+        return json.dumps({"error": f"Invalid entity_type. Must be one of: {sorted(valid_types)}"})
+    if correction_type not in valid_corrections:
+        return json.dumps({"error": f"Invalid correction_type. Must be one of: {sorted(valid_corrections)}"})
+    if not _is_uuid(entity_id):
+        return json.dumps({"error": "entity_id must be a valid UUID"})
+    if correction_type == "override_field" and not field_name:
+        return json.dumps({"error": "field_name required for override_field"})
+
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+        row = await pool.fetchrow(
+            """
+            INSERT INTO data_corrections
+                (entity_type, entity_id, correction_type, field_name,
+                 old_value, new_value, reason, corrected_by)
+            VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, 'mcp')
+            RETURNING id, status, created_at
+            """,
+            entity_type, entity_id, correction_type,
+            field_name, old_value, new_value, reason,
+        )
+        return json.dumps({
+            "success": True,
+            "id": str(row["id"]),
+            "status": row["status"],
+            "created_at": row["created_at"],
+        }, default=str)
+    except Exception:
+        logger.exception("create_consumer_correction error")
+        return json.dumps({"error": "Failed to create correction"})
+
+
+@mcp.tool()
+async def list_consumer_corrections(
+    entity_type: Optional[str] = None,
+    correction_type: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 50,
+) -> str:
+    """List data corrections for consumer entities.
+
+    Args:
+        entity_type: Filter by entity type (optional)
+        correction_type: Filter by correction type (optional)
+        status: Filter by status: applied, reverted, pending_review (optional)
+        limit: Max results (default 50)
+    """
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+        clauses = [
+            "entity_type IN ('product_review','product_pain_point','brand','market_report','complaint_content')",
+        ]
+        params: list = []
+        idx = 1
+        if entity_type:
+            clauses.append(f"entity_type = ${idx}")
+            params.append(entity_type)
+            idx += 1
+        if correction_type:
+            clauses.append(f"correction_type = ${idx}")
+            params.append(correction_type)
+            idx += 1
+        if status:
+            clauses.append(f"status = ${idx}")
+            params.append(status)
+            idx += 1
+        where = " AND ".join(clauses)
+
+        rows = await pool.fetch(
+            f"""
+            SELECT id, entity_type, entity_id, correction_type,
+                   field_name, reason, corrected_by, status, created_at
+            FROM data_corrections
+            WHERE {where}
+            ORDER BY created_at DESC
+            LIMIT ${idx}
+            """,
+            *params, limit,
+        )
+        corrections = [
+            {
+                "id": str(r["id"]),
+                "entity_type": r["entity_type"],
+                "entity_id": str(r["entity_id"]),
+                "correction_type": r["correction_type"],
+                "field_name": r["field_name"],
+                "reason": r["reason"],
+                "status": r["status"],
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ]
+        return json.dumps({"corrections": corrections, "total": len(corrections)}, default=str)
+    except Exception:
+        logger.exception("list_consumer_corrections error")
+        return json.dumps({"error": "Internal error", "corrections": []})
+
+
+@mcp.tool()
+async def revert_consumer_correction(
+    correction_id: str,
+) -> str:
+    """Revert a previously applied consumer correction.
+
+    Args:
+        correction_id: UUID of the correction to revert
+    """
+    if not _is_uuid(correction_id):
+        return json.dumps({"error": "correction_id must be a valid UUID"})
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+        row = await pool.fetchrow(
+            "SELECT status, entity_type FROM data_corrections WHERE id = $1",
+            _uuid.UUID(correction_id),
+        )
+        if not row:
+            return json.dumps({"error": "Correction not found"})
+        if row["status"] != "applied":
+            return json.dumps({"error": f"Cannot revert correction with status '{row['status']}'"})
+
+        await pool.execute(
+            """
+            UPDATE data_corrections
+            SET status = 'reverted', reverted_at = NOW(), reverted_by = 'mcp'
+            WHERE id = $1
+            """,
+            _uuid.UUID(correction_id),
+        )
+        return json.dumps({"success": True, "id": correction_id, "status": "reverted"})
+    except Exception:
+        logger.exception("revert_consumer_correction error")
+        return json.dumps({"error": "Failed to revert correction"})
 
 
 # ---------------------------------------------------------------------------

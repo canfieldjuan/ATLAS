@@ -276,10 +276,7 @@ def _parse_json_ld(
         except (json.JSONDecodeError, TypeError):
             continue
 
-        # Handle both single object and array
-        items = data if isinstance(data, list) else [data]
-
-        for item in items:
+        for item in _iter_json_ld_items(data):
             # Look for Product/SoftwareApplication with embedded reviews
             review_list = item.get("review", [])
             if not isinstance(review_list, list):
@@ -318,6 +315,22 @@ def _parse_json_ld(
                 # Extract date
                 reviewed_at = r.get("datePublished")
 
+                pros = None
+                cons = None
+                if isinstance(r.get("positiveNotes"), str):
+                    pros = r["positiveNotes"][:5000]
+                elif isinstance(r.get("positiveNotes"), dict):
+                    notes = _extract_itemlist_notes(r["positiveNotes"])
+                    if notes:
+                        pros = "; ".join(notes)[:5000]
+
+                if isinstance(r.get("negativeNotes"), str):
+                    cons = r["negativeNotes"][:5000]
+                elif isinstance(r.get("negativeNotes"), dict):
+                    notes = _extract_itemlist_notes(r["negativeNotes"])
+                    if notes:
+                        cons = "; ".join(notes)[:5000]
+
                 reviews.append({
                     "source": "peerspot",
                     "source_url": f"https://www.peerspot.com/products/{target.product_slug}-reviews",
@@ -329,8 +342,8 @@ def _parse_json_ld(
                     "rating_max": 5,
                     "summary": r.get("name") or r.get("headline"),
                     "review_text": review_body[:10000],
-                    "pros": None,  # JSON-LD rarely has structured pros/cons
-                    "cons": None,
+                    "pros": pros,
+                    "cons": cons,
                     "reviewer_name": reviewer_name or None,
                     "reviewer_title": None,
                     "reviewer_company": None,
@@ -345,6 +358,33 @@ def _parse_json_ld(
                 })
 
     return reviews
+
+
+def _iter_json_ld_items(data: object) -> list[dict]:
+    """Expand top-level JSON-LD items and @graph nodes into a flat dict list."""
+    items = data if isinstance(data, list) else [data]
+    expanded: list[dict] = []
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        expanded.append(item)
+
+        graph = item.get("@graph")
+        if isinstance(graph, list):
+            expanded.extend(node for node in graph if isinstance(node, dict))
+        elif isinstance(graph, dict):
+            expanded.append(graph)
+
+    return expanded
+
+
+def _extract_itemlist_notes(notes_obj: dict) -> list[str]:
+    """Extract note text from schema.org ItemList note payloads."""
+    items = notes_obj.get("itemListElement", [])
+    if not isinstance(items, list):
+        return []
+    return [item["name"] for item in items if isinstance(item, dict) and item.get("name")]
 
 
 # ------------------------------------------------------------------

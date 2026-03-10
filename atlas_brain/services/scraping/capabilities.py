@@ -54,7 +54,12 @@ class ConcurrencyClass(str, Enum):
 
 @dataclass(frozen=True)
 class SourceCapabilityProfile:
-    """Immutable capability profile for a scrape source."""
+    """Immutable capability profile for a scrape source.
+
+    Includes both static capability metadata and orchestration policy so that
+    the scrape intake task has one authoritative place to read concurrency,
+    retry, cooldown, and fallback behavior per source.
+    """
 
     source: str
     access_patterns: tuple[AccessPattern, ...]
@@ -64,6 +69,12 @@ class SourceCapabilityProfile:
     default_rpm: int
     concurrency_class: ConcurrencyClass
     notes: str = ""
+
+    # -- Orchestration policy (Sprint 2) --
+    max_concurrency: int = 4
+    retry_max: int = 2
+    cooldown_minutes: int = 1440   # 24 hours default
+    fallback_chain: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a plain dict for API/MCP responses."""
@@ -75,6 +86,10 @@ class SourceCapabilityProfile:
             "data_quality": self.data_quality.value,
             "default_rpm": self.default_rpm,
             "concurrency_class": self.concurrency_class.value,
+            "max_concurrency": self.max_concurrency,
+            "retry_max": self.retry_max,
+            "cooldown_minutes": self.cooldown_minutes,
+            "fallback_chain": list(self.fallback_chain),
             "notes": self.notes or None,
         }
 
@@ -99,6 +114,10 @@ _r(SourceCapabilityProfile(
     data_quality=DataQuality.verified,
     default_rpm=6,
     concurrency_class=ConcurrencyClass.web,
+    max_concurrency=3,
+    retry_max=2,
+    cooldown_minutes=2880,
+    fallback_chain=("web_unlocker", "js_rendered", "html_scrape"),
 ))
 _r(SourceCapabilityProfile(
     source="capterra",
@@ -108,6 +127,10 @@ _r(SourceCapabilityProfile(
     data_quality=DataQuality.verified,
     default_rpm=8,
     concurrency_class=ConcurrencyClass.web,
+    max_concurrency=3,
+    retry_max=2,
+    cooldown_minutes=2880,
+    fallback_chain=("web_unlocker", "html_scrape"),
 ))
 _r(SourceCapabilityProfile(
     source="trustradius",
@@ -117,6 +140,10 @@ _r(SourceCapabilityProfile(
     data_quality=DataQuality.verified,
     default_rpm=10,
     concurrency_class=ConcurrencyClass.web,
+    max_concurrency=4,
+    retry_max=2,
+    cooldown_minutes=1440,
+    fallback_chain=("web_unlocker", "js_rendered", "html_scrape"),
 ))
 _r(SourceCapabilityProfile(
     source="gartner",
@@ -126,6 +153,10 @@ _r(SourceCapabilityProfile(
     data_quality=DataQuality.verified,
     default_rpm=4,
     concurrency_class=ConcurrencyClass.web,
+    max_concurrency=2,
+    retry_max=1,
+    cooldown_minutes=4320,
+    fallback_chain=("web_unlocker", "html_scrape"),
 ))
 _r(SourceCapabilityProfile(
     source="peerspot",
@@ -135,6 +166,10 @@ _r(SourceCapabilityProfile(
     data_quality=DataQuality.verified,
     default_rpm=4,
     concurrency_class=ConcurrencyClass.web,
+    max_concurrency=3,
+    retry_max=2,
+    cooldown_minutes=2880,
+    fallback_chain=("web_unlocker", "html_scrape"),
 ))
 _r(SourceCapabilityProfile(
     source="getapp",
@@ -144,6 +179,10 @@ _r(SourceCapabilityProfile(
     data_quality=DataQuality.verified,
     default_rpm=8,
     concurrency_class=ConcurrencyClass.web,
+    max_concurrency=4,
+    retry_max=2,
+    cooldown_minutes=1440,
+    fallback_chain=("web_unlocker", "html_scrape"),
 ))
 _r(SourceCapabilityProfile(
     source="trustpilot",
@@ -153,6 +192,24 @@ _r(SourceCapabilityProfile(
     data_quality=DataQuality.verified,
     default_rpm=6,
     concurrency_class=ConcurrencyClass.web,
+    max_concurrency=3,
+    retry_max=2,
+    cooldown_minutes=2880,
+    fallback_chain=("web_unlocker", "html_scrape"),
+))
+_r(SourceCapabilityProfile(
+    source="software_advice",
+    access_patterns=(AccessPattern.web_unlocker, AccessPattern.html_scrape),
+    anti_bot=AntiBot.cloudflare,
+    proxy_class=ProxyClass.residential,
+    data_quality=DataQuality.verified,
+    default_rpm=8,
+    concurrency_class=ConcurrencyClass.web,
+    notes="Gartner Digital Markets property (same family as Capterra/GetApp)",
+    max_concurrency=4,
+    retry_max=2,
+    cooldown_minutes=1440,
+    fallback_chain=("web_unlocker", "html_scrape"),
 ))
 
 # Community sources (open posts, no identity verification)
@@ -164,6 +221,10 @@ _r(SourceCapabilityProfile(
     data_quality=DataQuality.community,
     default_rpm=4,
     concurrency_class=ConcurrencyClass.web,
+    max_concurrency=3,
+    retry_max=1,
+    cooldown_minutes=2880,
+    fallback_chain=("web_unlocker", "html_scrape"),
 ))
 _r(SourceCapabilityProfile(
     source="twitter",
@@ -173,6 +234,10 @@ _r(SourceCapabilityProfile(
     data_quality=DataQuality.community,
     default_rpm=10,
     concurrency_class=ConcurrencyClass.web,
+    max_concurrency=2,
+    retry_max=1,
+    cooldown_minutes=4320,
+    fallback_chain=("web_unlocker",),
 ))
 _r(SourceCapabilityProfile(
     source="reddit",
@@ -182,6 +247,9 @@ _r(SourceCapabilityProfile(
     data_quality=DataQuality.community,
     default_rpm=30,
     concurrency_class=ConcurrencyClass.api,
+    max_concurrency=10,
+    retry_max=3,
+    cooldown_minutes=60,
 ))
 _r(SourceCapabilityProfile(
     source="hackernews",
@@ -191,6 +259,9 @@ _r(SourceCapabilityProfile(
     data_quality=DataQuality.community,
     default_rpm=100,
     concurrency_class=ConcurrencyClass.api,
+    max_concurrency=10,
+    retry_max=3,
+    cooldown_minutes=30,
 ))
 _r(SourceCapabilityProfile(
     source="github",
@@ -200,6 +271,9 @@ _r(SourceCapabilityProfile(
     data_quality=DataQuality.community,
     default_rpm=25,
     concurrency_class=ConcurrencyClass.api,
+    max_concurrency=10,
+    retry_max=3,
+    cooldown_minutes=60,
 ))
 _r(SourceCapabilityProfile(
     source="youtube",
@@ -209,6 +283,9 @@ _r(SourceCapabilityProfile(
     data_quality=DataQuality.community,
     default_rpm=50,
     concurrency_class=ConcurrencyClass.api,
+    max_concurrency=10,
+    retry_max=3,
+    cooldown_minutes=60,
 ))
 _r(SourceCapabilityProfile(
     source="stackoverflow",
@@ -218,6 +295,9 @@ _r(SourceCapabilityProfile(
     data_quality=DataQuality.community,
     default_rpm=25,
     concurrency_class=ConcurrencyClass.api,
+    max_concurrency=10,
+    retry_max=3,
+    cooldown_minutes=60,
 ))
 _r(SourceCapabilityProfile(
     source="producthunt",
@@ -227,6 +307,10 @@ _r(SourceCapabilityProfile(
     data_quality=DataQuality.community,
     default_rpm=20,
     concurrency_class=ConcurrencyClass.api,
+    max_concurrency=10,
+    retry_max=3,
+    cooldown_minutes=60,
+    fallback_chain=("api", "html_scrape"),
 ))
 
 # News/RSS
@@ -238,6 +322,9 @@ _r(SourceCapabilityProfile(
     data_quality=DataQuality.news,
     default_rpm=10,
     concurrency_class=ConcurrencyClass.api,
+    max_concurrency=10,
+    retry_max=3,
+    cooldown_minutes=30,
 ))
 
 

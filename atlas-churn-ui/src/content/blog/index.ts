@@ -39,6 +39,11 @@ export interface ChartSpec {
   config: ChartConfig
 }
 
+export interface FaqItem {
+  question: string
+  answer: string
+}
+
 export interface BlogPost {
   slug: string
   title: string
@@ -50,6 +55,12 @@ export interface BlogPost {
   charts?: ChartSpec[]
   topic_type?: string
   data_context?: BlogDataContext
+  seo_title?: string
+  seo_description?: string
+  target_keyword?: string
+  secondary_keywords?: string[]
+  faq?: FaqItem[]
+  related_slugs?: string[]
 }
 
 export const POSTS: BlogPost[] = [

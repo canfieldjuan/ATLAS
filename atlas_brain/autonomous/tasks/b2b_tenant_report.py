@@ -15,6 +15,11 @@ from typing import Any
 import httpx
 
 from ...config import settings
+from ...services.tracing import (
+    build_business_trace_context,
+    build_reasoning_trace_context,
+    tracer,
+)
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 
@@ -62,6 +67,20 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         if not vendor_names:
             continue
 
+        span = tracer.start_span(
+            span_name="b2b.tenant_report",
+            operation_type="intelligence",
+            session_id=str(account_id),
+            metadata={
+                "business": build_business_trace_context(
+                    account_id=str(account_id),
+                    workflow="tenant_report",
+                    report_type="weekly_b2b_intelligence",
+                    vendor_name=", ".join(vendor_names[:5]),
+                ),
+            },
+        )
+
         try:
             result = await gather_intelligence_data(
                 pool,
@@ -70,6 +89,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 vendor_names=vendor_names,
             )
         except Exception as exc:
+            tracer.end_span(
+                span,
+                status="failed",
+                error_message=str(exc),
+                error_type=type(exc).__name__,
+            )
             logger.error("Data gathering failed for account %s: %s", account_id, exc)
             continue
 
@@ -77,6 +102,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
         # Skip if no data
         if not payload.get("vendor_churn_scores") and not payload.get("high_intent_companies"):
+            tracer.end_span(span, status="completed", output_data={"skipped": "no scoped intelligence data"})
             continue
 
         # LLM synthesis with existing skill
@@ -96,10 +122,17 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 timeout=300,
             )
         except asyncio.TimeoutError:
+            tracer.end_span(
+                span,
+                status="failed",
+                error_message="tenant report llm timed out",
+                error_type="TimeoutError",
+            )
             logger.error("LLM timed out for tenant report account=%s", account_id)
             continue
 
         if not analysis:
+            tracer.end_span(span, status="failed", error_message="tenant report llm returned no analysis")
             continue
 
         parsed = parse_json_response(analysis, recover_truncated=True)
@@ -143,6 +176,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     )
             reports_generated += 1
         except Exception as exc:
+            tracer.end_span(
+                span,
+                status="failed",
+                error_message=str(exc),
+                error_type=type(exc).__name__,
+            )
             logger.error("Failed to persist tenant report for %s: %s", account_id, exc)
             continue
 
@@ -156,6 +195,23 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
         # ntfy notification
         await _send_ntfy(acct["account_name"], len(vendor_names))
+        tracer.end_span(
+            span,
+            status="completed",
+            input_data={"vendor_names": vendor_names, "window_days": cfg.intelligence_window_days},
+            output_data={"reports_generated": len(report_types), "account_name": acct["account_name"]},
+            metadata={
+                "reasoning": build_reasoning_trace_context(
+                    decision={"report_types": [name for name, _ in report_types]},
+                    evidence={
+                        "vendors_analyzed": result["vendors_analyzed"],
+                        "high_intent_companies": result["high_intent_companies"],
+                        "competitive_flows": result["competitive_flows"],
+                    },
+                    rationale=exec_summary,
+                ),
+            },
+        )
 
     return {
         "_skip_synthesis": "B2B tenant reports complete",

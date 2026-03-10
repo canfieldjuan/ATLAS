@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from ..auth.dependencies import AuthUser, require_auth, require_plan
 from ..auth.rate_limit import limiter, _dynamic_limit
 from ..config import settings
+from ..services.b2b.corrections import suppress_predicate, apply_field_overrides
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.consumer_dashboard")
@@ -2146,6 +2147,9 @@ async def search_reviews(
         params.append(imported_before)
         idx += 1
 
+    # Exclude suppressed reviews
+    conditions.append(suppress_predicate("product_review", id_expr="pr.id"))
+
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
     sort_map = {
@@ -2234,7 +2238,9 @@ async def get_review(request: Request, review_id: str, user: AuthUser = Depends(
                pm.price AS product_price
         FROM product_reviews pr
         LEFT JOIN product_metadata pm ON pm.asin = pr.asin
-        WHERE pr.id = $1 {t_and}
+        WHERE pr.id = $1
+          AND {suppress_predicate('product_review', id_expr='pr.id')}
+          {t_and}
         """,
         rid, *t_params,
     )
@@ -2242,7 +2248,7 @@ async def get_review(request: Request, review_id: str, user: AuthUser = Depends(
     if not row:
         raise HTTPException(status_code=404, detail="Review not found")
 
-    return {
+    result = {
         "id": str(row["id"]),
         "asin": row["asin"],
         "source_category": row["source_category"],
@@ -2272,4 +2278,569 @@ async def get_review(request: Request, review_id: str, user: AuthUser = Depends(
         "product_avg_rating": _safe_float(row["product_avg_rating"]),
         "product_total_ratings": row["product_total_ratings"],
         "product_price": row["product_price"],
+    }
+    # Apply field overrides from corrections
+    return await apply_field_overrides(pool, "product_review", review_id, result)
+
+
+# ---------------------------------------------------------------------------
+# Brand history (snapshots + change events)
+# ---------------------------------------------------------------------------
+
+CONSUMER_ENTITY_TYPES = {
+    "product_review", "product_pain_point", "brand",
+    "market_report", "complaint_content",
+}
+CONSUMER_CORRECTION_TYPES = {
+    "suppress", "flag", "override_field", "reclassify",
+}
+
+
+@router.get("/brand-history")
+@limiter.limit(_dynamic_limit)
+async def brand_history(
+    request: Request,
+    brand: str = Query(..., min_length=1),
+    days: int = Query(90, ge=7, le=730),
+    user: AuthUser = Depends(require_auth),
+):
+    """Time-series of daily brand health snapshots."""
+    pool = _pool_or_503()
+    rows = await pool.fetch(
+        """
+        SELECT snapshot_date, total_reviews, avg_rating, avg_pain_score,
+               health_score, repurchase_yes, repurchase_no,
+               complaint_count, safety_count, top_complaint,
+               top_feature_request, competitive_flow_count,
+               trajectory_positive, trajectory_negative
+        FROM brand_intelligence_snapshots
+        WHERE brand = $1
+          AND snapshot_date >= CURRENT_DATE - $2::int
+        ORDER BY snapshot_date ASC
+        """,
+        brand, days,
+    )
+    return {
+        "brand": brand,
+        "days": days,
+        "snapshots": [
+            {
+                "date": str(r["snapshot_date"]),
+                "total_reviews": r["total_reviews"],
+                "avg_rating": _safe_float(r["avg_rating"]),
+                "avg_pain_score": _safe_float(r["avg_pain_score"]),
+                "health_score": _safe_float(r["health_score"]),
+                "repurchase_yes": r["repurchase_yes"],
+                "repurchase_no": r["repurchase_no"],
+                "complaint_count": r["complaint_count"],
+                "safety_count": r["safety_count"],
+                "top_complaint": r["top_complaint"],
+                "top_feature_request": r["top_feature_request"],
+                "competitive_flow_count": r["competitive_flow_count"],
+                "trajectory_positive": r["trajectory_positive"],
+                "trajectory_negative": r["trajectory_negative"],
+            }
+            for r in rows
+        ],
+        "total_snapshots": len(rows),
+    }
+
+
+@router.get("/change-events")
+@limiter.limit(_dynamic_limit)
+async def list_change_events(
+    request: Request,
+    brand: Optional[str] = Query(None),
+    event_type: Optional[str] = Query(None),
+    days: int = Query(30, ge=1, le=365),
+    limit: int = Query(100, ge=1, le=500),
+    user: AuthUser = Depends(require_auth),
+):
+    """List consumer product change events."""
+    pool = _pool_or_503()
+    clauses = ["event_date >= CURRENT_DATE - $1::int"]
+    params: list = [days]
+    idx = 2
+    if brand:
+        clauses.append(f"brand = ${idx}")
+        params.append(brand)
+        idx += 1
+    if event_type:
+        clauses.append(f"event_type = ${idx}")
+        params.append(event_type)
+        idx += 1
+    where = " AND ".join(clauses)
+
+    rows = await pool.fetch(
+        f"""
+        SELECT id, brand, asin, event_date, event_type, description,
+               old_value, new_value, delta, metadata, created_at
+        FROM product_change_events
+        WHERE {where}
+        ORDER BY event_date DESC, created_at DESC
+        LIMIT ${idx}
+        """,
+        *params, limit,
+    )
+    return {
+        "events": [
+            {
+                "id": str(r["id"]),
+                "brand": r["brand"],
+                "asin": r["asin"],
+                "event_date": str(r["event_date"]),
+                "event_type": r["event_type"],
+                "description": r["description"],
+                "old_value": _safe_float(r["old_value"]),
+                "new_value": _safe_float(r["new_value"]),
+                "delta": _safe_float(r["delta"]),
+                "metadata": _safe_json(r["metadata"]),
+            }
+            for r in rows
+        ],
+        "total": len(rows),
+        "filters": {"brand": brand, "event_type": event_type, "days": days},
+    }
+
+
+@router.get("/change-events/summary")
+@limiter.limit(_dynamic_limit)
+async def change_events_summary(
+    request: Request,
+    days: int = Query(30, ge=1, le=365),
+    user: AuthUser = Depends(require_auth),
+):
+    """Aggregate change event counts by type and brand."""
+    pool = _pool_or_503()
+    rows = await pool.fetch(
+        """
+        SELECT event_type, brand, count(*) AS cnt
+        FROM product_change_events
+        WHERE event_date >= CURRENT_DATE - $1::int
+        GROUP BY event_type, brand
+        ORDER BY cnt DESC
+        """,
+        days,
+    )
+    by_type: dict[str, int] = {}
+    by_brand: dict[str, int] = {}
+    for r in rows:
+        by_type[r["event_type"]] = by_type.get(r["event_type"], 0) + r["cnt"]
+        by_brand[r["brand"]] = by_brand.get(r["brand"], 0) + r["cnt"]
+    return {
+        "days": days,
+        "total_events": sum(by_type.values()),
+        "by_type": _dist(by_type),
+        "by_brand": sorted(
+            [{"brand": k, "count": v} for k, v in by_brand.items()],
+            key=lambda x: x["count"], reverse=True,
+        )[:20],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Corrections (reuse data_corrections table for consumer entities)
+# ---------------------------------------------------------------------------
+
+
+class ConsumerCorrectionBody(BaseModel):
+    entity_type: str
+    entity_id: str
+    correction_type: str
+    field_name: str | None = None
+    old_value: str | None = None
+    new_value: str | None = None
+    reason: str
+    metadata: dict | None = None
+
+
+@router.post("/corrections")
+@limiter.limit(_dynamic_limit)
+async def create_consumer_correction(
+    request: Request,
+    body: ConsumerCorrectionBody,
+    user: AuthUser | None = Depends(require_auth),
+):
+    """Create a correction for a consumer entity."""
+    pool = _pool_or_503()
+    if body.entity_type not in CONSUMER_ENTITY_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid entity_type. Must be one of: {sorted(CONSUMER_ENTITY_TYPES)}",
+        )
+    if body.correction_type not in CONSUMER_CORRECTION_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid correction_type. Must be one of: {sorted(CONSUMER_CORRECTION_TYPES)}",
+        )
+    if body.correction_type == "override_field":
+        if not body.field_name:
+            raise HTTPException(status_code=400, detail="field_name required for override_field")
+        if body.new_value is None:
+            raise HTTPException(status_code=400, detail="new_value required for override_field")
+
+    try:
+        entity_uuid = _uuid.UUID(body.entity_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="entity_id must be a valid UUID")
+
+    corrected_by = f"api:{user.user_id}" if user else "analyst"
+    meta = json.dumps(body.metadata) if body.metadata else "{}"
+
+    row = await pool.fetchrow(
+        """
+        INSERT INTO data_corrections
+            (entity_type, entity_id, correction_type, field_name,
+             old_value, new_value, reason, corrected_by, metadata)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+        RETURNING id, entity_type, entity_id, correction_type, status, created_at
+        """,
+        body.entity_type, entity_uuid, body.correction_type,
+        body.field_name, body.old_value, body.new_value,
+        body.reason, corrected_by, meta,
+    )
+    return {
+        "id": str(row["id"]),
+        "entity_type": row["entity_type"],
+        "entity_id": str(row["entity_id"]),
+        "correction_type": row["correction_type"],
+        "status": row["status"],
+        "created_at": row["created_at"].isoformat(),
+    }
+
+
+@router.get("/corrections")
+@limiter.limit(_dynamic_limit)
+async def list_consumer_corrections(
+    request: Request,
+    entity_type: Optional[str] = Query(None),
+    correction_type: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    user: AuthUser = Depends(require_auth),
+):
+    """List corrections for consumer entities."""
+    pool = _pool_or_503()
+    clauses = [
+        "entity_type IN ('product_review','product_pain_point','brand','market_report','complaint_content')",
+    ]
+    params: list = []
+    idx = 1
+    if entity_type:
+        clauses.append(f"entity_type = ${idx}")
+        params.append(entity_type)
+        idx += 1
+    if correction_type:
+        clauses.append(f"correction_type = ${idx}")
+        params.append(correction_type)
+        idx += 1
+    if status:
+        clauses.append(f"status = ${idx}")
+        params.append(status)
+        idx += 1
+    where = " AND ".join(clauses)
+
+    rows = await pool.fetch(
+        f"""
+        SELECT id, entity_type, entity_id, correction_type, field_name,
+               old_value, new_value, reason, corrected_by, status,
+               affected_count, metadata, created_at, reverted_at
+        FROM data_corrections
+        WHERE {where}
+        ORDER BY created_at DESC
+        LIMIT ${idx} OFFSET ${idx + 1}
+        """,
+        *params, limit, offset,
+    )
+    return {
+        "corrections": [
+            {
+                "id": str(r["id"]),
+                "entity_type": r["entity_type"],
+                "entity_id": str(r["entity_id"]),
+                "correction_type": r["correction_type"],
+                "field_name": r["field_name"],
+                "old_value": r["old_value"],
+                "new_value": r["new_value"],
+                "reason": r["reason"],
+                "corrected_by": r["corrected_by"],
+                "status": r["status"],
+                "created_at": r["created_at"].isoformat(),
+            }
+            for r in rows
+        ],
+        "total": len(rows),
+    }
+
+
+@router.get("/corrections/stats")
+@limiter.limit(_dynamic_limit)
+async def consumer_correction_stats(
+    request: Request,
+    days: int = Query(30, ge=1, le=365),
+    user: AuthUser = Depends(require_auth),
+):
+    """Aggregate correction activity stats for consumer entities."""
+    pool = _pool_or_503()
+    rows = await pool.fetch(
+        """
+        SELECT correction_type, status, count(*) AS cnt
+        FROM data_corrections
+        WHERE entity_type IN ('product_review','product_pain_point','brand','market_report','complaint_content')
+          AND created_at >= NOW() - ($1::int || ' days')::interval
+        GROUP BY correction_type, status
+        """,
+        days,
+    )
+    by_type: dict[str, int] = {}
+    by_status: dict[str, int] = {}
+    for r in rows:
+        by_type[r["correction_type"]] = by_type.get(r["correction_type"], 0) + r["cnt"]
+        by_status[r["status"]] = by_status.get(r["status"], 0) + r["cnt"]
+    return {
+        "days": days,
+        "total": sum(by_type.values()),
+        "by_type": _dist(by_type),
+        "by_status": _dist(by_status),
+    }
+
+
+@router.get("/corrections/{correction_id}")
+@limiter.limit(_dynamic_limit)
+async def get_consumer_correction(
+    request: Request,
+    correction_id: str,
+    user: AuthUser = Depends(require_auth),
+):
+    """Get a single correction by ID."""
+    pool = _pool_or_503()
+    try:
+        cid = _uuid.UUID(correction_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid correction ID")
+    row = await pool.fetchrow(
+        """
+        SELECT id, entity_type, entity_id, correction_type, field_name,
+               old_value, new_value, reason, corrected_by, status,
+               affected_count, metadata, created_at, reverted_at, reverted_by
+        FROM data_corrections WHERE id = $1
+        """,
+        cid,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Correction not found")
+    return {
+        "id": str(row["id"]),
+        "entity_type": row["entity_type"],
+        "entity_id": str(row["entity_id"]),
+        "correction_type": row["correction_type"],
+        "field_name": row["field_name"],
+        "old_value": row["old_value"],
+        "new_value": row["new_value"],
+        "reason": row["reason"],
+        "corrected_by": row["corrected_by"],
+        "status": row["status"],
+        "affected_count": row["affected_count"],
+        "metadata": _safe_json(row["metadata"]),
+        "created_at": row["created_at"].isoformat(),
+        "reverted_at": row["reverted_at"].isoformat() if row["reverted_at"] else None,
+        "reverted_by": row["reverted_by"],
+    }
+
+
+@router.post("/corrections/{correction_id}/revert")
+@limiter.limit(_dynamic_limit)
+async def revert_consumer_correction(
+    request: Request,
+    correction_id: str,
+    user: AuthUser = Depends(require_auth),
+):
+    """Revert a previously applied correction."""
+    pool = _pool_or_503()
+    try:
+        cid = _uuid.UUID(correction_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid correction ID")
+
+    row = await pool.fetchrow("SELECT status FROM data_corrections WHERE id = $1", cid)
+    if not row:
+        raise HTTPException(status_code=404, detail="Correction not found")
+    if row["status"] != "applied":
+        raise HTTPException(status_code=400, detail=f"Cannot revert correction with status '{row['status']}'")
+
+    reverted_by = f"api:{user.user_id}" if user else "analyst"
+    await pool.execute(
+        """
+        UPDATE data_corrections
+        SET status = 'reverted', reverted_at = NOW(), reverted_by = $1
+        WHERE id = $2
+        """,
+        reverted_by, cid,
+    )
+    return {"id": correction_id, "status": "reverted", "reverted_by": reverted_by}
+
+
+# ---------------------------------------------------------------------------
+# Export endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/export/reviews")
+@limiter.limit(_dynamic_limit)
+async def export_reviews(
+    request: Request,
+    category: Optional[str] = Query(None),
+    brand: Optional[str] = Query(None),
+    min_pain: Optional[float] = Query(None, ge=0, le=10),
+    limit: int = Query(500, ge=1, le=5000),
+    user: AuthUser = Depends(require_auth),
+):
+    """Export enriched reviews as JSON (for CSV conversion client-side)."""
+    pool = _pool_or_503()
+    clauses = [
+        "pr.enrichment_status = 'enriched'",
+        suppress_predicate("product_review", id_expr="pr.id"),
+    ]
+    params: list = []
+    idx = 1
+    if category:
+        clauses.append(f"pr.source_category = ${idx}")
+        params.append(category)
+        idx += 1
+    if brand:
+        clauses.append(f"pm.brand = ${idx}")
+        params.append(brand)
+        idx += 1
+    if min_pain is not None:
+        clauses.append(f"pr.pain_score >= ${idx}")
+        params.append(min_pain)
+        idx += 1
+    where = " AND ".join(clauses)
+
+    rows = await pool.fetch(
+        f"""
+        SELECT pr.asin, pr.rating, pr.summary, pr.root_cause, pr.severity,
+               pr.pain_score, pr.alternative_name, pr.enrichment_status,
+               pr.deep_enrichment_status, pm.brand, pm.title,
+               pr.reviewed_at
+        FROM product_reviews pr
+        LEFT JOIN product_metadata pm ON pm.asin = pr.asin
+        WHERE {where}
+        ORDER BY pr.pain_score DESC NULLS LAST
+        LIMIT ${idx}
+        """,
+        *params, limit,
+    )
+    return {
+        "count": len(rows),
+        "reviews": [
+            {
+                "asin": r["asin"],
+                "brand": r["brand"],
+                "title": r["title"],
+                "rating": _safe_float(r["rating"]),
+                "summary": r["summary"],
+                "root_cause": r["root_cause"],
+                "severity": r["severity"],
+                "pain_score": _safe_float(r["pain_score"]),
+                "alternative": r["alternative_name"],
+                "reviewed_at": str(r["reviewed_at"]) if r["reviewed_at"] else None,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/export/brands")
+@limiter.limit(_dynamic_limit)
+async def export_brands(
+    request: Request,
+    limit: int = Query(200, ge=1, le=1000),
+    user: AuthUser = Depends(require_auth),
+):
+    """Export brand intelligence scorecards as JSON."""
+    pool = _pool_or_503()
+    rows = await pool.fetch(
+        """
+        SELECT brand, total_reviews, avg_rating, avg_pain_score,
+               repurchase_yes, repurchase_no, health_score,
+               last_computed_at
+        FROM brand_intelligence
+        ORDER BY health_score DESC NULLS LAST
+        LIMIT $1
+        """,
+        limit,
+    )
+    return {
+        "count": len(rows),
+        "brands": [
+            {
+                "brand": r["brand"],
+                "total_reviews": r["total_reviews"],
+                "avg_rating": _safe_float(r["avg_rating"]),
+                "avg_pain_score": _safe_float(r["avg_pain_score"]),
+                "repurchase_yes": r["repurchase_yes"],
+                "repurchase_no": r["repurchase_no"],
+                "health_score": _safe_float(r["health_score"]),
+                "last_computed_at": str(r["last_computed_at"]) if r["last_computed_at"] else None,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/export/pain-points")
+@limiter.limit(_dynamic_limit)
+async def export_pain_points(
+    request: Request,
+    category: Optional[str] = Query(None),
+    min_pain: Optional[float] = Query(None, ge=0, le=10),
+    limit: int = Query(500, ge=1, le=5000),
+    user: AuthUser = Depends(require_auth),
+):
+    """Export product pain points as JSON."""
+    pool = _pool_or_503()
+    clauses = ["TRUE"]
+    params: list = []
+    idx = 1
+    if category:
+        clauses.append(f"category = ${idx}")
+        params.append(category)
+        idx += 1
+    if min_pain is not None:
+        clauses.append(f"pain_score >= ${idx}")
+        params.append(min_pain)
+        idx += 1
+    where = " AND ".join(clauses)
+
+    rows = await pool.fetch(
+        f"""
+        SELECT asin, product_name, category, total_reviews,
+               complaint_reviews, complaint_rate, pain_score,
+               top_complaints, root_cause_distribution,
+               last_computed_at
+        FROM product_pain_points
+        WHERE {where}
+        ORDER BY pain_score DESC NULLS LAST
+        LIMIT ${idx}
+        """,
+        *params, limit,
+    )
+    return {
+        "count": len(rows),
+        "pain_points": [
+            {
+                "asin": r["asin"],
+                "product_name": r["product_name"],
+                "category": r["category"],
+                "total_reviews": r["total_reviews"],
+                "complaint_reviews": r["complaint_reviews"],
+                "complaint_rate": _safe_float(r["complaint_rate"]),
+                "pain_score": _safe_float(r["pain_score"]),
+                "top_complaints": _safe_json(r["top_complaints"]),
+                "root_causes": _safe_json(r["root_cause_distribution"]),
+            }
+            for r in rows
+        ],
     }

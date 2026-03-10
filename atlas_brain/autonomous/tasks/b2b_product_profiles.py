@@ -16,11 +16,33 @@ import logging
 import re
 from typing import Any
 
+import math
+
 import httpx
 
 from ...config import settings
+from ...services.scraping.sources import VERIFIED_SOURCES
+from ...services.vendor_registry import resolve_vendor_name
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+
+
+def _compute_profile_confidence(
+    total_reviews: int,
+    source_distribution: dict[str, int],
+) -> float:
+    """Evidence-based confidence score for product profiles.
+
+    Same 3-signal formula as b2b_churn_intelligence._compute_evidence_confidence.
+    """
+    _VERIFIED = {s.value for s in VERIFIED_SOURCES}
+    mention_weight = min(math.log2(max(total_reviews, 1)) / math.log2(20), 1.0)
+    n_sources = len(source_distribution)
+    source_weight = min(n_sources / 3.0, 1.0)
+    total = sum(source_distribution.values()) or 1
+    verified_total = sum(cnt for src, cnt in source_distribution.items() if src in _VERIFIED)
+    quality_weight = verified_total / total
+    return round((mention_weight + source_weight + quality_weight) / 3.0, 2)
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_product_profiles")
 
@@ -424,6 +446,50 @@ def _compute_pain_addressed_heuristic(
 # ------------------------------------------------------------------
 
 
+async def _call_vllm(messages: list[dict], max_tokens: int, cfg) -> str:
+    """Call local vLLM server for profile synthesis."""
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            f"{cfg.product_profile_vllm_url}/v1/chat/completions",
+            json={
+                "model": cfg.product_profile_vllm_model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": 0.3,
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["choices"][0]["message"]["content"].strip()
+
+
+async def _call_openrouter(messages: list[dict], max_tokens: int, cfg) -> str:
+    """Call OpenRouter API for profile synthesis."""
+    import os
+
+    api_key = cfg.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY", "")
+    if not api_key:
+        raise ValueError("OpenRouter API key not configured for product profiles")
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": cfg.product_profile_openrouter_model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": 0.3,
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["choices"][0]["message"]["content"].strip()
+
+
 async def _synthesize_profile(
     vendor_name: str,
     metrics: dict,
@@ -467,26 +533,18 @@ async def _synthesize_profile(
     }
 
     cfg = settings.b2b_churn
-    vllm_url = cfg.product_profile_vllm_url
-    vllm_model = cfg.product_profile_vllm_model
+    backend = cfg.product_profile_llm_backend
+
+    messages = [
+        {"role": "system", "content": skill.content},
+        {"role": "user", "content": json.dumps(payload, default=str)},
+    ]
 
     try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(
-                f"{vllm_url}/v1/chat/completions",
-                json={
-                    "model": vllm_model,
-                    "messages": [
-                        {"role": "system", "content": skill.content},
-                        {"role": "user", "content": json.dumps(payload, default=str)},
-                    ],
-                    "max_tokens": max_tokens,
-                    "temperature": 0.3,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            text = data["choices"][0]["message"]["content"].strip()
+        if backend == "openrouter":
+            text = await _call_openrouter(messages, max_tokens, cfg)
+        else:
+            text = await _call_vllm(messages, max_tokens, cfg)
 
         if not text:
             return None, pain_heuristic
@@ -544,6 +602,7 @@ async def _upsert_profile(pool, profile: dict) -> None:
             profile_summary,
             source_distribution, sample_review_ids,
             review_window_start, review_window_end,
+            confidence_score,
             last_computed_at
         ) VALUES (
             $1, $2,
@@ -554,6 +613,7 @@ async def _upsert_profile(pool, profile: dict) -> None:
             $16,
             $17::jsonb, $18,
             $19, $20,
+            $21,
             NOW()
         )
         ON CONFLICT (vendor_name, COALESCE(product_category, ''))
@@ -576,6 +636,7 @@ async def _upsert_profile(pool, profile: dict) -> None:
             sample_review_ids = EXCLUDED.sample_review_ids,
             review_window_start = EXCLUDED.review_window_start,
             review_window_end = EXCLUDED.review_window_end,
+            confidence_score = EXCLUDED.confidence_score,
             last_computed_at = NOW()
         """,
         profile["vendor_name"],
@@ -598,7 +659,107 @@ async def _upsert_profile(pool, profile: dict) -> None:
         profile.get("sample_review_ids", []),
         profile.get("review_window_start"),
         profile.get("review_window_end"),
+        profile.get("confidence_score", 0),
     )
+
+
+# ------------------------------------------------------------------
+# Snapshot capture
+# ------------------------------------------------------------------
+
+
+async def _persist_profile_snapshots(pool, profiles_generated: int) -> int:
+    """Capture daily snapshots of all product profiles (append-only)."""
+    if profiles_generated == 0:
+        return 0
+
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT vendor_name, total_reviews_analyzed, avg_rating,
+                   recommend_rate, avg_urgency, strengths, weaknesses,
+                   primary_use_cases, top_integrations,
+                   commonly_compared_to, commonly_switched_from,
+                   pain_addressed, profile_summary
+            FROM b2b_product_profiles
+            """
+        )
+    except Exception:
+        logger.exception("Failed to fetch profiles for snapshot")
+        return 0
+
+    persisted = 0
+    for r in rows:
+        try:
+            strengths = r["strengths"] if isinstance(r["strengths"], list) else json.loads(r["strengths"] or "[]")
+            weaknesses = r["weaknesses"] if isinstance(r["weaknesses"], list) else json.loads(r["weaknesses"] or "[]")
+            use_cases = r["primary_use_cases"] if isinstance(r["primary_use_cases"], list) else json.loads(r["primary_use_cases"] or "[]")
+            integrations = r["top_integrations"] if isinstance(r["top_integrations"], list) else json.loads(r["top_integrations"] or "[]")
+            compared_to = r["commonly_compared_to"] if isinstance(r["commonly_compared_to"], list) else json.loads(r["commonly_compared_to"] or "[]")
+            switched_from = r["commonly_switched_from"] if isinstance(r["commonly_switched_from"], list) else json.loads(r["commonly_switched_from"] or "[]")
+            pain_addressed = r["pain_addressed"] if isinstance(r["pain_addressed"], dict) else json.loads(r["pain_addressed"] or "{}")
+
+            top_strength = strengths[0]["area"] if strengths else None
+            top_weakness = weaknesses[0]["area"] if weaknesses else None
+            top_use_case = use_cases[0]["use_case"] if use_cases and isinstance(use_cases[0], dict) else (use_cases[0] if use_cases else None)
+            top_integration = integrations[0]["tool"] if integrations and isinstance(integrations[0], dict) else (integrations[0] if integrations else None)
+            summary_len = len(r["profile_summary"] or "")
+
+            await pool.execute(
+                """
+                INSERT INTO b2b_product_profile_snapshots (
+                    vendor_name, snapshot_date,
+                    total_reviews_analyzed, avg_rating, recommend_rate, avg_urgency,
+                    strength_count, weakness_count, top_strength, top_weakness,
+                    top_use_case, top_integration,
+                    compared_to_count, switched_from_count,
+                    pain_categories_covered, profile_summary_len
+                ) VALUES (
+                    $1, CURRENT_DATE,
+                    $2, $3, $4, $5,
+                    $6, $7, $8, $9,
+                    $10, $11,
+                    $12, $13,
+                    $14, $15
+                )
+                ON CONFLICT (vendor_name, snapshot_date) DO UPDATE SET
+                    total_reviews_analyzed = EXCLUDED.total_reviews_analyzed,
+                    avg_rating = EXCLUDED.avg_rating,
+                    recommend_rate = EXCLUDED.recommend_rate,
+                    avg_urgency = EXCLUDED.avg_urgency,
+                    strength_count = EXCLUDED.strength_count,
+                    weakness_count = EXCLUDED.weakness_count,
+                    top_strength = EXCLUDED.top_strength,
+                    top_weakness = EXCLUDED.top_weakness,
+                    top_use_case = EXCLUDED.top_use_case,
+                    top_integration = EXCLUDED.top_integration,
+                    compared_to_count = EXCLUDED.compared_to_count,
+                    switched_from_count = EXCLUDED.switched_from_count,
+                    pain_categories_covered = EXCLUDED.pain_categories_covered,
+                    profile_summary_len = EXCLUDED.profile_summary_len
+                """,
+                r["vendor_name"],
+                r["total_reviews_analyzed"],
+                r["avg_rating"],
+                r["recommend_rate"],
+                r["avg_urgency"],
+                len(strengths),
+                len(weaknesses),
+                top_strength,
+                top_weakness,
+                top_use_case,
+                top_integration,
+                len(compared_to),
+                len(switched_from),
+                len(pain_addressed),
+                summary_len,
+            )
+            persisted += 1
+        except Exception:
+            logger.warning("Failed to snapshot profile for %s", r["vendor_name"])
+
+    logger.info("Product profile snapshots: %d persisted", persisted)
+    return persisted
 
 
 # ------------------------------------------------------------------
@@ -651,30 +812,31 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     generated = 0
     failed = 0
 
-    for vendor_name, metrics in aggregate_metrics.items():
+    for raw_vendor, metrics in aggregate_metrics.items():
         try:
-            satisfaction = satisfaction_data.get(vendor_name, [])
+            vendor_name = await resolve_vendor_name(raw_vendor)
+            satisfaction = satisfaction_data.get(raw_vendor, [])
             strengths, weaknesses = _build_strengths_weaknesses(satisfaction)
 
             use_cases = _build_use_cases(
-                use_case_data.get(vendor_name, []),
+                use_case_data.get(raw_vendor, []),
                 metrics["total_reviews"],
             )
 
             company_size = _build_company_size(
-                company_size_data.get(vendor_name, {}),
+                company_size_data.get(raw_vendor, {}),
             )
 
             compared_to, switched_from = _build_competitive_positioning(
-                competitive_data.get(vendor_name, {}),
+                competitive_data.get(raw_vendor, {}),
             )
 
             integrations = _build_top_integrations(
-                integration_data.get(vendor_name, {}),
+                integration_data.get(raw_vendor, {}),
             )
 
             pain_heuristic = _compute_pain_addressed_heuristic(
-                pain_data.get(vendor_name, {}),
+                pain_data.get(raw_vendor, {}),
                 satisfaction,
                 metrics["total_reviews"],
             )
@@ -687,7 +849,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 weaknesses=weaknesses,
                 use_cases=use_cases,
                 integrations=integrations,
-                competitive=competitive_data.get(vendor_name, {}),
+                competitive=competitive_data.get(raw_vendor, {}),
                 pain_heuristic=pain_heuristic,
                 max_tokens=max_tokens,
             )
@@ -709,10 +871,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 "commonly_compared_to": compared_to,
                 "commonly_switched_from": switched_from,
                 "profile_summary": summary,
-                "source_distribution": source_dist_data.get(vendor_name, {}),
+                "source_distribution": source_dist_data.get(raw_vendor, {}),
                 "sample_review_ids": metrics.get("sample_review_ids", []),
                 "review_window_start": metrics.get("review_window_start"),
                 "review_window_end": metrics.get("review_window_end"),
+                "confidence_score": _compute_profile_confidence(
+                    metrics["total_reviews"],
+                    source_dist_data.get(raw_vendor, {}),
+                ),
             }
 
             await _upsert_profile(pool, profile)
@@ -723,7 +889,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             )
 
         except Exception:
-            logger.exception("Failed to generate profile for %s", vendor_name)
+            logger.exception("Failed to generate profile for %s", raw_vendor)
             failed += 1
 
     logger.info(
@@ -731,9 +897,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         generated, failed,
     )
 
+    # 3. Capture daily snapshots
+    snapshots_persisted = 0
+    if generated > 0:
+        snapshots_persisted = await _persist_profile_snapshots(pool, generated)
+
     return {
         "_skip_synthesis": "B2B product profiles complete",
         "vendors_processed": generated,
         "failed": failed,
         "total_eligible": len(aggregate_metrics),
+        "snapshots_persisted": snapshots_persisted,
     }

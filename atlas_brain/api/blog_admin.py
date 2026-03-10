@@ -55,6 +55,12 @@ class BlogDraftDetail(BaseModel):
     source_report_date: Optional[str] = None
     created_at: str
     published_at: Optional[str] = None
+    seo_title: Optional[str] = None
+    seo_description: Optional[str] = None
+    target_keyword: Optional[str] = None
+    secondary_keywords: Optional[list] = None
+    faq: Optional[list] = None
+    related_slugs: Optional[list] = None
 
 
 class BlogDraftPatch(BaseModel):
@@ -65,6 +71,12 @@ class BlogDraftPatch(BaseModel):
     tags: Optional[list] = None
     status: Optional[str] = None
     reviewer_notes: Optional[str] = None
+    seo_title: Optional[str] = None
+    seo_description: Optional[str] = None
+    target_keyword: Optional[str] = None
+    secondary_keywords: Optional[list] = None
+    faq: Optional[list] = None
+    related_slugs: Optional[list] = None
 
 
 class ManualGenerateRequest(BaseModel):
@@ -128,6 +140,12 @@ def _row_to_detail(row) -> dict:
         "source_report_date": str(row["source_report_date"]) if row.get("source_report_date") else None,
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
         "published_at": row["published_at"].isoformat() if row.get("published_at") else None,
+        "seo_title": row.get("seo_title"),
+        "seo_description": row.get("seo_description"),
+        "target_keyword": row.get("target_keyword"),
+        "secondary_keywords": _safe_json(row.get("secondary_keywords", [])),
+        "faq": _safe_json(row.get("faq", [])),
+        "related_slugs": _safe_json(row.get("related_slugs", [])),
     }
 
 
@@ -280,6 +298,9 @@ async def update_draft(
         ("content", "content"),
         ("status", "status"),
         ("reviewer_notes", "reviewer_notes"),
+        ("seo_title", "seo_title"),
+        ("seo_description", "seo_description"),
+        ("target_keyword", "target_keyword"),
     ]:
         val = getattr(patch, field_name, None)
         if val is not None:
@@ -287,15 +308,18 @@ async def update_draft(
             args.append(val)
             idx += 1
 
-    if patch.charts is not None:
-        updates.append(f"charts = ${idx}")
-        args.append(json.dumps(patch.charts))
-        idx += 1
-
-    if patch.tags is not None:
-        updates.append(f"tags = ${idx}")
-        args.append(json.dumps(patch.tags))
-        idx += 1
+    for json_field, json_column in [
+        ("charts", "charts"),
+        ("tags", "tags"),
+        ("secondary_keywords", "secondary_keywords"),
+        ("faq", "faq"),
+        ("related_slugs", "related_slugs"),
+    ]:
+        val = getattr(patch, json_field, None)
+        if val is not None:
+            updates.append(f"{json_column} = ${idx}")
+            args.append(json.dumps(val))
+            idx += 1
 
     if not updates:
         raise HTTPException(400, "No fields to update")
@@ -500,6 +524,10 @@ def _write_blog_ts_file(row, ui_path: str, published_at: datetime) -> str | None
 
     data_context = _safe_json(row.get("data_context", {}))
 
+    faq = _safe_json(row.get("faq", []))
+    secondary_keywords = _safe_json(row.get("secondary_keywords", []))
+    related_slugs = _safe_json(row.get("related_slugs", []))
+
     var_name, ts_content = build_post_ts(
         slug=slug,
         title=row["title"],
@@ -511,6 +539,12 @@ def _write_blog_ts_file(row, ui_path: str, published_at: datetime) -> str | None
         charts_json=charts,
         content=row["content"],
         data_context=data_context,
+        seo_title=row.get("seo_title", ""),
+        seo_description=row.get("seo_description", ""),
+        target_keyword=row.get("target_keyword", ""),
+        secondary_keywords=secondary_keywords,
+        faq=faq,
+        related_slugs=related_slugs,
     )
 
     file_path = os.path.join(ui_path, f"{slug}.ts")

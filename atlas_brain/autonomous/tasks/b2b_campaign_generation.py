@@ -19,6 +19,7 @@ from typing import Any
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from .b2b_vendor_briefing import build_gate_url
 from .campaign_audit import log_campaign_event
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_campaign_generation")
@@ -1082,6 +1083,9 @@ async def _generate_vendor_campaigns(
         vendor_blog_urls = await _fetch_blog_posts(
             pool, pipeline="b2b", vendor_name=vendor_name, category=vendor_ctx.get("category"),
         )
+        # Gate URL for vendor-specific report (instead of generic booking page)
+        vendor_gate_url = build_gate_url(vendor_name)
+
         cold_email_content: dict[str, str] | None = None
         for channel in ["email_cold", "email_followup"]:
             payload = {
@@ -1093,7 +1097,7 @@ async def _generate_vendor_campaigns(
                     sender_name=cfg.default_sender_name,
                     sender_title=cfg.default_sender_title,
                     sender_company=cfg.default_sender_company,
-                    booking_url=cfg.default_booking_url,
+                    booking_url=vendor_gate_url,
                     blog_posts=vendor_blog_urls,
                 ),
                 "channel": channel,
@@ -1174,7 +1178,7 @@ async def _generate_vendor_campaigns(
                         sender_name=cfg.default_sender_name,
                         sender_title=cfg.default_sender_title,
                         sender_company=cfg.default_sender_company,
-                        booking_url=cfg.default_booking_url,
+                        booking_url=vendor_gate_url,
                         blog_posts=vendor_blog_urls,
                     ),
                 }
@@ -1430,6 +1434,9 @@ async def _generate_challenger_campaigns(
         challenger_blog_urls = await _fetch_blog_posts(
             pool, pipeline="b2b", vendor_name=challenger_name, category=challenger_ctx.get("category"),
         )
+        # Gate URL for challenger-specific report
+        challenger_gate_url = build_gate_url(challenger_name)
+
         cold_email_content: dict[str, str] | None = None
         for channel in ["email_cold", "email_followup"]:
             payload = {
@@ -1441,7 +1448,7 @@ async def _generate_challenger_campaigns(
                     sender_name=cfg.default_sender_name,
                     sender_title=cfg.default_sender_title,
                     sender_company=cfg.default_sender_company,
-                    booking_url=cfg.default_booking_url,
+                    booking_url=challenger_gate_url,
                     blog_posts=challenger_blog_urls,
                 ),
                 "channel": channel,
@@ -1522,7 +1529,7 @@ async def _generate_challenger_campaigns(
                         sender_name=cfg.default_sender_name,
                         sender_title=cfg.default_sender_title,
                         sender_company=cfg.default_sender_company,
-                        booking_url=cfg.default_booking_url,
+                        booking_url=challenger_gate_url,
                         blog_posts=challenger_blog_urls,
                     ),
                 }

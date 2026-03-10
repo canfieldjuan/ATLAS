@@ -71,9 +71,7 @@ def display_name(source: str | ReviewSource) -> str:
 # Classification sets (frozensets of enum members)
 # ---------------------------------------------------------------------------
 
-ALL_SOURCES: frozenset[ReviewSource] = frozenset(
-    m for m in ReviewSource if m is not ReviewSource.SOFTWARE_ADVICE
-)
+ALL_SOURCES: frozenset[ReviewSource] = frozenset(ReviewSource)
 
 SEARCH_SOURCES: frozenset[ReviewSource] = frozenset({
     ReviewSource.REDDIT,
@@ -92,6 +90,7 @@ SLUG_SOURCES: frozenset[ReviewSource] = frozenset({
     ReviewSource.GARTNER,
     ReviewSource.PEERSPOT,
     ReviewSource.GETAPP,
+    ReviewSource.SOFTWARE_ADVICE,
     ReviewSource.PRODUCTHUNT,
     ReviewSource.TRUSTPILOT,
 })
@@ -126,16 +125,21 @@ EXECUTIVE_SOURCES: frozenset[ReviewSource] = frozenset({
     ReviewSource.G2,
     ReviewSource.CAPTERRA,
     ReviewSource.TRUSTRADIUS,
+    ReviewSource.GARTNER,
+    ReviewSource.PEERSPOT,
 })
 
 DEFAULT_ALLOWLIST_SOURCES: frozenset[ReviewSource] = frozenset({
     ReviewSource.G2,
     ReviewSource.CAPTERRA,
     ReviewSource.TRUSTRADIUS,
+    ReviewSource.GARTNER,
+    ReviewSource.PEERSPOT,
+    ReviewSource.GETAPP,
+    ReviewSource.SOFTWARE_ADVICE,
     ReviewSource.TRUSTPILOT,
     ReviewSource.REDDIT,
     ReviewSource.HACKERNEWS,
-    ReviewSource.QUORA,
 })
 
 

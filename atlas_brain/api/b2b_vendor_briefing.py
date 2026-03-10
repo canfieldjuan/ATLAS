@@ -1,9 +1,10 @@
 """
 REST endpoints for Vendor Intelligence Briefings.
 
-Preview, generate+send, email gate, and list sent briefings.
+Preview, generate+send, email gate, report data, and list sent briefings.
 """
 
+import json
 import logging
 from datetime import datetime
 from uuid import UUID
@@ -67,7 +68,8 @@ def decode_gate_token(token: str) -> dict:
         )
     except pyjwt.ExpiredSignatureError:
         raise HTTPException(status_code=400, detail="This link has expired")
-    except pyjwt.PyJWTError:
+    except pyjwt.PyJWTError as exc:
+        logger.warning("Gate token decode failed: %s (token=%s...)", exc, token[:30])
         raise HTTPException(status_code=400, detail="Invalid link")
 
     if claims.get("type") != "briefing_gate":
@@ -224,6 +226,102 @@ async def briefing_gate(body: GateRequest):
         "status": "ok",
         "vendor_name": vendor_name,
         "message": "Full briefing sent to your email",
+        "report_token": body.token,
+    }
+
+
+@router.get("/report-data")
+async def report_data(token: str = Query(..., min_length=10)):
+    """Public endpoint: return rich intelligence data for a vendor given a valid gate token.
+
+    Called by the churnsignals.co report view page after email gate capture.
+    No auth required -- the JWT token IS the access control.
+    """
+    claims = decode_gate_token(token)
+    vendor_name = claims["vendor_name"]
+
+    pool = _pool_or_503()
+
+    # 1. Base briefing data -- prefer cached from b2b_vendor_briefings (instant)
+    #    over build_vendor_briefing() which hits OpenRouter LLM (~60s).
+    cached_row = await pool.fetchrow(
+        """
+        SELECT briefing_data FROM b2b_vendor_briefings
+        WHERE LOWER(vendor_name) = LOWER($1) AND status = 'sent'
+          AND briefing_data IS NOT NULL
+        ORDER BY created_at DESC LIMIT 1
+        """,
+        vendor_name,
+    )
+    if cached_row and cached_row["briefing_data"]:
+        bd = cached_row["briefing_data"]
+        briefing_data = json.loads(bd) if isinstance(bd, str) else bd
+        logger.info("report-data: using cached briefing for %s", vendor_name)
+    else:
+        logger.info("report-data: no cache, building briefing for %s (slow path)", vendor_name)
+        briefing_data = await build_vendor_briefing(vendor_name)
+
+    if not briefing_data:
+        raise HTTPException(status_code=404, detail=f"No data found for vendor: {vendor_name}")
+
+    # 2. Enrich with b2b_intelligence reports (vendor comparisons, deeper analysis)
+    intelligence_reports = []
+    rows = await pool.fetch(
+        """
+        SELECT report_type, executive_summary, intelligence_data,
+               report_date, created_at
+        FROM b2b_intelligence
+        WHERE LOWER(vendor_filter) = LOWER($1)
+          OR LOWER(category_filter) = LOWER($1)
+        ORDER BY created_at DESC
+        LIMIT 5
+        """,
+        vendor_name,
+    )
+    for row in rows:
+        intel_data = row["intelligence_data"]
+        if isinstance(intel_data, str):
+            try:
+                intel_data = json.loads(intel_data)
+            except (json.JSONDecodeError, TypeError):
+                intel_data = {}
+        intelligence_reports.append({
+            "report_type": row["report_type"],
+            "executive_summary": row["executive_summary"],
+            "data": intel_data,
+            "report_date": str(row["report_date"]) if row["report_date"] else None,
+        })
+
+    # 3. Product profile
+    profile_row = await pool.fetchrow(
+        """
+        SELECT profile_summary, commonly_compared_to, commonly_switched_from,
+               strengths, weaknesses, product_category
+        FROM b2b_product_profiles
+        WHERE LOWER(vendor_name) = LOWER($1)
+        ORDER BY last_computed_at DESC LIMIT 1
+        """,
+        vendor_name,
+    )
+    product_profile = None
+    if profile_row:
+        product_profile = {}
+        for key in profile_row.keys():
+            val = profile_row[key]
+            if isinstance(val, str):
+                try:
+                    parsed = json.loads(val)
+                    product_profile[key] = parsed
+                except (json.JSONDecodeError, TypeError):
+                    product_profile[key] = val
+            else:
+                product_profile[key] = val
+
+    return {
+        "vendor_name": vendor_name,
+        "briefing": briefing_data,
+        "intelligence_reports": intelligence_reports,
+        "product_profile": product_profile,
     }
 
 

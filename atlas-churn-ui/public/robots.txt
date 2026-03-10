@@ -1,0 +1,23 @@
+User-agent: *
+Allow: /blog/
+Allow: /methodology
+Allow: /landing
+Disallow: /api/
+Disallow: /login
+Disallow: /signup
+Disallow: /onboarding
+Disallow: /vendors
+Disallow: /reviews
+Disallow: /reports
+Disallow: /leads
+Disallow: /account
+Disallow: /blog-review
+Disallow: /campaign-review
+Disallow: /prospects
+Disallow: /vendor-targets
+Disallow: /challengers
+Disallow: /affiliates
+Disallow: /forgot-password
+Disallow: /reset-password
+
+Sitemap: https://churnsignals.co/sitemap.xml

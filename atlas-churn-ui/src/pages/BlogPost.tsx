@@ -1,7 +1,8 @@
 import { useParams, Link } from 'react-router-dom'
-import { lazy, Suspense, useMemo, useEffect } from 'react'
+import { lazy, Suspense, useMemo } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import PublicLayout from '../components/PublicLayout'
+import SeoHead from '../components/SeoHead'
 import { POSTS } from '../content/blog'
 import type { ChartSpec, BlogPost as BlogPostType } from '../content/blog'
 
@@ -75,10 +76,68 @@ export default function BlogPost() {
     return renderContentWithCharts(post.content, post.charts)
   }, [post])
 
-  useEffect(() => {
-    document.title = post
-      ? `${post.title} | Churn Signals`
-      : 'Post Not Found | Churn Signals'
+  const seoKeywords = useMemo(() => {
+    if (!post) return undefined
+    const kws: string[] = []
+    if (post.target_keyword) kws.push(post.target_keyword)
+    if (post.secondary_keywords) kws.push(...post.secondary_keywords)
+    return kws.length > 0 ? kws : undefined
+  }, [post])
+
+  const jsonLd = useMemo(() => {
+    if (!post) return undefined
+    const blogPosting: Record<string, unknown> = {
+      '@context': 'https://schema.org',
+      '@type': 'BlogPosting',
+      headline: post.seo_title || post.title,
+      description: post.seo_description || post.description,
+      datePublished: post.date,
+      author: { '@type': 'Organization', name: 'Churn Signals' },
+      publisher: {
+        '@type': 'Organization',
+        name: 'Churn Signals',
+        url: 'https://churnsignals.co',
+      },
+      mainEntityOfPage: {
+        '@type': 'WebPage',
+        '@id': `https://churnsignals.co/blog/${post.slug}`,
+      },
+      keywords: seoKeywords?.join(', ') || '',
+    }
+
+    // For migration guides, extract numbered steps from content for HowTo schema
+    if (post.topic_type === 'migration_guide' && post.content) {
+      const stepRegex = /<li>\s*<strong>([^<]+)<\/strong>/g
+      const steps: { '@type': string; name: string; position: number }[] = []
+      let match
+      let pos = 1
+      while ((match = stepRegex.exec(post.content)) !== null) {
+        steps.push({ '@type': 'HowToStep', name: match[1].replace(/\s*--\s*$/, ''), position: pos++ })
+      }
+      if (steps.length >= 2) {
+        return {
+          '@context': 'https://schema.org',
+          '@graph': [
+            blogPosting,
+            {
+              '@type': 'HowTo',
+              name: post.seo_title || post.title,
+              description: post.seo_description || post.description,
+              step: steps,
+            },
+          ],
+        }
+      }
+    }
+
+    return blogPosting
+  }, [post, seoKeywords])
+
+  const relatedPosts = useMemo(() => {
+    if (!post?.related_slugs) return []
+    return post.related_slugs
+      .map(s => POSTS.find(p => p.slug === s))
+      .filter((p): p is BlogPostType => !!p)
   }, [post])
 
   if (!post) {
@@ -97,6 +156,14 @@ export default function BlogPost() {
 
   return (
     <PublicLayout>
+      <SeoHead
+        title={`${post.seo_title || post.title} | Churn Signals`}
+        description={post.seo_description || post.description}
+        canonical={`https://churnsignals.co/blog/${post.slug}`}
+        keywords={seoKeywords}
+        faq={post.faq}
+        jsonLd={jsonLd}
+      />
       <article className="max-w-3xl mx-auto px-6 pt-12 pb-24">
         {/* Back link */}
         <Link
@@ -173,6 +240,37 @@ export default function BlogPost() {
               Book a 15-Min Intel Briefing
             </a>
           </div>
+        )}
+
+        {/* FAQ section — rendered for SEO (FAQ schema via SeoHead) */}
+        {post.faq && post.faq.length > 0 && (
+          <section className="mt-12 border-t border-slate-700/50 pt-8">
+            <h2 className="text-xl font-bold mb-6">Frequently Asked Questions</h2>
+            {post.faq.map((item, i) => (
+              <div key={i} className="mb-6">
+                <h3 className="font-semibold text-lg text-white">{item.question}</h3>
+                <p className="mt-2 text-slate-400">{item.answer}</p>
+              </div>
+            ))}
+          </section>
+        )}
+
+        {/* Related posts — internal linking for SEO */}
+        {relatedPosts.length > 0 && (
+          <section className="mt-8 border-t border-slate-700/50 pt-8">
+            <h2 className="text-lg font-semibold mb-4">Related Analysis</h2>
+            <div className="grid gap-3">
+              {relatedPosts.map(rp => (
+                <Link
+                  key={rp.slug}
+                  to={`/blog/${rp.slug}`}
+                  className="flex items-center gap-3 p-3 rounded-lg bg-slate-800/40 border border-slate-700/30 hover:border-cyan-500/30 transition-colors"
+                >
+                  <span className="text-sm text-cyan-400 hover:text-cyan-300">{rp.title}</span>
+                </Link>
+              ))}
+            </div>
+          </section>
         )}
       </article>
     </PublicLayout>

@@ -46,6 +46,16 @@ class AntiDetectionClient:
         self._max_retries = max_retries
         # Per-domain cookie jars: solved CAPTCHA cookies persist across requests
         self._cookie_jars: dict[str, dict[str, str]] = {}
+        # CAPTCHA telemetry: accumulates across requests within a scrape session
+        self.captcha_attempts: int = 0
+        self.captcha_types_seen: set[str] = set()
+        self.captcha_solve_ms_total: int = 0
+
+    def reset_captcha_stats(self) -> None:
+        """Reset CAPTCHA telemetry counters for a new scrape session."""
+        self.captcha_attempts = 0
+        self.captcha_types_seen = set()
+        self.captcha_solve_ms_total = 0
 
     def _get_domain_cookies(self, domain: str) -> dict[str, str]:
         """Get the cookie jar for a domain, evicting oldest if over limit."""
@@ -70,6 +80,7 @@ class AntiDetectionClient:
         sticky_session: bool = False,
         prefer_residential: bool = False,
         extra_headers: dict[str, str] | None = None,
+        timeout_seconds: float | None = None,
     ) -> Response:
         """Fetch a URL with anti-detection measures.
 
@@ -80,6 +91,7 @@ class AntiDetectionClient:
             sticky_session: Reuse same proxy across calls for this domain.
             prefer_residential: Use residential proxy (for Cloudflare sites).
             extra_headers: Additional headers merged on top of the browser profile.
+            timeout_seconds: Optional per-request timeout override.
 
         Returns:
             curl_cffi Response object.
@@ -87,6 +99,7 @@ class AntiDetectionClient:
         last_exc: Exception | None = None
         captcha_enabled = is_captcha_enabled_for_domain(domain)
         max_retries = self._max_retries + (1 if captcha_enabled else 0)
+        request_timeout = timeout_seconds or 30
 
         # Profile pinning: once a CAPTCHA is solved, reuse the same profile
         # so the User-Agent matches what was sent to the solver.
@@ -144,7 +157,7 @@ class AntiDetectionClient:
                         headers=headers,
                         cookies=domain_cookies if domain_cookies else None,
                         proxy=effective_proxy,
-                        timeout=30,
+                        timeout=request_timeout,
                         verify=not skip_ssl,
                     )
 
@@ -163,61 +176,77 @@ class AntiDetectionClient:
                         f" ({content_len} bytes)"
                     )
 
-                # 8. Check for CAPTCHA challenges on 403/429 (or 200 with challenge body)
-                if resp.status_code in (403, 429) and captcha_enabled:
+                # 8. Check for CAPTCHA challenges, including challenge HTML
+                # wrapped in gateway or success responses.
+                captcha_type = CaptchaType.NONE
+                content_type = (resp.headers.get("content-type") or "").lower()
+                is_text_response = (
+                    not content_type
+                    or "html" in content_type
+                    or "text" in content_type
+                )
+                if captcha_enabled and is_text_response and resp.text:
                     captcha_type = detect_captcha(resp.text, resp.status_code)
 
-                    if captcha_type != CaptchaType.NONE:
-                        solver = get_captcha_solver(domain)
-                        if solver:
-                            logger.info(
-                                "CAPTCHA detected on %s (%s), solving attempt %d/%d",
-                                domain, captcha_type.value,
-                                attempt + 1, max_retries + 1,
+                if captcha_type != CaptchaType.NONE:
+                    logger.warning(
+                        "Challenge page detected on %s with HTTP %s (%s)",
+                        domain, resp.status_code, captcha_type.value,
+                    )
+                    self.captcha_attempts += 1
+                    self.captcha_types_seen.add(captcha_type.value)
+                    solver = get_captcha_solver(domain)
+                    if solver:
+                        logger.info(
+                            "CAPTCHA detected on %s (%s), solving attempt %d/%d",
+                            domain, captcha_type.value,
+                            attempt + 1, max_retries + 1,
+                        )
+                        try:
+                            if captcha_type == CaptchaType.DATADOME:
+                                solve_proxy = proxy.url if proxy else None
+                            else:
+                                captcha_proxy = get_captcha_proxy()
+                                solve_proxy = captcha_proxy or (proxy.url if proxy else None)
+                            solution = await solver.solve(
+                                captcha_type=captcha_type,
+                                page_url=url,
+                                page_html=resp.text,
+                                user_agent=profile.user_agent,
+                                proxy_url=solve_proxy,
                             )
-                            try:
-                                # DataDome: pass the request proxy so solver uses same IP
-                                # (works when proxy sessions are source-IP-independent).
-                                # Cloudflare: use a dedicated sticky CAPTCHA proxy because
-                                # cf_clearance is IP-bound.
-                                if captcha_type == CaptchaType.DATADOME:
-                                    solve_proxy = proxy.url if proxy else None
-                                else:
-                                    captcha_proxy = get_captcha_proxy()
-                                    solve_proxy = captcha_proxy or (proxy.url if proxy else None)
-                                solution = await solver.solve(
-                                    captcha_type=captcha_type,
-                                    page_url=url,
-                                    page_html=resp.text,
-                                    user_agent=profile.user_agent,
-                                    proxy_url=solve_proxy,
-                                )
-                                # Store solved cookies and pin profile with matching TLS fingerprint
-                                self._get_domain_cookies(domain).update(solution.cookies)
-                                if solution.user_agent:
-                                    # Solver used a different UA -- match impersonate to it
-                                    pinned_profile = self._profiles.match_profile(solution.user_agent)
-                                    override_ua = solution.user_agent
-                                else:
-                                    pinned_profile = profile
-                                # Pin proxy so retry uses same IP as the solve
-                                if solution.sticky_proxy:
-                                    override_proxy = solution.sticky_proxy
-                                logger.info(
-                                    "CAPTCHA solved for %s in %dms, retrying (ua_override=%s, proxy_override=%s)",
-                                    domain, solution.solve_time_ms,
-                                    bool(solution.user_agent), bool(override_proxy),
-                                )
-                                # Successful solve always gets one more attempt.
-                                # Don't increment attempt -- the solve itself isn't a retry.
-                                last_exc = None
-                                continue
-                            except Exception as solve_exc:
-                                logger.warning(
-                                    "CAPTCHA solve failed for %s: %s",
-                                    domain, solve_exc,
-                                )
-                                # Fall through to normal 403 handling
+                            self.captcha_solve_ms_total += solution.solve_time_ms
+                            self._get_domain_cookies(domain).update(solution.cookies)
+                            if solution.user_agent:
+                                pinned_profile = self._profiles.match_profile(solution.user_agent)
+                                override_ua = solution.user_agent
+                            else:
+                                pinned_profile = profile
+                            if solution.sticky_proxy:
+                                override_proxy = solution.sticky_proxy
+                            logger.info(
+                                "CAPTCHA solved for %s in %dms, retrying (ua_override=%s, proxy_override=%s)",
+                                domain, solution.solve_time_ms,
+                                bool(solution.user_agent), bool(override_proxy),
+                            )
+                            last_exc = None
+                            continue
+                        except Exception as solve_exc:
+                            logger.warning(
+                                "CAPTCHA solve failed for %s: %s",
+                                domain, solve_exc,
+                            )
+                    else:
+                        logger.warning(
+                            "CAPTCHA detected on %s but no solver is configured for this domain",
+                            domain,
+                        )
+
+                    if attempt < max_retries:
+                        self._proxy.clear_sticky(domain)
+                        attempt += 1
+                        await asyncio.sleep(random.uniform(2, 5))
+                        continue
 
                 # Log non-200 responses
                 if resp.status_code == 403:

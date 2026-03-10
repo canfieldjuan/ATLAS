@@ -20,7 +20,7 @@ from typing import Any
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
-from ...services.scraping.sources import API_SOURCES, parse_source_allowlist
+from ...services.scraping.sources import parse_source_allowlist
 from ...services.vendor_registry import resolve_vendor_name
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_scrape_intake")
@@ -111,7 +111,8 @@ ON CONFLICT (dedup_key) DO NOTHING
 
 _TARGET_QUERY = """
 SELECT id, source, vendor_name, product_name, product_slug,
-       product_category, max_pages, metadata
+       product_category, max_pages, metadata,
+       last_scraped_at, last_scrape_status
 FROM b2b_scrape_targets
 WHERE enabled = true
     AND source = ANY($3::text[])
@@ -145,13 +146,33 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not allowed_sources:
         allowed_sources = list(get_all_parsers().keys())
 
-    # Fetch due targets
-    targets = await pool.fetch(
+    # Fetch due targets.
+    # Use minimum per-source cooldown as SQL floor, then post-filter for
+    # sources with longer cooldown (Sprint 2: per-source orchestration).
+    from ...services.scraping.capabilities import get_all_capabilities, get_capability
+
+    all_caps = get_all_capabilities()
+    min_cooldown_hours = min(
+        (c.cooldown_minutes / 60 for c in all_caps.values()),
+        default=cfg.blocked_cooldown_hours,
+    )
+    raw_targets = await pool.fetch(
         _TARGET_QUERY,
-        cfg.blocked_cooldown_hours,
+        max(1, int(min_cooldown_hours)),
         cfg.max_targets_per_run,
         allowed_sources,
     )
+
+    # Post-filter: apply per-source cooldown for blocked targets
+    targets = []
+    now = datetime.now(timezone.utc)
+    for row in raw_targets:
+        if row.get("last_scrape_status") == "blocked" and row.get("last_scraped_at"):
+            cap = get_capability(row["source"])
+            cooldown_min = cap.cooldown_minutes if cap else cfg.blocked_cooldown_hours * 60
+            if (now - row["last_scraped_at"]).total_seconds() < cooldown_min * 60:
+                continue
+        targets.append(row)
 
     if not targets:
         return {"_skip_synthesis": True, "targets_due": 0}
@@ -162,20 +183,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     results_lock = asyncio.Lock()
 
     # Group targets by source for concurrent scraping.
-    # Each source gets its own semaphore to respect rate limits:
-    #   - API sources (youtube, stackoverflow, producthunt, hackernews, github, rss):
-    #     high concurrency — APIs handle it, rate limiter throttles per-domain
-    #   - Web scrape sources (g2, capterra, trustradius, getapp, gartner, peerspot,
-    #     trustpilot, quora, reddit): lower concurrency to avoid proxy overload
-    _API_SOURCES = API_SOURCES
-    _WEB_CONCURRENCY = 4   # Concurrent web scrape targets
-    _API_CONCURRENCY = 10  # Concurrent API targets
+    # Per-source concurrency read from capability profiles (Sprint 2).
+    _DEFAULT_CONCURRENCY = 4
 
     source_sems: dict[str, asyncio.Semaphore] = {}
     for row in targets:
         src = row["source"]
         if src not in source_sems:
-            limit = _API_CONCURRENCY if src in _API_SOURCES else _WEB_CONCURRENCY
+            cap = get_capability(src)
+            limit = cap.max_concurrency if cap else _DEFAULT_CONCURRENCY
             source_sems[src] = asyncio.Semaphore(limit)
 
     async def _scrape_one(row):
@@ -209,13 +225,19 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         async with sem:
             started_at = time.monotonic()
             batch_id = f"scrape_{target.source}_{target.product_slug}_{int(time.time())}"
+            client.reset_captcha_stats()
 
             try:
                 result = await parser.scrape(target, client)
             except Exception as exc:
                 logger.error("Scrape failed for %s/%s: %s", target.source, target.vendor_name, exc)
                 duration_ms = int((time.monotonic() - started_at) * 1000)
-                await _log_scrape(pool, target, "failed", 0, 0, 0, [str(exc)], duration_ms, parser)
+                await _log_scrape(
+                    pool, target, "failed", 0, 0, 0, [str(exc)], duration_ms, parser,
+                    captcha_attempts=client.captcha_attempts,
+                    captcha_types=sorted(client.captcha_types_seen) if client.captcha_types_seen else None,
+                    captcha_solve_ms=client.captcha_solve_ms_total,
+                )
                 await pool.execute(
                     """
                     UPDATE b2b_scrape_targets
@@ -295,6 +317,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 pool, target, result.status,
                 len(result.reviews) + filtered_count, inserted, result.pages_scraped,
                 scrape_errors, duration_ms, parser,
+                captcha_attempts=client.captcha_attempts,
+                captcha_types=sorted(client.captcha_types_seen) if client.captcha_types_seen else None,
+                captcha_solve_ms=client.captcha_solve_ms_total,
             )
             await pool.execute(
                 """
@@ -389,15 +414,15 @@ async def _insert_reviews(pool, reviews: list[dict], batch_id: str, parser_versi
 
         reviewed_at_ts = _parse_date(r.get("reviewed_at"))
 
+        # Resolve to canonical vendor name BEFORE dedup key so both use canonical form
+        canonical_vendor = await resolve_vendor_name(r["vendor_name"])
+
         dedup_key = _make_dedup_key(
-            r["source"], r["vendor_name"],
+            r["source"], canonical_vendor,
             r.get("source_review_id"),
             r.get("reviewer_name"),
             r.get("reviewed_at"),
         )
-
-        # Resolve to canonical vendor name (dedup key uses raw value above)
-        canonical_vendor = await resolve_vendor_name(r["vendor_name"])
 
         rows.append((
             dedup_key,
@@ -448,17 +473,22 @@ async def _insert_reviews(pool, reviews: list[dict], batch_id: str, parser_versi
 async def _log_scrape(
     pool, target, status: str, reviews_found: int, reviews_inserted: int,
     pages_scraped: int, errors: list[str], duration_ms: int, parser,
+    *, captcha_attempts: int = 0, captcha_types: list[str] | None = None,
+    captcha_solve_ms: int = 0,
 ) -> None:
     """Insert a record into b2b_scrape_log."""
     proxy_type = "residential" if parser.prefer_residential else "none"
     pv = getattr(parser, 'version', None)
+    # Classify block type from errors
+    block_type = _classify_block_type(status, errors)
     try:
         await pool.execute(
             """
             INSERT INTO b2b_scrape_log
                 (target_id, source, status, reviews_found, reviews_inserted,
-                 pages_scraped, errors, duration_ms, proxy_type, parser_version)
-            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)
+                 pages_scraped, errors, duration_ms, proxy_type, parser_version,
+                 captcha_attempts, captcha_types, captcha_solve_ms, block_type)
+            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14)
             """,
             _uuid.UUID(target.id),
             target.source,
@@ -470,6 +500,28 @@ async def _log_scrape(
             duration_ms,
             proxy_type,
             pv,
+            captcha_attempts,
+            captcha_types or [],
+            captcha_solve_ms if captcha_solve_ms > 0 else None,
+            block_type,
         )
     except Exception:
         logger.warning("Failed to log scrape result", exc_info=True)
+
+
+def _classify_block_type(status: str, errors: list[str]) -> str | None:
+    """Classify the block type from scrape status and error messages."""
+    if status not in ("blocked", "failed"):
+        return None
+    error_text = " ".join(errors).lower()
+    if "captcha" in error_text or "challenge" in error_text:
+        return "captcha"
+    if "403" in error_text and ("ban" in error_text or "forbidden" in error_text):
+        return "ip_ban"
+    if "429" in error_text or "rate" in error_text:
+        return "rate_limit"
+    if "403" in error_text or "blocked" in error_text:
+        return "waf"
+    if status == "blocked":
+        return "unknown"
+    return None

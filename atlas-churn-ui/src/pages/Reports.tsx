@@ -1,13 +1,13 @@
 /* eslint-disable react-refresh/only-export-components */
 import { useNavigate } from 'react-router-dom'
-import { FileBarChart, RefreshCw } from 'lucide-react'
+import { FileBarChart, RefreshCw, Search, X, Loader2 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PageError } from '../components/ErrorBoundary'
 import UpgradeGate from '../components/UpgradeGate'
 import useApiData from '../hooks/useApiData'
 import { usePlanGate } from '../hooks/usePlanGate'
 import { fetchReports, generateAccountComparisonReport, generateAccountDeepDiveReport, generateVendorComparisonReport } from '../api/client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { Report } from '../types'
 
 export const REPORT_TYPE_COLORS: Record<string, string> = {
@@ -42,6 +42,8 @@ export default function Reports() {
   const navigate = useNavigate()
   const { canAccessReports } = usePlanGate()
   const [typeFilter, setTypeFilter] = useState('')
+  const [vendorSearch, setVendorSearch] = useState('')
+  const [debouncedVendor, setDebouncedVendor] = useState('')
   const [primaryVendor, setPrimaryVendor] = useState('')
   const [comparisonVendor, setComparisonVendor] = useState('')
   const [primaryCompany, setPrimaryCompany] = useState('')
@@ -51,12 +53,25 @@ export default function Reports() {
   const [creatingAccountComparison, setCreatingAccountComparison] = useState(false)
   const [creatingAccountDeepDive, setCreatingAccountDeepDive] = useState(false)
 
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedVendor(vendorSearch), 300)
+    return () => clearTimeout(timer)
+  }, [vendorSearch])
+
   const { data, loading, error, refresh, refreshing } = useApiData(
-    () => fetchReports({ report_type: typeFilter || undefined, limit: 50 }),
-    [typeFilter],
+    () => fetchReports({ report_type: typeFilter || undefined, vendor_filter: debouncedVendor || undefined, limit: 50 }),
+    [typeFilter, debouncedVendor],
   )
 
   const reports = data?.reports ?? []
+  const hasFilters = typeFilter !== '' || vendorSearch !== ''
+  const debouncePending = vendorSearch !== debouncedVendor
+
+  function clearFilters() {
+    setTypeFilter('')
+    setVendorSearch('')
+    setDebouncedVendor('')
+  }
 
   async function handleCreateComparison() {
     if (!primaryVendor.trim() || !comparisonVendor.trim()) {
@@ -146,9 +161,30 @@ export default function Reports() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-white">Intelligence Reports</h1>
-        <div className="flex items-center gap-3">
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-bold text-white">Intelligence Reports</h1>
+          <button
+            onClick={refresh}
+            disabled={refreshing}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
+            Refresh
+          </button>
+        </div>
+
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 flex-wrap">
+          <div className="relative flex-1 max-w-xs w-full">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
+            <input
+              type="text"
+              placeholder="Filter by vendor..."
+              value={vendorSearch}
+              onChange={(e) => setVendorSearch(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+            />
+          </div>
           <select
             value={typeFilter}
             onChange={(e) => setTypeFilter(e.target.value)}
@@ -166,14 +202,26 @@ export default function Reports() {
             <option value="vendor_retention">Vendor Retention</option>
             <option value="challenger_intel">Challenger Intel</option>
           </select>
-          <button
-            onClick={refresh}
-            disabled={refreshing}
-            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
-          >
-            <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
-            Refresh
-          </button>
+          {hasFilters && (
+            <button
+              onClick={clearFilters}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors"
+            >
+              <X className="h-3 w-3" />
+              Clear filters
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2 text-sm text-slate-400">
+          {debouncePending || loading ? (
+            <>
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Searching...
+            </>
+          ) : (
+            <span>{reports.length} report{reports.length !== 1 ? 's' : ''} found</span>
+          )}
         </div>
       </div>
 
@@ -268,12 +316,12 @@ export default function Reports() {
         <div className="flex flex-col items-center justify-center py-24 text-center">
           <FileBarChart className="h-10 w-10 text-slate-600 mb-4" />
           <p className="text-slate-500 mb-4">No reports found</p>
-          {typeFilter && (
+          {hasFilters && (
             <button
-              onClick={() => setTypeFilter('')}
+              onClick={clearFilters}
               className="px-3 py-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 text-sm font-medium hover:bg-cyan-500/20 transition-colors"
             >
-              Clear filter
+              Clear filters
             </button>
           )}
         </div>

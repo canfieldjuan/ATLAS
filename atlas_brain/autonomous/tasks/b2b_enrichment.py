@@ -155,6 +155,54 @@ async def _enrich_rows(rows, cfg, pool) -> dict[str, Any]:
     }
 
 
+async def _queue_version_upgrades(pool) -> int:
+    """Reset enrichment_status to 'pending' for reviews scraped with outdated parser versions.
+
+    Compares each review's parser_version against the currently registered
+    parser version.  Reviews with older versions are re-queued for enrichment.
+    Returns the number of reviews re-queued.
+    """
+    try:
+        from ...services.scraping.parsers import get_all_parsers
+
+        parsers = get_all_parsers()
+        if not parsers:
+            return 0
+
+        total_requeued = 0
+        for source_name, parser in parsers.items():
+            current_version = getattr(parser, "version", None)
+            if not current_version:
+                continue
+
+            # Find enriched reviews with an older parser version
+            count = await pool.fetchval(
+                """
+                UPDATE b2b_reviews
+                SET enrichment_status = 'pending',
+                    enrichment_attempts = 0
+                WHERE source = $1
+                  AND parser_version IS NOT NULL
+                  AND parser_version != $2
+                  AND enrichment_status IN ('enriched', 'no_signal')
+                RETURNING COUNT(*)
+                """,
+                source_name,
+                current_version,
+            )
+            if count and count > 0:
+                logger.info(
+                    "Re-queued %d %s reviews for re-enrichment (parser %s -> %s)",
+                    count, source_name, "old", current_version,
+                )
+                total_requeued += count
+
+        return total_requeued
+    except Exception:
+        logger.debug("Version upgrade check skipped", exc_info=True)
+        return 0
+
+
 async def run(task: ScheduledTask) -> dict[str, Any]:
     """Autonomous task handler: enrich pending B2B reviews (fallback for anything missed)."""
     cfg = settings.b2b_churn
@@ -164,6 +212,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     pool = get_db_pool()
     if not pool.is_initialized:
         return {"_skip_synthesis": "DB not ready"}
+
+    # Auto re-process reviews scraped with outdated parser versions
+    requeued = await _queue_version_upgrades(pool)
 
     max_batch = min(cfg.enrichment_max_per_batch, 500)
     max_attempts = cfg.enrichment_max_attempts
@@ -220,13 +271,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if rounds == 0:
         return {"_skip_synthesis": "No B2B reviews to enrich"}
 
-    return {
+    result = {
         "enriched": total_enriched,
         "failed": total_failed,
         "no_signal": total_no_signal,
         "rounds": rounds,
         "_skip_synthesis": "B2B enrichment complete",
     }
+    if requeued:
+        result["version_upgrade_requeued"] = requeued
+    return result
 
 
 _MIN_REVIEW_TEXT_LENGTH = 80  # Skip LLM calls for reviews shorter than this

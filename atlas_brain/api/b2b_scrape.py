@@ -472,20 +472,41 @@ async def _write_scrape_log(
     pool, target_id: UUID, source: str, status: str,
     reviews_found: int, reviews_inserted: int, pages_scraped: int,
     errors: list[str], duration_ms: int, parser,
+    *, captcha_attempts: int = 0, captcha_types: list[str] | None = None,
+    captcha_solve_ms: int = 0,
 ) -> None:
     """Write a record to b2b_scrape_log for observability."""
     proxy_type = "residential" if parser.prefer_residential else "none"
     pv = getattr(parser, 'version', None)
+    # Classify block type from errors
+    block_type = None
+    if status in ("blocked", "failed"):
+        error_text = " ".join(errors).lower()
+        if "captcha" in error_text or "challenge" in error_text:
+            block_type = "captcha"
+        elif "403" in error_text and ("ban" in error_text or "forbidden" in error_text):
+            block_type = "ip_ban"
+        elif "429" in error_text or "rate" in error_text:
+            block_type = "rate_limit"
+        elif "403" in error_text or "blocked" in error_text:
+            block_type = "waf"
+        elif status == "blocked":
+            block_type = "unknown"
     try:
         await pool.execute(
             """
             INSERT INTO b2b_scrape_log
                 (target_id, source, status, reviews_found, reviews_inserted,
-                 pages_scraped, errors, duration_ms, proxy_type, parser_version)
-            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)
+                 pages_scraped, errors, duration_ms, proxy_type, parser_version,
+                 captcha_attempts, captcha_types, captcha_solve_ms, block_type)
+            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14)
             """,
             target_id, source, status, reviews_found, reviews_inserted,
             pages_scraped, json.dumps(errors), duration_ms, proxy_type, pv,
+            captcha_attempts,
+            captcha_types or [],
+            captcha_solve_ms if captcha_solve_ms > 0 else None,
+            block_type,
         )
     except Exception:
         logger.warning("Failed to write scrape log", exc_info=True)

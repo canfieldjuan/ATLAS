@@ -927,12 +927,16 @@ async def review_queue_summary():
 @router.get("/sequences")
 async def list_sequences(
     status: str = Query(default="all", description="Filter: active, paused, completed, replied, bounced, unsubscribed, all"),
+    outcome: str = Query(default="all", description="Filter: pending, meeting_booked, deal_opened, deal_won, deal_lost, no_opportunity, disqualified, all"),
     company: str = Query(default="", description="Filter by company name (case-insensitive substring)"),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ):
     """List campaign sequences with optional filters."""
     pool = _pool_or_503()
+
+    if outcome != "all" and outcome not in VALID_OUTCOMES:
+        raise HTTPException(status_code=400, detail=f"Invalid outcome. Must be one of: {sorted(VALID_OUTCOMES)}")
 
     conditions = []
     params: list = []
@@ -941,6 +945,11 @@ async def list_sequences(
     if status != "all":
         conditions.append(f"cs.status = ${param_idx}")
         params.append(status)
+        param_idx += 1
+
+    if outcome != "all":
+        conditions.append(f"cs.outcome = ${param_idx}")
+        params.append(outcome)
         param_idx += 1
 
     if company:

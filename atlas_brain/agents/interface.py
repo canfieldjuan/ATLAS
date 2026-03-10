@@ -72,7 +72,11 @@ class LangGraphAgentAdapter:
         runtime_context: Optional[dict[str, Any]] = None,
     ) -> AgentResult:
         """Process input through LangGraph agent."""
-        from ..services.tracing import tracer
+        from ..services.tracing import (
+            build_business_trace_context,
+            build_reasoning_trace_context,
+            tracer,
+        )
 
         runtime_ctx = runtime_context or {}
 
@@ -192,6 +196,36 @@ class LangGraphAgentAdapter:
             tools_executed = result.get("tools_executed")
             if tools_executed:
                 trace_meta["tools_executed"] = tools_executed
+            business_context = build_business_trace_context(
+                account_id=runtime_ctx.get("account_id"),
+                product=runtime_ctx.get("product"),
+                workflow=runtime_ctx.get("workflow_type"),
+                report_type=runtime_ctx.get("report_type"),
+                event_type=runtime_ctx.get("event_type"),
+                crm_provider=runtime_ctx.get("crm_provider"),
+                vendor_name=runtime_ctx.get("vendor_name") or runtime_ctx.get("vendor_filter"),
+                company_name=runtime_ctx.get("company_name"),
+                entity_type=runtime_ctx.get("entity_type"),
+                entity_id=runtime_ctx.get("entity_id"),
+            )
+            if business_context:
+                trace_meta["business"] = business_context
+            reasoning_context = build_reasoning_trace_context(
+                decision={
+                    "action_type": agent_result.action_type,
+                    "intent": trace_meta.get("intent"),
+                    "tools_executed": tools_executed or [],
+                    "awaiting_user_input": agent_result.metadata.get("awaiting_user_input"),
+                },
+                evidence={
+                    "rag_graph_used": rag_graph_used,
+                    "rag_nodes_retrieved": rag_nodes_retrieved,
+                    "rag_chunks_used": rag_chunks_used,
+                    "history_turns": llm_meta.get("history_count", 0),
+                },
+            )
+            if reasoning_context:
+                trace_meta["reasoning"] = reasoning_context
 
             # Emit child spans for per-phase timings (classify/think/act/respond/etc.).
             self._emit_timing_child_spans(

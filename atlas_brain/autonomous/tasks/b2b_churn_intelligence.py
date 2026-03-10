@@ -22,6 +22,11 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from ...config import settings
+from ...services.tracing import (
+    build_business_trace_context,
+    build_reasoning_trace_context,
+    tracer,
+)
 from ...services.company_normalization import normalize_company_name
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
@@ -99,6 +104,16 @@ def _eligible_review_filters(*, window_param: int | None = 1, source_param: int 
         f"NOT EXISTS (SELECT 1 FROM data_corrections dc"
         f" WHERE dc.entity_type = 'review' AND dc.entity_id = {p}id"
         f" AND dc.correction_type = 'suppress' AND dc.status = 'applied')"
+    )
+    # Exclude reviews from suppressed sources (global or vendor-scoped)
+    parts.append(
+        f"NOT EXISTS (SELECT 1 FROM data_corrections dc2"
+        f" WHERE dc2.entity_type = 'source'"
+        f" AND dc2.correction_type = 'suppress_source'"
+        f" AND dc2.status = 'applied'"
+        f" AND LOWER(dc2.metadata->>'source_name') = LOWER({p}source)"
+        f" AND (dc2.field_name IS NULL OR LOWER(dc2.field_name) = LOWER({p}vendor_name))"
+        f")"
     )
     return "\n          AND ".join(parts)
 
@@ -1119,6 +1134,8 @@ async def _persist_vendor_snapshots(
     competitor_lookup: dict[str, list[dict]],
     high_intent: list[dict[str, Any]],
     today: date,
+    price_lookup: dict[str, float] | None = None,
+    dm_lookup: dict[str, float] | None = None,
 ) -> int:
     """Persist daily vendor health snapshots and clean up old data."""
     cfg = settings.b2b_churn
@@ -1157,6 +1174,18 @@ async def _persist_vendor_snapshots(
         comps = competitor_lookup.get(vendor, [])
         top_competitor = comps[0]["name"] if comps else None
 
+        _dm_rate = (dm_lookup or {}).get(vendor)
+        _price_rate = (price_lookup or {}).get(vendor)
+        _disp_cnt = disp_counts.get(vendor, 0)
+        _pressure = _compute_churn_pressure_score(
+            churn_density=churn_density,
+            avg_urgency=avg_urgency,
+            dm_churn_rate=_dm_rate or 0.0,
+            displacement_mention_count=_disp_cnt,
+            price_complaint_rate=_price_rate or 0.0,
+            total_reviews=total_reviews,
+        )
+
         try:
             await pool.execute(
                 """
@@ -1164,8 +1193,10 @@ async def _persist_vendor_snapshots(
                     vendor_name, snapshot_date, total_reviews, churn_intent,
                     churn_density, avg_urgency, positive_review_pct, recommend_ratio,
                     top_pain, top_competitor, pain_count, competitor_count,
-                    displacement_edge_count, high_intent_company_count
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                    displacement_edge_count, high_intent_company_count,
+                    pressure_score, dm_churn_rate, price_complaint_rate
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                          $15, $16, $17)
                 ON CONFLICT (vendor_name, snapshot_date) DO UPDATE SET
                     total_reviews = EXCLUDED.total_reviews,
                     churn_intent = EXCLUDED.churn_intent,
@@ -1178,7 +1209,10 @@ async def _persist_vendor_snapshots(
                     pain_count = EXCLUDED.pain_count,
                     competitor_count = EXCLUDED.competitor_count,
                     displacement_edge_count = EXCLUDED.displacement_edge_count,
-                    high_intent_company_count = EXCLUDED.high_intent_company_count
+                    high_intent_company_count = EXCLUDED.high_intent_company_count,
+                    pressure_score = EXCLUDED.pressure_score,
+                    dm_churn_rate = EXCLUDED.dm_churn_rate,
+                    price_complaint_rate = EXCLUDED.price_complaint_rate
                 """,
                 vendor, today, total_reviews, churn_intent,
                 churn_density, avg_urgency,
@@ -1186,8 +1220,9 @@ async def _persist_vendor_snapshots(
                 recommend_ratio,
                 top_pain, top_competitor,
                 len(pains), len(comps),
-                disp_counts.get(vendor, 0),
+                _disp_cnt,
                 hi_counts.get(vendor, 0),
+                _pressure, _dm_rate, _price_rate,
             )
             persisted += 1
         except Exception:
@@ -1212,6 +1247,8 @@ async def _detect_change_events(
     pain_lookup: dict[str, list[dict]],
     competitor_lookup: dict[str, list[dict]],
     today: date,
+    price_lookup: dict[str, float] | None = None,
+    dm_lookup: dict[str, float] | None = None,
 ) -> int:
     """Compare today's vendor data against prior snapshots and log change events."""
     detected = 0
@@ -1275,6 +1312,28 @@ async def _detect_change_events(
             if vol_pct >= 25.0:
                 events.append(("review_volume_spike", f"Review count jumped from {prior_tr} to {total_reviews} (+{vol_pct:.0f}%)", float(prior_tr), float(total_reviews), vol_pct))
 
+        # Pressure score spike (threshold: 10.0 points on 0-100 scale)
+        prior_ps = float(prior["pressure_score"] or 0)
+        _dm_rate = (dm_lookup or {}).get(vendor, 0.0)
+        _price_rate = (price_lookup or {}).get(vendor, 0.0)
+        cur_ps = _compute_churn_pressure_score(
+            churn_density=churn_density,
+            avg_urgency=avg_urgency,
+            dm_churn_rate=_dm_rate,
+            displacement_mention_count=0,  # not available here, use snapshot delta
+            price_complaint_rate=_price_rate,
+            total_reviews=total_reviews,
+        )
+        ps_delta = cur_ps - prior_ps
+        if ps_delta >= 10.0:
+            events.append(("pressure_score_spike", f"Pressure score rose from {prior_ps} to {cur_ps}", prior_ps, cur_ps, ps_delta))
+
+        # Decision-maker churn rate spike (threshold: 0.15 = 15 pp)
+        prior_dm = float(prior["dm_churn_rate"] or 0)
+        dm_delta = _dm_rate - prior_dm
+        if dm_delta >= 0.15:
+            events.append(("dm_churn_spike", f"DM churn rate rose from {prior_dm:.2%} to {_dm_rate:.2%}", prior_dm, _dm_rate, dm_delta))
+
         # New pain category
         prior_pain = prior["top_pain"]
         if top_pain and prior_pain and top_pain != prior_pain:
@@ -1316,6 +1375,62 @@ async def _detect_change_events(
             except Exception:
                 logger.debug("Webhook dispatch skipped for change events")
 
+    # Cross-vendor correlation: detect concurrent shifts
+    detected += await _detect_concurrent_shifts(pool, today)
+
+    return detected
+
+
+async def _detect_concurrent_shifts(pool, today: date) -> int:
+    """Detect dates where 3+ vendors had the same event type -- signals market trend."""
+    detected = 0
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT event_type, COUNT(DISTINCT vendor_name) AS vendor_count,
+                   ARRAY_AGG(DISTINCT vendor_name ORDER BY vendor_name) AS vendors,
+                   AVG(delta) AS avg_delta
+            FROM b2b_change_events
+            WHERE event_date = $1
+            GROUP BY event_type
+            HAVING COUNT(DISTINCT vendor_name) >= 3
+            """,
+            today,
+        )
+        for row in rows:
+            event_type = row["event_type"]
+            vendor_count = row["vendor_count"]
+            vendors = row["vendors"]
+            avg_delta = round(float(row["avg_delta"] or 0), 2)
+            vendor_list = ", ".join(vendors[:5])
+            suffix = f" +{vendor_count - 5} more" if vendor_count > 5 else ""
+            description = (
+                f"Concurrent {event_type} across {vendor_count} vendors: "
+                f"{vendor_list}{suffix} (avg delta: {avg_delta})"
+            )
+            try:
+                await pool.execute(
+                    """
+                    INSERT INTO b2b_change_events
+                        (vendor_name, event_date, event_type, description, delta, metadata)
+                    VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+                    """,
+                    "__market__",
+                    today,
+                    "concurrent_shift",
+                    description,
+                    avg_delta,
+                    json.dumps({
+                        "original_event_type": event_type,
+                        "vendor_count": vendor_count,
+                        "vendors": vendors,
+                    }),
+                )
+                detected += 1
+            except Exception:
+                logger.debug("Failed to persist concurrent_shift for %s", event_type)
+    except Exception:
+        logger.debug("Concurrent shift detection skipped", exc_info=True)
     return detected
 
 
@@ -1342,6 +1457,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     tl_limit = cfg.timeline_signals_limit
     prior_limit = cfg.prior_reports_limit
     today = date.today()
+    span = tracer.start_span(
+        span_name="b2b.churn_intelligence.run",
+        operation_type="intelligence",
+        metadata={
+            "business": build_business_trace_context(
+                workflow="b2b_churn_intelligence",
+                report_type="weekly_churn_feed",
+            ),
+        },
+    )
 
     # Gather all 17 data sources + data_context + provenance in parallel
     (
@@ -1435,6 +1560,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     # Check if there's enough data
     if not vendor_scores and not high_intent:
+        tracer.end_span(span, status="completed", output_data={"skipped": "no enriched reviews"})
         return {"_skip_synthesis": "No enriched B2B reviews to analyze"}
 
     # Fetch prior reports for trend comparison
@@ -1664,6 +1790,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         executive_summary, data_density, status, llm_model,
                         source_review_count, source_distribution
                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    ON CONFLICT (report_date, report_type, LOWER(COALESCE(vendor_filter,'')), LOWER(COALESCE(category_filter,'')), COALESCE(account_id, '00000000-0000-0000-0000-000000000000'::uuid))
+                    DO UPDATE SET intelligence_data = EXCLUDED.intelligence_data,
+                                  executive_summary = EXCLUDED.executive_summary,
+                                  data_density = EXCLUDED.data_density,
+                                  source_review_count = EXCLUDED.source_review_count,
+                                  source_distribution = EXCLUDED.source_distribution,
+                                  created_at = now()
                     RETURNING id
                     """,
                     today,
@@ -1696,6 +1829,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     executive_summary, data_density, status, llm_model,
                     source_review_count, source_distribution
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                ON CONFLICT (report_date, report_type, LOWER(COALESCE(vendor_filter,'')), LOWER(COALESCE(category_filter,'')), COALESCE(account_id, '00000000-0000-0000-0000-000000000000'::uuid))
+                DO UPDATE SET intelligence_data = EXCLUDED.intelligence_data,
+                              executive_summary = EXCLUDED.executive_summary,
+                              data_density = EXCLUDED.data_density,
+                              source_review_count = EXCLUDED.source_review_count,
+                              source_distribution = EXCLUDED.source_distribution,
+                              created_at = now()
                 """,
                 today,
                 "exploratory_overview",
@@ -1778,14 +1918,22 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         review_id = _uuid.UUID(hi["review_id"])
                     except (ValueError, TypeError):
                         pass
+                # Confidence for company signal: source quality + data completeness
+                _src = hi.get("source", "")
+                _src_dist = {_src: 1} if _src else {}
+                _cs_conf = _compute_evidence_confidence(1, _src_dist)
+                # Boost for richer data (decision_maker, buying_stage, seat_count)
+                _filled = sum(1 for f in (hi.get("decision_maker"), hi.get("buying_stage"), hi.get("seat_count")) if f is not None)
+                _cs_conf = round(min(_cs_conf + _filled * 0.05, 1.0), 2)
+
                 await conn.execute(
                     """
                     INSERT INTO b2b_company_signals (
                         company_name, vendor_name, urgency_score,
                         pain_category, buyer_role, decision_maker,
                         seat_count, contract_end, buying_stage,
-                        review_id, source, last_seen_at
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
+                        review_id, source, confidence_score, last_seen_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
                     ON CONFLICT (company_name, vendor_name)
                     DO UPDATE SET
                         urgency_score = GREATEST(b2b_company_signals.urgency_score, EXCLUDED.urgency_score),
@@ -1797,6 +1945,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         buying_stage = COALESCE(EXCLUDED.buying_stage, b2b_company_signals.buying_stage),
                         review_id = COALESCE(EXCLUDED.review_id, b2b_company_signals.review_id),
                         source = COALESCE(EXCLUDED.source, b2b_company_signals.source),
+                        confidence_score = GREATEST(b2b_company_signals.confidence_score, EXCLUDED.confidence_score),
                         last_seen_at = EXCLUDED.last_seen_at
                     """,
                     normalize_company_name(hi.get("company", "")),
@@ -1810,6 +1959,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     hi.get("buying_stage"),
                     review_id,
                     hi.get("source"),
+                    _cs_conf,
                 )
                 company_signals_persisted += 1
     except Exception:
@@ -2003,10 +2153,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             snapshots_persisted = await _persist_vendor_snapshots(
                 pool, vendor_scores, pain_lookup, competitor_lookup,
                 high_intent, today,
+                price_lookup=price_lookup, dm_lookup=dm_lookup,
             )
             if cfg.change_detection_enabled:
                 change_events_detected = await _detect_change_events(
                     pool, vendor_scores, pain_lookup, competitor_lookup, today,
+                    price_lookup=price_lookup, dm_lookup=dm_lookup,
                 )
         except Exception:
             logger.exception("Failed to persist vendor snapshots / change events")
@@ -2017,7 +2169,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # Emit reasoning events (no-op when reasoning disabled)
     await _emit_reasoning_events(parsed, high_intent, vendor_scores)
 
-    return {
+    response = {
         "_skip_synthesis": "B2B churn intelligence complete",
         "date": str(today),
         "vendors_analyzed": len(vendor_scores),
@@ -2035,6 +2187,23 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "snapshots_persisted": snapshots_persisted,
         "change_events_detected": change_events_detected,
     }
+    tracer.end_span(
+        span,
+        status="completed",
+        output_data=response,
+        metadata={
+            "reasoning": build_reasoning_trace_context(
+                decision={"report_types": len(report_types) + (1 if exploratory_persisted else 0)},
+                evidence={
+                    "fetcher_failures": fetcher_failures,
+                    "upsert_failures": upsert_failures,
+                    "competitive_flows": len(competitive_disp),
+                },
+                rationale=parsed.get("executive_summary"),
+            ),
+        },
+    )
+    return response
 
 
 # ------------------------------------------------------------------
@@ -3668,6 +3837,8 @@ async def _upsert_churn_signals(
 
         try:
             kw_data = keyword_spike_lookup.get(vendor, {})
+            src_dist = prov.get("source_distribution", {})
+            signal_confidence = _compute_evidence_confidence(total, src_dist)
             await pool.execute(
                 """
                 INSERT INTO b2b_churn_signals (
@@ -3684,10 +3855,11 @@ async def _upsert_churn_signals(
                     keyword_trend_summary,
                     source_distribution, sample_review_ids,
                     review_window_start, review_window_end,
+                    confidence_score,
                     last_computed_at
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
                           $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
-                          $22, $23, $24, $25, $26, $27, $28, $29)
+                          $22, $23, $24, $25, $26, $27, $28, $29, $30)
                 ON CONFLICT (vendor_name, COALESCE(product_category, '')) DO UPDATE SET
                     total_reviews = EXCLUDED.total_reviews,
                     negative_reviews = EXCLUDED.negative_reviews,
@@ -3715,6 +3887,7 @@ async def _upsert_churn_signals(
                     sample_review_ids = EXCLUDED.sample_review_ids,
                     review_window_start = EXCLUDED.review_window_start,
                     review_window_end = EXCLUDED.review_window_end,
+                    confidence_score = EXCLUDED.confidence_score,
                     last_computed_at = EXCLUDED.last_computed_at
                 """,
                 vendor,
@@ -3741,10 +3914,11 @@ async def _upsert_churn_signals(
                 kw_data.get("spike_count", 0),
                 json.dumps(kw_data.get("spike_keywords", [])),
                 json.dumps(kw_data.get("trend_summary", {})),
-                json.dumps(prov.get("source_distribution", {})),
+                json.dumps(src_dist),
                 prov.get("sample_review_ids", []),
                 prov.get("review_window_start"),
                 prov.get("review_window_end"),
+                signal_confidence,
                 now,
             )
         except Exception:
@@ -3940,6 +4114,11 @@ async def generate_vendor_report(
                 report_date, report_type, vendor_filter,
                 intelligence_data, executive_summary, data_density, status, llm_model
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            ON CONFLICT (report_date, report_type, LOWER(COALESCE(vendor_filter,'')), LOWER(COALESCE(category_filter,'')), COALESCE(account_id, '00000000-0000-0000-0000-000000000000'::uuid))
+            DO UPDATE SET intelligence_data = EXCLUDED.intelligence_data,
+                          executive_summary = EXCLUDED.executive_summary,
+                          data_density = EXCLUDED.data_density,
+                          created_at = now()
             """,
             today,
             "vendor_retention",
@@ -4212,6 +4391,11 @@ async def generate_vendor_comparison_report(
                 report_date, report_type, vendor_filter, category_filter,
                 intelligence_data, executive_summary, data_density, status, llm_model
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (report_date, report_type, LOWER(COALESCE(vendor_filter,'')), LOWER(COALESCE(category_filter,'')), COALESCE(account_id, '00000000-0000-0000-0000-000000000000'::uuid))
+            DO UPDATE SET intelligence_data = EXCLUDED.intelligence_data,
+                          executive_summary = EXCLUDED.executive_summary,
+                          data_density = EXCLUDED.data_density,
+                          created_at = now()
             RETURNING id
             """,
             today,
@@ -4422,6 +4606,11 @@ async def generate_company_deep_dive_report(
                 report_date, report_type, vendor_filter, category_filter,
                 intelligence_data, executive_summary, data_density, status, llm_model, account_id
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ON CONFLICT (report_date, report_type, LOWER(COALESCE(vendor_filter,'')), LOWER(COALESCE(category_filter,'')), COALESCE(account_id, '00000000-0000-0000-0000-000000000000'::uuid))
+            DO UPDATE SET intelligence_data = EXCLUDED.intelligence_data,
+                          executive_summary = EXCLUDED.executive_summary,
+                          data_density = EXCLUDED.data_density,
+                          created_at = now()
             RETURNING id
             """,
             today,
@@ -4494,6 +4683,11 @@ async def generate_company_comparison_report(
                 report_date, report_type, vendor_filter, category_filter,
                 intelligence_data, executive_summary, data_density, status, llm_model, account_id
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ON CONFLICT (report_date, report_type, LOWER(COALESCE(vendor_filter,'')), LOWER(COALESCE(category_filter,'')), COALESCE(account_id, '00000000-0000-0000-0000-000000000000'::uuid))
+            DO UPDATE SET intelligence_data = EXCLUDED.intelligence_data,
+                          executive_summary = EXCLUDED.executive_summary,
+                          data_density = EXCLUDED.data_density,
+                          created_at = now()
             RETURNING id
             """,
             today,
@@ -4707,6 +4901,11 @@ async def generate_challenger_report(
                 report_date, report_type, vendor_filter,
                 intelligence_data, executive_summary, data_density, status, llm_model
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            ON CONFLICT (report_date, report_type, LOWER(COALESCE(vendor_filter,'')), LOWER(COALESCE(category_filter,'')), COALESCE(account_id, '00000000-0000-0000-0000-000000000000'::uuid))
+            DO UPDATE SET intelligence_data = EXCLUDED.intelligence_data,
+                          executive_summary = EXCLUDED.executive_summary,
+                          data_density = EXCLUDED.data_density,
+                          created_at = now()
             """,
             today,
             "challenger_intel",

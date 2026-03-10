@@ -20,6 +20,7 @@ from urllib.parse import quote_plus
 
 from bs4 import BeautifulSoup
 
+from ..captcha import CaptchaType, detect_captcha
 from ..client import AntiDetectionClient
 from . import ScrapeResult, ScrapeTarget, register_parser
 
@@ -40,6 +41,8 @@ class GetAppParser:
         """Scrape GetApp reviews -- Web Unlocker first, then HTTP client."""
         from atlas_brain.config import settings
 
+        unlocker_errors: list[str] = []
+
         # Priority 1: Bright Data Web Unlocker (handles Cloudflare automatically)
         if settings.b2b_scrape.web_unlocker_url:
             unlocker_domains = {
@@ -52,18 +55,24 @@ class GetAppParser:
                     result = await self._scrape_web_unlocker(target)
                     if result.reviews:
                         return result
+                    unlocker_errors.extend(result.errors)
                     logger.warning(
-                        "Web Unlocker for %s returned 0 reviews, falling back",
+                        "Web Unlocker for %s returned 0 reviews, falling back%s",
                         target.vendor_name,
+                        f" ({result.errors[0]})" if result.errors else "",
                     )
                 except Exception as exc:
+                    unlocker_errors.append(f"Web Unlocker exception: {exc}")
                     logger.warning(
                         "Web Unlocker failed for %s: %s -- falling back",
                         target.vendor_name, exc,
                     )
 
         # Priority 2: curl_cffi HTTP client with residential proxy
-        return await self._scrape_http(target, client)
+        result = await self._scrape_http(target, client)
+        if unlocker_errors:
+            result.errors = unlocker_errors + result.errors
+        return result
 
     # ------------------------------------------------------------------
     # Web Unlocker path (Bright Data -- handles Cloudflare internally)
@@ -102,10 +111,18 @@ class GetAppParser:
                 pages_scraped += 1
 
                 if resp.status_code == 403:
-                    errors.append(f"Page {page}: blocked (403) via Web Unlocker")
+                    detail = _describe_getapp_response(resp.text, resp.status_code)
+                    if detail:
+                        errors.append(f"Page {page}: blocked (403) via Web Unlocker ({detail})")
+                    else:
+                        errors.append(f"Page {page}: blocked (403) via Web Unlocker")
                     break
                 if resp.status_code != 200:
-                    errors.append(f"Page {page}: HTTP {resp.status_code}")
+                    detail = _describe_getapp_response(resp.text, resp.status_code)
+                    if detail:
+                        errors.append(f"Page {page}: HTTP {resp.status_code} ({detail})")
+                    else:
+                        errors.append(f"Page {page}: HTTP {resp.status_code}")
                     continue
 
                 page_reviews = _parse_json_ld(resp.text, target, seen_ids)
@@ -113,6 +130,9 @@ class GetAppParser:
                     page_reviews = _parse_html(resp.text, target, seen_ids)
 
                 if not page_reviews:
+                    detail = _describe_getapp_response(resp.text, resp.status_code)
+                    if detail:
+                        errors.append(f"Page {page}: 0 reviews after Web Unlocker ({detail})")
                     if page == 1:
                         logger.warning(
                             "GetApp Web Unlocker page 1 returned 0 reviews for %s",
@@ -168,17 +188,26 @@ class GetAppParser:
                     referer=referer,
                     sticky_session=True,
                     prefer_residential=True,
+                    timeout_seconds=90,
                 )
                 pages_scraped += 1
 
                 if resp.status_code == 403:
-                    errors.append(f"Page {page}: blocked (403) -- Cloudflare challenge")
+                    detail = _describe_getapp_response(resp.text, resp.status_code)
+                    if detail:
+                        errors.append(f"Page {page}: blocked (403) -- {detail}")
+                    else:
+                        errors.append(f"Page {page}: blocked (403) -- Cloudflare challenge")
                     break
                 if resp.status_code == 429:
                     errors.append(f"Page {page}: rate limited (429)")
                     break
                 if resp.status_code != 200:
-                    errors.append(f"Page {page}: HTTP {resp.status_code}")
+                    detail = _describe_getapp_response(resp.text, resp.status_code)
+                    if detail:
+                        errors.append(f"Page {page}: HTTP {resp.status_code} ({detail})")
+                    else:
+                        errors.append(f"Page {page}: HTTP {resp.status_code}")
                     continue
 
                 # Guard against non-HTML responses
@@ -197,6 +226,9 @@ class GetAppParser:
                     page_reviews = _parse_html(html, target, seen_ids)
 
                 if not page_reviews:
+                    detail = _describe_getapp_response(html, resp.status_code)
+                    if detail:
+                        errors.append(f"Page {page}: 0 reviews ({detail})")
                     if page == 1:
                         logger.warning(
                             "GetApp page 1 returned 0 reviews for %s -- "
@@ -244,6 +276,22 @@ def _build_url(product_slug: str, page: int) -> str:
     if page > 1:
         return f"{base}?page={page}"
     return base
+
+
+def _describe_getapp_response(html: str, status_code: int) -> str | None:
+    """Return a concise reason string for blocked or empty GetApp responses."""
+    captcha_type = detect_captcha(html, status_code)
+    if captcha_type != CaptchaType.NONE:
+        return f"{captcha_type.value} challenge"
+
+    body = html.lower()
+    if "challenge-platform" in body or "_cf_chl_opt" in body or "cloudflare" in body:
+        return "possible cloudflare challenge"
+    if "access denied" in body:
+        return "access denied page"
+    if status_code >= 500 and body:
+        return "gateway/proxy error page"
+    return None
 
 
 # ------------------------------------------------------------------

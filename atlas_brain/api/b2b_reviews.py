@@ -15,8 +15,11 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from ..services.scraping.sources import ReviewSource
 from ..services.vendor_registry import resolve_vendor_name
 from ..storage.database import get_db_pool
+
+_VALID_SOURCES = {s.value for s in ReviewSource}
 
 logger = logging.getLogger("atlas.api.b2b_reviews")
 
@@ -83,6 +86,15 @@ async def import_b2b_reviews(reviews: list[B2BReviewInput]) -> dict:
     if not pool.is_initialized:
         raise HTTPException(status_code=503, detail="Database not ready")
 
+    # Validate all sources up front
+    bad_sources = {r.source for r in reviews if r.source not in _VALID_SOURCES}
+    if bad_sources:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown source(s): {', '.join(sorted(bad_sources))}. "
+                   f"Valid: {', '.join(sorted(_VALID_SOURCES))}",
+        )
+
     batch_id = f"api_{int(time.time())}"
     rows = []
     for r in reviews:
@@ -93,13 +105,13 @@ async def import_b2b_reviews(reviews: list[B2BReviewInput]) -> dict:
             except ValueError:
                 pass
 
+        # Resolve to canonical vendor name BEFORE dedup key so both use canonical form
+        canonical_vendor = await resolve_vendor_name(r.vendor_name)
+
         dedup_key = _make_dedup_key(
-            r.source, r.vendor_name, r.source_review_id,
+            r.source, canonical_vendor, r.source_review_id,
             r.reviewer_name, r.reviewed_at,
         )
-
-        # Resolve to canonical vendor name (dedup key uses raw value above)
-        canonical_vendor = await resolve_vendor_name(r.vendor_name)
 
         rows.append((
             dedup_key,

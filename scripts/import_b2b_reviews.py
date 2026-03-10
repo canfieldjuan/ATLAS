@@ -73,7 +73,8 @@ def load_reviews(file_path: Path) -> list[dict]:
 
 
 async def import_reviews(reviews: list[dict], dry_run: bool = False,
-                         batch_size: int = BATCH_SIZE) -> dict:
+                         batch_size: int = BATCH_SIZE,
+                         allow_unknown_sources: bool = False) -> dict:
     """Insert reviews into b2b_reviews table."""
     if dry_run:
         logger.info("DRY RUN: would import %d reviews", len(reviews))
@@ -88,6 +89,9 @@ async def import_reviews(reviews: list[dict], dry_run: bool = False,
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from atlas_brain.storage.database import get_db_pool
     from atlas_brain.services.vendor_registry import resolve_vendor_name
+    from atlas_brain.services.scraping.sources import ReviewSource
+
+    valid_sources = {s.value for s in ReviewSource}
 
     pool = get_db_pool()
     await pool.initialize()
@@ -110,15 +114,23 @@ async def import_reviews(reviews: list[dict], dry_run: bool = False,
                 skipped += 1
                 continue
 
+            if source not in valid_sources:
+                if allow_unknown_sources:
+                    logger.warning("Unknown source '%s' for vendor '%s', importing anyway", source, vendor_name)
+                else:
+                    logger.warning("Unknown source '%s' for vendor '%s', skipping (use --allow-unknown-sources to override)", source, vendor_name)
+                    skipped += 1
+                    continue
+
+            # Resolve to canonical vendor name BEFORE dedup key so both use canonical form
+            canonical_vendor = await resolve_vendor_name(vendor_name)
+
             dedup_key = make_dedup_key(
-                source, vendor_name,
+                source, canonical_vendor,
                 review.get("source_review_id"),
                 review.get("reviewer_name"),
                 review.get("reviewed_at"),
             )
-
-            # Resolve to canonical vendor name (dedup key uses raw value above)
-            canonical_vendor = await resolve_vendor_name(vendor_name)
 
             reviewed_at = review.get("reviewed_at")
             if reviewed_at and isinstance(reviewed_at, str):
@@ -186,6 +198,8 @@ async def main():
     parser.add_argument("--file", type=Path, required=True, help="Path to reviews JSON file")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Insert batch size")
     parser.add_argument("--dry-run", action="store_true", help="Preview counts without writing")
+    parser.add_argument("--allow-unknown-sources", action="store_true",
+                        help="Import reviews with non-canonical source values instead of skipping")
     args = parser.parse_args()
 
     if not args.file.exists():
@@ -204,7 +218,10 @@ async def main():
         logger.info("  %-30s %6d", v, c)
     logger.info("  %-30s %6d", "TOTAL", len(reviews))
 
-    result = await import_reviews(reviews, dry_run=args.dry_run, batch_size=args.batch_size)
+    result = await import_reviews(
+        reviews, dry_run=args.dry_run, batch_size=args.batch_size,
+        allow_unknown_sources=args.allow_unknown_sources,
+    )
     print(json.dumps(result, indent=2))
 
 

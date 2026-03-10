@@ -103,10 +103,59 @@ function StatObject({ obj }: { obj: Record<string, unknown> }) {
   )
 }
 
+/** Render an array of objects as a responsive table */
+function DataTable({ rows }: { rows: Record<string, unknown>[] }) {
+  if (rows.length === 0) return null
+  // Collect all keys across all rows, but skip very long arrays/objects
+  const allKeys = Array.from(new Set(rows.flatMap(r => Object.keys(r))))
+  // Filter out keys whose values are complex (arrays/deep objects) -- show simple values only
+  const columns = allKeys.filter(k =>
+    rows.some(r => {
+      const v = r[k]
+      return v !== null && v !== undefined && typeof v !== 'object'
+    })
+  )
+  if (columns.length === 0) return null
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-slate-700/50">
+            {columns.map(col => (
+              <th key={col} className="text-left text-xs font-medium text-slate-400 uppercase tracking-wider px-3 py-2 whitespace-nowrap">
+                {col.replace(/_/g, ' ')}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => (
+            <tr key={i} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+              {columns.map(col => {
+                const val = row[col]
+                const display = val === null || val === undefined ? '--'
+                  : typeof val === 'number' ? (Number.isInteger(val) ? String(val) : val.toFixed(1))
+                  : String(val)
+                return (
+                  <td key={col} className="px-3 py-2 text-slate-300 whitespace-nowrap">
+                    {display}
+                  </td>
+                )
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 /** Known scalar metadata keys that should render inline, not in a card */
 const SCALAR_KEYS = new Set([
   'vendor_name', 'challenger_name', 'primary_vendor', 'comparison_vendor', 'report_date', 'window_days',
   'signal_count', 'high_urgency_count', 'medium_urgency_count',
+  'scope', 'llm_model', 'model_analysis', 'parse_fallback',
 ])
 
 const QUOTE_KEYS = new Set(['anonymized_quotes', 'quotable_evidence'])
@@ -135,6 +184,16 @@ function IntelValue({ fieldKey, value }: { fieldKey: string; value: unknown }) {
   // String array
   if (Array.isArray(value) && value.length > 0 && typeof value[0] === 'string') {
     return <StringList items={value as string[]} asQuotes={QUOTE_KEYS.has(fieldKey)} />
+  }
+
+  // Array of objects (e.g. displacement_map, category_insights, vendor_scorecards)
+  if (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    typeof value[0] === 'object' &&
+    value[0] !== null
+  ) {
+    return <DataTable rows={value as Record<string, unknown>[]} />
   }
 
   // Flat {key: number} object (e.g. by_buying_stage, seat_count_signals)
@@ -180,10 +239,21 @@ export default function ReportDetail() {
     ? `${report.vendor_filter} vs ${report.category_filter}`
     : (report.vendor_filter ?? report.report_type.replace(/_/g, ' '))
 
-  // Split intelligence_data into scalars (rendered as stat row) and rich fields
-  const intel = report.intelligence_data ?? {}
+  // intelligence_data can be an object (keyed fields) or an array (vendor/edge rows)
+  const rawIntel = report.intelligence_data
+  const intelIsArray = Array.isArray(rawIntel)
+  const intel = intelIsArray ? {} : (rawIntel ?? {})
   const scalarEntries = Object.entries(intel).filter(([k]) => SCALAR_KEYS.has(k))
-  const richEntries = Object.entries(intel).filter(([k]) => !SCALAR_KEYS.has(k))
+  const richEntries = Object.entries(intel).filter(([k, v]) => {
+    if (SCALAR_KEYS.has(k)) return false
+    // Skip duplicate of top-level executive_summary
+    if (k === 'executive_summary') return false
+    // Skip empty arrays / empty strings / null
+    if (v === null || v === undefined) return false
+    if (typeof v === 'string' && v.trim() === '') return false
+    if (Array.isArray(v) && v.length === 0) return false
+    return true
+  })
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -221,6 +291,16 @@ export default function ReportDetail() {
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
           <h3 className="text-sm font-medium text-slate-300 mb-2">Executive Summary</h3>
           <p className="text-sm text-slate-300 whitespace-pre-wrap">{report.executive_summary}</p>
+        </div>
+      )}
+
+      {/* Array-based reports (scorecard, displacement, category overview, churn feed) */}
+      {intelIsArray && (rawIntel as Record<string, unknown>[]).length > 0 && (
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
+          <h3 className="text-sm font-medium text-slate-300 mb-3">
+            {report.report_type.replace(/_/g, ' ')} ({(rawIntel as unknown[]).length} items)
+          </h3>
+          <DataTable rows={rawIntel as Record<string, unknown>[]} />
         </div>
       )}
 

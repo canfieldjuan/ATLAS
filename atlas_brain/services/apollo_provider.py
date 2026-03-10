@@ -51,13 +51,19 @@ class OrgResult:
 class PersonStub:
     """Obfuscated person data from people search (no email, last name hidden)."""
 
-    __slots__ = ("apollo_person_id", "first_name", "title", "has_email")
+    __slots__ = (
+        "apollo_person_id", "first_name", "title", "has_email",
+        "organization_name", "organization_domain",
+    )
 
     def __init__(self, data: dict[str, Any]):
         self.apollo_person_id: str = data.get("id", "")
         self.first_name: str = data.get("first_name") or ""
         self.title: str = data.get("title") or ""
         self.has_email: bool = data.get("has_email", False)
+        org = data.get("organization") or {}
+        self.organization_name: str = org.get("name") or data.get("organization_name") or ""
+        self.organization_domain: str = org.get("primary_domain") or ""
 
 
 class PersonFull:

@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from typing import Any, Optional
-from uuid import UUID
 
 from .events import AtlasEvent
 from .state import ReasoningAgentState
@@ -28,6 +26,11 @@ class ReasoningAgentGraph:
         Returns the processing result dict (stored in atlas_events.processing_result).
         """
         from .graph import run_reasoning_graph
+        from ..services.tracing import (
+            build_business_trace_context,
+            build_reasoning_trace_context,
+            tracer,
+        )
 
         state: ReasoningAgentState = {
             "event_id": str(event.id) if event.id else "",
@@ -37,10 +40,31 @@ class ReasoningAgentGraph:
             "entity_id": event.entity_id,
             "payload": event.payload,
         }
+        span = tracer.start_span(
+            span_name="reasoning.process",
+            operation_type="reasoning",
+            session_id=str(event.id) if event.id else None,
+            metadata={
+                "business": build_business_trace_context(
+                    workflow="reasoning_agent",
+                    event_type=event.event_type,
+                    source_name=event.source,
+                    entity_type=event.entity_type,
+                    entity_id=event.entity_id,
+                ),
+            },
+        )
 
         try:
             result_state = await run_reasoning_graph(state)
         except Exception:
+            tracer.end_span(
+                span,
+                status="failed",
+                input_data={"event_type": event.event_type, "payload": event.payload},
+                error_message="reasoning graph failed",
+                error_type="ReasoningGraphError",
+            )
             logger.error(
                 "Reasoning graph failed for event %s", event.id, exc_info=True
             )
@@ -49,7 +73,7 @@ class ReasoningAgentGraph:
                 "triage_priority": state.get("triage_priority", "unknown"),
             }
 
-        return {
+        result = {
             "status": "completed",
             "triage_priority": result_state.get("triage_priority", "unknown"),
             "needs_reasoning": result_state.get("needs_reasoning", False),
@@ -60,6 +84,30 @@ class ReasoningAgentGraph:
             "notified": result_state.get("notification_sent", False),
             "summary": result_state.get("summary", ""),
         }
+        tracer.end_span(
+            span,
+            status="completed",
+            input_data={"event_type": event.event_type, "payload": event.payload},
+            output_data=result,
+            metadata={
+                "reasoning": build_reasoning_trace_context(
+                    decision={
+                        "triage_priority": result_state.get("triage_priority"),
+                        "needs_reasoning": result_state.get("needs_reasoning"),
+                        "queued": result_state.get("queued"),
+                        "planned_actions": result_state.get("planned_actions", []),
+                    },
+                    evidence={
+                        "connections_found": result_state.get("connections_found", []),
+                        "action_results": result_state.get("action_results", []),
+                    },
+                    triage_reasoning=result_state.get("triage_reasoning"),
+                    rationale=result_state.get("rationale"),
+                    raw_reasoning=result_state.get("reasoning_output"),
+                ),
+            },
+        )
+        return result
 
     async def process_drained_events(
         self, events: list[AtlasEvent]

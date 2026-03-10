@@ -129,6 +129,8 @@ class GartnerParser:
                 # Try JSON-LD first, then HTML fallback
                 page_reviews = _parse_json_ld(resp.text, target, seen_ids)
                 if not page_reviews:
+                    page_reviews = _parse_next_data(resp.text, target, seen_ids)
+                if not page_reviews:
                     page_reviews = _parse_html(resp.text, target, seen_ids)
 
                 if not page_reviews:
@@ -212,6 +214,8 @@ class GartnerParser:
                 # Try JSON-LD first, then HTML fallback
                 page_reviews = _parse_json_ld(resp.text, target, seen_ids)
                 if not page_reviews:
+                    page_reviews = _parse_next_data(resp.text, target, seen_ids)
+                if not page_reviews:
                     page_reviews = _parse_html(resp.text, target, seen_ids)
 
                 if not page_reviews:
@@ -289,10 +293,7 @@ def _parse_json_ld(
         except (json.JSONDecodeError, TypeError):
             continue
 
-        # Handle both single object and array
-        items = data if isinstance(data, list) else [data]
-
-        for item in items:
+        for item in _iter_json_ld_items(data):
             # Look for Product/SoftwareApplication with reviews
             review_list = item.get("review", [])
             if not isinstance(review_list, list):
@@ -363,6 +364,139 @@ def _parse_json_ld(
                 })
 
     return reviews
+
+
+def _parse_next_data(
+    html: str, target: ScrapeTarget, seen_ids: set[str]
+) -> list[dict]:
+    """Extract Gartner reviews from the embedded Next.js bootstrap payload."""
+    soup = BeautifulSoup(html, "html.parser")
+    script = soup.find("script", id="__NEXT_DATA__")
+    if not script or not script.string:
+        return []
+
+    try:
+        payload = json.loads(script.string)
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+    server_data = payload.get("props", {}).get("pageProps", {}).get("serverSideXHRData", {})
+    review_data = server_data.get("user-reviews-by-market-vendor-product", {})
+    raw_reviews = review_data.get("userReviews", [])
+    if not isinstance(raw_reviews, list):
+        return []
+
+    snippet_map = _build_snippet_map(server_data.get("vendor-snippets", {}))
+    reviews: list[dict] = []
+
+    for entry in raw_reviews:
+        review = _parse_next_data_review(entry, snippet_map, target)
+        if review and review["source_review_id"] not in seen_ids:
+            seen_ids.add(review["source_review_id"])
+            reviews.append(review)
+
+    return reviews
+
+
+def _iter_json_ld_items(data: object) -> list[dict]:
+    """Expand top-level JSON-LD items and @graph nodes into a flat dict list."""
+    items = data if isinstance(data, list) else [data]
+    expanded: list[dict] = []
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        expanded.append(item)
+
+        graph = item.get("@graph")
+        if isinstance(graph, list):
+            expanded.extend(node for node in graph if isinstance(node, dict))
+        elif isinstance(graph, dict):
+            expanded.append(graph)
+
+    return expanded
+
+
+def _build_snippet_map(snippets: object) -> dict[str, dict]:
+    """Index Gartner snippet records by review id for enrichment."""
+    if not isinstance(snippets, dict):
+        return {}
+
+    indexed: dict[str, dict] = {}
+    for value in snippets.values():
+        if not isinstance(value, list):
+            continue
+        for entry in value:
+            if not isinstance(entry, dict):
+                continue
+            review_id = entry.get("reviewId")
+            if review_id is not None:
+                indexed[str(review_id)] = entry
+
+    return indexed
+
+
+def _parse_next_data_review(entry: object, snippet_map: dict[str, dict], target: ScrapeTarget) -> dict | None:
+    """Convert a Gartner Next.js review record into a b2b review dict."""
+    if not isinstance(entry, dict):
+        return None
+
+    review_id = entry.get("reviewId")
+    if review_id is None:
+        return None
+
+    snippet = snippet_map.get(str(review_id), {})
+    answers = snippet.get("answers", {}) if isinstance(snippet, dict) else {}
+    pros = answers.get("lessonslearned-like-most") if isinstance(answers, dict) else None
+    cons = answers.get("lessonslearned-dislike-most") if isinstance(answers, dict) else None
+
+    summary = (entry.get("reviewHeadline") or snippet.get("reviewHeadline") or None)
+    review_summary = (entry.get("reviewSummary") or snippet.get("reviewSummary") or "").strip()
+    parts = [review_summary] if review_summary else []
+    if pros:
+        parts.append(f"What I like: {pros}")
+    if cons:
+        parts.append(f"What I dislike: {cons}")
+    review_text = "\n\n".join(part for part in parts if part).strip()
+    if len(review_text) < 20 and summary:
+        review_text = summary.strip()
+    if len(review_text) < 20:
+        return None
+
+    rating = entry.get("reviewRating")
+    try:
+        rating = float(rating) if rating is not None else None
+    except (TypeError, ValueError):
+        rating = None
+
+    return {
+        "source": "gartner",
+        "source_url": f"{_build_reviews_url(target.product_slug)}#review-{review_id}",
+        "source_review_id": str(review_id),
+        "vendor_name": target.vendor_name,
+        "product_name": target.product_name or entry.get("productNames"),
+        "product_category": target.product_category,
+        "rating": rating,
+        "rating_max": 5,
+        "summary": summary,
+        "review_text": review_text[:10000],
+        "pros": pros,
+        "cons": cons,
+        "reviewer_name": None,
+        "reviewer_title": entry.get("jobTitle") or None,
+        "reviewer_company": None,
+        "company_size_raw": entry.get("companySize") or snippet.get("companySize"),
+        "reviewer_industry": entry.get("industryName") or snippet.get("industryName"),
+        "reviewed_at": entry.get("formattedReviewDate") or snippet.get("formattedReviewDate"),
+        "raw_metadata": {
+            "extraction_method": "next_data",
+            "review_source_code": entry.get("reviewSourceCode"),
+            "partner_review": bool(entry.get("partnerReview")),
+            "reviewer_function": entry.get("function") or None,
+            "source_weight": 1.0,
+            "source_type": "verified_review_platform",
+        },
+    }
 
 
 # ------------------------------------------------------------------
