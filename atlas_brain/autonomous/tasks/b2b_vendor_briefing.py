@@ -64,7 +64,7 @@ async def _is_first_briefing(pool: Any, vendor_name: str) -> bool:
         """
         SELECT COUNT(*) FROM b2b_vendor_briefings
         WHERE LOWER(vendor_name) = LOWER($1)
-          AND status NOT IN ('failed', 'suppressed')
+          AND status NOT IN ('failed', 'suppressed', 'rejected')
         """,
         vendor_name,
     )
@@ -150,6 +150,8 @@ def _default_pain_label(category: Any) -> str:
 
 def _build_default_cta_hook(briefing: dict[str, Any]) -> str:
     """Build a specific CTA hook from the strongest measured signal."""
+    challenger_mode = briefing.get("challenger_mode", False)
+    vendor = briefing.get("vendor_name", "the vendor")
     pains = briefing.get("pain_breakdown") or []
     top_pain = pains[0].get("category") if pains and isinstance(pains[0], dict) else ""
     pain_label = _default_pain_label(top_pain).lower()
@@ -158,6 +160,18 @@ def _build_default_cta_hook(briefing: dict[str, Any]) -> str:
     top_target = ""
     if targets and isinstance(targets[0], dict):
         top_target = str(targets[0].get("competitor") or "").strip()
+
+    if challenger_mode:
+        if top_target and top_pain:
+            return (
+                f"See which accounts are leaving {top_target} due to "
+                f"{pain_label} and how to position your outreach."
+            )
+        if top_pain:
+            return f"Review the {pain_label} signals driving accounts to evaluate alternatives like {vendor}."
+        if top_target:
+            return f"See the accounts in motion from {top_target} that your team can engage now."
+        return f"Review this week's account movement signals relevant to {vendor}."
 
     if top_target and top_pain:
         return (
@@ -168,7 +182,7 @@ def _build_default_cta_hook(briefing: dict[str, Any]) -> str:
         return f"Review the {pain_label} cluster behind this alert to prioritize retention plays."
     if top_target:
         return f"Review the accounts trending toward {top_target} to focus retention outreach early."
-    return f"Review this week's measured churn signals for {briefing.get('vendor_name', 'the vendor')}."
+    return f"Review this week's measured churn signals for {vendor}."
 
 
 def _finalize_briefing_presentation(briefing: dict[str, Any]) -> None:
@@ -278,9 +292,16 @@ async def _enrich_with_analyst_summary(briefing: dict[str, Any]) -> None:
 # Data builder
 # ---------------------------------------------------------------------------
 
-async def build_vendor_briefing(vendor_name: str) -> dict[str, Any] | None:
+async def build_vendor_briefing(
+    vendor_name: str,
+    target_mode: str = "vendor_retention",
+) -> dict[str, Any] | None:
     """
     Build a briefing data dict for *vendor_name* from existing DB tables.
+
+    When *target_mode* is ``'challenger_intel'``, the displacement data is
+    flipped: instead of showing who the vendor is losing customers to, we
+    show which incumbents are losing customers to this challenger.
 
     Returns None if the vendor is not found in any source.
     """
@@ -288,10 +309,13 @@ async def build_vendor_briefing(vendor_name: str) -> dict[str, Any] | None:
     if not pool.is_initialized:
         return None
 
+    challenger_mode = target_mode == "challenger_intel"
+
     briefing: dict[str, Any] = {
         "vendor_name": vendor_name,
         "report_date": date.today().isoformat(),
         "booking_url": build_gate_url(vendor_name),
+        "challenger_mode": challenger_mode,
     }
 
     found = False
@@ -368,6 +392,28 @@ async def build_vendor_briefing(vendor_name: str) -> dict[str, Any] | None:
             briefing["top_feature_gaps"] = [
                 w.get("area", str(w)) if isinstance(w, dict) else str(w)
                 for w in weaknesses[:3]
+            ]
+
+    # ------------------------------------------------------------------
+    # Challenger mode: flip displacement to show incumbents losing TO us
+    # ------------------------------------------------------------------
+    if challenger_mode:
+        challenger_edges = await pool.fetch(
+            """
+            SELECT from_vendor AS competitor, SUM(mention_count) AS count
+            FROM b2b_displacement_edges
+            WHERE LOWER(to_vendor) = LOWER($1)
+              AND computed_date > NOW() - INTERVAL '30 days'
+            GROUP BY from_vendor
+            ORDER BY count DESC
+            LIMIT 5
+            """,
+            vendor_name,
+        )
+        if challenger_edges:
+            briefing["top_displacement_targets"] = [
+                {"competitor": r["competitor"], "count": int(r["count"] or 0)}
+                for r in challenger_edges
             ]
 
     # ------------------------------------------------------------------
@@ -510,8 +556,18 @@ def _normalize_displacement(targets: list) -> list[dict]:
     result = []
     for t in (targets or []):
         if isinstance(t, dict):
+            raw = t.get("competitor", t.get("name", "Unknown"))
+            # Handle stringified JSON like '{"name": "Pardot", "context": ...}'
+            if isinstance(raw, str) and raw.startswith("{"):
+                try:
+                    parsed = json.loads(raw)
+                    raw = parsed.get("name") or parsed.get("competitor") or raw
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            elif isinstance(raw, dict):
+                raw = raw.get("name") or raw.get("competitor") or "Unknown"
             result.append({
-                "competitor": t.get("competitor", t.get("name", "Unknown")),
+                "competitor": raw,
                 "count": t.get("count", t.get("mentions", 0)),
             })
         elif isinstance(t, str):
@@ -575,11 +631,18 @@ async def send_vendor_briefing(
 
     pool = get_db_pool()
 
+    challenger_mode = briefing_data.get("challenger_mode", False)
+
     # Suppression check
     if pool.is_initialized:
         suppressed = await is_suppressed(pool, email=to_email)
         if suppressed:
             logger.info("Suppressed briefing to %s (vendor=%s)", to_email, vendor_name)
+            suppressed_subject = (
+                f"Sales Intelligence Briefing: {vendor_name}"
+                if challenger_mode
+                else f"Churn Intelligence Briefing: {vendor_name}"
+            )
             try:
                 await pool.execute(
                     """
@@ -589,7 +652,7 @@ async def send_vendor_briefing(
                     """,
                     vendor_name,
                     to_email,
-                    f"Churn Intelligence Briefing: {vendor_name}",
+                    suppressed_subject,
                     json.dumps(briefing_data, default=str),
                 )
             except Exception as exc:
@@ -600,11 +663,20 @@ async def send_vendor_briefing(
     from_addr = f"{sender_name} <{cfg.resend_from_email}>"
 
     if briefing_data.get("prospect_mode"):
-        subject = f"{vendor_name} -- Churn Signals Detected"
+        if challenger_mode:
+            subject = f"{vendor_name} -- Accounts In Motion"
+        else:
+            subject = f"{vendor_name} -- Churn Signals Detected"
     elif briefing_data.get("is_gated_delivery"):
-        subject = f"Your {vendor_name} Churn Intelligence Report"
+        if challenger_mode:
+            subject = f"Your {vendor_name} Sales Intelligence Report"
+        else:
+            subject = f"Your {vendor_name} Churn Intelligence Report"
     else:
-        subject = f"Churn Intelligence Briefing: {vendor_name}"
+        if challenger_mode:
+            subject = f"Sales Intelligence Briefing: {vendor_name}"
+        else:
+            subject = f"Churn Intelligence Briefing: {vendor_name}"
 
     resend_id: str | None = None
     status = "sent"
@@ -652,6 +724,107 @@ async def send_vendor_briefing(
 
 
 # ---------------------------------------------------------------------------
+# Approve / reject pending briefings (HITL)
+# ---------------------------------------------------------------------------
+
+async def send_approved_briefing(briefing_id: str) -> dict[str, Any]:
+    """Send a pending_approval briefing and update its status to sent."""
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        return {"error": "Database not ready"}
+
+    row = await pool.fetchrow(
+        """
+        SELECT id, vendor_name, recipient_email, subject,
+               briefing_data, briefing_html
+        FROM b2b_vendor_briefings
+        WHERE id = $1 AND status = 'pending_approval'
+        """,
+        briefing_id,
+    )
+    if not row:
+        return {"error": "Briefing not found or not pending approval"}
+
+    vendor_name = row["vendor_name"]
+    to_email = row["recipient_email"]
+    subject = row["subject"]
+    html = row["briefing_html"]
+    bd = row["briefing_data"]
+    briefing_data = json.loads(bd) if isinstance(bd, str) else (bd or {})
+
+    if not html:
+        return {"error": "No rendered HTML stored for this briefing"}
+
+    # Send via CampaignSender
+    cfg = settings.campaign_sequence
+    if not cfg.resend_api_key or not cfg.resend_from_email:
+        return {"error": "Resend not configured"}
+
+    sender_name = settings.b2b_churn.vendor_briefing_sender_name
+    from_addr = f"{sender_name} <{cfg.resend_from_email}>"
+
+    resend_id: str | None = None
+    status = "sent"
+
+    try:
+        sender = get_campaign_sender()
+        result = await sender.send(
+            to=to_email,
+            from_email=from_addr,
+            subject=subject,
+            body=html,
+            tags=[
+                {"name": "type", "value": "vendor_briefing"},
+                {"name": "vendor", "value": vendor_name},
+            ],
+        )
+        resend_id = result.get("id")
+    except Exception as exc:
+        logger.warning("Failed to send approved briefing %s: %s", briefing_id, exc)
+        status = "failed"
+
+    await pool.execute(
+        """
+        UPDATE b2b_vendor_briefings
+        SET status = $1, resend_id = $2, approved_at = NOW()
+        WHERE id = $3
+        """,
+        status,
+        resend_id,
+        briefing_id,
+    )
+
+    return {
+        "id": str(briefing_id),
+        "vendor_name": vendor_name,
+        "to_email": to_email,
+        "status": status,
+        "resend_id": resend_id,
+    }
+
+
+async def reject_briefing(briefing_id: str, reason: str | None = None) -> dict[str, Any]:
+    """Reject a pending_approval briefing."""
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        return {"error": "Database not ready"}
+
+    result = await pool.execute(
+        """
+        UPDATE b2b_vendor_briefings
+        SET status = 'rejected', rejected_at = NOW(), reject_reason = $1
+        WHERE id = $2 AND status = 'pending_approval'
+        """,
+        reason,
+        briefing_id,
+    )
+    if result == "UPDATE 0":
+        return {"error": "Briefing not found or not pending approval"}
+
+    return {"id": str(briefing_id), "status": "rejected"}
+
+
+# ---------------------------------------------------------------------------
 # Recipient resolution
 # ---------------------------------------------------------------------------
 
@@ -664,14 +837,14 @@ async def resolve_briefing_recipient(
     1. vendor_targets (active vendor_retention with contact_email)
     2. prospects (active, verified/probabilistic email, best seniority)
     """
-    # Priority 1: vendor_targets
+    # Priority 1: vendor_targets (both vendor_retention and challenger_intel)
     row = await pool.fetchrow(
         """
         SELECT contact_email AS email, contact_name AS name,
-               contact_role AS role
+               contact_role AS role, target_mode
         FROM vendor_targets
         WHERE LOWER(company_name) = LOWER($1)
-          AND target_mode = 'vendor_retention'
+          AND target_mode IN ('vendor_retention', 'challenger_intel')
           AND status = 'active'
           AND contact_email IS NOT NULL
         LIMIT 1
@@ -684,6 +857,7 @@ async def resolve_briefing_recipient(
             "name": row["name"] or "",
             "role": row["role"] or "",
             "source": "vendor_target",
+            "target_mode": row["target_mode"],
         }
 
     # Priority 2: prospects
@@ -735,7 +909,7 @@ async def _check_cooldown(
         SELECT EXISTS(
             SELECT 1 FROM b2b_vendor_briefings
             WHERE LOWER(vendor_name) = LOWER($1)
-              AND status NOT IN ('failed', 'suppressed')
+              AND status NOT IN ('failed', 'suppressed', 'rejected')
               AND created_at > NOW() - make_interval(days => $2)
         )
         """,
@@ -758,6 +932,7 @@ async def generate_and_send_briefing(
     pool = get_db_pool()
 
     # Auto-resolve recipient if not provided
+    target_mode = "vendor_retention"
     if to_email is None:
         if not pool.is_initialized:
             return {"error": "Database not ready -- cannot resolve recipient"}
@@ -765,8 +940,9 @@ async def generate_and_send_briefing(
         if not contact:
             return {"error": f"No contact found for vendor: {vendor_name}"}
         to_email = contact["email"]
+        target_mode = contact.get("target_mode", "vendor_retention")
 
-    briefing_data = await build_vendor_briefing(vendor_name)
+    briefing_data = await build_vendor_briefing(vendor_name, target_mode=target_mode)
     if not briefing_data:
         return {"error": f"No data found for vendor: {vendor_name}"}
 
@@ -817,12 +993,13 @@ async def send_batch_briefings() -> dict[str, Any]:
     max_batch = cfg.vendor_briefing_max_per_batch
     cooldown_days = cfg.vendor_briefing_cooldown_days
 
-    # Fetch eligible vendor targets
+    # Fetch eligible vendor targets (both retention and challenger)
     rows = await pool.fetch(
         """
-        SELECT company_name, contact_email, contact_name, contact_role
+        SELECT company_name, contact_email, contact_name, contact_role,
+               target_mode
         FROM vendor_targets
-        WHERE target_mode = 'vendor_retention'
+        WHERE target_mode IN ('vendor_retention', 'challenger_intel')
           AND status = 'active'
           AND contact_email IS NOT NULL
         ORDER BY company_name
@@ -831,7 +1008,7 @@ async def send_batch_briefings() -> dict[str, Any]:
         max_batch,
     )
 
-    sent = 0
+    queued = 0
     skipped_cooldown = 0
     skipped_suppressed = 0
     skipped_no_data = 0
@@ -841,6 +1018,7 @@ async def send_batch_briefings() -> dict[str, Any]:
     for row in rows:
         vendor_name = row["company_name"]
         to_email = row["contact_email"]
+        target_mode = row["target_mode"]
 
         # Cooldown check
         if await _check_cooldown(pool, vendor_name, cooldown_days):
@@ -855,8 +1033,10 @@ async def send_batch_briefings() -> dict[str, Any]:
             details.append({"vendor": vendor_name, "status": "skipped_suppressed"})
             continue
 
-        # Build briefing data
-        briefing_data = await build_vendor_briefing(vendor_name)
+        # Build briefing data (pass target_mode for challenger framing)
+        briefing_data = await build_vendor_briefing(
+            vendor_name, target_mode=target_mode,
+        )
         if not briefing_data:
             skipped_no_data += 1
             details.append({"vendor": vendor_name, "status": "skipped_no_data"})
@@ -867,29 +1047,51 @@ async def send_batch_briefings() -> dict[str, Any]:
             briefing_data["prospect_mode"] = True
             briefing_data["gate_url"] = build_gate_url(vendor_name)
 
-        # Render and send
+        # Render HTML and store as pending_approval (HITL gate)
         briefing_html = render_vendor_briefing_html(briefing_data)
-        result = await send_vendor_briefing(
-            to_email=to_email,
-            vendor_name=vendor_name,
-            briefing_html=briefing_html,
-            briefing_data=briefing_data,
-        )
 
-        if result is None:
-            failed += 1
-            details.append({"vendor": vendor_name, "status": "failed"})
+        challenger_mode = briefing_data.get("challenger_mode", False)
+        if briefing_data.get("prospect_mode"):
+            subject = (
+                f"{vendor_name} -- Accounts In Motion"
+                if challenger_mode
+                else f"{vendor_name} -- Churn Signals Detected"
+            )
         else:
-            sent += 1
+            subject = (
+                f"Sales Intelligence Briefing: {vendor_name}"
+                if challenger_mode
+                else f"Churn Intelligence Briefing: {vendor_name}"
+            )
+
+        try:
+            await pool.execute(
+                """
+                INSERT INTO b2b_vendor_briefings
+                    (vendor_name, recipient_email, subject, briefing_data,
+                     briefing_html, status, target_mode)
+                VALUES ($1, $2, $3, $4::jsonb, $5, 'pending_approval', $6)
+                """,
+                vendor_name,
+                to_email,
+                subject,
+                json.dumps(briefing_data, default=str),
+                briefing_html,
+                target_mode,
+            )
+            queued += 1
             details.append({
                 "vendor": vendor_name,
-                "status": "sent",
+                "status": "pending_approval",
                 "to": to_email,
-                "resend_id": result.get("resend_id"),
             })
+        except Exception as exc:
+            logger.warning("Failed to queue briefing for %s: %s", vendor_name, exc)
+            failed += 1
+            details.append({"vendor": vendor_name, "status": "failed"})
 
     return {
-        "sent": sent,
+        "queued": queued,
         "skipped_cooldown": skipped_cooldown,
         "skipped_suppressed": skipped_suppressed,
         "skipped_no_data": skipped_no_data,

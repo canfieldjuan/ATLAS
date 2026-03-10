@@ -22,6 +22,7 @@ import type {
   ProspectStats,
   ReviewQueueDraft,
   AuditEvent,
+  BriefingDraft,
 } from '../types'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
@@ -30,6 +31,7 @@ const CAMPAIGNS_BASE = `${API_BASE}/api/v1/b2b/campaigns`
 const TARGETS_BASE = `${API_BASE}/api/v1/b2b/vendor-targets`
 const BLOG_ADMIN_BASE = `${API_BASE}/api/v1/admin/blog`
 const PROSPECTS_BASE = `${API_BASE}/api/v1/b2b/prospects`
+const BRIEFINGS_BASE = `${API_BASE}/api/v1/b2b/briefings`
 
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem('atlas_token')
@@ -476,4 +478,34 @@ export async function removeTrackedVendor(vendor_name: string) {
 
 export async function listTrackedVendors() {
   return get<{ vendors: TrackedVendor[]; count: number }>(TENANT_BASE, '/vendors')
+}
+
+// ---------------------------------------------------------------------------
+// Briefing Review Queue (HITL)
+// ---------------------------------------------------------------------------
+
+export async function fetchBriefingReviewQueue(params?: {
+  status?: string
+  limit?: number
+  offset?: number
+}) {
+  return get<{ briefings: BriefingDraft[]; count: number }>(BRIEFINGS_BASE, '/review-queue', params)
+}
+
+export async function fetchBriefingReviewSummary() {
+  return get<{
+    pending_approval: number
+    sent: number
+    rejected: number
+    failed: number
+    oldest_pending_hours: number | null
+  }>(BRIEFINGS_BASE, '/review-queue/summary')
+}
+
+export async function bulkApproveBriefings(ids: string[]) {
+  return post<{ processed: number; failed: { id: string; reason: string }[] }>(BRIEFINGS_BASE, '/bulk-approve', { briefing_ids: ids, action: 'approve' })
+}
+
+export async function bulkRejectBriefings(ids: string[], reason?: string) {
+  return post<{ rejected: number; failed: { id: string; reason: string }[] }>(BRIEFINGS_BASE, '/bulk-reject', { briefing_ids: ids, reason })
 }

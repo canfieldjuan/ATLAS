@@ -428,7 +428,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         msg = (
             f"[{mode_label}] Generated {result['generated']} campaign(s) for "
             f"{result['companies']} company/companies. "
-            f"Review drafts in the Leads dashboard."
+            f"Review drafts in the lead engagement pipeline."
         )
         await send_pipeline_notification(
             msg, task, title="Atlas: ABM Campaigns",
@@ -1044,6 +1044,24 @@ async def _generate_vendor_campaigns(
     for target in targets[:limit]:
         vendor_name = target["company_name"]
 
+        # B->A sequencing: require a briefing before campaign generation
+        briefing_row = await pool.fetchrow(
+            """SELECT id, created_at FROM b2b_vendor_briefings
+               WHERE LOWER(vendor_name) = LOWER($1)
+                 AND status = 'sent'
+               ORDER BY created_at DESC LIMIT 1""",
+            vendor_name,
+        )
+        if not briefing_row:
+            skipped += 1
+            continue
+        days_since_briefing = (
+            datetime.now(timezone.utc) - briefing_row["created_at"]
+        ).days
+        if days_since_briefing < 7:
+            skipped += 1
+            continue
+
         # Dedup: skip vendor if campaign sent within dedup_days
         existing = await pool.fetchval(
             """
@@ -1385,6 +1403,24 @@ async def _generate_challenger_campaigns(
 
     for target in targets[:limit]:
         challenger_name = target["company_name"]
+
+        # B->A sequencing: require a briefing before campaign generation
+        briefing_row = await pool.fetchrow(
+            """SELECT id, created_at FROM b2b_vendor_briefings
+               WHERE LOWER(vendor_name) = LOWER($1)
+                 AND status = 'sent'
+               ORDER BY created_at DESC LIMIT 1""",
+            challenger_name,
+        )
+        if not briefing_row:
+            skipped += 1
+            continue
+        days_since_briefing = (
+            datetime.now(timezone.utc) - briefing_row["created_at"]
+        ).days
+        if days_since_briefing < 7:
+            skipped += 1
+            continue
 
         # Dedup
         existing = await pool.fetchval(

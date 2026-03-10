@@ -23,6 +23,8 @@ from ..autonomous.tasks.b2b_vendor_briefing import (
     build_vendor_briefing,
     create_gate_token,
     generate_and_send_briefing,
+    reject_briefing,
+    send_approved_briefing,
     send_batch_briefings,
     send_vendor_briefing,
 )
@@ -136,6 +138,16 @@ class VendorCheckoutRequest(BaseModel):
     email: str | None = Field(None, min_length=5)
 
 
+class BulkBriefingApproveRequest(BaseModel):
+    briefing_ids: list[str] = Field(..., min_length=1)
+    action: str = Field("approve", pattern="^(approve|reject)$")
+
+
+class BulkBriefingRejectRequest(BaseModel):
+    briefing_ids: list[str] = Field(..., min_length=1)
+    reason: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -201,7 +213,7 @@ async def briefing_gate(body: GateRequest):
 
     pool = _pool_or_503()
 
-    # Rate limit: max 3 gate requests per email per day
+    # Rate limit: max 50 gate requests per email per day (loose for testing)
     count = await pool.fetchval(
         """
         SELECT COUNT(*) FROM b2b_vendor_briefings
@@ -210,7 +222,7 @@ async def briefing_gate(body: GateRequest):
         """,
         email,
     )
-    if count and count >= 3:
+    if count and count >= 50:
         raise HTTPException(status_code=429, detail="Too many requests -- try again tomorrow")
 
     # Suppression check
@@ -239,7 +251,7 @@ async def briefing_gate(body: GateRequest):
     except Exception:
         logger.exception("CRM lead creation failed during gate (non-fatal)")
 
-    # Build full (non-redacted) briefing -- prefer cached version (instant)
+    # Build briefing data for fallback fields
     cached_row = await pool.fetchrow(
         """
         SELECT briefing_data FROM b2b_vendor_briefings
@@ -258,27 +270,88 @@ async def briefing_gate(body: GateRequest):
     if not briefing_data:
         raise HTTPException(status_code=404, detail=f"No data found for vendor: {vendor_name}")
 
-    # Mark as gated delivery so template adds "Want this weekly?" footer
-    briefing_data["is_gated_delivery"] = True
+    # Fetch the full exploratory_overview report for deep analysis
+    full_report_row = await pool.fetchrow(
+        """
+        SELECT intelligence_data, executive_summary
+        FROM b2b_intelligence
+        WHERE report_type = 'exploratory_overview'
+        ORDER BY created_at DESC LIMIT 1
+        """,
+    )
+    full_report_data: dict = {}
+    if full_report_row:
+        rd = full_report_row["intelligence_data"]
+        full_report_data = json.loads(rd) if isinstance(rd, str) else rd
 
-    briefing_html = render_vendor_briefing_html(briefing_data)
+    # Generate full vendor report PDF
+    import base64
+    import httpx as _httpx
+    from ..services.b2b.pdf_renderer import render_vendor_full_report_pdf
+    from ..templates.email.vendor_report_delivery import (
+        render_report_delivery_html,
+        render_report_delivery_text,
+    )
 
-    # Send the full briefing
-    result = await send_vendor_briefing(
-        to_email=email,
+    pdf_bytes = render_vendor_full_report_pdf(
         vendor_name=vendor_name,
-        briefing_html=briefing_html,
+        report_data=full_report_data,
         briefing_data=briefing_data,
     )
 
-    if result is None:
-        raise HTTPException(status_code=500, detail="Failed to send briefing")
+    # Send cover email with PDF attachment via Resend (churnsignals.co sender)
+    cover_html = render_report_delivery_html(vendor_name)
+    slug = vendor_name.lower().replace(" ", "-")
+    sender_name = settings.b2b_churn.vendor_briefing_sender_name
+    cfg = settings.campaign_sequence
 
-    logger.info("Gate briefing sent to %s for %s", email, vendor_name)
+    try:
+        async with _httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {cfg.resend_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "from": f"{sender_name} <{cfg.resend_from_email}>",
+                    "to": [email],
+                    "subject": f"Your {vendor_name} Churn Intelligence Report",
+                    "html": cover_html,
+                    "reply_to": "outreach@churnsignals.co",
+                    "attachments": [{
+                        "filename": f"{slug}-churn-report.pdf",
+                        "content": base64.b64encode(pdf_bytes).decode("utf-8"),
+                    }],
+                },
+            )
+            resp.raise_for_status()
+            logger.info("Gate report email sent via Resend: %s", resp.json().get("id"))
+    except Exception:
+        logger.exception("Failed to send gated report email")
+        raise HTTPException(status_code=500, detail="Failed to send report")
+
+    # Persist delivery record
+    try:
+        await pool.execute(
+            """
+            INSERT INTO b2b_vendor_briefings
+                (vendor_name, recipient_email, subject, briefing_data, status)
+            VALUES ($1, $2, $3, $4::jsonb, 'sent')
+            """,
+            vendor_name,
+            email,
+            f"Your {vendor_name} Churn Intelligence Report",
+            json.dumps(briefing_data, default=str),
+        )
+    except Exception:
+        logger.warning("Failed to persist gate delivery record (non-fatal)")
+
+    logger.info("Gate full report (PDF) sent to %s for %s", email, vendor_name)
     return {
         "status": "ok",
         "vendor_name": vendor_name,
-        "message": "Full briefing sent to your email",
+        "message": "Full report sent to your email",
         "report_token": body.token,
     }
 
@@ -309,7 +382,7 @@ async def vendor_checkout(body: VendorCheckoutRequest):
     session_params: dict = {
         "mode": "subscription",
         "line_items": [{"price": price_id, "quantity": 1}],
-        "success_url": f"https://churnsignals.co/report?vendor={vendor_encoded}&checkout=success",
+        "success_url": f"https://churnsignals.co/report?vendor={vendor_encoded}&checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
         "cancel_url": f"https://churnsignals.co/report?vendor={vendor_encoded}&checkout=cancelled",
         "metadata": {
             "vendor_name": body.vendor_name,
@@ -331,6 +404,82 @@ async def vendor_checkout(body: VendorCheckoutRequest):
         body.vendor_name, body.tier, session.id,
     )
     return {"url": session.url}
+
+
+@router.get("/checkout-session")
+async def checkout_session_info(session_id: str = Query(..., min_length=10)):
+    """Retrieve customer email and metadata from a completed Stripe Checkout session.
+
+    Also fires the purchase confirmation email on first call (idempotent).
+    """
+    import stripe
+
+    cfg = settings.saas_auth
+    if not cfg.stripe_secret_key:
+        raise HTTPException(status_code=503, detail="Stripe not configured")
+    stripe.api_key = cfg.stripe_secret_key
+
+    try:
+        session = stripe.checkout.Session.retrieve(session_id)
+    except stripe.StripeError as exc:
+        logger.warning("Stripe session retrieval failed: %s", exc)
+        raise HTTPException(status_code=400, detail="Invalid session")
+
+    customer_email = (
+        session.customer_details.email if session.customer_details else session.customer_email
+    ) or ""
+    meta = session.metadata or {}
+    vendor_name = meta.get("vendor_name", "")
+    tier = meta.get("tier", "standard")
+
+    # Send confirmation email (idempotent -- dedup by session_id in billing_events)
+    if customer_email and meta.get("source") == "vendor_briefing_report":
+        pool = get_db_pool()
+        dedup_key = f"vendor_checkout_email_{session_id}"
+        already_sent = await pool.fetchval(
+            "SELECT 1 FROM billing_events WHERE stripe_event_id = $1", dedup_key
+        )
+        if not already_sent:
+            try:
+                from ..templates.email.vendor_checkout_confirmation import (
+                    render_checkout_confirmation_html,
+                    render_checkout_confirmation_text,
+                )
+                from ..services.email_provider import get_email_provider
+
+                html = render_checkout_confirmation_html(vendor_name, tier, customer_email)
+                text = render_checkout_confirmation_text(vendor_name, tier)
+
+                email_provider = get_email_provider()
+                await email_provider.send(
+                    to=[customer_email],
+                    subject=f"Subscription Confirmed: {vendor_name} Churn Intelligence",
+                    body=text,
+                    html=html,
+                    reply_to="outreach@churnsignals.co",
+                )
+                # Mark as sent so webhook doesn't double-send
+                await pool.execute(
+                    """
+                    INSERT INTO billing_events (stripe_event_id, event_type, payload)
+                    VALUES ($1, $2, '{}'::jsonb)
+                    ON CONFLICT (stripe_event_id) DO NOTHING
+                    """,
+                    dedup_key,
+                    "vendor_checkout_confirmation_email",
+                )
+                logger.info(
+                    "Vendor checkout confirmation sent (direct): email=%s vendor=%s tier=%s",
+                    customer_email, vendor_name, tier,
+                )
+            except Exception:
+                logger.exception("Failed to send vendor checkout confirmation (direct)")
+
+    return {
+        "email": customer_email,
+        "vendor_name": vendor_name,
+        "tier": tier,
+    }
 
 
 @router.get("/report-data")
@@ -465,7 +614,7 @@ async def list_briefings(
     limit: int = Query(50, le=200),
     user: AuthUser | None = Depends(optional_auth),
 ):
-    """List sent briefings, optionally filtered by vendor."""
+    """List all briefings, optionally filtered by vendor."""
     pool = _pool_or_503()
 
     if vendor:
@@ -494,3 +643,132 @@ async def list_briefings(
         )
 
     return [_row_to_dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Briefing Review Queue (HITL)
+# ---------------------------------------------------------------------------
+
+@router.get("/review-queue/summary")
+async def briefing_review_summary(
+    user: AuthUser | None = Depends(optional_auth),
+):
+    """Summary stats for the briefing review queue."""
+    pool = _pool_or_503()
+
+    row = await pool.fetchrow(
+        """
+        SELECT
+            COUNT(*) FILTER (WHERE status = 'pending_approval') AS pending_approval,
+            COUNT(*) FILTER (WHERE status = 'sent') AS sent,
+            COUNT(*) FILTER (WHERE status = 'rejected') AS rejected,
+            COUNT(*) FILTER (WHERE status = 'failed') AS failed,
+            EXTRACT(EPOCH FROM (NOW() - MIN(created_at) FILTER (WHERE status = 'pending_approval'))) / 3600
+                AS oldest_pending_hours
+        FROM b2b_vendor_briefings
+        """
+    )
+
+    return {
+        "pending_approval": row["pending_approval"] or 0,
+        "sent": row["sent"] or 0,
+        "rejected": row["rejected"] or 0,
+        "failed": row["failed"] or 0,
+        "oldest_pending_hours": round(float(row["oldest_pending_hours"]), 1) if row["oldest_pending_hours"] else None,
+    }
+
+
+@router.get("/review-queue")
+async def briefing_review_queue(
+    status: str | None = Query(None),
+    limit: int = Query(100, le=500),
+    offset: int = Query(0),
+    user: AuthUser | None = Depends(optional_auth),
+):
+    """List briefings for review, optionally filtered by status."""
+    pool = _pool_or_503()
+
+    if status and status != "all":
+        rows = await pool.fetch(
+            """
+            SELECT id, vendor_name, recipient_email, subject,
+                   briefing_html, status, target_mode,
+                   created_at, approved_at, rejected_at, reject_reason
+            FROM b2b_vendor_briefings
+            WHERE status = $1
+            ORDER BY created_at DESC
+            LIMIT $2 OFFSET $3
+            """,
+            status,
+            limit,
+            offset,
+        )
+        count_val = await pool.fetchval(
+            "SELECT COUNT(*) FROM b2b_vendor_briefings WHERE status = $1",
+            status,
+        )
+    else:
+        rows = await pool.fetch(
+            """
+            SELECT id, vendor_name, recipient_email, subject,
+                   briefing_html, status, target_mode,
+                   created_at, approved_at, rejected_at, reject_reason
+            FROM b2b_vendor_briefings
+            ORDER BY created_at DESC
+            LIMIT $1 OFFSET $2
+            """,
+            limit,
+            offset,
+        )
+        count_val = await pool.fetchval(
+            "SELECT COUNT(*) FROM b2b_vendor_briefings"
+        )
+
+    return {
+        "briefings": [_row_to_dict(r) for r in rows],
+        "count": count_val or 0,
+    }
+
+
+@router.post("/bulk-approve")
+async def bulk_approve_briefings(
+    body: BulkBriefingApproveRequest,
+    user: AuthUser | None = Depends(optional_auth),
+):
+    """Approve and send pending briefings."""
+    results = []
+    failed = []
+
+    for bid in body.briefing_ids:
+        result = await send_approved_briefing(bid)
+        if "error" in result:
+            failed.append({"id": bid, "reason": result["error"]})
+        else:
+            results.append(result)
+
+    return {
+        "processed": len(results),
+        "failed": failed,
+    }
+
+
+@router.post("/bulk-reject")
+async def bulk_reject_briefings(
+    body: BulkBriefingRejectRequest,
+    user: AuthUser | None = Depends(optional_auth),
+):
+    """Reject pending briefings."""
+    rejected = 0
+    failed = []
+
+    for bid in body.briefing_ids:
+        result = await reject_briefing(bid, body.reason)
+        if "error" in result:
+            failed.append({"id": bid, "reason": result["error"]})
+        else:
+            rejected += 1
+
+    return {
+        "rejected": rejected,
+        "failed": failed,
+    }

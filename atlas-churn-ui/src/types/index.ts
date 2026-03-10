@@ -331,6 +331,26 @@ export interface AuditEvent {
   created_at: string | null
 }
 
+// ---------------------------------------------------------------------------
+// Briefing Review (HITL)
+// ---------------------------------------------------------------------------
+
+export type BriefingStatus = 'pending_approval' | 'sent' | 'opened' | 'clicked' | 'bounced' | 'failed' | 'suppressed' | 'rejected'
+
+export interface BriefingDraft {
+  id: string
+  vendor_name: string
+  recipient_email: string
+  subject: string | null
+  briefing_html: string | null
+  status: BriefingStatus
+  target_mode: string | null
+  created_at: string | null
+  approved_at: string | null
+  rejected_at: string | null
+  reject_reason: string | null
+}
+
 export type TargetMode = 'vendor_retention' | 'challenger_intel'
 export type TargetTier = 'report' | 'dashboard' | 'api'
 

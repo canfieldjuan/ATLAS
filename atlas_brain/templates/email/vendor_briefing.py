@@ -8,6 +8,7 @@ vendor.  Table-based layout with inline CSS for Outlook compatibility.
 
 from __future__ import annotations
 
+import json
 from datetime import date
 from html import escape
 from typing import Any
@@ -136,6 +137,7 @@ def render_vendor_briefing_html(briefing: dict) -> str:
     gate_url = briefing.get("gate_url", "")
     is_gated_delivery = briefing.get("is_gated_delivery", False)
     prospect_mode = briefing.get("prospect_mode", False)
+    challenger_mode = briefing.get("challenger_mode", False)
 
     # Section 4: pain breakdown
     pains = briefing.get("pain_breakdown") or []
@@ -185,8 +187,18 @@ def render_vendor_briefing_html(briefing: dict) -> str:
 
     displacement_rows = ""
     for d in displacements:
-        comp = _safe(d.get("competitor"), "Unknown")
-        cnt = _safe(d.get("count", 0), "0")
+        raw_comp = d.get("competitor") or d.get("name") or "Unknown"
+        # Handle stringified JSON objects like '{"name": "Marketo"}'
+        if isinstance(raw_comp, str) and raw_comp.startswith("{"):
+            try:
+                parsed = json.loads(raw_comp)
+                raw_comp = parsed.get("name") or parsed.get("competitor") or raw_comp
+            except (json.JSONDecodeError, TypeError):
+                pass
+        elif isinstance(raw_comp, dict):
+            raw_comp = raw_comp.get("name") or raw_comp.get("competitor") or "Unknown"
+        comp = _safe(raw_comp, "Unknown")
+        cnt = _safe(d.get("count") or d.get("mentions", 0), "0")
         displacement_rows += f"""
         <tr>
           <td style="padding:6px 12px;font-size:14px;color:#333;border-bottom:1px solid #eee;">{comp}</td>
@@ -235,14 +247,16 @@ def render_vendor_briefing_html(briefing: dict) -> str:
                 risk_parts.append(f"{watch} watch")
             risk_text = ", ".join(risk_parts)
 
+            _acct_heading = "Accounts In Motion" if challenger_mode else "Accounts at Risk"
+            _acct_desc = "enterprise accounts leaving incumbents" if challenger_mode else "enterprise accounts flagged"
             named_accounts_html = f"""
         <!-- Named Accounts (redacted) -->
         <table cellpadding="0" cellspacing="0" border="0" style="width:100%;margin-bottom:28px;">
           <tr><td style="padding:0 24px;">
-            <h3 style="margin:0 0 12px;font-size:16px;color:#1a2332;">Accounts at Risk</h3>
+            <h3 style="margin:0 0 12px;font-size:16px;color:#1a2332;">{_acct_heading}</h3>
             <div style="background:#fafafa;border:1px solid #eee;border-radius:6px;padding:16px 20px;text-align:center;">
               <div style="font-size:28px;font-weight:700;color:#1a2332;">{len(named_accounts)}</div>
-              <div style="font-size:13px;color:#888;margin-top:4px;">enterprise accounts flagged</div>
+              <div style="font-size:13px;color:#888;margin-top:4px;">{_acct_desc}</div>
               <div style="font-size:13px;color:#555;margin-top:8px;">{risk_text}</div>
               <div style="font-size:12px;color:#999;margin-top:10px;font-style:italic;">Full account list available in paid briefing</div>
             </div>
@@ -275,11 +289,12 @@ def render_vendor_briefing_html(briefing: dict) -> str:
               </td>
             </tr>"""
 
+            _full_acct_heading = "Accounts In Motion" if challenger_mode else "Accounts at Risk"
             named_accounts_html = f"""
         <!-- Named Accounts -->
         <table cellpadding="0" cellspacing="0" border="0" style="width:100%;margin-bottom:28px;">
           <tr><td style="padding:0 24px;">
-            <h3 style="margin:0 0 12px;font-size:16px;color:#1a2332;">Accounts at Risk</h3>
+            <h3 style="margin:0 0 12px;font-size:16px;color:#1a2332;">{_full_acct_heading}</h3>
             <table cellpadding="0" cellspacing="0" border="0" style="width:100%;border:1px solid #eee;border-radius:6px;overflow:hidden;">
               <tr style="background:#f8f9fa;">
                 <th style="padding:8px 12px;text-align:left;font-size:12px;color:#888;font-weight:600;text-transform:uppercase;">Company</th>
@@ -315,39 +330,44 @@ def render_vendor_briefing_html(briefing: dict) -> str:
             </table>"""
 
     # Section 9: CTA content
-    cta_title = escape(cta_hook) if cta_hook else f"Get weekly intelligence for {vendor}"
-    cta_description_html = ""
-    cta_description = briefing.get("cta_description", "")
-    if cta_description:
+    cta_title = f"There&#39;s more in the full report"
+    if challenger_mode:
         cta_description_html = (
             '<div style="font-size:14px;color:#555;margin-bottom:16px;">'
-            f'{escape(cta_description)}</div>'
+            f"This briefing is a summary. The full sales intelligence report for {vendor} "
+            "includes detailed account movement data, incumbent pain analysis, "
+            "and actionable prospecting insights."
+            "</div>"
         )
-    elif not cta_hook:
+    else:
         cta_description_html = (
             '<div style="font-size:14px;color:#555;margin-bottom:16px;">'
-            "See who&#39;s churning, why, and where they&#39;re going -- every week."
+            f"This briefing is a summary. The full intelligence report for {vendor} "
+            "includes detailed competitive analysis, displacement flow data, "
+            "feature gap breakdowns, and actionable retention insights."
             "</div>"
         )
 
-    if prospect_mode:
-        cta_button_label = "See the Full Report"
-        cta_button_sub = (
-            '<div style="font-size:12px;color:#888;margin-top:10px;">'
-            "Includes named accounts, full displacement map, and all evidence."
-            "</div>"
-        )
-        cta_link = gate_url or booking_url
-    elif is_gated_delivery:
-        cta_button_label = "Want This Every Week?"
+    if prospect_mode or is_gated_delivery:
+        if challenger_mode:
+            cta_button_label = "See Which Accounts Are In Motion"
+        else:
+            cta_button_label = "See the Full Report"
         cta_button_sub = (
             '<div style="font-size:13px;color:#555;margin-top:10px;">'
-            "Reply to this email and I&#39;ll set up weekly briefings for you."
-            "</div>"
+            + ("The full report includes account movement data, "
+               "incumbent pain analysis, and more."
+               if challenger_mode else
+               "The full report includes competitive displacement maps, "
+               "customer pain analysis, and more.")
+            + "</div>"
         )
-        cta_link = booking_url
+        cta_link = gate_url or booking_url
     else:
-        cta_button_label = "Walk Through This Week&#39;s Findings"
+        if challenger_mode:
+            cta_button_label = "See Which Accounts Are In Motion"
+        else:
+            cta_button_label = "See the Full Report"
         cta_button_sub = ""
         cta_link = booking_url
 
@@ -377,7 +397,7 @@ def render_vendor_briefing_html(briefing: dict) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
-  <title>Churn Intelligence Briefing - {vendor}</title>
+  <title>{"Sales Intelligence Briefing" if challenger_mode else "Churn Intelligence Briefing"} - {vendor}</title>
   <!--[if mso]>
   <style>table {{border-collapse:collapse;}}</style>
   <![endif]-->
@@ -401,7 +421,7 @@ def render_vendor_briefing_html(briefing: dict) -> str:
   <!-- Context line -->
   <tr>
     <td style="padding:20px 24px 0;">
-      <p style="margin:0;font-size:13px;color:#666;line-height:1.5;">We monitor public customer signals for {vendor} so your team doesn&#39;t have to. Here&#39;s what we found this week.</p>
+      <p style="margin:0;font-size:13px;color:#666;line-height:1.5;">{"We track accounts in motion across your competitive landscape so your sales team doesn&#39;t have to. Here&#39;s what we found this week." if challenger_mode else "We monitor public customer signals for " + vendor + " so your team doesn&#39;t have to. Here&#39;s what we found this week."}</p>
     </td>
   </tr>
 
@@ -419,7 +439,7 @@ def render_vendor_briefing_html(briefing: dict) -> str:
               <tr>
                 <td style="text-align:center;">
                   <div style="font-size:36px;font-weight:700;color:{score_color};line-height:1;">{score:.0f}</div>
-                  <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:0.5px;">Churn Pressure</div>
+                  <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:0.5px;">{"Market Momentum" if challenger_mode else "Churn Pressure"}</div>
                   <div style="margin-top:4px;font-size:13px;">{trend_html}</div>
                 </td>
               </tr>
@@ -458,7 +478,7 @@ def render_vendor_briefing_html(briefing: dict) -> str:
         <tr>
           <td style="width:25%;text-align:center;padding:8px 4px;">
             <div style="font-size:22px;font-weight:700;color:#1a2332;">{density}</div>
-            <div style="font-size:11px;color:#888;text-transform:uppercase;">Churn Density</div>
+            <div style="font-size:11px;color:#888;text-transform:uppercase;">{"Signal Density" if challenger_mode else "Churn Density"}</div>
           </td>
           <td style="width:25%;text-align:center;padding:8px 4px;">
             <div style="font-size:22px;font-weight:700;color:#1a2332;">{urgency}</div>
@@ -470,7 +490,7 @@ def render_vendor_briefing_html(briefing: dict) -> str:
           </td>
           <td style="width:25%;text-align:center;padding:8px 4px;">
             <div style="font-size:22px;font-weight:700;color:#1a2332;">{dm_rate}</div>
-            <div style="font-size:11px;color:#888;text-transform:uppercase;">DM Churn Rate</div>
+            <div style="font-size:11px;color:#888;text-transform:uppercase;">{"DM Switch Rate" if challenger_mode else "DM Churn Rate"}</div>
           </td>
         </tr>
       </table>
@@ -484,7 +504,7 @@ def render_vendor_briefing_html(briefing: dict) -> str:
   {"" if not pain_rows else f'''
   <tr>
     <td style="padding:20px 24px;">
-      <h3 style="margin:0 0 14px;font-size:16px;color:#1a2332;">What's Driving Churn</h3>
+      <h3 style="margin:0 0 14px;font-size:16px;color:#1a2332;">{"What's Driving The Switch" if challenger_mode else "What's Driving Churn"}</h3>
       <table cellpadding="0" cellspacing="0" border="0" style="width:100%;">
         {pain_rows}
       </table>
@@ -496,7 +516,7 @@ def render_vendor_briefing_html(briefing: dict) -> str:
   {"" if not displacement_rows else f'''
   <tr>
     <td style="padding:20px 24px;">
-      <h3 style="margin:0 0 14px;font-size:16px;color:#1a2332;">Where They&#39;re Going</h3>
+      <h3 style="margin:0 0 14px;font-size:16px;color:#1a2332;">{"Incumbents Losing Accounts" if challenger_mode else "Where They&#39;re Going"}</h3>
       <table cellpadding="0" cellspacing="0" border="0" style="width:100%;border:1px solid #eee;border-radius:6px;overflow:hidden;">
         <tr style="background:#f8f9fa;">
           <th style="padding:8px 12px;text-align:left;font-size:12px;color:#888;font-weight:600;text-transform:uppercase;">Competitor</th>

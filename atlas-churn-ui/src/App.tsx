@@ -27,6 +27,7 @@ const BlogPost = lazy(() => import('./pages/BlogPost'))
 const Methodology = lazy(() => import('./pages/Methodology'))
 const BlogReview = lazy(() => import('./pages/BlogReview'))
 const CampaignReview = lazy(() => import('./pages/CampaignReview'))
+const BriefingReview = lazy(() => import('./pages/BriefingReview'))
 const Prospects = lazy(() => import('./pages/Prospects'))
 const Report = lazy(() => import('./pages/Report'))
 
@@ -95,6 +96,7 @@ export default function App() {
             <Route path="/affiliates" element={renderLazyRoute(Affiliates)} />
             <Route path="/blog-review" element={renderLazyRoute(BlogReview)} />
             <Route path="/campaign-review" element={renderLazyRoute(CampaignReview)} />
+            <Route path="/briefing-review" element={renderLazyRoute(BriefingReview)} />
             <Route path="/prospects" element={renderLazyRoute(Prospects)} />
             <Route path="/account" element={renderLazyRoute(Account)} />
             <Route path="*" element={<Navigate to="/" replace />} />
