@@ -1335,7 +1335,13 @@ async def create_consumer_correction(
     Supported entity types: product_review, product_pain_point, brand,
     market_report, complaint_content.
 
-    Supported correction types: suppress, flag, override_field, reclassify.
+    Supported correction types: suppress, flag, override_field, reclassify,
+    merge_brand.
+
+    For merge_brand: old_value = source brand name, new_value = target brand
+    name. Renames across brand_intelligence, brand_intelligence_snapshots,
+    product_change_events, product_displacement_edges, product_metadata.
+    Adds source as alias on target in consumer_brand_registry.
 
     Args:
         entity_type: Type of entity to correct
@@ -1343,11 +1349,11 @@ async def create_consumer_correction(
         correction_type: Type of correction to apply
         reason: Human-readable reason for the correction
         field_name: Required for override_field corrections
-        old_value: Original value (for override_field)
-        new_value: New value (for override_field)
+        old_value: Original value (for override_field) or source brand (for merge_brand)
+        new_value: New value (for override_field) or target brand (for merge_brand)
     """
     valid_types = {"product_review", "product_pain_point", "brand", "market_report", "complaint_content"}
-    valid_corrections = {"suppress", "flag", "override_field", "reclassify"}
+    valid_corrections = {"suppress", "flag", "override_field", "reclassify", "merge_brand"}
 
     if entity_type not in valid_types:
         return json.dumps({"error": f"Invalid entity_type. Must be one of: {sorted(valid_types)}"})
@@ -1357,6 +1363,11 @@ async def create_consumer_correction(
         return json.dumps({"error": "entity_id must be a valid UUID"})
     if correction_type == "override_field" and not field_name:
         return json.dumps({"error": "field_name required for override_field"})
+    if correction_type == "merge_brand":
+        if not old_value or not new_value:
+            return json.dumps({
+                "error": "merge_brand requires old_value (source brand) and new_value (target brand)",
+            })
 
     try:
         from ..storage.database import get_db_pool
@@ -1372,12 +1383,28 @@ async def create_consumer_correction(
             entity_type, entity_id, correction_type,
             field_name, old_value, new_value, reason,
         )
-        return json.dumps({
+
+        # Execute brand merge if applicable
+        merge_info = None
+        if correction_type == "merge_brand":
+            from ..services.brand_merge import execute_brand_merge
+            merge_result = await execute_brand_merge(pool, old_value, new_value)
+            correction_id = row["id"]
+            await pool.execute(
+                "UPDATE data_corrections SET affected_count = $1, metadata = $2::jsonb WHERE id = $3",
+                merge_result["total_affected"], json.dumps(merge_result), correction_id,
+            )
+            merge_info = merge_result
+
+        result = {
             "success": True,
             "id": str(row["id"]),
             "status": row["status"],
             "created_at": row["created_at"],
-        }, default=str)
+        }
+        if merge_info:
+            result["merge"] = merge_info
+        return json.dumps(result, default=str)
     except Exception:
         logger.exception("create_consumer_correction error")
         return json.dumps({"error": "Failed to create correction"})

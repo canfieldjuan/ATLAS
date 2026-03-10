@@ -112,18 +112,16 @@ Slack/Teams notifications (Block Kit, Adaptive Cards), email digest (Resend).
 
 ---
 
-## Phase 6: Brand Merge & Advanced Controls -- NOT STARTED
+## Phase 6: Brand Merge & Advanced Controls -- DONE
 
 **B2B precedent**: `merge_vendor` correction type renames across 17 tables in transaction,
 adds old name as alias, invalidates cache.
 
-**Already done**: Corrections CRUD, suppress, flag, override_field, reclassify.
-
-| Item | Status | What's Needed |
-|------|--------|---------------|
-| Brand merge correction | **MISSING** | `merge_brand` correction type: rename across brand_intelligence, brand_intelligence_snapshots, product_change_events, product_pain_points. Add old name as alias to brand_registry. |
-| Merge REST endpoint | **MISSING** | Extend `POST /consumer/dashboard/corrections` to handle `merge_brand`. |
-| Merge MCP tool | **MISSING** | Extend `create_consumer_correction` to handle `merge_brand`. |
+| Item | Status | What's There |
+|------|--------|-------------|
+| Brand merge service | **DONE** | `brand_merge.py`: `execute_brand_merge()` renames across brand_intelligence (UNIQUE brand+source), brand_intelligence_snapshots (UNIQUE brand+snapshot_date), product_change_events, product_metadata, product_displacement_edges (UNIQUE from_brand+to_brand+direction+computed_date, both columns). Two-phase conflict handling (DELETE conflicts, then UPDATE). Refreshes mv_brand_summary. Adds old name as alias in consumer_brand_registry. Invalidates resolution cache. |
+| Merge REST endpoint | **DONE** | `POST /consumer/dashboard/corrections` with `correction_type=merge_brand`, old_value=source, new_value=target. Stores merge result in correction metadata + affected_count. |
+| Merge MCP tool | **DONE** | `create_consumer_correction` extended with `merge_brand` support. Same execution path, returns merge stats in response. |
 
 ---
 
@@ -147,4 +145,4 @@ Phase 5  (delivery surfaces)  -- independent, can be done anytime after Phase 0
 | Phase 2 | **100%** | Displacement edges, confidence scoring (3-signal), min_confidence filters, REST + MCP |
 | Phase 3 | **100%** | Concurrent event detection, pairwise Pearson r correlation, market-level concurrent_shift events, REST + MCP |
 | Phase 5 | **30%** | CSV export + ntfy done. Missing webhooks, PDF, Slack/Teams, email. |
-| Phase 6 | **80%** | Corrections infrastructure done. Missing brand merge. |
+| Phase 6 | **100%** | Brand merge across 6 tables (conflict-aware), mv refresh, alias + cache invalidation, REST + MCP |
