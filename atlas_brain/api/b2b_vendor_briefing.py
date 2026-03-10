@@ -14,7 +14,7 @@ import jwt as pyjwt
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from ..auth.dependencies import AuthUser, optional_auth
+from ..auth.dependencies import AuthUser, optional_auth, require_auth
 from ..config import settings
 from ..services.crm_provider import get_crm_provider
 from ..storage.database import get_db_pool
@@ -213,7 +213,7 @@ async def briefing_gate(body: GateRequest):
 
     pool = _pool_or_503()
 
-    # Rate limit: max 50 gate requests per email per day (loose for testing)
+    # Rate limit: max 5 gate requests per email per day
     count = await pool.fetchval(
         """
         SELECT COUNT(*) FROM b2b_vendor_briefings
@@ -222,7 +222,7 @@ async def briefing_gate(body: GateRequest):
         """,
         email,
     )
-    if count and count >= 50:
+    if count and count >= 5:
         raise HTTPException(status_code=429, detail="Too many requests -- try again tomorrow")
 
     # Suppression check
@@ -432,8 +432,10 @@ async def checkout_session_info(session_id: str = Query(..., min_length=10)):
     vendor_name = meta.get("vendor_name", "")
     tier = meta.get("tier", "standard")
 
-    # Send confirmation email (idempotent -- dedup by session_id in billing_events)
-    if customer_email and meta.get("source") == "vendor_briefing_report":
+    # Send confirmation email only after successful payment
+    # (idempotent -- dedup by session_id in billing_events)
+    payment_ok = getattr(session, "payment_status", None) == "paid"
+    if customer_email and meta.get("source") == "vendor_briefing_report" and payment_ok:
         pool = get_db_pool()
         dedup_key = f"vendor_checkout_email_{session_id}"
         already_sent = await pool.fetchval(
@@ -651,7 +653,7 @@ async def list_briefings(
 
 @router.get("/review-queue/summary")
 async def briefing_review_summary(
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """Summary stats for the briefing review queue."""
     pool = _pool_or_503()
@@ -683,7 +685,7 @@ async def briefing_review_queue(
     status: str | None = Query(None),
     limit: int = Query(100, le=500),
     offset: int = Query(0),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """List briefings for review, optionally filtered by status."""
     pool = _pool_or_503()
@@ -733,7 +735,7 @@ async def briefing_review_queue(
 @router.post("/bulk-approve")
 async def bulk_approve_briefings(
     body: BulkBriefingApproveRequest,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """Approve and send pending briefings."""
     results = []
@@ -755,7 +757,7 @@ async def bulk_approve_briefings(
 @router.post("/bulk-reject")
 async def bulk_reject_briefings(
     body: BulkBriefingRejectRequest,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_auth),
 ):
     """Reject pending briefings."""
     rejected = 0

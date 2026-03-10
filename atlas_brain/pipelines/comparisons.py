@@ -111,18 +111,22 @@ async def load_known_brands(pool) -> dict[str, str]:
         if is_trusted_known_brand(r["brand"], r["product_count"])
     }
 
-    # Overlay consumer brand registry canonical names + aliases
+    # Overlay consumer brand registry canonical names + aliases.
+    # Registry entries must still pass is_trusted_known_brand() to prevent
+    # dirty values (e.g. "ipadcleaningcloth", "other") from leaking in.
     try:
         reg_rows = await pool.fetch(
             "SELECT canonical_name, aliases FROM consumer_brand_registry"
         )
         for r in reg_rows:
             canonical = r["canonical_name"]
+            if not is_trusted_known_brand(canonical):
+                continue
             known[canonical.lower()] = canonical
             aliases = r["aliases"]
             if isinstance(aliases, list):
                 for alias in aliases:
-                    if isinstance(alias, str) and alias.strip():
+                    if isinstance(alias, str) and alias.strip() and is_trusted_known_brand(alias):
                         known[alias.lower()] = canonical
     except Exception:
         pass  # Table may not exist during migration rollout

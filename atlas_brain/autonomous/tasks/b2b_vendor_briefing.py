@@ -783,16 +783,27 @@ async def send_approved_briefing(briefing_id: str) -> dict[str, Any]:
         logger.warning("Failed to send approved briefing %s: %s", briefing_id, exc)
         status = "failed"
 
-    await pool.execute(
-        """
-        UPDATE b2b_vendor_briefings
-        SET status = $1, resend_id = $2, approved_at = NOW()
-        WHERE id = $3
-        """,
-        status,
-        resend_id,
-        briefing_id,
-    )
+    if status == "sent":
+        await pool.execute(
+            """
+            UPDATE b2b_vendor_briefings
+            SET status = $1, resend_id = $2, approved_at = NOW()
+            WHERE id = $3
+            """,
+            status,
+            resend_id,
+            briefing_id,
+        )
+    else:
+        await pool.execute(
+            """
+            UPDATE b2b_vendor_briefings
+            SET status = $1
+            WHERE id = $2
+            """,
+            status,
+            briefing_id,
+        )
 
     return {
         "id": str(briefing_id),
