@@ -2756,21 +2756,31 @@ async def export_reviews(
 @limiter.limit(_dynamic_limit)
 async def export_brands(
     request: Request,
+    min_confidence: Optional[float] = Query(None, ge=0, le=1),
     limit: int = Query(200, ge=1, le=1000),
     user: AuthUser = Depends(require_auth),
 ):
     """Export brand intelligence scorecards as JSON."""
     pool = _pool_or_503()
+    clauses = ["TRUE"]
+    params: list = []
+    idx = 1
+    if min_confidence is not None:
+        clauses.append(f"confidence_score >= ${idx}")
+        params.append(min_confidence)
+        idx += 1
+    where = " AND ".join(clauses)
     rows = await pool.fetch(
-        """
+        f"""
         SELECT brand, total_reviews, avg_rating, avg_pain_score,
                repurchase_yes, repurchase_no, health_score,
-               last_computed_at
+               confidence_score, last_computed_at
         FROM brand_intelligence
+        WHERE {where}
         ORDER BY health_score DESC NULLS LAST
-        LIMIT $1
+        LIMIT ${idx}
         """,
-        limit,
+        *params, limit,
     )
     return {
         "count": len(rows),
@@ -2783,6 +2793,7 @@ async def export_brands(
                 "repurchase_yes": r["repurchase_yes"],
                 "repurchase_no": r["repurchase_no"],
                 "health_score": _safe_float(r["health_score"]),
+                "confidence_score": _safe_float(r["confidence_score"]),
                 "last_computed_at": str(r["last_computed_at"]) if r["last_computed_at"] else None,
             }
             for r in rows
@@ -2796,6 +2807,7 @@ async def export_pain_points(
     request: Request,
     category: Optional[str] = Query(None),
     min_pain: Optional[float] = Query(None, ge=0, le=10),
+    min_confidence: Optional[float] = Query(None, ge=0, le=1),
     limit: int = Query(500, ge=1, le=5000),
     user: AuthUser = Depends(require_auth),
 ):
@@ -2811,6 +2823,10 @@ async def export_pain_points(
     if min_pain is not None:
         clauses.append(f"pain_score >= ${idx}")
         params.append(min_pain)
+        idx += 1
+    if min_confidence is not None:
+        clauses.append(f"confidence_score >= ${idx}")
+        params.append(min_confidence)
         idx += 1
     where = " AND ".join(clauses)
 
@@ -2840,6 +2856,237 @@ async def export_pain_points(
                 "pain_score": _safe_float(r["pain_score"]),
                 "top_complaints": _safe_json(r["top_complaints"]),
                 "root_causes": _safe_json(r["root_cause_distribution"]),
+            }
+            for r in rows
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Brand registry endpoints
+# ---------------------------------------------------------------------------
+
+
+class AddBrandBody(BaseModel):
+    canonical_name: str
+    aliases: list[str] | None = None
+
+
+class AddBrandAliasBody(BaseModel):
+    alias: str
+
+
+@router.get("/fuzzy-brand-search")
+@limiter.limit(_dynamic_limit)
+async def fuzzy_brand_search(
+    request: Request,
+    q: str = "",
+    limit: int = Query(10, ge=1, le=100),
+    min_similarity: float = Query(0.3, ge=0.0, le=1.0),
+    user: AuthUser = Depends(require_auth),
+):
+    """Search consumer brands by name using fuzzy matching (trigram similarity)."""
+    if not q or not q.strip():
+        raise HTTPException(status_code=400, detail="q parameter is required")
+    from ..services.brand_registry import fuzzy_search_brands
+    results = await fuzzy_search_brands(q.strip(), limit=limit, min_similarity=min_similarity)
+    return {"query": q.strip(), "results": results, "count": len(results)}
+
+
+@router.get("/brand-registry")
+@limiter.limit(_dynamic_limit)
+async def list_brand_registry(
+    request: Request,
+    limit: int = Query(200, ge=1, le=500),
+    user: AuthUser = Depends(require_auth),
+):
+    """List all canonical consumer brands in the brand registry."""
+    from ..services.brand_registry import list_brands
+    brands = await list_brands()
+    return {
+        "brands": [
+            {
+                "id": str(b["id"]),
+                "canonical_name": b["canonical_name"],
+                "aliases": list(b["aliases"]) if isinstance(b["aliases"], list) else [],
+                "created_at": str(b["created_at"]),
+                "updated_at": str(b["updated_at"]),
+            }
+            for b in brands[:limit]
+        ],
+        "count": min(len(brands), limit),
+    }
+
+
+@router.post("/brand-registry")
+@limiter.limit(_dynamic_limit)
+async def add_brand_to_registry_endpoint(
+    request: Request,
+    body: AddBrandBody,
+    user: AuthUser = Depends(require_auth),
+):
+    """Add or update a consumer brand in the canonical brand registry."""
+    if not body.canonical_name.strip():
+        raise HTTPException(status_code=400, detail="canonical_name is required")
+    from ..services.brand_registry import add_brand
+    row = await add_brand(body.canonical_name.strip(), body.aliases)
+    return {
+        "success": True,
+        "brand": {
+            "id": str(row["id"]),
+            "canonical_name": row["canonical_name"],
+            "aliases": list(row["aliases"]) if isinstance(row["aliases"], list) else [],
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"]),
+        },
+    }
+
+
+@router.post("/brand-registry/{brand}/aliases")
+@limiter.limit(_dynamic_limit)
+async def add_brand_alias_endpoint(
+    request: Request,
+    brand: str,
+    body: AddBrandAliasBody,
+    user: AuthUser = Depends(require_auth),
+):
+    """Add an alias to an existing consumer brand in the registry."""
+    if not body.alias.strip():
+        raise HTTPException(status_code=400, detail="alias is required")
+    from ..services.brand_registry import add_alias
+    row = await add_alias(brand.strip(), body.alias.strip())
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Brand '{brand}' not found in registry")
+    return {
+        "success": True,
+        "brand": {
+            "id": str(row["id"]),
+            "canonical_name": row["canonical_name"],
+            "aliases": list(row["aliases"]) if isinstance(row["aliases"], list) else [],
+            "updated_at": str(row["updated_at"]),
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Displacement edge endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/displacement-edges")
+@limiter.limit(_dynamic_limit)
+async def list_displacement_edges(
+    request: Request,
+    from_brand: Optional[str] = Query(None),
+    to_brand: Optional[str] = Query(None),
+    direction: Optional[str] = Query(None),
+    min_confidence: Optional[float] = Query(None, ge=0, le=1),
+    days: int = Query(90, ge=1, le=3650),
+    limit: int = Query(50, ge=1, le=200),
+    user: AuthUser = Depends(require_auth),
+):
+    """Query product displacement edges (brand-to-brand competitive flows)."""
+    pool = _pool_or_503()
+    clauses = ["computed_date >= CURRENT_DATE - $1::int"]
+    params: list = [days]
+    idx = 2
+
+    if from_brand:
+        clauses.append(f"from_brand ILIKE '%%' || ${idx} || '%%'")
+        params.append(from_brand)
+        idx += 1
+    if to_brand:
+        clauses.append(f"to_brand ILIKE '%%' || ${idx} || '%%'")
+        params.append(to_brand)
+        idx += 1
+    if direction:
+        clauses.append(f"direction = ${idx}")
+        params.append(direction)
+        idx += 1
+    if min_confidence is not None:
+        clauses.append(f"confidence_score >= ${idx}")
+        params.append(min_confidence)
+        idx += 1
+
+    where = " AND ".join(clauses)
+    rows = await pool.fetch(
+        f"""
+        SELECT id, from_brand, to_brand, direction, mention_count,
+               signal_strength, avg_rating, category_distribution,
+               confidence_score, computed_date
+        FROM product_displacement_edges
+        WHERE {where}
+        ORDER BY mention_count DESC, confidence_score DESC
+        LIMIT ${idx}
+        """,
+        *params, limit,
+    )
+    return {
+        "edges": [
+            {
+                "id": str(r["id"]),
+                "from_brand": r["from_brand"],
+                "to_brand": r["to_brand"],
+                "direction": r["direction"],
+                "mention_count": r["mention_count"],
+                "signal_strength": r["signal_strength"],
+                "avg_rating": _safe_float(r["avg_rating"]),
+                "category_distribution": _safe_json(r["category_distribution"]),
+                "confidence_score": _safe_float(r["confidence_score"]),
+                "computed_date": str(r["computed_date"]),
+            }
+            for r in rows
+        ],
+        "count": len(rows),
+    }
+
+
+@router.get("/displacement-history")
+@limiter.limit(_dynamic_limit)
+async def get_displacement_history(
+    request: Request,
+    from_brand: str = Query(..., min_length=1),
+    to_brand: str = Query(..., min_length=1),
+    direction: Optional[str] = Query(None),
+    days: int = Query(365, ge=1, le=3650),
+    user: AuthUser = Depends(require_auth),
+):
+    """Time-series of displacement edge strength for a specific brand pair."""
+    pool = _pool_or_503()
+    clauses = [
+        "LOWER(from_brand) = LOWER($1)",
+        "LOWER(to_brand) = LOWER($2)",
+        "computed_date >= CURRENT_DATE - $3::int",
+    ]
+    params: list = [from_brand, to_brand, days]
+    idx = 4
+    if direction:
+        clauses.append(f"direction = ${idx}")
+        params.append(direction)
+
+    where = " AND ".join(clauses)
+    rows = await pool.fetch(
+        f"""
+        SELECT computed_date, direction, mention_count, signal_strength,
+               confidence_score, avg_rating
+        FROM product_displacement_edges
+        WHERE {where}
+        ORDER BY computed_date ASC
+        """,
+        *params,
+    )
+    return {
+        "from_brand": from_brand,
+        "to_brand": to_brand,
+        "days": days,
+        "history": [
+            {
+                "date": str(r["computed_date"]),
+                "direction": r["direction"],
+                "mention_count": r["mention_count"],
+                "signal_strength": r["signal_strength"],
+                "confidence_score": _safe_float(r["confidence_score"]),
+                "avg_rating": _safe_float(r["avg_rating"]),
             }
             for r in rows
         ],

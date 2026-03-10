@@ -36,6 +36,16 @@ Tools:
     list_consumer_corrections     -- list corrections with filters
     revert_consumer_correction    -- revert a previously applied correction
 
+    -- Consumer Brand Registry --
+    fuzzy_brand_search            -- trigram similarity search on brand names
+    add_brand_to_registry         -- add/update canonical brand with aliases
+    add_brand_alias               -- add alias to existing brand
+    list_brand_registry           -- list all canonical brands
+
+    -- Consumer Displacement Edges --
+    list_product_displacement_edges  -- query brand-to-brand competitive flows
+    get_product_displacement_history -- time-series for a specific brand pair
+
 Run:
     python -m atlas_brain.mcp.intelligence_server          # stdio
     python -m atlas_brain.mcp.intelligence_server --sse    # SSE HTTP transport
@@ -1471,6 +1481,285 @@ async def revert_consumer_correction(
     except Exception:
         logger.exception("revert_consumer_correction error")
         return json.dumps({"error": "Failed to revert correction"})
+
+
+# ---------------------------------------------------------------------------
+# Brand registry tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def fuzzy_brand_search(
+    query: str,
+    limit: int = 10,
+    min_similarity: float = 0.3,
+) -> str:
+    """Search consumer brands by name using fuzzy matching (trigram similarity).
+
+    Finds brands even with typos or partial names (e.g. "Cuisinrt" finds "Cuisinart").
+
+    Args:
+        query: Brand name to search for
+        limit: Max results (default 10, max 100)
+        min_similarity: Minimum similarity threshold 0.0-1.0 (default 0.3)
+    """
+    if not query or not query.strip():
+        return json.dumps({"error": "query is required"})
+    try:
+        from ..services.brand_registry import fuzzy_search_brands
+        results = await fuzzy_search_brands(
+            query.strip(), limit=limit, min_similarity=min_similarity,
+        )
+        return json.dumps({"query": query.strip(), "results": results, "count": len(results)}, default=str)
+    except Exception:
+        logger.exception("fuzzy_brand_search error")
+        return json.dumps({"error": "Internal error"})
+
+
+@mcp.tool()
+async def add_brand_to_registry(
+    canonical_name: str,
+    aliases: Optional[str] = None,
+) -> str:
+    """Add or update a consumer brand in the canonical brand registry.
+
+    On conflict with an existing brand, merges aliases into the existing set.
+
+    Args:
+        canonical_name: The official brand name (e.g. "KitchenAid")
+        aliases: Comma-separated lowercase aliases (e.g. "kitchen aid,kitchenaid")
+    """
+    if not canonical_name or not canonical_name.strip():
+        return json.dumps({"success": False, "error": "canonical_name is required"})
+    try:
+        from ..services.brand_registry import add_brand
+        alias_list = []
+        if aliases:
+            alias_list = [a.strip() for a in aliases.split(",") if a.strip()]
+        row = await add_brand(canonical_name.strip(), alias_list)
+        return json.dumps({
+            "success": True,
+            "brand": {
+                "id": str(row["id"]),
+                "canonical_name": row["canonical_name"],
+                "aliases": list(row["aliases"]) if isinstance(row["aliases"], list) else [],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            },
+        }, default=str)
+    except Exception:
+        logger.exception("add_brand_to_registry error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+@mcp.tool()
+async def add_brand_alias(
+    canonical_name: str,
+    alias: str,
+) -> str:
+    """Add an alias to an existing consumer brand in the registry.
+
+    Args:
+        canonical_name: Existing canonical brand name (e.g. "KitchenAid")
+        alias: New alias to add (e.g. "kitchen-aid")
+    """
+    if not canonical_name or not canonical_name.strip():
+        return json.dumps({"success": False, "error": "canonical_name is required"})
+    if not alias or not alias.strip():
+        return json.dumps({"success": False, "error": "alias is required"})
+    try:
+        from ..services.brand_registry import add_alias
+        row = await add_alias(canonical_name.strip(), alias.strip())
+        if row is None:
+            return json.dumps({
+                "success": False,
+                "error": f"Brand '{canonical_name}' not found in registry",
+            })
+        return json.dumps({
+            "success": True,
+            "brand": {
+                "id": str(row["id"]),
+                "canonical_name": row["canonical_name"],
+                "aliases": list(row["aliases"]) if isinstance(row["aliases"], list) else [],
+                "updated_at": row["updated_at"],
+            },
+        }, default=str)
+    except Exception:
+        logger.exception("add_brand_alias error")
+        return json.dumps({"success": False, "error": "Internal error"})
+
+
+@mcp.tool()
+async def list_brand_registry(limit: int = 100) -> str:
+    """List all canonical consumer brands in the brand registry with their aliases.
+
+    Args:
+        limit: Maximum results (default 100, cap 500)
+    """
+    limit = max(1, min(limit, 500))
+    try:
+        from ..services.brand_registry import list_brands
+        brands = await list_brands()
+        result = [
+            {
+                "id": str(b["id"]),
+                "canonical_name": b["canonical_name"],
+                "aliases": list(b["aliases"]) if isinstance(b["aliases"], list) else [],
+                "created_at": b["created_at"],
+                "updated_at": b["updated_at"],
+            }
+            for b in brands[:limit]
+        ]
+        return json.dumps({"brands": result, "count": len(result)}, default=str)
+    except Exception:
+        logger.exception("list_brand_registry error")
+        return json.dumps({"error": "Internal error", "brands": [], "count": 0})
+
+
+# ---------------------------------------------------------------------------
+# Displacement edge tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def list_product_displacement_edges(
+    from_brand: Optional[str] = None,
+    to_brand: Optional[str] = None,
+    direction: Optional[str] = None,
+    min_confidence: Optional[float] = None,
+    days: int = 90,
+    limit: int = 50,
+) -> str:
+    """Query product displacement edges (brand-to-brand competitive flows).
+
+    Shows which brands customers compare, switch from/to, consider, or avoid.
+    Edges have confidence scores based on review evidence strength.
+
+    Args:
+        from_brand: Filter by source brand (case-insensitive partial match)
+        to_brand: Filter by destination brand (case-insensitive partial match)
+        direction: Filter by flow direction (switched_from, switched_to, compared, considered, avoided)
+        min_confidence: Minimum confidence score (0.0-1.0)
+        days: Lookback window in days (default 90)
+        limit: Max results (default 50, max 200)
+    """
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+        clauses = ["computed_date >= CURRENT_DATE - $1::int"]
+        params: list = [days]
+        idx = 2
+
+        if from_brand:
+            clauses.append(f"from_brand ILIKE '%%' || ${idx} || '%%'")
+            params.append(from_brand)
+            idx += 1
+        if to_brand:
+            clauses.append(f"to_brand ILIKE '%%' || ${idx} || '%%'")
+            params.append(to_brand)
+            idx += 1
+        if direction:
+            clauses.append(f"direction = ${idx}")
+            params.append(direction)
+            idx += 1
+        if min_confidence is not None:
+            clauses.append(f"confidence_score >= ${idx}")
+            params.append(min_confidence)
+            idx += 1
+
+        where = " AND ".join(clauses)
+        rows = await pool.fetch(
+            f"""
+            SELECT id, from_brand, to_brand, direction, mention_count,
+                   signal_strength, avg_rating, confidence_score, computed_date
+            FROM product_displacement_edges
+            WHERE {where}
+            ORDER BY mention_count DESC, confidence_score DESC
+            LIMIT ${idx}
+            """,
+            *params, min(limit, 200),
+        )
+        edges = [
+            {
+                "id": str(r["id"]),
+                "from_brand": r["from_brand"],
+                "to_brand": r["to_brand"],
+                "direction": r["direction"],
+                "mention_count": r["mention_count"],
+                "signal_strength": r["signal_strength"],
+                "avg_rating": float(r["avg_rating"]) if r["avg_rating"] else None,
+                "confidence_score": float(r["confidence_score"]) if r["confidence_score"] else None,
+                "computed_date": str(r["computed_date"]),
+            }
+            for r in rows
+        ]
+        return json.dumps({"edges": edges, "count": len(edges)}, default=str)
+    except Exception:
+        logger.exception("list_product_displacement_edges error")
+        return json.dumps({"error": "Internal error", "edges": []})
+
+
+@mcp.tool()
+async def get_product_displacement_history(
+    from_brand: str,
+    to_brand: str,
+    direction: Optional[str] = None,
+    days: int = 365,
+) -> str:
+    """Time-series of displacement edge strength for a specific brand pair.
+
+    Args:
+        from_brand: Source brand (case-insensitive)
+        to_brand: Destination brand (case-insensitive)
+        direction: Optional direction filter
+        days: How far back to look (default 365)
+    """
+    try:
+        from ..storage.database import get_db_pool
+        pool = get_db_pool()
+        clauses = [
+            "LOWER(from_brand) = LOWER($1)",
+            "LOWER(to_brand) = LOWER($2)",
+            "computed_date >= CURRENT_DATE - $3::int",
+        ]
+        params: list = [from_brand, to_brand, days]
+        idx = 4
+        if direction:
+            clauses.append(f"direction = ${idx}")
+            params.append(direction)
+
+        where = " AND ".join(clauses)
+        rows = await pool.fetch(
+            f"""
+            SELECT computed_date, direction, mention_count, signal_strength,
+                   confidence_score, avg_rating
+            FROM product_displacement_edges
+            WHERE {where}
+            ORDER BY computed_date ASC
+            """,
+            *params,
+        )
+        history = [
+            {
+                "date": str(r["computed_date"]),
+                "direction": r["direction"],
+                "mention_count": r["mention_count"],
+                "signal_strength": r["signal_strength"],
+                "confidence_score": float(r["confidence_score"]) if r["confidence_score"] else None,
+                "avg_rating": float(r["avg_rating"]) if r["avg_rating"] else None,
+            }
+            for r in rows
+        ]
+        return json.dumps({
+            "from_brand": from_brand,
+            "to_brand": to_brand,
+            "days": days,
+            "history": history,
+            "total": len(history),
+        }, default=str)
+    except Exception:
+        logger.exception("get_product_displacement_history error")
+        return json.dumps({"error": "Internal error", "history": []})
 
 
 # ---------------------------------------------------------------------------

@@ -14,11 +14,14 @@ notification -- returns _skip_synthesis so the runner does not double-synthesize
 import asyncio
 import json
 import logging
+import math
 import re
+import uuid as _uuid
 from datetime import date, datetime, timezone
 from typing import Any
 
 from ...config import settings
+from ...services.brand_registry import resolve_brand_name_cached, _ensure_cache as _ensure_brand_cache
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 
@@ -204,6 +207,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # Upsert brand_intelligence scorecards (only if report stored successfully)
     snapshots_persisted = 0
     change_events_detected = 0
+    displacement_edges_persisted = 0
     if report_stored:
         await _upsert_brand_intelligence(
             pool, fetchers["brand_health"], parsed,
@@ -217,6 +221,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         change_events_detected = await _detect_change_events(
             pool, fetchers["brand_health"],
         )
+        displacement_edges_persisted = await _persist_displacement_edges(pool)
 
     # Send ntfy notification
     from ...pipelines.notify import send_pipeline_notification
@@ -238,6 +243,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "insights": len(parsed.get("insights", [])),
         "snapshots_persisted": snapshots_persisted,
         "change_events_detected": change_events_detected,
+        "displacement_edges_persisted": displacement_edges_persisted,
     }
 
 
@@ -280,6 +286,9 @@ async def _fetch_data_context(pool) -> dict[str, Any]:
 
 async def _fetch_brand_health(pool, *, category: str | None = None) -> list[dict[str, Any]]:
     """Per-brand health: reviews, rating, pain, severity, repurchase, safety."""
+    # Warm brand registry cache for sync resolution below
+    await _ensure_brand_cache()
+
     cat_filter = ""
     params: list = []
     if category:
@@ -319,7 +328,7 @@ async def _fetch_brand_health(pool, *, category: str | None = None) -> list[dict
     )
     return [
         {
-            "brand": r["brand"],
+            "brand": resolve_brand_name_cached(r["brand"]),
             "total_reviews": r["total_reviews"],
             "review_period": f"{r['earliest_review']} to {r['latest_review']}" if r["earliest_review"] else "dates unavailable",
             "avg_rating": round(float(r["avg_rating"]), 2) if r["avg_rating"] else 0.0,
@@ -673,6 +682,51 @@ def _normalize_feature_requests(gaps: list[dict[str, Any]]) -> list[dict[str, An
 
 
 # ------------------------------------------------------------------
+# Confidence scoring
+# ------------------------------------------------------------------
+
+
+def _compute_consumer_confidence(
+    mention_count: int,
+    deep_enriched_count: int,
+    total_count: int,
+    severity_counts: dict[str, int] | None = None,
+) -> float:
+    """Evidence-based confidence score for consumer entities (0.0-1.0).
+
+    Three equally-weighted signals (each 0-1, averaged):
+      1. mention_weight:     log-scaled mention count (caps at 50)
+      2. enrichment_weight:  proportion of reviews that are deep-enriched
+      3. severity_weight:    consistency of severity signals (entropy-based)
+
+    Adapted from B2B ``_compute_evidence_confidence()`` which uses
+    mention weight + source diversity + verified source proportion.
+    Consumer has a single source (Amazon), so source signals are replaced
+    with enrichment depth and severity consistency.
+    """
+    mention_weight = min(
+        math.log2(max(mention_count, 1)) / math.log2(50), 1.0
+    )
+
+    enrichment_weight = (
+        deep_enriched_count / total_count if total_count > 0 else 0.0
+    )
+
+    severity_weight = 0.5
+    if severity_counts:
+        vals = [severity_counts.get(s, 0) for s in ("critical", "major", "minor")]
+        total_sev = sum(vals)
+        if total_sev > 0:
+            probs = [v / total_sev for v in vals if v > 0]
+            entropy = -sum(p * math.log2(p) for p in probs)
+            max_entropy = math.log2(3)
+            severity_weight = 1.0 - (entropy / max_entropy)
+
+    score = (mention_weight + enrichment_weight + severity_weight) / 3.0
+    return round(max(0.0, min(1.0, score)), 2)
+
+
+# ------------------------------------------------------------------
 # Brand intelligence upserts
 # ------------------------------------------------------------------
 
@@ -781,6 +835,15 @@ async def _upsert_brand_intelligence(
         if brand_replacement:
             buyer["replacement_distribution"] = brand_replacement
 
+        source_review_count = brand_data.get("total_reviews", 0)
+        source_dist = json.dumps({"amazon": source_review_count})
+        brand_confidence = _compute_consumer_confidence(
+            mention_count=brand_data.get("total_reviews", 0),
+            deep_enriched_count=brand_data.get("total_reviews", 0),
+            total_count=brand_data.get("total_reviews", 0),
+            severity_counts=brand_data.get("severity_distribution"),
+        )
+
         try:
             await pool.execute(
                 """
@@ -789,8 +852,9 @@ async def _upsert_brand_intelligence(
                     repurchase_yes, repurchase_no,
                     sentiment_breakdown, top_feature_requests, top_complaints,
                     competitive_flows, buyer_profile, positive_aspects,
-                    health_score, last_computed_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                    health_score, last_computed_at,
+                    source_review_count, source_distribution, confidence_score
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18)
                 ON CONFLICT (brand, source) DO UPDATE SET
                     total_reviews = EXCLUDED.total_reviews,
                     avg_rating = EXCLUDED.avg_rating,
@@ -804,7 +868,10 @@ async def _upsert_brand_intelligence(
                     buyer_profile = EXCLUDED.buyer_profile,
                     positive_aspects = EXCLUDED.positive_aspects,
                     health_score = EXCLUDED.health_score,
-                    last_computed_at = EXCLUDED.last_computed_at
+                    last_computed_at = EXCLUDED.last_computed_at,
+                    source_review_count = EXCLUDED.source_review_count,
+                    source_distribution = EXCLUDED.source_distribution,
+                    confidence_score = EXCLUDED.confidence_score
                 """,
                 brand,
                 "all",
@@ -821,6 +888,9 @@ async def _upsert_brand_intelligence(
                 json.dumps(scorecard.get("positive_aspects", [])),
                 health,
                 now,
+                source_review_count,
+                source_dist,
+                brand_confidence,
             )
             upserted += 1
         except Exception:
@@ -1023,3 +1093,150 @@ async def _detect_change_events(
     if detected:
         logger.info("Detected %d consumer change events", detected)
     return detected
+
+
+# ------------------------------------------------------------------
+# Displacement edge persistence
+# ------------------------------------------------------------------
+
+
+async def _persist_displacement_edges(pool) -> int:
+    """Extract competitive flows from deep-enriched reviews and persist as canonical edges."""
+    from ...pipelines.comparisons import (
+        ADJACENCY_DIRECTIONS,
+        load_known_brands,
+        normalize_brand,
+        normalize_canonical_brand,
+    )
+
+    today = date.today()
+    known_brands = await load_known_brands(pool)
+
+    rows = await pool.fetch(
+        f"""
+        SELECT
+            pm.brand AS reviewed_brand,
+            comp->>'product_name' AS product_name,
+            COALESCE(comp->>'direction', 'compared') AS direction,
+            {_CAT_EXPR} AS category,
+            pr.rating,
+            pr.severity,
+            pr.deep_enrichment_status,
+            pr.id AS review_id
+        FROM product_reviews pr
+        JOIN product_metadata pm ON pm.asin = pr.asin,
+             jsonb_array_elements(
+                 CASE jsonb_typeof(pr.deep_extraction->'product_comparisons')
+                      WHEN 'array' THEN pr.deep_extraction->'product_comparisons'
+                      ELSE '[]'::jsonb
+                 END
+             ) AS comp
+        WHERE pr.deep_enrichment_status = 'enriched'
+          AND pr.deep_extraction->'product_comparisons' IS NOT NULL
+          AND pm.brand IS NOT NULL AND pm.brand != ''
+        """,
+    )
+
+    # Aggregate per (from_brand, to_brand, direction)
+    edge_map: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+    for row in rows:
+        direction = row["direction"]
+        if direction in ADJACENCY_DIRECTIONS:
+            continue
+
+        raw_other = (row["product_name"] or "").strip()
+        reviewed_brand = (row["reviewed_brand"] or "").strip()
+
+        normalized_other = normalize_brand(raw_other, known_brands)
+        if not normalized_other:
+            continue
+        normalized_reviewed = normalize_canonical_brand(reviewed_brand, known_brands)
+        if not normalized_reviewed:
+            continue
+        if normalized_other.lower() == normalized_reviewed.lower():
+            continue
+
+        if direction == "switched_from":
+            from_brand, to_brand = normalized_other, normalized_reviewed
+        elif direction == "switched_to":
+            from_brand, to_brand = normalized_reviewed, normalized_other
+        else:
+            from_brand, to_brand = normalized_reviewed, normalized_other
+
+        # Resolve through brand registry
+        from_brand = resolve_brand_name_cached(from_brand)
+        to_brand = resolve_brand_name_cached(to_brand)
+
+        key = (from_brand, to_brand, direction)
+        if key not in edge_map:
+            edge_map[key] = {
+                "mention_count": 0,
+                "ratings": [],
+                "categories": {},
+                "sample_ids": [],
+                "severity": {"critical": 0, "major": 0, "minor": 0},
+                "deep_count": 0,
+                "total": 0,
+            }
+
+        e = edge_map[key]
+        e["mention_count"] += 1
+        e["total"] += 1
+        if row["rating"] is not None:
+            e["ratings"].append(float(row["rating"]))
+        cat = row.get("category") or "unknown"
+        e["categories"][cat] = e["categories"].get(cat, 0) + 1
+        if row["review_id"]:
+            e["sample_ids"].append(row["review_id"])
+        sev = row.get("severity")
+        if sev in e["severity"]:
+            e["severity"][sev] += 1
+        if row["deep_enrichment_status"] == "enriched":
+            e["deep_count"] += 1
+
+    # Persist edges with >= 2 mentions
+    persisted = 0
+    for (from_b, to_b, dirn), e in edge_map.items():
+        mc = e["mention_count"]
+        if mc < 2:
+            continue
+
+        if mc >= 10:
+            strength = "strong"
+        elif mc >= 4:
+            strength = "moderate"
+        else:
+            strength = "emerging"
+
+        avg_r = round(sum(e["ratings"]) / len(e["ratings"]), 2) if e["ratings"] else None
+        conf = _compute_consumer_confidence(mc, e["deep_count"], e["total"], e["severity"])
+        sample = [sid for sid in e["sample_ids"][:20]]
+
+        try:
+            await pool.execute(
+                """
+                INSERT INTO product_displacement_edges (
+                    from_brand, to_brand, direction, mention_count,
+                    signal_strength, avg_rating, category_distribution,
+                    sample_review_ids, confidence_score, computed_date
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::uuid[], $9, $10)
+                ON CONFLICT (from_brand, to_brand, direction, computed_date)
+                DO UPDATE SET
+                    mention_count = EXCLUDED.mention_count,
+                    signal_strength = EXCLUDED.signal_strength,
+                    avg_rating = EXCLUDED.avg_rating,
+                    category_distribution = EXCLUDED.category_distribution,
+                    sample_review_ids = EXCLUDED.sample_review_ids,
+                    confidence_score = EXCLUDED.confidence_score
+                """,
+                from_b, to_b, dirn, mc, strength, avg_r,
+                json.dumps(e["categories"]), sample, conf, today,
+            )
+            persisted += 1
+        except Exception:
+            logger.warning("Failed to persist edge %s -> %s", from_b, to_b, exc_info=True)
+
+    if persisted:
+        logger.info("Persisted %d product displacement edges for %s", persisted, today)
+    return persisted

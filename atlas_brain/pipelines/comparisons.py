@@ -96,16 +96,38 @@ def is_trusted_known_brand(raw: str, product_count: int | None = None) -> bool:
 
 
 async def load_known_brands(pool) -> dict[str, str]:
-    """Fetch known brands from product_metadata. Returns {lowercase: original_casing}."""
+    """Fetch known brands from product_metadata + consumer brand registry.
+
+    Returns {lowercase: canonical_casing}.  Registry aliases override
+    product_metadata casing, so ``"kitchen aid"`` maps to ``"KitchenAid"``.
+    """
     rows = await pool.fetch(
         "SELECT brand, COUNT(*) AS product_count FROM product_metadata "
         "WHERE brand IS NOT NULL AND brand != '' GROUP BY brand"
     )
-    return {
+    known = {
         r["brand"].lower(): r["brand"]
         for r in rows
         if is_trusted_known_brand(r["brand"], r["product_count"])
     }
+
+    # Overlay consumer brand registry canonical names + aliases
+    try:
+        reg_rows = await pool.fetch(
+            "SELECT canonical_name, aliases FROM consumer_brand_registry"
+        )
+        for r in reg_rows:
+            canonical = r["canonical_name"]
+            known[canonical.lower()] = canonical
+            aliases = r["aliases"]
+            if isinstance(aliases, list):
+                for alias in aliases:
+                    if isinstance(alias, str) and alias.strip():
+                        known[alias.lower()] = canonical
+    except Exception:
+        pass  # Table may not exist during migration rollout
+
+    return known
 
 
 def normalize_canonical_brand(raw: str, known_brands: dict[str, str]) -> str | None:
