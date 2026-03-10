@@ -2,9 +2,9 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'safety-strength-training-equipment-2026-03',
-  title: 'Safety Alert: 221 Flagged Reviews in Strength Training Equipment Reveal Critical Risks',
-  description: 'A data-driven deep dive into 221 safety-flagged reviews for strength training equipment between 2000 and 2023.',
-  date: '2026-03-03',
+  title: 'Safety Alert: 303 Flagged Reviews in Strength Training Equipment',
+  description: 'Data analysis reveals serious safety concerns across popular home gym equipment based on 3,658 verified reviews.',
+  date: '2026-03-09',
   author: 'Atlas Intelligence Team',
   tags: ["Strength Training Equipment", "safety", "consumer-protection", "reviews"],
   topic_type: 'safety_spotlight',
@@ -15,36 +15,20 @@ const post: BlogPost = {
     "title": "Safety Flags by Brand in Strength Training Equipment",
     "data": [
       {
-        "name": "Amazon Basics",
-        "safety_flags": 216
-      },
-      {
-        "name": "Razor",
-        "safety_flags": 147
-      },
-      {
-        "name": "Lasko",
-        "safety_flags": 146
-      },
-      {
-        "name": "Schwinn",
-        "safety_flags": 128
-      },
-      {
         "name": "CAP Barbell",
-        "safety_flags": 117
+        "safety_flags": 159
       },
       {
-        "name": "Cuisinart",
-        "safety_flags": 104
+        "name": "Amazon Basics",
+        "safety_flags": 73
       },
       {
-        "name": "Anker",
-        "safety_flags": 98
+        "name": "Yes4All",
+        "safety_flags": 62
       },
       {
-        "name": "SAMSUNG",
-        "safety_flags": 88
+        "name": "BalanceFrom",
+        "safety_flags": 9
       }
     ],
     "config": {
@@ -58,33 +42,81 @@ const post: BlogPost = {
     }
   },
   {
+    "chart_id": "safety-products-bar",
+    "chart_type": "horizontal_bar",
+    "title": "Most Flagged Products in Strength Training Equipment",
+    "data": [
+      {
+        "name": "Amazon Basics Cast Iron Kettlebell",
+        "safety_flags": 32
+      },
+      {
+        "name": "CAP Barbell Flat/Incline/Decline Bench",
+        "safety_flags": 31
+      },
+      {
+        "name": "Yes4All Adjustable Cast Iron Dumbbell Se",
+        "safety_flags": 29
+      },
+      {
+        "name": "CAP Barbell Power Racks and Attachments",
+        "safety_flags": 25
+      },
+      {
+        "name": "CAP Barbell 60-Pound Adjustable Dumbbell",
+        "safety_flags": 24
+      },
+      {
+        "name": "CAP Barbell A-Frame Dumbbell Weight Rack",
+        "safety_flags": 21
+      },
+      {
+        "name": "CAP Barbell Unisex-Adult Olympic Grip Pl",
+        "safety_flags": 21
+      },
+      {
+        "name": "Yes4All Vinyl Coated Kettlebell Weights,",
+        "safety_flags": 19
+      },
+      {
+        "name": "Amazon Basics Rubber Encased Hex Dumbbel",
+        "safety_flags": 18
+      },
+      {
+        "name": "CAP Barbell Pair of Push Up Bars",
+        "safety_flags": 13
+      }
+    ],
+    "config": {
+      "x_key": "name",
+      "bars": [
+        {
+          "dataKey": "safety_flags",
+          "color": "#ef4444"
+        }
+      ]
+    }
+  },
+  {
     "chart_id": "consequence-bar",
     "chart_type": "horizontal_bar",
     "title": "Safety Issues by Severity",
     "data": [
       {
-        "name": "safety_concern",
-        "count": 1630
+        "name": "Safety Concern",
+        "count": 169
       },
       {
-        "name": "inconvenience",
-        "count": 1151
+        "name": "Inconvenience",
+        "count": 89
       },
       {
-        "name": "financial_loss",
-        "count": 956
+        "name": "Workflow Disruption",
+        "count": 32
       },
       {
-        "name": "workflow_impact",
-        "count": 666
-      },
-      {
-        "name": "positive_impact",
-        "count": 15
-      },
-      {
-        "name": "none",
-        "count": 6
+        "name": "Financial Loss",
+        "count": 9
       }
     ],
     "config": {
@@ -98,46 +130,41 @@ const post: BlogPost = {
     }
   }
 ],
-  content: `## Introduction
-
-Between September 2000 and August 2023, we analyzed 288,747 verified reviews for strength training equipment. Of these, 221 were flagged for safety concerns, with an average pain score of 7.0 out of 10—indicating serious, often physical, user experiences. This is not a minor quality issue; it's a pattern of product failures with real-world consequences. The data reveals a troubling trend: a significant number of strength training tools are failing in ways that threaten user safety.
-
-> "THESE DUMBELLS SUCK WORST PURCHASE IV EVER MADE ON AMAZON" -- verified buyer, CAP Barbell, 1.0 rating
-
-> "STUNK LIKE OIL AND OTHER WEIRED, TOXIC CHEMICALS THEY STUNK UP MY WHOLE HOUSE" -- verified buyer, CAP Barbell, 1.0 rating
-
-> "I'm returning the unopened package" -- verified buyer, CAP Barbell, 1.0 rating
-
-> "The middle peace that connects the front end with the back end SNAPPED!!!" -- verified buyer, CAP Barbell, 1.0 rating
-
-## Which Brands Have the Most Safety Concerns?
-
-Among the 221 safety-flagged reviews, CAP Barbell emerged as the most frequently cited brand, accounting for a disproportionate share of the concerns. The brand appears in 112 of the 221 flagged reviews, representing over half of all safety incidents in the dataset. This concentration suggests systemic issues with product design, materials, or quality control.
-
-{{chart:safety-brands-bar}}
-
-The remaining 109 safety flags are distributed across 7 other brands, with no single brand approaching CAP Barbell’s volume. The data shows a clear imbalance: while multiple brands exist in the market, only one is consistently linked to preventable, dangerous failures.
-
-## How Serious Are These Issues?
-
-The severity of safety incidents varies, but the most common consequences are physical injury or exposure to hazardous materials. Of the 221 flagged reviews, 142 (64%) reported outcomes involving structural failure—such as snapped weight plates, broken collars, or collapsing racks. Another 53 (24%) described chemical or sensory hazards, including strong chemical odors, toxic fumes, or material off-gassing that contaminated homes or equipment.
-
-Only 26 (12%) of the incidents were categorized as minor, such as unclear instructions or missing parts. The vast majority involved direct physical risk or environmental contamination.
-
-{{chart:consequence-bar}}
-
-## What Buyers Should Know
-
-For consumers investing in strength training equipment, safety must be the primary filter. The data from 2000 to 2023 shows that while the market offers many options, a small number of products—particularly from CAP Barbell—are associated with repeated, high-impact failures.
-
-- **Avoid CAP Barbell** if safety is a priority. The brand accounts for 51% of all safety-flagged reviews in this dataset.
-- **Inspect for chemical odors** before use. A strong, oily, or chemical smell is a red flag for off-gassing or poor material quality.
-- **Test load-bearing components** before full use. If a bar, plate, or rack shows signs of stress or deformation under light load, do not use it.
-- **Return unopened items immediately** if the packaging or product shows signs of damage or unusual odor. The fact that multiple buyers returned unopened packages due to smell or defect underscores that problems are detectable before use.
-
-This is not a case of isolated bad luck. It’s a systemic issue. With 221 documented safety incidents across 23 years, the pattern is clear: some products are failing in ways that endanger users. Consumers deserve safer, more transparent manufacturing. Until then, exercise caution—especially with equipment from CAP Barbell.
-
-The data doesn’t just show problems. It shows a path forward: reject the unacceptable, demand better, and prioritize safety over brand loyalty.`,
+  data_context: {},
+  content: `<h2 id="introduction">Introduction</h2>
+<p>Between March 2010 and August 2023, we analyzed 3,658 verified reviews of strength training equipment and identified 303 reviews flagged for safety concerns. These aren't minor inconveniences—the average pain score among these flagged reviews is 7.0 out of 10, indicating significant problems that affected buyers' ability to use their equipment safely.</p>
+<p>This analysis focuses exclusively on products in the Strength Training Equipment category, examining everything from kettlebells and dumbbells to power racks and weight benches. What we found should concern anyone building a home gym.</p>
+<h2 id="which-brands-have-the-most-safety-concerns">Which Brands Have the Most Safety Concerns?</h2>
+<p>Safety issues aren't evenly distributed across brands. Some manufacturers account for a disproportionate share of flagged reviews.</p>
+<p>{{chart:safety-brands-bar}}</p>
+<p>The data reveals clear patterns in which brands generate the most safety-related complaints. While some brands appear more frequently simply because they sell more products, the concentration of safety flags at certain manufacturers suggests systematic quality control issues rather than isolated incidents.</p>
+<h2 id="which-specific-products-are-most-flagged">Which Specific Products Are Most Flagged?</h2>
+<p>The most concerning finding: safety issues cluster around specific product models. Here are the top products by safety flag count:</p>
+<p><strong>Amazon Basics Cast Iron Kettlebell</strong> leads with 32 safety flags and an average pain score of 6.7. This is particularly notable given kettlebells' reputation as simple, low-tech equipment.</p>
+<p><strong>CAP Barbell Flat/Incline/Decline Bench</strong> follows with 31 flags and a higher pain score of 7.5—the highest among the top flagged products. Weight benches present unique safety risks when structural integrity fails during use.</p>
+<p><strong>Yes4All Adjustable Cast Iron Dumbbell Sets</strong> (the 40-200LBS model) generated 29 safety flags with a 7.2 pain score. Adjustable dumbbells involve more moving parts and connection points, creating multiple potential failure modes.</p>
+<p><strong>CAP Barbell Power Racks and Attachments</strong> accumulated 25 flags (6.7 pain score), concerning given that power racks are designed as safety equipment for heavy lifting.</p>
+<p><strong>CAP Barbell 60-Pound Adjustable Dumbbell Weight Set</strong> shows 24 flags with the second-highest pain score at 7.7.</p>
+<p><strong>CAP Barbell A-Frame Dumbbell Weight Rack</strong> rounds out the top six with 21 flags and a 6.5 pain score.</p>
+<p>{{chart:safety-products-bar}}</p>
+<p>CAP Barbell appears four times in the top six flagged products, suggesting potential quality control challenges across their product line.</p>
+<h2 id="how-serious-are-these-issues">How Serious Are These Issues?</h2>
+<p>Not all safety concerns carry equal weight. We categorized the 303 flagged reviews by consequence severity to understand the true risk profile.</p>
+<p>{{chart:consequence-bar}}</p>
+<p>The severity distribution reveals the range of consequences buyers experienced—from minor issues that required extra caution to serious incidents that resulted in injury or property damage. Understanding this breakdown helps contextualize the overall risk landscape in strength training equipment.</p>
+<p>One verified buyer noted about a CAP Barbell product: "It is not very stiff, and can sway if you shake it." While this reviewer still gave 4 stars, structural instability in weight-bearing equipment represents a serious safety concern, especially under heavy loads.</p>
+<h2 id="what-buyers-should-know">What Buyers Should Know</h2>
+<p>With 303 safety-flagged reviews identified across the Strength Training Equipment category, home gym buyers need to approach purchases with heightened scrutiny.</p>
+<p><strong>Inspect upon arrival.</strong> Don't assume equipment is safe just because it's new. Check for:
+- Weld quality on metal components
+- Secure fasteners and connection points
+- Structural stability under light load before adding weight
+- Any signs of manufacturing defects</p>
+<p><strong>Start light.</strong> Even if you're experienced, test new equipment with lighter weights first. Many safety issues only manifest under load.</p>
+<p><strong>Watch for design flaws.</strong> Some products have inherent design issues that no amount of quality control can fix. Read negative reviews specifically looking for repeated mentions of the same failure mode—that's a design problem, not a one-off defect.</p>
+<p><strong>Consider the failure mode.</strong> A dumbbell rack that tips over is inconvenient. A weight bench that collapses mid-press is dangerous. Prioritize structural integrity in equipment that supports your body weight plus external loads.</p>
+<p><strong>Don't rely on weight limits alone.</strong> Manufacturers' stated weight capacities don't account for dynamic loading, impact forces, or degradation over time. Build in a safety margin.</p>
+<p>The concentration of safety flags among specific brands and models isn't random. Between 2010 and 2023, clear patterns emerged showing which products consistently generated safety concerns. Use this data to inform your purchasing decisions—your safety depends on it.</p>`,
 }
 
 export default post
