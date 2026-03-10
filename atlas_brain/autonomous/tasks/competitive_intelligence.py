@@ -1171,22 +1171,29 @@ async def _detect_concurrent_shifts(pool) -> int:
 
 
 async def _dispatch_consumer_events(
-    pool, brand_health: dict, change_events: int, concurrent_shifts: int,
+    pool, brand_health: list, change_events: int, concurrent_shifts: int,
 ) -> None:
     """Dispatch consumer webhook events for change events and report generation."""
     try:
         from ...services.b2b.webhook_dispatcher import dispatch_consumer_webhooks
 
+        _METRIC_KEYS = {
+            "avg_rating", "total_reviews", "avg_pain_score",
+            "repurchase_yes", "repurchase_no", "safety_flagged_count",
+        }
+
         # Dispatch report_generated for each brand analyzed
-        for brand in brand_health:
+        # brand_health is a list[dict] from _fetch_brand_health()
+        for bd in brand_health:
+            brand_name = bd.get("brand", "")
+            if not brand_name:
+                continue
             await dispatch_consumer_webhooks(
-                pool, "consumer_report_generated", brand, {
+                pool, "consumer_report_generated", brand_name, {
                     "event": "report_generated",
-                    "brand": brand,
+                    "brand": brand_name,
                     "metrics": {
-                        k: v for k, v in brand_health[brand].items()
-                        if k in ("avg_rating", "total_reviews", "avg_pain_score",
-                                 "repurchase_yes", "repurchase_no", "safety_flagged_count")
+                        k: v for k, v in bd.items() if k in _METRIC_KEYS
                     },
                 },
             )

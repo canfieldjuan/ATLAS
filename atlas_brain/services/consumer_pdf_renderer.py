@@ -267,7 +267,7 @@ def render_market_report_pdf(report_row: dict) -> tuple[bytes, str]:
             pdf.body_text(f"{i}. {text[:500]}")
 
     filename = f"atlas-consumer-report-{_sanitize_filename(str(report_date))}.pdf"
-    return pdf.output(), filename
+    return bytes(pdf.output()), filename
 
 
 def render_brand_report_pdf(brand_row: dict, snapshots: list[dict] | None = None) -> tuple[bytes, str]:
@@ -371,4 +371,4 @@ def render_brand_report_pdf(brand_row: dict, snapshots: list[dict] | None = None
         pdf.simple_table(headers, rows, [35, 25, 25, 25, 30])
 
     filename = f"atlas-brand-{_sanitize_filename(brand)}.pdf"
-    return pdf.output(), filename
+    return bytes(pdf.output()), filename
