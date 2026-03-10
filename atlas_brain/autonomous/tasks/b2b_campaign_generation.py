@@ -1979,7 +1979,7 @@ async def _generate_content(
     last_max = 0
 
     for attempt in range(2):
-        user_content = json.dumps(payload, indent=2, default=str)
+        user_content = json.dumps(payload, separators=(",", ":"), default=str)
 
         # On retry, prepend a revision instruction
         if attempt == 1:

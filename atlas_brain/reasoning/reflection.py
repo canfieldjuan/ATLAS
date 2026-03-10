@@ -43,13 +43,13 @@ async def run_reflection() -> dict[str, Any]:
 
     prompt = (
         "Here are patterns detected across Atlas's domains:\n\n"
-        + json.dumps(findings, default=str, indent=2)
+        + json.dumps(findings, default=str, separators=(",", ":"))
     )
 
     try:
         import asyncio
         from .graph import _llm_generate, _parse_llm_json
-        text = await asyncio.wait_for(
+        result = await asyncio.wait_for(
             _llm_generate(
                 llm, prompt, REFLECTION_SYSTEM,
                 max_tokens=settings.reasoning.max_tokens,
@@ -57,6 +57,7 @@ async def run_reflection() -> dict[str, Any]:
             ),
             timeout=120.0,
         )
+        text = result["response"]
         analyzed = _parse_llm_json(text)
         llm_findings = analyzed.get("findings", [])
     except asyncio.TimeoutError:

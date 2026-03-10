@@ -1607,6 +1607,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     parsed: dict[str, Any] = {}
     analysis = None
+    llm_usage: dict[str, Any] = {}
     if payload_size > cfg.intelligence_exploratory_char_budget:
         logger.warning(
             "Skipping exploratory_overview LLM call: payload size %d exceeds budget %d",
@@ -1627,11 +1628,17 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         else None
                     ),
                     workload=_llm_workload,
+                    usage_out=llm_usage,
                 ),
                 timeout=300,
             )
         except asyncio.TimeoutError:
             logger.error("LLM call timed out after 300s for b2b_churn_intelligence")
+
+    if llm_usage.get("input_tokens"):
+        logger.info("b2b_churn_intelligence LLM tokens: in=%d out=%d model=%s",
+                     llm_usage["input_tokens"], llm_usage["output_tokens"],
+                     llm_usage.get("model", ""))
 
     had_llm_analysis = bool(analysis)
     if had_llm_analysis:
@@ -2191,6 +2198,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         span,
         status="completed",
         output_data=response,
+        input_tokens=llm_usage.get("input_tokens"),
+        output_tokens=llm_usage.get("output_tokens"),
         metadata={
             "reasoning": build_reasoning_trace_context(
                 decision={"report_types": len(report_types) + (1 if exploratory_persisted else 0)},

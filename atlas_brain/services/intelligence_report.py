@@ -120,11 +120,17 @@ async def generate_report(
     from ..pipelines.llm import call_llm_with_skill
 
     cfg = settings.external_data
+    usage: dict[str, Any] = {}
     report_text = call_llm_with_skill(
         skill_name, payload,
         max_tokens=cfg.report_full_max_tokens if report_type == "full" else cfg.report_executive_max_tokens,
         temperature=cfg.report_temperature,
+        usage_out=usage,
     )
+    if usage.get("input_tokens"):
+        logger.info("intelligence_report LLM tokens: in=%d out=%d model=%s type=%s",
+                     usage["input_tokens"], usage["output_tokens"],
+                     usage.get("model", ""), report_type)
 
     if not report_text:
         return {"error": "LLM failed to generate report"}
@@ -216,10 +222,16 @@ async def generate_report_package(
         "writer_model": "Claude Opus for drafting, human review for polish",
     }
 
+    builder_usage: dict[str, Any] = {}
     text = call_llm_with_skill(
         "intelligence/report_builder", payload,
         max_tokens=cfg.report_builder_max_tokens, temperature=cfg.report_temperature,
+        usage_out=builder_usage,
     )
+    if builder_usage.get("input_tokens"):
+        logger.info("report_builder LLM tokens: in=%d out=%d model=%s",
+                     builder_usage["input_tokens"], builder_usage["output_tokens"],
+                     builder_usage.get("model", ""))
 
     return {
         "entity_name": entity_name,

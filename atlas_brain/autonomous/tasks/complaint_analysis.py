@@ -110,6 +110,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # Load skill and call LLM (in thread to avoid blocking event loop)
     from ...pipelines.llm import call_llm_with_skill, parse_json_response
 
+    usage: dict[str, Any] = {}
     try:
         analysis = await asyncio.wait_for(
             asyncio.to_thread(
@@ -118,6 +119,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 max_tokens=cfg.complaint_analysis_max_tokens, temperature=0.4,
                 workload="synthesis",
                 response_format={"type": "json_object"},
+                usage_out=usage,
             ),
             timeout=300,
         )
@@ -126,6 +128,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         # Still upsert pain points even if LLM times out
         await _upsert_pain_points(pool, product_stats, {})
         return {"_skip_synthesis": "LLM analysis timed out", "products_upserted": len(product_stats)}
+    if usage.get("input_tokens"):
+        logger.info("complaint_analysis LLM tokens: in=%d out=%d model=%s",
+                     usage["input_tokens"], usage["output_tokens"], usage.get("model", ""))
     if not analysis:
         return {"_skip_synthesis": "LLM analysis failed"}
 

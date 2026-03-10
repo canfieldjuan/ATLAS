@@ -110,11 +110,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # Load skill and call LLM
     from ...pipelines.llm import call_llm_with_skill, parse_json_response
 
+    usage: dict[str, Any] = {}
     analysis = call_llm_with_skill(
         "digest/daily_intelligence", payload,
         max_tokens=cfg.intelligence_max_tokens, temperature=cfg.intelligence_temperature,
         workload="synthesis",
+        usage_out=usage,
     )
+    if usage.get("input_tokens"):
+        logger.info("daily_intelligence LLM tokens: in=%d out=%d model=%s",
+                     usage["input_tokens"], usage["output_tokens"], usage.get("model", ""))
     if not analysis:
         return {"_skip_synthesis": "LLM analysis failed"}
 

@@ -267,6 +267,10 @@ async def _extract_sms_data(
         timeout=cfg.llm_timeout,
     )
 
+    _usage = result.get("usage", {})
+    if _usage.get("input_tokens"):
+        logger.info("sms_intelligence LLM tokens: in=%d out=%d",
+                     _usage["input_tokens"], _usage.get("output_tokens", 0))
     text = result.get("response", "").strip()
     if not text:
         return None, {}, None

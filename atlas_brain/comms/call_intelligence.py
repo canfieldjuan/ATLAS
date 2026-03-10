@@ -374,6 +374,10 @@ async def _extract_call_data(
         timeout=cfg.llm_timeout,
     )
 
+    _usage = result.get("usage", {})
+    if _usage.get("input_tokens"):
+        logger.info("call_intelligence LLM tokens: in=%d out=%d",
+                     _usage["input_tokens"], _usage.get("output_tokens", 0))
     text = result.get("response", "").strip()
     if not text:
         return transcript[:200], {}, []

@@ -165,7 +165,7 @@ async def generate_action_plan(
     business_context_str = "\n".join(ctx_parts) if ctx_parts else "General business"
 
     customer_context_str = _format_customer_context(customer_context)
-    extracted_str = json.dumps(extracted_data, indent=2, default=str)
+    extracted_str = json.dumps(extracted_data, separators=(",", ":"), default=str)
 
     # Load skill prompt
     skill = get_skill_registry().get("call/action_planning")
@@ -205,6 +205,10 @@ async def generate_action_plan(
         timeout=settings.call_intelligence.llm_timeout,
     )
 
+    _usage = result.get("usage", {})
+    if _usage.get("input_tokens"):
+        logger.info("action_planner LLM tokens: in=%d out=%d",
+                     _usage["input_tokens"], _usage.get("output_tokens", 0))
     text = result.get("response", "").strip()
     if not text:
         return _fallback_plan(extracted_data)

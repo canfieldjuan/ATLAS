@@ -423,6 +423,10 @@ async def _classify_and_plan(emails: list[dict[str, Any]]) -> int:
                 timeout=30,
             )
 
+            _usage = result.get("usage", {})
+            if _usage.get("input_tokens"):
+                logger.info("email_intake LLM tokens: in=%d out=%d",
+                             _usage["input_tokens"], _usage.get("output_tokens", 0))
             text = result.get("response", "").strip()
             if not text:
                 continue

@@ -287,7 +287,7 @@ class HeadlessRunner:
             Message(role="system", content=skill.content),
             Message(
                 role="user",
-                content=json.dumps(raw_result, indent=2, default=str),
+                content=json.dumps(raw_result, separators=(",", ":"), default=str),
             ),
         ]
 

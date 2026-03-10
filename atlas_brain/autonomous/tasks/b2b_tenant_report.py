@@ -108,6 +108,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         # LLM synthesis with existing skill
         from ...pipelines.llm import call_llm_with_skill, parse_json_response
 
+        llm_usage: dict[str, Any] = {}
         try:
             analysis = await asyncio.wait_for(
                 asyncio.to_thread(
@@ -118,6 +119,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     temperature=0.4,
                     workload="synthesis",
                     response_format={"type": "json_object"},
+                    usage_out=llm_usage,
                 ),
                 timeout=300,
             )
@@ -130,6 +132,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             )
             logger.error("LLM timed out for tenant report account=%s", account_id)
             continue
+
+        if llm_usage.get("input_tokens"):
+            logger.info("b2b_tenant_report LLM tokens: in=%d out=%d model=%s account=%s",
+                         llm_usage["input_tokens"], llm_usage["output_tokens"],
+                         llm_usage.get("model", ""), account_id)
 
         if not analysis:
             tracer.end_span(span, status="failed", error_message="tenant report llm returned no analysis")
@@ -200,6 +207,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             status="completed",
             input_data={"vendor_names": vendor_names, "window_days": cfg.intelligence_window_days},
             output_data={"reports_generated": len(report_types), "account_name": acct["account_name"]},
+            input_tokens=llm_usage.get("input_tokens"),
+            output_tokens=llm_usage.get("output_tokens"),
             metadata={
                 "reasoning": build_reasoning_trace_context(
                     decision={"report_types": [name for name, _ in report_types]},
@@ -242,7 +251,7 @@ async def _send_report_email(
         f"<h3>Executive Summary</h3>"
         f"<p>{summary or 'No significant changes this week.'}</p>"
         f"<hr>"
-        f"<p><em>View full details in your Atlas Intel dashboard.</em></p>"
+        f"<p><em>View full details in your churn intelligence feed.</em></p>"
     )
 
     try:

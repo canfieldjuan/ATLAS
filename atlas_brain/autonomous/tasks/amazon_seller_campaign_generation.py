@@ -343,7 +343,7 @@ async def _generate_content(
 
     messages = [
         Message(role="system", content=system_prompt),
-        Message(role="user", content=json.dumps(payload, indent=2, default=str)),
+        Message(role="user", content=json.dumps(payload, separators=(",", ":"), default=str)),
     ]
 
     text = ""
@@ -360,6 +360,10 @@ async def _generate_content(
             ),
             timeout=90,
         )
+        _usage = result.get("usage", {})
+        if _usage.get("input_tokens"):
+            logger.info("amazon_seller_campaign_generation LLM tokens: in=%d out=%d",
+                         _usage["input_tokens"], _usage.get("output_tokens", 0))
         text = result.get("response", "").strip()
         if not text:
             return None

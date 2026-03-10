@@ -2847,11 +2847,15 @@ def _generate_content(
 
     messages = [
         Message(role="system", content=skill.content),
-        Message(role="user", content=json.dumps(payload, indent=2, default=str)),
+        Message(role="user", content=json.dumps(payload, separators=(",", ":"), default=str)),
     ]
 
     try:
         result = llm.chat(messages=messages, max_tokens=max_tokens, temperature=0.7)
+        _usage = result.get("usage", {}) if isinstance(result, dict) else {}
+        if _usage.get("input_tokens"):
+            logger.info("b2b_blog_post_generation LLM tokens: in=%d out=%d",
+                         _usage["input_tokens"], _usage.get("output_tokens", 0))
         text = result.get("response", "") if isinstance(result, dict) else str(result)
         text = clean_llm_output(text)
         parsed = parse_json_response(text, recover_truncated=True)

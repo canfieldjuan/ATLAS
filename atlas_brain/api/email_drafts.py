@@ -449,7 +449,7 @@ async def generate_draft(gmail_message_id: str):
     if thread_context:
         user_input_dict["thread_context"] = thread_context
 
-    user_input = json.dumps(user_input_dict, indent=2)
+    user_input = json.dumps(user_input_dict, separators=(",", ":"), default=str)
 
     try:
         result = await asyncio.to_thread(
@@ -658,7 +658,7 @@ async def redraft(draft_id: UUID, reason: str | None = Query(default=None)):
             len(graph_facts), draft_id,
         )
 
-    user_input = json.dumps(user_input_dict, indent=2)
+    user_input = json.dumps(user_input_dict, separators=(",", ":"), default=str)
 
     # Use slightly higher temperature for variety
     temperature = min(cfg.temperature + 0.1, 0.9)

@@ -130,6 +130,10 @@ class OpenRouterLLM(BaseModelService):
             return {
                 "response": content,
                 "message": {"role": "assistant", "content": content},
+                "usage": {
+                    "input_tokens": usage.get("prompt_tokens", 0),
+                    "output_tokens": usage.get("completion_tokens", 0),
+                },
             }
         except httpx.HTTPError as e:
             logger.error("OpenRouter chat error: %s", e)
@@ -186,10 +190,16 @@ class OpenRouterLLM(BaseModelService):
                     }
                 })
 
+            usage = data.get("usage", {})
+
             return {
                 "response": content.strip(),
                 "tool_calls": normalized_calls,
                 "message": message,
+                "usage": {
+                    "input_tokens": usage.get("prompt_tokens", 0),
+                    "output_tokens": usage.get("completion_tokens", 0),
+                },
             }
         except httpx.HTTPError as e:
             logger.error("OpenRouter chat_with_tools error: %s", e)

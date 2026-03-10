@@ -53,3 +53,7 @@ class ReasoningAgentState(TypedDict, total=False):
     summary: str
     should_notify: bool
     notification_sent: bool
+
+    # Token tracking
+    total_input_tokens: int
+    total_output_tokens: int

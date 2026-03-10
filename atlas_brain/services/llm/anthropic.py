@@ -89,11 +89,15 @@ class AnthropicLLM(BaseModelService):
 
     def _convert_messages(
         self, messages: list[Message]
-    ) -> tuple[str, list[dict]]:
+    ) -> tuple[str | list[dict], list[dict]]:
         """Convert Message objects to Anthropic format.
 
         Anthropic requires system content as a separate param, not in messages.
-        Returns (system_prompt, messages_list).
+        Returns (system_prompt_or_blocks, messages_list).
+
+        When the system prompt exceeds 1024 chars, it is returned as a list of
+        content blocks with ``cache_control`` set so Anthropic can cache the
+        prefix and avoid re-tokenizing large skill prompts on every call.
         """
         system_parts: list[str] = []
         api_messages: list[dict] = []
@@ -136,7 +140,21 @@ class AnthropicLLM(BaseModelService):
             else:
                 api_messages.append({"role": msg.role, "content": msg.content})
 
-        return "\n\n".join(system_parts), api_messages
+        system_text = "\n\n".join(system_parts)
+
+        # Enable prompt caching for large system prompts (skill prompts are
+        # 5-20 KB and reused across calls).  Anthropic caches the prefix when
+        # cache_control is set, saving ~90% on repeated system prompt tokens.
+        if len(system_text) > 1024:
+            return [
+                {
+                    "type": "text",
+                    "text": system_text,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ], api_messages
+
+        return system_text, api_messages
 
     def chat(
         self,
@@ -180,6 +198,10 @@ class AnthropicLLM(BaseModelService):
             return {
                 "response": content,
                 "message": {"role": "assistant", "content": content},
+                "usage": {
+                    "input_tokens": response.usage.input_tokens,
+                    "output_tokens": response.usage.output_tokens,
+                },
             }
         except Exception as e:
             logger.error("Anthropic chat error: %s", e)
@@ -249,6 +271,10 @@ class AnthropicLLM(BaseModelService):
                 "response": content,
                 "tool_calls": normalized_calls,
                 "message": {"role": "assistant", "content": content},
+                "usage": {
+                    "input_tokens": response.usage.input_tokens,
+                    "output_tokens": response.usage.output_tokens,
+                },
             }
         except Exception as e:
             logger.error("Anthropic chat_with_tools error: %s", e)

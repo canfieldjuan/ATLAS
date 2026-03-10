@@ -471,7 +471,7 @@ async def _generate_report(
 
     messages = [
         Message(role="system", content=system_prompt),
-        Message(role="user", content=json.dumps(intel, indent=2, default=str)),
+        Message(role="user", content=json.dumps(intel, separators=(",", ":"), default=str)),
     ]
 
     try:
@@ -487,6 +487,10 @@ async def _generate_report(
             ),
             timeout=120,
         )
+        _usage = result.get("usage", {})
+        if _usage.get("input_tokens"):
+            logger.info("subcategory_intelligence LLM tokens: in=%d out=%d",
+                         _usage["input_tokens"], _usage.get("output_tokens", 0))
         text = result.get("response", "").strip()
         if not text:
             return None

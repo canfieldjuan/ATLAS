@@ -148,12 +148,17 @@ class TogetherLLM(BaseModelService):
             message = choice.get("message", {})
             content = message.get("content", "").strip()
 
+            usage = data.get("usage", {})
             logger.info("Together chat: tokens=%s, content_len=%d",
-                       data.get("usage", {}), len(content))
+                       usage, len(content))
 
             return {
                 "response": content,
                 "message": {"role": "assistant", "content": content},
+                "usage": {
+                    "input_tokens": usage.get("prompt_tokens", 0),
+                    "output_tokens": usage.get("completion_tokens", 0),
+                },
             }
         except httpx.HTTPError as e:
             logger.error("Together chat error: %s", e)
@@ -224,6 +229,7 @@ class TogetherLLM(BaseModelService):
                     }
                 })
 
+            usage = data.get("usage", {})
             logger.info("Together response: content_len=%d, tool_calls=%d",
                        len(content), len(normalized_calls))
 
@@ -235,6 +241,10 @@ class TogetherLLM(BaseModelService):
                 "response": content.strip(),
                 "tool_calls": normalized_calls,
                 "message": message,
+                "usage": {
+                    "input_tokens": usage.get("prompt_tokens", 0),
+                    "output_tokens": usage.get("completion_tokens", 0),
+                },
             }
         except httpx.HTTPError as e:
             logger.error("Together chat_with_tools error: %s", e)

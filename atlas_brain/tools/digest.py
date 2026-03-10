@@ -129,7 +129,7 @@ class RunDigestTool:
 
             messages = [
                 Message(role="system", content=skill.content),
-                Message(role="user", content=json.dumps(raw_result, indent=2, default=str)),
+                Message(role="user", content=json.dumps(raw_result, separators=(",", ":"), default=str)),
             ]
 
             result = llm.chat(
@@ -137,6 +137,10 @@ class RunDigestTool:
                 max_tokens=autonomous_config.synthesis_max_tokens,
                 temperature=autonomous_config.synthesis_temperature,
             )
+            _usage = result.get("usage", {})
+            if _usage.get("input_tokens"):
+                logger.info("digest synthesis LLM tokens: in=%d out=%d",
+                             _usage["input_tokens"], _usage.get("output_tokens", 0))
 
             text = result.get("response", "").strip()
             # Strip <think> tags (Qwen3 models)

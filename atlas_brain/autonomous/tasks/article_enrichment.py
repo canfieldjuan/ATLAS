@@ -240,12 +240,17 @@ async def _classify_soram(
         "matched_keywords": matched_keywords,
     }
 
+    usage: dict[str, Any] = {}
     text = call_llm_with_skill(
         "digest/soram_classification", payload,
         max_tokens=512, temperature=0.1,
         workload="triage",
         try_openrouter=False, auto_activate_ollama=True,
+        usage_out=usage,
     )
+    if usage.get("input_tokens"):
+        logger.info("soram_classification LLM tokens: in=%d out=%d model=%s",
+                     usage["input_tokens"], usage["output_tokens"], usage.get("model", ""))
     if not text:
         return None
 

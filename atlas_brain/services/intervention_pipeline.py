@@ -120,11 +120,17 @@ async def run_intervention_pipeline(
     from ..pipelines.llm import call_llm_with_skill
 
     cfg = settings.external_data
+    total_input_tokens = 0
+    total_output_tokens = 0
 
+    stage1_usage: dict[str, Any] = {}
     playbook_text = call_llm_with_skill(
         "intelligence/adaptive_intervention", playbook_payload,
         max_tokens=cfg.intervention_stage1_max_tokens, temperature=cfg.intervention_temperature,
+        usage_out=stage1_usage,
     )
+    total_input_tokens += stage1_usage.get("input_tokens", 0)
+    total_output_tokens += stage1_usage.get("output_tokens", 0)
 
     if not playbook_text:
         return {
@@ -160,10 +166,14 @@ async def run_intervention_pipeline(
     if sensor_summary:
         simulation_payload["sensor_analysis"] = sensor_summary
 
+    stage2_usage: dict[str, Any] = {}
     simulation_text = call_llm_with_skill(
         "intelligence/simulated_evolution", simulation_payload,
         max_tokens=cfg.intervention_stage2_max_tokens, temperature=cfg.intervention_temperature,
+        usage_out=stage2_usage,
     )
+    total_input_tokens += stage2_usage.get("input_tokens", 0)
+    total_output_tokens += stage2_usage.get("output_tokens", 0)
 
     if not simulation_text:
         stages["simulation"] = {"skill": "intelligence/simulated_evolution", "status": "failed"}
@@ -248,10 +258,14 @@ async def run_intervention_pipeline(
                 "evidence": evidence,
             }
 
+            stage3_usage: dict[str, Any] = {}
             narrative_text = call_llm_with_skill(
                 "intelligence/autonomous_narrative_architect", narrative_payload,
                 max_tokens=cfg.intervention_stage3_max_tokens, temperature=cfg.intervention_temperature,
+                usage_out=stage3_usage,
             )
+            total_input_tokens += stage3_usage.get("input_tokens", 0)
+            total_output_tokens += stage3_usage.get("output_tokens", 0)
 
             if narrative_text:
                 # Run content filter on the output
@@ -299,6 +313,11 @@ async def run_intervention_pipeline(
                 }
 
     # ---- Build result ----
+    if total_input_tokens:
+        logger.info("intervention_pipeline LLM tokens: in=%d out=%d model=%s entity=%s",
+                     total_input_tokens, total_output_tokens,
+                     stage1_usage.get("model", ""), entity_name)
+
     result: dict[str, Any] = {
         "pipeline_id": pipeline_id,
         "entity_name": entity_name,
@@ -314,6 +333,10 @@ async def run_intervention_pipeline(
         "safety_warnings": safety_warnings,
         "requested_by": requested_by,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "llm_usage": {
+            "input_tokens": total_input_tokens,
+            "output_tokens": total_output_tokens,
+        },
     }
 
     # Persist

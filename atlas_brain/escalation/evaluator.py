@@ -173,7 +173,7 @@ class EscalationEvaluator:
                         Message(role="system", content=skill.content),
                         Message(
                             role="user",
-                            content=json.dumps(result.context, indent=2, default=str),
+                            content=json.dumps(result.context, separators=(",", ":"), default=str),
                         ),
                     ]
 

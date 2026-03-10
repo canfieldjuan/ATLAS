@@ -158,8 +158,8 @@ async def _generate_next_step(
     # Build template replacements (shared + skill-specific)
     replacements = {
         "{company_name}": seq.get("company_name", ""),
-        "{company_context}": json.dumps(company_context, indent=2, default=str),
-        "{selling_context}": json.dumps(selling_context, indent=2, default=str),
+        "{company_context}": json.dumps(company_context, separators=(",", ":"), default=str),
+        "{selling_context}": json.dumps(selling_context, separators=(",", ":"), default=str),
         "{current_step}": str(seq.get("current_step", 1) + 1),
         "{max_steps}": str(seq.get("max_steps", 4)),
         "{days_since_last}": days_since,
@@ -174,7 +174,7 @@ async def _generate_next_step(
         replacements["{recipient_company}"] = company_context.get("seller_name", "")
         replacements["{recipient_type}"] = "amazon_seller"
         replacements["{category}"] = company_context.get("category", "")
-        replacements["{category_intelligence}"] = json.dumps(cat_intel, indent=2, default=str)
+        replacements["{category_intelligence}"] = json.dumps(cat_intel, separators=(",", ":"), default=str)
 
     system_prompt = skill.content
     for placeholder, value in replacements.items():
@@ -199,6 +199,10 @@ async def _generate_next_step(
             timeout=60,
         )
 
+        _usage = result.get("usage", {})
+        if _usage.get("input_tokens"):
+            logger.info("campaign_sequence LLM tokens: in=%d out=%d",
+                         _usage["input_tokens"], _usage.get("output_tokens", 0))
         text = result.get("response", "").strip()
         if not text:
             return None

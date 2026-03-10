@@ -383,11 +383,15 @@ def call_llm_with_skill(
     auto_activate_ollama: bool = True,
     response_format: dict[str, Any] | None = None,
     guided_json: dict[str, Any] | None = None,
+    usage_out: dict[str, Any] | None = None,
 ) -> str | None:
     """Load a skill, resolve an LLM, call it, clean the output.
 
     Returns the raw cleaned text, or None on failure.
     Caller is responsible for further parsing (JSON, etc.).
+
+    If *usage_out* is provided (a mutable dict), it will be populated with:
+        input_tokens (int), output_tokens (int), model (str), provider (str)
     """
     from ..skills import get_skill_registry
     from ..services.protocols import Message
@@ -429,6 +433,15 @@ def call_llm_with_skill(
             **kwargs,
         )
         text = result.get("response", "").strip()
+
+        # Populate usage_out for callers that want token tracking
+        if usage_out is not None:
+            usage = result.get("usage", {})
+            usage_out["input_tokens"] = usage.get("input_tokens", 0)
+            usage_out["output_tokens"] = usage.get("output_tokens", 0)
+            usage_out["model"] = getattr(llm, "model", getattr(llm, "model_id", ""))
+            usage_out["provider"] = getattr(llm, "name", "")
+
         if not text:
             logger.warning("LLM returned empty response for skill '%s'", skill_name)
             return None

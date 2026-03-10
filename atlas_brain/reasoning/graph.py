@@ -22,12 +22,15 @@ _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n?(.*?)\n?\s*```", re.DOTALL)
 
 async def _llm_generate(llm, prompt: str, system_prompt: str,
                          max_tokens: int = 1024, temperature: float = 0.3,
-                         timeout: float = 120.0) -> str:
-    """Call LLM.chat() from async context and return response text.
+                         timeout: float = 120.0) -> dict[str, Any]:
+    """Call LLM.chat() from async context and return response with usage.
 
     Args:
         timeout: Maximum seconds to wait for the LLM response (default 120s).
                  Raises asyncio.TimeoutError if exceeded.
+
+    Returns:
+        Dict with 'response' (str) and 'usage' (dict with input_tokens, output_tokens)
     """
     from ..services.protocols import Message
 
@@ -35,21 +38,18 @@ async def _llm_generate(llm, prompt: str, system_prompt: str,
         Message(role="system", content=system_prompt),
         Message(role="user", content=prompt),
     ]
-    # Prefer async if available; fall back to sync via thread
-    if hasattr(llm, "chat_async"):
-        return await asyncio.wait_for(
-            llm.chat_async(
-                messages=messages, max_tokens=max_tokens, temperature=temperature,
-            ),
-            timeout=timeout,
-        )
+    # Always use sync chat() via thread -- chat_async() returns only str,
+    # losing the usage dict needed for token tracking.
     result = await asyncio.wait_for(
         asyncio.to_thread(
             llm.chat, messages=messages, max_tokens=max_tokens, temperature=temperature,
         ),
         timeout=timeout,
     )
-    return result.get("response", "")
+    return {
+        "response": result.get("response", ""),
+        "usage": result.get("usage", {}),
+    }
 
 
 def _parse_llm_json(text: str) -> dict[str, Any]:
@@ -84,6 +84,10 @@ async def run_reasoning_graph(state: ReasoningAgentState) -> ReasoningAgentState
     """Execute the full reasoning graph: triage -> context -> lock check ->
     reason -> plan -> execute -> synthesize -> notify.
     """
+    # Initialize token tracking
+    state["total_input_tokens"] = 0
+    state["total_output_tokens"] = 0
+
     # 1. Triage
     state = await _node_triage(state)
     if not state.get("needs_reasoning"):
@@ -142,11 +146,16 @@ async def _node_triage(state: ReasoningAgentState) -> ReasoningAgentState:
 
     try:
         from ..config import settings
-        text = await _llm_generate(
+        result = await _llm_generate(
             llm, event_desc, TRIAGE_SYSTEM,
             max_tokens=settings.reasoning.triage_max_tokens,
             temperature=0.1,
         )
+        text = result["response"]
+        usage = result.get("usage", {})
+        state["total_input_tokens"] = state.get("total_input_tokens", 0) + usage.get("input_tokens", 0)
+        state["total_output_tokens"] = state.get("total_output_tokens", 0) + usage.get("output_tokens", 0)
+
         parsed = _parse_llm_json(text)
         state["triage_priority"] = parsed.get("priority", "medium")
         state["needs_reasoning"] = parsed.get("needs_reasoning", True)
@@ -292,11 +301,16 @@ async def _node_reason(state: ReasoningAgentState) -> ReasoningAgentState:
         return state
 
     try:
-        text = await _llm_generate(
+        result = await _llm_generate(
             llm, prompt, REASONING_SYSTEM,
             max_tokens=settings.reasoning.max_tokens,
             temperature=settings.reasoning.temperature,
         )
+        text = result["response"]
+        usage = result.get("usage", {})
+        state["total_input_tokens"] = state.get("total_input_tokens", 0) + usage.get("input_tokens", 0)
+        state["total_output_tokens"] = state.get("total_output_tokens", 0) + usage.get("output_tokens", 0)
+
         state["reasoning_output"] = text
 
         parsed = _parse_llm_json(text)
@@ -422,10 +436,15 @@ async def _node_synthesize(state: ReasoningAgentState) -> ReasoningAgentState:
         return state
 
     try:
-        text = await _llm_generate(
+        result = await _llm_generate(
             llm, context, SYNTHESIS_SYSTEM,
             max_tokens=256, temperature=0.3,
         )
+        text = result["response"]
+        usage = result.get("usage", {})
+        state["total_input_tokens"] = state.get("total_input_tokens", 0) + usage.get("input_tokens", 0)
+        state["total_output_tokens"] = state.get("total_output_tokens", 0) + usage.get("output_tokens", 0)
+
         state["summary"] = text.strip()
     except Exception:
         state["summary"] = state.get("rationale", "Reasoning agent completed.")
