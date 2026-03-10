@@ -89,6 +89,8 @@ class ReasoningAgentGraph:
             status="completed",
             input_data={"event_type": event.event_type, "payload": event.payload},
             output_data=result,
+            input_tokens=result_state.get("total_input_tokens"),
+            output_tokens=result_state.get("total_output_tokens"),
             metadata={
                 "reasoning": build_reasoning_trace_context(
                     decision={
