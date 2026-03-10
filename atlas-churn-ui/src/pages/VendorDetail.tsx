@@ -287,7 +287,7 @@ export default function VendorDetail() {
                         key={i}
                         className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3"
                       >
-                        {typeof q === 'string' ? q : (q as Record<string, unknown>).quote ?? (q as Record<string, unknown>).text ?? ''}
+                        {typeof q === 'string' ? q : String((q as Record<string, unknown>).quote ?? (q as Record<string, unknown>).text ?? '')}
                       </blockquote>
                     ))}
                   </div>

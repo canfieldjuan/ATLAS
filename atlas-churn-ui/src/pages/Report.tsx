@@ -96,6 +96,7 @@ function ReportView({ data }: { data: ReportData }) {
       <SeoHead
         title={`${data.vendor_name} Churn Intelligence Report | Churn Signals`}
         description={`Full churn intelligence report for ${data.vendor_name}: pain drivers, displacement targets, at-risk accounts, and competitive analysis.`}
+        canonical={`https://churnsignals.co/report?vendor=${encodeURIComponent(data.vendor_name)}`}
       />
       <div className="max-w-5xl mx-auto px-6 py-12">
         {/* Context line */}
@@ -545,6 +546,7 @@ export default function Report() {
       <SeoHead
         title={`${vendor} Churn Intelligence Report | Churn Signals`}
         description={`Access the full ${vendor} churn intelligence report: account-level signals, displacement data, and risk scores.`}
+        canonical={`https://churnsignals.co/report?vendor=${encodeURIComponent(vendor)}`}
       />
       <div className="min-h-[60vh] flex items-center justify-center px-6 py-16">
         <div className="w-full max-w-md">
