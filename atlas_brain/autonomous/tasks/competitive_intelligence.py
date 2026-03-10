@@ -221,6 +221,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         change_events_detected = await _detect_change_events(
             pool, fetchers["brand_health"],
         )
+        # Detect market-level concurrent shifts (3+ brands with same event today)
+        concurrent_shifts = await _detect_concurrent_shifts(pool)
         displacement_edges_persisted = await _persist_displacement_edges(pool)
 
     # Send ntfy notification
@@ -243,6 +245,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "insights": len(parsed.get("insights", [])),
         "snapshots_persisted": snapshots_persisted,
         "change_events_detected": change_events_detected,
+        "concurrent_shifts_detected": concurrent_shifts,
         "displacement_edges_persisted": displacement_edges_persisted,
     }
 
@@ -1092,6 +1095,68 @@ async def _detect_change_events(
 
     if detected:
         logger.info("Detected %d consumer change events", detected)
+    return detected
+
+
+# ------------------------------------------------------------------
+# Concurrent shift detection (market-level)
+# ------------------------------------------------------------------
+
+
+async def _detect_concurrent_shifts(pool) -> int:
+    """Detect dates where 3+ brands had the same event type -- signals market trend."""
+    today = date.today()
+    detected = 0
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT event_type, COUNT(DISTINCT brand) AS brand_count,
+                   ARRAY_AGG(DISTINCT brand ORDER BY brand) AS brands,
+                   AVG(delta) AS avg_delta
+            FROM product_change_events
+            WHERE event_date = $1
+              AND brand != '__market__'
+            GROUP BY event_type
+            HAVING COUNT(DISTINCT brand) >= 3
+            """,
+            today,
+        )
+        for row in rows:
+            event_type = row["event_type"]
+            brand_count = row["brand_count"]
+            brands = row["brands"]
+            avg_delta = round(float(row["avg_delta"] or 0), 2)
+            brand_list = ", ".join(brands[:5])
+            suffix = f" +{brand_count - 5} more" if brand_count > 5 else ""
+            description = (
+                f"Concurrent {event_type} across {brand_count} brands: "
+                f"{brand_list}{suffix} (avg delta: {avg_delta})"
+            )
+            try:
+                await pool.execute(
+                    """
+                    INSERT INTO product_change_events
+                        (brand, event_date, event_type, description, delta, metadata)
+                    VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+                    """,
+                    "__market__",
+                    today,
+                    "concurrent_shift",
+                    description,
+                    avg_delta,
+                    json.dumps({
+                        "original_event_type": event_type,
+                        "brand_count": brand_count,
+                        "brands": brands,
+                    }),
+                )
+                detected += 1
+            except Exception:
+                logger.debug("Failed to persist concurrent_shift for %s", event_type)
+    except Exception:
+        logger.debug("Concurrent shift detection skipped", exc_info=True)
+    if detected:
+        logger.info("Detected %d concurrent shifts for %s", detected, today)
     return detected
 
 

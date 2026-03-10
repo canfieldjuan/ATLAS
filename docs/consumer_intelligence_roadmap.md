@@ -81,20 +81,18 @@ Pain scores have no evidence backing -- can't distinguish strong signals from no
 
 ---
 
-## Phase 3: Cross-Brand Correlation -- NOT STARTED
+## Phase 3: Cross-Brand Correlation -- DONE
 
 **B2B precedent**: `GET /concurrent-events` (dates where 3+ vendors had same event type).
 `GET /vendor-correlation` (pairwise Pearson r on snapshot time-series with displacement context).
 Automatic `concurrent_shift` event detection.
 
-**Already done**: Snapshots, change events, history queries, summary endpoint.
-
-| Item | Status | What's Needed |
-|------|--------|---------------|
-| Concurrent event detection | **MISSING** | `GET /consumer/dashboard/concurrent-events`: dates where 3+ brands had same event type. Market-level signal. |
-| Pairwise brand correlation | **MISSING** | `GET /consumer/dashboard/brand-correlation?brand_a=X&brand_b=Y&metric=avg_pain_score`: aligned snapshot time-series + Pearson r. |
-| Market-level signal detection | **MISSING** | `concurrent_shift` event type in `_detect_change_events()` for `__market__` pseudo-brand. |
-| MCP tools | **MISSING** | `list_concurrent_events`, `get_brand_correlation` |
+| Item | Status | What's There |
+|------|--------|-------------|
+| Concurrent event detection | **DONE** | `GET /consumer/dashboard/concurrent-events`: dates where N+ brands had same event type. Filters by event_type, min_brands, days. Aggregates avg/min/max delta. |
+| Pairwise brand correlation | **DONE** | `GET /consumer/dashboard/brand-correlation?brand_a=X&brand_b=Y&metric=avg_pain_score`: aligned `brand_intelligence_snapshots` time-series + Pearson r. 8 metrics supported: health_score, avg_pain_score, avg_rating, total_reviews, repurchase_yes, safety_count, complaint_count, competitive_flow_count. Includes recent displacement edges between the pair. |
+| Market-level signal detection | **DONE** | `_detect_concurrent_shifts()` in competitive_intelligence.py: runs daily after change events, detects 3+ brands with same event type, creates `concurrent_shift` event with brand=`__market__` pseudo-brand + metadata (original_event_type, brand_count, brands). |
+| MCP tools | **DONE** | `list_concurrent_events` (filterable, same query as REST), `get_brand_correlation` (inline Pearson r, displacement context). 32 tools total. |
 
 ---
 
@@ -147,6 +145,6 @@ Phase 5  (delivery surfaces)  -- independent, can be done anytime after Phase 0
 |-------|-------|---------|
 | Phase 0 | **100%** | Brand registry (3,850 seeded), resolution with cache, fuzzy matching, provenance, REST + MCP |
 | Phase 2 | **100%** | Displacement edges, confidence scoring (3-signal), min_confidence filters, REST + MCP |
-| Phase 3 | **60%** | Snapshots + change events done. Missing cross-brand correlation. |
+| Phase 3 | **100%** | Concurrent event detection, pairwise Pearson r correlation, market-level concurrent_shift events, REST + MCP |
 | Phase 5 | **30%** | CSV export + ntfy done. Missing webhooks, PDF, Slack/Teams, email. |
 | Phase 6 | **80%** | Corrections infrastructure done. Missing brand merge. |

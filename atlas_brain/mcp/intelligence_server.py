@@ -42,6 +42,10 @@ Tools:
     add_brand_alias               -- add alias to existing brand
     list_brand_registry           -- list all canonical brands
 
+    -- Consumer Cross-Brand Correlation --
+    list_concurrent_events            -- dates where 3+ brands had same event type
+    get_brand_correlation             -- aligned snapshot time-series + Pearson r
+
     -- Consumer Displacement Edges --
     list_product_displacement_edges  -- query brand-to-brand competitive flows
     get_product_displacement_history -- time-series for a specific brand pair
@@ -1760,6 +1764,204 @@ async def get_product_displacement_history(
     except Exception:
         logger.exception("get_product_displacement_history error")
         return json.dumps({"error": "Internal error", "history": []})
+
+
+# ---------------------------------------------------------------------------
+# Cross-brand correlation
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def list_concurrent_events(
+    days: int = 30,
+    event_type: Optional[str] = None,
+    min_brands: int = 2,
+    limit: int = 50,
+) -> str:
+    """
+    Find dates where multiple brands had the same change event type.
+
+    Surfaces cross-brand correlations like 'pain score spiked at 4 brands on
+    the same day' -- may indicate market-level trends vs brand-specific issues.
+
+    days: Lookback period (default 30)
+    event_type: Optional filter (pain_score_spike, vulnerability_spike, safety_flag_emergence, etc.)
+    min_brands: Minimum brand count to qualify as concurrent (default 2)
+    limit: Max results (default 50)
+    """
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        if not pool:
+            return json.dumps({"error": "Database not ready"})
+
+        type_filter = ""
+        params: list = [days, min_brands, limit]
+        if event_type:
+            type_filter = "AND event_type = $4"
+            params.append(event_type)
+
+        rows = await pool.fetch(
+            f"""
+            SELECT event_date, event_type,
+                   COUNT(DISTINCT brand) AS brand_count,
+                   ARRAY_AGG(DISTINCT brand ORDER BY brand) AS brands,
+                   AVG(delta) AS avg_delta,
+                   MIN(delta) AS min_delta,
+                   MAX(delta) AS max_delta
+            FROM product_change_events
+            WHERE event_date >= CURRENT_DATE - $1::int
+              AND brand != '__market__'
+              {type_filter}
+            GROUP BY event_date, event_type
+            HAVING COUNT(DISTINCT brand) >= $2
+            ORDER BY brand_count DESC, event_date DESC
+            LIMIT $3
+            """,
+            *params,
+        )
+
+        results = [
+            {
+                "event_date": str(r["event_date"]),
+                "event_type": r["event_type"],
+                "brand_count": r["brand_count"],
+                "brands": r["brands"],
+                "avg_delta": round(float(r["avg_delta"]), 2) if r["avg_delta"] is not None else None,
+                "min_delta": round(float(r["min_delta"]), 2) if r["min_delta"] is not None else None,
+                "max_delta": round(float(r["max_delta"]), 2) if r["max_delta"] is not None else None,
+            }
+            for r in rows
+        ]
+        return json.dumps({"concurrent_events": results, "total": len(results)}, default=str)
+    except Exception:
+        logger.exception("list_concurrent_events error")
+        return json.dumps({"error": "Internal error"})
+
+
+@mcp.tool()
+async def get_brand_correlation(
+    brand_a: str,
+    brand_b: str,
+    days: int = 90,
+    metric: str = "avg_pain_score",
+) -> str:
+    """
+    Compare two brands' metric trends and compute Pearson correlation coefficient.
+
+    Returns aligned time-series from daily snapshots and Pearson r. Negative
+    correlation (r < -0.5) suggests one brand gains when the other loses --
+    potential displacement.
+
+    brand_a: First brand name (partial match)
+    brand_b: Second brand name (partial match)
+    days: Lookback period (default 90)
+    metric: Metric to correlate (health_score, avg_pain_score, avg_rating,
+            total_reviews, repurchase_yes, safety_count, complaint_count,
+            competitive_flow_count)
+    """
+    try:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+        if not pool:
+            return json.dumps({"error": "Database not ready"})
+
+        valid_metrics = {
+            "health_score", "avg_pain_score", "avg_rating", "total_reviews",
+            "repurchase_yes", "safety_count", "complaint_count",
+            "competitive_flow_count",
+        }
+        if metric not in valid_metrics:
+            return json.dumps({"error": f"metric must be one of: {sorted(valid_metrics)}"})
+
+        rows = await pool.fetch(
+            f"""
+            SELECT a.snapshot_date,
+                   a.{metric} AS value_a,
+                   b.{metric} AS value_b
+            FROM brand_intelligence_snapshots a
+            JOIN brand_intelligence_snapshots b
+              ON a.snapshot_date = b.snapshot_date
+            WHERE a.brand ILIKE '%' || $1 || '%'
+              AND b.brand ILIKE '%' || $2 || '%'
+              AND a.snapshot_date >= CURRENT_DATE - $3::int
+            ORDER BY a.snapshot_date ASC
+            """,
+            brand_a, brand_b, days,
+        )
+
+        if not rows:
+            return json.dumps({"error": "No overlapping snapshots found for these brands"})
+
+        vals_a = [float(r["value_a"] or 0) for r in rows]
+        vals_b = [float(r["value_b"] or 0) for r in rows]
+
+        # Pearson correlation
+        n = len(vals_a)
+        correlation = None
+        if n >= 3:
+            mean_a = sum(vals_a) / n
+            mean_b = sum(vals_b) / n
+            dx = [v - mean_a for v in vals_a]
+            dy = [v - mean_b for v in vals_b]
+            num = sum(a * b for a, b in zip(dx, dy))
+            den_a = sum(a * a for a in dx) ** 0.5
+            den_b = sum(b * b for b in dy) ** 0.5
+            if den_a > 0 and den_b > 0:
+                correlation = round(num / (den_a * den_b), 4)
+
+        series = [
+            {
+                "date": str(r["snapshot_date"]),
+                "value_a": float(r["value_a"] or 0),
+                "value_b": float(r["value_b"] or 0),
+            }
+            for r in rows
+        ]
+
+        # Recent displacement edges between the pair
+        edge_rows = await pool.fetch(
+            """
+            SELECT from_brand, to_brand, mention_count, signal_strength,
+                   category_distribution
+            FROM product_displacement_edges
+            WHERE (from_brand ILIKE '%' || $1 || '%' AND to_brand ILIKE '%' || $2 || '%')
+               OR (from_brand ILIKE '%' || $2 || '%' AND to_brand ILIKE '%' || $1 || '%')
+            ORDER BY computed_date DESC
+            LIMIT 5
+            """,
+            brand_a, brand_b,
+        )
+        displacement = []
+        for r in edge_rows:
+            cat_dist = r["category_distribution"]
+            if isinstance(cat_dist, str):
+                try:
+                    cat_dist = json.loads(cat_dist)
+                except Exception:
+                    cat_dist = {}
+            displacement.append({
+                "from_brand": r["from_brand"],
+                "to_brand": r["to_brand"],
+                "mention_count": r["mention_count"],
+                "signal_strength": r["signal_strength"],
+                "top_categories": cat_dist or {},
+            })
+
+        return json.dumps({
+            "brand_a": brand_a,
+            "brand_b": brand_b,
+            "metric": metric,
+            "data_points": len(series),
+            "correlation": correlation,
+            "series": series,
+            "displacement_edges": displacement,
+        }, default=str)
+    except Exception:
+        logger.exception("get_brand_correlation error")
+        return json.dumps({"error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------

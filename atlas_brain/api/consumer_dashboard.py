@@ -2439,6 +2439,190 @@ async def change_events_summary(
 
 
 # ---------------------------------------------------------------------------
+# Cross-brand correlation
+# ---------------------------------------------------------------------------
+
+
+@router.get("/concurrent-events")
+@limiter.limit(_dynamic_limit)
+async def list_concurrent_events(
+    request: Request,
+    days: int = Query(30, ge=1, le=365),
+    event_type: Optional[str] = Query(None),
+    min_brands: int = Query(2, ge=2, le=50),
+    limit: int = Query(50, ge=1, le=200),
+    user: AuthUser = Depends(require_auth),
+):
+    """Find dates where multiple brands experienced the same change event type.
+
+    Surfaces cross-brand correlations like 'pain score spiked at 4 brands on
+    the same day' which may indicate a market-level trend.
+    """
+    pool = _pool_or_503()
+
+    type_filter = ""
+    params: list = [days, min_brands, limit]
+    if event_type:
+        type_filter = "AND event_type = $4"
+        params.append(event_type)
+
+    rows = await pool.fetch(
+        f"""
+        SELECT event_date, event_type,
+               COUNT(DISTINCT brand) AS brand_count,
+               ARRAY_AGG(DISTINCT brand ORDER BY brand) AS brands,
+               AVG(delta) AS avg_delta,
+               MIN(delta) AS min_delta,
+               MAX(delta) AS max_delta
+        FROM product_change_events
+        WHERE event_date >= CURRENT_DATE - $1::int
+          AND brand != '__market__'
+          {type_filter}
+        GROUP BY event_date, event_type
+        HAVING COUNT(DISTINCT brand) >= $2
+        ORDER BY brand_count DESC, event_date DESC
+        LIMIT $3
+        """,
+        *params,
+    )
+
+    return {
+        "period_days": days,
+        "min_brands": min_brands,
+        "event_type_filter": event_type,
+        "concurrent_events": [
+            {
+                "event_date": str(r["event_date"]),
+                "event_type": r["event_type"],
+                "brand_count": r["brand_count"],
+                "brands": r["brands"],
+                "avg_delta": round(float(r["avg_delta"]), 2) if r["avg_delta"] is not None else None,
+                "min_delta": round(float(r["min_delta"]), 2) if r["min_delta"] is not None else None,
+                "max_delta": round(float(r["max_delta"]), 2) if r["max_delta"] is not None else None,
+            }
+            for r in rows
+        ],
+        "total": len(rows),
+    }
+
+
+def _pearson_r(x: list[float], y: list[float]) -> float | None:
+    """Compute Pearson correlation coefficient. Returns None if < 3 data points."""
+    n = len(x)
+    if n < 3:
+        return None
+    mean_x = sum(x) / n
+    mean_y = sum(y) / n
+    dx = [xi - mean_x for xi in x]
+    dy = [yi - mean_y for yi in y]
+    numerator = sum(a * b for a, b in zip(dx, dy))
+    denom_x = sum(a * a for a in dx) ** 0.5
+    denom_y = sum(b * b for b in dy) ** 0.5
+    if denom_x == 0 or denom_y == 0:
+        return None
+    return round(numerator / (denom_x * denom_y), 4)
+
+
+@router.get("/brand-correlation")
+@limiter.limit(_dynamic_limit)
+async def get_brand_correlation(
+    request: Request,
+    brand_a: str = Query(..., min_length=1),
+    brand_b: str = Query(..., min_length=1),
+    days: int = Query(90, ge=7, le=365),
+    metric: str = Query("avg_pain_score"),
+    user: AuthUser = Depends(require_auth),
+):
+    """Compare two brands' metric trends and compute Pearson correlation.
+
+    Returns aligned time-series data from daily snapshots and r coefficient.
+    Negative correlation (r < -0.5) suggests one brand gains when the other loses.
+    """
+    pool = _pool_or_503()
+
+    valid_metrics = {
+        "health_score", "avg_pain_score", "avg_rating", "total_reviews",
+        "repurchase_yes", "safety_count", "complaint_count",
+        "competitive_flow_count",
+    }
+    if metric not in valid_metrics:
+        raise HTTPException(
+            status_code=400,
+            detail=f"metric must be one of: {sorted(valid_metrics)}",
+        )
+
+    rows = await pool.fetch(
+        f"""
+        SELECT a.snapshot_date,
+               a.{metric} AS value_a,
+               b.{metric} AS value_b
+        FROM brand_intelligence_snapshots a
+        JOIN brand_intelligence_snapshots b
+          ON a.snapshot_date = b.snapshot_date
+        WHERE a.brand ILIKE '%' || $1 || '%'
+          AND b.brand ILIKE '%' || $2 || '%'
+          AND a.snapshot_date >= CURRENT_DATE - $3::int
+        ORDER BY a.snapshot_date ASC
+        """,
+        brand_a, brand_b, days,
+    )
+
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail="No overlapping snapshots found for these brands",
+        )
+
+    series = [
+        {
+            "date": str(r["snapshot_date"]),
+            "value_a": _safe_float(r["value_a"], 0),
+            "value_b": _safe_float(r["value_b"], 0),
+        }
+        for r in rows
+    ]
+
+    vals_a = [_safe_float(r["value_a"], 0) for r in rows]
+    vals_b = [_safe_float(r["value_b"], 0) for r in rows]
+    correlation = _pearson_r(vals_a, vals_b)
+
+    # Recent displacement edges between the pair
+    edge_rows = await pool.fetch(
+        """
+        SELECT from_brand, to_brand, mention_count, signal_strength,
+               category_distribution
+        FROM product_displacement_edges
+        WHERE (from_brand ILIKE '%' || $1 || '%' AND to_brand ILIKE '%' || $2 || '%')
+           OR (from_brand ILIKE '%' || $2 || '%' AND to_brand ILIKE '%' || $1 || '%')
+        ORDER BY computed_date DESC
+        LIMIT 5
+        """,
+        brand_a, brand_b,
+    )
+    displacement = [
+        {
+            "from_brand": r["from_brand"],
+            "to_brand": r["to_brand"],
+            "mention_count": r["mention_count"],
+            "signal_strength": r["signal_strength"],
+            "top_categories": _safe_json(r["category_distribution"]),
+        }
+        for r in edge_rows
+    ]
+
+    return {
+        "brand_a": brand_a,
+        "brand_b": brand_b,
+        "metric": metric,
+        "period_days": days,
+        "data_points": len(series),
+        "correlation": correlation,
+        "series": series,
+        "displacement_edges": displacement,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Corrections (reuse data_corrections table for consumer entities)
 # ---------------------------------------------------------------------------
 
