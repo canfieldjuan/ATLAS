@@ -171,7 +171,7 @@ async def _send_alert_email(
         f"{rows}"
         f"</table>"
         f"<hr>"
-        f"<p><em>View full details in your Atlas Intel dashboard.</em></p>"
+        f"<p><em>View full signal details in your intelligence feed.</em></p>"
     )
 
     try:

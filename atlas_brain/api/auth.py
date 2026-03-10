@@ -214,7 +214,7 @@ async def _send_welcome_email(email: str, full_name: str, product: str) -> None:
         subject = "Welcome to Atlas B2B Intelligence"
         heading = "B2B Churn Intelligence"
         steps = (
-            "<li>Track your first vendor from the dashboard</li>"
+            "<li>Add your first vendor to your churn intelligence watchlist</li>"
             "<li>Review churn signals and competitive intelligence</li>"
             "<li>Set up weekly intelligence reports</li>"
         )
@@ -224,7 +224,7 @@ async def _send_welcome_email(email: str, full_name: str, product: str) -> None:
         steps = (
             "<li>Add your first ASIN to start tracking</li>"
             "<li>Explore brand health, safety signals, and competitive flows</li>"
-            "<li>Check your weekly digest every Monday for new insights</li>"
+            "<li>Check your weekly digest every Monday for new competitive intelligence</li>"
         )
 
     name = full_name or "there"

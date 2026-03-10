@@ -95,7 +95,7 @@ class IntelligenceReportPDF(FPDF):
     def header(self) -> None:
         self.set_font("Helvetica", "B", 10)
         self.set_text_color(*_CLR_PRIMARY)
-        self.cell(0, 8, "Atlas Intelligence", align="L")
+        self.cell(0, 8, "Churn Signals Intelligence", align="L")
         self.set_text_color(*_CLR_MUTED)
         self.set_font("Helvetica", "", 8)
         self.cell(0, 8, "churnsignals.co", align="R", new_x="LMARGIN", new_y="NEXT")
@@ -548,3 +548,235 @@ def render_report_pdf(
         },
     )
     return pdf_bytes
+
+
+def render_vendor_full_report_pdf(
+    vendor_name: str,
+    report_data: dict,
+    briefing_data: dict | None = None,
+) -> bytes:
+    """Build a comprehensive single-vendor PDF from the exploratory_overview.
+
+    Extracts the vendor's data from the full report (feed entry, scorecard,
+    displacement edges, category insights) and renders all sections.
+    If *briefing_data* is provided, it supplements any missing sections.
+
+    Returns raw PDF bytes.
+    """
+    vn_lower = vendor_name.lower()
+
+    # -- Extract vendor-specific slices from the full report -------------------
+    feed = report_data.get("weekly_churn_feed", [])
+    vendor_feed: dict = {}
+    for entry in (feed if isinstance(feed, list) else []):
+        if isinstance(entry, dict):
+            ev = (entry.get("vendor") or entry.get("vendor_name") or "").lower()
+            if ev == vn_lower:
+                vendor_feed = entry
+                break
+
+    scorecards = report_data.get("vendor_scorecards", [])
+    vendor_sc: dict = {}
+    for sc in (scorecards if isinstance(scorecards, list) else []):
+        if isinstance(sc, dict):
+            sv = (sc.get("vendor") or "").lower()
+            if sv == vn_lower:
+                vendor_sc = sc
+                break
+
+    disp_map = report_data.get("displacement_map", [])
+    vendor_disp: list[dict] = []
+    for d in (disp_map if isinstance(disp_map, list) else []):
+        if isinstance(d, dict):
+            fv = (d.get("from_vendor") or "").lower()
+            if fv == vn_lower:
+                vendor_disp.append(d)
+
+    # Merge: prefer full report data, fall back to briefing_data
+    bd = briefing_data or {}
+    merged = {**bd, **vendor_feed, **vendor_sc}
+
+    exec_summary = (
+        merged.get("executive_summary")
+        or report_data.get("executive_summary")
+        or ""
+    )
+
+    # -- Build PDF -------------------------------------------------------------
+    pdf = IntelligenceReportPDF()
+    pdf.alias_nb_pages()
+    pdf.add_page()
+
+    # Title
+    date_str = merged.get("report_date") or date.today().isoformat()
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.set_text_color(*_CLR_DARK)
+    pdf.cell(0, 10, _latin1_safe(f"Churn Intelligence Report: {vendor_name}"), new_x="LMARGIN", new_y="NEXT")
+
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(*_CLR_MUTED)
+    category = merged.get("category") or merged.get("product_category") or "Software"
+    pdf.cell(0, 5, f"Category: {_latin1_safe(category)}  |  Report Date: {date_str}", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(4)
+
+    # Executive summary
+    if exec_summary:
+        pdf.section_title("Executive Summary")
+        pdf.body_text(exec_summary)
+
+    # Key metrics
+    score = float(merged.get("churn_pressure_score", 0))
+    metrics = [
+        ("Churn Pressure Score", f"{score:.0f}", _score_color(score)),
+        ("Signal Density", f"{float(merged.get('churn_signal_density', 0)):.1f}%", None),
+        ("Average Urgency", f"{float(merged.get('avg_urgency', 0)):.1f}", None),
+        ("Total Reviews", str(merged.get("total_reviews") or merged.get("review_count", 0)), None),
+        ("DM Churn Rate", f"{float(merged.get('dm_churn_rate', 0)):.1f}%", None),
+        ("Trend", _safe_str(merged.get("trend", "stable")).title(), None),
+    ]
+    pdf.section_title("Key Metrics")
+    for label, value, color in metrics:
+        pdf.metric_row(label, value, color)
+
+    # Action recommendation (from full report)
+    action = merged.get("action_recommendation")
+    if action:
+        pdf.section_title("Action Recommendation")
+        pdf.body_text(action)
+
+    # Pain breakdown
+    pains = _safe_list(merged.get("pain_breakdown"))
+    if pains:
+        pdf.section_title("Pain Category Breakdown")
+        rows = []
+        for p in pains[:10]:
+            if isinstance(p, dict):
+                cat = _safe_str(p.get("category", ""))[:30]
+                count = str(p.get("count", ""))
+                urg = p.get("avg_urgency")
+                if urg is not None:
+                    rows.append([cat, count, f"{float(urg):.1f}"])
+                else:
+                    rows.append([cat, count, "--"])
+        if rows:
+            pdf.simple_table(["Category", "Signals", "Avg Urgency"], rows, [60, 30, 30])
+
+    # Competitive displacement (from displacement_map -- full edges)
+    if vendor_disp:
+        pdf.section_title("Competitive Displacement Analysis")
+        rows = []
+        for d in vendor_disp[:15]:
+            rows.append([
+                _safe_str(d.get("to_vendor", ""))[:30],
+                str(d.get("mention_count", 0)),
+                _safe_str(d.get("primary_driver", ""))[:30],
+                _safe_str(d.get("signal_strength", 0)),
+            ])
+        pdf.simple_table(
+            ["Competitor", "Mentions", "Primary Driver", "Strength"],
+            rows,
+            [45, 25, 55, 25],
+        )
+        # Key quotes from displacement edges
+        for d in vendor_disp[:5]:
+            quote = d.get("key_quote")
+            if quote:
+                pdf.quote_block(_safe_str(quote)[:300])
+    else:
+        # Fall back to briefing displacement targets
+        targets = _safe_list(merged.get("top_displacement_targets"))
+        if targets:
+            pdf.section_title("Competitive Displacement")
+            rows = []
+            for t in targets[:10]:
+                if isinstance(t, dict):
+                    rows.append([
+                        _safe_str(t.get("competitor") or t.get("name", ""))[:30],
+                        str(t.get("count") or t.get("mentions", 0)),
+                    ])
+            pdf.simple_table(["Competitor", "Mentions"], rows, [90, 30])
+
+    # Named accounts at risk
+    accounts = _safe_list(merged.get("named_accounts"))
+    if accounts:
+        pdf.section_title("Accounts at Risk")
+        rows = []
+        for a in accounts[:15]:
+            if isinstance(a, dict):
+                urg = float(a.get("urgency", 0))
+                risk = "Critical" if urg >= 8 else ("High" if urg >= 6 else "Watch")
+                rows.append([
+                    _safe_str(a.get("company", ""))[:30],
+                    f"{urg:.1f}",
+                    risk,
+                    _safe_str(a.get("primary_pain", ""))[:25],
+                ])
+        if rows:
+            pdf.simple_table(
+                ["Company", "Urgency", "Risk", "Primary Pain"],
+                rows,
+                [50, 20, 25, 50],
+            )
+
+    # Feature gaps
+    gaps = _safe_list(merged.get("top_feature_gaps"))
+    if gaps:
+        pdf.section_title("Feature Gaps")
+        for g in gaps[:8]:
+            txt = g.get("feature", g) if isinstance(g, dict) else _safe_str(g)
+            pdf.body_text(f"  - {txt}")
+
+    # Evidence / customer quotes
+    evidence = _safe_list(merged.get("evidence"))
+    if evidence:
+        pdf.section_title("Customer Evidence")
+        for e in evidence[:8]:
+            text = e.get("quote", e) if isinstance(e, dict) else _safe_str(e)
+            if text:
+                pdf.quote_block(_safe_str(text)[:400])
+
+    # Budget context
+    budget = merged.get("budget_context")
+    if isinstance(budget, dict) and budget:
+        pdf.section_title("Budget Context")
+        _budget_labels = {
+            "avg_seat_count": "Avg Seat Count",
+            "median_seat_count": "Median Seat Count",
+            "max_seat_count": "Max Seat Count",
+            "price_increase_rate": "Price Increase Rate",
+            "price_increase_count": "Price Increase Mentions",
+        }
+        for key, label in _budget_labels.items():
+            val = budget.get(key)
+            if val is None:
+                continue
+            if key == "price_increase_rate":
+                display = f"{float(val) * 100:.1f}%"
+            elif isinstance(val, float):
+                display = f"{val:,.0f}" if val == int(val) else f"{val:,.1f}"
+            else:
+                display = str(val)
+            pdf.metric_row(label, display)
+    elif budget:
+        pdf.section_title("Budget Context")
+        pdf.body_text(_safe_str(budget))
+
+    # Source distribution from full report
+    src_dist = report_data.get("source_distribution")
+    if isinstance(src_dist, dict) and src_dist:
+        pdf.section_title("Source Distribution")
+        rows = []
+        for source, stats in src_dist.items():
+            if isinstance(stats, dict):
+                rows.append([
+                    source.replace("_", " ").title(),
+                    str(stats.get("reviews", 0)),
+                    str(stats.get("high_urgency", 0)),
+                ])
+        if rows:
+            pdf.simple_table(["Source", "Reviews", "High Urgency"], rows, [60, 30, 30])
+
+    # -- Generate bytes --------------------------------------------------------
+    buf = io.BytesIO()
+    pdf.output(buf)
+    return buf.getvalue()

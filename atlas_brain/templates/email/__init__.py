@@ -20,6 +20,14 @@ from .invoice import (
 )
 
 from .vendor_briefing import render_vendor_briefing_html
+from .vendor_checkout_confirmation import (
+    render_checkout_confirmation_html,
+    render_checkout_confirmation_text,
+)
+from .vendor_report_delivery import (
+    render_report_delivery_html,
+    render_report_delivery_text,
+)
 
 __all__ = [
     "BUSINESS_NAME",
@@ -33,4 +41,8 @@ __all__ = [
     "render_invoice_html",
     "render_invoice_text",
     "render_vendor_briefing_html",
+    "render_checkout_confirmation_html",
+    "render_checkout_confirmation_text",
+    "render_report_delivery_html",
+    "render_report_delivery_text",
 ]

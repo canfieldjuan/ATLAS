@@ -135,6 +135,22 @@ Phase 5  (delivery surfaces)  -- independent, can be done anytime after Phase 0
 
 ---
 
+## Phase 7: Product Language Repositioning -- DONE
+
+**B2B precedent**: Reposition product language around the moat. Avoid "AI dashboard", "review insights portal". Use "displacement intelligence network", "evidence-backed signals", "historical brand memory", "action-ready intelligence feeds".
+
+| Item | Status | What's There |
+|------|--------|-------------|
+| MCP server docstrings | **DONE** | Intelligence MCP: "continuously collected consumer product intelligence", "competitive displacement mapping", "evidence-backed pain-point analysis", "historical brand memory". |
+| PDF report headers | **DONE** | Consumer PDF right-side label: "Competitive Displacement Intelligence" (was "Product Review Analysis"). |
+| API module docstrings | **DONE** | consumer_dashboard.py: "continuously collected brand intelligence, competitive displacement maps, evidence-backed pain-point feeds, historical brand memory". |
+| Trial nurture emails | **DONE** | Watchlists, intelligence feeds, displacement maps, evidence-backed signals replace generic "Atlas Intel" / "dashboard" language across all 4 milestones. |
+| Email footers | **DONE** | consumer_weekly_digest, consumer_signal_alerts: "intelligence feed" replaces "Atlas Intel dashboard". b2b_tenant_report: "churn intelligence feed". |
+| Welcome emails | **DONE** | auth.py: B2B "churn intelligence watchlist", consumer "competitive intelligence" replace "dashboard"/"insights". |
+| Campaign notifications | **DONE** | b2b_campaigns.py + b2b_campaign_generation.py: "lead engagement pipeline" replaces "Leads dashboard". |
+
+---
+
 ## Overall Score
 
 | Phase | Score | Summary |
@@ -144,3 +160,4 @@ Phase 5  (delivery surfaces)  -- independent, can be done anytime after Phase 0
 | Phase 3 | **100%** | Concurrent event detection, pairwise Pearson r correlation, market-level concurrent_shift events, REST + MCP |
 | Phase 5 | **100%** | Webhook dispatch (reuses B2B infrastructure), PDF export (market + brand reports), Slack/Teams (via channel formatters), email digest (Resend), CSV/JSON export, ntfy |
 | Phase 6 | **100%** | Brand merge across 6 tables (conflict-aware), mv refresh, alias + cache invalidation, REST + MCP |
+| Phase 7 | **100%** | Product language repositioned across 17 files: MCP docstrings, PDF headers, API descriptions, trial nurture, email footers, welcome emails, campaign notifications -- all use intelligence-moat language. Zero generic "dashboard/portal" strings remain. |

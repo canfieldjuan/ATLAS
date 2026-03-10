@@ -1,9 +1,11 @@
 """
 Atlas B2B Churn Intelligence MCP Server.
 
-Exposes B2B churn intelligence data (reviews, vendor signals, reports,
-pipeline health, blog posts, affiliate partners) to any MCP-compatible
-client (Claude Desktop, Cursor, custom agents).
+Continuously collected competitive intelligence for the B2B SaaS market.
+Exposes the full displacement intelligence network -- vendor churn signals,
+evidence-backed risk profiles, historical vendor memory, and action-ready
+intelligence feeds -- to any MCP-compatible client (Claude Desktop, Cursor,
+custom agents).
 
 Tools:
     list_churn_signals       -- query pre-aggregated weekly vendor churn metrics

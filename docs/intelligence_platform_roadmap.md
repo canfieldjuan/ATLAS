@@ -84,6 +84,7 @@ Phase 2 deferred scope:
 | Phase 4 | **100%** | Sprints 1-5 complete: outcome tracking + signal effectiveness (Sprint 1), score calibration from outcomes (Sprint 2), CRM event ingestion pipeline (Sprint 3), Salesforce + Pipedrive native webhooks (Sprint 4), CRM event enrichment (Sprint 5, cross-event resolution, vendor normalization, fuzzy matching). A/B testing deferred (low ROI until volume justifies). |
 | Phase 5 | **100%** | API-first solid (45+ MCP tools). Sprint 1: webhook outbound delivery. Sprint 2: PDF report export. Sprint 3: Slack + Teams (Block Kit, Adaptive Cards). Sprint 4: CRM outbound push (HubSpot, Salesforce, Pipedrive). All delivery surfaces covered: API, webhooks, email, PDF, Slack, Teams, CRM push, ntfy, CSV. |
 | Phase 6 | **100%** | Sprints 1-5 complete. Sprint 1: data_corrections table + CRUD + MCP + audit. Sprint 2: correction-aware queries on all entity tables. Sprint 3: vendor merge across 20 tables (was 17; added b2b_scrape_targets, b2b_product_profile_snapshots, campaign_funnel_stats refresh). Sprint 4: field override reads. Sprint 5: source quality controls (suppress_source, impact). Correction logic (suppress_predicate, apply_field_overrides) extracted to shared `services/b2b/corrections.py`. |
+| Phase 7 | **100%** | Product language repositioned across all user-facing surfaces (17 files). MCP docstrings: displacement intelligence network, evidence-backed signals, historical vendor memory, action-ready feeds. PDF headers: "Churn Signals Intelligence" (B2B), "Competitive Displacement Intelligence" (consumer). Email templates: displacement intelligence framing. Trial nurture: watchlists, intelligence feeds, displacement maps. Welcome emails: watchlist + competitive intelligence language. Email footers: "intelligence feed" replaces "Atlas Intel dashboard". Campaign notifications: "lead engagement pipeline" replaces "Leads dashboard". FastAPI metadata updated. Zero instances of "AI dashboard", "review insights portal", "Atlas Intel dashboard", or "Leads dashboard" remain. |
 
 ### What's Strong Today
 
@@ -1492,7 +1493,7 @@ Goal for this sprint:
 
 ## Active job assignments
 
-Phases 1 through 6 are complete. Active work now shifts to Phase 7, full-system verification, deferred-gap triage, and launch-readiness.
+Phases 1 through 7 are complete. All phases at 100%. Active work now shifts to full-system verification, deferred-gap triage, and launch-readiness.
 
 ### Senior dev 1: test and integration lead
 

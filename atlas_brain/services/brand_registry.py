@@ -222,11 +222,12 @@ async def add_brand(canonical_name: str, aliases: list[str] | None = None) -> di
         INSERT INTO consumer_brand_registry (canonical_name, aliases)
         VALUES ($1, $2::jsonb)
         ON CONFLICT (canonical_name) DO UPDATE SET
-            aliases = (
-                SELECT jsonb_agg(DISTINCT val)
-                FROM jsonb_array_elements_text(
-                    consumer_brand_registry.aliases || EXCLUDED.aliases
-                ) AS t(val)
+            aliases = COALESCE(
+                (SELECT jsonb_agg(DISTINCT val)
+                 FROM jsonb_array_elements_text(
+                     consumer_brand_registry.aliases || EXCLUDED.aliases
+                 ) AS t(val)),
+                '[]'::jsonb
             ),
             updated_at = NOW()
         RETURNING id, canonical_name, aliases, created_at, updated_at

@@ -230,6 +230,31 @@ When a section defines or explains categories (pain categories, buying stages, v
 **Feature Gaps** -- Missing capabilities that force workarounds or third-party integrations. Urgency: 5.8/10.
 ```
 
+## AEO (Answer Engine Optimization)
+
+Structure content so AI answer engines (ChatGPT, Perplexity, Google AI Overviews) can cite it directly.
+
+### Inverted Pyramid
+Start each section with a direct answer in the first 40-60 words. AI engines extract the first substantive paragraph as the cited answer. Put the conclusion first, then the supporting data.
+
+### Self-Contained Sections
+Each H2 section should be independently citable (200-500 words). An AI engine should be able to extract any single section and present it as a complete answer without needing context from other sections.
+
+### Question-Format H2s
+Where natural, phrase H2 headings as questions that match real search queries. Example: "What Are the Most Common Salesforce Complaints?" rather than "Salesforce Complaint Analysis."
+
+### Quantitative Claims
+Always include specific numbers: review counts, percentages, urgency scores, time periods. AI engines prefer answers with concrete data over vague statements. "67% of reviewers cite pricing" is more citable than "many reviewers cite pricing."
+
+### Freshness Signals
+Include date references and "as of [month year]" anchoring in key claims. AI engines weigh recency. Example: "As of March 2026, 127 reviews show switching intent."
+
+### Entity Clarity
+Use full vendor/product names on first mention in each section, not abbreviations. AI engines need unambiguous entity references to cite correctly.
+
+### Structured Comparisons
+Use HTML tables for any 2+ item comparison. AI engines extract tabular data more reliably than prose comparisons.
+
 ## Topic-Specific Guidance
 
 ### vendor_alternative

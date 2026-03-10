@@ -106,7 +106,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         topic_type, topic_ctx = topic
         data = await _gather_data(pool, topic_type, topic_ctx)
         blueprint = _build_blueprint(topic_type, topic_ctx, data)
-        content = _generate_content(llm, blueprint, cfg.blog_post_max_tokens)
+        related_posts = await _fetch_related_for_linking(
+            pool, blueprint.tags, current_slug=blueprint.slug,
+        )
+        content = _generate_content(llm, blueprint, cfg.blog_post_max_tokens, related_posts)
         if content is None:
             logger.warning("LLM failed for topic %s, skipping", blueprint.slug)
             continue
@@ -149,17 +152,19 @@ async def _select_topic(pool) -> tuple[str, dict[str, Any]] | None:
     month_suffix = today.strftime("%Y-%m")
 
     # Gather all candidate data in parallel
-    brand_pairs, cat_stats, migrations, safety = await asyncio.gather(
+    brand_pairs, cat_stats, migrations, safety, best_for = await asyncio.gather(
         _find_brand_showdown_candidates(pool),
         _find_complaint_roundup_candidates(pool),
         _find_migration_candidates(pool),
         _find_safety_candidates(pool),
+        _find_best_for_candidates(pool),
         return_exceptions=True,
     )
     brand_pairs = brand_pairs if not isinstance(brand_pairs, Exception) else []
     cat_stats = cat_stats if not isinstance(cat_stats, Exception) else []
     migrations = migrations if not isinstance(migrations, Exception) else []
     safety = safety if not isinstance(safety, Exception) else []
+    best_for = best_for if not isinstance(best_for, Exception) else []
 
     # Build slug -> (score, topic_type, ctx) candidates
     raw_candidates: list[tuple[str, float, str, dict[str, Any]]] = []
@@ -183,6 +188,11 @@ async def _select_topic(pool) -> tuple[str, dict[str, Any]] | None:
         slug = f"safety-{_slugify(sf['category'])}-{month_suffix}"
         score = sf["safety_count"] * 15
         raw_candidates.append((slug, score, "safety_spotlight", {**sf, "slug": slug}))
+
+    for bf in best_for:
+        slug = f"best-{_slugify(bf['category'])}-{month_suffix}"
+        score = bf["asin_count"] * 0.5 + bf["avg_pain"] * 5
+        raw_candidates.append((slug, score, "best_for_products", {**bf, "slug": slug}))
 
     if not raw_candidates:
         return None
@@ -399,6 +409,43 @@ async def _find_safety_candidates(pool) -> list[dict[str, Any]]:
     ]
 
 
+async def _find_best_for_candidates(pool) -> list[dict[str, Any]]:
+    """Find categories with enough enriched products for a best-for guide."""
+    rows = await pool.fetch(
+        """
+        SELECT
+            COALESCE(
+                REPLACE(pm.categories->>2, '&amp;', '&'),
+                REPLACE(pm.categories->>1, '&amp;', '&'),
+                pr.source_category
+            ) AS category,
+            count(DISTINCT pm.asin) AS asin_count,
+            avg(pr.pain_score) AS avg_pain,
+            avg(pr.rating) AS avg_rating,
+            count(*) AS review_count
+        FROM product_reviews pr
+        JOIN product_metadata pm ON pm.asin = pr.asin
+        WHERE pr.deep_enrichment_status = 'enriched'
+          AND pm.brand IS NOT NULL AND pm.brand != ''
+        GROUP BY category
+        HAVING count(DISTINCT pm.asin) >= 10
+           AND count(*) >= 50
+        ORDER BY count(DISTINCT pm.asin) DESC
+        LIMIT 10
+        """
+    )
+    return [
+        {
+            "category": r["category"],
+            "asin_count": r["asin_count"],
+            "avg_pain": round(float(r["avg_pain"]), 1),
+            "avg_rating": round(float(r["avg_rating"]), 2),
+            "review_count": r["review_count"],
+        }
+        for r in rows
+    ]
+
+
 async def _batch_slug_check(pool, slugs: list[str]) -> set[str]:
     """Check which slugs already exist (all time). Single query."""
     if not slugs:
@@ -424,7 +471,7 @@ async def _recently_covered_subjects(pool, days: int = 90) -> set[str]:
                 ''
             )) AS subject
         FROM blog_posts
-        WHERE topic_type IN ('brand_showdown','complaint_roundup','migration_report','safety_spotlight')
+        WHERE topic_type IN ('brand_showdown','complaint_roundup','migration_report','safety_spotlight','best_for_products')
           AND created_at > NOW() - make_interval(days => $1)
           AND COALESCE(data_context->>'category', data_context->>'brand_a', '') != ''
         """,
@@ -510,6 +557,19 @@ async def _gather_data(
         data["brand_health"] = brand_health if not isinstance(brand_health, Exception) else []
         data["category_stats"] = cat_stats if not isinstance(cat_stats, Exception) else []
 
+    elif topic_type == "best_for_products":
+        brand_health, cat_stats, feature_gaps, top_prods = await asyncio.gather(
+            _fetch_brand_health(pool, category=cat),
+            _fetch_category_stats(pool, category=cat),
+            _fetch_feature_gaps(pool, category=cat),
+            _fetch_best_for_products(pool, cat),
+            return_exceptions=True,
+        )
+        data["brand_health"] = brand_health if not isinstance(brand_health, Exception) else []
+        data["category_stats"] = cat_stats if not isinstance(cat_stats, Exception) else []
+        data["feature_gaps"] = feature_gaps if not isinstance(feature_gaps, Exception) else []
+        data["top_products"] = top_prods if not isinstance(top_prods, Exception) else []
+
     # Shared: quotable phrases for all topic types
     try:
         data["quotes"] = await _fetch_quotable_phrases(pool, topic_type, topic_ctx)
@@ -581,7 +641,7 @@ async def _fetch_quotable_phrases(
             "AND pm.brand IN ($1, $2)"
         )
         args = [topic_ctx["brand_a"], topic_ctx["brand_b"]]
-    elif topic_type in ("complaint_roundup", "migration_report", "safety_spotlight"):
+    elif topic_type in ("complaint_roundup", "migration_report", "safety_spotlight", "best_for_products"):
         where = """
             AND COALESCE(
                 REPLACE(pm.categories->>2, '&amp;', '&'),
@@ -617,6 +677,50 @@ async def _fetch_quotable_phrases(
     ]
 
 
+async def _fetch_best_for_products(pool, category: str) -> list[dict[str, Any]]:
+    """Fetch top products by review count for a best-for guide."""
+    _ce = (
+        "COALESCE(REPLACE(pm.categories->>2, '&amp;', '&'),"
+        " REPLACE(pm.categories->>1, '&amp;', '&'), pr.source_category)"
+    )
+    rows = await pool.fetch(
+        f"""
+        SELECT
+            pm.asin,
+            pm.product_title,
+            pm.brand,
+            count(*) AS review_count,
+            avg(pr.pain_score) AS avg_pain,
+            avg(pr.rating) AS avg_rating,
+            count(*) FILTER (
+                WHERE (pr.deep_extraction->'safety_flag'->>'flagged')::boolean IS TRUE
+            ) AS safety_flags
+        FROM product_reviews pr
+        JOIN product_metadata pm ON pm.asin = pr.asin
+        WHERE pr.deep_enrichment_status = 'enriched'
+          AND {_ce} = $1
+          AND pm.brand IS NOT NULL AND pm.brand != ''
+        GROUP BY pm.asin, pm.product_title, pm.brand
+        HAVING count(*) >= 5
+        ORDER BY count(*) DESC
+        LIMIT 12
+        """,
+        category,
+    )
+    return [
+        {
+            "asin": r["asin"],
+            "product_title": r["product_title"],
+            "brand": r["brand"],
+            "review_count": r["review_count"],
+            "avg_pain": round(float(r["avg_pain"]), 1),
+            "avg_rating": round(float(r["avg_rating"]), 2),
+            "safety_flags": r["safety_flags"],
+        }
+        for r in rows
+    ]
+
+
 # -- Stage 3: Blueprint Construction ------------------------------
 
 def _build_blueprint(
@@ -628,6 +732,7 @@ def _build_blueprint(
         "complaint_roundup": _blueprint_complaint_roundup,
         "migration_report": _blueprint_migration_report,
         "safety_spotlight": _blueprint_safety_spotlight,
+        "best_for_products": _blueprint_best_for_products,
     }[topic_type]
     return builder(topic_ctx, data)
 
@@ -1164,6 +1269,126 @@ def _blueprint_safety_spotlight(ctx: dict, data: dict) -> PostBlueprint:
     )
 
 
+def _blueprint_best_for_products(ctx: dict, data: dict) -> PostBlueprint:
+    category = ctx["category"]
+    top_products = data.get("top_products", [])[:10]
+    brand_health = data.get("brand_health", [])
+
+    # Overview chart: top products by review count
+    overview_data = [
+        {
+            "name": p["product_title"][:30],
+            "reviews": p["review_count"],
+            "pain_score": p["avg_pain"],
+        }
+        for p in top_products[:8]
+    ]
+    overview_chart = ChartSpec(
+        chart_id="overview-bar",
+        chart_type="bar",
+        title=f"Top Products in {category} by Review Volume",
+        data=overview_data,
+        config={
+            "x_key": "name",
+            "bars": [
+                {"dataKey": "reviews", "color": "#22d3ee"},
+                {"dataKey": "pain_score", "color": "#f87171"},
+            ],
+        },
+    )
+
+    # Brand comparison chart
+    brand_data = [
+        {
+            "name": b["brand"][:25],
+            "avg_pain": round(float(b.get("avg_pain_score", 0)), 1),
+            "reviews": b.get("review_count", 0),
+        }
+        for b in brand_health[:8]
+    ]
+    charts = [overview_chart]
+
+    if brand_data:
+        brand_chart = ChartSpec(
+            chart_id="brands-bar",
+            chart_type="horizontal_bar",
+            title=f"Brand Pain Scores in {category}",
+            data=brand_data,
+            config={
+                "x_key": "name",
+                "bars": [{"dataKey": "avg_pain", "color": "#a78bfa"}],
+            },
+        )
+        charts.append(brand_chart)
+
+    sections = [
+        SectionSpec(
+            id="hook",
+            heading="Introduction",
+            goal="Set the stage: how many products/reviews we analyzed in this category",
+            key_stats={
+                "category": category,
+                "asin_count": ctx["asin_count"],
+                "review_count": ctx["review_count"],
+                "avg_pain": ctx["avg_pain"],
+                "avg_rating": ctx["avg_rating"],
+            },
+            data_summary=(
+                f"Analyzed {ctx['review_count']} reviews across {ctx['asin_count']} "
+                f"products in {category}. Average pain: {ctx['avg_pain']}/10, "
+                f"average rating: {ctx['avg_rating']}/5."
+            ),
+        ),
+        SectionSpec(
+            id="overview",
+            heading=f"Best {category} Products: The Data at a Glance",
+            goal="Present the top products by review volume and pain scores",
+            chart_ids=["overview-bar"],
+            key_stats={
+                "top_products": [
+                    {
+                        "title": p["product_title"],
+                        "brand": p["brand"],
+                        "reviews": p["review_count"],
+                        "avg_pain": p["avg_pain"],
+                        "avg_rating": p["avg_rating"],
+                        "safety_flags": p["safety_flags"],
+                    }
+                    for p in top_products[:6]
+                ],
+            },
+            data_summary=f"Top {len(overview_data)} products ranked by review volume.",
+        ),
+    ]
+
+    if brand_data:
+        sections.append(SectionSpec(
+            id="brands",
+            heading="Which Brands Have the Fewest Complaints?",
+            goal="Compare brands by pain score and review volume",
+            chart_ids=["brands-bar"],
+            data_summary=f"Brand-level pain scores across {len(brand_data)} brands.",
+        ))
+
+    sections.append(SectionSpec(
+        id="verdict",
+        heading="The Verdict: Which Products to Consider",
+        goal="Summarize the best options by use case with specific product recommendations",
+        key_stats={"category": category, "asin_count": ctx["asin_count"]},
+    ))
+
+    return PostBlueprint(
+        topic_type="best_for_products",
+        slug=ctx["slug"],
+        suggested_title=f"Best {category} Products: {ctx['asin_count']} Products Analyzed",
+        tags=[category, "best-of", "buyer-guide", "reviews"],
+        data_context=data["data_context"],
+        sections=sections,
+        charts=charts,
+        quotable_phrases=data.get("quotes", []),
+    )
+
+
 # -- Blueprint helpers ---------------------------------------------
 
 def _build_complaint_comparison_data(
@@ -1216,12 +1441,61 @@ def _build_flow_data(
     return [{"name": label, "mentions": count} for label, count in top]
 
 
+# -- Related slugs ------------------------------------------------
+
+async def _compute_related_slugs(
+    pool, current_slug: str, tags: list[str], limit: int = 4
+) -> list[str]:
+    """Find related blog posts by overlapping tags/category."""
+    if not tags:
+        return []
+    rows = await pool.fetch(
+        """
+        SELECT slug FROM blog_posts
+        WHERE slug != $1
+          AND status IN ('draft', 'published')
+          AND tags::jsonb ?| $2
+        ORDER BY created_at DESC
+        LIMIT $3
+        """,
+        current_slug, tags[:3], limit,
+    )
+    return [r["slug"] for r in rows]
+
+
+async def _fetch_related_for_linking(
+    pool, tags: list[str], current_slug: str = "", limit: int = 6
+) -> list[dict[str, str]]:
+    """Fetch published/draft posts with overlapping tags for internal linking."""
+    if not tags:
+        return []
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT slug, title FROM blog_posts
+            WHERE slug != $1
+              AND status IN ('draft', 'published')
+              AND tags::jsonb ?| $2
+            ORDER BY created_at DESC
+            LIMIT $3
+            """,
+            current_slug, tags[:3], limit,
+        )
+        return [{"slug": r["slug"], "title": r["title"]} for r in rows]
+    except Exception:
+        logger.debug("Failed to fetch related posts for linking", exc_info=True)
+        return []
+
+
 # -- Stage 4: Content Generation ----------------------------------
 
 def _generate_content(
-    llm, blueprint: PostBlueprint, max_tokens: int
+    llm,
+    blueprint: PostBlueprint,
+    max_tokens: int,
+    related_posts: list[dict[str, str]] | None = None,
 ) -> dict[str, Any] | None:
-    """Single LLM call: blueprint in, {title, description, content} out."""
+    """Single LLM call: blueprint in, {title, description, content, SEO fields} out."""
     from ...pipelines.llm import clean_llm_output, parse_json_response
     from ...skills.registry import get_skill_registry
 
@@ -1231,7 +1505,7 @@ def _generate_content(
         return None
 
     # Build the payload from blueprint
-    payload = {
+    payload: dict[str, Any] = {
         "topic_type": blueprint.topic_type,
         "suggested_title": blueprint.suggested_title,
         "data_context": blueprint.data_context,
@@ -1256,16 +1530,22 @@ def _generate_content(
         ],
         "quotable_phrases": blueprint.quotable_phrases[:5],
     }
+    if related_posts:
+        payload["related_posts"] = related_posts
 
     from ...services.protocols import Message
 
     messages = [
         Message(role="system", content=skill.content),
-        Message(role="user", content=json.dumps(payload, indent=2, default=str)),
+        Message(role="user", content=json.dumps(payload, separators=(",", ":"), default=str)),
     ]
 
     try:
         result = llm.chat(messages=messages, max_tokens=max_tokens, temperature=0.7)
+        _usage = result.get("usage", {}) if isinstance(result, dict) else {}
+        if _usage.get("input_tokens"):
+            logger.info("blog_post_generation LLM tokens: in=%d out=%d",
+                         _usage["input_tokens"], _usage.get("output_tokens", 0))
         text = result.get("response", "") if isinstance(result, dict) else str(result)
         text = clean_llm_output(text)
         parsed = parse_json_response(text, recover_truncated=True)
@@ -1279,6 +1559,18 @@ def _generate_content(
         if not all(k in parsed for k in ("title", "description", "content")):
             logger.error("LLM response missing required keys: %s", list(parsed.keys()))
             return None
+
+        # Ensure SEO fields have sane defaults if LLM didn't produce them
+        if "seo_title" not in parsed or not parsed["seo_title"]:
+            parsed["seo_title"] = parsed["title"][:60]
+        if "seo_description" not in parsed or not parsed["seo_description"]:
+            parsed["seo_description"] = parsed["description"][:155]
+        if "target_keyword" not in parsed:
+            parsed["target_keyword"] = ""
+        if "secondary_keywords" not in parsed:
+            parsed["secondary_keywords"] = []
+        if "faq" not in parsed or not isinstance(parsed["faq"], list):
+            parsed["faq"] = []
 
         return parsed
     except Exception:
@@ -1305,8 +1597,10 @@ async def _assemble_and_store(
         INSERT INTO blog_posts (
             slug, title, description, topic_type, tags,
             content, charts, data_context,
-            status, llm_model, source_report_date
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'draft',$9,$10)
+            status, llm_model, source_report_date,
+            seo_title, seo_description, target_keyword,
+            secondary_keywords, faq
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'draft',$9,$10,$11,$12,$13,$14,$15)
         ON CONFLICT (slug) DO UPDATE SET
             title = EXCLUDED.title,
             description = EXCLUDED.description,
@@ -1314,7 +1608,12 @@ async def _assemble_and_store(
             charts = EXCLUDED.charts,
             data_context = EXCLUDED.data_context,
             llm_model = EXCLUDED.llm_model,
-            source_report_date = EXCLUDED.source_report_date
+            source_report_date = EXCLUDED.source_report_date,
+            seo_title = EXCLUDED.seo_title,
+            seo_description = EXCLUDED.seo_description,
+            target_keyword = EXCLUDED.target_keyword,
+            secondary_keywords = EXCLUDED.secondary_keywords,
+            faq = EXCLUDED.faq
         WHERE blog_posts.status != 'published'
         RETURNING id
         """,
@@ -1328,6 +1627,11 @@ async def _assemble_and_store(
         json.dumps(blueprint.data_context, default=str),
         str(model_name),
         date.today(),
+        content.get("seo_title", content["title"][:60]),
+        content.get("seo_description", content.get("description", "")[:155]),
+        content.get("target_keyword", ""),
+        json.dumps(content.get("secondary_keywords", []), default=str),
+        json.dumps(content.get("faq", []), default=str),
     )
     if not row:
         logger.warning(
@@ -1336,6 +1640,18 @@ async def _assemble_and_store(
         return ""
     post_id = str(row["id"])
     logger.info("Stored blog draft: slug=%s, id=%s", blueprint.slug, post_id)
+
+    # Compute related slugs for internal linking
+    related_slugs: list[str] = []
+    try:
+        related_slugs = await _compute_related_slugs(pool, blueprint.slug, blueprint.tags)
+        if related_slugs:
+            await pool.execute(
+                "UPDATE blog_posts SET related_slugs = $1 WHERE id = $2",
+                json.dumps(related_slugs), row["id"],
+            )
+    except Exception:
+        logger.debug("Related slug computation skipped", exc_info=True)
 
     # Write .ts file for the frontend if ui_path is configured
     cfg = settings.external_data
@@ -1346,6 +1662,7 @@ async def _assemble_and_store(
                 blueprint,
                 content,
                 charts_json,
+                related_slugs=related_slugs,
             )
         except Exception:
             logger.warning("Failed to write UI blog file", exc_info=True)
@@ -1370,6 +1687,7 @@ def _write_ui_post(
     blueprint: PostBlueprint,
     content: dict[str, Any],
     charts_json: list[dict[str, Any]],
+    related_slugs: list[str] | None = None,
 ) -> None:
     """Write a .ts post file and register it in index.ts."""
     from pathlib import Path
@@ -1395,6 +1713,12 @@ def _write_ui_post(
         topic_type=blueprint.topic_type,
         charts_json=charts_json,
         content=content["content"],
+        seo_title=content.get("seo_title", ""),
+        seo_description=content.get("seo_description", ""),
+        target_keyword=content.get("target_keyword", ""),
+        secondary_keywords=content.get("secondary_keywords"),
+        faq=content.get("faq"),
+        related_slugs=related_slugs,
     )
 
     post_path = blog_dir / (slug + ".ts")

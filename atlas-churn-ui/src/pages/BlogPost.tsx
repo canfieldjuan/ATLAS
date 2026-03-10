@@ -92,15 +92,27 @@ export default function BlogPost() {
       headline: post.seo_title || post.title,
       description: post.seo_description || post.description,
       datePublished: post.date,
-      author: { '@type': 'Organization', name: 'Churn Signals' },
+      dateModified: post.date,
+      image: 'https://churnsignals.co/og-default.png',
+      author: {
+        '@type': 'Organization',
+        name: 'Churn Signals',
+        sameAs: ['https://twitter.com/churnsignals', 'https://www.linkedin.com/company/churn-signals'],
+      },
       publisher: {
         '@type': 'Organization',
         name: 'Churn Signals',
         url: 'https://churnsignals.co',
+        sameAs: ['https://twitter.com/churnsignals', 'https://www.linkedin.com/company/churn-signals'],
       },
       mainEntityOfPage: {
         '@type': 'WebPage',
         '@id': `https://churnsignals.co/blog/${post.slug}`,
+      },
+      isBasedOn: {
+        '@type': 'Dataset',
+        name: 'B2B SaaS Review Intelligence',
+        description: 'Aggregated from G2, Capterra, TrustRadius, and Reddit',
       },
       keywords: seoKeywords?.join(', ') || '',
     }

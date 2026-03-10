@@ -1,0 +1,11 @@
+User-agent: *
+Allow: /blog/
+Disallow: /api/
+Disallow: /login
+Disallow: /signup
+Disallow: /onboarding
+Disallow: /account
+Disallow: /forgot-password
+Disallow: /reset-password
+
+Sitemap: https://atlas-intel-ui-two.vercel.app/sitemap.xml

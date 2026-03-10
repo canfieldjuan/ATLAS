@@ -1,7 +1,8 @@
-"""PDF renderer for consumer intelligence reports.
+"""PDF renderer for consumer competitive intelligence exports.
 
-Uses fpdf2 (pure Python) to generate downloadable PDF reports from
-market_intelligence_reports and brand_intelligence data.
+Uses fpdf2 (pure Python) to generate intelligence report PDFs from
+market_intelligence_reports and brand_intelligence data. Part of the
+delivery surface layer -- the intelligence is in the data, not the format.
 """
 
 from __future__ import annotations
@@ -96,7 +97,7 @@ class ConsumerReportPDF(FPDF):
         self.cell(0, 8, "Atlas Consumer Intelligence", align="L")
         self.set_text_color(*_CLR_MUTED)
         self.set_font("Helvetica", "", 8)
-        self.cell(0, 8, "Product Review Analysis", align="R", new_x="LMARGIN", new_y="NEXT")
+        self.cell(0, 8, "Competitive Displacement Intelligence", align="R", new_x="LMARGIN", new_y="NEXT")
         self.set_draw_color(*_CLR_PRIMARY)
         self.line(self.l_margin, self.get_y(), self.w - self.r_margin, self.get_y())
         self.ln(4)
@@ -184,7 +185,7 @@ def render_market_report_pdf(report_row: dict) -> tuple[bytes, str]:
     pdf.ln(4)
 
     # Executive summary
-    exec_summary = report_row.get("executive_summary") or report_row.get("analysis_text", "")
+    exec_summary = report_row.get("analysis_text", "")
     if exec_summary:
         pdf.section_title("Executive Summary")
         pdf.body_text(exec_summary[:3000])

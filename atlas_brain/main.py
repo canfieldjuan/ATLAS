@@ -703,7 +703,7 @@ async def lifespan(app: FastAPI):
 # Create the FastAPI application
 app = FastAPI(
     title="Atlas Brain",
-    description="The central intelligence server for the Atlas project.",
+    description="Central intelligence server: continuously collected competitive intelligence, displacement mapping, historical risk memory, and action-ready intelligence feeds.",
     version="0.2.0",
     lifespan=lifespan,
 )

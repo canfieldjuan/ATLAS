@@ -1,9 +1,9 @@
 """
-Read-only REST endpoints for the Consumer Competitive Intelligence Dashboard.
+Consumer competitive intelligence API.
 
-Queries ``product_reviews`` (deep_extraction JSONB) and ``product_metadata``
-tables to surface brand analysis, competitive flow mapping, feature gaps,
-safety signals, and buyer psychology.
+Serves continuously collected brand intelligence, competitive displacement
+maps, evidence-backed pain-point feeds, and historical brand memory from
+``product_reviews`` (deep_extraction JSONB) and ``product_metadata``.
 """
 
 import json
@@ -3092,8 +3092,9 @@ async def export_market_report_pdf(
 
     row = await pool.fetchrow(
         """
-        SELECT id, report_date, report_type, executive_summary,
-               analysis_text, report_data
+        SELECT id, report_date, report_type, analysis_text,
+               competitive_flows, feature_gaps, brand_scorecards,
+               insights, recommendations
         FROM market_intelligence_reports
         WHERE id = $1
         """,
@@ -3103,13 +3104,14 @@ async def export_market_report_pdf(
         raise HTTPException(status_code=404, detail="Report not found")
 
     report = dict(row)
-    # Parse JSONB if needed
-    rd = report.get("report_data")
-    if isinstance(rd, str):
-        try:
-            report["report_data"] = json.loads(rd)
-        except (json.JSONDecodeError, TypeError):
-            report["report_data"] = {}
+    # Build report_data dict from individual JSONB columns for renderer
+    report["report_data"] = {
+        "competitive_flows": report.pop("competitive_flows", []),
+        "feature_gaps": report.pop("feature_gaps", []),
+        "brand_scorecards": report.pop("brand_scorecards", []),
+        "insights": report.pop("insights", []),
+        "recommendations": report.pop("recommendations", []),
+    }
 
     from ..services.consumer_pdf_renderer import render_market_report_pdf
 

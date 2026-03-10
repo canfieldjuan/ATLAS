@@ -1,11 +1,13 @@
 import { useState, useEffect, type FormEvent } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, useNavigate } from 'react-router-dom'
 import {
   FileText, Mail, AlertCircle, Loader2, ShieldCheck,
   TrendingUp, TrendingDown, Minus, Users, BarChart3, ArrowRight,
+  X, Check,
 } from 'lucide-react'
 import PublicLayout from '../components/PublicLayout'
 import SeoHead from '../components/SeoHead'
+import { useAuth } from '../auth/AuthContext'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 const GATE_URL = `${API_BASE}/api/v1/b2b/briefings/gate`
@@ -100,7 +102,104 @@ function RankedBar({ label, count, max }: { label: string; count: number; max: n
   )
 }
 
+function PricingModal({ vendorName, onClose }: { vendorName: string; onClose: () => void }) {
+  const [loading, setLoading] = useState<'standard' | 'pro' | null>(null)
+
+  const handleSelect = async (tier: 'standard' | 'pro') => {
+    setLoading(tier)
+    await startCheckout(vendorName, tier)
+    setLoading(null)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+      <div
+        className="relative bg-slate-900 border border-slate-700 rounded-2xl max-w-3xl w-full p-8"
+        onClick={e => e.stopPropagation()}
+      >
+        <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-white cursor-pointer">
+          <X className="h-5 w-5" />
+        </button>
+
+        <div className="text-center mb-8">
+          <h2 className="text-2xl font-bold mb-2">Choose Your Plan</h2>
+          <p className="text-sm text-slate-400">Weekly churn intelligence for {vendorName}</p>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-6">
+          {/* Standard */}
+          <div className="border border-slate-700 rounded-xl p-6 flex flex-col">
+            <h3 className="text-lg font-semibold mb-1">Standard</h3>
+            <div className="mb-4">
+              <span className="text-3xl font-bold">$499</span>
+              <span className="text-slate-400 text-sm">/mo</span>
+            </div>
+            <ul className="space-y-2 mb-6 flex-1">
+              {[
+                'Weekly churn intelligence reports',
+                'Pain driver analysis',
+                'Competitive displacement tracking',
+                'Feature gap identification',
+                'Anonymized customer signals',
+              ].map(f => (
+                <li key={f} className="flex items-start gap-2 text-sm text-slate-300">
+                  <Check className="h-4 w-4 text-cyan-400 mt-0.5 shrink-0" />
+                  {f}
+                </li>
+              ))}
+            </ul>
+            <button
+              onClick={() => handleSelect('standard')}
+              disabled={loading !== null}
+              className="w-full py-3 bg-slate-700 hover:bg-slate-600 rounded-lg font-medium transition-colors cursor-pointer disabled:opacity-50"
+            >
+              {loading === 'standard' ? 'Redirecting...' : 'Get Started'}
+            </button>
+          </div>
+
+          {/* Pro */}
+          <div className="border-2 border-cyan-500/50 rounded-xl p-6 flex flex-col relative">
+            <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-0.5 bg-cyan-600 rounded-full text-xs font-medium">
+              Recommended
+            </div>
+            <h3 className="text-lg font-semibold mb-1">Pro</h3>
+            <div className="mb-4">
+              <span className="text-3xl font-bold">$1,499</span>
+              <span className="text-slate-400 text-sm">/mo</span>
+            </div>
+            <ul className="space-y-2 mb-6 flex-1">
+              {[
+                'Everything in Standard',
+                'Named account-level signals',
+                'Urgency scoring per account',
+                'Real-time churn alerts',
+                'Dedicated support',
+              ].map(f => (
+                <li key={f} className="flex items-start gap-2 text-sm text-slate-300">
+                  <Check className="h-4 w-4 text-cyan-400 mt-0.5 shrink-0" />
+                  {f}
+                </li>
+              ))}
+            </ul>
+            <button
+              onClick={() => handleSelect('pro')}
+              disabled={loading !== null}
+              className="w-full py-3 bg-cyan-600 hover:bg-cyan-500 rounded-lg font-medium transition-colors cursor-pointer disabled:opacity-50"
+            >
+              {loading === 'pro' ? 'Redirecting...' : 'Get Started'}
+            </button>
+          </div>
+        </div>
+
+        <p className="text-center text-xs text-slate-500 mt-6">Cancel anytime. No long-term contracts.</p>
+      </div>
+    </div>
+  )
+}
+
 function ReportView({ data }: { data: ReportData }) {
+  const [showPricing, setShowPricing] = useState(false)
   const b = data.briefing
   const score = Number(b.churn_pressure_score) || 0
   const pains: any[] = b.pain_breakdown || []
@@ -112,7 +211,7 @@ function ReportView({ data }: { data: ReportData }) {
   const painLabels: Record<string, string> = b.pain_labels || {}
 
   return (
-    <PublicLayout variant="report" onCtaClick={() => startCheckout(data.vendor_name, 'standard')}>
+    <PublicLayout variant="report" onCtaClick={() => setShowPricing(true)}>
       <SeoHead
         title={`${data.vendor_name} Churn Intelligence Report | Churn Signals`}
         description={`Full churn intelligence report for ${data.vendor_name}: pain drivers, displacement targets, at-risk accounts, and competitive analysis.`}
@@ -223,12 +322,11 @@ function ReportView({ data }: { data: ReportData }) {
                   accounts with active churn signals detected in the last 30 days
                 </p>
                 <button
-                  onClick={() => startCheckout(data.vendor_name, 'pro')}
+                  onClick={() => setShowPricing(true)}
                   className="inline-block px-4 py-2 bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/30 rounded-lg text-sm text-cyan-400 font-medium transition-colors cursor-pointer"
                 >
                   Unlock Account-Level Details
                 </button>
-                <p className="text-xs text-slate-500 mt-1">Pro -- $1,499/mo</p>
               </div>
             </div>
           )}
@@ -335,14 +433,18 @@ function ReportView({ data }: { data: ReportData }) {
             Get weekly churn signals, displacement tracking, and at-risk accounts for {data.vendor_name} delivered to your inbox.
           </p>
           <button
-            onClick={() => startCheckout(data.vendor_name, 'standard')}
+            onClick={() => setShowPricing(true)}
             className="inline-block px-6 py-3 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-semibold transition-colors cursor-pointer"
           >
             Get Weekly Reports
           </button>
-          <p className="text-xs text-slate-500 mt-2">Starting at $499/mo -- cancel anytime</p>
+          <p className="text-xs text-slate-500 mt-2">Starting at $499/mo</p>
         </div>
       </div>
+
+      {showPricing && (
+        <PricingModal vendorName={data.vendor_name} onClose={() => setShowPricing(false)} />
+      )}
     </PublicLayout>
   )
 }
@@ -436,6 +538,230 @@ function IntelValue({ value }: { value: any }) {
 }
 
 // ---------------------------------------------------------------------------
+// Post-Checkout Success + Account Creation
+// ---------------------------------------------------------------------------
+
+const CHECKOUT_SESSION_URL = `${API_BASE}/api/v1/b2b/briefings/checkout-session`
+
+function CheckoutSuccess({ vendor, sessionId }: { vendor: string; sessionId: string }) {
+  const { signup, login } = useAuth()
+  const navigate = useNavigate()
+  const [sessionEmail, setSessionEmail] = useState('')
+  const [tier, setTier] = useState('')
+  const [fullName, setFullName] = useState('')
+  const [companyName, setCompanyName] = useState('')
+  const [password, setPassword] = useState('')
+  const [signupError, setSignupError] = useState('')
+  const [signupLoading, setSignupLoading] = useState(false)
+  const [accountCreated, setAccountCreated] = useState(false)
+  const [mode, setMode] = useState<'signup' | 'login'>('signup')
+
+  useEffect(() => {
+    if (!sessionId) return
+    fetch(`${CHECKOUT_SESSION_URL}?session_id=${encodeURIComponent(sessionId)}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.email) setSessionEmail(data.email)
+        if (data?.tier) setTier(data.tier)
+      })
+      .catch(() => {})
+  }, [sessionId])
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    setSignupError('')
+    if (password.length < 8) {
+      setSignupError('Password must be at least 8 characters')
+      return
+    }
+    setSignupLoading(true)
+    try {
+      if (mode === 'signup') {
+        await signup(sessionEmail, password, fullName, companyName, 'b2b_retention')
+      } else {
+        await login(sessionEmail, password)
+      }
+      setAccountCreated(true)
+      setTimeout(() => navigate('/landing'), 2000)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Something went wrong'
+      if (msg.toLowerCase().includes('already registered')) {
+        setMode('login')
+        setSignupError('Account exists -- sign in to link your subscription.')
+      } else {
+        setSignupError(msg)
+      }
+    } finally {
+      setSignupLoading(false)
+    }
+  }
+
+  return (
+    <PublicLayout variant="report">
+      <SeoHead
+        title="Subscription Confirmed | Churn Signals"
+        description={`Your ${vendor} churn intelligence subscription is confirmed.`}
+        canonical="https://churnsignals.co/report"
+      />
+      <div className="min-h-[60vh] flex items-center justify-center px-6 py-16">
+        <div className="max-w-lg w-full">
+          {/* Confirmation header */}
+          <div className="text-center mb-8">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-green-500/10 border border-green-500/20 mb-6">
+              <Check className="h-8 w-8 text-green-400" />
+            </div>
+            <h1 className="text-3xl font-bold mb-3">You're all set</h1>
+            <p className="text-slate-400">
+              Your {vendor} {tier === 'pro' ? 'Pro' : 'Standard'} subscription is confirmed.
+            </p>
+          </div>
+
+          {/* What happens next */}
+          <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-6 text-left space-y-4 mb-8">
+            <h2 className="text-sm font-medium text-cyan-400 uppercase tracking-wider">What happens next</h2>
+            <div className="space-y-3">
+              <div className="flex items-start gap-3">
+                <div className="w-6 h-6 rounded-full bg-cyan-600/20 text-cyan-400 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">1</div>
+                <div>
+                  <p className="text-sm font-medium text-white">First report within 24 hours</p>
+                  <p className="text-xs text-slate-400">We'll compile the latest churn signals for {vendor} and deliver your first full report.</p>
+                </div>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="w-6 h-6 rounded-full bg-cyan-600/20 text-cyan-400 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">2</div>
+                <div>
+                  <p className="text-sm font-medium text-white">Weekly delivery every Monday</p>
+                  <p className="text-xs text-slate-400">Fresh intelligence lands in your inbox at the start of each week -- pain drivers, displacement data, and competitive signals.</p>
+                </div>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="w-6 h-6 rounded-full bg-cyan-600/20 text-cyan-400 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">3</div>
+                <div>
+                  <p className="text-sm font-medium text-white">Act on the signals</p>
+                  <p className="text-xs text-slate-400">Use the intelligence to get ahead of churn -- engage at-risk accounts, address pain points, and track competitive threats.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Account creation form */}
+          {!accountCreated ? (
+            <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-6">
+              <h2 className="text-lg font-semibold text-white mb-1">
+                {mode === 'signup' ? 'Create your account' : 'Sign in to your account'}
+              </h2>
+              <p className="text-sm text-slate-400 mb-5">
+                {mode === 'signup'
+                  ? 'Set up your login to manage your subscription and access reports.'
+                  : 'Sign in to link this subscription to your existing account.'}
+              </p>
+
+              {/* Purchased product card */}
+              <div
+                className="flex items-start gap-3 p-3 rounded-lg border mb-5"
+                style={{ borderColor: tier === 'pro' ? 'rgb(6 182 212 / 0.5)' : 'rgb(139 92 246 / 0.5)', backgroundColor: tier === 'pro' ? 'rgb(8 51 68 / 0.3)' : 'rgb(76 29 149 / 0.2)' }}
+              >
+                <ShieldCheck className="h-5 w-5 mt-0.5 shrink-0 text-white" />
+                <div>
+                  <div className="text-sm font-medium text-white">
+                    {vendor} -- {tier === 'pro' ? 'Pro' : 'Standard'}
+                  </div>
+                  <div className="text-xs text-slate-400">
+                    {tier === 'pro'
+                      ? 'Weekly reports + named account signals + urgency scoring'
+                      : 'Weekly churn intelligence reports + competitive analysis'}
+                  </div>
+                </div>
+              </div>
+
+              {signupError && (
+                <div className="flex items-center gap-2 text-sm text-red-400 bg-red-900/20 border border-red-800/50 rounded-lg px-3 py-2 mb-4">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  {signupError}
+                </div>
+              )}
+
+              <form onSubmit={handleSubmit} className="space-y-4">
+                {mode === 'signup' && (
+                  <>
+                    <div>
+                      <label className="block text-sm text-slate-400 mb-1">Full name</label>
+                      <input
+                        type="text"
+                        value={fullName}
+                        onChange={e => setFullName(e.target.value)}
+                        required
+                        className="w-full px-3 py-2 bg-slate-900/60 border border-slate-600/50 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                        placeholder="Jane Smith"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-slate-400 mb-1">Company name</label>
+                      <input
+                        type="text"
+                        value={companyName}
+                        onChange={e => setCompanyName(e.target.value)}
+                        required
+                        className="w-full px-3 py-2 bg-slate-900/60 border border-slate-600/50 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                        placeholder="Acme Inc."
+                      />
+                    </div>
+                  </>
+                )}
+                <div>
+                  <label className="block text-sm text-slate-400 mb-1">Email</label>
+                  <input
+                    type="email"
+                    value={sessionEmail}
+                    onChange={e => setSessionEmail(e.target.value)}
+                    required
+                    className="w-full px-3 py-2 bg-slate-900/60 border border-slate-600/50 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                    placeholder="you@company.com"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-slate-400 mb-1">Password</label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    required
+                    minLength={8}
+                    className="w-full px-3 py-2 bg-slate-900/60 border border-slate-600/50 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                    placeholder="Min. 8 characters"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={signupLoading}
+                  className="w-full py-2.5 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 rounded-lg text-white font-medium transition-colors cursor-pointer"
+                >
+                  {signupLoading
+                    ? (mode === 'signup' ? 'Creating account...' : 'Signing in...')
+                    : (mode === 'signup' ? 'Create Account' : 'Sign In')}
+                </button>
+              </form>
+            </div>
+          ) : (
+            <div className="bg-green-900/20 border border-green-800/50 rounded-xl p-6 text-center">
+              <Check className="h-6 w-6 text-green-400 mx-auto mb-2" />
+              <p className="text-sm text-green-400 font-medium">Account created! Redirecting to your dashboard...</p>
+            </div>
+          )}
+
+          <p className="text-sm text-slate-400 text-center mt-6">
+            Questions? Reach us at{' '}
+            <a href="mailto:outreach@churnsignals.co" className="text-cyan-400 hover:text-cyan-300 transition-colors">
+              outreach@churnsignals.co
+            </a>
+          </p>
+        </div>
+      </div>
+    </PublicLayout>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Main Component
 // ---------------------------------------------------------------------------
 
@@ -443,6 +769,7 @@ export default function Report() {
   const [params] = useSearchParams()
   const vendor = params.get('vendor') || ''
   const token = params.get('ref') || ''
+  const checkoutStatus = params.get('checkout') || ''
   // If mode=view, skip the gate and load report directly (post-gate redirect)
   const mode = params.get('mode') || ''
 
@@ -527,9 +854,14 @@ export default function Report() {
     }
   }
 
+  // Post-checkout success page
+  if (checkoutStatus === 'success' && vendor) {
+    return <CheckoutSuccess vendor={vendor} sessionId={params.get('session_id') || ''} />
+  }
+
   if (!vendor || !token) {
     return (
-      <PublicLayout>
+      <PublicLayout variant="report">
         <div className="min-h-[60vh] flex items-center justify-center px-6">
           <div className="max-w-md text-center">
             <AlertCircle className="h-12 w-12 text-red-400 mx-auto mb-4" />
@@ -546,7 +878,7 @@ export default function Report() {
   // Loading report data
   if (status === 'loading_report') {
     return (
-      <PublicLayout>
+      <PublicLayout variant="report">
         <div className="min-h-[60vh] flex items-center justify-center px-6">
           <div className="text-center">
             <Loader2 className="h-10 w-10 text-cyan-400 animate-spin mx-auto mb-4" />
@@ -564,7 +896,7 @@ export default function Report() {
 
   // Gate form
   return (
-    <PublicLayout>
+    <PublicLayout variant="report">
       <SeoHead
         title={`${vendor} Churn Intelligence Report | Churn Signals`}
         description={`Access the full ${vendor} churn intelligence report: account-level signals, displacement data, and risk scores.`}

@@ -1286,7 +1286,7 @@ async def _send_campaign_notification(
     message = (
         f"Generated {count} campaign(s) for {companies} company/companies.\n"
         f"Batch: {batch_id}\n\n"
-        "Review and approve in the Leads dashboard."
+        "Review and approve in the lead engagement pipeline."
     )
 
     headers = {

@@ -220,7 +220,7 @@ async def _send_digest_email(
         f"{pain_html}"
         f"{brand_html}"
         f"<hr>"
-        f"<p><em>View full details in your Atlas Intel dashboard.</em></p>"
+        f"<p><em>View full signal details in your intelligence feed.</em></p>"
     )
 
     try:

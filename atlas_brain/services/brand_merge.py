@@ -36,8 +36,9 @@ _UNIQUE_TARGETS: list[tuple[str, str, list[str]]] = [
 async def execute_brand_merge(pool: Any, source_name: str, target_name: str) -> dict:
     """Merge *source_name* into *target_name* across all consumer brand tables.
 
-    Runs in a single transaction.  Returns a dict with per-table affected
-    counts and a total.
+    Uses explicit BEGIN/COMMIT via pool.execute() to stay compatible with
+    the DatabasePool wrapper (which does not support async-with on acquire).
+    Returns a dict with per-table affected counts and a total.
     """
     if not source_name or not target_name:
         return {"error": "source_name and target_name are required", "total_affected": 0}
@@ -52,47 +53,56 @@ async def execute_brand_merge(pool: Any, source_name: str, target_name: str) -> 
     total_updated = 0
     total_deleted = 0
 
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            # 1. Simple tables (no UNIQUE conflicts possible)
-            for table, column in _SIMPLE_TARGETS:
-                result = await conn.execute(
-                    f"UPDATE {table} SET {column} = $2 WHERE {column} = $1",
-                    source, target,
-                )
-                count = _parse_command_count(result)
-                table_counts[f"{table}.{column}"] = count
-                total_updated += count
+    try:
+        await pool.execute("BEGIN")
 
-            # 2. Tables with UNIQUE constraints -- delete conflicts first
-            for table, column, key_cols in _UNIQUE_TARGETS:
-                join_parts = []
-                for kc in key_cols:
-                    join_parts.append(f"src.{kc} IS NOT DISTINCT FROM tgt.{kc}")
-                join_pred = " AND ".join(join_parts)
+        # 1. Simple tables (no UNIQUE conflicts possible)
+        for table, column in _SIMPLE_TARGETS:
+            result = await pool.execute(
+                f"UPDATE {table} SET {column} = $2 WHERE {column} = $1",
+                source, target,
+            )
+            count = _parse_command_count(result)
+            table_counts[f"{table}.{column}"] = count
+            total_updated += count
 
-                # Delete source rows that conflict with existing target rows
-                del_sql = (
-                    f"DELETE FROM {table} src"
-                    f" USING {table} tgt"
-                    f" WHERE src.{column} = $1"
-                    f"   AND tgt.{column} = $2"
-                    f"   AND {join_pred}"
-                )
-                del_result = await conn.execute(del_sql, source, target)
-                del_count = _parse_command_count(del_result)
-                if del_count > 0:
-                    deleted_conflicts[f"{table}.{column}"] = del_count
-                    total_deleted += del_count
+        # 2. Tables with UNIQUE constraints -- delete conflicts first
+        for table, column, key_cols in _UNIQUE_TARGETS:
+            join_parts = []
+            for kc in key_cols:
+                join_parts.append(f"src.{kc} IS NOT DISTINCT FROM tgt.{kc}")
+            join_pred = " AND ".join(join_parts)
 
-                # Now update remaining source rows (no conflicts left)
-                upd_result = await conn.execute(
-                    f"UPDATE {table} SET {column} = $2 WHERE {column} = $1",
-                    source, target,
-                )
-                upd_count = _parse_command_count(upd_result)
-                table_counts[f"{table}.{column}"] = upd_count
-                total_updated += upd_count
+            # Delete source rows that conflict with existing target rows
+            del_sql = (
+                f"DELETE FROM {table} src"
+                f" USING {table} tgt"
+                f" WHERE src.{column} = $1"
+                f"   AND tgt.{column} = $2"
+                f"   AND {join_pred}"
+            )
+            del_result = await pool.execute(del_sql, source, target)
+            del_count = _parse_command_count(del_result)
+            if del_count > 0:
+                deleted_conflicts[f"{table}.{column}"] = del_count
+                total_deleted += del_count
+
+            # Now update remaining source rows (no conflicts left)
+            upd_result = await pool.execute(
+                f"UPDATE {table} SET {column} = $2 WHERE {column} = $1",
+                source, target,
+            )
+            upd_count = _parse_command_count(upd_result)
+            table_counts[f"{table}.{column}"] = upd_count
+            total_updated += upd_count
+
+        await pool.execute("COMMIT")
+    except Exception:
+        try:
+            await pool.execute("ROLLBACK")
+        except Exception:
+            pass
+        raise
 
     # 3. Refresh materialized view (outside transaction).
     try:

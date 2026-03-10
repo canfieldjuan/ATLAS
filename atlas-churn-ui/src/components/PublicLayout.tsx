@@ -17,7 +17,7 @@ export default function PublicLayout({ children, variant = 'default', onCtaClick
   const location = useLocation()
   const isReport = variant === 'report'
 
-  const reportCta = isReport ? (
+  const reportCta = isReport && onCtaClick ? (
     <button
       onClick={onCtaClick}
       className="text-sm px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg font-medium transition-colors cursor-pointer"
@@ -55,7 +55,8 @@ export default function PublicLayout({ children, variant = 'default', onCtaClick
               Sign in
             </Link>
           )}
-          {reportCta || (
+          {reportCta}
+          {!isReport && !reportCta && (
             <a
               href="/signup"
               className="text-sm px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg font-medium transition-colors"
@@ -84,9 +85,11 @@ export default function PublicLayout({ children, variant = 'default', onCtaClick
               </>
             )}
             {isReport ? (
-              <button onClick={onCtaClick} className="hover:text-slate-300 transition-colors cursor-pointer">
-                Get Weekly Reports
-              </button>
+              onCtaClick && (
+                <button onClick={onCtaClick} className="hover:text-slate-300 transition-colors cursor-pointer">
+                  Get Weekly Reports
+                </button>
+              )
             ) : (
               <a href="/signup" className="hover:text-slate-300 transition-colors">Sign up</a>
             )}

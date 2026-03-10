@@ -46,6 +46,10 @@ def _init_price_map():
         PRICE_TO_PLAN[cfg.stripe_b2b_growth_price_id] = "b2b_growth"
     if cfg.stripe_b2b_pro_price_id:
         PRICE_TO_PLAN[cfg.stripe_b2b_pro_price_id] = "b2b_pro"
+    if cfg.stripe_vendor_standard_price_id:
+        PRICE_TO_PLAN[cfg.stripe_vendor_standard_price_id] = "vendor_standard"
+    if cfg.stripe_vendor_pro_price_id:
+        PRICE_TO_PLAN[cfg.stripe_vendor_pro_price_id] = "vendor_pro"
 
 
 def _get_stripe():
@@ -268,7 +272,12 @@ async def stripe_webhook(request: Request):
     account_id = None
 
     if event_type == "checkout.session.completed":
-        account_id = await _handle_checkout_completed(pool, obj)
+        # Check if this is a vendor retention checkout (has vendor metadata)
+        meta = obj.metadata or {}
+        if meta.get("source") == "vendor_briefing_report":
+            await _handle_vendor_checkout_completed(pool, obj, meta)
+        else:
+            account_id = await _handle_checkout_completed(pool, obj)
 
     elif event_type == "invoice.paid":
         account_id = await _handle_invoice_paid(pool, obj)
@@ -374,6 +383,70 @@ async def _handle_checkout_completed(pool, session) -> _uuid.UUID | None:
 
     logger.info("Account %s upgraded to %s", account_id, plan)
     return account_id
+
+
+async def _handle_vendor_checkout_completed(pool, session, meta: dict) -> None:
+    """Handle vendor retention checkout -- send confirmation email.
+
+    Deduplicates against the direct-send path in checkout_session_info.
+    """
+    vendor_name = meta.get("vendor_name", "")
+    tier = meta.get("tier", "standard")
+    customer_email = ""
+
+    if session.customer_details:
+        customer_email = session.customer_details.email or ""
+    if not customer_email:
+        customer_email = session.customer_email or ""
+
+    if not customer_email:
+        logger.warning("Vendor checkout completed but no customer email found")
+        return
+
+    # Dedup: check if direct-send path already sent for this session
+    dedup_key = f"vendor_checkout_email_{session.id}"
+    already_sent = await pool.fetchval(
+        "SELECT 1 FROM billing_events WHERE stripe_event_id = $1", dedup_key
+    )
+    if already_sent:
+        logger.info("Vendor checkout confirmation already sent (direct path): %s", session.id)
+        return
+
+    # Send confirmation email
+    try:
+        from ..templates.email.vendor_checkout_confirmation import (
+            render_checkout_confirmation_html,
+            render_checkout_confirmation_text,
+        )
+        from ..services.email_provider import get_email_provider
+
+        html = render_checkout_confirmation_html(vendor_name, tier, customer_email)
+        text = render_checkout_confirmation_text(vendor_name, tier)
+
+        email_provider = get_email_provider()
+        await email_provider.send(
+            to=[customer_email],
+            subject=f"Subscription Confirmed: {vendor_name} Churn Intelligence",
+            body=text,
+            html=html,
+            reply_to="outreach@churnsignals.co",
+        )
+        # Mark as sent
+        await pool.execute(
+            """
+            INSERT INTO billing_events (stripe_event_id, event_type, payload)
+            VALUES ($1, $2, '{}'::jsonb)
+            ON CONFLICT (stripe_event_id) DO NOTHING
+            """,
+            dedup_key,
+            "vendor_checkout_confirmation_email",
+        )
+        logger.info(
+            "Vendor checkout confirmation sent (webhook): email=%s vendor=%s tier=%s",
+            customer_email, vendor_name, tier,
+        )
+    except Exception:
+        logger.exception("Failed to send vendor checkout confirmation email")
 
 
 async def _handle_invoice_paid(pool, invoice) -> _uuid.UUID | None:

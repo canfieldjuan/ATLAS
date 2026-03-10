@@ -1,8 +1,9 @@
 """
-Read-only REST endpoints for the B2B Churn Intelligence Dashboard.
+B2B churn intelligence API.
 
-Mirrors the SQL from ``atlas_brain.mcp.b2b_churn_server`` so the frontend
-can query data directly over HTTP instead of going through MCP stdio.
+Action-ready intelligence feeds for the B2B displacement intelligence
+network. Mirrors ``atlas_brain.mcp.b2b_churn_server`` queries over HTTP
+for direct consumption by thin delivery surfaces.
 """
 
 import csv

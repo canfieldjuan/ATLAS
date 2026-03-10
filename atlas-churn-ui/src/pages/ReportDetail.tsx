@@ -206,6 +206,21 @@ function IntelValue({ fieldKey, value }: { fieldKey: string; value: unknown }) {
     return <StatObject obj={value as Record<string, unknown>} />
   }
 
+  // Nested {key: {subkey: value}} object (e.g. source_distribution)
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.values(value).every(
+      (v) => typeof v === 'object' && v !== null && !Array.isArray(v),
+    )
+  ) {
+    const entries = Object.entries(value as Record<string, Record<string, unknown>>)
+    // Convert to table rows
+    const rows = entries.map(([k, v]) => ({ name: k, ...v }))
+    return <DataTable rows={rows} />
+  }
+
   // Fallback: formatted JSON
   return (
     <pre className="text-xs text-slate-400 bg-slate-800/50 rounded p-3 overflow-x-auto">

@@ -1,9 +1,11 @@
 """
 Atlas Intelligence MCP Server.
 
-Exposes intelligence report generation, consumer product review data,
-brand intelligence, pain point analysis, and pressure baseline queries
-to any MCP-compatible client (Claude Desktop, Cursor, custom agents).
+Continuously collected consumer product intelligence: brand health tracking,
+competitive displacement mapping, evidence-backed pain-point analysis,
+historical brand memory, and analyst-corrected intelligence feeds. Exposes
+the full consumer intelligence network to any MCP-compatible client
+(Claude Desktop, Cursor, custom agents).
 
 Tools:
     -- Strategic Intelligence --
@@ -1828,8 +1830,9 @@ async def export_market_report_pdf(
         import uuid as _uuid
         row = await pool.fetchrow(
             """
-            SELECT id, report_date, report_type, executive_summary,
-                   analysis_text, report_data
+            SELECT id, report_date, report_type, analysis_text,
+                   competitive_flows, feature_gaps, brand_scorecards,
+                   insights, recommendations
             FROM market_intelligence_reports
             WHERE id = $1
             """,
@@ -1839,12 +1842,13 @@ async def export_market_report_pdf(
             return json.dumps({"error": "Report not found"})
 
         report = dict(row)
-        rd = report.get("report_data")
-        if isinstance(rd, str):
-            try:
-                report["report_data"] = json.loads(rd)
-            except (json.JSONDecodeError, TypeError):
-                report["report_data"] = {}
+        report["report_data"] = {
+            "competitive_flows": report.pop("competitive_flows", []),
+            "feature_gaps": report.pop("feature_gaps", []),
+            "brand_scorecards": report.pop("brand_scorecards", []),
+            "insights": report.pop("insights", []),
+            "recommendations": report.pop("recommendations", []),
+        }
 
         from ..services.consumer_pdf_renderer import render_market_report_pdf
 

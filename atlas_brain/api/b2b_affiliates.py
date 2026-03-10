@@ -2,7 +2,7 @@
 REST endpoints for B2B Affiliate Opportunities.
 
 Joins enriched review competitor mentions against registered affiliate partners
-to surface monetization opportunities ranked by purchase-intent signals.
+to identify monetization opportunities ranked by purchase-intent signals.
 """
 
 import logging
