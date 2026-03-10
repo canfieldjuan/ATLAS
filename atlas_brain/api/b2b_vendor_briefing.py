@@ -6,6 +6,7 @@ Preview, generate+send, email gate, report data, and list sent briefings.
 
 import json
 import logging
+import re
 from datetime import datetime
 from uuid import UUID
 
@@ -51,6 +52,38 @@ def _row_to_dict(row) -> dict:
         else:
             d[key] = val
     return d
+
+
+# ---------------------------------------------------------------------------
+# Public report redaction helpers
+# ---------------------------------------------------------------------------
+
+# Dollar amounts like $180K, $500/month, $120K/year
+_DOLLAR_RE = re.compile(r"\$[\d,.]+[KkMm]?(?:/\w+)?")
+
+
+def _redact_quotes(evidence: list) -> list:
+    """Filter quotes that contain dollar amounts or are too identifying.
+
+    Keeps the quote but scrubs dollar figures (replaces with '[amount]').
+    """
+    cleaned = []
+    for item in evidence:
+        if isinstance(item, dict):
+            text = item.get("quote") or item.get("text") or ""
+        elif isinstance(item, str):
+            text = item
+        else:
+            continue
+        if not text:
+            continue
+        # Scrub dollar amounts
+        text = _DOLLAR_RE.sub("[amount]", text)
+        if isinstance(item, dict):
+            cleaned.append({**item, "quote": text})
+        else:
+            cleaned.append(text)
+    return cleaned
 
 
 # ---------------------------------------------------------------------------
@@ -200,8 +233,22 @@ async def briefing_gate(body: GateRequest):
     except Exception:
         logger.exception("CRM lead creation failed during gate (non-fatal)")
 
-    # Build full (non-redacted) briefing
-    briefing_data = await build_vendor_briefing(vendor_name)
+    # Build full (non-redacted) briefing -- prefer cached version (instant)
+    cached_row = await pool.fetchrow(
+        """
+        SELECT briefing_data FROM b2b_vendor_briefings
+        WHERE LOWER(vendor_name) = LOWER($1) AND status = 'sent'
+          AND briefing_data IS NOT NULL
+        ORDER BY created_at DESC LIMIT 1
+        """,
+        vendor_name,
+    )
+    if cached_row and cached_row["briefing_data"]:
+        bd = cached_row["briefing_data"]
+        briefing_data = json.loads(bd) if isinstance(bd, str) else bd
+    else:
+        briefing_data = await build_vendor_briefing(vendor_name)
+
     if not briefing_data:
         raise HTTPException(status_code=404, detail=f"No data found for vendor: {vendor_name}")
 
@@ -264,6 +311,15 @@ async def report_data(token: str = Query(..., min_length=10)):
     if not briefing_data:
         raise HTTPException(status_code=404, detail=f"No data found for vendor: {vendor_name}")
 
+    # Redact named accounts from public report (premium-only data).
+    # Replace with count so UI can show "X accounts showing friction signals".
+    named = briefing_data.pop("named_accounts", []) or []
+    briefing_data["named_account_count"] = len(named)
+
+    # Strip company-identifying details from quotes
+    evidence = briefing_data.get("evidence") or []
+    briefing_data["evidence"] = _redact_quotes(evidence)
+
     # 2. Enrich with b2b_intelligence reports (vendor comparisons, deeper analysis)
     intelligence_reports = []
     rows = await pool.fetch(
@@ -285,10 +341,18 @@ async def report_data(token: str = Query(..., min_length=10)):
                 intel_data = json.loads(intel_data)
             except (json.JSONDecodeError, TypeError):
                 intel_data = {}
+        # Strip company-identifying fields from public report
+        _REDACT_INTEL_KEYS = {
+            "primary_company_examples", "comparison_company_examples",
+            "primary_quote_highlights", "comparison_quote_highlights",
+        }
+        redacted_data = {
+            k: v for k, v in intel_data.items() if k not in _REDACT_INTEL_KEYS
+        }
         intelligence_reports.append({
             "report_type": row["report_type"],
             "executive_summary": row["executive_summary"],
-            "data": intel_data,
+            "data": redacted_data,
             "report_date": str(row["report_date"]) if row["report_date"] else None,
         })
 

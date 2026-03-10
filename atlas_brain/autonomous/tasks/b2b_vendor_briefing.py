@@ -291,7 +291,7 @@ async def build_vendor_briefing(vendor_name: str) -> dict[str, Any] | None:
     briefing: dict[str, Any] = {
         "vendor_name": vendor_name,
         "report_date": date.today().isoformat(),
-        "booking_url": settings.b2b_churn.vendor_briefing_booking_url,
+        "booking_url": build_gate_url(vendor_name),
     }
 
     found = False

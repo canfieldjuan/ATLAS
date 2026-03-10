@@ -52,7 +52,7 @@ _PAIN_COLORS = {
 
 def _pain_color(category: str) -> str:
     """Return color for a pain category, with a default fallback."""
-    return _PAIN_COLORS.get(category.lower(), "#5b6e7a")
+    return _PAIN_COLORS.get((category or "").lower(), "#5b6e7a")
 
 
 def _bar_width(count: int, max_count: int) -> int:
@@ -398,9 +398,16 @@ def render_vendor_briefing_html(briefing: dict) -> str:
     </td>
   </tr>
 
+  <!-- Context line -->
+  <tr>
+    <td style="padding:20px 24px 0;">
+      <p style="margin:0;font-size:13px;color:#666;line-height:1.5;">We monitor public customer signals for {vendor} so your team doesn&#39;t have to. Here&#39;s what we found this week.</p>
+    </td>
+  </tr>
+
   <!-- Section 2: Vendor Headline -->
   <tr>
-    <td style="padding:28px 24px 20px;">
+    <td style="padding:20px 24px 20px;">
       <table cellpadding="0" cellspacing="0" border="0" style="width:100%;">
         <tr>
           <td>

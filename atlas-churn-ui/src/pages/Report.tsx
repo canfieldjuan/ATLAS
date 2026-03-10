@@ -87,17 +87,22 @@ function ReportView({ data }: { data: ReportData }) {
   const maxPain = Math.max(...pains.map((p: any) => Number(p.count) || 0), 1)
   const displacements: any[] = b.top_displacement_targets || []
   const evidence: any[] = b.evidence || []
-  const namedAccounts: any[] = b.named_accounts || []
+  const namedAccountCount: number = b.named_account_count || (b.named_accounts || []).length
   const featureGaps: any[] = b.top_feature_gaps || []
   const painLabels: Record<string, string> = b.pain_labels || {}
 
   return (
-    <PublicLayout>
+    <PublicLayout variant="report">
       <SeoHead
         title={`${data.vendor_name} Churn Intelligence Report | Churn Signals`}
         description={`Full churn intelligence report for ${data.vendor_name}: pain drivers, displacement targets, at-risk accounts, and competitive analysis.`}
       />
       <div className="max-w-5xl mx-auto px-6 py-12">
+        {/* Context line */}
+        <p className="text-sm text-slate-400 mb-6">
+          We monitor public customer signals for {data.vendor_name} so your team doesn't have to. Here's what we found this week.
+        </p>
+
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-8">
           <div>
@@ -184,29 +189,24 @@ function ReportView({ data }: { data: ReportData }) {
             </div>
           )}
 
-          {/* Named Accounts */}
-          {namedAccounts.length > 0 && (
+          {/* Accounts with Friction Signals (count-only teaser) */}
+          {namedAccountCount > 0 && (
             <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
               <h3 className="text-sm font-medium text-cyan-400 uppercase tracking-wider mb-4">
                 <Users className="inline h-4 w-4 mr-1.5 -mt-0.5" />
-                Accounts at Risk
+                Accounts Showing Friction
               </h3>
-              <div className="space-y-2">
-                {namedAccounts.map((a: any, i: number) => {
-                  const urg = Number(a.urgency) || 0
-                  const badge = urg >= 8
-                    ? 'bg-red-500/20 text-red-400'
-                    : urg >= 6
-                      ? 'bg-amber-500/20 text-amber-400'
-                      : 'bg-blue-500/20 text-blue-400'
-                  const label = urg >= 8 ? 'Critical' : urg >= 6 ? 'High' : 'Watch'
-                  return (
-                    <div key={i} className="flex items-center justify-between py-2 border-b border-slate-800 last:border-0">
-                      <span className="text-sm text-slate-300">{a.company}</span>
-                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${badge}`}>{label}</span>
-                    </div>
-                  )
-                })}
+              <div className="text-center py-4">
+                <div className="text-3xl font-bold text-white mb-1">{namedAccountCount}</div>
+                <p className="text-sm text-slate-400 mb-4">
+                  accounts with active churn signals detected in the last 30 days
+                </p>
+                <a
+                  href="mailto:outreach@atlasbizintel.co?subject=Account-level%20signals%20for%20{data.vendor_name}"
+                  className="inline-block px-4 py-2 bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/30 rounded-lg text-sm text-cyan-400 font-medium transition-colors"
+                >
+                  Request account-level details
+                </a>
               </div>
             </div>
           )}
@@ -313,10 +313,10 @@ function ReportView({ data }: { data: ReportData }) {
             Get weekly churn signals, displacement tracking, and at-risk accounts for {data.vendor_name} delivered to your inbox.
           </p>
           <a
-            href="mailto:outreach@atlasbizintel.co?subject=Weekly%20briefing%20for%20{data.vendor_name}"
+            href={`mailto:outreach@atlasbizintel.co?subject=Weekly%20reports%20for%20${encodeURIComponent(data.vendor_name)}`}
             className="inline-block px-6 py-3 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-semibold transition-colors"
           >
-            Get Weekly Briefings
+            Get Weekly Reports
           </a>
         </div>
       </div>

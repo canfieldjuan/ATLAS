@@ -218,7 +218,7 @@ export default function VendorDetail() {
                       const obj = c as Record<string, unknown>
                       // competitor field may be a stringified JSON object
                       let name = String(obj.name ?? obj.competitor ?? '')
-                      try { if (name.startsWith('{')) name = (JSON.parse(name) as Record<string, unknown>).name as string ?? name } catch {}
+                      try { if (name.startsWith('{')) name = (JSON.parse(name) as Record<string, unknown>).name as string ?? name } catch { /* ignore parse errors */ }
                       const mentions = Number(obj.mentions ?? obj.count ?? 0)
                       return (
                         <li key={i} className="flex items-center justify-between text-sm">

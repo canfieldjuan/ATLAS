@@ -5,8 +5,15 @@ const NAV_LINKS = [
   { label: 'Blog', to: '/blog' },
 ]
 
-export default function PublicLayout({ children }: { children: React.ReactNode }) {
+type Props = {
+  children: React.ReactNode
+  /** "report" strips Blog/Sign-in, changes CTA to "Get Weekly Reports" */
+  variant?: 'default' | 'report'
+}
+
+export default function PublicLayout({ children, variant = 'default' }: Props) {
   const location = useLocation()
+  const isReport = variant === 'report'
 
   return (
     <div className="min-h-screen bg-slate-900 text-white flex flex-col">
@@ -17,7 +24,7 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
             <AtlasRobotLogo className="h-7 w-7" />
             <span className="text-xl font-bold">Churn Signals</span>
           </Link>
-          {NAV_LINKS.map(link => (
+          {!isReport && NAV_LINKS.map(link => (
             <Link
               key={link.to}
               to={link.to}
@@ -32,15 +39,19 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
           ))}
         </div>
         <div className="flex items-center gap-4">
-          <Link to="/login" className="text-sm text-slate-400 hover:text-white transition-colors">
-            Sign in
-          </Link>
-          <Link
-            to="/signup"
+          {!isReport && (
+            <Link to="/login" className="text-sm text-slate-400 hover:text-white transition-colors">
+              Sign in
+            </Link>
+          )}
+          <a
+            href={isReport
+              ? 'mailto:outreach@atlasbizintel.co?subject=Weekly%20churn%20reports'
+              : '/signup'}
             className="text-sm px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg font-medium transition-colors"
           >
-            Start Free Trial
-          </Link>
+            {isReport ? 'Get Weekly Reports' : 'Start Free Trial'}
+          </a>
         </div>
       </nav>
 
@@ -55,9 +66,20 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
             <span>Churn Signals</span>
           </div>
           <div className="flex items-center gap-4">
-            <Link to="/blog" className="hover:text-slate-300 transition-colors">Blog</Link>
-            <Link to="/login" className="hover:text-slate-300 transition-colors">Sign in</Link>
-            <Link to="/signup" className="hover:text-slate-300 transition-colors">Sign up</Link>
+            {!isReport && (
+              <>
+                <Link to="/blog" className="hover:text-slate-300 transition-colors">Blog</Link>
+                <Link to="/login" className="hover:text-slate-300 transition-colors">Sign in</Link>
+              </>
+            )}
+            <a
+              href={isReport
+                ? 'mailto:outreach@atlasbizintel.co?subject=Weekly%20churn%20reports'
+                : '/signup'}
+              className="hover:text-slate-300 transition-colors"
+            >
+              {isReport ? 'Get Weekly Reports' : 'Sign up'}
+            </a>
           </div>
         </div>
       </footer>
