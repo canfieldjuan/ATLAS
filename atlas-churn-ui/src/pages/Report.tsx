@@ -10,6 +10,26 @@ import SeoHead from '../components/SeoHead'
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 const GATE_URL = `${API_BASE}/api/v1/b2b/briefings/gate`
 const REPORT_DATA_URL = `${API_BASE}/api/v1/b2b/briefings/report-data`
+const CHECKOUT_URL = `${API_BASE}/api/v1/b2b/briefings/checkout`
+
+async function startCheckout(vendorName: string, tier: 'standard' | 'pro') {
+  try {
+    const res = await fetch(CHECKOUT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ vendor_name: vendorName, tier }),
+    })
+    if (res.ok) {
+      const { url } = await res.json()
+      window.location.href = url
+    } else {
+      const body = await res.json().catch(() => ({ detail: 'Checkout failed' }))
+      alert(body.detail || 'Failed to start checkout')
+    }
+  } catch {
+    alert('Network error -- please try again')
+  }
+}
 
 type Status = 'idle' | 'submitting' | 'loading_report' | 'report' | 'error'
 
@@ -92,7 +112,7 @@ function ReportView({ data }: { data: ReportData }) {
   const painLabels: Record<string, string> = b.pain_labels || {}
 
   return (
-    <PublicLayout variant="report">
+    <PublicLayout variant="report" onCtaClick={() => startCheckout(data.vendor_name, 'standard')}>
       <SeoHead
         title={`${data.vendor_name} Churn Intelligence Report | Churn Signals`}
         description={`Full churn intelligence report for ${data.vendor_name}: pain drivers, displacement targets, at-risk accounts, and competitive analysis.`}
@@ -202,12 +222,13 @@ function ReportView({ data }: { data: ReportData }) {
                 <p className="text-sm text-slate-400 mb-4">
                   accounts with active churn signals detected in the last 30 days
                 </p>
-                <a
-                  href="mailto:outreach@atlasbizintel.co?subject=Account-level%20signals%20for%20{data.vendor_name}"
-                  className="inline-block px-4 py-2 bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/30 rounded-lg text-sm text-cyan-400 font-medium transition-colors"
+                <button
+                  onClick={() => startCheckout(data.vendor_name, 'pro')}
+                  className="inline-block px-4 py-2 bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/30 rounded-lg text-sm text-cyan-400 font-medium transition-colors cursor-pointer"
                 >
-                  Request account-level details
-                </a>
+                  Unlock Account-Level Details
+                </button>
+                <p className="text-xs text-slate-500 mt-1">Pro -- $1,499/mo</p>
               </div>
             </div>
           )}
@@ -313,12 +334,13 @@ function ReportView({ data }: { data: ReportData }) {
           <p className="text-sm text-slate-400 mb-4">
             Get weekly churn signals, displacement tracking, and at-risk accounts for {data.vendor_name} delivered to your inbox.
           </p>
-          <a
-            href={`mailto:outreach@atlasbizintel.co?subject=Weekly%20reports%20for%20${encodeURIComponent(data.vendor_name)}`}
-            className="inline-block px-6 py-3 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-semibold transition-colors"
+          <button
+            onClick={() => startCheckout(data.vendor_name, 'standard')}
+            className="inline-block px-6 py-3 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-semibold transition-colors cursor-pointer"
           >
             Get Weekly Reports
-          </a>
+          </button>
+          <p className="text-xs text-slate-500 mt-2">Starting at $499/mo -- cancel anytime</p>
         </div>
       </div>
     </PublicLayout>

@@ -130,6 +130,12 @@ class GateRequest(BaseModel):
     token: str = Field(..., min_length=10)
 
 
+class VendorCheckoutRequest(BaseModel):
+    vendor_name: str = Field(..., min_length=1)
+    tier: str = Field(..., pattern="^(standard|pro)$")
+    email: str | None = Field(None, min_length=5)
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -275,6 +281,56 @@ async def briefing_gate(body: GateRequest):
         "message": "Full briefing sent to your email",
         "report_token": body.token,
     }
+
+
+@router.post("/checkout")
+async def vendor_checkout(body: VendorCheckoutRequest):
+    """Create a Stripe Checkout Session for vendor retention intel subscription."""
+    import stripe
+    from urllib.parse import quote
+
+    cfg = settings.saas_auth
+    if not cfg.stripe_secret_key:
+        raise HTTPException(status_code=503, detail="Stripe not configured")
+    stripe.api_key = cfg.stripe_secret_key
+
+    price_id = (
+        cfg.stripe_vendor_standard_price_id
+        if body.tier == "standard"
+        else cfg.stripe_vendor_pro_price_id
+    )
+    if not price_id:
+        raise HTTPException(
+            status_code=503,
+            detail=f"No Stripe price configured for vendor {body.tier} tier",
+        )
+
+    vendor_encoded = quote(body.vendor_name)
+    session_params: dict = {
+        "mode": "subscription",
+        "line_items": [{"price": price_id, "quantity": 1}],
+        "success_url": f"https://churnsignals.co/report?vendor={vendor_encoded}&checkout=success",
+        "cancel_url": f"https://churnsignals.co/report?vendor={vendor_encoded}&checkout=cancelled",
+        "metadata": {
+            "vendor_name": body.vendor_name,
+            "tier": body.tier,
+            "source": "vendor_briefing_report",
+        },
+    }
+    if body.email:
+        session_params["customer_email"] = body.email.strip().lower()
+
+    try:
+        session = stripe.checkout.Session.create(**session_params)
+    except stripe.StripeError as exc:
+        logger.error("Stripe checkout creation failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Failed to create checkout session")
+
+    logger.info(
+        "Vendor checkout session: vendor=%s tier=%s session=%s",
+        body.vendor_name, body.tier, session.id,
+    )
+    return {"url": session.url}
 
 
 @router.get("/report-data")

@@ -35,6 +35,8 @@ class SaaSAuthConfig(BaseSettings):
     stripe_b2b_starter_price_id: str = Field(default="", description="Stripe Price ID for B2B Starter plan")
     stripe_b2b_growth_price_id: str = Field(default="", description="Stripe Price ID for B2B Growth plan")
     stripe_b2b_pro_price_id: str = Field(default="", description="Stripe Price ID for B2B Pro plan")
+    stripe_vendor_standard_price_id: str = Field(default="", description="Stripe Price ID for Vendor Standard ($499/mo)")
+    stripe_vendor_pro_price_id: str = Field(default="", description="Stripe Price ID for Vendor Pro ($1,499/mo)")
 
     @model_validator(mode="after")
     def _validate_secrets(self):

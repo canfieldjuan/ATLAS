@@ -9,11 +9,22 @@ type Props = {
   children: React.ReactNode
   /** "report" strips Blog/Sign-in, changes CTA to "Get Weekly Reports" */
   variant?: 'default' | 'report'
+  /** Called when the report-variant CTA is clicked (wires to Stripe checkout) */
+  onCtaClick?: () => void
 }
 
-export default function PublicLayout({ children, variant = 'default' }: Props) {
+export default function PublicLayout({ children, variant = 'default', onCtaClick }: Props) {
   const location = useLocation()
   const isReport = variant === 'report'
+
+  const reportCta = isReport ? (
+    <button
+      onClick={onCtaClick}
+      className="text-sm px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg font-medium transition-colors cursor-pointer"
+    >
+      Get Weekly Reports
+    </button>
+  ) : null
 
   return (
     <div className="min-h-screen bg-slate-900 text-white flex flex-col">
@@ -44,14 +55,14 @@ export default function PublicLayout({ children, variant = 'default' }: Props) {
               Sign in
             </Link>
           )}
-          <a
-            href={isReport
-              ? 'mailto:outreach@atlasbizintel.co?subject=Weekly%20churn%20reports'
-              : '/signup'}
-            className="text-sm px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg font-medium transition-colors"
-          >
-            {isReport ? 'Get Weekly Reports' : 'Start Free Trial'}
-          </a>
+          {reportCta || (
+            <a
+              href="/signup"
+              className="text-sm px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg font-medium transition-colors"
+            >
+              Start Free Trial
+            </a>
+          )}
         </div>
       </nav>
 
@@ -72,14 +83,13 @@ export default function PublicLayout({ children, variant = 'default' }: Props) {
                 <Link to="/login" className="hover:text-slate-300 transition-colors">Sign in</Link>
               </>
             )}
-            <a
-              href={isReport
-                ? 'mailto:outreach@atlasbizintel.co?subject=Weekly%20churn%20reports'
-                : '/signup'}
-              className="hover:text-slate-300 transition-colors"
-            >
-              {isReport ? 'Get Weekly Reports' : 'Sign up'}
-            </a>
+            {isReport ? (
+              <button onClick={onCtaClick} className="hover:text-slate-300 transition-colors cursor-pointer">
+                Get Weekly Reports
+              </button>
+            ) : (
+              <a href="/signup" className="hover:text-slate-300 transition-colors">Sign up</a>
+            )}
           </div>
         </div>
       </footer>
