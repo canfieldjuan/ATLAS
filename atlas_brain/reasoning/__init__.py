@@ -53,6 +53,16 @@ async def init_stratified_reasoner(db_pool) -> None:
 
     _stratified_reasoner = StratifiedReasoner(cache, episodic, metacognition=meta)
 
+    # Attach temporal engine for ad-hoc vendor temporal queries
+    try:
+        from .temporal import TemporalEngine
+        _stratified_reasoner._temporal = TemporalEngine(db_pool)
+    except Exception:
+        import logging
+        logging.getLogger("atlas.reasoning").warning(
+            "Failed to init TemporalEngine (non-fatal)", exc_info=True,
+        )
+
 
 async def close_stratified_reasoner() -> None:
     """Flush metacognition and shutdown the episodic store connection."""

@@ -1173,7 +1173,7 @@ Both ALTER TABLEs verified via information_schema.
 
 ---
 
-### P3-001: Wire temporal + archetypes into b2b_churn_intelligence task [P0]
+### P3-001: Wire temporal + archetypes into b2b_churn_intelligence task [P0] [DONE]
 **Assigned**: Dev 2
 
 The b2b_churn_intelligence autonomous task currently sends raw vendor snapshot data to the stratified reasoner. It needs to:
@@ -1203,11 +1203,27 @@ The b2b_churn_intelligence autonomous task currently sends raw vendor snapshot d
 
 **Findings**:
 ```
+DONE by Dev 2, 2026-03-11.
+
+Modified: atlas_brain/autonomous/tasks/b2b_churn_intelligence.py (line ~1652)
+- Inserted temporal + archetype enrichment after _build_exploratory_payload()
+  and before the LLM call
+- Loops through vendor_scores, runs TemporalEngine.analyze_vendor() per vendor
+- Converts to evidence dict via TemporalEngine.to_evidence_dict()
+- Runs enrich_evidence_with_archetypes() to add archetype pre-scores
+- Adds payload["temporal_analysis"] with per-vendor velocity, acceleration,
+  anomalies, archetype_scores, and insufficient_data flag
+- Recalculates payload_size after enrichment
+- Entire block wrapped in try/except (non-fatal if temporal unavailable)
+- Syntax verified via ast.parse()
+
+Note: Import verification requires pydantic_settings (runtime dep only).
+The running Atlas app has it. Shell env doesn't.
 ```
 
 ---
 
-### P3-002: Wire archetype falsification conditions into cache store [P1]
+### P3-002: Wire archetype falsification conditions into cache store [P1] [DONE]
 **Assigned**: Dev 2
 
 When the stratified reasoner stores a new cache entry after full reasoning, the falsification_conditions currently come from the LLM output. We should also merge in the archetype-specific template conditions from `archetypes.py`.
@@ -1230,11 +1246,21 @@ Then use `all_conds` instead of just `conclusion.get("falsification_conditions",
 
 **Findings**:
 ```
+DONE by Dev 2, 2026-03-11.
+
+Modified: atlas_brain/reasoning/stratified_reasoner.py (line ~401)
+- Before CacheEntry construction, added:
+  1. Extract llm_conds from conclusion.get("falsification_conditions", [])
+  2. Call get_falsification_conditions(archetype) for template conditions
+  3. Merge + deduplicate via list(set(llm_conds + archetype_conds))
+  4. Use all_conds in CacheEntry constructor
+- Import wrapped in try/except (falls back to llm_conds only)
+- Syntax verified via ast.parse()
 ```
 
 ---
 
-### P3-003: Add temporal engine to stratified reasoner init [P1]
+### P3-003: Add temporal engine to stratified reasoner init [P1] [DONE]
 **Assigned**: Dev 2
 
 The TemporalEngine needs a DB pool. Wire it into the app-scoped reasoner so it's available for direct use.
@@ -1256,6 +1282,14 @@ This lets callers do `get_stratified_reasoner()._temporal.analyze_vendor(name)` 
 
 **Findings**:
 ```
+DONE by Dev 2, 2026-03-11.
+
+Modified: atlas_brain/reasoning/__init__.py (line ~55)
+- After StratifiedReasoner construction, added:
+  from .temporal import TemporalEngine
+  _stratified_reasoner._temporal = TemporalEngine(db_pool)
+- Wrapped in try/except with warning log (non-fatal)
+- Syntax verified via ast.parse()
 ```
 
 ---
@@ -1264,10 +1298,12 @@ This lets callers do `get_stratified_reasoner()._temporal.analyze_vendor(name)` 
 
 | Task | Assignee | Status | What |
 |------|----------|--------|------|
-| P3-001 | Dev 2 | OPEN | Wire temporal + archetypes into b2b_churn_intelligence |
-| P3-002 | Dev 2 | OPEN | Merge archetype falsification conditions into cache store |
-| P3-003 | Dev 2 | OPEN | Attach TemporalEngine to stratified reasoner init |
+| P3-001 | Dev 2 | DONE | Wire temporal + archetypes into b2b_churn_intelligence |
+| P3-002 | Dev 2 | DONE | Merge archetype falsification conditions into cache store |
+| P3-003 | Dev 2 | DONE | Attach TemporalEngine to stratified reasoner init |
 | P3-CODE | Claude | DONE | temporal.py + archetypes.py + 18 tests |
+
+**Phase 3 COMPLETE.** All tasks done.
 
 ---
 

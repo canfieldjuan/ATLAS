@@ -398,6 +398,15 @@ class StratifiedReasoner:
             vendor_name, archetype, confidence, tokens, duration_ms,
         )
 
+        # Merge LLM + archetype-specific falsification conditions
+        llm_conds = conclusion.get("falsification_conditions", [])
+        try:
+            from .archetypes import get_falsification_conditions
+            archetype_conds = get_falsification_conditions(archetype)
+            all_conds = list(set(llm_conds + archetype_conds))
+        except Exception:
+            all_conds = llm_conds
+
         # Store in semantic cache
         cache_entry = CacheEntry(
             pattern_sig=pattern_sig,
@@ -408,7 +417,7 @@ class StratifiedReasoner:
             confidence=confidence,
             reasoning_steps=[],
             boundary_conditions={},
-            falsification_conditions=conclusion.get("falsification_conditions", []),
+            falsification_conditions=all_conds,
             uncertainty_sources=conclusion.get("uncertainty_sources", []),
             conclusion_type=archetype,
             evidence_hash=evidence_hash,

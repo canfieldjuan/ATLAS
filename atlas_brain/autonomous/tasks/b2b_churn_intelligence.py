@@ -1650,6 +1650,37 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         churning_companies=churning_companies,
     )
 
+    # Enrich payload with temporal analysis + archetype pre-scores per vendor
+    try:
+        from atlas_brain.reasoning.temporal import TemporalEngine
+        from atlas_brain.reasoning.archetypes import enrich_evidence_with_archetypes
+
+        temporal_engine = TemporalEngine(pool)
+        temporal_summaries = []
+        for vs in vendor_scores[:cfg.intelligence_exploratory_vendor_limit]:
+            vname = vs["vendor_name"]
+            try:
+                te = await temporal_engine.analyze_vendor(vname)
+                td = TemporalEngine.to_evidence_dict(te)
+                enriched = enrich_evidence_with_archetypes(
+                    {"vendor_name": vname, **td}, td,
+                )
+                temporal_summaries.append({
+                    "vendor": vname,
+                    "velocity": td.get("velocity"),
+                    "acceleration": td.get("acceleration"),
+                    "anomalies": td.get("anomalies", []),
+                    "archetype_scores": enriched.get("archetype_scores", []),
+                    "insufficient_data": td.get("insufficient_data", True),
+                })
+            except Exception:
+                logger.debug("Temporal enrichment skipped for %s", vname)
+        if temporal_summaries:
+            payload["temporal_analysis"] = temporal_summaries
+            payload_size = len(json.dumps(payload, default=str))
+    except Exception:
+        logger.debug("Temporal/archetype enrichment unavailable", exc_info=True)
+
     from ...pipelines.llm import call_llm_with_skill, parse_json_response, get_pipeline_llm
 
     # Resolve model name before the call so we can record it in the DB
