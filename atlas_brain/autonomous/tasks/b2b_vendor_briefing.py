@@ -581,6 +581,10 @@ async def _llm_call(
             },
         }
     except json.JSONDecodeError:
+        logger.warning(
+            "Account card LLM returned invalid JSON (text=%s)",
+            text[:200] if text else "<empty>",
+        )
         return None
     except Exception:
         logger.exception("LLM call failed")

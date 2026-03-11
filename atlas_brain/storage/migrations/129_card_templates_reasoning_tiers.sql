@@ -92,11 +92,11 @@ Account data:
 - Budget context: {budget_context}
 
 Return a JSON object with these keys:
-- "persona_pain_ranking": Array of {{"pain": "...", "relevance_to_persona": "...", "rank": N}}
-- "competitive_analysis": Array of {{"competitor": "...", "driving_pain": "...", "evidence_strength": "strong|moderate|weak"}}
-- "timing_signals": {{"trajectory": "rising|stable|cooling", "budget_indicators": "...", "renewal_signals": "..."}}
-- "candidate_strategies": Array of 3 {{"hook": "...", "value_prop": "...", "urgency_lever": "..."}}
-- "selected_strategy": {{"index": N, "rationale": "..."}}
+- "persona_pain_ranking": Array of {"pain": "...", "relevance_to_persona": "...", "rank": N}
+- "competitive_analysis": Array of {"competitor": "...", "driving_pain": "...", "evidence_strength": "strong|moderate|weak"}
+- "timing_signals": {"trajectory": "rising|stable|cooling", "budget_indicators": "...", "renewal_signals": "..."}
+- "candidate_strategies": Array of 3 {"hook": "...", "value_prop": "...", "urgency_lever": "..."}
+- "selected_strategy": {"index": N, "rationale": "..."}
 
 Return ONLY valid JSON. No markdown fences.',
     2, 'both',
@@ -133,7 +133,7 @@ Return a JSON object with these keys:
 - "urgency_label": One of "critical", "high", "moderate", "watch".
 - "talking_points": Array of 2-3 short bullet points tailored to the persona.
 - "confidence": Float 0-1, calibrated per checklist item 5.
-- "evidence_chain": Array of {{"claim": "...", "supporting_data_point": "..."}} linking each key claim to data.
+- "evidence_chain": Array of {"claim": "...", "supporting_data_point": "..."} linking each key claim to data.
 - "corrections_applied": Array of strings describing any self-corrections made during synthesis.
 
 Return ONLY valid JSON. No markdown fences.',
