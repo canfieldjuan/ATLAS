@@ -1162,6 +1162,115 @@ Both ALTER TABLEs verified via information_schema.
 
 ---
 
+## Phase 3: Temporal Reasoning + Churn Archetypes (WS1 + WS2)
+
+**Goal**: First real intelligence content flowing through the stratified reasoner. Temporal engine computes velocity/acceleration/anomalies from vendor snapshots. Archetype scorer matches vendor evidence against 8 canonical churn patterns. Together they enrich the evidence payload before LLM reasoning.
+
+**Code written by Claude (already done)**:
+- `atlas_brain/reasoning/temporal.py` (WS1) — TemporalEngine: velocity (rate-of-change between snapshots), acceleration (3+ points), rolling percentiles by category (IQR-based), z-score anomaly detection, recency weighting (14-day half-life). Pure data, no LLM.
+- `atlas_brain/reasoning/archetypes.py` (WS2) — 8 archetype profiles (pricing_shock, feature_gap, acquisition_decay, leadership_redesign, integration_break, support_collapse, category_disruption, compliance_gap). Signal scoring with keyword matching, velocity/anomaly bonuses. `enrich_evidence_with_archetypes()` adds ranked scores to evidence dict before LLM call.
+- 39/39 tests passing (18 new Phase 3 tests: 7 temporal + 11 archetypes).
+
+---
+
+### P3-001: Wire temporal + archetypes into b2b_churn_intelligence task [P0]
+**Assigned**: Dev 2
+
+The b2b_churn_intelligence autonomous task currently sends raw vendor snapshot data to the stratified reasoner. It needs to:
+
+1. **Run temporal analysis before reasoning**: In the intelligence task (around where evidence is assembled for each vendor), add:
+   ```python
+   from atlas_brain.reasoning.temporal import TemporalEngine
+   from atlas_brain.reasoning.archetypes import enrich_evidence_with_archetypes
+
+   temporal_engine = TemporalEngine(pool)
+   temporal_evidence = await temporal_engine.analyze_vendor(vendor_name)
+   temporal_dict = TemporalEngine.to_evidence_dict(temporal_evidence)
+
+   # Merge temporal data into evidence
+   evidence.update(temporal_dict)
+
+   # Enrich with archetype pre-scores
+   evidence = enrich_evidence_with_archetypes(evidence, temporal_dict)
+   ```
+
+2. **Pass enriched evidence to stratified reasoner**: The `analyze()` call should receive the enriched evidence dict (which now contains velocity, acceleration, anomaly, and archetype_scores fields).
+
+3. **Verify**: Run `python -c "from atlas_brain.reasoning.temporal import TemporalEngine; from atlas_brain.reasoning.archetypes import enrich_evidence_with_archetypes; print('OK')"` to confirm imports work.
+
+**Files to modify**:
+- `atlas_brain/autonomous/tasks/b2b_churn_intelligence.py` (wire temporal + archetypes into evidence assembly)
+
+**Findings**:
+```
+```
+
+---
+
+### P3-002: Wire archetype falsification conditions into cache store [P1]
+**Assigned**: Dev 2
+
+When the stratified reasoner stores a new cache entry after full reasoning, the falsification_conditions currently come from the LLM output. We should also merge in the archetype-specific template conditions from `archetypes.py`.
+
+In `atlas_brain/reasoning/stratified_reasoner.py`, in the `_reason()` method, after the LLM returns a conclusion (around line 411), add:
+
+```python
+from .archetypes import get_falsification_conditions
+
+# Merge archetype-specific falsification templates
+archetype_conds = get_falsification_conditions(archetype)
+llm_conds = conclusion.get("falsification_conditions", [])
+all_conds = list(set(llm_conds + archetype_conds))  # deduplicate
+```
+
+Then use `all_conds` instead of just `conclusion.get("falsification_conditions", [])` in the CacheEntry constructor.
+
+**Files to modify**:
+- `atlas_brain/reasoning/stratified_reasoner.py` (merge archetype falsification conditions)
+
+**Findings**:
+```
+```
+
+---
+
+### P3-003: Add temporal engine to stratified reasoner init [P1]
+**Assigned**: Dev 2
+
+The TemporalEngine needs a DB pool. Wire it into the app-scoped reasoner so it's available for direct use.
+
+In `atlas_brain/reasoning/__init__.py`, modify `init_stratified_reasoner()`:
+
+```python
+from .temporal import TemporalEngine
+
+# After existing init code:
+temporal = TemporalEngine(db_pool)
+_stratified_reasoner._temporal = temporal  # attach for direct access
+```
+
+This lets callers do `get_stratified_reasoner()._temporal.analyze_vendor(name)` for ad-hoc temporal queries from MCP tools or API endpoints.
+
+**Files to modify**:
+- `atlas_brain/reasoning/__init__.py`
+
+**Findings**:
+```
+```
+
+---
+
+## Phase 3 Task Summary
+
+| Task | Assignee | Status | What |
+|------|----------|--------|------|
+| P3-001 | Dev 2 | OPEN | Wire temporal + archetypes into b2b_churn_intelligence |
+| P3-002 | Dev 2 | OPEN | Merge archetype falsification conditions into cache store |
+| P3-003 | Dev 2 | OPEN | Attach TemporalEngine to stratified reasoner init |
+| P3-CODE | Claude | DONE | temporal.py + archetypes.py + 18 tests |
+
+---
+
 ## Blockers Log
 
 | Date | Blocker | Owner | Resolution |
@@ -1214,3 +1323,12 @@ Both ALTER TABLEs verified via information_schema.
   - `stratified_reasoner.py`: Updated with Reconstitute mode, metacognitive monitor, tier_context
 - 21/21 tests passing (11 new Phase 2 tests for diff engine, tiers, metacognition)
 - **3 integration tasks posted for Dev 2**: P2-001 (register falsification task), P2-002 (metacognition flush), P2-003 (verify column schema)
+
+### 2026-03-11 (Session 4)
+- **Phase 3 code COMPLETE**: Both WS1 (Temporal) and WS2 (Archetypes) modules written + tested.
+  - `temporal.py`: Velocity, acceleration, percentiles, z-score anomalies, recency weighting. 7 tests.
+  - `archetypes.py`: 8 archetype profiles with signal rules, keyword matching, velocity/anomaly bonuses. `enrich_evidence_with_archetypes()` for LLM context enrichment. 11 tests.
+- 39/39 tests passing (18 new Phase 3 tests, all Phase 1-2 tests still green)
+- **3 integration tasks posted for Dev 2**: P3-001 (wire into intelligence task), P3-002 (merge falsification conditions), P3-003 (attach temporal engine to init)
+- Key design: archetypes.py is a pure-data pre-filter (no LLM). It scores evidence against archetype signal signatures and adds ranked matches to the evidence dict. The LLM sees these pre-scores as context, making classification more consistent.
+- Snapshot data limitation: Still only 1 day of snapshots. Temporal velocities will return insufficient_data=True until 2+ days accumulate (pipeline runs daily at 9 PM). Archetype scoring works immediately since it uses absolute values, not deltas.

@@ -1,4 +1,4 @@
-"""Smoke tests for the stratified reasoning engine (Phase 1).
+"""Smoke tests for the stratified reasoning engine (Phases 1-3).
 
 Tests semantic cache (Postgres) and episodic store (Neo4j) end-to-end.
 Requires running Postgres (port 5433) and Neo4j (port 7687).
@@ -289,3 +289,284 @@ class TestMetacognition:
         # Run 1000 checks, expect ~12% to trigger
         triggered = sum(1 for _ in range(1000) if m.should_force_exploration())
         assert 60 < triggered < 200, f"Expected ~120 triggers, got {triggered}"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 tests: Temporal reasoning + Churn archetypes
+# ---------------------------------------------------------------------------
+
+
+class TestTemporalEngine:
+    """Pure-logic tests for temporal.py (no DB)."""
+
+    def test_velocity_basic(self):
+        from datetime import date
+
+        from atlas_brain.reasoning.temporal import TemporalEngine
+
+        engine = TemporalEngine(pool=None)
+        snapshots = [
+            {"snapshot_date": date(2026, 3, 1), "churn_density": 0.3, "avg_urgency": 5.0},
+            {"snapshot_date": date(2026, 3, 8), "churn_density": 0.6, "avg_urgency": 7.0},
+        ]
+        velocities = engine._compute_velocities("TestVendor", snapshots)
+        assert len(velocities) == 2
+        cd = next(v for v in velocities if v.metric == "churn_density")
+        assert abs(cd.velocity - (0.3 / 7)) < 0.001  # 0.0429/day
+        assert cd.acceleration is None  # need 3+ snapshots
+
+    def test_velocity_with_acceleration(self):
+        from datetime import date
+
+        from atlas_brain.reasoning.temporal import TemporalEngine
+
+        engine = TemporalEngine(pool=None)
+        snapshots = [
+            {"snapshot_date": date(2026, 3, 1), "avg_urgency": 4.0},
+            {"snapshot_date": date(2026, 3, 8), "avg_urgency": 5.0},
+            {"snapshot_date": date(2026, 3, 15), "avg_urgency": 7.0},
+        ]
+        velocities = engine._compute_velocities("TestVendor", snapshots)
+        v = next(v for v in velocities if v.metric == "avg_urgency")
+        assert v.velocity > 0  # urgency increasing
+        assert v.acceleration is not None
+        assert v.acceleration > 0  # accelerating
+
+    def test_velocity_insufficient_data(self):
+        from atlas_brain.reasoning.temporal import TemporalEngine
+
+        engine = TemporalEngine(pool=None)
+        snapshots = [{"snapshot_date": None, "churn_density": 0.5}]
+        velocities = engine._compute_velocities("TestVendor", snapshots)
+        assert velocities == []
+
+    def test_recency_weight(self):
+        from atlas_brain.reasoning.temporal import TemporalEngine
+
+        assert TemporalEngine.recency_weight(0) == 1.0
+        assert abs(TemporalEngine.recency_weight(14) - 0.5) < 0.001  # half-life
+        assert abs(TemporalEngine.recency_weight(28) - 0.25) < 0.001
+
+    def test_evidence_dict_insufficient(self):
+        from atlas_brain.reasoning.temporal import TemporalEngine, TemporalEvidence
+
+        ev = TemporalEvidence(vendor_name="X", snapshot_days=1, insufficient_data=True)
+        d = TemporalEngine.to_evidence_dict(ev)
+        assert d["temporal_status"] == "insufficient_data"
+        assert d["snapshot_days"] == 1
+
+    def test_evidence_dict_with_velocities(self):
+        from atlas_brain.reasoning.temporal import (
+            TemporalEngine,
+            TemporalEvidence,
+            VendorVelocity,
+        )
+
+        ev = TemporalEvidence(
+            vendor_name="X",
+            snapshot_days=7,
+            velocities=[
+                VendorVelocity(
+                    vendor_name="X", metric="churn_density",
+                    current_value=0.6, previous_value=0.3,
+                    velocity=0.0429, days_between=7, acceleration=0.01,
+                ),
+            ],
+        )
+        d = TemporalEngine.to_evidence_dict(ev)
+        assert "velocity_churn_density" in d
+        assert "accel_churn_density" in d
+        assert d["snapshot_days"] == 7
+
+    def test_normal_sf(self):
+        from atlas_brain.reasoning.temporal import _normal_sf
+
+        # sf(0) should be ~0.5
+        assert abs(_normal_sf(0) - 0.5) < 0.01
+        # sf(2) should be ~0.023
+        assert abs(_normal_sf(2.0) - 0.0228) < 0.005
+        # sf(-2) should be ~0.977
+        assert abs(_normal_sf(-2.0) - 0.977) < 0.005
+
+
+class TestArchetypes:
+    """Pure-logic tests for archetypes.py (no DB)."""
+
+    def test_all_archetypes_defined(self):
+        from atlas_brain.reasoning.archetypes import ARCHETYPES
+
+        expected = {
+            "pricing_shock", "feature_gap", "acquisition_decay",
+            "leadership_redesign", "integration_break", "support_collapse",
+            "category_disruption", "compliance_gap",
+        }
+        assert set(ARCHETYPES.keys()) == expected
+
+    def test_pricing_shock_high_signals(self):
+        from atlas_brain.reasoning.archetypes import best_match
+
+        evidence = {
+            "avg_urgency": 7.5,
+            "top_pain": "pricing is way too expensive after renewal hike",
+            "competitor_count": 5,
+            "recommend_ratio": 0.25,
+            "displacement_edge_count": 4,
+            "positive_review_pct": 28.0,
+            "churn_density": 0.8,
+        }
+        m = best_match(evidence)
+        assert m is not None
+        assert m.archetype == "pricing_shock"
+        assert m.score > 0.5
+
+    def test_feature_gap_signals(self):
+        from atlas_brain.reasoning.archetypes import best_match
+
+        evidence = {
+            "top_pain": "missing SSO, lack of API, need webhook support",
+            "competitor_count": 4,
+            "displacement_edge_count": 3,
+            "pain_count": 6,
+            "recommend_ratio": 0.4,
+            "avg_urgency": 4.0,
+        }
+        m = best_match(evidence)
+        assert m is not None
+        assert m.archetype == "feature_gap"
+
+    def test_support_collapse_signals(self):
+        from atlas_brain.reasoning.archetypes import best_match
+
+        evidence = {
+            "top_pain": "support response time is terrible, no response for weeks",
+            "avg_urgency": 8.0,
+            "positive_review_pct": 22.0,
+            "recommend_ratio": 0.2,
+            "churn_density": 0.85,
+        }
+        m = best_match(evidence)
+        assert m is not None
+        assert m.archetype == "support_collapse"
+
+    def test_compliance_gap_signals(self):
+        from atlas_brain.reasoning.archetypes import best_match
+
+        evidence = {
+            "top_pain": "no SOC2 certification, GDPR compliance missing",
+            "high_intent_company_count": 5,
+            "avg_urgency": 6.0,
+            "churn_density": 0.6,
+        }
+        m = best_match(evidence)
+        assert m is not None
+        assert m.archetype == "compliance_gap"
+
+    def test_no_match_below_threshold(self):
+        from atlas_brain.reasoning.archetypes import best_match
+
+        evidence = {
+            "avg_urgency": 2.0,
+            "positive_review_pct": 85.0,
+            "recommend_ratio": 0.9,
+            "competitor_count": 0,
+            "pain_count": 0,
+        }
+        m = best_match(evidence)
+        # Should either be None or very low score
+        if m is not None:
+            assert m.score < 0.3
+
+    def test_velocity_bonus(self):
+        from atlas_brain.reasoning.archetypes import score_evidence
+
+        base = {
+            "avg_urgency": 7.0,
+            "top_pain": "pricing increase is outrageous",
+            "competitor_count": 4,
+            "recommend_ratio": 0.3,
+            "displacement_edge_count": 3,
+            "positive_review_pct": 35.0,
+        }
+        # Without velocity
+        scores_no_vel = score_evidence(base)
+        ps_no = next(m for m in scores_no_vel if m.archetype == "pricing_shock")
+
+        # With velocity signals matching pricing_shock hints
+        temporal = {
+            "velocity_avg_urgency": 0.5,       # increasing
+            "velocity_competitor_count": 0.3,   # increasing
+            "velocity_recommend_ratio": -0.05,  # decreasing
+        }
+        scores_vel = score_evidence(base, temporal)
+        ps_vel = next(m for m in scores_vel if m.archetype == "pricing_shock")
+
+        assert ps_vel.score > ps_no.score
+
+    def test_anomaly_bonus(self):
+        from atlas_brain.reasoning.archetypes import score_evidence
+
+        base = {
+            "avg_urgency": 7.0,
+            "top_pain": "way too expensive after the price hike",
+            "competitor_count": 4,
+            "recommend_ratio": 0.3,
+        }
+        temporal_with_anom = {
+            "anomalies": [
+                {"metric": "avg_urgency", "z_score": 2.5, "value": 7.0},
+                {"metric": "competitor_count", "z_score": 2.1, "value": 4},
+            ],
+        }
+        scores_no = score_evidence(base)
+        scores_anom = score_evidence(base, temporal_with_anom)
+        ps_no = next(m for m in scores_no if m.archetype == "pricing_shock")
+        ps_anom = next(m for m in scores_anom if m.archetype == "pricing_shock")
+        assert ps_anom.score > ps_no.score
+
+    def test_enrich_evidence(self):
+        from atlas_brain.reasoning.archetypes import enrich_evidence_with_archetypes
+
+        evidence = {
+            "avg_urgency": 7.5,
+            "top_pain": "price hike is killing us",
+            "competitor_count": 5,
+            "recommend_ratio": 0.2,
+            "displacement_edge_count": 4,
+            "positive_review_pct": 25.0,
+        }
+        enriched = enrich_evidence_with_archetypes(evidence)
+        assert "archetype_scores" in enriched
+        assert len(enriched["archetype_scores"]) > 0
+        top = enriched["archetype_scores"][0]
+        assert "archetype" in top
+        assert "signal_score" in top
+        assert "matched_signals" in top
+
+    def test_falsification_conditions(self):
+        from atlas_brain.reasoning.archetypes import get_falsification_conditions
+
+        conds = get_falsification_conditions("pricing_shock")
+        assert len(conds) == 3
+        assert any("pricing" in c.lower() or "price" in c.lower() for c in conds)
+
+        assert get_falsification_conditions("nonexistent") == []
+
+    def test_top_matches_limit(self):
+        from atlas_brain.reasoning.archetypes import top_matches
+
+        evidence = {
+            "avg_urgency": 8.0,
+            "top_pain": "support is terrible, pricing too high, missing features, no compliance",
+            "competitor_count": 6,
+            "displacement_edge_count": 5,
+            "high_intent_company_count": 4,
+            "positive_review_pct": 20.0,
+            "recommend_ratio": 0.15,
+            "churn_density": 0.9,
+            "pain_count": 8,
+        }
+        matches = top_matches(evidence, limit=3)
+        assert len(matches) <= 3
+        # Scores should be descending
+        for i in range(len(matches) - 1):
+            assert matches[i].score >= matches[i + 1].score
