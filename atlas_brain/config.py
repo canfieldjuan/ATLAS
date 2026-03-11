@@ -1591,7 +1591,7 @@ class FTLTracingConfig(BaseModel):
     """Fine-Tune Labs tracing configuration."""
 
     enabled: bool = True
-    base_url: str = "http://localhost:3000"
+    base_url: str = "https://finetunelab.ai"
     api_key: str = ""  # wak_... key for FTL API
     user_id: str = ""  # FTL user ID for trace ownership
     capture_business_context: bool = Field(
@@ -2244,6 +2244,9 @@ class B2BChurnConfig(BaseSettings):
     vendor_briefing_sender_name: str = Field(default="Atlas Intelligence", description="Display name for briefing sender")
     vendor_briefing_cooldown_days: int = Field(default=7, description="Min days between briefings to same vendor")
     vendor_briefing_max_per_batch: int = Field(default=20, description="Max briefings per batch send run")
+    vendor_briefing_account_cards_enabled: bool = Field(default=True, description="Generate account cards in briefings")
+    vendor_briefing_account_cards_max: int = Field(default=3, description="Max account cards per briefing")
+    vendor_briefing_account_cards_reasoning_depth: int = Field(default=2, description="Reasoning depth for card enrichment (0=baseline, 2=LLM)")
 
     # Analyst enrichment (OpenRouter)
     openrouter_api_key: str = Field(default="", description="OpenRouter API key for analyst enrichment")
