@@ -311,6 +311,17 @@ async def lifespan(app: FastAPI):
             event_bus = None
             event_consumer = None
 
+    # Initialize stratified reasoning engine (semantic cache + episodic store)
+    if db_settings.enabled:
+        try:
+            from .reasoning import init_stratified_reasoner
+            pool = get_db_pool()
+            if pool.is_initialized:
+                await init_stratified_reasoner(pool)
+                logger.info("Stratified reasoning engine initialized")
+        except Exception as e:
+            logger.warning("Stratified reasoning engine failed to start (non-fatal): %s", e)
+
     # Note: Speaker ID loaded lazily via get_speaker_id_service() when voice
     # pipeline starts. No registry needed - single Resemblyzer implementation.
 
@@ -609,6 +620,13 @@ async def lifespan(app: FastAPI):
             logger.info("Reasoning event bus stopped")
         except Exception as e:
             logger.error("Error stopping reasoning event bus: %s", e)
+
+    # Shutdown stratified reasoning engine
+    try:
+        from .reasoning import close_stratified_reasoner
+        await close_stratified_reasoner()
+    except Exception as e:
+        logger.debug("Stratified reasoner shutdown: %s", e)
 
     # Shutdown autonomous scheduler
     if autonomous_scheduler:

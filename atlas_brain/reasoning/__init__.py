@@ -13,3 +13,48 @@ __all__ = [
     "EventBus",
     "EntityLockManager",
 ]
+
+# ---------------------------------------------------------------------------
+# Stratified reasoning engine (lazy singleton)
+# ---------------------------------------------------------------------------
+
+_stratified_reasoner = None
+
+
+def get_stratified_reasoner():
+    """Return the app-scoped StratifiedReasoner, or None if not initialised."""
+    return _stratified_reasoner
+
+
+async def init_stratified_reasoner(db_pool) -> None:
+    """Initialise the stratified reasoning engine (call from app startup).
+
+    *db_pool*: atlas_brain.storage.database.DatabasePool (must be initialised).
+    """
+    global _stratified_reasoner
+
+    from .semantic_cache import SemanticCache
+    from .episodic_store import EpisodicStore
+    from .stratified_reasoner import StratifiedReasoner
+
+    cache = SemanticCache(db_pool)
+    episodic = EpisodicStore()
+
+    try:
+        await episodic.ensure_indexes()
+    except Exception:
+        import logging
+        logging.getLogger("atlas.reasoning").warning(
+            "Failed to ensure episodic indexes (Neo4j may be unavailable)",
+            exc_info=True,
+        )
+
+    _stratified_reasoner = StratifiedReasoner(cache, episodic)
+
+
+async def close_stratified_reasoner() -> None:
+    """Shutdown the episodic store connection."""
+    global _stratified_reasoner
+    if _stratified_reasoner is not None:
+        await _stratified_reasoner._episodic.close()
+        _stratified_reasoner = None
