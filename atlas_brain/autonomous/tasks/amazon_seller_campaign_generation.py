@@ -364,6 +364,10 @@ async def _generate_content(
         if _usage.get("input_tokens"):
             logger.info("amazon_seller_campaign_generation LLM tokens: in=%d out=%d",
                          _usage["input_tokens"], _usage.get("output_tokens", 0))
+            from ...pipelines.llm import trace_llm_call
+            trace_llm_call("task.amazon_seller_campaign", input_tokens=_usage["input_tokens"],
+                           output_tokens=_usage.get("output_tokens", 0),
+                           model=getattr(llm, "model", ""), provider=getattr(llm, "name", ""))
         text = result.get("response", "").strip()
         if not text:
             return None

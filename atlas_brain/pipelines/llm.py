@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any
 
 logger = logging.getLogger("atlas.pipelines.llm")
@@ -425,6 +426,7 @@ def call_llm_with_skill(
     if guided_json is not None:
         kwargs["guided_json"] = guided_json
 
+    t0 = time.monotonic()
     try:
         result = llm.chat(
             messages=messages,
@@ -433,14 +435,27 @@ def call_llm_with_skill(
             **kwargs,
         )
         text = result.get("response", "").strip()
+        usage = result.get("usage", {})
+        model_name = getattr(llm, "model", getattr(llm, "model_id", ""))
+        provider_name = getattr(llm, "name", "")
 
         # Populate usage_out for callers that want token tracking
         if usage_out is not None:
-            usage = result.get("usage", {})
             usage_out["input_tokens"] = usage.get("input_tokens", 0)
             usage_out["output_tokens"] = usage.get("output_tokens", 0)
-            usage_out["model"] = getattr(llm, "model", getattr(llm, "model_id", ""))
-            usage_out["provider"] = getattr(llm, "name", "")
+            usage_out["model"] = model_name
+            usage_out["provider"] = provider_name
+
+        # Emit FTL trace span
+        trace_llm_call(
+            span_name=f"pipeline.{skill_name}",
+            input_tokens=usage.get("input_tokens", 0),
+            output_tokens=usage.get("output_tokens", 0),
+            model=model_name,
+            provider=provider_name,
+            duration_ms=(time.monotonic() - t0) * 1000,
+            metadata={"skill": skill_name, "workload": workload or "default"},
+        )
 
         if not text:
             logger.warning("LLM returned empty response for skill '%s'", skill_name)
@@ -452,4 +467,52 @@ def call_llm_with_skill(
 
     except Exception:
         logger.exception("LLM call failed for skill '%s'", skill_name)
+        trace_llm_call(
+            span_name=f"pipeline.{skill_name}",
+            model=getattr(llm, "model", ""),
+            provider=getattr(llm, "name", ""),
+            duration_ms=(time.monotonic() - t0) * 1000,
+            status="failed",
+        )
         return None
+
+
+# ------------------------------------------------------------------
+# FTL trace helper for direct llm.chat() callers
+# ------------------------------------------------------------------
+
+
+def trace_llm_call(
+    span_name: str,
+    *,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    model: str = "",
+    provider: str = "",
+    duration_ms: float = 0,
+    status: str = "completed",
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Emit an FTL trace span for an LLM call (fire-and-forget).
+
+    Use this for direct ``llm.chat()`` callers that don't go through
+    ``call_llm_with_skill()``.  Lightweight -- no-ops when FTL is disabled.
+    """
+    from ..services.tracing import tracer
+
+    if not tracer.enabled:
+        return
+
+    span = tracer.start_span(
+        span_name=span_name,
+        operation_type="llm_call",
+        model_name=model,
+        model_provider=provider,
+        metadata=metadata or {},
+    )
+    tracer.end_span(
+        span,
+        status=status,
+        input_tokens=input_tokens if input_tokens else None,
+        output_tokens=output_tokens if output_tokens else None,
+    )

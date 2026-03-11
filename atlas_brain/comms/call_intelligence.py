@@ -378,6 +378,10 @@ async def _extract_call_data(
     if _usage.get("input_tokens"):
         logger.info("call_intelligence LLM tokens: in=%d out=%d",
                      _usage["input_tokens"], _usage.get("output_tokens", 0))
+        from ..pipelines.llm import trace_llm_call
+        trace_llm_call("comms.call_intelligence", input_tokens=_usage["input_tokens"],
+                       output_tokens=_usage.get("output_tokens", 0),
+                       model=getattr(llm, "model", ""), provider=getattr(llm, "name", ""))
     text = result.get("response", "").strip()
     if not text:
         return transcript[:200], {}, []

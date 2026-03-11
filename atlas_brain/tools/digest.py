@@ -141,6 +141,10 @@ class RunDigestTool:
             if _usage.get("input_tokens"):
                 logger.info("digest synthesis LLM tokens: in=%d out=%d",
                              _usage["input_tokens"], _usage.get("output_tokens", 0))
+                from ..pipelines.llm import trace_llm_call
+                trace_llm_call("tool.digest_synthesis", input_tokens=_usage["input_tokens"],
+                               output_tokens=_usage.get("output_tokens", 0),
+                               model=getattr(llm, "model", ""), provider=getattr(llm, "name", ""))
 
             text = result.get("response", "").strip()
             # Strip <think> tags (Qwen3 models)

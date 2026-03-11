@@ -1546,6 +1546,10 @@ def _generate_content(
         if _usage.get("input_tokens"):
             logger.info("blog_post_generation LLM tokens: in=%d out=%d",
                          _usage["input_tokens"], _usage.get("output_tokens", 0))
+            from ...pipelines.llm import trace_llm_call
+            trace_llm_call("task.blog_post_generation", input_tokens=_usage["input_tokens"],
+                           output_tokens=_usage.get("output_tokens", 0),
+                           model=getattr(llm, "model", ""), provider=getattr(llm, "name", ""))
         text = result.get("response", "") if isinstance(result, dict) else str(result)
         text = clean_llm_output(text)
         parsed = parse_json_response(text, recover_truncated=True)

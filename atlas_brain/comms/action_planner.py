@@ -209,6 +209,10 @@ async def generate_action_plan(
     if _usage.get("input_tokens"):
         logger.info("action_planner LLM tokens: in=%d out=%d",
                      _usage["input_tokens"], _usage.get("output_tokens", 0))
+        from ..pipelines.llm import trace_llm_call
+        trace_llm_call("comms.action_planner", input_tokens=_usage["input_tokens"],
+                       output_tokens=_usage.get("output_tokens", 0),
+                       model=getattr(llm, "model", ""), provider=getattr(llm, "name", ""))
     text = result.get("response", "").strip()
     if not text:
         return _fallback_plan(extracted_data)

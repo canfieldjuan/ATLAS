@@ -13,8 +13,10 @@ Data sources (in priority order):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
@@ -31,6 +33,13 @@ from ...templates.email.vendor_briefing import render_vendor_briefing_html
 from .campaign_suppression import is_suppressed
 
 logger = logging.getLogger("atlas.b2b.vendor_briefing")
+
+_ACCOUNT_CARD_SYSTEM_PROMPT = (
+    "You are a B2B sales intelligence analyst. "
+    "Generate concise, data-grounded intelligence cards. "
+    "Every claim must be supported by the provided data. "
+    "Return only valid JSON."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +298,209 @@ async def _enrich_with_analyst_summary(briefing: dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Account cards
+# ---------------------------------------------------------------------------
+
+async def generate_account_cards(
+    briefing_data: dict[str, Any],
+    reasoning_depth: int | None = None,
+) -> list[dict[str, Any]]:
+    """Generate intelligence cards for top named accounts.
+
+    Builds a baseline card from raw data, then optionally enriches via LLM
+    using configurable card_templates from the database.
+
+    Mutates briefing_data["account_cards"] in place. Returns the card list.
+    """
+    cfg = settings.b2b_churn
+    if not cfg.vendor_briefing_account_cards_enabled:
+        briefing_data["account_cards"] = []
+        return []
+
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        briefing_data["account_cards"] = []
+        return []
+
+    max_cards = cfg.vendor_briefing_account_cards_max
+    if reasoning_depth is None:
+        reasoning_depth = cfg.vendor_briefing_account_cards_reasoning_depth
+
+    # Fetch enabled card templates
+    template_rows = await pool.fetch(
+        "SELECT * FROM card_templates WHERE enabled = true ORDER BY name"
+    )
+    if not template_rows:
+        briefing_data["account_cards"] = []
+        return []
+
+    # Select top accounts by urgency
+    named_accounts = briefing_data.get("named_accounts") or []
+    sorted_accounts = sorted(
+        named_accounts,
+        key=lambda a: float(a.get("urgency", 0)) if isinstance(a, dict) else 0,
+        reverse=True,
+    )[:max_cards]
+
+    if not sorted_accounts:
+        briefing_data["account_cards"] = []
+        return []
+
+    vendor_name = briefing_data.get("vendor_name", "Unknown")
+    cards: list[dict[str, Any]] = []
+
+    for account in sorted_accounts:
+        company = account.get("company", "Unknown") if isinstance(account, dict) else str(account)
+        urgency = float(account.get("urgency", 0)) if isinstance(account, dict) else 0
+
+        for tpl in template_rows:
+            # Build baseline card from required + optional fields
+            baseline: dict[str, Any] = {
+                "company": company,
+                "urgency": urgency,
+                "vendor_name": vendor_name,
+            }
+            for field in (tpl["required_fields"] or []):
+                if field not in baseline:
+                    val = account.get(field) if isinstance(account, dict) else None
+                    if val is None:
+                        val = briefing_data.get(field)
+                    if val is not None:
+                        baseline[field] = val
+            for field in (tpl["optional_fields"] or []):
+                if field not in baseline:
+                    val = account.get(field) if isinstance(account, dict) else None
+                    if val is None:
+                        val = briefing_data.get(field)
+                    if val is not None:
+                        baseline[field] = val
+
+            card: dict[str, Any] = {
+                "template_name": tpl["name"],
+                "template_label": tpl["label"],
+                "company": company,
+                "urgency": urgency,
+                "reasoning_depth": 0,
+                "baseline": baseline,
+                "enriched": None,
+                "token_usage": None,
+            }
+
+            # LLM enrichment if depth qualifies
+            if tpl["reasoning_depth"] <= reasoning_depth and reasoning_depth >= 2:
+                enriched = await _enrich_account_card(tpl, baseline)
+                if enriched:
+                    card["enriched"] = enriched.get("data")
+                    card["token_usage"] = enriched.get("token_usage")
+                    card["reasoning_depth"] = reasoning_depth
+                    card["model"] = enriched.get("model")
+
+            cards.append(card)
+
+    briefing_data["account_cards"] = cards
+
+    total_in = sum(c["token_usage"]["input_tokens"] for c in cards if c.get("token_usage"))
+    total_out = sum(c["token_usage"]["output_tokens"] for c in cards if c.get("token_usage"))
+    if total_in:
+        logger.info(
+            "Account cards: %d cards, tokens in=%d out=%d vendor=%s",
+            len(cards), total_in, total_out, vendor_name,
+        )
+        from ...pipelines.llm import trace_llm_call
+        trace_llm_call("task.vendor_briefing.account_cards", input_tokens=total_in,
+                       output_tokens=total_out,
+                       metadata={"vendor": vendor_name, "card_count": len(cards)})
+
+    return cards
+
+
+async def _enrich_account_card(
+    template: dict[str, Any],
+    card_data: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Run LLM enrichment for a single account card. Returns enrichment dict or None."""
+    from ...services.llm_router import get_llm
+    from ...services.protocols import Message
+
+    llm = get_llm("campaign")
+    if llm is None:
+        from ...services import llm_registry
+        llm = llm_registry.get_active()
+    if llm is None:
+        logger.warning("No LLM available for account card enrichment")
+        return None
+
+    # Build prompt from template with placeholder substitution
+    prompt_text = template["prompt_template"] or ""
+    for key, val in card_data.items():
+        placeholder = "{" + key + "}"
+        if placeholder in prompt_text:
+            if isinstance(val, (list, dict)):
+                replacement = json.dumps(val, default=str)
+            elif val is None:
+                replacement = "N/A"
+            else:
+                replacement = str(val)
+            prompt_text = prompt_text.replace(placeholder, replacement)
+
+    # Strip any unreplaced placeholders so the LLM doesn't see raw {field_name}
+    prompt_text = re.sub(r"\{[a-z_]+\}", "N/A", prompt_text)
+
+    system_content = template.get("system_prompt") or _ACCOUNT_CARD_SYSTEM_PROMPT
+    messages = [
+        Message(role="system", content=system_content),
+        Message(role="user", content=prompt_text),
+    ]
+
+    try:
+        if hasattr(llm, "chat_async"):
+            text = (await llm.chat_async(
+                messages=messages,
+                max_tokens=1024,
+                temperature=0.3,
+            )).strip()
+            usage = {}
+            model_name = getattr(llm, "model_name", "unknown")
+        else:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    llm.chat,
+                    messages=messages,
+                    max_tokens=1024,
+                    temperature=0.3,
+                ),
+                timeout=60,
+            )
+            text = result.get("response", "").strip() if isinstance(result, dict) else str(result).strip()
+            usage = result.get("usage", {}) if isinstance(result, dict) else {}
+            model_name = result.get("model", "unknown") if isinstance(result, dict) else "unknown"
+
+        if not text:
+            return None
+
+        # Clean markdown fences (handles ```json, ```JSON, plain ```)
+        text = re.sub(r"^```\w*\n?", "", text)
+        text = re.sub(r"\n?```$", "", text)
+        text = text.strip()
+
+        data = json.loads(text)
+        return {
+            "data": data,
+            "model": model_name,
+            "token_usage": {
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+            },
+        }
+    except json.JSONDecodeError:
+        logger.warning("Account card LLM returned invalid JSON for %s", card_data.get("company"))
+        return None
+    except Exception:
+        logger.exception("Account card enrichment failed for %s", card_data.get("company"))
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Data builder
 # ---------------------------------------------------------------------------
 
@@ -437,6 +649,10 @@ async def build_vendor_briefing(
     # Analyst enrichment (Kimi K2.5) -- adds headline, executive_summary,
     # pain_labels.  Falls back silently if OpenRouter is unavailable.
     await _enrich_with_analyst_summary(briefing)
+
+    # Account cards -- baseline data + optional LLM enrichment
+    await generate_account_cards(briefing)
+
     _finalize_briefing_presentation(briefing)
 
     return briefing
