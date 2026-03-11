@@ -243,8 +243,8 @@ class FalsificationWatcher:
                 SELECT event_type, direction FROM b2b_change_events
                 WHERE vendor_name = $1
                   AND event_type LIKE '%support%'
-                  AND detected_at >= NOW() - INTERVAL '14 days'
-                ORDER BY detected_at DESC LIMIT 5
+                  AND created_at >= NOW() - INTERVAL '14 days'
+                ORDER BY created_at DESC LIMIT 5
                 """,
                 vendor_name,
             )

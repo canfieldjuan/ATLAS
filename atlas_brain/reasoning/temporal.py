@@ -7,7 +7,7 @@ Computes time-series analytics over b2b_vendor_snapshots:
     - Z-score anomaly detection against category baselines
     - Recency-weighted review scoring
 
-All outputs are pure data (no LLM) — they feed into the stratified reasoner
+All outputs are pure data (no LLM) -- they feed into the stratified reasoner
 as evidence for archetype matching and full reasoning.
 """
 

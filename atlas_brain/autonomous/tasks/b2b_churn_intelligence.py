@@ -1665,13 +1665,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 enriched = enrich_evidence_with_archetypes(
                     {"vendor_name": vname, **td}, td,
                 )
+                # Extract per-metric velocities and accelerations
+                velocities = {k: v for k, v in td.items() if k.startswith("velocity_")}
+                accelerations = {k: v for k, v in td.items() if k.startswith("accel_")}
                 temporal_summaries.append({
                     "vendor": vname,
-                    "velocity": td.get("velocity"),
-                    "acceleration": td.get("acceleration"),
+                    "velocities": velocities,
+                    "accelerations": accelerations,
                     "anomalies": td.get("anomalies", []),
                     "archetype_scores": enriched.get("archetype_scores", []),
-                    "insufficient_data": td.get("insufficient_data", True),
+                    "insufficient_data": td.get("temporal_status") == "insufficient_data",
                 })
             except Exception:
                 logger.debug("Temporal enrichment skipped for %s", vname)
