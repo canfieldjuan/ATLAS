@@ -50,6 +50,7 @@ _BUILTIN_TASKS = [
     ("b2b_score_calibration", "run", "b2b_score_calibration"),
     ("challenger_target_discovery", "run", "challenger_target_discovery"),
     ("crm_event_processing", "run", "crm_event_processing"),
+    ("falsification_check", "run", "falsification_check"),
 ]
 
 

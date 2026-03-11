@@ -35,10 +35,12 @@ async def init_stratified_reasoner(db_pool) -> None:
 
     from .semantic_cache import SemanticCache
     from .episodic_store import EpisodicStore
+    from .metacognition import MetacognitiveMonitor
     from .stratified_reasoner import StratifiedReasoner
 
     cache = SemanticCache(db_pool)
     episodic = EpisodicStore()
+    meta = MetacognitiveMonitor(db_pool)
 
     try:
         await episodic.ensure_indexes()
@@ -49,12 +51,17 @@ async def init_stratified_reasoner(db_pool) -> None:
             exc_info=True,
         )
 
-    _stratified_reasoner = StratifiedReasoner(cache, episodic)
+    _stratified_reasoner = StratifiedReasoner(cache, episodic, metacognition=meta)
 
 
 async def close_stratified_reasoner() -> None:
-    """Shutdown the episodic store connection."""
+    """Flush metacognition and shutdown the episodic store connection."""
     global _stratified_reasoner
     if _stratified_reasoner is not None:
+        if _stratified_reasoner._meta:
+            try:
+                await _stratified_reasoner._meta.flush()
+            except Exception:
+                pass
         await _stratified_reasoner._episodic.close()
         _stratified_reasoner = None

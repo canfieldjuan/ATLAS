@@ -2274,6 +2274,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             ),
         },
     )
+
+    # Flush metacognition counters to DB after each intelligence run
+    try:
+        from atlas_brain.reasoning import get_stratified_reasoner
+        reasoner = get_stratified_reasoner()
+        if reasoner and reasoner._meta:
+            await reasoner._meta.flush()
+    except Exception:
+        logger.debug("Metacognition flush skipped", exc_info=True)
+
     return response
 
 

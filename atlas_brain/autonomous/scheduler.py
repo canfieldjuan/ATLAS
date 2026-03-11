@@ -654,6 +654,15 @@ class TaskScheduler:
             "timeout_seconds": 120,
             "metadata": {"builtin_handler": "crm_event_processing"},
         },
+        {
+            "name": "falsification_check",
+            "description": "Nightly check of cached reasoning conclusions against fresh vendor signals",
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": "0 4 * * *",
+            "timeout_seconds": 300,
+            "metadata": {"builtin_handler": "falsification_check"},
+        },
     ]
 
     async def _ensure_default_tasks(self) -> None:
