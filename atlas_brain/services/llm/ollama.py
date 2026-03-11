@@ -183,6 +183,10 @@ class OllamaLLM(BaseModelService):
                     "message": {"role": "assistant", "content": response_text},
                     "prompt_eval_count": prompt_eval_count,
                     "eval_count": eval_count,
+                    "usage": {
+                        "input_tokens": prompt_eval_count,
+                        "output_tokens": eval_count,
+                    },
                     "done_reason": done_reason,
                     "prompt_eval_duration_ms": prompt_eval_duration,
                     "eval_duration_ms": eval_duration,
@@ -197,7 +201,8 @@ class OllamaLLM(BaseModelService):
                 raise
 
         return {"response": "", "message": {"role": "assistant", "content": ""},
-                "prompt_eval_count": 0, "eval_count": 0}
+                "prompt_eval_count": 0, "eval_count": 0,
+                "usage": {"input_tokens": 0, "output_tokens": 0}}
 
     def chat_with_tools(
         self,
@@ -300,6 +305,10 @@ class OllamaLLM(BaseModelService):
                 "message": msg,
                 "prompt_eval_count": prompt_eval_count,
                 "eval_count": eval_count,
+                "usage": {
+                    "input_tokens": prompt_eval_count,
+                    "output_tokens": eval_count,
+                },
                 "done_reason": done_reason,
                 "prompt_eval_duration_ms": prompt_eval_duration,
                 "eval_duration_ms": eval_duration,

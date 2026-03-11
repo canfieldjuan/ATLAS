@@ -159,11 +159,18 @@ class VLLMLLM(BaseModelService):
                 choice.get("finish_reason"),
             )
 
+            # Normalize OpenAI-format usage keys to Anthropic-format
+            raw_usage = data.get("usage", {})
+            usage = {
+                "input_tokens": raw_usage.get("prompt_tokens", 0),
+                "output_tokens": raw_usage.get("completion_tokens", 0),
+            }
+
             return {
                 "response": content,
                 "message": {"role": "assistant", "content": content},
                 "finish_reason": choice.get("finish_reason"),
-                "usage": data.get("usage", {}),
+                "usage": usage,
             }
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500] if hasattr(e, 'response') else ""
