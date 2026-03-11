@@ -1654,7 +1654,8 @@ async def _fetch_opportunities(
                r.enrichment->'use_case'->>'primary_workflow' AS primary_workflow,
                r.enrichment->'use_case'->'integration_stack' AS integration_stack,
                r.enrichment->'sentiment_trajectory'->>'direction' AS sentiment_direction,
-               COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry
+               COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry,
+               r.reviewer_title, r.company_size_raw
         FROM b2b_reviews r
         WHERE r.enrichment_status = 'enriched'
           AND r.enriched_at > NOW() - make_interval(days => $1)
@@ -1773,6 +1774,8 @@ def _build_company_context(best: dict, all_opps: list[dict]) -> dict[str, Any]:
         "decision_timeline": best.get("decision_timeline"),
         "role_type": best.get("role_type"),
         "industry": best.get("industry"),
+        "reviewer_title": best.get("reviewer_title"),
+        "company_size": best.get("company_size_raw"),
         "key_quotes": key_quotes[:5],
         "feature_gaps": all_feature_gaps[:5],
         "primary_workflow": best.get("primary_workflow"),

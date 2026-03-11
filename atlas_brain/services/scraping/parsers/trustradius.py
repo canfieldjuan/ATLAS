@@ -142,10 +142,19 @@ class TrustRadiusParser:
 
                 html = resp.text
 
-                # Strategy 1: JSON-LD extraction (structured data)
+                # Strategy 1: JSON-LD for review text + __NEXT_DATA__ for reviewer metadata
                 page_reviews = _parse_jsonld_reviews(html, target, seen_ids)
+                if page_reviews:
+                    # __NEXT_DATA__ has companyName/title/industry that JSON-LD lacks
+                    _supplement_from_next_data(html, page_reviews)
+                    # HTML author blocks as further fallback
+                    _supplement_author_info(html, page_reviews)
 
-                # Strategy 2: HTML review card extraction
+                # Strategy 2: __NEXT_DATA__ only (when JSON-LD absent)
+                if not page_reviews:
+                    page_reviews = _parse_next_data_reviews(html, target, seen_ids)
+
+                # Strategy 3: HTML review card extraction
                 if not page_reviews:
                     page_reviews = _parse_html_reviews(html, target, seen_ids)
 
@@ -279,6 +288,111 @@ class TrustRadiusParser:
 # ------------------------------------------------------------------
 
 
+def _parse_next_data_reviews(
+    html: str, target: ScrapeTarget, seen_ids: set[str]
+) -> list[dict]:
+    """Extract reviews from TrustRadius __NEXT_DATA__ payload.
+
+    This is the richest data source -- includes reviewer company name,
+    job title, industry, and company size that JSON-LD omits.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    script = soup.find("script", id="__NEXT_DATA__")
+    if not script or not script.string:
+        return []
+
+    try:
+        payload = json.loads(script.string)
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+    props = payload.get("props", {}).get("pageProps", {})
+    reviews: list[dict] = []
+
+    # Reviews live in truncatedReviews.hits and/or searchData.hits
+    for container_key in ("truncatedReviews", "productPageFilteredReviews"):
+        container = props.get(container_key, {})
+        if not isinstance(container, dict):
+            continue
+        # productPageFilteredReviews nests under searchData
+        if container_key == "productPageFilteredReviews":
+            container = container.get("searchData", {})
+        hits = container.get("hits", [])
+        if not isinstance(hits, list):
+            continue
+
+        for entry in hits:
+            if not isinstance(entry, dict):
+                continue
+            review_id = entry.get("_id") or entry.get("slug", "")
+            if not review_id or review_id in seen_ids:
+                continue
+
+            # Build review text from questions or heading
+            heading = entry.get("heading") or ""
+            questions = entry.get("questions")
+            text_parts = []
+            if isinstance(questions, list):
+                for q in questions:
+                    if isinstance(q, dict):
+                        answer = q.get("responseText") or q.get("text") or ""
+                        if answer:
+                            text_parts.append(answer)
+            elif isinstance(questions, dict):
+                for answer in questions.values():
+                    if isinstance(answer, str) and answer:
+                        text_parts.append(answer)
+            review_text = "\n\n".join(text_parts).strip()
+            if len(review_text) < 20:
+                review_text = heading
+            if len(review_text) < 20:
+                continue
+
+            seen_ids.add(review_id)
+
+            # Rating
+            rating = entry.get("rating")
+            try:
+                rating = float(rating) if rating is not None else None
+            except (TypeError, ValueError):
+                rating = None
+
+            # Reviewer info
+            reviewer = entry.get("reviewer", {})
+            if not isinstance(reviewer, dict):
+                reviewer = {}
+
+            reviews.append({
+                "source": "trustradius",
+                "source_url": f"{_PRODUCT_BASE}/{target.product_slug}/reviews",
+                "source_review_id": str(review_id),
+                "vendor_name": target.vendor_name,
+                "product_name": target.product_name,
+                "product_category": target.product_category,
+                "rating": rating,
+                "rating_max": 10,
+                "summary": heading[:500] if heading else None,
+                "review_text": review_text[:10000],
+                "pros": None,
+                "cons": None,
+                "reviewer_name": reviewer.get("fullName") or None,
+                "reviewer_title": reviewer.get("title") or None,
+                "reviewer_company": reviewer.get("companyName") or None,
+                "company_size_raw": reviewer.get("companySize") or None,
+                "reviewer_industry": reviewer.get("industryType") or None,
+                "reviewed_at": entry.get("publishedDate") or entry.get("editedDate"),
+                "raw_metadata": {
+                    "extraction_method": "next_data",
+                    "source_weight": 0.8,
+                    "source_type": "verified_review_platform",
+                    "department": reviewer.get("department"),
+                    "job_type": reviewer.get("jobType"),
+                },
+            })
+
+    return reviews
+
+
 def _parse_jsonld_reviews(
     html: str, target: ScrapeTarget, seen_ids: set[str]
 ) -> list[dict]:
@@ -383,6 +497,111 @@ def _parse_jsonld_reviews(
     return reviews
 
 
+def _supplement_from_next_data(html: str, reviews: list[dict]) -> None:
+    """Fill reviewer metadata from __NEXT_DATA__ into JSON-LD reviews.
+
+    __NEXT_DATA__ has companyName, title, industryType, companySize
+    that JSON-LD omits. Match by reviewer name.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    script = soup.find("script", id="__NEXT_DATA__")
+    if not script or not script.string:
+        return
+
+    try:
+        payload = json.loads(script.string)
+    except (json.JSONDecodeError, TypeError):
+        return
+
+    props = payload.get("props", {}).get("pageProps", {})
+    # Build name -> reviewer map from all hit sources
+    reviewer_map: dict[str, dict] = {}
+    for container_key in ("truncatedReviews", "productPageFilteredReviews"):
+        container = props.get(container_key, {})
+        if not isinstance(container, dict):
+            continue
+        if container_key == "productPageFilteredReviews":
+            container = container.get("searchData", {})
+        for hit in (container.get("hits") or []):
+            if not isinstance(hit, dict):
+                continue
+            reviewer = hit.get("reviewer", {})
+            if isinstance(reviewer, dict) and reviewer.get("fullName"):
+                reviewer_map[reviewer["fullName"].lower()] = reviewer
+
+    if not reviewer_map:
+        return
+
+    for review in reviews:
+        rname = (review.get("reviewer_name") or "").lower()
+        if not rname:
+            continue
+        info = reviewer_map.get(rname)
+        if not info:
+            continue
+        if not review.get("reviewer_title") and info.get("title"):
+            review["reviewer_title"] = info["title"]
+        if not review.get("reviewer_company") and info.get("companyName"):
+            review["reviewer_company"] = info["companyName"]
+        if not review.get("company_size_raw") and info.get("companySize"):
+            review["company_size_raw"] = info["companySize"]
+        if not review.get("reviewer_industry") and info.get("industryType"):
+            review["reviewer_industry"] = info["industryType"]
+
+
+def _supplement_author_info(html: str, reviews: list[dict]) -> None:
+    """Fill reviewer_title and reviewer_company from HTML author blocks.
+
+    TrustRadius 2025+ embeds author info in:
+      <a class="_authorLink_..."> Name </a>
+      <div>  (meta container)
+        <div>Department - Role</div>
+        <div>Job Title</div>
+        <div>Company Name</div>
+      </div>
+
+    Match authors to JSON-LD reviews by reviewer_name.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    author_map: dict[str, dict[str, str]] = {}
+
+    for link in soup.select('a[class*="authorLink"]'):
+        name = link.get_text(strip=True)
+        if not name:
+            continue
+        meta_div = link.find_next_sibling("div")
+        if not meta_div:
+            continue
+        children = [c for c in meta_div.children if hasattr(c, "get_text")]
+        info: dict[str, str] = {}
+        if len(children) >= 2:
+            info["title"] = children[1].get_text(strip=True)
+        if len(children) >= 3:
+            info["company"] = children[2].get_text(strip=True)
+        if info:
+            author_map[name.lower()] = info
+
+    if not author_map:
+        return
+
+    for review in reviews:
+        rname = (review.get("reviewer_name") or "").lower()
+        if not rname:
+            continue
+        info = author_map.get(rname)
+        if not info:
+            # Fuzzy: try matching first name + last initial (e.g. "Willem W.")
+            for aname, ainfo in author_map.items():
+                if rname.split()[0] == aname.split()[0] if aname else False:
+                    info = ainfo
+                    break
+        if info:
+            if not review.get("reviewer_title") and info.get("title"):
+                review["reviewer_title"] = info["title"]
+            if not review.get("reviewer_company") and info.get("company"):
+                review["reviewer_company"] = info["company"]
+
+
 def _parse_html_reviews(
     html: str, target: ScrapeTarget, seen_ids: set[str]
 ) -> list[dict]:
@@ -409,6 +628,21 @@ def _parse_html_reviews(
             'div[class*="reviewContent"], '
             'article[class*="review"]'
         )
+
+    # TrustRadius 2025+ uses CSS-module hashed classes like _card_xdvxd_96.
+    # If no cards found, look for containers that have an authorLink child.
+    if not review_cards:
+        for author_link in soup.select('a[class*="authorLink"]'):
+            card = author_link.parent
+            # Walk up to find the card container (class starts with _card_)
+            for _ in range(5):
+                if card and card.parent:
+                    card = card.parent
+                    cls = " ".join(card.get("class", []))
+                    if "_card_" in cls or "card" in cls.lower():
+                        break
+            if card and card not in review_cards:
+                review_cards.append(card)
 
     for card in review_cards:
         try:
@@ -477,7 +711,7 @@ def _parse_trustradius_card(card, target: ScrapeTarget) -> dict | None:
     pros = _extract_html_section(card, ["pros", "like", "positive", "strength", "best"])
     cons = _extract_html_section(card, ["cons", "dislike", "negative", "weakness", "worst"])
 
-    # Reviewer info
+    # Reviewer info -- try semantic selectors first (legacy markup)
     reviewer_name = _get_card_text(
         card,
         '[itemprop="author"], [class*="author"], [class*="reviewer"]'
@@ -498,6 +732,30 @@ def _parse_trustradius_card(card, target: ScrapeTarget) -> dict | None:
         card,
         '[class*="industry"], [class*="sector"]'
     )
+
+    # TrustRadius 2025+ uses CSS-module hashed classes. Author info lives in:
+    #   <a class="_authorLink_..."> Name </a>
+    #   <div class="_text_...">            (meta container)
+    #     <div>Department - Role</div>     (child 0)
+    #     <div>Job Title</div>             (child 1)
+    #     <div>Company Name</div>          (child 2)
+    #   </div>
+    #   <div class="_expertise_..."> N years of experience </div>
+    if not reviewer_title and not reviewer_company:
+        author_link = card.select_one('a[class*="authorLink"]')
+        if author_link:
+            if not reviewer_name:
+                reviewer_name = author_link.get_text(strip=True) or None
+            meta_div = author_link.find_next_sibling("div")
+            if meta_div:
+                children = [
+                    c for c in meta_div.children
+                    if hasattr(c, "get_text")
+                ]
+                if len(children) >= 2:
+                    reviewer_title = children[1].get_text(strip=True) or None
+                if len(children) >= 3:
+                    reviewer_company = children[2].get_text(strip=True) or None
 
     # Date
     reviewed_at = None

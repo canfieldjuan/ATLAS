@@ -365,9 +365,24 @@ async def _generate_content(
             logger.info("amazon_seller_campaign_generation LLM tokens: in=%d out=%d",
                          _usage["input_tokens"], _usage.get("output_tokens", 0))
             from ...pipelines.llm import trace_llm_call
+            _trace_meta = result.get("_trace_meta", {})
             trace_llm_call("task.amazon_seller_campaign", input_tokens=_usage["input_tokens"],
                            output_tokens=_usage.get("output_tokens", 0),
-                           model=getattr(llm, "model", ""), provider=getattr(llm, "name", ""))
+                           model=getattr(llm, "model", ""), provider=getattr(llm, "name", ""),
+                           input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in messages]},
+                           output_data={"response": result.get("response", "")[:2000]},
+                           api_endpoint=_trace_meta.get("api_endpoint"),
+                           provider_request_id=_trace_meta.get("provider_request_id"),
+                           ttft_ms=_trace_meta.get("ttft_ms"),
+                           inference_time_ms=_trace_meta.get("inference_time_ms"),
+                           queue_time_ms=_trace_meta.get("queue_time_ms"),
+                           metadata={
+                               "seller_name": payload.get("recipient_name", ""),
+                               "seller_company": payload.get("recipient_company", ""),
+                               "category": payload.get("category", ""),
+                               "channel": payload.get("channel", ""),
+                               "recipient_type": payload.get("recipient_type", ""),
+                           })
         text = result.get("response", "").strip()
         if not text:
             return None

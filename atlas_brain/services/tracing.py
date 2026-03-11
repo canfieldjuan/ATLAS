@@ -154,13 +154,19 @@ class FTLTracingClient:
         request_headers_sanitized: Optional[dict[str, Any]] = None,
         provider_request_id: Optional[str] = None,
         reasoning: Optional[str] = None,
+        duration_ms_override: Optional[float] = None,
     ) -> None:
-        """End a span and fire-and-forget the trace payload."""
-        if not self._enabled:
-            return
+        """End a span and fire-and-forget the trace payload.
 
-        duration_ns = time.monotonic_ns() - ctx.start_time
-        duration_ms = duration_ns / 1_000_000
+        If *duration_ms_override* is set, it replaces the monotonic-clock
+        duration.  Useful for ``trace_llm_call()`` where the LLM call
+        happened before the span was created.
+        """
+        if duration_ms_override is not None and duration_ms_override > 0:
+            duration_ms = duration_ms_override
+        else:
+            duration_ns = time.monotonic_ns() - ctx.start_time
+            duration_ms = duration_ns / 1_000_000
         end_iso = datetime.now(timezone.utc).isoformat()
 
         payload: dict[str, Any] = {
@@ -199,6 +205,17 @@ class FTLTracingClient:
         if input_tokens is not None or output_tokens is not None:
             payload["total_tokens"] = int(input_tokens or 0) + int(output_tokens or 0)
 
+        # Calculate cost from model pricing
+        if (input_tokens or output_tokens) and ctx.model_provider:
+            cost = settings.ftl_tracing.pricing.cost_usd(
+                ctx.model_provider or "",
+                ctx.model_name or "",
+                int(input_tokens or 0),
+                int(output_tokens or 0),
+            )
+            if cost > 0:
+                payload["cost_usd"] = round(cost, 6)
+
         if ttft_ms is not None:
             payload["ttft_ms"] = int(round(ttft_ms))
         if inference_time_ms is not None:
@@ -226,8 +243,12 @@ class FTLTracingClient:
             payload["error_message"] = error_message
             payload["error_type"] = error_type or "unknown"
 
-        if output_tokens is not None and output_tokens > 0 and duration_ms > 0:
-            payload["tokens_per_second"] = int(round(output_tokens / (duration_ms / 1000)))
+        if output_tokens is not None and output_tokens > 0:
+            # Prefer inference_time_ms (actual generation time) over total
+            # wall-clock duration, which includes network RTT and queue wait.
+            gen_ms = inference_time_ms or duration_ms
+            if gen_ms and gen_ms > 0:
+                payload["tokens_per_second"] = round(output_tokens / (gen_ms / 1000), 1)
 
         self._dispatch(payload)
 
@@ -253,8 +274,6 @@ class FTLTracingClient:
 
         Useful when sub-step timings are known after the parent completes.
         """
-        if not self._enabled:
-            return
 
         duration_val = max(0, int(round(duration_ms)))
         payload: dict[str, Any] = {
@@ -289,12 +308,24 @@ class FTLTracingClient:
             payload["output_tokens"] = int(output_tokens)
         if input_tokens is not None or output_tokens is not None:
             payload["total_tokens"] = int(input_tokens or 0) + int(output_tokens or 0)
+
+        # Calculate cost from parent span's model info
+        if (input_tokens or output_tokens) and parent.model_provider:
+            cost = settings.ftl_tracing.pricing.cost_usd(
+                parent.model_provider or "",
+                parent.model_name or "",
+                int(input_tokens or 0),
+                int(output_tokens or 0),
+            )
+            if cost > 0:
+                payload["cost_usd"] = round(cost, 6)
+
         if error_message:
             payload["error_message"] = error_message
             payload["error_type"] = error_type or "unknown"
 
         if output_tokens is not None and output_tokens > 0 and duration_val > 0:
-            payload["tokens_per_second"] = int(round(output_tokens / (duration_val / 1000)))
+            payload["tokens_per_second"] = round(output_tokens / (duration_val / 1000), 1)
 
         self._dispatch(payload)
 
@@ -304,12 +335,28 @@ class FTLTracingClient:
             loop = asyncio.get_running_loop()
             loop.create_task(self._send(payload))
         except RuntimeError:
-            # No event loop -- skip silently
-            pass
+            # No running event loop (sync context) -- send in a thread
+            import threading
+
+            def _bg_send() -> None:
+                try:
+                    asyncio.run(self._send(payload))
+                except Exception:
+                    pass
+
+            threading.Thread(target=_bg_send, daemon=True).start()
 
     async def _send(self, payload: dict[str, Any]) -> None:
-        """POST trace to FTL API. Errors are logged, never raised."""
+        """POST trace to FTL API + store locally. Errors are logged, never raised."""
         span_id = payload.get("span_id", "?")
+
+        # Store locally for cost dashboard queries (always, even without FTL)
+        await self._store_local(payload)
+
+        # Send to FTL remote API only when enabled
+        if not self._enabled:
+            return
+
         try:
             client = await self._ensure_client()
             resp = await client.post(
@@ -328,15 +375,51 @@ class FTLTracingClient:
                 )
             else:
                 logger.info(
-                    "FTL trace sent span=%s status=%s tokens=%d+%d model=%s",
+                    "FTL trace sent span=%s status=%s tokens=%d+%d cost=$%.4f model=%s",
                     span_id,
                     payload.get("status"),
                     payload.get("input_tokens", 0),
                     payload.get("output_tokens", 0),
+                    payload.get("cost_usd", 0),
                     payload.get("model_name"),
                 )
         except Exception as e:
             logger.warning("FTL trace send failed span=%s: %s", span_id, type(e).__name__)
+
+    async def _store_local(self, payload: dict[str, Any]) -> None:
+        """Insert usage row into local llm_usage table (best-effort)."""
+        if not payload.get("input_tokens") and not payload.get("output_tokens"):
+            return
+        try:
+            from ..storage.database import get_db_pool
+
+            pool = get_db_pool()
+            if not pool.is_initialized:
+                return
+            await pool.execute(
+                """INSERT INTO llm_usage
+                   (span_name, operation_type, model_name, model_provider,
+                    input_tokens, output_tokens, total_tokens, cost_usd,
+                    duration_ms, ttft_ms, inference_time_ms, tokens_per_second,
+                    status, metadata)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)""",
+                payload.get("span_name", ""),
+                payload.get("operation_type", "llm_call"),
+                payload.get("model_name"),
+                payload.get("model_provider"),
+                payload.get("input_tokens", 0),
+                payload.get("output_tokens", 0),
+                payload.get("total_tokens", 0),
+                payload.get("cost_usd", 0),
+                payload.get("duration_ms", 0),
+                payload.get("ttft_ms"),
+                payload.get("inference_time_ms"),
+                payload.get("tokens_per_second"),
+                payload.get("status", "completed"),
+                json.dumps(payload.get("metadata", {})),
+            )
+        except Exception as exc:
+            logger.warning("_store_local failed for span=%s: %s", payload.get("span_name"), exc)
 
 
 def _truncate(data: Any, max_chars: int) -> Any:

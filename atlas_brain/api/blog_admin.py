@@ -229,7 +229,8 @@ async def get_draft_evidence(
             SELECT id, vendor_name, reviewer_company, summary, review_text,
                    enrichment->>'pain_category' AS pain_category,
                    (enrichment->>'urgency_score')::numeric AS urgency_score,
-                   source, reviewed_at
+                   source, reviewed_at, reviewer_title, company_size_raw,
+                   COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry
             FROM b2b_reviews
             WHERE LOWER(vendor_name) = LOWER($1)
               AND enrichment_status = 'enriched'
@@ -245,7 +246,8 @@ async def get_draft_evidence(
             SELECT id, vendor_name, reviewer_company, summary, review_text,
                    enrichment->>'pain_category' AS pain_category,
                    (enrichment->>'urgency_score')::numeric AS urgency_score,
-                   source, reviewed_at
+                   source, reviewed_at, reviewer_title, company_size_raw,
+                   COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry
             FROM b2b_reviews
             WHERE LOWER(vendor_name) = LOWER($1)
               AND enrichment_status = 'enriched'
@@ -262,6 +264,9 @@ async def get_draft_evidence(
             "id": str(r["id"]),
             "vendor_name": r["vendor_name"],
             "reviewer_company": r.get("reviewer_company"),
+            "reviewer_title": r.get("reviewer_title"),
+            "company_size": r.get("company_size_raw"),
+            "industry": r.get("industry"),
             "headline": r.get("summary"),
             "full_text": r.get("review_text"),
             "pain_categories": [pain] if pain else [],

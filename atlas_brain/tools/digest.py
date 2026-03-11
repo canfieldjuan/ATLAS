@@ -142,9 +142,24 @@ class RunDigestTool:
                 logger.info("digest synthesis LLM tokens: in=%d out=%d",
                              _usage["input_tokens"], _usage.get("output_tokens", 0))
                 from ..pipelines.llm import trace_llm_call
-                trace_llm_call("tool.digest_synthesis", input_tokens=_usage["input_tokens"],
-                               output_tokens=_usage.get("output_tokens", 0),
-                               model=getattr(llm, "model", ""), provider=getattr(llm, "name", ""))
+                _model_name = getattr(llm, "model", getattr(llm, "model_id", ""))
+                _provider_name = getattr(llm, "name", "")
+                _trace_meta = result.get("_trace_meta", {})
+                trace_llm_call(
+                    "tool.digest_synthesis",
+                    input_tokens=_usage["input_tokens"],
+                    output_tokens=_usage.get("output_tokens", 0),
+                    model=_model_name,
+                    provider=_provider_name,
+                    input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in messages]},
+                    output_data={"response": result.get("response", "")[:2000]},
+                    metadata={"digest_type": digest_type, "workflow": "digest_synthesis", "skill": skill_name},
+                    api_endpoint=_trace_meta.get("api_endpoint"),
+                    provider_request_id=_trace_meta.get("provider_request_id"),
+                    ttft_ms=_trace_meta.get("ttft_ms"),
+                    inference_time_ms=_trace_meta.get("inference_time_ms"),
+                    queue_time_ms=_trace_meta.get("queue_time_ms"),
+                )
 
             text = result.get("response", "").strip()
             # Strip <think> tags (Qwen3 models)

@@ -1547,9 +1547,32 @@ def _generate_content(
             logger.info("blog_post_generation LLM tokens: in=%d out=%d",
                          _usage["input_tokens"], _usage.get("output_tokens", 0))
             from ...pipelines.llm import trace_llm_call
+            _trace_meta = result.get("_trace_meta", {}) if isinstance(result, dict) else {}
+            _resp_text = (result.get("response", "") if isinstance(result, dict) else str(result)) or ""
+            _biz_ctx = {
+                "topic_type": blueprint.topic_type,
+                "slug": blueprint.slug,
+                "suggested_title": blueprint.suggested_title[:200],
+                "tags": blueprint.tags[:10],
+            }
+            _dc = blueprint.data_context or {}
+            if _dc.get("brand_a"):
+                _biz_ctx["brand_a"] = str(_dc["brand_a"])[:200]
+            if _dc.get("brand_b"):
+                _biz_ctx["brand_b"] = str(_dc["brand_b"])[:200]
+            if _dc.get("category"):
+                _biz_ctx["category"] = str(_dc["category"])[:200]
             trace_llm_call("task.blog_post_generation", input_tokens=_usage["input_tokens"],
                            output_tokens=_usage.get("output_tokens", 0),
-                           model=getattr(llm, "model", ""), provider=getattr(llm, "name", ""))
+                           model=getattr(llm, "model", ""), provider=getattr(llm, "name", ""),
+                           input_data={"messages": [{"role": m.role, "content": (m.content or "")[:500]} for m in messages]},
+                           output_data={"response": _resp_text[:2000]},
+                           api_endpoint=_trace_meta.get("api_endpoint"),
+                           provider_request_id=_trace_meta.get("provider_request_id"),
+                           ttft_ms=_trace_meta.get("ttft_ms"),
+                           inference_time_ms=_trace_meta.get("inference_time_ms"),
+                           queue_time_ms=_trace_meta.get("queue_time_ms"),
+                           metadata=_biz_ctx)
         text = result.get("response", "") if isinstance(result, dict) else str(result)
         text = clean_llm_output(text)
         parsed = parse_json_response(text, recover_truncated=True)

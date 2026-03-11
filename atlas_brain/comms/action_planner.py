@@ -210,9 +210,37 @@ async def generate_action_plan(
         logger.info("action_planner LLM tokens: in=%d out=%d",
                      _usage["input_tokens"], _usage.get("output_tokens", 0))
         from ..pipelines.llm import trace_llm_call
-        trace_llm_call("comms.action_planner", input_tokens=_usage["input_tokens"],
-                       output_tokens=_usage.get("output_tokens", 0),
-                       model=getattr(llm, "model", ""), provider=getattr(llm, "name", ""))
+        _trace = result.get("_trace_meta", {})
+        _customer_name = extracted_data.get("customer_name") or (
+            customer_context.contact.get("full_name") if not customer_context.is_empty else None
+        )
+        trace_llm_call(
+            "comms.action_planner",
+            input_tokens=_usage["input_tokens"],
+            output_tokens=_usage.get("output_tokens", 0),
+            model=getattr(llm, "model", ""),
+            provider=getattr(llm, "name", ""),
+            input_data={
+                "messages": [
+                    {"role": m.role, "content": m.content[:500]} for m in messages
+                ],
+            },
+            output_data={
+                "response": result.get("response", "")[:2000],
+            },
+            api_endpoint=_trace.get("api_endpoint"),
+            provider_request_id=_trace.get("provider_request_id"),
+            ttft_ms=_trace.get("ttft_ms"),
+            inference_time_ms=_trace.get("inference_time_ms"),
+            queue_time_ms=_trace.get("queue_time_ms"),
+            metadata={
+                "transcript_id": str(transcript_id),
+                "customer_name": _customer_name,
+                "intent": extracted_data.get("intent"),
+                "business_name": getattr(business_context, "name", None) if business_context else None,
+                "pipeline": "action_planner",
+            },
+        )
     text = result.get("response", "").strip()
     if not text:
         return _fallback_plan(extracted_data)

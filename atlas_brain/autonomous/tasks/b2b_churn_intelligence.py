@@ -573,7 +573,10 @@ def _build_deterministic_vendor_feed(
         companies = company_lookup.get(vendor, [])
         named_accounts = [
             {"company": c.get("company", c) if isinstance(c, dict) else str(c),
-             "urgency": c.get("urgency", 0) if isinstance(c, dict) else 0}
+             "urgency": c.get("urgency", 0) if isinstance(c, dict) else 0,
+             "title": c.get("title") if isinstance(c, dict) else None,
+             "company_size": c.get("company_size") if isinstance(c, dict) else None,
+             "industry": c.get("industry") if isinstance(c, dict) else None}
             for c in companies[:5]
         ]
 
@@ -730,6 +733,8 @@ def _build_deterministic_displacement_map(
                 reasons=reasons,
                 quote_lookup=quote_lookup,
             ),
+            "industries": row.get("industries", []),
+            "company_sizes": row.get("company_sizes", []),
         })
     results.sort(key=lambda x: x["mention_count"], reverse=True)
     return results[:limit]
@@ -742,6 +747,7 @@ def _build_deterministic_vendor_scorecards(
     competitor_lookup: dict[str, list[dict]],
     budget_lookup: dict[str, dict],
     sentiment_lookup: dict[str, dict[str, int]],
+    company_lookup: dict[str, list[dict]],
     prior_reports: list[dict[str, Any]],
     limit: int = 15,
 ) -> list[dict[str, Any]]:
@@ -806,6 +812,27 @@ def _build_deterministic_vendor_scorecards(
             top_competitor_text = "Insufficient displacement data"
 
         top_pain = (pain_lookup.get(vendor, [{}])[0] or {}).get("category", "unknown")
+
+        # Industry and company size distributions from churning companies
+        companies = company_lookup.get(vendor, [])
+        industry_counts: dict[str, int] = {}
+        size_counts: dict[str, int] = {}
+        for c in companies:
+            ind = c.get("industry") if isinstance(c, dict) else None
+            if ind and ind != "unknown":
+                industry_counts[ind] = industry_counts.get(ind, 0) + 1
+            sz = c.get("company_size") if isinstance(c, dict) else None
+            if sz:
+                size_counts[sz] = size_counts.get(sz, 0) + 1
+        industry_dist = sorted(
+            [{"industry": k, "count": v} for k, v in industry_counts.items()],
+            key=lambda x: -x["count"],
+        )[:5]
+        size_dist = sorted(
+            [{"size": k, "count": v} for k, v in size_counts.items()],
+            key=lambda x: -x["count"],
+        )[:5]
+
         results.append({
             "vendor": vendor,
             "total_reviews": total_reviews,
@@ -819,6 +846,8 @@ def _build_deterministic_vendor_scorecards(
             "trend": trend,
             "budget_context": budget_lookup.get(vendor, {}),
             "sentiment_direction": sentiment_direction,
+            "industry_distribution": industry_dist,
+            "company_size_distribution": size_dist,
         })
     results.sort(key=lambda x: (-(x["avg_urgency"]), -(x["churn_signal_density"]), x["vendor"]))
     return results[:limit]
@@ -829,6 +858,7 @@ def _build_deterministic_category_overview(
     *,
     pain_lookup: dict[str, list[dict]],
     competitive_disp: list[dict[str, Any]],
+    company_lookup: dict[str, list[dict]],
     limit: int = 12,
 ) -> list[dict[str, Any]]:
     """Build category overview directly from scorecards and competitive flows."""
@@ -860,6 +890,30 @@ def _build_deterministic_category_overview(
 
         total_reviews = int(top_vendor.get("total_reviews") or 0)
         churn_density = round((int(top_vendor.get("churn_intent") or 0) * 100.0 / total_reviews), 1) if total_reviews else 0.0
+
+        # Aggregate industry/size across all vendors in category
+        cat_industries: dict[str, int] = {}
+        cat_sizes: dict[str, int] = {}
+        for r in rows:
+            v = _canonicalize_vendor(r.get("vendor_name") or "")
+            for c in company_lookup.get(v, []):
+                if not isinstance(c, dict):
+                    continue
+                ind = c.get("industry")
+                if ind and ind != "unknown":
+                    cat_industries[ind] = cat_industries.get(ind, 0) + 1
+                sz = c.get("company_size")
+                if sz:
+                    cat_sizes[sz] = cat_sizes.get(sz, 0) + 1
+        top_industries = sorted(
+            [{"industry": k, "count": v} for k, v in cat_industries.items()],
+            key=lambda x: -x["count"],
+        )[:5]
+        top_sizes = sorted(
+            [{"size": k, "count": v} for k, v in cat_sizes.items()],
+            key=lambda x: -x["count"],
+        )[:5]
+
         results.append({
             "category": category,
             "highest_churn_risk": highest_vendor,
@@ -869,6 +923,8 @@ def _build_deterministic_category_overview(
                 f"Based on {total_reviews} reviews, {highest_vendor} shows {churn_density}% churn-signal density in {category}. "
                 f"{emerging} is the most visible challenger flow in this category."
             ),
+            "industry_distribution": top_industries,
+            "company_size_distribution": top_sizes,
         })
     results.sort(key=lambda x: x["category"])
     return results[:limit]
@@ -1457,9 +1513,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     tl_limit = cfg.timeline_signals_limit
     prior_limit = cfg.prior_reports_limit
     today = date.today()
+    from ...pipelines.llm import get_pipeline_llm as _get_plm
+    _ci_llm = _get_plm(workload="vllm")
     span = tracer.start_span(
         span_name="b2b.churn_intelligence.run",
         operation_type="intelligence",
+        model_name=getattr(_ci_llm, "model", getattr(_ci_llm, "model_id", None)) if _ci_llm else None,
+        model_provider=getattr(_ci_llm, "name", None) if _ci_llm else None,
         metadata={
             "business": build_business_trace_context(
                 workflow="b2b_churn_intelligence",
@@ -1727,6 +1787,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         competitor_lookup=competitor_lookup,
         budget_lookup=budget_lookup,
         sentiment_lookup=sentiment_lookup,
+        company_lookup=company_lookup,
         prior_reports=prior_reports,
     )
     deterministic_displacement_map = _build_deterministic_displacement_map(
@@ -1750,6 +1811,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         vendor_scores,
         pain_lookup=pain_lookup,
         competitive_disp=competitive_disp,
+        company_lookup=company_lookup,
     )
 
     parsed["executive_summary"] = _build_validated_executive_summary(
@@ -2510,7 +2572,10 @@ async def _fetch_competitive_displacement(pool, window_days: int) -> list[dict[s
         SELECT vendor_name,
             comp.value->>'name' AS competitor,
             comp.value->>'context' AS direction,
-            count(*) AS mention_count
+            count(*) AS mention_count,
+            array_agg(DISTINCT company_size_raw) FILTER (WHERE company_size_raw IS NOT NULL) AS sizes,
+            array_agg(DISTINCT COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry'))
+                FILTER (WHERE COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') IS NOT NULL) AS industries
         FROM b2b_reviews
         CROSS JOIN LATERAL jsonb_array_elements(enrichment->'competitors_mentioned') AS comp(value)
         WHERE {filters}
@@ -2523,6 +2588,8 @@ async def _fetch_competitive_displacement(pool, window_days: int) -> list[dict[s
     )
     # Post-process: canonicalize competitors, filter self-flows, re-aggregate
     merged: dict[tuple[str, str, str | None], int] = {}
+    merged_industries: dict[tuple[str, str, str | None], list[str]] = {}
+    merged_sizes: dict[tuple[str, str, str | None], list[str]] = {}
     for r in rows:
         canon = _canonicalize_competitor(r["competitor"] or "")
         vendor = _canonicalize_vendor(r["vendor_name"] or "")
@@ -2531,13 +2598,26 @@ async def _fetch_competitive_displacement(pool, window_days: int) -> list[dict[s
             continue
         key = (vendor, canon, r["direction"])
         merged[key] = merged.get(key, 0) + r["mention_count"]
+        if r.get("industries"):
+            merged_industries.setdefault(key, []).extend(r["industries"])
+        if r.get("sizes"):
+            merged_sizes.setdefault(key, []).extend(r["sizes"])
 
     # Re-apply HAVING count >= 2, sort by mention_count DESC
-    results = [
-        {"vendor": k[0], "competitor": k[1], "direction": k[2], "mention_count": cnt}
-        for k, cnt in merged.items()
-        if cnt >= 2
-    ]
+    results = []
+    for k, cnt in merged.items():
+        if cnt < 2:
+            continue
+        ind_list = merged_industries.get(k, [])
+        sz_list = merged_sizes.get(k, [])
+        results.append({
+            "vendor": k[0],
+            "competitor": k[1],
+            "direction": k[2],
+            "mention_count": cnt,
+            "industries": sorted(set(i for i in ind_list if i and i != "unknown")),
+            "company_sizes": sorted(set(s for s in sz_list if s)),
+        })
     results.sort(key=lambda x: x["mention_count"], reverse=True)
     return results
 
@@ -3093,7 +3173,10 @@ async def _fetch_churning_companies(pool, window_days: int) -> list[dict[str, An
                 'company', reviewer_company,
                 'urgency', (enrichment->>'urgency_score')::numeric,
                 'role', enrichment->'reviewer_context'->>'role_level',
-                'pain', enrichment->>'pain_category'
+                'pain', enrichment->>'pain_category',
+                'title', reviewer_title,
+                'company_size', company_size_raw,
+                'industry', COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry')
             ) ORDER BY (enrichment->>'urgency_score')::numeric DESC)
             AS companies
         FROM b2b_reviews
@@ -3124,6 +3207,8 @@ async def _fetch_quotable_evidence(pool, window_days: int, *, min_urgency: float
         WITH ranked_quotes AS (
             SELECT vendor_name, id AS review_id, phrase.value AS quote,
                 (enrichment->>'urgency_score')::numeric AS urgency,
+                reviewer_company, reviewer_title, company_size_raw,
+                COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry,
                 ROW_NUMBER() OVER (
                     PARTITION BY vendor_name
                     ORDER BY (enrichment->>'urgency_score')::numeric DESC
@@ -3140,7 +3225,11 @@ async def _fetch_quotable_evidence(pool, window_days: int, *, min_urgency: float
                 jsonb_build_object(
                     'quote', quote,
                     'urgency', urgency,
-                    'review_id', review_id
+                    'review_id', review_id,
+                    'company', reviewer_company,
+                    'title', reviewer_title,
+                    'company_size', company_size_raw,
+                    'industry', industry
                 ) ORDER BY urgency DESC
             ) AS quotes
         FROM ranked_quotes WHERE rn <= 15
@@ -3334,7 +3423,9 @@ async def _fetch_timeline_signals(pool, window_days: int, *, limit: int = 50) ->
             enrichment->'timeline'->>'contract_end' AS contract_end,
             enrichment->'timeline'->>'evaluation_deadline' AS evaluation_deadline,
             enrichment->'timeline'->>'decision_timeline' AS decision_timeline,
-            (enrichment->>'urgency_score')::numeric AS urgency
+            (enrichment->>'urgency_score')::numeric AS urgency,
+            reviewer_title, company_size_raw,
+            COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry
         FROM b2b_reviews
         WHERE {filters}
           AND (
@@ -3356,6 +3447,9 @@ async def _fetch_timeline_signals(pool, window_days: int, *, limit: int = 50) ->
             "evaluation_deadline": r["evaluation_deadline"],
             "decision_timeline": r["decision_timeline"],
             "urgency": float(r["urgency"]) if r["urgency"] else 0,
+            "title": r["reviewer_title"],
+            "company_size": r["company_size_raw"],
+            "industry": r["industry"],
         }
         for r in rows
     ]
@@ -3742,6 +3836,9 @@ def _build_timeline_lookup(timeline_signals: list[dict]) -> dict[str, list[dict]
             "evaluation_deadline": row.get("evaluation_deadline"),
             "decision_timeline": row.get("decision_timeline"),
             "urgency": row.get("urgency", 0),
+            "title": row.get("title"),
+            "company_size": row.get("company_size"),
+            "industry": row.get("industry"),
         })
     return lookup
 
@@ -4025,7 +4122,9 @@ async def generate_vendor_report(
                r.enrichment->'pain_categories' AS pain_json,
                r.enrichment->'quotable_phrases' AS quotable_phrases,
                r.enrichment->'feature_gaps' AS feature_gaps,
-               r.enrichment->'sentiment_trajectory'->>'direction' AS sentiment_direction
+               r.enrichment->'sentiment_trajectory'->>'direction' AS sentiment_direction,
+               r.reviewer_title, r.company_size_raw,
+               COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry
         FROM b2b_reviews r
                 WHERE {filters}
           AND r.vendor_name ILIKE '%' || $2 || '%'
@@ -4168,7 +4267,9 @@ async def _fetch_vendor_comparison_rows(
                r.enrichment->'competitors_mentioned' AS competitors_json,
                r.enrichment->'pain_categories' AS pain_json,
                r.enrichment->'quotable_phrases' AS quotable_phrases,
-               r.enrichment->'feature_gaps' AS feature_gaps
+               r.enrichment->'feature_gaps' AS feature_gaps,
+               r.reviewer_title, r.company_size_raw,
+               COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry
         FROM b2b_reviews r
         WHERE {filters}
           AND r.vendor_name ILIKE '%' || $2 || '%'
@@ -4449,7 +4550,9 @@ async def _fetch_company_comparison_rows(
                r.enrichment->'timeline'->>'contract_end' AS contract_end,
                r.enrichment->'timeline'->>'evaluation_deadline' AS evaluation_deadline,
                r.enrichment->'timeline'->>'decision_timeline' AS decision_timeline,
-               r.enrichment->'contract_context'->>'contract_value_signal' AS contract_value_signal
+               r.enrichment->'contract_context'->>'contract_value_signal' AS contract_value_signal,
+               r.reviewer_title, r.company_size_raw,
+               COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry
         FROM b2b_reviews r
         WHERE {filters}
           AND LOWER(r.reviewer_company) = LOWER($2)
@@ -4474,12 +4577,14 @@ def _build_company_comparison_snapshot(
     alternatives: dict[str, int] = {}
     gaps: dict[str, int] = {}
     role_levels: dict[str, int] = {}
+    industries: dict[str, int] = {}
     timeline_signals: list[dict[str, Any]] = []
     contract_signals: list[str] = []
     quote_highlights: list[str] = []
     decision_maker_count = 0
     churn_mentions = 0
     urgencies: list[float] = []
+    company_size_val: str | None = None
     for row in rows:
         vendor_name = str(row.get("vendor_name") or "")
         if vendor_name:
@@ -4497,6 +4602,11 @@ def _build_company_comparison_snapshot(
         role_level = str(row.get("role_level") or "")
         if role_level:
             role_levels[role_level] = role_levels.get(role_level, 0) + 1
+        ind = str(row.get("industry") or "")
+        if ind:
+            industries[ind] = industries.get(ind, 0) + 1
+        if not company_size_val and row.get("company_size_raw"):
+            company_size_val = str(row["company_size_raw"])
         urgency = float(row.get("urgency") or 0)
         urgencies.append(urgency)
         for comp in _safe_json(row.get("competitors_json")):
@@ -4519,6 +4629,9 @@ def _build_company_comparison_snapshot(
             "evaluation_deadline": row.get("evaluation_deadline"),
             "decision_timeline": row.get("decision_timeline"),
             "urgency": urgency,
+            "title": row.get("reviewer_title"),
+            "company_size": row.get("company_size_raw"),
+            "industry": row.get("industry"),
         }
         if timeline_item["contract_end"] or timeline_item["evaluation_deadline"] or timeline_item["decision_timeline"]:
             timeline_signals.append(timeline_item)
@@ -4539,6 +4652,8 @@ def _build_company_comparison_snapshot(
         "alternatives_considered": sorted([{"name": k, "count": v} for k, v in alternatives.items()], key=lambda x: x["count"], reverse=True)[:5],
         "top_feature_gaps": sorted([{"feature": k, "count": v} for k, v in gaps.items()], key=lambda x: x["count"], reverse=True)[:5],
         "role_levels": sorted([{"role": k, "count": v} for k, v in role_levels.items()], key=lambda x: x["count"], reverse=True)[:5],
+        "industries": sorted([{"industry": k, "count": v} for k, v in industries.items()], key=lambda x: x["count"], reverse=True)[:5],
+        "company_size": company_size_val,
         "timeline_signals": timeline_signals[:5],
         "contract_value_signals": contract_signals[:5],
         "quote_highlights": quote_highlights[:5],
@@ -4755,7 +4870,9 @@ async def generate_challenger_report(
                r.enrichment->'competitors_mentioned' AS competitors_json,
                r.enrichment->'pain_categories' AS pain_json,
                r.enrichment->'quotable_phrases' AS quotable_phrases,
-               r.enrichment->'feature_gaps' AS feature_gaps
+               r.enrichment->'feature_gaps' AS feature_gaps,
+               r.reviewer_title, r.company_size_raw,
+               COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry
         FROM b2b_reviews r
                 WHERE {filters}
           AND (r.enrichment->>'urgency_score')::numeric >= 3

@@ -446,7 +446,10 @@ def call_llm_with_skill(
             usage_out["model"] = model_name
             usage_out["provider"] = provider_name
 
-        # Emit FTL trace span
+        # Extract provider trace metadata
+        trace_meta = result.get("_trace_meta", {})
+
+        # Emit FTL trace span with full I/O and provider metadata
         trace_llm_call(
             span_name=f"pipeline.{skill_name}",
             input_tokens=usage.get("input_tokens", 0),
@@ -455,6 +458,13 @@ def call_llm_with_skill(
             provider=provider_name,
             duration_ms=(time.monotonic() - t0) * 1000,
             metadata={"skill": skill_name, "workload": workload or "default"},
+            input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in messages]},
+            output_data={"response": text[:2000]} if text else None,
+            api_endpoint=trace_meta.get("api_endpoint"),
+            provider_request_id=trace_meta.get("provider_request_id"),
+            ttft_ms=trace_meta.get("ttft_ms"),
+            inference_time_ms=trace_meta.get("inference_time_ms"),
+            queue_time_ms=trace_meta.get("queue_time_ms"),
         )
 
         if not text:
@@ -465,7 +475,7 @@ def call_llm_with_skill(
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
         return text
 
-    except Exception:
+    except Exception as exc:
         logger.exception("LLM call failed for skill '%s'", skill_name)
         trace_llm_call(
             span_name=f"pipeline.{skill_name}",
@@ -473,6 +483,9 @@ def call_llm_with_skill(
             provider=getattr(llm, "name", ""),
             duration_ms=(time.monotonic() - t0) * 1000,
             status="failed",
+            error_message=str(exc)[:500],
+            error_type=type(exc).__name__,
+            input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in messages]},
         )
         return None
 
@@ -492,11 +505,36 @@ def trace_llm_call(
     duration_ms: float = 0,
     status: str = "completed",
     metadata: dict[str, Any] | None = None,
+    # I/O capture
+    input_data: dict[str, Any] | None = None,
+    output_data: dict[str, Any] | None = None,
+    # Timing breakdown
+    ttft_ms: float | None = None,
+    inference_time_ms: float | None = None,
+    queue_time_ms: float | None = None,
+    # RAG / retrieval
+    context_tokens: int | None = None,
+    retrieval_latency_ms: float | None = None,
+    rag_graph_used: bool | None = None,
+    rag_nodes_retrieved: int | None = None,
+    rag_chunks_used: int | None = None,
+    # Provider debugging
+    api_endpoint: str | None = None,
+    provider_request_id: str | None = None,
+    # Reasoning
+    reasoning: str | None = None,
+    # Error details
+    error_message: str | None = None,
+    error_type: str | None = None,
 ) -> None:
     """Emit an FTL trace span for an LLM call (fire-and-forget).
 
     Use this for direct ``llm.chat()`` callers that don't go through
     ``call_llm_with_skill()``.  Lightweight -- no-ops when FTL is disabled.
+
+    Accepts all fields supported by ``tracer.end_span()`` so callers can
+    pass through provider metadata, I/O data, timing breakdowns, RAG
+    metrics, and business context.
     """
     from ..services.tracing import tracer
 
@@ -515,4 +553,20 @@ def trace_llm_call(
         status=status,
         input_tokens=input_tokens if input_tokens else None,
         output_tokens=output_tokens if output_tokens else None,
+        input_data=input_data,
+        output_data=output_data,
+        ttft_ms=ttft_ms,
+        inference_time_ms=inference_time_ms,
+        queue_time_ms=queue_time_ms,
+        context_tokens=context_tokens,
+        retrieval_latency_ms=retrieval_latency_ms,
+        rag_graph_used=rag_graph_used,
+        rag_nodes_retrieved=rag_nodes_retrieved,
+        rag_chunks_used=rag_chunks_used,
+        api_endpoint=api_endpoint,
+        provider_request_id=provider_request_id,
+        reasoning=reasoning,
+        error_message=error_message,
+        error_type=error_type,
+        duration_ms_override=duration_ms if duration_ms > 0 else None,
     )

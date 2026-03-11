@@ -204,9 +204,24 @@ async def _generate_next_step(
             logger.info("campaign_sequence LLM tokens: in=%d out=%d",
                          _usage["input_tokens"], _usage.get("output_tokens", 0))
             from ...pipelines.llm import trace_llm_call
+            _trace_meta = result.get("_trace_meta", {})
             trace_llm_call("task.campaign_sequence", input_tokens=_usage["input_tokens"],
                            output_tokens=_usage.get("output_tokens", 0),
-                           model=getattr(llm, "model", ""), provider=getattr(llm, "name", ""))
+                           model=getattr(llm, "model", ""), provider=getattr(llm, "name", ""),
+                           input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in messages]},
+                           output_data={"response": result.get("response", "")[:2000]},
+                           api_endpoint=_trace_meta.get("api_endpoint"),
+                           provider_request_id=_trace_meta.get("provider_request_id"),
+                           ttft_ms=_trace_meta.get("ttft_ms"),
+                           inference_time_ms=_trace_meta.get("inference_time_ms"),
+                           queue_time_ms=_trace_meta.get("queue_time_ms"),
+                           metadata={
+                               "company_name": seq.get("company_name", ""),
+                               "current_step": seq.get("current_step", 0) + 1,
+                               "max_steps": seq.get("max_steps", 4),
+                               "recipient_type": recipient_type or "",
+                               "days_since_last": days_since,
+                           })
         text = result.get("response", "").strip()
         if not text:
             return None

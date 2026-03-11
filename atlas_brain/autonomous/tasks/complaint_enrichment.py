@@ -372,9 +372,32 @@ def _call_and_parse(llm, messages, max_tokens: int) -> dict[str, Any] | None:
             logger.info("complaint_enrichment LLM tokens: in=%d out=%d",
                          _usage["input_tokens"], _usage.get("output_tokens", 0))
             from ...pipelines.llm import trace_llm_call
+            _trace = result.get("_trace_meta", {})
+            # Extract business context from user message payload
+            _biz_ctx: dict[str, Any] = {"workflow": "complaint_enrichment"}
+            try:
+                _user_payload = json.loads(messages[-1].content)
+                _biz_ctx["asin"] = _user_payload.get("asin", "")
+                _biz_ctx["rating"] = _user_payload.get("rating")
+            except Exception:
+                pass
             trace_llm_call("task.complaint_enrichment", input_tokens=_usage["input_tokens"],
                            output_tokens=_usage.get("output_tokens", 0),
-                           model=getattr(llm, "model", ""), provider=getattr(llm, "name", ""))
+                           model=getattr(llm, "model", ""), provider=getattr(llm, "name", ""),
+                           input_data={
+                               "messages": [
+                                   {"role": m.role, "content": m.content[:500]} for m in messages
+                               ],
+                           },
+                           output_data={
+                               "response": result.get("response", "")[:2000],
+                           },
+                           api_endpoint=_trace.get("api_endpoint"),
+                           provider_request_id=_trace.get("provider_request_id"),
+                           ttft_ms=_trace.get("ttft_ms"),
+                           inference_time_ms=_trace.get("inference_time_ms"),
+                           queue_time_ms=_trace.get("queue_time_ms"),
+                           metadata=_biz_ctx)
         text = result.get("response", "").strip()
         if not text:
             return None
@@ -402,9 +425,33 @@ def _call_and_parse_array(llm, messages, max_tokens: int) -> list[dict[str, Any]
             logger.info("complaint_enrichment_array LLM tokens: in=%d out=%d",
                          _usage["input_tokens"], _usage.get("output_tokens", 0))
             from ...pipelines.llm import trace_llm_call
+            _trace = result.get("_trace_meta", {})
+            # Extract batch context from user message payload
+            _biz_ctx: dict[str, Any] = {"workflow": "complaint_enrichment_batch"}
+            try:
+                _batch_payload = json.loads(messages[-1].content)
+                if isinstance(_batch_payload, list):
+                    _biz_ctx["batch_size"] = len(_batch_payload)
+                    _biz_ctx["asins"] = [r.get("asin", "") for r in _batch_payload[:10]]
+            except Exception:
+                pass
             trace_llm_call("task.complaint_enrichment_batch", input_tokens=_usage["input_tokens"],
                            output_tokens=_usage.get("output_tokens", 0),
-                           model=getattr(llm, "model", ""), provider=getattr(llm, "name", ""))
+                           model=getattr(llm, "model", ""), provider=getattr(llm, "name", ""),
+                           input_data={
+                               "messages": [
+                                   {"role": m.role, "content": m.content[:500]} for m in messages
+                               ],
+                           },
+                           output_data={
+                               "response": result.get("response", "")[:2000],
+                           },
+                           api_endpoint=_trace.get("api_endpoint"),
+                           provider_request_id=_trace.get("provider_request_id"),
+                           ttft_ms=_trace.get("ttft_ms"),
+                           inference_time_ms=_trace.get("inference_time_ms"),
+                           queue_time_ms=_trace.get("queue_time_ms"),
+                           metadata=_biz_ctx)
         text = result.get("response", "").strip()
         if not text:
             return None

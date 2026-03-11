@@ -352,8 +352,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     # Fire all targets concurrently (per-source semaphores handle throttling)
     logger.info(
-        "Scraping %d targets concurrently (API: %d concurrent, Web: %d concurrent)",
-        len(targets), _API_CONCURRENCY, _WEB_CONCURRENCY,
+        "Scraping %d targets concurrently (%d sources, default concurrency %d)",
+        len(targets), len(source_sems), _DEFAULT_CONCURRENCY,
     )
     await asyncio.gather(
         *[_scrape_one(row) for row in targets],

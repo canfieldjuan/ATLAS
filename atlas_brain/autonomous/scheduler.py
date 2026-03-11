@@ -150,7 +150,7 @@ class TaskScheduler:
             "task_type": "builtin",
             "schedule_type": "cron",
             "cron_expression": "0 3 * * *",
-            "timeout_seconds": 300,
+            "timeout_seconds": 1800,
             "metadata": {"builtin_handler": "nightly_memory_sync"},
         },
         {

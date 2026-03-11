@@ -1171,8 +1171,8 @@ async def _generate_llm_response(
         if response:
             return {
                 "response": response,
-                "input_tokens": llm_result.get("prompt_eval_count", 0),
-                "output_tokens": llm_result.get("eval_count", 0),
+                "input_tokens": llm_result.get("prompt_eval_count") or (llm_result.get("usage") or {}).get("input_tokens", 0),
+                "output_tokens": llm_result.get("eval_count") or (llm_result.get("usage") or {}).get("output_tokens", 0),
                 "system_prompt": system_msg,
                 "history_count": len(history_messages),
                 "prompt_eval_duration_ms": llm_result.get("prompt_eval_duration_ms"),

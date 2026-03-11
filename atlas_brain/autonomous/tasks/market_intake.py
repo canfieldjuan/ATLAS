@@ -66,13 +66,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         ))
 
     if snapshot_rows:
-        await pool.executemany(
-            """
-            INSERT INTO market_snapshots (symbol, price, change_pct, volume)
-            VALUES ($1, $2, $3, $4)
-            """,
-            snapshot_rows,
-        )
+        async with pool.transaction() as conn:
+            await conn.executemany(
+                """
+                INSERT INTO market_snapshots (symbol, price, change_pct, volume)
+                VALUES ($1, $2, $3, $4)
+                """,
+                snapshot_rows,
+            )
 
     # Log significant moves (informational only; daily intelligence derives insights)
     significant = 0

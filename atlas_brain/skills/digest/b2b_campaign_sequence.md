@@ -89,4 +89,7 @@ Respond with ONLY this JSON (no markdown fences, no extra text):
 - Do not reuse adversarial competitive-awareness lines. If market timing matters, frame it as buyer activity or category movement, never as "your competitors get this too".
 - When the selling context includes `blog_posts`, reference ONE blog link per email as published analysis. Rotate posts across sequence steps -- never repeat the same post link in two emails. Frame as: "We recently published..." or "Our latest analysis covers..."
 - When the company context includes `target_persona`, maintain persona-consistent tone across all steps: `executive` = ROI/TCO/strategic focus with `economic_buyer` tone; `technical` = feature gaps/integration/migration with `evaluator` tone; `operations` = support quality/reliability/team productivity with `champion` tone. Match `role_type` from the context if present.
+- When `reviewer_title` is in the company context, calibrate tone to that functional domain beyond the generic role_type.
+- When `company_size` is in the company context, tailor the pitch: enterprise (1000+) = scalability, compliance, TCO; mid-market = value, migration ease; SMB = simplicity, price.
+- When `industry` is in the company context, reference sector-specific challenges or use cases for credibility.
 - Subject lines must stay under 50 characters and must not reveal competitor names, premium account details, or the main paid insight. NEVER use spam trigger words: "urgent", "urgency", "act now", "limited time", "alert", "warning", "immediate", "free", "guaranteed".

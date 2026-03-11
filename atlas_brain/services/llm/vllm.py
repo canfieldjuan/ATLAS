@@ -171,6 +171,10 @@ class VLLMLLM(BaseModelService):
                 "message": {"role": "assistant", "content": content},
                 "finish_reason": choice.get("finish_reason"),
                 "usage": usage,
+                "_trace_meta": {
+                    "api_endpoint": f"{self.base_url}/v1/chat/completions",
+                    "provider_request_id": data.get("id", ""),
+                },
             }
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500] if hasattr(e, 'response') else ""

@@ -113,7 +113,7 @@ register_pipeline(PipelineConfig(
             module="complaint_enrichment",
             schedule_type="interval",
             interval_seconds=None,
-            timeout_seconds=180,
+            timeout_seconds=300,
             description="Classify product reviews via LLM for root cause, severity, and pain score",
             metadata={"builtin_handler": "complaint_enrichment"},
             interval_config_key="external_data.complaint_enrichment_interval_seconds",

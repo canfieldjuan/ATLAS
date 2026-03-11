@@ -298,9 +298,32 @@ async def _generate_content(
             logger.info("complaint_content_generation LLM tokens: in=%d out=%d",
                          _usage["input_tokens"], _usage.get("output_tokens", 0))
             from ...pipelines.llm import trace_llm_call
+            _trace = result.get("_trace_meta", {})
+            _target = payload.get("target_product", {})
             trace_llm_call("task.complaint_content_generation", input_tokens=_usage["input_tokens"],
                            output_tokens=_usage.get("output_tokens", 0),
-                           model=getattr(llm, "model", ""), provider=getattr(llm, "name", ""))
+                           model=getattr(llm, "model", ""), provider=getattr(llm, "name", ""),
+                           input_data={
+                               "messages": [
+                                   {"role": m.role, "content": m.content[:500]} for m in messages
+                               ],
+                           },
+                           output_data={
+                               "response": result.get("response", "")[:2000],
+                           },
+                           api_endpoint=_trace.get("api_endpoint"),
+                           provider_request_id=_trace.get("provider_request_id"),
+                           ttft_ms=_trace.get("ttft_ms"),
+                           inference_time_ms=_trace.get("inference_time_ms"),
+                           queue_time_ms=_trace.get("queue_time_ms"),
+                           metadata={
+                               "workflow": "complaint_content_generation",
+                               "content_type": payload.get("content_type", ""),
+                               "asin": _target.get("asin", ""),
+                               "category": _target.get("category", ""),
+                               "avg_pain_score": _target.get("avg_pain_score", 0),
+                               "avg_rating": _target.get("avg_rating", 0),
+                           })
         text = result.get("response", "").strip()
         if not text:
             return None

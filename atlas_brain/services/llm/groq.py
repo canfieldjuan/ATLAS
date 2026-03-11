@@ -152,12 +152,23 @@ class GroqLLM(BaseModelService):
             logger.info("Groq chat: tokens=%s, content_len=%d",
                        usage, len(content))
 
+            queue_time = usage.get("queue_time")
+            prompt_time = usage.get("prompt_time")
+            completion_time = usage.get("completion_time")
+
             return {
                 "response": content,
                 "message": {"role": "assistant", "content": content},
                 "usage": {
                     "input_tokens": usage.get("prompt_tokens", 0),
                     "output_tokens": usage.get("completion_tokens", 0),
+                },
+                "_trace_meta": {
+                    "api_endpoint": f"{self.base_url}/chat/completions",
+                    "provider_request_id": response.headers.get("x-request-id") or data.get("id", ""),
+                    "queue_time_ms": round(queue_time * 1000, 1) if queue_time else None,
+                    "ttft_ms": round(prompt_time * 1000, 1) if prompt_time else None,
+                    "inference_time_ms": round(completion_time * 1000, 1) if completion_time else None,
                 },
             }
         except httpx.HTTPError as e:

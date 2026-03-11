@@ -58,6 +58,11 @@ Proper attribution is mandatory for all quotes.
 - Verified: `> "quote text" -- verified reviewer on G2`
 - Community: `> "quote text" -- reviewer on Reddit`
 - When role is available: `> "quote text" -- IT Director, reviewer on Capterra`
+- When company context is available: `> "quote text" -- IT Director at a mid-market healthcare company, reviewer on G2`
+  - Use `title` for the role (e.g., "Head of Marketing")
+  - Use `industry` for sector (e.g., "healthcare", "financial services")
+  - Use `company_size` for scale (e.g., "mid-market", "enterprise")
+  - NEVER use the actual `company` name in attribution -- generalize to industry + size instead
 
 If `source_name` is not provided in the quotable phrase data, use `> "quote text" -- software reviewer` (generic, no platform claim).
 
@@ -140,7 +145,7 @@ Return valid JSON with exactly these keys:
 2. **Chart placement**: Every `chart_id` listed in a section's `chart_ids` MUST appear exactly once in the content as `{{chart:chart-id}}` on its own line. Do not invent chart IDs not in `available_charts`.
 3. **Structure**: Follow the section order from the blueprint. Use the provided `heading` for each section as an H2 (`##`).
 4. **Tone**: Analytical, measured, and honest. Written for decision-makers who want signal, not noise. Confident where data supports it, explicitly uncertain where it doesn't.
-5. **Quotable phrases**: Where `quotable_phrases` are provided, weave 3-5 as blockquotes using proper source attribution (see Source Attribution section above). Choose the most specific and illustrative ones. Each quotable phrase now includes a `sentiment` field (`"positive"` or `"negative"`). Place positive quotes in strengths/praise sections and negative quotes in pain/churn analysis sections. Aim for at least 1 positive and 1 negative quote to maintain balance.
+5. **Quotable phrases**: Where `quotable_phrases` are provided, weave 3-5 as blockquotes using proper source attribution (see Source Attribution section above). Choose the most specific and illustrative ones. Each quotable phrase now includes a `sentiment` field (`"positive"` or `"negative"`). Place positive quotes in strengths/praise sections and negative quotes in pain/churn analysis sections. Aim for at least 1 positive and 1 negative quote to maintain balance. Quotes may also include `company`, `title`, `company_size`, and `industry` fields -- use title/industry/company_size for richer attribution (see Source Attribution). Never reveal the actual company name.
 6. **Timeframes**: Anchor statistics with the period from `data_context.review_period`.
 7. **Length**: 1000-1800 words for the main content. Concise paragraphs (2-4 sentences each).
 8. **Affiliate integration**: When `data_context.affiliate_partner` exists, mention the partner product ONLY where data genuinely supports it. Use `{{affiliate:partner-slug}}` placeholder. Maximum 2 mentions. NEVER force a recommendation the data doesn't support. If the affiliate partner shows negative patterns, mention those too. **CRITICAL: Only reference an affiliate partner if the partner's product is directly relevant to the article's category.** If the affiliate doesn't fit, omit it entirely.

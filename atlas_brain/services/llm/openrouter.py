@@ -134,6 +134,10 @@ class OpenRouterLLM(BaseModelService):
                     "input_tokens": usage.get("prompt_tokens", 0),
                     "output_tokens": usage.get("completion_tokens", 0),
                 },
+                "_trace_meta": {
+                    "api_endpoint": f"{self.base_url}/chat/completions",
+                    "provider_request_id": response.headers.get("x-request-id") or data.get("id", ""),
+                },
             }
         except httpx.HTTPError as e:
             logger.error("OpenRouter chat error: %s", e)

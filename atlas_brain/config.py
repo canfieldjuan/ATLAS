@@ -1587,6 +1587,54 @@ class OpenAICompatConfig(BaseModel):
     api_key: str = ""  # If empty, no auth required
 
 
+class ModelPricingConfig(BaseModel):
+    """Per-model pricing in USD per 1M tokens.
+
+    Keys are ``provider/model`` slugs (case-insensitive lookup).
+    Local models (ollama, vllm) default to $0 since they run on-prem.
+    """
+
+    # Anthropic (per 1M tokens)
+    anthropic_sonnet_input: float = 3.00
+    anthropic_sonnet_output: float = 15.00
+    anthropic_haiku_input: float = 0.25
+    anthropic_haiku_output: float = 1.25
+
+    # Groq (per 1M tokens -- hosted inference)
+    groq_llama70b_input: float = 0.59
+    groq_llama70b_output: float = 0.79
+
+    # OpenRouter (varies -- default to DeepSeek V3 pricing)
+    openrouter_default_input: float = 0.27
+    openrouter_default_output: float = 1.10
+
+    # Together AI (default to Llama 70B pricing)
+    together_default_input: float = 0.88
+    together_default_output: float = 0.88
+
+    # Local models (free -- GPU electricity only)
+    local_input: float = 0.0
+    local_output: float = 0.0
+
+    def cost_usd(self, provider: str, model: str, input_tokens: int, output_tokens: int) -> float:
+        """Calculate cost in USD for a given call."""
+        p = (provider or "").lower()
+        m = (model or "").lower()
+        if p in ("ollama", "vllm", "transformers-flash", "llama-cpp") or "local" in p:
+            return 0.0
+        if p == "anthropic" or "claude" in m:
+            if "haiku" in m:
+                return (input_tokens * self.anthropic_haiku_input + output_tokens * self.anthropic_haiku_output) / 1_000_000
+            return (input_tokens * self.anthropic_sonnet_input + output_tokens * self.anthropic_sonnet_output) / 1_000_000
+        if p == "groq":
+            return (input_tokens * self.groq_llama70b_input + output_tokens * self.groq_llama70b_output) / 1_000_000
+        if p == "openrouter":
+            return (input_tokens * self.openrouter_default_input + output_tokens * self.openrouter_default_output) / 1_000_000
+        if p in ("together", "cloud", "hybrid"):
+            return (input_tokens * self.together_default_input + output_tokens * self.together_default_output) / 1_000_000
+        return 0.0
+
+
 class FTLTracingConfig(BaseModel):
     """Fine-Tune Labs tracing configuration."""
 
@@ -1612,6 +1660,7 @@ class FTLTracingConfig(BaseModel):
         le=10000,
         description="Maximum characters stored for reasoning previews",
     )
+    pricing: ModelPricingConfig = Field(default_factory=ModelPricingConfig)
 
 
 class PersonaConfig(BaseSettings):
@@ -2246,7 +2295,8 @@ class B2BChurnConfig(BaseSettings):
     vendor_briefing_max_per_batch: int = Field(default=20, description="Max briefings per batch send run")
     vendor_briefing_account_cards_enabled: bool = Field(default=True, description="Generate account cards in briefings")
     vendor_briefing_account_cards_max: int = Field(default=3, description="Max account cards per briefing")
-    vendor_briefing_account_cards_reasoning_depth: int = Field(default=2, description="Reasoning depth for card enrichment (0=baseline, 2=LLM)")
+    vendor_briefing_account_cards_reasoning_depth: int = Field(default=2, description="Reasoning depth for card enrichment (0=baseline, 1=CoT, 2=multi-pass)")
+    vendor_briefing_account_cards_adaptive_depth: bool = Field(default=True, description="Adaptively select reasoning depth per account based on urgency and data richness")
 
     # Analyst enrichment (OpenRouter)
     openrouter_api_key: str = Field(default="", description="OpenRouter API key for analyst enrichment")
@@ -2322,9 +2372,9 @@ class B2BScrapeConfig(BaseSettings):
 
     # Schedule
     intake_interval_seconds: int = Field(default=3600, description="Scrape polling interval (1 hour)")
-    max_targets_per_run: int = Field(default=5, description="Max targets to scrape per run")
+    max_targets_per_run: int = Field(default=200, description="Max targets to scrape per run (0 = unlimited)")
     source_allowlist: str = Field(
-        default="g2,capterra,trustradius,gartner,peerspot,getapp,software_advice,trustpilot,reddit,hackernews",
+        default="g2,capterra,trustradius,gartner,peerspot,getapp,software_advice,trustpilot,reddit,hackernews,sourceforge",
         description="Sources allowed for automated scrape intake (comma-separated)",
     )
 
@@ -2587,7 +2637,7 @@ class ApolloConfig(BaseSettings):
 
     enabled: bool = Field(default=False, description="Enable Apollo.io prospect pipeline")
     api_key: str = Field(default="", description="Apollo.io API key")
-    max_prospects_per_company: int = Field(default=10, ge=1, le=25, description="Max people to enrich per company")
+    max_prospects_per_company: int = Field(default=3, ge=1, le=25, description="Max people to reveal per company (1 credit each)")
     target_seniorities: list[str] = Field(
         default=["c_suite", "owner", "founder", "vp", "head", "director", "manager"],
         description="Apollo seniority levels to target (buying committee breadth)",

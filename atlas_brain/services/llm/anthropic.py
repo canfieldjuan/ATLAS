@@ -195,12 +195,20 @@ class AnthropicLLM(BaseModelService):
                 len(content),
             )
 
+            request_id = getattr(response, "id", None) or ""
+
             return {
                 "response": content,
                 "message": {"role": "assistant", "content": content},
                 "usage": {
                     "input_tokens": response.usage.input_tokens,
                     "output_tokens": response.usage.output_tokens,
+                },
+                "_trace_meta": {
+                    "api_endpoint": "https://api.anthropic.com/v1/messages",
+                    "provider_request_id": request_id,
+                    "cache_read_tokens": getattr(response.usage, "cache_read_input_tokens", None),
+                    "cache_creation_tokens": getattr(response.usage, "cache_creation_input_tokens", None),
                 },
             }
         except Exception as e:

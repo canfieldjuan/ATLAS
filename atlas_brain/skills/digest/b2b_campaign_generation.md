@@ -23,7 +23,9 @@ You receive a JSON object with:
 - `contract_end`: When their contract ends (may be null)
 - `decision_timeline`: e.g., "within_quarter", "immediate", "next_year"
 - `role_type`: Who the reviewer is -- "economic_buyer", "decision_maker", "champion", "evaluator", "end_user"
+- `reviewer_title`: The reviewer's actual job title, e.g. "VP of Engineering", "Head of Marketing" (may be null)
 - `industry`: Target company industry (may be null)
+- `company_size`: Company size segment, e.g. "1001-5000 employees", "Mid-Market (51-1000 emp.)" (may be null)
 - `key_quotes`: Curated evidence phrases from enrichment (array of strings)
 - `feature_gaps`: Specific features the company is missing or unhappy with (array of strings, may be empty)
 - `primary_workflow`: The main workflow they use the product for (may be null)
@@ -106,23 +108,27 @@ Return a JSON object with the generated content. The structure depends on the ch
 
 15. **Industry relevance**: When `industry` is available, reference sector-specific challenges, compliance requirements, or use cases to build credibility.
 
-16. **Blog post linking**: When `selling.blog_posts` is provided, reference 1-2 relevant posts as published analysis. Frame them as independent research: "We recently published an analysis of [topic]: [url]" or "Our latest report covers this: [url]". Do NOT link all posts in one email -- pick the most relevant 1-2. Rotate different posts across channels (cold vs follow-up) so each email offers fresh content.
+16. **Reviewer title calibration**: When `reviewer_title` is available, use it to calibrate tone and focus beyond the generic `role_type`. A "VP of Engineering" gets different language than a "Head of Marketing" even if both are `decision_maker`. Reference their functional domain naturally.
 
-17. **Persona-specific data emphasis**: When `target_persona` is provided, lead with the data most relevant to that audience:
+17. **Company size context**: When `company_size` is available, use it to calibrate the pitch. Enterprise (1000+ employees) cares about scalability, compliance, and total cost of ownership. Mid-market cares about value and ease of migration. SMB cares about simplicity and price.
+
+18. **Blog post linking**: When `selling.blog_posts` is provided, reference 1-2 relevant posts as published analysis. Frame them as independent research: "We recently published an analysis of [topic]: [url]" or "Our latest report covers this: [url]". Do NOT link all posts in one email -- pick the most relevant 1-2. Rotate different posts across channels (cold vs follow-up) so each email offers fresh content.
+
+19. **Persona-specific data emphasis**: When `target_persona` is provided, lead with the data most relevant to that audience:
    - `executive`: Open with the business impact number (churn cost, seat count x price delta, contract renewal risk). Close with strategic positioning.
    - `technical`: Open with the specific feature gap or integration failure. Include the migration path or technical comparison. Close with an evaluation offer.
    - `operations`: Open with the support/reliability pain (ticket volume, downtime incidents, team complaints). Close with workflow improvement and team productivity gains.
 
-18. **WORD LIMIT (strictly enforced post-generation)**: email_cold body: 75-150 words. email_followup body: 75-125 words. A 100-word email is 5-6 short sentences. When in doubt, cut a sentence. Exceeding the limit triggers an automatic rewrite request.
+20. **WORD LIMIT (strictly enforced post-generation)**: email_cold body: 75-150 words. email_followup body: 75-125 words. A 100-word email is 5-6 short sentences. When in doubt, cut a sentence. Exceeding the limit triggers an automatic rewrite request.
 
-19. **HTML body (mandatory)**: The `body` field MUST be valid HTML. Use ONLY `<p>`, `<br>`, `<strong>`, and `<a>` tags. Do NOT use markdown syntax (`**`, `*`, `#`, `-` lists). Do NOT use `<div>`, `<table>`, `<img>`, or inline styles. Every paragraph must be wrapped in `<p>` tags.
+21. **HTML body (mandatory)**: The `body` field MUST be valid HTML. Use ONLY `<p>`, `<br>`, `<strong>`, and `<a>` tags. Do NOT use markdown syntax (`**`, `*`, `#`, `-` lists). Do NOT use `<div>`, `<table>`, `<img>`, or inline styles. Every paragraph must be wrapped in `<p>` tags.
 
-20. **Subject line length**: Subject lines MUST be under 50 characters for mobile preview.
+22. **Subject line length**: Subject lines MUST be under 50 characters for mobile preview.
 
-21. **Protect the premium reveal**: Subject lines must NOT include competitor names, exact replacement winners, exact savings figures, account names, or the main premium insight. Use curiosity without giving away the answer. NEVER use spam trigger words in subjects: "urgent", "urgency", "act now", "limited time", "don't miss", "last chance", "alert", "warning", "immediate", "guaranteed", "free", "risk-free". Describe the data, not the alarm.
+23. **Protect the premium reveal**: Subject lines must NOT include competitor names, exact replacement winners, exact savings figures, account names, or the main premium insight. Use curiosity without giving away the answer. NEVER use spam trigger words in subjects: "urgent", "urgency", "act now", "limited time", "don't miss", "last chance", "alert", "warning", "immediate", "guaranteed", "free", "risk-free". Describe the data, not the alarm.
 
-22. **CTA is separate**: The `cta` field is a standalone call-to-action string. The body should end naturally leading into the CTA. Include the affiliate/booking URL as an `<a>` tag at the end of the body, not in the `cta` field.
+24. **CTA is separate**: The `cta` field is a standalone call-to-action string. The body should end naturally leading into the CTA. Include the affiliate/booking URL as an `<a>` tag at the end of the body, not in the `cta` field.
 
-23. **Quote framing is mandatory**: Never drop a bare quote or number into the email as an unframed fact. Wrap evidence with analyst language such as "Buyers are reporting...", "Teams evaluating alternatives are saying...", or "Across the accounts we analyzed..." before the quote or number.
+25. **Quote framing is mandatory**: Never drop a bare quote or number into the email as an unframed fact. Wrap evidence with analyst language such as "Buyers are reporting...", "Teams evaluating alternatives are saying...", or "Across the accounts we analyzed..." before the quote or number.
 
 Return ONLY the JSON object, no markdown fences, no explanation.

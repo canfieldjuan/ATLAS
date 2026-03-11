@@ -40,9 +40,13 @@ class ReasoningAgentGraph:
             "entity_id": event.entity_id,
             "payload": event.payload,
         }
+        from ..services.llm_router import get_llm as _get_llm
+        _rlm = _get_llm("reasoning")
         span = tracer.start_span(
             span_name="reasoning.process",
             operation_type="reasoning",
+            model_name=getattr(_rlm, "model", getattr(_rlm, "model_id", None)) if _rlm else None,
+            model_provider=getattr(_rlm, "name", None) if _rlm else None,
             session_id=str(event.id) if event.id else None,
             metadata={
                 "business": build_business_trace_context(

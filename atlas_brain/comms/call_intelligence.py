@@ -379,9 +379,32 @@ async def _extract_call_data(
         logger.info("call_intelligence LLM tokens: in=%d out=%d",
                      _usage["input_tokens"], _usage.get("output_tokens", 0))
         from ..pipelines.llm import trace_llm_call
-        trace_llm_call("comms.call_intelligence", input_tokens=_usage["input_tokens"],
-                       output_tokens=_usage.get("output_tokens", 0),
-                       model=getattr(llm, "model", ""), provider=getattr(llm, "name", ""))
+        _trace = result.get("_trace_meta", {})
+        trace_llm_call(
+            "comms.call_intelligence",
+            input_tokens=_usage["input_tokens"],
+            output_tokens=_usage.get("output_tokens", 0),
+            model=getattr(llm, "model", ""),
+            provider=getattr(llm, "name", ""),
+            input_data={
+                "messages": [
+                    {"role": m.role, "content": m.content[:500]} for m in messages
+                ],
+            },
+            output_data={
+                "response": result.get("response", "")[:2000],
+            },
+            api_endpoint=_trace.get("api_endpoint"),
+            provider_request_id=_trace.get("provider_request_id"),
+            ttft_ms=_trace.get("ttft_ms"),
+            inference_time_ms=_trace.get("inference_time_ms"),
+            queue_time_ms=_trace.get("queue_time_ms"),
+            metadata={
+                "transcript_length": len(transcript),
+                "business_name": getattr(business_context, "name", None) if business_context else None,
+                "pipeline": "call_intelligence",
+            },
+        )
     text = result.get("response", "").strip()
     if not text:
         return transcript[:200], {}, []

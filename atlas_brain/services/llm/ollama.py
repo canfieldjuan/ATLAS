@@ -193,6 +193,13 @@ class OllamaLLM(BaseModelService):
                     "total_duration_ms": total_duration,
                     "request_id": data.get("request_id") or data.get("id"),
                     "id": data.get("id") or data.get("request_id"),
+                    "_trace_meta": {
+                        "api_endpoint": f"{self.base_url}/api/chat",
+                        "provider_request_id": data.get("request_id") or data.get("id"),
+                        "inference_time_ms": eval_duration,
+                        "queue_time_ms": max(0, total_duration - prompt_eval_duration - eval_duration) if total_duration else None,
+                        "ttft_ms": prompt_eval_duration,
+                    },
                 }
             except httpx.HTTPError as e:
                 logger.error("Ollama chat error: %s", e)

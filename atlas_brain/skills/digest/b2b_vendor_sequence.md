@@ -100,3 +100,6 @@ Respond with ONLY this JSON (no markdown fences, no extra text):
 - If the original email included a competitive awareness angle, maintain that thread naturally when relevant
 - When the selling context includes `blog_posts`, reference ONE blog link per email. Rotate across steps -- never repeat the same post link.
 - When `key_quotes` are available in the company context, weave 1-2 into the body as evidence. Never attribute to individuals.
+- When `reviewer_title` is in the company context, calibrate tone to that functional domain (e.g., a "VP of Engineering" gets different language than a "Head of CS").
+- When `company_size` is in the company context, tailor the pitch: enterprise (1000+) = scalability, compliance, TCO; mid-market = value, migration ease; SMB = simplicity, price.
+- When `industry` is in the company context, reference sector-specific challenges or use cases for credibility.

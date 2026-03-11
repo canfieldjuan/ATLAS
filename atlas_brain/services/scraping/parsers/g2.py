@@ -407,12 +407,39 @@ def _parse_review_card(card, target: ScrapeTarget) -> dict | None:
     if not review_text or len(review_text) < 20:
         return None
 
-    # Reviewer info
+    # Reviewer info -- try semantic selectors first (legacy G2 markup)
     reviewer_name = _get_text(card, '[itemprop="author"], [class*="reviewer-name"]')
     reviewer_title = _get_text(card, '[class*="reviewer-title"], [class*="job-title"]')
     reviewer_company = _get_text(card, '[class*="reviewer-company"], [class*="organization"]')
     company_size = _get_text(card, '[class*="company-size"], [class*="employees"]')
     reviewer_industry = _get_text(card, '[class*="industry"]')
+
+    # G2 2025+ uses Tailwind utility classes (elv-*) with no semantic names.
+    # Reviewer info is: bold div = name, then sibling subtle divs = title,
+    # optional industry, and company size segment (contains "emp.").
+    if not reviewer_title:
+        name_el = card.select_one(
+            'div[class*="elv-font-bold"]:not([class*="elv-text-lg"])'
+        )
+        if name_el:
+            if not reviewer_name:
+                reviewer_name = name_el.get_text(strip=True) or None
+            # Collect subtle sibling divs in the same info block
+            info_parent = name_el.parent.parent if name_el.parent else None
+            if info_parent:
+                subtle = [
+                    d.get_text(strip=True)
+                    for d in info_parent.select('div[class*="elv-text-subtle"]')
+                    if d.get_text(strip=True)
+                ]
+                # Last element with "emp." is company size; others are title/industry
+                for idx, text in enumerate(subtle):
+                    if "emp." in text or "employees" in text.lower():
+                        company_size = company_size or text
+                    elif idx == 0:
+                        reviewer_title = reviewer_title or text
+                    else:
+                        reviewer_industry = reviewer_industry or text
 
     # Date
     reviewed_at = None

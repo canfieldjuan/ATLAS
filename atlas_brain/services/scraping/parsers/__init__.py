@@ -113,4 +113,4 @@ def get_parser_version(source: str) -> str | None:
 
 
 # Auto-register parsers on import
-from . import reddit, trustradius, capterra, g2, peerspot, getapp, gartner, hackernews, github, rss, youtube, producthunt, trustpilot, stackoverflow, quora, twitter, software_advice  # noqa: E402, F401
+from . import reddit, trustradius, capterra, g2, peerspot, getapp, gartner, hackernews, github, rss, youtube, producthunt, trustpilot, stackoverflow, quora, twitter, software_advice, sourceforge  # noqa: E402, F401

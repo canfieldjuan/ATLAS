@@ -325,7 +325,9 @@ async def list_high_intent(
                     THEN (enrichment->'budget_signals'->>'seat_count')::int END AS seat_count,
                enrichment->'use_case'->>'lock_in_level' AS lock_in_level,
                enrichment->'timeline'->>'contract_end' AS contract_end,
-               enrichment->'buyer_authority'->>'buying_stage' AS buying_stage
+               enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
+               reviewer_title, company_size_raw,
+               COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry
         FROM b2b_reviews
         WHERE {where}
         ORDER BY (enrichment->>'urgency_score')::numeric DESC
@@ -350,6 +352,9 @@ async def list_high_intent(
             "lock_in_level": r["lock_in_level"],
             "contract_end": r["contract_end"],
             "buying_stage": r["buying_stage"],
+            "reviewer_title": r["reviewer_title"],
+            "company_size": r["company_size_raw"],
+            "industry": r["industry"],
         })
 
     return {"companies": companies, "count": len(companies)}
@@ -402,7 +407,9 @@ async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(o
         f"""
         SELECT reviewer_company,
                (enrichment->>'urgency_score')::numeric AS urgency,
-               enrichment->>'pain_category' AS pain
+               enrichment->>'pain_category' AS pain,
+               reviewer_title, company_size_raw,
+               COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry
         FROM b2b_reviews
         WHERE vendor_name ILIKE '%' || $1 || '%'
           AND enrichment_status = 'enriched'
@@ -468,6 +475,9 @@ async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(o
             "company": r["reviewer_company"],
             "urgency": _safe_float(r["urgency"], 0),
             "pain": r["pain"],
+            "title": r["reviewer_title"],
+            "company_size": r["company_size_raw"],
+            "industry": r["industry"],
         }
         for r in hi_rows
     ]
@@ -813,7 +823,8 @@ async def search_reviews(
                enrichment->>'pain_category' AS pain_category,
                (enrichment->'churn_signals'->>'intent_to_leave')::boolean AS intent_to_leave,
                (enrichment->'reviewer_context'->>'decision_maker')::boolean AS decision_maker,
-               enriched_at
+               enriched_at, reviewer_title, company_size_raw,
+               COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry
         FROM b2b_reviews
         WHERE {where}
         ORDER BY (enrichment->>'urgency_score')::numeric DESC
@@ -834,6 +845,9 @@ async def search_reviews(
             "intent_to_leave": r["intent_to_leave"],
             "decision_maker": r["decision_maker"],
             "enriched_at": str(r["enriched_at"]) if r["enriched_at"] else None,
+            "reviewer_title": r["reviewer_title"],
+            "company_size": r["company_size_raw"],
+            "industry": r["industry"],
         }
         for r in rows
     ]

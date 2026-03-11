@@ -63,6 +63,15 @@ class LangGraphAgentAdapter:
         except Exception:
             return "unknown"
 
+    def _get_model_provider(self) -> str:
+        """Get the active LLM provider name for tracing."""
+        try:
+            from ..services import llm_registry
+            active = llm_registry.get_active()
+            return getattr(active, "name", "unknown") if active else "unknown"
+        except Exception:
+            return "unknown"
+
     async def process(
         self,
         input_text: str,
@@ -84,7 +93,7 @@ class LangGraphAgentAdapter:
             span_name="agent.process",
             operation_type="llm_call",
             model_name=self._get_model_name(),
-            model_provider="ollama",
+            model_provider=self._get_model_provider(),
             session_id=session_id,
             metadata={"input_type": input_type, "speaker_id": speaker_id},
         )
