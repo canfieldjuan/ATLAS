@@ -691,6 +691,62 @@ def _validate_enrichment(result: dict) -> bool:
             if isinstance(c, dict) and "name" in c
         ]
 
+    # Validate evidence_type, displacement_confidence, and reason_category on each competitor entry
+    _VALID_EVIDENCE_TYPES = {"explicit_switch", "active_evaluation", "implied_preference", "reverse_flow", "neutral_mention"}
+    _VALID_DISP_CONFIDENCE = {"high", "medium", "low", "none"}
+    _VALID_REASON_CATEGORIES = {"pricing", "features", "reliability", "ux", "support", "integration"}
+    _ET_TO_CONTEXT = {
+        "explicit_switch": "switched_to",
+        "active_evaluation": "considering",
+        "implied_preference": "compared",
+        "reverse_flow": "switched_from",
+        "neutral_mention": "compared",
+    }
+    for comp in result.get("competitors_mentioned", []):
+        # Coerce unknown evidence_type; fall back from legacy context field
+        et = comp.get("evidence_type")
+        if et not in _VALID_EVIDENCE_TYPES:
+            # Map legacy context → evidence_type
+            legacy = comp.get("context", "")
+            _CONTEXT_TO_ET = {
+                "switched_to": "explicit_switch",
+                "considering": "active_evaluation",
+                "compared": "implied_preference",
+                "switched_from": "reverse_flow",
+            }
+            comp["evidence_type"] = _CONTEXT_TO_ET.get(legacy, "neutral_mention")
+
+        # Coerce unknown displacement_confidence
+        dc = comp.get("displacement_confidence")
+        if dc not in _VALID_DISP_CONFIDENCE:
+            comp["displacement_confidence"] = "low"
+
+        # Consistency: reverse_flow → confidence "none"
+        if comp["evidence_type"] == "reverse_flow":
+            comp["displacement_confidence"] = "none"
+        # Consistency: neutral_mention → confidence at most "low"
+        if comp["evidence_type"] == "neutral_mention" and comp.get("displacement_confidence") in ("high", "medium"):
+            comp["displacement_confidence"] = "low"
+
+        # Coerce reason_category to taxonomy
+        rc = comp.get("reason_category")
+        if rc and rc not in _VALID_REASON_CATEGORIES:
+            comp["reason_category"] = None
+
+        # Backward compat: populate context from evidence_type
+        comp["context"] = _ET_TO_CONTEXT.get(comp["evidence_type"], "compared")
+
+        # Backward compat: populate reason from reason_category + reason_detail
+        rc = comp.get("reason_category")
+        rd = comp.get("reason_detail")
+        if rc and rd:
+            comp["reason"] = f"{rc}: {rd}"
+        elif rc:
+            comp["reason"] = rc
+        elif rd:
+            comp["reason"] = rd
+        # else: keep existing reason if any (legacy data)
+
     # Type check: quotable_phrases must be list if present
     qp = result.get("quotable_phrases")
     if qp is not None and not isinstance(qp, list):

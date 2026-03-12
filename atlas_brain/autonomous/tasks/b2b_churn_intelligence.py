@@ -853,12 +853,16 @@ def _build_deterministic_vendor_feed(
 
 
 def _build_reason_lookup(competitor_reasons: list[dict[str, Any]]) -> dict[tuple[str, str], list[str]]:
-    """Map (vendor, competitor) to ordered reason strings."""
+    """Map (vendor, competitor) to ordered reason strings.
+
+    Prefers structured ``reason_category`` when available; falls back to
+    free-text ``reason`` for legacy data.
+    """
     lookup: dict[tuple[str, str], list[str]] = {}
     for row in competitor_reasons:
         vendor = _canonicalize_vendor(row.get("vendor", ""))
         competitor = _canonicalize_competitor(row.get("competitor", ""))
-        reason = row.get("reason") or ""
+        reason = row.get("reason_category") or row.get("reason") or ""
         if not vendor or not competitor or not reason:
             continue
         key = (vendor, competitor)
@@ -945,7 +949,11 @@ def _build_deterministic_displacement_map(
     *,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
-    """Build displacement report from deterministic aggregated flows."""
+    """Build displacement report from evidence-quality-filtered aggregated flows.
+
+    Quality gate: only edges with at least one explicit_switch or active_evaluation
+    survive.  Pure implied_preference edges are market-pain data, not displacement.
+    """
     reason_lookup = _build_reason_lookup(competitor_reasons)
     results: list[dict[str, Any]] = []
     for row in competitive_disp:
@@ -953,25 +961,49 @@ def _build_deterministic_displacement_map(
         competitor = _canonicalize_competitor(row.get("competitor") or "")
         if not vendor or not competitor or vendor.lower() == competitor.lower():
             continue
-        reasons = reason_lookup.get((vendor, competitor), [])
+
         mention_count = int(row.get("mention_count") or 0)
-        if mention_count >= 5:
+        explicit = int(row.get("explicit_switches") or 0)
+        active_eval = int(row.get("active_evaluations") or 0)
+        implied = int(row.get("implied_preferences") or 0)
+
+        # Quality gate: require at least one explicit switch or active evaluation
+        if explicit == 0 and active_eval == 0:
+            continue
+
+        # Primary driver: use structured reason_categories; fall back to keyword inference
+        reason_cats = row.get("reason_categories") or {}
+        if reason_cats:
+            driver = max(reason_cats.items(), key=lambda x: x[1])[0]
+        else:
+            reasons = reason_lookup.get((vendor, competitor), [])
+            driver = _infer_driver_from_reasons(reasons)
+
+        # Signal strength: weight evidence types (explicit 3x, active_eval 2x, implied 1x)
+        weighted_signal = explicit * 3 + active_eval * 2 + implied * 1
+        if weighted_signal >= 15 or explicit >= 3:
             strength = "strong"
-        elif mention_count >= 3:
+        elif weighted_signal >= 6 or explicit >= 1:
             strength = "moderate"
         else:
             strength = "emerging"
-        driver = _infer_driver_from_reasons(reasons)
+
+        reasons_for_quote = reason_lookup.get((vendor, competitor), [])
         results.append({
             "from_vendor": vendor,
             "to_vendor": competitor,
             "mention_count": mention_count,
             "primary_driver": driver,
             "signal_strength": strength,
+            "evidence_breakdown": {
+                "explicit_switches": explicit,
+                "active_evaluations": active_eval,
+                "implied_preferences": implied,
+            },
             "key_quote": _pick_displacement_quote(
                 vendor=vendor,
                 competitor=competitor,
-                reasons=reasons,
+                reasons=reasons_for_quote,
                 quote_lookup=quote_lookup,
             ),
             "industries": row.get("industries", []),
@@ -3479,13 +3511,31 @@ async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days
 
 
 async def _fetch_competitive_displacement(pool, window_days: int) -> list[dict[str, Any]]:
-    """Who's winning from whom -- competitive flows with 2+ mentions (per skill rules)."""
+    """Competitive displacement flows — filtered to real displacement evidence only.
+
+    Uses evidence_type (new schema) with COALESCE fallback to context (legacy).
+    Excludes reverse_flow, neutral_mention, and low-confidence implied_preference.
+    """
     sources = _intelligence_source_allowlist()
     filters = _eligible_review_filters(window_param=1, source_param=2)
     rows = await pool.fetch(
         f"""
         SELECT vendor_name,
             comp.value->>'name' AS competitor,
+            COALESCE(
+                comp.value->>'evidence_type',
+                CASE comp.value->>'context'
+                    WHEN 'switched_to' THEN 'explicit_switch'
+                    WHEN 'considering' THEN 'active_evaluation'
+                    WHEN 'compared' THEN 'implied_preference'
+                    WHEN 'switched_from' THEN 'reverse_flow'
+                    ELSE 'neutral_mention'
+                END
+            ) AS evidence_type,
+            COALESCE(
+                comp.value->>'displacement_confidence', 'low'
+            ) AS displacement_confidence,
+            comp.value->>'reason_category' AS reason_category,
             comp.value->>'context' AS direction,
             count(*) AS mention_count,
             array_agg(DISTINCT company_size_raw) FILTER (WHERE company_size_raw IS NOT NULL) AS sizes,
@@ -3494,7 +3544,29 @@ async def _fetch_competitive_displacement(pool, window_days: int) -> list[dict[s
         FROM b2b_reviews
         CROSS JOIN LATERAL jsonb_array_elements(enrichment->'competitors_mentioned') AS comp(value)
         WHERE {filters}
-        GROUP BY vendor_name, comp.value->>'name', comp.value->>'context'
+          AND COALESCE(
+                comp.value->>'evidence_type',
+                CASE comp.value->>'context'
+                    WHEN 'switched_to' THEN 'explicit_switch'
+                    WHEN 'considering' THEN 'active_evaluation'
+                    WHEN 'compared' THEN 'implied_preference'
+                    WHEN 'switched_from' THEN 'reverse_flow'
+                    ELSE 'neutral_mention'
+                END
+              ) IN ('explicit_switch', 'active_evaluation', 'implied_preference')
+          AND NOT (
+              COALESCE(
+                comp.value->>'evidence_type',
+                CASE comp.value->>'context'
+                    WHEN 'compared' THEN 'implied_preference'
+                    ELSE 'neutral_mention'
+                END
+              ) = 'implied_preference'
+              AND COALESCE(comp.value->>'displacement_confidence', 'low') = 'low'
+          )
+        GROUP BY vendor_name, comp.value->>'name',
+                 evidence_type, displacement_confidence, reason_category,
+                 comp.value->>'context'
         HAVING count(*) >= 2
         ORDER BY mention_count DESC
         """,
@@ -3502,21 +3574,27 @@ async def _fetch_competitive_displacement(pool, window_days: int) -> list[dict[s
         sources,
     )
     # Post-process: canonicalize competitors, filter self-flows, re-aggregate
-    merged: dict[tuple[str, str, str | None], int] = {}
-    merged_industries: dict[tuple[str, str, str | None], list[str]] = {}
-    merged_sizes: dict[tuple[str, str, str | None], list[str]] = {}
+    MergeKey = tuple[str, str, str]  # (vendor, competitor, evidence_type)
+    merged: dict[MergeKey, int] = {}
+    merged_industries: dict[MergeKey, list[str]] = {}
+    merged_sizes: dict[MergeKey, list[str]] = {}
+    merged_reason_cats: dict[MergeKey, dict[str, int]] = {}
     for r in rows:
         canon = _canonicalize_competitor(r["competitor"] or "")
         vendor = _canonicalize_vendor(r["vendor_name"] or "")
-        # Filter self-flows (vendor mentioning itself)
         if canon and vendor and canon.lower() == vendor.lower():
             continue
-        key = (vendor, canon, r["direction"])
+        et = r["evidence_type"] or "implied_preference"
+        key: MergeKey = (vendor, canon, et)
         merged[key] = merged.get(key, 0) + r["mention_count"]
         if r.get("industries"):
             merged_industries.setdefault(key, []).extend(r["industries"])
         if r.get("sizes"):
             merged_sizes.setdefault(key, []).extend(r["sizes"])
+        rc = r.get("reason_category")
+        if rc:
+            cats = merged_reason_cats.setdefault(key, {})
+            cats[rc] = cats.get(rc, 0) + r["mention_count"]
 
     # Re-apply HAVING count >= 2, sort by mention_count DESC
     results = []
@@ -3528,8 +3606,9 @@ async def _fetch_competitive_displacement(pool, window_days: int) -> list[dict[s
         results.append({
             "vendor": k[0],
             "competitor": k[1],
-            "direction": k[2],
+            "evidence_type": k[2],
             "mention_count": cnt,
+            "reason_categories": merged_reason_cats.get(k, {}),
             "industries": sorted(set(i for i in ind_list if i and i != "unknown")),
             "company_sizes": sorted(set(s for s in sz_list if s)),
         })
@@ -4482,7 +4561,7 @@ async def _fetch_timeline_signals(pool, window_days: int, *, limit: int = 50) ->
 
 
 async def _fetch_competitor_reasons(pool, window_days: int) -> list[dict[str, Any]]:
-    """Top reasons per vendor/competitor pair (aggregated, not raw dump)."""
+    """Top reasons per vendor/competitor pair — prefers structured reason_category."""
     sources = _intelligence_source_allowlist()
     filters = _eligible_review_filters(window_param=1, source_param=2)
     rows = await pool.fetch(
@@ -4491,7 +4570,9 @@ async def _fetch_competitor_reasons(pool, window_days: int) -> list[dict[str, An
             SELECT vendor_name,
                 comp.value->>'name' AS competitor,
                 comp.value->>'context' AS direction,
-                comp.value->>'reason' AS reason,
+                COALESCE(comp.value->>'reason_category', comp.value->>'reason') AS reason,
+                comp.value->>'reason_category' AS reason_category,
+                comp.value->>'reason_detail' AS reason_detail,
                 count(*) AS mention_count,
                 ROW_NUMBER() OVER (
                     PARTITION BY vendor_name, comp.value->>'name'
@@ -4500,10 +4581,11 @@ async def _fetch_competitor_reasons(pool, window_days: int) -> list[dict[str, An
             FROM b2b_reviews
             CROSS JOIN LATERAL jsonb_array_elements(enrichment->'competitors_mentioned') AS comp(value)
                         WHERE {filters}
-              AND comp.value->>'reason' IS NOT NULL
-            GROUP BY vendor_name, comp.value->>'name', comp.value->>'context', comp.value->>'reason'
+              AND COALESCE(comp.value->>'reason_category', comp.value->>'reason') IS NOT NULL
+            GROUP BY vendor_name, comp.value->>'name', comp.value->>'context',
+                     reason, reason_category, reason_detail
         )
-        SELECT vendor_name, competitor, direction, reason, mention_count
+        SELECT vendor_name, competitor, direction, reason, reason_category, reason_detail, mention_count
         FROM ranked_reasons WHERE rn <= 3
         ORDER BY mention_count DESC
         """,
@@ -4516,6 +4598,8 @@ async def _fetch_competitor_reasons(pool, window_days: int) -> list[dict[str, An
             "competitor": r["competitor"],
             "direction": r["direction"],
             "reason": r["reason"],
+            "reason_category": r["reason_category"],
+            "reason_detail": r["reason_detail"],
             "mention_count": r["mention_count"],
         }
         for r in rows
@@ -4746,15 +4830,44 @@ def _build_pain_lookup(pain_dist: list[dict]) -> dict[str, list[dict]]:
 
 
 def _aggregate_competitive_disp(competitive_disp: list[dict]) -> list[dict]:
-    """Merge rows with same (vendor, competitor) across directions, summing mentions."""
-    agg: dict[tuple[str, str], int] = {}
+    """Merge rows with same (vendor, competitor), preserving evidence breakdown."""
+    agg: dict[tuple[str, str], dict[str, Any]] = {}
     for row in competitive_disp:
         key = (row.get("vendor", ""), row.get("competitor", ""))
-        agg[key] = agg.get(key, 0) + int(row.get("mention_count") or 0)
-    return [
-        {"vendor": v, "competitor": c, "mention_count": m}
-        for (v, c), m in sorted(agg.items(), key=lambda x: x[1], reverse=True)
-    ]
+        if key not in agg:
+            agg[key] = {
+                "mention_count": 0,
+                "explicit_switches": 0,
+                "active_evaluations": 0,
+                "implied_preferences": 0,
+                "reason_categories": {},
+            }
+        entry = agg[key]
+        cnt = int(row.get("mention_count") or 0)
+        entry["mention_count"] += cnt
+        et = row.get("evidence_type", "implied_preference")
+        if et == "explicit_switch":
+            entry["explicit_switches"] += cnt
+        elif et == "active_evaluation":
+            entry["active_evaluations"] += cnt
+        else:
+            entry["implied_preferences"] += cnt
+        # Merge reason_categories from this row
+        for rc, rc_cnt in (row.get("reason_categories") or {}).items():
+            entry["reason_categories"][rc] = entry["reason_categories"].get(rc, 0) + rc_cnt
+
+    results = []
+    for (v, c), data in sorted(agg.items(), key=lambda x: x[1]["mention_count"], reverse=True):
+        results.append({
+            "vendor": v,
+            "competitor": c,
+            "mention_count": data["mention_count"],
+            "explicit_switches": data["explicit_switches"],
+            "active_evaluations": data["active_evaluations"],
+            "implied_preferences": data["implied_preferences"],
+            "reason_categories": data["reason_categories"],
+        })
+    return results
 
 
 def _build_competitor_lookup(competitive_disp: list[dict]) -> dict[str, list[dict]]:
