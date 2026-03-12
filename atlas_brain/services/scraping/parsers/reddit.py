@@ -34,6 +34,8 @@ _DOMAIN = "reddit.com"
 _MIN_SELFTEXT_LEN = 100       # Skip short posts
 _MIN_COMMENT_LEN = 80         # Skip short comments
 _MIN_COMMENT_SCORE = 2        # Skip low-signal comments
+_MAX_SEARCH_REQUESTS = 60     # Cap total search requests per scrape to stay within rate limits
+_MAX_COMMENT_FETCHES = 30     # Cap comment fetches per scrape
 
 # ---------------------------------------------------------------------------
 # Subreddit lists
@@ -190,8 +192,14 @@ class RedditParser:
             if profile in ("deep", "insider"):
                 comment_limit = 15 if profile == "insider" else 10
                 comment_min_score = _MIN_COMMENT_SCORE
+                comment_fetches = 0
 
                 for post_dict in post_items["posts"]:
+                    if comment_fetches >= _MAX_COMMENT_FETCHES:
+                        logger.info("Reddit comment fetch cap (%d) reached for %s [%s]",
+                                    _MAX_COMMENT_FETCHES, target.vendor_name, profile)
+                        break
+
                     post_id = post_dict["source_review_id"]
                     num_comments = (post_dict.get("raw_metadata") or {}).get("num_comments", 0)
                     if num_comments < 3:
@@ -203,6 +211,7 @@ class RedditParser:
                     reviews.extend(comments)
                     pages_scraped += cpages
                     errors.extend(cerrs)
+                    comment_fetches += 1
 
         logger.info(
             "Reddit authenticated scrape [%s] for %s: %d items from %d requests",
@@ -224,10 +233,16 @@ class RedditParser:
         pages: list[str] = []
 
         queries = self._build_queries(target.vendor_name, profile)
+        request_count = 0
 
         # Strategy 1: Search each subreddit
         for sub in subreddits:
             for query in queries:
+                if request_count >= _MAX_SEARCH_REQUESTS:
+                    logger.info("Reddit request cap (%d) reached for %s [%s], stopping",
+                                _MAX_SEARCH_REQUESTS, target.vendor_name, profile)
+                    break
+
                 url = (
                     f"https://oauth.reddit.com/r/{sub}/search"
                     f"?q={quote_plus(query)}&restrict_sr=on&sort=new&limit=100&t=all"
@@ -235,6 +250,7 @@ class RedditParser:
                 try:
                     resp = await http.get(url)
                     pages.append(url)
+                    request_count += 1
 
                     if resp.status_code == 429:
                         logger.debug("Reddit rate limited on r/%s, pausing", sub)
@@ -257,10 +273,16 @@ class RedditParser:
                     logger.warning("Reddit auth scrape failed r/%s: %s", sub, exc)
 
                 await asyncio.sleep(0.5)
+            else:
+                continue
+            break  # break outer loop if inner broke on cap
 
         # Strategy 2: Global search for churn-specific phrases (churn / deep profiles only)
         if profile in ("churn", "deep"):
             for qualifier in _CHURN_QUALIFIERS:
+                if request_count >= _MAX_SEARCH_REQUESTS:
+                    break
+
                 query = f'"{qualifier} {target.vendor_name}"'
                 url = (
                     f"https://oauth.reddit.com/search"
@@ -269,6 +291,7 @@ class RedditParser:
                 try:
                     resp = await http.get(url)
                     pages.append(url)
+                    request_count += 1
 
                     if resp.status_code == 200:
                         data = resp.json()
@@ -384,8 +407,10 @@ class RedditParser:
         # Content type depends on search profile
         if profile == "insider":
             content_type = "insider_account"
+            source_weight = 0.6  # insider accounts are high-value forward-looking signals
         else:
             content_type = "community_discussion"
+            source_weight = 0.5
 
         # Reddit fullname used as thread_id (e.g. "t3_abc123")
         fullname = post.get("name", f"t3_{post_id}")
@@ -416,8 +441,8 @@ class RedditParser:
             "comment_depth": 0,
             "raw_metadata": {
                 "extraction_method": "api_json",
-                "source_weight": 0.5,
-                "source_type": "community_discussion",
+                "source_weight": source_weight,
+                "source_type": content_type,
                 "search_profile": profile,
                 "subreddit": post.get("subreddit", ""),
                 "score": post.get("score", 0),

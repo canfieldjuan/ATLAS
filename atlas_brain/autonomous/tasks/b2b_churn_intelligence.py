@@ -18,6 +18,7 @@ import json
 import logging
 import math
 import uuid as _uuid
+from collections import Counter
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -3312,8 +3313,9 @@ async def _fetch_insider_aggregates(pool, window_days: int) -> list[dict[str, An
             vendor_name,
             COUNT(DISTINCT id)::int AS signal_count,
             ROUND(
-                AVG(DISTINCT CASE WHEN enrichment->'insider_signals'->'talent_drain'->>'departures_mentioned' = 'true'
-                         THEN 1 ELSE 0 END)::numeric,
+                COUNT(DISTINCT CASE WHEN enrichment->'insider_signals'->'talent_drain'->>'departures_mentioned' = 'true'
+                         THEN id END)::numeric
+                / NULLIF(COUNT(DISTINCT id), 0)::numeric,
                 4
             ) AS talent_drain_rate,
             jsonb_agg(DISTINCT
@@ -3350,7 +3352,6 @@ def _build_insider_lookup(rows: list[Any]) -> dict[str, dict]:
         quotable_raw = _safe_json(r["quotable_phrases"]) if r["quotable_phrases"] else []
 
         # Mode of org health fields across all insider posts
-        from collections import Counter
         bureaucracy = Counter(
             h.get("bureaucracy_level") for h in org_health_array if h and h.get("bureaucracy_level")
         )
