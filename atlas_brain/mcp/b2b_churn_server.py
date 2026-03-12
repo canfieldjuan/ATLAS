@@ -101,6 +101,7 @@ VALID_REPORT_TYPES = (
     "account_deep_dive",
     "vendor_retention",
     "challenger_intel",
+    "battle_card",
 )
 
 from atlas_brain.services.scraping.sources import ALL_SOURCES, ReviewSource

@@ -426,6 +426,136 @@ def _render_generic_data(pdf: IntelligenceReportPDF, data: dict, skip_keys: set 
                     pdf.body_text(f"  - {_safe_str(item)[:200]}")
 
 
+def _render_battle_card(
+    pdf: IntelligenceReportPDF, data: Any, exec_summary: str | None,
+) -> None:
+    """Render a per-vendor battle card report."""
+    card = data if isinstance(data, dict) else {}
+
+    if exec_summary:
+        pdf.section_title("Executive Summary")
+        pdf.body_text(exec_summary)
+
+    vendor = _safe_str(card.get("vendor", "Unknown"))
+    score = float(card.get("churn_pressure_score", 0))
+    confidence = _safe_str(card.get("confidence", ""))
+    total_reviews = card.get("total_reviews", 0)
+
+    # Vendor header with score
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.set_text_color(*_score_color(score))
+    pdf.cell(0, 8, _latin1_safe(f"Battle Card: {vendor}"), new_x="LMARGIN", new_y="NEXT")
+
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(*_CLR_DARK)
+    pdf.cell(0, 5, _latin1_safe(
+        f"Churn Pressure Score: {score:.0f}/100 | "
+        f"Reviews: {total_reviews} | Confidence: {confidence}"
+    ), new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
+
+    # Section 1: Vendor Weaknesses
+    weaknesses = _safe_list(card.get("vendor_weaknesses"))
+    if weaknesses:
+        pdf.section_title("Vendor Weaknesses")
+        rows = []
+        for w in weaknesses[:5]:
+            if isinstance(w, dict):
+                evidence = str(w.get("evidence_count") or w.get("count", ""))
+                rows.append([
+                    _safe_str(w.get("area", ""))[:35],
+                    evidence,
+                    _safe_str(w.get("source", ""))[:20],
+                ])
+        if rows:
+            pdf.simple_table(["Weakness", "Evidence", "Source"], rows, [70, 35, 45])
+
+    # Section 2: Customer Pain Quotes
+    quotes = _safe_list(card.get("customer_pain_quotes"))
+    if quotes:
+        pdf.section_title("Customer Pain Points")
+        for q in quotes[:4]:
+            text = q.get("quote", q) if isinstance(q, dict) else _safe_str(q)
+            if text:
+                label_parts = []
+                if isinstance(q, dict):
+                    if q.get("title"):
+                        label_parts.append(q["title"])
+                    if q.get("industry"):
+                        label_parts.append(q["industry"])
+                    if q.get("urgency"):
+                        label_parts.append(f"urgency: {q['urgency']}")
+                if label_parts:
+                    pdf.set_font("Helvetica", "", 7)
+                    pdf.set_text_color(*_CLR_MUTED)
+                    pdf.cell(0, 4, _latin1_safe(" | ".join(label_parts)),
+                             new_x="LMARGIN", new_y="NEXT")
+                pdf.quote_block(str(text)[:300])
+
+    # Section 3: Competitor Differentiators
+    diffs = _safe_list(card.get("competitor_differentiators"))
+    if diffs:
+        pdf.section_title("Competitor Differentiators")
+        rows = []
+        for d in diffs[:5]:
+            if isinstance(d, dict):
+                rows.append([
+                    _safe_str(d.get("competitor", ""))[:25],
+                    str(d.get("mentions", 0)),
+                    _safe_str(d.get("solves_weakness") or "-")[:30],
+                    _safe_str(d.get("primary_driver", ""))[:15],
+                ])
+        if rows:
+            pdf.simple_table(
+                ["Competitor", "Mentions", "Solves", "Driver"],
+                rows, [40, 25, 50, 35],
+            )
+
+    # Section 4: Objection Handlers (LLM-generated)
+    objections = _safe_list(card.get("objection_handlers"))
+    if objections:
+        pdf.section_title("Objection Handlers")
+        for obj in objections[:4]:
+            if isinstance(obj, dict):
+                objection_text = obj.get("objection", "")
+                response_text = obj.get("response", "")
+                backing = obj.get("data_backing", "")
+                pdf.set_font("Helvetica", "B", 9)
+                pdf.set_text_color(*_CLR_DARK)
+                pdf.cell(0, 5, _latin1_safe(f'"{objection_text}"'),
+                         new_x="LMARGIN", new_y="NEXT")
+                pdf.set_font("Helvetica", "", 9)
+                pdf.set_text_color(*_CLR_DARK)
+                pdf.multi_cell(0, 5, _latin1_safe(response_text))
+                if backing:
+                    pdf.set_font("Helvetica", "I", 7)
+                    pdf.set_text_color(*_CLR_MUTED)
+                    pdf.cell(0, 4, _latin1_safe(f"Data: {backing}"),
+                             new_x="LMARGIN", new_y="NEXT")
+                pdf.ln(2)
+
+    # Section 5: Recommended Plays (LLM-generated)
+    plays = _safe_list(card.get("recommended_plays"))
+    if plays:
+        pdf.section_title("Recommended Plays")
+        for play in plays[:3]:
+            if isinstance(play, dict):
+                pdf.set_font("Helvetica", "B", 9)
+                pdf.set_text_color(*_CLR_DARK)
+                pdf.multi_cell(0, 5, _latin1_safe(play.get("play", "")))
+                details = []
+                if play.get("target_segment"):
+                    details.append(f"Target: {play['target_segment']}")
+                if play.get("key_message"):
+                    details.append(f"Message: {play['key_message']}")
+                if details:
+                    pdf.set_font("Helvetica", "", 8)
+                    pdf.set_text_color(*_CLR_MUTED)
+                    pdf.multi_cell(0, 4, _latin1_safe(" | ".join(details)))
+                pdf.ln(2)
+
+
 # -- Public API ----------------------------------------------------------------
 
 _RENDERERS: dict[str, Any] = {
@@ -439,6 +569,7 @@ _RENDERERS: dict[str, Any] = {
     "account_deep_dive": _render_deep_dive,
     "vendor_retention": _render_vendor_scorecard,
     "challenger_intel": _render_vendor_scorecard,
+    "battle_card": _render_battle_card,
 }
 
 
