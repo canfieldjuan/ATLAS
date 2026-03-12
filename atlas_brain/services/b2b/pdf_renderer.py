@@ -198,19 +198,20 @@ def _render_churn_feed(pdf: IntelligenceReportPDF, data: Any) -> None:
     pdf.body_text(f"{len(feed)} vendors analyzed this period.")
 
     # Summary table
-    headers = ["Vendor", "Score", "Density", "Urgency", "Trend"]
+    headers = ["Vendor", "Score", "Risk", "Density", "Urgency", "Trend"]
     rows = []
     for entry in feed[:20]:
         if not isinstance(entry, dict):
             continue
         rows.append([
-            _safe_str(entry.get("vendor") or entry.get("vendor_name"))[:30],
+            _safe_str(entry.get("vendor") or entry.get("vendor_name"))[:25],
             f"{float(entry.get('churn_pressure_score', 0)):.0f}",
+            _safe_str(entry.get("risk_level", ""))[:6].upper(),
             f"{float(entry.get('churn_signal_density', 0)):.1f}%",
             f"{float(entry.get('avg_urgency', 0)):.1f}",
             _safe_str(entry.get("trend", "stable")),
         ])
-    pdf.simple_table(headers, rows, [55, 25, 25, 25, 30])
+    pdf.simple_table(headers, rows, [42, 20, 22, 22, 22, 22])
 
     # Per-vendor detail (top 5)
     for entry in feed[:5]:
@@ -222,7 +223,29 @@ def _render_churn_feed(pdf: IntelligenceReportPDF, data: Any) -> None:
         pdf.ln(2)
         pdf.set_font("Helvetica", "B", 10)
         pdf.set_text_color(*_score_color(score))
-        pdf.cell(0, 6, f"{vendor} (Score: {score:.0f})", new_x="LMARGIN", new_y="NEXT")
+        risk = _safe_str(entry.get("risk_level", ""))
+        risk_label = f" | Risk: {risk.upper()}" if risk else ""
+        pdf.cell(0, 6, f"{vendor} (Score: {score:.0f}{risk_label})", new_x="LMARGIN", new_y="NEXT")
+
+        # Affected segments
+        segments = entry.get("affected_segments") or {}
+        if isinstance(segments, dict):
+            seg_industries = _safe_list(segments.get("industries"))
+            seg_sizes = _safe_list(segments.get("company_sizes"))
+            if seg_industries:
+                ind_rows = [
+                    [_safe_str(s.get("industry", ""))[:25], str(s.get("count", 0))]
+                    for s in seg_industries[:3] if isinstance(s, dict)
+                ]
+                if ind_rows:
+                    pdf.simple_table(["Affected Industry", "Count"], ind_rows, [80, 30])
+            if seg_sizes:
+                sz_rows = [
+                    [_safe_str(s.get("size", ""))[:25], str(s.get("count", 0))]
+                    for s in seg_sizes[:3] if isinstance(s, dict)
+                ]
+                if sz_rows:
+                    pdf.simple_table(["Company Size", "Count"], sz_rows, [80, 30])
 
         # Pain breakdown
         pains = _safe_list(entry.get("pain_breakdown"))
@@ -333,54 +356,124 @@ def _render_vendor_scorecard(pdf: IntelligenceReportPDF, data: dict, exec_summar
 
 
 def _render_comparison(pdf: IntelligenceReportPDF, data: dict, exec_summary: str | None) -> None:
-    """Render vendor_comparison or account_comparison reports."""
+    """Render vendor_comparison or account_comparison reports (Competitive Benchmark)."""
     if exec_summary:
         pdf.section_title("Executive Summary")
         pdf.body_text(exec_summary)
 
-    # The comparison data usually has primary/comparison sub-dicts
-    primary = data.get("primary") or data.get("primary_vendor") or {}
-    comparison = data.get("comparison") or data.get("comparison_vendor") or {}
+    # The comparison data has primary_metrics/comparison_metrics or primary/comparison sub-dicts
+    primary = data.get("primary_metrics") or data.get("primary") or data.get("primary_vendor") or {}
+    comparison = data.get("comparison_metrics") or data.get("comparison") or data.get("comparison_vendor") or {}
+
+    p_name = _safe_str(
+        data.get("primary_vendor")
+        or (primary.get("vendor_name") if isinstance(primary, dict) else "")
+        or "Primary"
+    )
+    c_name = _safe_str(
+        data.get("comparison_vendor")
+        or (comparison.get("vendor_name") if isinstance(comparison, dict) else "")
+        or "Comparison"
+    )
 
     if isinstance(primary, dict) and isinstance(comparison, dict):
         pdf.section_title("Side-by-Side Comparison")
-        p_name = _safe_str(primary.get("vendor_name") or primary.get("company_name") or "Primary")
-        c_name = _safe_str(comparison.get("vendor_name") or comparison.get("company_name") or "Comparison")
 
         headers = ["Metric", p_name[:20], c_name[:20]]
-        metrics = ["churn_pressure_score", "churn_signal_density", "avg_urgency",
-                    "review_count", "dm_churn_rate"]
+        metrics = [
+            ("signal_count", "Reviews Analyzed"),
+            ("churn_signal_density", "Signal Density (%)"),
+            ("avg_urgency_score", "Avg Urgency"),
+            ("positive_review_pct", "Positive Review (%)"),
+            ("recommend_ratio", "Recommend Ratio"),
+            ("churn_intent_count", "Churn Intent Count"),
+        ]
         rows = []
-        for m in metrics:
-            pv = primary.get(m)
-            cv = comparison.get(m)
+        for key, label in metrics:
+            pv = primary.get(key)
+            cv = comparison.get(key)
             if pv is not None or cv is not None:
-                rows.append([
-                    m.replace("_", " ").title(),
-                    _safe_str(pv),
-                    _safe_str(cv),
-                ])
+                rows.append([label, _safe_str(pv), _safe_str(cv)])
         pdf.simple_table(headers, rows, [60, 45, 45])
 
-    # Render each sub-section if present
-    for label, sub in [("Primary", primary), ("Comparison", comparison)]:
-        if not isinstance(sub, dict):
-            continue
-        name = _safe_str(sub.get("vendor_name") or sub.get("company_name") or label)
-
-        pains = _safe_list(sub.get("pain_breakdown") or sub.get("top_pain_categories"))
+    # Pain categories per vendor
+    for vendor_label, prefix in [(p_name, "primary"), (c_name, "comparison")]:
+        pains = _safe_list(data.get(f"{prefix}_top_pains"))
         if pains:
-            pdf.section_title(f"{name} - Pain Categories")
-            rows = []
-            for p in pains[:5]:
-                if isinstance(p, dict):
-                    rows.append([_safe_str(p.get("category", ""))[:30], str(p.get("count", ""))])
-            pdf.simple_table(["Category", "Count"], rows, [90, 30])
+            pdf.section_title(f"{vendor_label} - Pain Categories")
+            rows = [
+                [_safe_str(p.get("category", ""))[:30], str(p.get("count", ""))]
+                for p in pains[:5] if isinstance(p, dict)
+            ]
+            if rows:
+                pdf.simple_table(["Category", "Count"], rows, [90, 30])
 
-    # Common fields at top level
-    _render_generic_data(pdf, data, skip_keys={
-        "primary", "comparison", "primary_vendor", "comparison_vendor",
-    })
+    # Strengths/Weaknesses (from product profiles)
+    for vendor_label, prefix in [(p_name, "primary"), (c_name, "comparison")]:
+        strengths = _safe_list(data.get(f"{prefix}_strengths"))
+        weaknesses = _safe_list(data.get(f"{prefix}_weaknesses"))
+        if strengths or weaknesses:
+            pdf.section_title(f"{vendor_label} - Strengths & Weaknesses")
+            if strengths:
+                rows = [
+                    [_safe_str(s.get("area", ""))[:35],
+                     _safe_str(s.get("score", "-"))]
+                    for s in strengths[:5] if isinstance(s, dict)
+                ]
+                if rows:
+                    pdf.simple_table(["Strength", "Score"], rows, [100, 30])
+            if weaknesses:
+                rows = [
+                    [_safe_str(w.get("area", ""))[:35],
+                     _safe_str(w.get("score", "-"))]
+                    for w in weaknesses[:5] if isinstance(w, dict)
+                ]
+                if rows:
+                    pdf.simple_table(["Weakness", "Score"], rows, [100, 30])
+
+    # Switching triggers
+    for vendor_label, prefix in [(p_name, "primary"), (c_name, "comparison")]:
+        triggers = _safe_list(data.get(f"{prefix}_switching_triggers"))
+        if triggers:
+            pdf.section_title(f"{vendor_label} - Switching Triggers")
+            rows = [
+                [_safe_str(t.get("competitor", ""))[:25],
+                 _safe_str(t.get("primary_reason", ""))[:25],
+                 str(t.get("mention_count", 0))]
+                for t in triggers[:5] if isinstance(t, dict)
+            ]
+            if rows:
+                pdf.simple_table(["To Competitor", "Reason", "Mentions"],
+                                 rows, [50, 60, 30])
+
+    # Trend analysis
+    trend = data.get("trend_analysis")
+    if isinstance(trend, dict):
+        pdf.section_title("Trend Analysis vs Prior Report")
+        prior_date = _safe_str(trend.get("prior_report_date", ""))
+        if prior_date:
+            pdf.body_text(f"Compared to report from {prior_date}")
+        for vendor_label, prefix in [(p_name, "primary"), (c_name, "comparison")]:
+            density_change = trend.get(f"{prefix}_churn_density_change")
+            urgency_change = trend.get(f"{prefix}_urgency_change")
+            if density_change is not None:
+                direction = "+" if density_change > 0 else ""
+                pdf.metric_row(f"{vendor_label} Density Change",
+                               f"{direction}{density_change}pp")
+            if urgency_change is not None:
+                direction = "+" if urgency_change > 0 else ""
+                pdf.metric_row(f"{vendor_label} Urgency Change",
+                               f"{direction}{urgency_change}")
+
+    # Quote highlights
+    for vendor_label, prefix in [(p_name, "primary"), (c_name, "comparison")]:
+        quotes = _safe_list(data.get(f"{prefix}_quote_highlights"))
+        if quotes:
+            pdf.section_title(f"{vendor_label} - Customer Quotes")
+            for q in quotes[:3]:
+                text = q if isinstance(q, str) else _safe_str(q)
+                if text:
+                    pdf.quote_block(text[:300])
 
 
 def _render_deep_dive(pdf: IntelligenceReportPDF, data: dict, exec_summary: str | None) -> None:
@@ -424,6 +517,268 @@ def _render_generic_data(pdf: IntelligenceReportPDF, data: dict, skip_keys: set 
             else:
                 for item in val[:10]:
                     pdf.body_text(f"  - {_safe_str(item)[:200]}")
+
+
+def _render_vendor_deep_dive(
+    pdf: IntelligenceReportPDF, data: dict, exec_summary: str | None,
+) -> None:
+    """Render enriched vendor deep dive (vendor_scorecard) report."""
+    if exec_summary:
+        pdf.section_title("Executive Summary")
+        pdf.body_text(exec_summary)
+
+    # Handle both list-wrapped and direct dict data
+    items = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
+    if not items:
+        return
+
+    for entry in items[:5]:
+        if not isinstance(entry, dict):
+            continue
+        vendor = _safe_str(entry.get("vendor", "Unknown"))
+        score = float(entry.get("churn_pressure_score", 0))
+        risk = _safe_str(entry.get("risk_level", ""))
+
+        # Vendor header
+        pdf.ln(3)
+        pdf.set_font("Helvetica", "B", 14)
+        pdf.set_text_color(*_score_color(score))
+        risk_label = f" [{risk.upper()}]" if risk else ""
+        pdf.cell(0, 8, _latin1_safe(f"{vendor}{risk_label}"),
+                 new_x="LMARGIN", new_y="NEXT")
+
+        # Key metrics
+        pdf.section_title("Key Metrics")
+        for metric_key, label in [
+            ("churn_pressure_score", "Churn Pressure Score"),
+            ("churn_signal_density", "Signal Density (%)"),
+            ("avg_urgency", "Average Urgency"),
+            ("dm_churn_rate", "DM Churn Rate"),
+            ("price_complaint_rate", "Price Complaint Rate"),
+            ("recommend_ratio", "Recommend Ratio"),
+            ("trend", "Trend"),
+            ("sentiment_direction", "Sentiment Direction"),
+        ]:
+            val = entry.get(metric_key)
+            if val is not None:
+                color = _score_color(float(val)) if metric_key == "churn_pressure_score" else None
+                pdf.metric_row(label, _safe_str(val), color)
+
+        # Customer profile
+        profile = entry.get("customer_profile")
+        if isinstance(profile, dict):
+            has_content = any(profile.get(k) for k in (
+                "typical_industries", "typical_company_size",
+                "primary_use_cases", "top_integrations",
+            ))
+            if has_content:
+                pdf.section_title("Customer Profile")
+                for field, label in [
+                    ("typical_industries", "Industries"),
+                    ("typical_company_size", "Company Sizes"),
+                    ("primary_use_cases", "Use Cases"),
+                    ("top_integrations", "Integrations"),
+                ]:
+                    items_list = profile.get(field) or []
+                    if items_list and isinstance(items_list, list):
+                        text = ", ".join(str(i)[:30] for i in items_list[:5])
+                        pdf.key_value(label, text)
+
+        # Feature analysis
+        features = entry.get("feature_analysis")
+        if isinstance(features, dict):
+            loved = _safe_list(features.get("loved"))
+            hated = _safe_list(features.get("hated"))
+            if loved:
+                pdf.section_title("Strengths")
+                rows = [
+                    [_safe_str(f.get("feature", ""))[:35],
+                     _safe_str(f.get("score", "-"))]
+                    for f in loved[:5] if isinstance(f, dict)
+                ]
+                if rows:
+                    pdf.simple_table(["Feature", "Score"], rows, [100, 30])
+            if hated:
+                pdf.section_title("Feature Gaps")
+                rows = [
+                    [_safe_str(f.get("feature", ""))[:35],
+                     str(f.get("mentions", 0))]
+                    for f in hated[:5] if isinstance(f, dict)
+                ]
+                if rows:
+                    pdf.simple_table(["Feature", "Mentions"], rows, [100, 30])
+
+        # Churn predictors
+        predictors = entry.get("churn_predictors")
+        if isinstance(predictors, dict):
+            high_ind = _safe_list(predictors.get("high_risk_industries"))
+            high_sz = _safe_list(predictors.get("high_risk_sizes"))
+            if high_ind or high_sz:
+                pdf.section_title("Churn Predictors")
+                if high_ind:
+                    rows = [
+                        [_safe_str(i.get("industry", ""))[:30], str(i.get("count", 0))]
+                        for i in high_ind[:3] if isinstance(i, dict)
+                    ]
+                    if rows:
+                        pdf.simple_table(["High-Risk Industry", "Count"], rows, [80, 30])
+                if high_sz:
+                    rows = [
+                        [_safe_str(s.get("size", ""))[:30], str(s.get("count", 0))]
+                        for s in high_sz[:3] if isinstance(s, dict)
+                    ]
+                    if rows:
+                        pdf.simple_table(["High-Risk Size", "Count"], rows, [80, 30])
+
+        # Competitor overlap
+        overlap = _safe_list(entry.get("competitor_overlap"))
+        if overlap:
+            pdf.section_title("Competitor Overlap")
+            rows = [
+                [_safe_str(c.get("competitor", ""))[:30], str(c.get("mentions", 0))]
+                for c in overlap[:5] if isinstance(c, dict)
+            ]
+            if rows:
+                pdf.simple_table(["Competitor", "Mentions"], rows, [90, 30])
+
+        # Accounts at risk
+        accounts = _safe_list(entry.get("named_accounts"))
+        if accounts:
+            pdf.section_title("Accounts at Risk")
+            rows = []
+            for a in accounts[:10]:
+                if isinstance(a, dict):
+                    urg = float(a.get("urgency", 0))
+                    risk_label = "Critical" if urg >= 8 else ("High" if urg >= 6 else "Watch")
+                    rows.append([
+                        _safe_str(a.get("company", ""))[:25],
+                        f"{urg:.1f}",
+                        risk_label,
+                        _safe_str(a.get("industry") or "")[:15],
+                    ])
+            if rows:
+                pdf.simple_table(["Company", "Urgency", "Risk", "Industry"],
+                                 rows, [45, 25, 25, 45])
+
+        # Evidence
+        evidence = _safe_list(entry.get("evidence"))
+        if evidence:
+            pdf.section_title("Evidence")
+            for e in evidence[:3]:
+                text = e.get("quote", e) if isinstance(e, dict) else _safe_str(e)
+                if text:
+                    pdf.quote_block(str(text)[:300])
+
+        # Expert take (LLM-generated)
+        expert = entry.get("expert_take")
+        if expert:
+            pdf.section_title("Expert Take")
+            pdf.body_text(str(expert))
+
+
+def _render_category_report(
+    pdf: IntelligenceReportPDF, data: dict, exec_summary: str | None,
+) -> None:
+    """Render enriched industry-specific category overview report."""
+    if exec_summary:
+        pdf.section_title("Executive Summary")
+        pdf.body_text(exec_summary)
+
+    categories = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
+    if not categories:
+        return
+
+    for cat in categories[:12]:
+        if not isinstance(cat, dict):
+            continue
+
+        category = _safe_str(cat.get("category", "Unknown"))
+        pdf.ln(3)
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.set_text_color(*_CLR_PRIMARY)
+        pdf.cell(0, 8, _latin1_safe(f"Category: {category}"),
+                 new_x="LMARGIN", new_y="NEXT")
+
+        # Key info
+        pdf.key_value("Highest Churn Risk", _safe_str(cat.get("highest_churn_risk", "")))
+        pdf.key_value("Emerging Challenger", _safe_str(cat.get("emerging_challenger", "")))
+        pdf.key_value("Dominant Pain", _safe_str(cat.get("dominant_pain", "")))
+
+        # Market signal
+        signal = cat.get("market_shift_signal")
+        if signal:
+            pdf.ln(2)
+            pdf.body_text(str(signal))
+
+        # Vendor rankings
+        rankings = _safe_list(cat.get("vendor_rankings"))
+        if rankings:
+            pdf.section_title("Vendor Rankings")
+            rows = []
+            for r in rankings[:8]:
+                if isinstance(r, dict):
+                    rows.append([
+                        _safe_str(r.get("vendor", ""))[:25],
+                        f"{float(r.get('churn_pressure_score', 0)):.0f}",
+                        f"{float(r.get('churn_signal_density', 0)):.1f}%",
+                        _safe_str(r.get("risk_level", ""))[:6].upper(),
+                    ])
+            if rows:
+                pdf.simple_table(["Vendor", "Score", "Density", "Risk"],
+                                 rows, [50, 25, 30, 25])
+
+        # Feature gaps
+        gaps = _safe_list(cat.get("top_feature_gaps"))
+        if gaps:
+            pdf.section_title("Top Feature Gaps")
+            rows = [
+                [_safe_str(g.get("feature", ""))[:35], str(g.get("mentions", 0))]
+                for g in gaps[:5] if isinstance(g, dict)
+            ]
+            if rows:
+                pdf.simple_table(["Feature", "Mentions"], rows, [100, 30])
+
+        # Case studies
+        cases = _safe_list(cat.get("case_studies"))
+        if cases:
+            pdf.section_title("Case Studies")
+            for cs in cases[:3]:
+                if isinstance(cs, dict):
+                    label_parts = []
+                    if cs.get("vendor"):
+                        label_parts.append(f"Vendor: {cs['vendor']}")
+                    if cs.get("company") and cs["company"] != "Anonymous":
+                        label_parts.append(cs["company"])
+                    if cs.get("title"):
+                        label_parts.append(cs["title"])
+                    if label_parts:
+                        pdf.set_font("Helvetica", "", 7)
+                        pdf.set_text_color(*_CLR_MUTED)
+                        pdf.cell(0, 4, _latin1_safe(" | ".join(label_parts)),
+                                 new_x="LMARGIN", new_y="NEXT")
+                    quote = cs.get("quote", "")
+                    if quote:
+                        pdf.quote_block(str(quote)[:300])
+
+        # Segment distribution
+        ind_dist = _safe_list(cat.get("industry_distribution"))
+        size_dist = _safe_list(cat.get("company_size_distribution"))
+        if ind_dist or size_dist:
+            pdf.section_title("Segment Distribution")
+            if ind_dist:
+                rows = [
+                    [_safe_str(i.get("industry", ""))[:25], str(i.get("count", 0))]
+                    for i in ind_dist[:5] if isinstance(i, dict)
+                ]
+                if rows:
+                    pdf.simple_table(["Industry", "Count"], rows, [80, 30])
+            if size_dist:
+                rows = [
+                    [_safe_str(s.get("size", ""))[:25], str(s.get("count", 0))]
+                    for s in size_dist[:5] if isinstance(s, dict)
+                ]
+                if rows:
+                    pdf.simple_table(["Company Size", "Count"], rows, [80, 30])
 
 
 def _render_battle_card(
@@ -560,9 +915,9 @@ def _render_battle_card(
 
 _RENDERERS: dict[str, Any] = {
     "weekly_churn_feed": lambda pdf, d, s: _render_churn_feed(pdf, d),
-    "vendor_scorecard": _render_vendor_scorecard,
+    "vendor_scorecard": _render_vendor_deep_dive,
     "displacement_report": _render_vendor_scorecard,
-    "category_overview": _render_vendor_scorecard,
+    "category_overview": _render_category_report,
     "exploratory_overview": _render_vendor_scorecard,
     "vendor_comparison": _render_comparison,
     "account_comparison": _render_comparison,

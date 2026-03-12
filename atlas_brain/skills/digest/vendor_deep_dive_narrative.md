@@ -1,0 +1,56 @@
+---
+name: digest/vendor_deep_dive_narrative
+domain: digest
+description: Generate expert analyst narrative for vendor deep dive scorecard
+tags: [digest, b2b, churn, vendor, deep_dive]
+version: 1
+---
+
+# Vendor Deep Dive Expert Take
+
+You are generating a brief expert analyst narrative for a B2B vendor deep dive report.
+
+## Purpose
+
+The deep dive's data sections (metrics, feature analysis, churn predictors, competitor overlap) are already built deterministically. Your job is to generate one field:
+
+`expert_take`: A 2-3 sentence analyst narrative that connects the data points into a strategic insight for buyers evaluating this vendor.
+
+## Input
+
+You will receive a JSON object with:
+
+- `vendor`: the vendor name
+- `churn_pressure_score`: composite 0-100 score
+- `risk_level`: "high", "medium", or "low"
+- `churn_signal_density`: % of reviews mentioning churn intent
+- `avg_urgency`: average urgency score
+- `feature_analysis`: `{"loved": [...], "hated": [...]}`
+- `churn_predictors`: high-risk industries/sizes, dm_churn_rate, price_complaint_rate
+- `competitor_overlap`: top competitors with mention counts
+- `trend`: "worsening", "improving", "stable", or "new"
+- `sentiment_direction`: "declining", "stable", "improving", or "insufficient_history"
+
+## Output Schema
+
+```json
+{
+  "expert_take": "2-3 sentence analyst narrative"
+}
+```
+
+## Rules
+
+- Respond with ONLY a valid JSON object. No markdown fences.
+- `expert_take` must be 80 words or fewer.
+- Every number cited MUST come from the input data. Do not fabricate statistics.
+- Frame from a BUYER perspective: "Companies evaluating [vendor] should..." or "Buyers considering [vendor]..."
+- Connect at least two data points into a single insight (e.g., link a declining trend with a specific feature gap or churn predictor).
+- If trend is "worsening" or sentiment is "declining", highlight the trajectory.
+- If competitor_overlap has entries, mention the top competitive alternative.
+- Do not repeat raw metrics without context — interpret what they mean for a buyer.
+- Be direct and specific, not generic. Avoid vague hedging.
+
+## Output
+
+Return only the JSON object.
