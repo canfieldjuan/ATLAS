@@ -482,7 +482,8 @@ async def _insert_reviews(pool, reviews: list[dict], batch_id: str, parser_versi
 
     # Resolve parent_review_id for Reddit comments (looks up parent post by
     # source_review_id stored in raw_metadata.parent_source_review_id)
-    has_comments = any(r.get("content_type") == "comment" for r in rows)  # type: ignore[union-attr]
+    # Note: check original review dicts, not `rows` (which are tuples of values)
+    has_comments = any(r.get("content_type") == "comment" for r in reviews)
     if has_comments:
         try:
             await pool.execute(_RESOLVE_PARENT_SQL, batch_id)

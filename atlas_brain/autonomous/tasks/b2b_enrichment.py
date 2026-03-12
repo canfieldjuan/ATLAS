@@ -96,7 +96,7 @@ async def enrich_batch(batch_id: str) -> dict[str, Any]:
                   r.source, r.raw_metadata,
                   r.rating, r.rating_max, r.summary, r.review_text, r.pros, r.cons,
                   r.reviewer_title, r.reviewer_company, r.company_size_raw,
-                  r.reviewer_industry, r.enrichment_attempts
+                  r.reviewer_industry, r.enrichment_attempts, r.content_type
         """,
         batch_id,
         max_attempts,
@@ -244,7 +244,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                       r.source, r.raw_metadata,
                       r.rating, r.rating_max, r.summary, r.review_text, r.pros, r.cons,
                       r.reviewer_title, r.reviewer_company, r.company_size_raw,
-                      r.reviewer_industry, r.enrichment_attempts
+                      r.reviewer_industry, r.enrichment_attempts, r.content_type
             """,
             max_attempts,
             max_batch,
@@ -436,6 +436,7 @@ def _build_classify_payload(row, truncate_length: int = 3000) -> dict[str, Any]:
         "source_name": row.get("source") or "",
         "source_weight": raw_meta.get("source_weight", 0.7),
         "source_type": raw_meta.get("source_type", "unknown"),
+        "content_type": row.get("content_type") or "review",
         "rating": float(row["rating"]) if row["rating"] is not None else None,
         "rating_max": int(row["rating_max"]),
         "summary": row["summary"] or "",
@@ -475,6 +476,7 @@ async def _triage_review(row, local_only: bool) -> tuple[dict[str, Any] | None, 
     payload = json.dumps({
         "vendor_name": row["vendor_name"],
         "source": row.get("source") or "",
+        "content_type": row.get("content_type") or "review",
         "rating": float(row["rating"]) if row.get("rating") is not None else None,
         "summary": row.get("summary") or "",
         "review_text": review_text,
@@ -604,6 +606,14 @@ _KNOWN_ROLE_TYPES = {"economic_buyer", "champion", "evaluator", "end_user", "unk
 _KNOWN_BUYING_STAGES = {"active_purchase", "evaluation", "renewal_decision", "post_purchase", "unknown"}
 _KNOWN_DECISION_TIMELINES = {"immediate", "within_quarter", "within_year", "unknown"}
 _KNOWN_CONTRACT_VALUE_SIGNALS = {"enterprise_high", "enterprise_mid", "mid_market", "smb", "unknown"}
+
+# Insider signal validation sets (migration 133)
+_KNOWN_CONTENT_TYPES = {"review", "community_discussion", "comment", "insider_account"}
+_KNOWN_ORG_HEALTH_LEVELS = {"high", "medium", "low", "unknown"}
+_KNOWN_LEADERSHIP_QUALITIES = {"poor", "mixed", "good", "unknown"}
+_KNOWN_INNOVATION_CLIMATES = {"stagnant", "declining", "healthy", "unknown"}
+_KNOWN_MORALE_LEVELS = {"high", "medium", "low", "unknown"}
+_KNOWN_DEPARTURE_TYPES = {"voluntary", "involuntary", "still_employed", "unknown"}
 
 
 def _validate_enrichment(result: dict) -> bool:
@@ -796,6 +806,54 @@ def _validate_enrichment(result: dict) -> bool:
             cvs = cc.get("contract_value_signal")
             if cvs and cvs not in _KNOWN_CONTRACT_VALUE_SIGNALS:
                 cc["contract_value_signal"] = "unknown"
+
+    # content_classification: pass-through string, coerce to known values
+    cc_val = result.get("content_classification")
+    if cc_val and cc_val not in _KNOWN_CONTENT_TYPES:
+        result["content_classification"] = "review"
+
+    # insider_signals: validate structure if present
+    insider = result.get("insider_signals")
+    if insider is not None:
+        if not isinstance(insider, dict):
+            result["insider_signals"] = None
+        else:
+            # org_health: must be dict
+            oh = insider.get("org_health")
+            if oh is not None and not isinstance(oh, dict):
+                insider["org_health"] = {}
+            elif isinstance(oh, dict):
+                # culture_indicators must be list
+                ci = oh.get("culture_indicators")
+                if ci is not None and not isinstance(ci, list):
+                    oh["culture_indicators"] = []
+                # Enum fields: coerce unknowns
+                for field, allowed in (
+                    ("bureaucracy_level", _KNOWN_ORG_HEALTH_LEVELS),
+                    ("leadership_quality", _KNOWN_LEADERSHIP_QUALITIES),
+                    ("innovation_climate", _KNOWN_INNOVATION_CLIMATES),
+                ):
+                    val = oh.get(field)
+                    if val and val not in allowed:
+                        oh[field] = "unknown"
+
+            # talent_drain: must be dict
+            td = insider.get("talent_drain")
+            if td is not None and not isinstance(td, dict):
+                insider["talent_drain"] = {}
+            elif isinstance(td, dict):
+                for bool_field in ("departures_mentioned", "layoff_fear"):
+                    if bool_field in td:
+                        coerced = _coerce_bool(td[bool_field])
+                        td[bool_field] = coerced if coerced is not None else False
+                morale = td.get("morale")
+                if morale and morale not in _KNOWN_MORALE_LEVELS:
+                    td["morale"] = "unknown"
+
+            # departure_type: enum
+            dt = insider.get("departure_type")
+            if dt and dt not in _KNOWN_DEPARTURE_TYPES:
+                insider["departure_type"] = "unknown"
 
     return True
 

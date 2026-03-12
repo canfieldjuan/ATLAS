@@ -3310,15 +3310,14 @@ async def _fetch_insider_aggregates(pool, window_days: int) -> list[dict[str, An
         """
         SELECT
             vendor_name,
-            COUNT(*)::int AS signal_count,
+            COUNT(DISTINCT id)::int AS signal_count,
             ROUND(
-                AVG(CASE WHEN enrichment->'insider_signals'->'talent_drain'->>'departures_mentioned' = 'true'
+                AVG(DISTINCT CASE WHEN enrichment->'insider_signals'->'talent_drain'->>'departures_mentioned' = 'true'
                          THEN 1 ELSE 0 END)::numeric,
                 4
             ) AS talent_drain_rate,
-            jsonb_agg(
+            jsonb_agg(DISTINCT
                 enrichment->'insider_signals'->'org_health'
-                ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST
             ) FILTER (WHERE enrichment->'insider_signals'->'org_health' IS NOT NULL) AS org_health_array,
             jsonb_agg(
                 jsonb_build_object(
@@ -3329,9 +3328,9 @@ async def _fetch_insider_aggregates(pool, window_days: int) -> list[dict[str, An
                 ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST
             ) FILTER (WHERE ph.value IS NOT NULL) AS quotable_phrases
         FROM b2b_reviews
-        CROSS JOIN LATERAL jsonb_array_elements_text(
+        LEFT JOIN LATERAL jsonb_array_elements_text(
             COALESCE(enrichment->'quotable_phrases', '[]'::jsonb)
-        ) AS ph(value)
+        ) AS ph(value) ON true
         WHERE content_type = 'insider_account'
           AND enrichment_status = 'enriched'
           AND imported_at > NOW() - make_interval(days => $1)
