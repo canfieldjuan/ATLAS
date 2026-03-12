@@ -6,6 +6,7 @@ import amazonWebServicesVsGoogleCloudPlatform202603 from './amazon-web-services-
 import amazonWebServicesDeepDive202603 from './amazon-web-services-deep-dive-2026-03'
 import googleCloudPlatformDeepDive202603 from './google-cloud-platform-deep-dive-2026-03'
 import bamboohrVsRippling202603 from './bamboohr-vs-rippling-2026-03'
+import realCostOfSalesforce202603 from './real-cost-of-salesforce-2026-03'
 type ChartValue = string | number | null | undefined
 type ChartDatum = Record<string, ChartValue>
 
@@ -73,4 +74,5 @@ export const POSTS: BlogPost[] = [
   amazonWebServicesDeepDive202603,
   googleCloudPlatformDeepDive202603,
   bamboohrVsRippling202603,
+  realCostOfSalesforce202603,
 ]
