@@ -945,6 +945,7 @@ def _build_deterministic_battle_cards(
     company_lookup: dict[str, list],
     product_profile_lookup: dict[str, dict],
     competitive_disp: list[dict[str, Any]],
+    competitor_reasons: list[dict[str, Any]],
     limit: int = 15,
 ) -> list[dict[str, Any]]:
     """Build per-vendor battle cards from aggregated data.
@@ -955,23 +956,44 @@ def _build_deterministic_battle_cards(
     - Competitor differentiators (who they lose to, and why)
     - Objection data (raw metrics for LLM-generated sales copy)
     """
-    # Pre-index competitive displacement by vendor
-    vendor_disp: dict[str, list[dict]] = {}
-    for flow in competitive_disp:
-        v = _canonicalize_vendor(flow.get("vendor") or "")
-        if v:
-            vendor_disp.setdefault(v, []).append(flow)
+    # Build reason lookup for inferring primary driver on differentiators
+    # (reuses _build_reason_lookup and _infer_driver_from_reasons from displacement map)
+    reason_lookup = _build_reason_lookup(competitor_reasons)
 
-    cards: list[dict[str, Any]] = []
+    # Merge multi-category rows per vendor (same pattern as vendor feed builder)
+    merged: dict[str, dict[str, Any]] = {}
     for row in vendor_scores:
         vendor = _canonicalize_vendor(row.get("vendor_name") or "")
         if not vendor:
             continue
-        total_reviews = int(row.get("total_reviews") or 0)
-        churn_intent = int(row.get("churn_intent") or 0)
+        reviews = int(row.get("total_reviews") or 0)
+        churn = int(row.get("churn_intent") or 0)
+        urgency = float(row.get("avg_urgency") or 0)
+        category = row.get("product_category") or "Unknown"
+        if vendor not in merged:
+            merged[vendor] = {
+                "total_reviews": reviews,
+                "churn_intent": churn,
+                "urgency_weighted_sum": urgency * reviews,
+                "category": category,
+                "category_reviews": reviews,
+            }
+        else:
+            m = merged[vendor]
+            m["total_reviews"] += reviews
+            m["churn_intent"] += churn
+            m["urgency_weighted_sum"] += urgency * reviews
+            if reviews > m["category_reviews"]:
+                m["category"] = category
+                m["category_reviews"] = reviews
+
+    cards: list[dict[str, Any]] = []
+    for vendor, m in merged.items():
+        total_reviews = m["total_reviews"]
+        churn_intent = m["churn_intent"]
         churn_density = round(churn_intent * 100.0 / total_reviews, 1) if total_reviews else 0.0
         avg_urgency = round(
-            float(row.get("urgency_weighted_sum") or 0) / total_reviews, 1
+            m["urgency_weighted_sum"] / total_reviews, 1
         ) if total_reviews else 0.0
         dm_rate = float(dm_lookup.get(vendor, 0))
         price_rate = float(price_lookup.get(vendor, 0))
@@ -1090,13 +1112,9 @@ def _build_deterministic_battle_cards(
                         switch_count = sf.get("count", 0)
                         break
 
-            # Infer primary driver from displacement flows
-            vendor_flows = vendor_disp.get(vendor, [])
-            driver = "other"
-            for flow in vendor_flows:
-                if _canonicalize_competitor(flow.get("competitor") or "") == _canonicalize_vendor(comp_name):
-                    driver = flow.get("primary_driver", "other") if isinstance(flow, dict) else "other"
-                    break
+            # Infer primary driver from competitor reasons (same as displacement map)
+            reasons = reason_lookup.get((vendor, _canonicalize_competitor(comp_name)), [])
+            driver = _infer_driver_from_reasons(reasons)
 
             differentiators.append({
                 "competitor": comp_name,
@@ -1131,7 +1149,7 @@ def _build_deterministic_battle_cards(
 
         cards.append({
             "vendor": vendor,
-            "category": row.get("product_category") or "",
+            "category": m.get("category") or "",
             "churn_pressure_score": score,
             "total_reviews": total_reviews,
             "confidence": confidence,
@@ -2106,6 +2124,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         company_lookup=company_lookup,
         product_profile_lookup=product_profile_lookup,
         competitive_disp=competitive_disp,
+        competitor_reasons=competitor_reasons,
     )
     logger.info("Built %d battle cards", len(deterministic_battle_cards))
 
@@ -3725,21 +3744,7 @@ async def _fetch_product_profiles(pool) -> list[dict[str, Any]]:
         FROM b2b_product_profiles
         ORDER BY total_reviews_analyzed DESC
     """)
-    results = []
-    for r in rows:
-        row = dict(r)
-        for col in ("strengths", "weaknesses", "pain_addressed",
-                    "commonly_compared_to", "commonly_switched_from",
-                    "primary_use_cases", "typical_company_size",
-                    "typical_industries", "top_integrations"):
-            val = row.get(col)
-            if isinstance(val, str):
-                try:
-                    row[col] = json.loads(val)
-                except (json.JSONDecodeError, TypeError):
-                    pass
-        results.append(row)
-    return results
+    return [dict(r) for r in rows]
 
 
 async def _fetch_budget_signals(pool, window_days: int) -> list[dict[str, Any]]:
