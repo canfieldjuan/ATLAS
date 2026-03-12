@@ -254,40 +254,199 @@ def _build_validated_executive_summary(
     if report_type == "vendor_scorecard":
         scorecards = parsed.get("vendor_scorecards", [])
         n = len(scorecards)
-        high_risk = [s for s in scorecards if s.get("risk_level") == "high"]
+        if not scorecards:
+            return ""
+
+        # Risk distribution
+        risk_counts: dict[str, int] = {"high": 0, "medium": 0, "low": 0}
+        for s in scorecards:
+            rl = s.get("risk_level", "low")
+            if rl in risk_counts:
+                risk_counts[rl] += 1
+        risk_parts = []
+        for level in ("high", "medium", "low"):
+            if risk_counts[level]:
+                risk_parts.append(f"{risk_counts[level]} {level}-risk")
+
+        # Sentence 1: scale + risk distribution
         lines = [
             f"{window_label}, Atlas scored {n} vendors on churn pressure"
-            + (f" from {total_review_count} reviews across {source_label_text}." if total_review_count else f" across {source_label_text}.")
+            + (f" from {total_review_count:,} reviews across {source_label_text}"
+               if total_review_count else f" across {source_label_text}")
+            + f" \u2014 {', '.join(risk_parts)}."
         ]
-        if high_risk:
-            names = _join_summary_terms([str(s.get("vendor", "")) for s in high_risk[:3]])
-            lines.append(f"Highest-risk vendors: {names}.")
-        lines.append(
-            "Confidence is highest for vendors with 50+ reviews; smaller samples should be treated as directional."
-        )
+
+        # Sentence 2: top-pressure vendor, score, driver, DM rate
+        top = scorecards[0]  # sorted by urgency+density descending
+        top_vendor = top.get("vendor", "")
+        top_score = top.get("churn_pressure_score", 0)
+        top_density = top.get("churn_signal_density", 0)
+        top_pain = top.get("top_pain", "")
+        dm_rate = top.get("dm_churn_rate", 0)
+
+        s2 = f"{top_vendor} scored highest at {top_score:.1f}"
+        s2 += f" ({top_density}% churn density \u2014 share of reviews containing explicit switching signals)"
+        if top_pain and top_pain.lower() not in ("other", "unknown"):
+            s2 += f", driven primarily by {top_pain} complaints"
+        if dm_rate and dm_rate >= 0.3:
+            s2 += f"; {dm_rate:.0%} of switching signals came from decision-makers"
+        s2 += "."
+        lines.append(s2)
+
+        # Sentence 3: trend direction (only when there's a clear skew)
+        trend_counts: dict[str, int] = {"worsening": 0, "improving": 0, "stable": 0, "new": 0}
+        for s in scorecards:
+            t = s.get("trend", "stable")
+            if t in trend_counts:
+                trend_counts[t] += 1
+        if trend_counts["worsening"] > trend_counts["improving"]:
+            lines.append(
+                f"{trend_counts['worsening']} vendors are trending worse than last period"
+                + (f", {trend_counts['improving']} improving." if trend_counts["improving"] else ".")
+            )
+        elif trend_counts["improving"] > trend_counts["worsening"]:
+            lines.append(
+                f"{trend_counts['improving']} vendors are improving"
+                + (f", {trend_counts['worsening']} worsening." if trend_counts["worsening"] else ".")
+            )
+
+        # Sentence 4: displacement direction for highest-risk vendor
+        top_threat = top.get("top_competitor_threat", "")
+        if top_threat and "Insufficient" not in top_threat:
+            lines.append(f"High-risk vendors are losing ground primarily to {top_threat}.")
+
         return " ".join(lines)
 
     if report_type == "displacement_report":
         disp = parsed.get("displacement_map", [])
+        if not disp:
+            return ""
         n_edges = len(disp)
         from_vendors = {e.get("from_vendor") for e in disp if e.get("from_vendor")}
-        to_vendors = {e.get("to_vendor") for e in disp if e.get("to_vendor")}
+        total_mentions = sum(e.get("mention_count", 0) for e in disp)
+
+        # Sentence 1: scale
         lines = [
-            f"{window_label}, Atlas mapped {n_edges} competitive displacement flows across {len(from_vendors)} source vendors"
-            + (f" from {total_review_count} reviews." if total_review_count else ".")
+            f"{window_label}, Atlas tracked {n_edges} competitive displacement flows"
+            f" across {len(from_vendors)} vendors"
+            + (f" from {total_review_count:,} reviews" if total_review_count else "")
+            + f", totaling {total_mentions:,} switching mentions."
         ]
-        if to_vendors:
-            top_targets = _join_summary_terms(sorted(to_vendors)[:4])
-            lines.append(f"Most-cited alternatives: {top_targets}.")
+
+        # Sentence 2: strongest flow
+        top = disp[0]  # sorted by mention_count descending
+        top_from = top.get("from_vendor", "")
+        top_to = top.get("to_vendor", "")
+        top_count = top.get("mention_count", 0)
+        top_driver = top.get("primary_driver", "")
+        s2 = f"The strongest flow is {top_from} \u2192 {top_to} ({top_count} mentions)"
+        if top_driver and top_driver.lower() != "other":
+            s2 += f", driven by {top_driver}"
+        s2 += "."
+        lines.append(s2)
+
+        # Sentence 3: driver distribution (weighted by mention count)
+        driver_counts: dict[str, int] = {}
+        for e in disp:
+            d = e.get("primary_driver", "other")
+            if d.lower() != "other":
+                driver_counts[d] = driver_counts.get(d, 0) + e.get("mention_count", 0)
+        if driver_counts and total_mentions:
+            ranked_drivers = sorted(driver_counts.items(), key=lambda x: -x[1])
+            top_d = ranked_drivers[0]
+            pct = round(top_d[1] * 100 / total_mentions)
+            parts = [f"{top_d[0]} drives {pct}% of all displacement flow"]
+            for d_name, d_count in ranked_drivers[1:3]:
+                parts.append(f"{d_name} ({round(d_count * 100 / total_mentions)}%)")
+            lines.append(", followed by ".join(parts) + "." if len(parts) > 1 else parts[0] + ".")
+
+        # Sentence 4: signal strength breakdown
+        strength_counts: dict[str, int] = {"strong": 0, "moderate": 0, "emerging": 0}
+        for e in disp:
+            ss = e.get("signal_strength", "emerging")
+            if ss in strength_counts:
+                strength_counts[ss] += 1
+        strength_parts = []
+        for level, label in [("strong", "strong signal (5+ mentions)"), ("moderate", "moderate"), ("emerging", "emerging")]:
+            if strength_counts[level]:
+                strength_parts.append(f"{strength_counts[level]} {label}")
+        if strength_parts:
+            lines.append(", ".join(strength_parts) + ".")
+
         return " ".join(lines)
 
     if report_type == "category_overview":
-        cat = parsed.get("category_insights", [])
-        n = len(cat)
+        cats = parsed.get("category_insights", [])
+        if not cats:
+            return ""
+        n = len(cats)
+
+        # Count total unique vendors across all category rankings
+        all_cat_vendors: set[str] = set()
+        for cat in cats:
+            for vr in cat.get("vendor_rankings", []):
+                v = vr.get("vendor")
+                if v:
+                    all_cat_vendors.add(v)
+
+        # Sentence 1: scale
         lines = [
-            f"{window_label}, Atlas analyzed cross-vendor trends across {n} product categories"
-            + (f" from {total_review_count} reviews." if total_review_count else ".")
+            f"{window_label}, Atlas analyzed churn trends across {n} product categories"
+            + (f" covering {len(all_cat_vendors)} vendors from {total_review_count:,} reviews."
+               if total_review_count and all_cat_vendors
+               else f" covering {len(all_cat_vendors)} vendors." if all_cat_vendors
+               else ".")
         ]
+
+        # Sentence 2: hottest category (highest churn density)
+        hottest = None
+        hottest_density = 0.0
+        for cat in cats:
+            rankings = cat.get("vendor_rankings", [])
+            if rankings:
+                cd = rankings[0].get("churn_signal_density", 0)
+                if cd > hottest_density:
+                    hottest_density = cd
+                    hottest = cat
+        if hottest:
+            cat_name = hottest.get("category", "")
+            risk_vendor = hottest.get("highest_churn_risk", "")
+            pain = hottest.get("dominant_pain", "")
+            s2 = (
+                f"{cat_name} shows the highest pressure \u2014 {risk_vendor}"
+                f" at {hottest_density}% churn density"
+                " (share of reviews with explicit switching signals)"
+            )
+            if pain and pain.lower() not in ("other", "unknown"):
+                s2 += f", driven by {pain}"
+            s2 += "."
+            lines.append(s2)
+
+        # Sentence 3: market movement — categories with clear challengers
+        movements = []
+        for cat in cats:
+            challenger = cat.get("emerging_challenger", "")
+            incumbent = cat.get("highest_churn_risk", "")
+            cat_name = cat.get("category", "")
+            if challenger and incumbent and "Insufficient" not in challenger:
+                # Skip the hottest category (already covered in sentence 2)
+                if hottest and cat_name == hottest.get("category"):
+                    continue
+                movements.append(f"in {cat_name}, {challenger} is emerging as the primary alternative to {incumbent}")
+        if movements:
+            lines.append("; ".join(movements[:2]).capitalize() + ".")
+
+        # Sentence 4: cross-category pain pattern
+        pain_counts: dict[str, int] = {}
+        for cat in cats:
+            p = cat.get("dominant_pain", "")
+            if p and p.lower() not in ("other", "unknown"):
+                pain_counts[p] = pain_counts.get(p, 0) + 1
+        if pain_counts:
+            top_pain_name, top_pain_ct = max(pain_counts.items(), key=lambda x: x[1])
+            if top_pain_ct >= 2:
+                lines.append(f"{top_pain_name.capitalize()} is the dominant churn driver in {top_pain_ct} of {n} categories.")
+
         return " ".join(lines)
 
     # --- default: weekly_churn_feed -----------------------------------
