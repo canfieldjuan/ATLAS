@@ -225,8 +225,13 @@ def _build_validated_executive_summary(
     *,
     data_context: dict[str, Any],
     executive_sources: list[str],
+    report_type: str = "weekly_churn_feed",
 ) -> str:
-    """Build a concise deterministic executive summary from validated structured data."""
+    """Build a concise deterministic executive summary from validated structured data.
+
+    Each *report_type* gets a tailored summary.  Shared helper ``_summary_preamble``
+    produces the opening sentence; the body varies per type.
+    """
     feed = parsed.get("weekly_churn_feed", [])
     if not isinstance(feed, list) or not feed:
         return parsed.get("executive_summary", "")
@@ -237,19 +242,62 @@ def _build_validated_executive_summary(
     window_label = f"Between {start} and {end}" if start and end else "In the current analysis window"
 
     source_dist = data_context.get("source_distribution") or {}
-    executive_review_count = sum(
+    total_review_count = sum(
         int((source_dist.get(source) or {}).get("reviews") or 0)
         for source in executive_sources
     )
     source_labels = [_source_display_name(source) for source in executive_sources]
     source_label_text = ", ".join(source_labels)
 
+    # --- per-report-type summaries ------------------------------------
+
+    if report_type == "vendor_scorecard":
+        scorecards = parsed.get("vendor_scorecards", [])
+        n = len(scorecards)
+        high_risk = [s for s in scorecards if s.get("risk_level") == "high"]
+        lines = [
+            f"{window_label}, Atlas scored {n} vendors on churn pressure"
+            + (f" from {total_review_count} reviews across {source_label_text}." if total_review_count else f" across {source_label_text}.")
+        ]
+        if high_risk:
+            names = _join_summary_terms([str(s.get("vendor", "")) for s in high_risk[:3]])
+            lines.append(f"Highest-risk vendors: {names}.")
+        lines.append(
+            "Confidence is highest for vendors with 50+ reviews; smaller samples should be treated as directional."
+        )
+        return " ".join(lines)
+
+    if report_type == "displacement_report":
+        disp = parsed.get("displacement_map", [])
+        n_edges = len(disp)
+        from_vendors = {e.get("from_vendor") for e in disp if e.get("from_vendor")}
+        to_vendors = {e.get("to_vendor") for e in disp if e.get("to_vendor")}
+        lines = [
+            f"{window_label}, Atlas mapped {n_edges} competitive displacement flows across {len(from_vendors)} source vendors"
+            + (f" from {total_review_count} reviews." if total_review_count else ".")
+        ]
+        if to_vendors:
+            top_targets = _join_summary_terms(sorted(to_vendors)[:4])
+            lines.append(f"Most-cited alternatives: {top_targets}.")
+        return " ".join(lines)
+
+    if report_type == "category_overview":
+        cat = parsed.get("category_insights", [])
+        n = len(cat)
+        lines = [
+            f"{window_label}, Atlas analyzed cross-vendor trends across {n} product categories"
+            + (f" from {total_review_count} reviews." if total_review_count else ".")
+        ]
+        return " ".join(lines)
+
+    # --- default: weekly_churn_feed -----------------------------------
+
     top_entries = feed[:3]
     top_vendors: list[str] = []
     top_pains: list[str] = []
     top_alternatives: list[str] = []
     quote = None
-    has_named_accounts = False
+    churn_density_defined = False
 
     for entry in top_entries:
         vendor = entry.get("vendor")
@@ -258,22 +306,26 @@ def _build_validated_executive_summary(
         if vendor:
             parts = [str(vendor)]
             if churn_density is not None:
-                parts[0] += f" ({churn_density}% churn density"
+                if not churn_density_defined:
+                    parts[0] += f" ({churn_density}% churn density -- share of reviews containing explicit switching signals"
+                    churn_density_defined = True
+                else:
+                    parts[0] += f" ({churn_density}%"
                 if total_reviews:
                     parts[0] += f", {total_reviews} reviews)"
                 else:
                     parts[0] += ")"
             top_vendors.append(parts[0])
-        # Extract pains from pain_breakdown or top_pain
+        # Extract pains from pain_breakdown or top_pain -- skip vague "other"
         pain_breakdown = entry.get("pain_breakdown", [])
         if pain_breakdown:
             for pb in pain_breakdown[:2]:
                 p = pb.get("category", "")
-                if p and p not in top_pains:
+                if p and p.lower() != "other" and p not in top_pains:
                     top_pains.append(str(p))
         elif entry.get("top_pain"):
             p = str(entry["top_pain"])
-            if p not in top_pains:
+            if p.lower() != "other" and p not in top_pains:
                 top_pains.append(p)
         # Extract alternatives from displacement targets
         for dt in entry.get("top_displacement_targets", []) or []:
@@ -282,14 +334,12 @@ def _build_validated_executive_summary(
                 top_alternatives.append(comp)
         if not quote and entry.get("key_quote"):
             quote = str(entry["key_quote"])
-        if entry.get("named_accounts"):
-            has_named_accounts = True
 
     lines = [
         (
             f"{window_label}, Atlas identified {len(feed)} vendors under elevated churn pressure "
-            f"from {executive_review_count} executive-source reviews across {source_label_text}."
-            if executive_review_count
+            f"from {total_review_count} reviews across {source_label_text}."
+            if total_review_count
             else f"{window_label}, Atlas identified {len(feed)} vendors under elevated churn pressure across {source_label_text}."
         )
     ]
@@ -304,11 +354,9 @@ def _build_validated_executive_summary(
         )
     if quote:
         lines.append(f"Representative evidence: \"{quote}\"")
-    if has_named_accounts:
-        lines.append("Named accounts identified in some vendor feeds -- see individual entries for details.")
 
     lines.append(
-        "Confidence is highest for vendors with 50+ reviews; broader market-level conclusions should be treated as directional because source mix still varies across vendors."
+        "Confidence is highest for vendors with 50+ reviews; smaller samples should be treated as directional."
     )
     return " ".join(lines)
 
@@ -440,7 +488,7 @@ def _build_deterministic_vendor_feed(
     company_lookup: dict[str, list],
     keyword_spike_lookup: dict[str, dict],
     prior_reports: list[dict[str, Any]],
-    limit: int = 15,
+    limit: int = 50,
 ) -> list[dict[str, Any]]:
     """Build vendor-level weekly churn feed from aggregated data.
 
@@ -2412,15 +2460,22 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         logger.info("Vendor scorecard LLM: %d/%d failed",
                      scorecard_llm_failures, len(deterministic_vendor_scorecards))
 
-    parsed["executive_summary"] = _build_validated_executive_summary(
-        {"weekly_churn_feed": deterministic_weekly_feed},
-        data_context=data_context,
-        executive_sources=_executive_source_list(),
-    )
     parsed["weekly_churn_feed"] = deterministic_weekly_feed
     parsed["vendor_scorecards"] = deterministic_vendor_scorecards
     parsed["displacement_map"] = deterministic_displacement_map
     parsed["category_insights"] = deterministic_category_overview
+
+    # Build per-report-type executive summaries
+    _exec_sources = _executive_source_list()
+    _exec_summaries: dict[str, str] = {}
+    for _rt in ("weekly_churn_feed", "vendor_scorecard", "displacement_report", "category_overview"):
+        _exec_summaries[_rt] = _build_validated_executive_summary(
+            parsed,
+            data_context=data_context,
+            executive_sources=_exec_sources,
+            report_type=_rt,
+        )
+    _fallback_summary = _exec_summaries.get("weekly_churn_feed", "")
 
     # Build battle cards (per-vendor, persisted separately)
     deterministic_battle_cards = _build_deterministic_battle_cards(
@@ -2483,7 +2538,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "pain_categories": len(pain_dist),
         "feature_gaps": len(feature_gaps),
     })
-    exec_summary = parsed.get("executive_summary", "")
     exploratory_persisted = False
 
     # Provenance for intelligence reports
@@ -2515,7 +2569,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     today,
                     report_type,
                     json.dumps(data, default=str),
-                    exec_summary,
+                    _exec_summaries.get(report_type, _fallback_summary),
                     data_density,
                     "published",
                     llm_model_id,
