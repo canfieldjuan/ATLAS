@@ -117,7 +117,8 @@ Return valid JSON with exactly these keys:
     {"question": "What do teams switch to from Asana?", "answer": "The most frequently mentioned alternatives in reviews with switching intent are Monday.com, ClickUp, and Notion, each cited for different strengths."},
     {"question": "Is Asana good for small teams?", "answer": "Reviewer sentiment is mixed. Small team reviewers praise the free tier and intuitive interface, but report frustration with pricing jumps when scaling beyond 15 users."}
   ],
-  "content": "Markdown content here..."
+  "content": "Markdown content here...",
+  "cta_body": "Optional. 1-2 sentence teaser for the full report. Only include if cta_context is provided in the input."
 }
 ```
 
@@ -149,7 +150,7 @@ Return valid JSON with exactly these keys:
 6. **Timeframes**: Anchor statistics with the period from `data_context.review_period`.
 7. **Length**: 1000-1800 words for the main content. Concise paragraphs (2-4 sentences each).
 8. **Affiliate integration**: When `data_context.affiliate_partner` exists, mention the partner product ONLY where data genuinely supports it. Use `{{affiliate:partner-slug}}` placeholder. Maximum 2 mentions. NEVER force a recommendation the data doesn't support. If the affiliate partner shows negative patterns, mention those too. **CRITICAL: Only reference an affiliate partner if the partner's product is directly relevant to the article's category.** If the affiliate doesn't fit, omit it entirely.
-9. **Formatting**: Markdown only (no HTML except tables -- use HTML `<table>` for comparison tables). Use headers, bold for key numbers, blockquotes, bullet lists. No CTA section -- the frontend adds its own.
+9. **Formatting**: Markdown only (no HTML except tables -- use HTML `<table>` for comparison tables). Use headers, bold for key numbers, blockquotes, bullet lists. Do NOT include a CTA section in the article content -- the CTA renders separately. However, if `cta_context` is provided in the input, generate a `cta_body` field (1-2 sentences, max 40 words) in your output JSON that teases what the full report contains beyond the blog, references the specific vendor or category, and creates urgency without being pushy.
 10. **SEO**: `seo_title` must be under 60 characters with the target keyword in the first 30 characters. `seo_description` must be under 155 characters and include the target keyword. Use the target keyword naturally in the H2 headings (2-3 times in the content, not forced). The display `title` can be longer and more natural -- it is the H1 on the page.
 11. **Balance**: For EVERY vendor discussed, mention at least one strength AND one weakness based on reviewer data. No hit pieces. No puff pieces.
 12. **Methodology transparency**: State the sample size and source distribution in the introduction. E.g., "This analysis draws on N enriched reviews from G2, Capterra, and Reddit, collected between [dates]." Readers should understand the data foundation immediately.

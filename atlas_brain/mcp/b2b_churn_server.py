@@ -1751,7 +1751,7 @@ async def list_blog_posts(
         rows = await pool.fetch(
             f"""
             SELECT id, slug, title, description, topic_type, tags,
-                   status, llm_model, created_at, published_at
+                   status, llm_model, created_at, published_at, cta
             FROM blog_posts
             {where}
             ORDER BY created_at DESC
@@ -1772,6 +1772,7 @@ async def list_blog_posts(
                 "llm_model": r["llm_model"],
                 "created_at": r["created_at"],
                 "published_at": r["published_at"],
+                "cta": _safe_json(r["cta"]),
             }
             for r in rows
         ]
@@ -1837,6 +1838,7 @@ async def get_blog_post(
             "llm_model": row["llm_model"],
             "created_at": row["created_at"],
             "published_at": row["published_at"],
+            "cta": _safe_json(row["cta"]),
         }
 
         return json.dumps({"success": True, "post": post}, default=str)
