@@ -1528,7 +1528,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         },
     )
 
-    # Gather all 17 data sources + data_context + provenance in parallel
+    # Gather all data sources + data_context + provenance in parallel
     (
         vendor_scores, high_intent, competitive_disp,
         pain_dist, feature_gaps,
@@ -1540,6 +1540,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         displacement_provenance,
         pain_provenance, use_case_provenance, integration_provenance,
         buyer_profile_provenance,
+        insider_aggregates_raw,
     ) = await asyncio.gather(
         _fetch_vendor_churn_scores(pool, window_days, min_reviews),
         _fetch_high_intent_companies(pool, urgency_threshold, window_days),
@@ -1565,6 +1566,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _fetch_use_case_provenance(pool, window_days),
         _fetch_integration_provenance(pool, window_days),
         _fetch_buyer_profile_provenance(pool, window_days),
+        _fetch_insider_aggregates(pool, window_days),
         return_exceptions=True,
     )
 
@@ -1617,6 +1619,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if isinstance(buyer_profile_provenance, Exception):
         logger.warning("buyer_profile_provenance fetch failed: %s", buyer_profile_provenance)
         buyer_profile_provenance = {}
+    if isinstance(insider_aggregates_raw, Exception):
+        logger.warning("insider_aggregates fetch failed: %s", insider_aggregates_raw)
+        insider_aggregates_raw = []
+    insider_lookup = _build_insider_lookup(insider_aggregates_raw)
 
     # Check if there's enough data
     if not vendor_scores and not high_intent:
@@ -2008,6 +2014,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         sentiment_lookup, buyer_auth_lookup, timeline_lookup,
         keyword_spike_lookup,
         provenance_lookup=vendor_provenance,
+        insider_lookup=insider_lookup,
     )
 
     # Persist company signals to first-class table
@@ -3290,6 +3297,104 @@ async def _fetch_quotable_evidence(pool, window_days: int, *, min_urgency: float
     return results
 
 
+async def _fetch_insider_aggregates(pool, window_days: int) -> list[dict[str, Any]]:
+    """Aggregate insider account signals per vendor.
+
+    Reads b2b_reviews WHERE content_type = 'insider_account' and extracts:
+    - signal count
+    - org health summary (mode of bureaucracy_level / leadership_quality / innovation_climate)
+    - talent drain rate (fraction mentioning departures)
+    - top quotable phrases from high-urgency insider posts
+    """
+    rows = await pool.fetch(
+        """
+        SELECT
+            vendor_name,
+            COUNT(*)::int AS signal_count,
+            ROUND(
+                AVG(CASE WHEN enrichment->'insider_signals'->'talent_drain'->>'departures_mentioned' = 'true'
+                         THEN 1 ELSE 0 END)::numeric,
+                4
+            ) AS talent_drain_rate,
+            jsonb_agg(
+                enrichment->'insider_signals'->'org_health'
+                ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST
+            ) FILTER (WHERE enrichment->'insider_signals'->'org_health' IS NOT NULL) AS org_health_array,
+            jsonb_agg(
+                jsonb_build_object(
+                    'quote', ph.value,
+                    'urgency', (enrichment->>'urgency_score')::numeric,
+                    'review_id', id::text
+                )
+                ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST
+            ) FILTER (WHERE ph.value IS NOT NULL) AS quotable_phrases
+        FROM b2b_reviews
+        CROSS JOIN LATERAL jsonb_array_elements_text(
+            COALESCE(enrichment->'quotable_phrases', '[]'::jsonb)
+        ) AS ph(value)
+        WHERE content_type = 'insider_account'
+          AND enrichment_status = 'enriched'
+          AND imported_at > NOW() - make_interval(days => $1)
+        GROUP BY vendor_name
+        """,
+        window_days,
+    )
+    return list(rows)
+
+
+def _build_insider_lookup(rows: list[Any]) -> dict[str, dict]:
+    """Build vendor → insider aggregate dict from _fetch_insider_aggregates rows."""
+    result: dict[str, dict] = {}
+    for r in rows:
+        vendor = r["vendor_name"]
+        org_health_array = _safe_json(r["org_health_array"]) if r["org_health_array"] else []
+        quotable_raw = _safe_json(r["quotable_phrases"]) if r["quotable_phrases"] else []
+
+        # Mode of org health fields across all insider posts
+        from collections import Counter
+        bureaucracy = Counter(
+            h.get("bureaucracy_level") for h in org_health_array if h and h.get("bureaucracy_level")
+        )
+        leadership = Counter(
+            h.get("leadership_quality") for h in org_health_array if h and h.get("leadership_quality")
+        )
+        innovation = Counter(
+            h.get("innovation_climate") for h in org_health_array if h and h.get("innovation_climate")
+        )
+
+        # Flatten all culture_indicators
+        culture_indicators: list[str] = []
+        for h in org_health_array:
+            if h and isinstance(h.get("culture_indicators"), list):
+                culture_indicators.extend(h["culture_indicators"])
+        top_culture = [item for item, _ in Counter(culture_indicators).most_common(10)]
+
+        org_health_summary = {
+            "bureaucracy_level": bureaucracy.most_common(1)[0][0] if bureaucracy else "unknown",
+            "leadership_quality": leadership.most_common(1)[0][0] if leadership else "unknown",
+            "innovation_climate": innovation.most_common(1)[0][0] if innovation else "unknown",
+            "culture_indicators": top_culture,
+        }
+
+        # Keep top 5 quotable phrases, deduplicate
+        seen_quotes: set[str] = set()
+        quotable_evidence = []
+        for q in quotable_raw:
+            if isinstance(q, dict) and q.get("quote") and q["quote"] not in seen_quotes:
+                seen_quotes.add(q["quote"])
+                quotable_evidence.append(q)
+                if len(quotable_evidence) >= 5:
+                    break
+
+        result[vendor] = {
+            "signal_count": r["signal_count"] or 0,
+            "org_health_summary": org_health_summary,
+            "talent_drain_rate": float(r["talent_drain_rate"]) if r["talent_drain_rate"] is not None else None,
+            "quotable_evidence": quotable_evidence,
+        }
+    return result
+
+
 async def _fetch_budget_signals(pool, window_days: int) -> list[dict[str, Any]]:
     """Aggregate budget signals: seat_count stats and price-increase mentions per vendor."""
     sources = _intelligence_source_allowlist()
@@ -3961,8 +4066,9 @@ async def _upsert_churn_signals(
     timeline_lookup: dict[str, list[dict]] | None = None,
     keyword_spike_lookup: dict[str, dict] | None = None,
     provenance_lookup: dict[str, dict] | None = None,
+    insider_lookup: dict[str, dict] | None = None,
 ) -> int:
-    """Upsert b2b_churn_signals (29 columns incl. provenance). Returns failure count."""
+    """Upsert b2b_churn_signals (29 columns incl. provenance + insider). Returns failure count."""
     now = datetime.now(timezone.utc)
     budget_lookup = budget_lookup or {}
     use_case_lookup = use_case_lookup or {}
@@ -3972,6 +4078,7 @@ async def _upsert_churn_signals(
     timeline_lookup = timeline_lookup or {}
     keyword_spike_lookup = keyword_spike_lookup or {}
     provenance_lookup = provenance_lookup or {}
+    insider_lookup = insider_lookup or {}
     failures = 0
 
     for vs in vendor_scores:
@@ -3984,6 +4091,7 @@ async def _upsert_churn_signals(
         nps = ((recommend_yes - recommend_no) / total * 100) if total > 0 else None
 
         prov = provenance_lookup.get(vendor, {})
+        insider = insider_lookup.get(vendor, {})
 
         try:
             kw_data = keyword_spike_lookup.get(vendor, {})
@@ -4006,10 +4114,13 @@ async def _upsert_churn_signals(
                     source_distribution, sample_review_ids,
                     review_window_start, review_window_end,
                     confidence_score,
+                    insider_signal_count, insider_org_health_summary,
+                    insider_talent_drain_rate, insider_quotable_evidence,
                     last_computed_at
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
                           $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
-                          $22, $23, $24, $25, $26, $27, $28, $29, $30)
+                          $22, $23, $24, $25, $26, $27, $28, $29,
+                          $30, $31, $32, $33, $34)
                 ON CONFLICT (vendor_name, COALESCE(product_category, '')) DO UPDATE SET
                     total_reviews = EXCLUDED.total_reviews,
                     negative_reviews = EXCLUDED.negative_reviews,
@@ -4038,6 +4149,10 @@ async def _upsert_churn_signals(
                     review_window_start = EXCLUDED.review_window_start,
                     review_window_end = EXCLUDED.review_window_end,
                     confidence_score = EXCLUDED.confidence_score,
+                    insider_signal_count = EXCLUDED.insider_signal_count,
+                    insider_org_health_summary = EXCLUDED.insider_org_health_summary,
+                    insider_talent_drain_rate = EXCLUDED.insider_talent_drain_rate,
+                    insider_quotable_evidence = EXCLUDED.insider_quotable_evidence,
                     last_computed_at = EXCLUDED.last_computed_at
                 """,
                 vendor,
@@ -4069,6 +4184,11 @@ async def _upsert_churn_signals(
                 prov.get("review_window_start"),
                 prov.get("review_window_end"),
                 signal_confidence,
+                # Insider aggregate columns (migration 133)
+                insider.get("signal_count", 0),
+                json.dumps(insider.get("org_health_summary", {})),
+                insider.get("talent_drain_rate"),
+                json.dumps(insider.get("quotable_evidence", [])[:5]),
                 now,
             )
         except Exception:

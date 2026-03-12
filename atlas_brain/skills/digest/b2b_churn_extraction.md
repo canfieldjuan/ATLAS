@@ -20,6 +20,7 @@ You are a B2B software intelligence analyst. Given a single software review, ext
   "source_name": "g2",
   "source_weight": 1.0,
   "source_type": "verified_review_platform",
+  "content_type": "review",
   "rating": 2.0,
   "rating_max": 5,
   "summary": "Too expensive and clunky",
@@ -32,6 +33,8 @@ You are a B2B software intelligence analyst. Given a single software review, ext
   "reviewer_industry": "Technology"
 }
 ```
+
+`content_type` values: `review`, `community_discussion`, `comment`, `insider_account`.
 
 ## Output Schema
 
@@ -111,9 +114,37 @@ You are a B2B software intelligence analyst. Given a single software review, ext
     "contract_end": "Q2 2026",
     "evaluation_deadline": null,
     "decision_timeline": "within_quarter"
+  },
+
+  "content_classification": "review",
+
+  "insider_signals": null
+}
+```
+
+For `content_type = "insider_account"`, populate `insider_signals`:
+
+```json
+{
+  "insider_signals": {
+    "role_at_company": "Senior Engineer",
+    "departure_type": "voluntary",
+    "org_health": {
+      "bureaucracy_level": "high",
+      "leadership_quality": "poor",
+      "innovation_climate": "stagnant",
+      "culture_indicators": ["micromanagement", "no autonomy", "reorg every 6 months"]
+    },
+    "talent_drain": {
+      "departures_mentioned": true,
+      "layoff_fear": false,
+      "morale": "low"
+    }
   }
 }
 ```
+
+For all other `content_type` values, set `"insider_signals": null`.
 
 ## Field Rules
 
@@ -227,6 +258,28 @@ ONLY extract explicitly stated figures. Never estimate or infer budgets.
   - **"within_year"**: Decision within 12 months
   - **"unknown"**: Cannot determine
 
+### content_classification
+Set to the `content_type` value from the input (pass-through for downstream filtering):
+- `"review"`: Structured review from a verified platform
+- `"community_discussion"`: Reddit/HN post expressing user experience
+- `"comment"`: Reply within a thread (lower signal weight)
+- `"insider_account"`: Employee or ex-employee perspective
+
+### insider_signals
+Only populated when `content_type = "insider_account"`. All other types must set this to `null`.
+
+- `role_at_company`: The role the author held at the vendor (not the reviewer of the product). E.g., "Senior Engineer", "Product Manager", "Support Lead". Null if not stated.
+- `departure_type`: `"voluntary"` (quit), `"involuntary"` (laid off / fired), `"still_employed"`, or `"unknown"`.
+- `org_health.bureaucracy_level`: How bureaucratic/slow the company is (`"high"`, `"medium"`, `"low"`, `"unknown"`).
+- `org_health.leadership_quality`: Perception of leadership effectiveness (`"poor"`, `"mixed"`, `"good"`, `"unknown"`).
+- `org_health.innovation_climate`: Whether the product/engineering culture is innovative (`"stagnant"`, `"declining"`, `"healthy"`, `"unknown"`).
+- `org_health.culture_indicators`: Array of specific culture descriptors extracted from the text (e.g., `["micromanagement", "no autonomy"]`). Empty array if none.
+- `talent_drain.departures_mentioned`: True if the text mentions people leaving, high turnover, or difficulty retaining talent.
+- `talent_drain.layoff_fear`: True if the text mentions fear of layoffs, RIFs, or job security concerns.
+- `talent_drain.morale`: Overall morale signal: `"high"`, `"medium"`, `"low"`, or `"unknown"`.
+
+**Why insider signals matter for churn prediction**: A vendor with deteriorating engineering culture, talent exodus, and poor leadership quality will ship a worse product over time — directly increasing customer churn risk. Treat insider accounts as forward-looking churn indicators.
+
 ## Source Context
 
 The `source_weight` field indicates how much to trust this review source. Calibrate your analysis accordingly:
@@ -234,6 +287,8 @@ The `source_weight` field indicates how much to trust this review source. Calibr
 - **weight 0.8-1.0** (G2, Capterra): Verified review platforms. Trust reviewer identity and company info. Use standard urgency scoring.
 - **weight 0.4-0.7** (Reddit): Anonymous community discussion. Reduce urgency by 1 point if the post only expresses vague frustration without specific timelines or actions. Do not trust claimed titles unless corroborated by specifics.
 - **weight 0.1-0.3** (TrustRadius aggregate): Product-level summary, not an individual review. Set `intent_to_leave=false`, `urgency_score=0`, `decision_maker=false`. Extract only `pain_category` and `feature_gaps` from the aggregate notes.
+- **content_type = "insider_account"**: Employee/ex-employee perspective. Prioritize `insider_signals` extraction. The standard churn fields (`urgency_score`, `churn_signals`) still apply — an insider post predicting product stagnation IS a churn signal. `urgency_score` represents the customer churn risk implied by the org health signals (e.g. mass engineer departures = high urgency for customers to evaluate alternatives).
+- **content_type = "comment"**: Short reply in a thread. Lower signal confidence. Reduce urgency by 1 point. Focus on extracting `quotable_phrases` and `competitors_mentioned`.
 
 ## Reasoning Framework
 

@@ -12,7 +12,7 @@ You are a B2B churn signal screener. Given a software review, determine whether 
 
 ## Input
 
-A JSON object with: vendor_name, source, rating, summary, review_text, pros, cons.
+A JSON object with: vendor_name, source, rating, summary, review_text, pros, cons, content_type (optional).
 
 ## Decision Criteria
 
@@ -25,6 +25,9 @@ Answer YES if ANY of these are present:
 - Describes feature gaps driving them toward alternatives
 - Mentions an evaluation, RFP, or vendor selection process
 - Expresses regret about choosing the product ("wish we had gone with")
+- **content_type is "insider_account"** — always YES (employee/ex-employee perspectives are high-value; extract org health + product quality signals even without explicit churn language)
+- Employee or ex-employee describes organizational dysfunction, talent drain, or leadership problems that impact product quality
+- Insider account describes declining engineering culture, morale collapse, or mass departures
 
 Answer NO if ALL of these are true:
 - Review is purely positive with no pain points

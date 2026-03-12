@@ -101,12 +101,26 @@ INSERT INTO b2b_reviews (
     rating, rating_max, summary, review_text, pros, cons,
     reviewer_name, reviewer_title, reviewer_company,
     company_size_raw, reviewer_industry, reviewed_at,
-    import_batch_id, raw_metadata, parser_version
+    import_batch_id, raw_metadata, parser_version,
+    content_type, thread_id, comment_depth
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-    $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
+    $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
+    $23, $24, $25
 )
 ON CONFLICT (dedup_key) DO NOTHING
+"""
+
+# Resolve parent_review_id for comments after all posts in the batch are inserted
+_RESOLVE_PARENT_SQL = """
+UPDATE b2b_reviews AS c
+SET parent_review_id = p.id
+FROM b2b_reviews AS p
+WHERE c.import_batch_id = $1
+  AND c.content_type = 'comment'
+  AND c.parent_review_id IS NULL
+  AND p.source = 'reddit'
+  AND p.source_review_id = (c.raw_metadata->>'parent_source_review_id')
 """
 
 _TARGET_QUERY = """
@@ -447,6 +461,10 @@ async def _insert_reviews(pool, reviews: list[dict], batch_id: str, parser_versi
             batch_id,
             json.dumps(r.get("raw_metadata", {})),
             parser_version,
+            # Threading / content-type columns (migration 133)
+            r.get("content_type") or "review",
+            r.get("thread_id"),
+            r.get("comment_depth") or 0,
         ))
 
     if skipped_short:
@@ -461,6 +479,15 @@ async def _insert_reviews(pool, reviews: list[dict], batch_id: str, parser_versi
     except Exception:
         logger.exception("Failed to insert scraped reviews (batch %s)", batch_id)
         return 0
+
+    # Resolve parent_review_id for Reddit comments (looks up parent post by
+    # source_review_id stored in raw_metadata.parent_source_review_id)
+    has_comments = any(r.get("content_type") == "comment" for r in rows)  # type: ignore[union-attr]
+    if has_comments:
+        try:
+            await pool.execute(_RESOLVE_PARENT_SQL, batch_id)
+        except Exception:
+            logger.warning("parent_review_id resolution failed for batch %s", batch_id)
 
     # Count actual inserts
     count_row = await pool.fetchrow(
