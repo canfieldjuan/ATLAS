@@ -6,7 +6,6 @@ monitoring progress, retrieving results, and managing jobs.
 """
 
 import logging
-from pathlib import Path
 from typing import Optional
 from uuid import UUID
 
@@ -30,7 +29,7 @@ router = APIRouter(prefix="/scraper", tags=["universal-scraper"])
 
 
 class FromFileRequest(BaseModel):
-    path: str = Field(description="Path to a JSON config file on disk")
+    path: str = Field(description="Filename inside the configured scrape_configs directory")
 
 
 # ── Endpoints ────────────────────────────────────────────────────────
@@ -38,7 +37,11 @@ class FromFileRequest(BaseModel):
 
 @router.post("/jobs")
 async def create_job(config: ScrapeJobConfig):
-    """Submit a scrape job. Returns immediately with job_id; scraping runs in background."""
+    """Submit a scrape job. Returns immediately with job_id; scraping runs in background.
+
+    URL validation (SSRF protection) is enforced on each target URL by the
+    ScrapeTarget Pydantic model.
+    """
     if not settings.universal_scrape.enabled:
         raise HTTPException(503, "Universal scraper is disabled")
     pool = get_db_pool()
@@ -56,7 +59,12 @@ async def create_job(config: ScrapeJobConfig):
 
 @router.post("/jobs/from-file")
 async def create_job_from_file(req: FromFileRequest):
-    """Load a scrape job from a JSON config file on disk and start it."""
+    """Load a scrape job from a JSON config file and start it.
+
+    The file path is resolved relative to the configured ``config_dir``
+    (default: ``scrape_configs/``). Path traversal outside that directory
+    is blocked.
+    """
     if not settings.universal_scrape.enabled:
         raise HTTPException(503, "Universal scraper is disabled")
     pool = get_db_pool()
@@ -67,6 +75,8 @@ async def create_job_from_file(req: FromFileRequest):
         config = load_config_file(req.path)
     except FileNotFoundError:
         raise HTTPException(404, f"Config file not found: {req.path}")
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
     except Exception as exc:
         raise HTTPException(400, f"Invalid config file: {exc}")
 
@@ -139,7 +149,10 @@ async def get_job(job_id: UUID):
 @router.get("/jobs/{job_id}/results")
 async def get_results(
     job_id: UUID,
-    include_raw: bool = False,
+    include_raw: bool = Query(
+        default=False,
+        description="Include raw LLM response (may contain sensitive page content)",
+    ),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ):
@@ -172,20 +185,19 @@ async def get_results(
 
 @router.post("/jobs/{job_id}/cancel")
 async def cancel_job(job_id: UUID):
-    """Cancel a pending or running job."""
+    """Cancel a pending or running job.
+
+    Signals the running background task to stop processing new targets
+    and pages. Already-in-flight requests will complete but no new ones
+    will be started.
+    """
     pool = get_db_pool()
     if not pool.is_initialized:
         raise HTTPException(503, "Database not ready")
 
-    result = await pool.execute(
-        """
-        UPDATE universal_scrape_jobs
-        SET status = 'cancelled', finished_at = now()
-        WHERE id = $1 AND status IN ('pending', 'running')
-        """,
-        job_id,
-    )
-    return {"cancelled": "UPDATE 1" in result}
+    scraper = get_universal_scraper()
+    cancelled = await scraper.cancel_job(job_id)
+    return {"cancelled": cancelled}
 
 
 @router.delete("/jobs/{job_id}")

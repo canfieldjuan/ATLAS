@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS universal_scrape_jobs (
     id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name              TEXT NOT NULL,
     status            TEXT NOT NULL DEFAULT 'pending'
-                      CHECK (status IN ('pending', 'running', 'completed', 'failed', 'cancelled')),
+                      CHECK (status IN ('pending', 'running', 'completed', 'partial_success', 'failed', 'cancelled')),
     config            JSONB NOT NULL,
     total_targets     INT NOT NULL DEFAULT 0,
     completed_targets INT NOT NULL DEFAULT 0,

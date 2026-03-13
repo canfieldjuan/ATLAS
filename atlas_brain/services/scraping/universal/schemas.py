@@ -9,7 +9,7 @@ from enum import Enum
 from typing import Any, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class PaginationStrategy(str, Enum):
@@ -68,6 +68,13 @@ class ScrapeTarget(BaseModel):
     prefer_residential: bool = False
     sticky_session: bool = False
 
+    @field_validator("url")
+    @classmethod
+    def _validate_url(cls, v: str) -> str:
+        from .url_validation import validate_url
+
+        return validate_url(v)
+
 
 class ScrapeJobConfig(BaseModel):
     """Top-level job definition — submitted via API or loaded from JSON file."""
@@ -82,8 +89,8 @@ class ScrapeJobConfig(BaseModel):
     )
     llm_max_tokens: int = Field(default=4096, ge=256, le=16384)
     store_raw_llm: bool = Field(
-        default=True,
-        description="Persist raw LLM output for debugging",
+        default=False,
+        description="Persist raw LLM output for debugging (may contain sensitive page content)",
     )
 
     model_config = {"populate_by_name": True}

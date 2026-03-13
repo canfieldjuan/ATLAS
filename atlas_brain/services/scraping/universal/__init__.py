@@ -8,7 +8,12 @@ user-defined schema (natural language or JSON field definitions).
 Supports multi-site scrape jobs with parallel execution.
 """
 
-from .orchestrator import UniversalScraper, get_universal_scraper, load_config_file
+from .orchestrator import (
+    UniversalScraper,
+    get_universal_scraper,
+    load_config_file,
+    reconcile_orphaned_jobs,
+)
 from .schemas import (
     ExtractionSchema,
     PaginationConfig,
@@ -26,4 +31,5 @@ __all__ = [
     "UniversalScraper",
     "get_universal_scraper",
     "load_config_file",
+    "reconcile_orphaned_jobs",
 ]

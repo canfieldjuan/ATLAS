@@ -72,8 +72,14 @@ async def extract_from_text(
 
 
 def _parse_items(text: str) -> list[dict[str, Any]]:
-    """Parse LLM output as a JSON array of dicts."""
-    # Direct parse
+    """Parse LLM output as a JSON array of dicts.
+
+    Uses bracket-balanced extraction instead of greedy regex to avoid
+    over-capturing mixed content.
+    """
+    text = text.strip()
+
+    # 1. Direct parse (best case — clean output)
     try:
         result = json.loads(text)
         if isinstance(result, list):
@@ -83,25 +89,67 @@ def _parse_items(text: str) -> list[dict[str, Any]]:
     except json.JSONDecodeError:
         pass
 
-    # Find JSON array in text
-    arr_match = re.search(r"\[.*\]", text, re.DOTALL)
-    if arr_match:
+    # 2. Bracket-balanced extraction: find the first [ and its matching ]
+    items = _extract_balanced(text, "[", "]")
+    if items is not None:
         try:
-            result = json.loads(arr_match.group())
+            result = json.loads(items)
             if isinstance(result, list):
                 return [r for r in result if isinstance(r, dict)]
         except json.JSONDecodeError:
             pass
 
-    # Find single JSON object
-    obj_match = re.search(r"\{.*\}", text, re.DOTALL)
-    if obj_match:
+    # 3. Try balanced { } for a single object
+    obj = _extract_balanced(text, "{", "}")
+    if obj is not None:
         try:
-            obj = json.loads(obj_match.group())
-            if isinstance(obj, dict):
-                return [obj]
+            parsed = json.loads(obj)
+            if isinstance(parsed, dict):
+                return [parsed]
         except json.JSONDecodeError:
             pass
 
     logger.warning("Could not parse LLM output as JSON, returning empty list")
     return []
+
+
+def _extract_balanced(text: str, open_ch: str, close_ch: str) -> str | None:
+    """Extract the first balanced bracket/brace substring from text.
+
+    Returns the matched substring including delimiters, or None.
+    """
+    start = text.find(open_ch)
+    if start == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escape = False
+
+    for i in range(start, len(text)):
+        ch = text[i]
+
+        if escape:
+            escape = False
+            continue
+
+        if ch == "\\":
+            if in_string:
+                escape = True
+            continue
+
+        if ch == '"':
+            in_string = not in_string
+            continue
+
+        if in_string:
+            continue
+
+        if ch == open_ch:
+            depth += 1
+        elif ch == close_ch:
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+
+    return None

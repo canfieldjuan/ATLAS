@@ -125,6 +125,14 @@ async def lifespan(app: FastAPI):
                     logger.info("Database migrations checked")
             except Exception as e:
                 logger.warning("Database migration check failed: %s", e)
+
+            # Reconcile orphaned universal scraper jobs from previous crashes
+            try:
+                from .services.scraping.universal.orchestrator import reconcile_orphaned_jobs
+                await reconcile_orphaned_jobs()
+            except Exception as e:
+                logger.debug("Universal scraper reconciliation skipped: %s", e)
+
         except Exception as e:
             logger.error("Failed to initialize database: %s", e)
             # Continue without database - service can still function
