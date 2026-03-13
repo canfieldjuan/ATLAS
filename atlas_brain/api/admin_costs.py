@@ -642,6 +642,579 @@ async def scraping_top_posts(
 
 
 # ---------------------------------------------------------------------------
+# Reddit scraper — deep monitoring sub-section
+# ---------------------------------------------------------------------------
+
+
+@router.get("/scraping/reddit/overview")
+async def reddit_overview(days: int = Query(default=7, ge=1, le=30)):
+    """
+    Reddit scraper health dashboard.
+
+    Covers auth mode, raw throughput, rate-limit events (parsed from the
+    errors JSONB), the triage/enrichment signal funnel, and final actionable
+    signal conversion (intent_to_leave + high_urgency).
+    """
+    pool = _pool_or_503()
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    # -- Scrape-log stats: runs, throughput, 429s --------------------------
+    log_row = await pool.fetchrow(
+        """
+        SELECT
+            COUNT(*)                                                              AS total_runs,
+            COUNT(*) FILTER (WHERE l.status = 'completed')                       AS completed,
+            COUNT(*) FILTER (WHERE l.status = 'failed')                          AS failed,
+            COUNT(*) FILTER (WHERE l.status = 'blocked')                         AS blocked,
+            COUNT(*) FILTER (WHERE l.status = 'partial')                         AS partial,
+            COALESCE(SUM(l.reviews_found), 0)                                    AS reviews_found,
+            COALESCE(SUM(l.reviews_inserted), 0)                                 AS reviews_inserted,
+            COALESCE(AVG(l.duration_ms), 0)                                      AS avg_duration_ms,
+            COALESCE(SUM(l.pages_scraped), 0)                                    AS pages_scraped_total,
+            -- Auth mode: reddit:2 = OAuth2, reddit:1 = public
+            MODE() WITHIN GROUP (ORDER BY l.parser_version)                      AS dominant_parser,
+            -- Rate-limit events: count runs that had any 429 in their errors array
+            COUNT(*) FILTER (
+                WHERE EXISTS (
+                    SELECT 1 FROM jsonb_array_elements_text(l.errors) e
+                    WHERE e LIKE '%429%'
+                )
+            )                                                                     AS runs_with_429s,
+            -- Total individual 429 occurrences across all runs
+            COALESCE(SUM((
+                SELECT COUNT(*) FROM jsonb_array_elements_text(l.errors) e
+                WHERE e LIKE '%429%'
+            )), 0)                                                                AS total_429_events
+        FROM b2b_scrape_log l
+        WHERE l.source = 'reddit'
+          AND l.started_at >= $1
+        """,
+        since,
+    )
+
+    # -- Signal funnel: enrichment status breakdown -------------------------
+    funnel_rows = await pool.fetch(
+        """
+        SELECT
+            enrichment_status,
+            COUNT(*) AS cnt
+        FROM b2b_reviews
+        WHERE source = 'reddit'
+          AND imported_at >= $1
+        GROUP BY enrichment_status
+        """,
+        since,
+    )
+    funnel: dict[str, int] = {r["enrichment_status"]: int(r["cnt"]) for r in funnel_rows}
+    enriched   = funnel.get("enriched", 0)
+    no_signal  = funnel.get("no_signal", 0)
+    failed_enr = funnel.get("failed", 0)
+    pending    = funnel.get("pending", 0) + funnel.get("enriching", 0)
+    inserted   = sum(funnel.values())
+    triage_denominator = enriched + no_signal
+
+    # -- Signal conversion: intent_to_leave + high urgency -----------------
+    conversion_row = await pool.fetchrow(
+        """
+        SELECT
+            COUNT(*) FILTER (
+                WHERE COALESCE(enrichment->'churn_signals'->>'intent_to_leave', 'false')::boolean
+            )                                                                AS intent_to_leave,
+            COUNT(*) FILTER (
+                WHERE (enrichment->>'urgency_score')::numeric >= 7
+            )                                                                AS high_urgency,
+            COUNT(*) FILTER (
+                WHERE COALESCE(enrichment->'churn_signals'->>'intent_to_leave', 'false')::boolean
+                   OR (enrichment->>'urgency_score')::numeric >= 7
+            )                                                                AS actionable
+        FROM b2b_reviews
+        WHERE source = 'reddit'
+          AND imported_at >= $1
+          AND enrichment_status = 'enriched'
+        """,
+        since,
+    )
+
+    # Derive auth mode from the most common parser version seen in this window
+    dominant = log_row["dominant_parser"] or ""
+    auth_mode = "oauth2" if "reddit:2" in dominant else ("public" if dominant else "unknown")
+
+    reviews_found    = int(log_row["reviews_found"])
+    reviews_inserted = int(log_row["reviews_inserted"])
+    intent_to_leave  = int(conversion_row["intent_to_leave"])
+    high_urgency     = int(conversion_row["high_urgency"])
+    actionable       = int(conversion_row["actionable"])
+
+    return {
+        "period_days": days,
+        "auth_mode": auth_mode,
+        "runs": {
+            "total":     int(log_row["total_runs"]),
+            "completed": int(log_row["completed"]),
+            "failed":    int(log_row["failed"]),
+            "blocked":   int(log_row["blocked"]),
+            "partial":   int(log_row["partial"]),
+        },
+        "throughput": {
+            "reviews_found":       reviews_found,
+            "reviews_inserted":    reviews_inserted,
+            "insert_rate":         round(reviews_inserted / reviews_found, 3) if reviews_found else 0.0,
+            "avg_duration_ms":     round(float(log_row["avg_duration_ms"]), 1),
+            "pages_scraped_total": int(log_row["pages_scraped_total"]),
+        },
+        "rate_limits": {
+            "runs_with_429s":   int(log_row["runs_with_429s"]),
+            "total_429_events": int(log_row["total_429_events"]),
+        },
+        "signal_funnel": {
+            "inserted":                  inserted,
+            "enriched":                  enriched,
+            "no_signal":                 no_signal,
+            "failed":                    failed_enr,
+            "pending":                   pending,
+            "triage_pass_rate":          round(enriched / triage_denominator, 3) if triage_denominator else 0.0,
+            "enrichment_completion_rate": round(enriched / inserted, 3) if inserted else 0.0,
+        },
+        "signal_conversion": {
+            "intent_to_leave": intent_to_leave,
+            "high_urgency":    high_urgency,
+            "actionable":      actionable,
+            "actionable_rate": round(actionable / inserted, 3) if inserted else 0.0,
+        },
+    }
+
+
+@router.get("/scraping/reddit/by-subreddit")
+async def reddit_by_subreddit(days: int = Query(default=30, ge=1, le=90)):
+    """
+    Per-subreddit signal yield.
+
+    Shows which subreddits are producing actionable intelligence vs noise.
+    Use this to tune the DEFAULT_SUBREDDITS list in the Reddit parser.
+    """
+    pool = _pool_or_503()
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    rows = await pool.fetch(
+        """
+        SELECT
+            raw_metadata->>'subreddit'                                                   AS subreddit,
+            COUNT(*)                                                                      AS total_posts,
+            COUNT(*) FILTER (WHERE (raw_metadata->>'source_weight')::numeric > 0.7)      AS high_signal_posts,
+            COUNT(*) FILTER (WHERE enrichment_status = 'enriched')                       AS enriched_posts,
+            COUNT(*) FILTER (WHERE enrichment_status = 'no_signal')                      AS no_signal_posts,
+            COUNT(*) FILTER (WHERE enrichment_status = 'failed')                         AS failed_posts,
+            ROUND(AVG((raw_metadata->>'source_weight')::numeric)::numeric, 3)            AS avg_source_weight,
+            ROUND(AVG(
+                CASE WHEN enrichment_status = 'enriched'
+                     THEN (enrichment->>'urgency_score')::numeric END
+            )::numeric, 2)                                                                AS avg_urgency_score,
+            ROUND(AVG(
+                CASE WHEN (raw_metadata->>'score') ~ '^\-?[0-9]+$'
+                     THEN (raw_metadata->>'score')::int END
+            )::numeric, 1)                                                                AS avg_reddit_score,
+            COUNT(*) FILTER (
+                WHERE raw_metadata->>'trending_score' = 'high'
+            )                                                                             AS trending_high_count,
+            COUNT(*) FILTER (
+                WHERE COALESCE(jsonb_array_length(raw_metadata->'comment_threads'), 0) > 0
+            )                                                                             AS comment_harvested_count
+        FROM b2b_reviews
+        WHERE source = 'reddit'
+          AND imported_at >= $1
+          AND raw_metadata->>'subreddit' IS NOT NULL
+          AND raw_metadata->>'subreddit' != ''
+        GROUP BY raw_metadata->>'subreddit'
+        ORDER BY enriched_posts DESC, total_posts DESC
+        """,
+        since,
+    )
+
+    def _sub(r: dict) -> dict:
+        total    = int(r["total_posts"])
+        enriched = int(r["enriched_posts"])
+        no_sig   = int(r["no_signal_posts"])
+        high_sig = int(r["high_signal_posts"])
+        triage_d = enriched + no_sig
+        return {
+            "subreddit":               r["subreddit"],
+            "total_posts":             total,
+            "high_signal_posts":       high_sig,
+            "signal_rate":             round(high_sig / total, 3) if total else 0.0,
+            "enriched_posts":          enriched,
+            "triage_pass_rate":        round(enriched / triage_d, 3) if triage_d else 0.0,
+            "no_signal_posts":         no_sig,
+            "failed_posts":            int(r["failed_posts"]),
+            "avg_source_weight":       float(r["avg_source_weight"] or 0),
+            "avg_urgency_score":       float(r["avg_urgency_score"] or 0),
+            "avg_reddit_score":        float(r["avg_reddit_score"] or 0),
+            "trending_high_count":     int(r["trending_high_count"]),
+            "comment_harvested_count": int(r["comment_harvested_count"]),
+        }
+
+    return {
+        "period_days": days,
+        "subreddits": [_sub(dict(r)) for r in rows],
+    }
+
+
+@router.get("/scraping/reddit/signal-breakdown")
+async def reddit_signal_breakdown(days: int = Query(default=30, ge=1, le=90)):
+    """
+    Post-quality characteristics for tuning the Reddit scraper.
+
+    Covers flair vs signal correlation, edited/crosspost amplification,
+    comment harvest stats, author churn score distribution, post age,
+    and trending score spread.
+    """
+    pool = _pool_or_503()
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    # -- Flair analysis -------------------------------------------------------
+    flair_rows = await pool.fetch(
+        """
+        SELECT
+            COALESCE(NULLIF(raw_metadata->>'post_flair', ''), '(no flair)')  AS flair,
+            COUNT(*)                                                           AS count,
+            COUNT(*) FILTER (WHERE enrichment_status = 'enriched')            AS enriched,
+            ROUND(AVG((raw_metadata->>'source_weight')::numeric)::numeric, 3) AS avg_weight
+        FROM b2b_reviews
+        WHERE source = 'reddit'
+          AND imported_at >= $1
+        GROUP BY raw_metadata->>'post_flair'
+        ORDER BY count DESC
+        LIMIT 15
+        """,
+        since,
+    )
+
+    # -- Edit stats -----------------------------------------------------------
+    edit_row = await pool.fetchrow(
+        """
+        SELECT
+            COUNT(*) FILTER (WHERE (raw_metadata->>'is_edited')::boolean)    AS edited_posts,
+            COUNT(*) FILTER (WHERE NOT (raw_metadata->>'is_edited')::boolean
+                               OR raw_metadata->>'is_edited' IS NULL)        AS unedited_posts,
+            COUNT(*) FILTER (WHERE (raw_metadata->>'is_edited')::boolean
+                               AND enrichment_status = 'enriched')           AS edited_enriched,
+            COUNT(*) FILTER (WHERE (NOT (raw_metadata->>'is_edited')::boolean
+                               OR raw_metadata->>'is_edited' IS NULL)
+                               AND enrichment_status = 'enriched')           AS unedited_enriched
+        FROM b2b_reviews
+        WHERE source = 'reddit'
+          AND imported_at >= $1
+        """,
+        since,
+    )
+
+    # -- Crosspost stats ------------------------------------------------------
+    crosspost_row = await pool.fetchrow(
+        """
+        SELECT
+            COUNT(*) FILTER (WHERE (raw_metadata->>'is_crosspost')::boolean)  AS crossposts,
+            COUNT(*) FILTER (WHERE (raw_metadata->>'is_crosspost')::boolean
+                               AND enrichment_status = 'enriched')            AS crosspost_enriched,
+            -- Count total unique extra subreddits reached via crossposts
+            COALESCE((
+                SELECT COUNT(DISTINCT sub)
+                FROM b2b_reviews r2,
+                     jsonb_array_elements_text(r2.raw_metadata->'crosspost_subreddits') AS sub
+                WHERE r2.source = 'reddit'
+                  AND r2.imported_at >= $1
+                  AND (r2.raw_metadata->>'is_crosspost')::boolean
+            ), 0)                                                              AS crosspost_subreddits_reached
+        FROM b2b_reviews
+        WHERE source = 'reddit'
+          AND imported_at >= $1
+        """,
+        since,
+    )
+
+    # -- Comment harvest stats ------------------------------------------------
+    comment_row = await pool.fetchrow(
+        """
+        SELECT
+            COUNT(*) FILTER (
+                WHERE COALESCE(jsonb_array_length(raw_metadata->'comment_threads'), 0) > 0
+            )                                                                  AS posts_with_comments,
+            ROUND(AVG(
+                COALESCE(jsonb_array_length(raw_metadata->'comment_threads'), 0)
+            )::numeric, 2)                                                     AS avg_comments_fetched,
+            COUNT(*)                                                            AS total_posts
+        FROM b2b_reviews
+        WHERE source = 'reddit'
+          AND imported_at >= $1
+        """,
+        since,
+    )
+
+    # -- Author churn score distribution + stats ------------------------------
+    author_row = await pool.fetchrow(
+        """
+        SELECT
+            COUNT(*) FILTER (
+                WHERE (raw_metadata->>'author_churn_score')::numeric >= 7
+            )                                                                  AS high_score_authors,
+            ROUND(AVG((raw_metadata->>'author_churn_score')::numeric)::numeric, 2)
+                                                                               AS avg_churn_score,
+            COUNT(*) FILTER (
+                WHERE (raw_metadata->>'author_churn_score')::numeric < 3
+            )                                                                  AS score_0_2,
+            COUNT(*) FILTER (
+                WHERE (raw_metadata->>'author_churn_score')::numeric >= 3
+                  AND (raw_metadata->>'author_churn_score')::numeric < 5
+            )                                                                  AS score_3_4,
+            COUNT(*) FILTER (
+                WHERE (raw_metadata->>'author_churn_score')::numeric >= 5
+                  AND (raw_metadata->>'author_churn_score')::numeric < 7
+            )                                                                  AS score_5_6,
+            COUNT(*) FILTER (
+                WHERE (raw_metadata->>'author_churn_score')::numeric >= 7
+            )                                                                  AS score_7_10
+        FROM b2b_reviews
+        WHERE source = 'reddit'
+          AND imported_at >= $1
+        """,
+        since,
+    )
+
+    # -- Post age distribution (reviewed_at = when content was written) -------
+    age_row = await pool.fetchrow(
+        """
+        SELECT
+            COUNT(*) FILTER (WHERE reviewed_at >= NOW() - INTERVAL '7 days')   AS last_7d,
+            COUNT(*) FILTER (WHERE reviewed_at >= NOW() - INTERVAL '30 days'
+                               AND reviewed_at < NOW() - INTERVAL '7 days')    AS last_8_to_30d,
+            COUNT(*) FILTER (WHERE reviewed_at >= NOW() - INTERVAL '90 days'
+                               AND reviewed_at < NOW() - INTERVAL '30 days')   AS last_31_to_90d,
+            COUNT(*) FILTER (WHERE reviewed_at < NOW() - INTERVAL '90 days'
+                               OR reviewed_at IS NULL)                          AS older
+        FROM b2b_reviews
+        WHERE source = 'reddit'
+          AND imported_at >= $1
+        """,
+        since,
+    )
+
+    # -- Trending distribution ------------------------------------------------
+    trending_row = await pool.fetchrow(
+        """
+        SELECT
+            COUNT(*) FILTER (WHERE raw_metadata->>'trending_score' = 'high')   AS trending_high,
+            COUNT(*) FILTER (WHERE raw_metadata->>'trending_score' = 'medium') AS trending_medium,
+            COUNT(*) FILTER (WHERE raw_metadata->>'trending_score' = 'low'
+                               OR raw_metadata->>'trending_score' IS NULL)     AS trending_low
+        FROM b2b_reviews
+        WHERE source = 'reddit'
+          AND imported_at >= $1
+        """,
+        since,
+    )
+
+    # -- Assemble ---------------------------------------------------------
+    def _flair(r: dict) -> dict:
+        cnt      = int(r["count"])
+        enriched = int(r["enriched"])
+        return {
+            "flair":       r["flair"],
+            "count":       cnt,
+            "signal_rate": round(enriched / cnt, 3) if cnt else 0.0,
+            "avg_weight":  float(r["avg_weight"] or 0),
+        }
+
+    edited   = int(edit_row["edited_posts"])
+    unedited = int(edit_row["unedited_posts"])
+    ed_enr   = int(edit_row["edited_enriched"])
+    un_enr   = int(edit_row["unedited_enriched"])
+
+    crossposts     = int(crosspost_row["crossposts"])
+    cp_enriched    = int(crosspost_row["crosspost_enriched"])
+    total_posts    = int(comment_row["total_posts"])
+
+    return {
+        "period_days": days,
+        "flair_analysis": [_flair(dict(r)) for r in flair_rows],
+        "edit_stats": {
+            "edited_posts":         edited,
+            "edited_signal_rate":   round(ed_enr / edited, 3) if edited else 0.0,
+            "unedited_signal_rate": round(un_enr / unedited, 3) if unedited else 0.0,
+        },
+        "crosspost_stats": {
+            "crossposts":                   crossposts,
+            "crosspost_signal_rate":        round(cp_enriched / crossposts, 3) if crossposts else 0.0,
+            "crosspost_subreddits_reached": int(crosspost_row["crosspost_subreddits_reached"]),
+        },
+        "comment_harvest_stats": {
+            "posts_with_comments":  int(comment_row["posts_with_comments"]),
+            "avg_comments_fetched": float(comment_row["avg_comments_fetched"] or 0),
+            "comment_trigger_rate": round(
+                int(comment_row["posts_with_comments"]) / total_posts, 3
+            ) if total_posts else 0.0,
+        },
+        "author_churn_stats": {
+            "high_score_authors": int(author_row["high_score_authors"]),
+            "avg_churn_score":    float(author_row["avg_churn_score"] or 0),
+            "score_distribution": {
+                "0-2":  int(author_row["score_0_2"]),
+                "3-4":  int(author_row["score_3_4"]),
+                "5-6":  int(author_row["score_5_6"]),
+                "7-10": int(author_row["score_7_10"]),
+            },
+        },
+        "post_age_distribution": {
+            "last_7d":       int(age_row["last_7d"]),
+            "last_8_to_30d": int(age_row["last_8_to_30d"]),
+            "last_31_to_90d":int(age_row["last_31_to_90d"]),
+            "older":         int(age_row["older"]),
+        },
+        "trending_distribution": {
+            "high":   int(trending_row["trending_high"]),
+            "medium": int(trending_row["trending_medium"]),
+            "low":    int(trending_row["trending_low"]),
+        },
+    }
+
+
+@router.get("/scraping/reddit/per-vendor")
+async def reddit_per_vendor(
+    days: int  = Query(default=30, ge=1, le=90),
+    limit: int = Query(default=20, ge=1, le=100),
+):
+    """
+    Per-vendor Reddit signal breakdown.
+
+    Identifies which vendor targets are worth scraping on Reddit vs which
+    produce only noise.  Includes top subreddits and pain categories per
+    vendor to guide targeting decisions.
+    """
+    pool = _pool_or_503()
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    # Main per-vendor aggregation
+    rows = await pool.fetch(
+        """
+        SELECT
+            vendor_name,
+            COUNT(*)                                                                     AS inserted,
+            COUNT(*) FILTER (WHERE enrichment_status = 'enriched')                      AS enriched,
+            COUNT(*) FILTER (WHERE enrichment_status = 'no_signal')                     AS no_signal,
+            COUNT(*) FILTER (WHERE enrichment_status = 'failed')                        AS failed,
+            ROUND(AVG((raw_metadata->>'source_weight')::numeric)::numeric, 3)           AS avg_source_weight,
+            ROUND(AVG(
+                CASE WHEN enrichment_status = 'enriched'
+                     THEN (enrichment->>'urgency_score')::numeric END
+            )::numeric, 2)                                                               AS avg_urgency_score,
+            COUNT(*) FILTER (
+                WHERE COALESCE(enrichment->'churn_signals'->>'intent_to_leave', 'false')::boolean
+            )                                                                            AS intent_to_leave_count,
+            COUNT(*) FILTER (
+                WHERE (enrichment->>'urgency_score')::numeric >= 7
+            )                                                                            AS high_urgency_count,
+            COUNT(*) FILTER (
+                WHERE raw_metadata->>'trending_score' = 'high'
+            )                                                                            AS trending_high_count
+        FROM b2b_reviews
+        WHERE source = 'reddit'
+          AND imported_at >= $1
+        GROUP BY vendor_name
+        ORDER BY enriched DESC, inserted DESC
+        LIMIT $2
+        """,
+        since,
+        limit,
+    )
+
+    if not rows:
+        return {"period_days": days, "vendors": []}
+
+    vendor_names = [r["vendor_name"] for r in rows]
+
+    # Top 3 subreddits per vendor (separate query to avoid heavy aggregation inline)
+    sub_rows = await pool.fetch(
+        """
+        SELECT
+            vendor_name,
+            raw_metadata->>'subreddit'   AS subreddit,
+            COUNT(*)                      AS cnt
+        FROM b2b_reviews
+        WHERE source = 'reddit'
+          AND imported_at >= $1
+          AND vendor_name = ANY($2)
+          AND raw_metadata->>'subreddit' IS NOT NULL
+          AND raw_metadata->>'subreddit' != ''
+        GROUP BY vendor_name, raw_metadata->>'subreddit'
+        ORDER BY vendor_name, cnt DESC
+        """,
+        since,
+        vendor_names,
+    )
+
+    # Build vendor → top subreddits map (top 3)
+    top_subs: dict[str, list[str]] = {}
+    for r in sub_rows:
+        vn = r["vendor_name"]
+        if vn not in top_subs:
+            top_subs[vn] = []
+        if len(top_subs[vn]) < 3:
+            top_subs[vn].append(r["subreddit"])
+
+    # Top 3 pain categories per vendor
+    pain_rows = await pool.fetch(
+        """
+        SELECT
+            vendor_name,
+            enrichment->>'pain_category'  AS pain_category,
+            COUNT(*)                       AS cnt
+        FROM b2b_reviews
+        WHERE source = 'reddit'
+          AND imported_at >= $1
+          AND vendor_name = ANY($2)
+          AND enrichment_status = 'enriched'
+          AND enrichment->>'pain_category' IS NOT NULL
+        GROUP BY vendor_name, enrichment->>'pain_category'
+        ORDER BY vendor_name, cnt DESC
+        """,
+        since,
+        vendor_names,
+    )
+
+    top_pain: dict[str, list[str]] = {}
+    for r in pain_rows:
+        vn = r["vendor_name"]
+        if vn not in top_pain:
+            top_pain[vn] = []
+        if len(top_pain[vn]) < 3:
+            top_pain[vn].append(r["pain_category"])
+
+    def _vendor(r: dict) -> dict:
+        vn       = r["vendor_name"]
+        inserted = int(r["inserted"])
+        enriched = int(r["enriched"])
+        no_sig   = int(r["no_signal"])
+        triage_d = enriched + no_sig
+        return {
+            "vendor_name":          vn,
+            "inserted":             inserted,
+            "enriched":             enriched,
+            "no_signal":            no_sig,
+            "failed":               int(r["failed"]),
+            "triage_pass_rate":     round(enriched / triage_d, 3) if triage_d else 0.0,
+            "avg_source_weight":    float(r["avg_source_weight"] or 0),
+            "avg_urgency_score":    float(r["avg_urgency_score"] or 0),
+            "intent_to_leave_count": int(r["intent_to_leave_count"]),
+            "high_urgency_count":   int(r["high_urgency_count"]),
+            "trending_high_count":  int(r["trending_high_count"]),
+            "top_subreddits":       top_subs.get(vn, []),
+            "top_pain_categories":  top_pain.get(vn, []),
+        }
+
+    return {
+        "period_days": days,
+        "vendors": [_vendor(dict(r)) for r in rows],
+    }
+
+
+# ---------------------------------------------------------------------------
 # System resources (CPU + RAM + network + GPU)
 # ---------------------------------------------------------------------------
 
