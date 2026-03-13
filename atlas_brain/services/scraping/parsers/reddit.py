@@ -9,6 +9,11 @@ Authenticated API benefits:
   - Access to all subreddits including quarantined
   - Larger result sets (up to 100 per page vs 25)
   - Reliable -- no 403/429 blocks
+
+Search profiles (set via target.metadata["search_profile"]):
+  - "churn"   (default) -- vendor name + churn qualifiers, posts only
+  - "deep"    -- churn + pain/frustration + comparison queries, top comments
+  - "insider" -- employee/org queries, insider subreddits, top comments
 """
 
 from __future__ import annotations
@@ -26,9 +31,17 @@ from . import ScrapeResult, ScrapeTarget, register_parser
 logger = logging.getLogger("atlas.services.scraping.parsers.reddit")
 
 _DOMAIN = "reddit.com"
-_MIN_SELFTEXT_LEN = 100  # Skip short posts
+_MIN_SELFTEXT_LEN = 100       # Skip short posts
+_MIN_COMMENT_LEN = 80         # Skip short comments
+_MIN_COMMENT_SCORE = 2        # Skip low-signal comments
+_MAX_SEARCH_REQUESTS = 60     # Cap total search requests per scrape to stay within rate limits
+_MAX_COMMENT_FETCHES = 30     # Cap comment fetches per scrape
 
-# Default subreddits for B2B software complaints/discussions
+# ---------------------------------------------------------------------------
+# Subreddit lists
+# ---------------------------------------------------------------------------
+
+# Default B2B discussion subreddits (churn / deep profiles)
 _DEFAULT_SUBREDDITS = [
     "sysadmin", "salesforce", "aws", "ITManagers",
     "devops", "msp", "networking", "cybersecurity",
@@ -36,10 +49,43 @@ _DEFAULT_SUBREDDITS = [
     "smallbusiness", "marketing", "CustomerSuccess",
 ]
 
-# Extra search terms to find churn signal beyond just the vendor name
+# Subreddits focused on employee/org insider accounts
+_INSIDER_SUBREDDITS = [
+    "cscareerquestions", "ExperiencedDevs", "ITCareerQuestions",
+    "sysadmin", "devops", "antiwork", "jobs", "technology",
+    "cscareeradvice", "softwaregore",
+]
+
+# ---------------------------------------------------------------------------
+# Query templates per profile
+# ---------------------------------------------------------------------------
+
+# Churn / evaluation qualifiers appended to vendor name (churn + deep profiles)
 _CHURN_QUALIFIERS = [
     "switching from", "alternative to", "replacing",
     "migrating from", "moved away from", "leaving",
+]
+
+# Additional deep-profile query templates ({vendor} is substituted)
+_DEEP_QUERY_TEMPLATES = [
+    '"{vendor}" pricing too expensive',
+    '"{vendor}" support terrible',
+    '"{vendor}" vs',
+    '"{vendor}" problems',
+    '"{vendor}" frustrated',
+    '"{vendor}" worth it',
+]
+
+# Insider-profile query templates ({vendor} is substituted)
+_INSIDER_QUERY_TEMPLATES = [
+    '"{vendor}" culture toxic',
+    '"{vendor}" leaving why',
+    '"worked at {vendor}"',
+    '"left {vendor}"',
+    '"{vendor}" layoffs morale',
+    '"{vendor}" product quality declining',
+    '"{vendor}" engineering culture',
+    '"{vendor}" management',
 ]
 
 
@@ -58,11 +104,11 @@ def _get_reddit_credentials() -> tuple[str, str]:
 
 
 class RedditParser:
-    """Parse Reddit posts as B2B review proxies."""
+    """Parse Reddit posts (and optionally comments) as B2B review proxies."""
 
     source_name = "reddit"
     prefer_residential = False  # No proxy needed
-    version = "reddit:1"
+    version = "reddit:2"
 
     def __init__(self) -> None:
         self._token: str | None = None
@@ -94,7 +140,7 @@ class RedditParser:
             return None
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
-        """Scrape Reddit for posts mentioning the vendor."""
+        """Scrape Reddit for posts (and comments) mentioning the vendor."""
         client_id, client_secret = _get_reddit_credentials()
         has_auth = bool(client_id and client_secret)
 
@@ -106,9 +152,20 @@ class RedditParser:
 
         return await self._scrape_public(target, client)
 
+    # ------------------------------------------------------------------
+    # Authenticated path
+    # ------------------------------------------------------------------
+
     async def _scrape_authenticated(self, target: ScrapeTarget, token: str) -> ScrapeResult:
-        """Scrape via Reddit OAuth2 API (oauth.reddit.com). Higher limits, more results."""
-        subreddits = target.metadata.get("subreddits") or _DEFAULT_SUBREDDITS
+        """Scrape via Reddit OAuth2 API. Dispatches by search_profile."""
+        profile = (target.metadata.get("search_profile") or "churn").lower()
+
+        subreddits: list[str]
+        if profile == "insider":
+            subreddits = target.metadata.get("subreddits") or _INSIDER_SUBREDDITS
+        else:
+            subreddits = target.metadata.get("subreddits") or _DEFAULT_SUBREDDITS
+
         if isinstance(subreddits, str):
             subreddits = [s.strip() for s in subreddits.split(",")]
 
@@ -123,42 +180,109 @@ class RedditParser:
         }
 
         async with httpx.AsyncClient(timeout=30, headers=headers) as http:
-            # Strategy 1: Search each subreddit (high signal)
-            for sub in subreddits:
-                for query in self._build_queries(target.vendor_name):
-                    url = (
-                        f"https://oauth.reddit.com/r/{sub}/search"
-                        f"?q={quote_plus(query)}&restrict_sr=on&sort=new&limit=100&t=all"
+            post_items = await self._collect_posts_authenticated(
+                http, target, profile, subreddits, seen_ids, errors,
+            )
+            pages_scraped += len(post_items["pages"])
+
+            for post_dict in post_items["posts"]:
+                reviews.append(post_dict)
+
+            # Comment harvesting for deep / insider profiles
+            if profile in ("deep", "insider"):
+                comment_limit = 15 if profile == "insider" else 10
+                comment_min_score = _MIN_COMMENT_SCORE
+                comment_fetches = 0
+
+                for post_dict in post_items["posts"]:
+                    if comment_fetches >= _MAX_COMMENT_FETCHES:
+                        logger.info("Reddit comment fetch cap (%d) reached for %s [%s]",
+                                    _MAX_COMMENT_FETCHES, target.vendor_name, profile)
+                        break
+
+                    post_id = post_dict["source_review_id"]
+                    num_comments = (post_dict.get("raw_metadata") or {}).get("num_comments", 0)
+                    if num_comments < 3:
+                        continue
+
+                    comments, cpages, cerrs = await self._fetch_comments_authenticated(
+                        http, post_id, target, post_dict, comment_limit, comment_min_score, seen_ids,
                     )
-                    try:
-                        resp = await http.get(url)
-                        pages_scraped += 1
+                    reviews.extend(comments)
+                    pages_scraped += cpages
+                    errors.extend(cerrs)
+                    comment_fetches += 1
 
-                        if resp.status_code == 429:
-                            logger.debug("Reddit rate limited on r/%s, pausing", sub)
-                            await asyncio.sleep(2)
-                            continue
-                        if resp.status_code != 200:
-                            errors.append(f"r/{sub} q={query}: HTTP {resp.status_code}")
-                            continue
+        logger.info(
+            "Reddit authenticated scrape [%s] for %s: %d items from %d requests",
+            profile, target.vendor_name, len(reviews), pages_scraped,
+        )
+        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors)
 
-                        data = resp.json()
-                        posts = data.get("data", {}).get("children", [])
+    async def _collect_posts_authenticated(
+        self,
+        http: httpx.AsyncClient,
+        target: ScrapeTarget,
+        profile: str,
+        subreddits: list[str],
+        seen_ids: set[str],
+        errors: list[str],
+    ) -> dict:
+        """Collect post dicts for the given profile. Returns {"posts": [...], "pages": [...]}."""
+        posts: list[dict] = []
+        pages: list[str] = []
 
-                        for post_wrapper in posts:
-                            review = self._parse_post(post_wrapper, target, seen_ids)
-                            if review:
-                                reviews.append(review)
+        queries = self._build_queries(target.vendor_name, profile)
+        request_count = 0
 
-                    except Exception as exc:
-                        errors.append(f"r/{sub} q={query}: {exc}")
-                        logger.warning("Reddit auth scrape failed r/%s: %s", sub, exc)
+        # Strategy 1: Search each subreddit
+        for sub in subreddits:
+            for query in queries:
+                if request_count >= _MAX_SEARCH_REQUESTS:
+                    logger.info("Reddit request cap (%d) reached for %s [%s], stopping",
+                                _MAX_SEARCH_REQUESTS, target.vendor_name, profile)
+                    break
 
-                    # Respect rate limits even with auth
-                    await asyncio.sleep(0.5)
+                url = (
+                    f"https://oauth.reddit.com/r/{sub}/search"
+                    f"?q={quote_plus(query)}&restrict_sr=on&sort=new&limit=100&t=all"
+                )
+                try:
+                    resp = await http.get(url)
+                    pages.append(url)
+                    request_count += 1
 
-            # Strategy 2: Global search for churn-specific phrases
+                    if resp.status_code == 429:
+                        logger.debug("Reddit rate limited on r/%s, pausing", sub)
+                        await asyncio.sleep(2)
+                        continue
+                    if resp.status_code != 200:
+                        errors.append(f"r/{sub} q={query}: HTTP {resp.status_code}")
+                        continue
+
+                    data = resp.json()
+                    for post_wrapper in data.get("data", {}).get("children", []):
+                        post_dict = self._parse_post(
+                            post_wrapper, target, seen_ids, profile=profile,
+                        )
+                        if post_dict:
+                            posts.append(post_dict)
+
+                except Exception as exc:
+                    errors.append(f"r/{sub} q={query}: {exc}")
+                    logger.warning("Reddit auth scrape failed r/%s: %s", sub, exc)
+
+                await asyncio.sleep(0.5)
+            else:
+                continue
+            break  # break outer loop if inner broke on cap
+
+        # Strategy 2: Global search for churn-specific phrases (churn / deep profiles only)
+        if profile in ("churn", "deep"):
             for qualifier in _CHURN_QUALIFIERS:
+                if request_count >= _MAX_SEARCH_REQUESTS:
+                    break
+
                 query = f'"{qualifier} {target.vendor_name}"'
                 url = (
                     f"https://oauth.reddit.com/search"
@@ -166,32 +290,99 @@ class RedditParser:
                 )
                 try:
                     resp = await http.get(url)
-                    pages_scraped += 1
+                    pages.append(url)
+                    request_count += 1
 
                     if resp.status_code == 200:
                         data = resp.json()
-                        posts = data.get("data", {}).get("children", [])
-                        for post_wrapper in posts:
-                            review = self._parse_post(post_wrapper, target, seen_ids)
-                            if review:
-                                reviews.append(review)
+                        for post_wrapper in data.get("data", {}).get("children", []):
+                            post_dict = self._parse_post(
+                                post_wrapper, target, seen_ids, profile=profile,
+                            )
+                            if post_dict:
+                                posts.append(post_dict)
                 except Exception as exc:
                     errors.append(f"global q={qualifier}: {exc}")
 
                 await asyncio.sleep(0.5)
 
-        logger.info(
-            "Reddit authenticated scrape for %s: %d reviews from %d requests",
-            target.vendor_name, len(reviews), pages_scraped,
+        return {"posts": posts, "pages": pages}
+
+    async def _fetch_comments_authenticated(
+        self,
+        http: httpx.AsyncClient,
+        post_id: str,
+        target: ScrapeTarget,
+        parent_post: dict,
+        limit: int,
+        min_score: int,
+        seen_ids: set[str],
+    ) -> tuple[list[dict], int, list[str]]:
+        """Fetch top-level comments for a post. Returns (comments, pages_count, errors)."""
+        url = (
+            f"https://oauth.reddit.com/comments/{post_id}"
+            f"?sort=best&limit={limit}&depth=2"
         )
-        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors)
+        comments: list[dict] = []
+        errors: list[str] = []
 
-    def _build_queries(self, vendor_name: str) -> list[str]:
-        """Build search queries for a vendor. Returns vendor name + churn variants."""
-        return [vendor_name]
+        try:
+            resp = await http.get(url)
+            await asyncio.sleep(0.5)
 
-    def _parse_post(self, post_wrapper: dict, target: ScrapeTarget,
-                    seen_ids: set[str]) -> dict | None:
+            if resp.status_code == 429:
+                await asyncio.sleep(2)
+                return comments, 1, errors
+            if resp.status_code != 200:
+                errors.append(f"comments/{post_id}: HTTP {resp.status_code}")
+                return comments, 1, errors
+
+            data = resp.json()
+            # Response is [post_listing, comment_listing]
+            if not isinstance(data, list) or len(data) < 2:
+                return comments, 1, errors
+
+            comment_listing = data[1]
+            for child in comment_listing.get("data", {}).get("children", []):
+                comment = self._parse_comment(
+                    child, target, parent_post, seen_ids, depth=0, min_score=min_score,
+                )
+                if comment:
+                    comments.append(comment)
+
+        except Exception as exc:
+            errors.append(f"comments/{post_id}: {exc}")
+            logger.warning("Reddit comment fetch failed for %s: %s", post_id, exc)
+
+        return comments, 1, errors
+
+    # ------------------------------------------------------------------
+    # Query builders
+    # ------------------------------------------------------------------
+
+    def _build_queries(self, vendor_name: str, profile: str) -> list[str]:
+        """Build search queries for a vendor based on search profile."""
+        if profile == "insider":
+            return [t.format(vendor=vendor_name) for t in _INSIDER_QUERY_TEMPLATES]
+
+        queries = [vendor_name]
+        if profile == "deep":
+            queries += [t.format(vendor=vendor_name) for t in _DEEP_QUERY_TEMPLATES]
+
+        return queries
+
+    # ------------------------------------------------------------------
+    # Parsers
+    # ------------------------------------------------------------------
+
+    def _parse_post(
+        self,
+        post_wrapper: dict,
+        target: ScrapeTarget,
+        seen_ids: set[str],
+        *,
+        profile: str = "churn",
+    ) -> dict | None:
         """Parse a single Reddit post into a review dict. Returns None if skipped."""
         post = post_wrapper.get("data", {})
         post_id = post.get("id", "")
@@ -213,6 +404,17 @@ class RedditParser:
             else None
         )
 
+        # Content type depends on search profile
+        if profile == "insider":
+            content_type = "insider_account"
+            source_weight = 0.6  # insider accounts are high-value forward-looking signals
+        else:
+            content_type = "community_discussion"
+            source_weight = 0.5
+
+        # Reddit fullname used as thread_id (e.g. "t3_abc123")
+        fullname = post.get("name", f"t3_{post_id}")
+
         return {
             "source": "reddit",
             "source_url": f"https://www.reddit.com{post.get('permalink', '')}",
@@ -232,10 +434,16 @@ class RedditParser:
             "company_size_raw": None,
             "reviewer_industry": None,
             "reviewed_at": reviewed_at,
+            # Threading fields
+            "content_type": content_type,
+            "parent_review_id": None,  # Posts have no parent
+            "thread_id": fullname,
+            "comment_depth": 0,
             "raw_metadata": {
                 "extraction_method": "api_json",
-                "source_weight": 0.5,
-                "source_type": "community_discussion",
+                "source_weight": source_weight,
+                "source_type": content_type,
+                "search_profile": profile,
                 "subreddit": post.get("subreddit", ""),
                 "score": post.get("score", 0),
                 "num_comments": post.get("num_comments", 0),
@@ -243,9 +451,105 @@ class RedditParser:
             },
         }
 
+    def _parse_comment(
+        self,
+        child: dict,
+        target: ScrapeTarget,
+        parent_post: dict,
+        seen_ids: set[str],
+        *,
+        depth: int,
+        min_score: int,
+    ) -> dict | None:
+        """Parse a Reddit comment into a review dict. Returns None if skipped."""
+        if child.get("kind") != "t1":
+            return None
+
+        data = child.get("data", {})
+        comment_id = data.get("id", "")
+        body = data.get("body", "")
+
+        if comment_id in seen_ids:
+            return None
+        if body in ("[removed]", "[deleted]", ""):
+            return None
+        if len(body) < _MIN_COMMENT_LEN:
+            return None
+
+        score = data.get("score", 0)
+        if isinstance(score, (int, float)) and score < min_score:
+            return None
+
+        seen_ids.add(comment_id)
+
+        created_utc = data.get("created_utc", 0)
+        reviewed_at = (
+            datetime.fromtimestamp(created_utc, tz=timezone.utc).isoformat()
+            if created_utc
+            else None
+        )
+
+        # Store the parent post's source_review_id so b2b_scrape_intake can resolve
+        # it to a UUID after the parent post is inserted.
+        parent_source_review_id = parent_post.get("source_review_id")
+        thread_id = parent_post.get("thread_id")
+
+        return {
+            "source": "reddit",
+            "source_url": (
+                f"https://www.reddit.com{data.get('permalink', '')}"
+                if data.get("permalink")
+                else parent_post.get("source_url", "")
+            ),
+            "source_review_id": f"t1_{comment_id}",
+            "vendor_name": target.vendor_name,
+            "product_name": target.product_name,
+            "product_category": target.product_category,
+            "rating": None,
+            "rating_max": 5,
+            "summary": None,
+            "review_text": body[:5000],
+            "pros": None,
+            "cons": None,
+            "reviewer_name": data.get("author", ""),
+            "reviewer_title": None,
+            "reviewer_company": None,
+            "company_size_raw": None,
+            "reviewer_industry": None,
+            "reviewed_at": reviewed_at,
+            # Threading fields
+            "content_type": "comment",
+            "parent_review_id": None,  # resolved post-insert by b2b_scrape_intake
+            "thread_id": thread_id,
+            "comment_depth": depth + 1,
+            "raw_metadata": {
+                "extraction_method": "api_json",
+                "source_weight": 0.4,
+                "source_type": "comment",
+                "search_profile": parent_post.get("raw_metadata", {}).get("search_profile", "churn"),
+                "subreddit": data.get("subreddit", ""),
+                "score": score,
+                "upvote_ratio": None,
+                "num_comments": None,
+                # For parent_review_id resolution after insert
+                "parent_source_review_id": parent_source_review_id,
+            },
+        }
+
+    # ------------------------------------------------------------------
+    # Public (unauthenticated) fallback
+    # ------------------------------------------------------------------
+
     async def _scrape_public(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
-        """Fallback: scrape via public JSON endpoints (no auth)."""
-        subreddits = target.metadata.get("subreddits") or _DEFAULT_SUBREDDITS
+        """Fallback: scrape via public JSON endpoints (no auth). Posts only, churn profile."""
+        profile = (target.metadata.get("search_profile") or "churn").lower()
+
+        subreddits: list[str]
+        if profile == "insider":
+            subreddits = target.metadata.get("subreddits") or _INSIDER_SUBREDDITS
+        else:
+            subreddits = target.metadata.get("subreddits") or _DEFAULT_SUBREDDITS
+
         if isinstance(subreddits, str):
             subreddits = [s.strip() for s in subreddits.split(",")]
 
@@ -254,13 +558,16 @@ class RedditParser:
         pages_scraped = 0
         seen_ids: set[str] = set()
 
+        queries = self._build_queries(target.vendor_name, profile)
         vendor_encoded = quote_plus(target.vendor_name)
 
         for sub in subreddits[:target.max_pages]:
+            # Use the first query for the public fallback (simpler / less noisy)
+            query_encoded = quote_plus(queries[0] if queries else target.vendor_name)
             sub_encoded = quote_plus(sub)
             url = (
                 f"https://www.reddit.com/search.json"
-                f"?q={vendor_encoded}+subreddit:{sub_encoded}&sort=new&limit=25&t=year"
+                f"?q={query_encoded}+subreddit:{sub_encoded}&sort=new&limit=25&t=year"
             )
 
             try:
@@ -301,20 +608,21 @@ class RedditParser:
                 except (ValueError, TypeError):
                     errors.append(f"r/{sub}: non-parseable JSON body")
                     continue
-                posts = data.get("data", {}).get("children", [])
 
-                for post_wrapper in posts:
-                    review = self._parse_post(post_wrapper, target, seen_ids)
-                    if review:
-                        reviews.append(review)
+                for post_wrapper in data.get("data", {}).get("children", []):
+                    post_dict = self._parse_post(
+                        post_wrapper, target, seen_ids, profile=profile,
+                    )
+                    if post_dict:
+                        reviews.append(post_dict)
 
             except Exception as exc:
                 errors.append(f"r/{sub}: {exc}")
                 logger.warning("Reddit scrape failed for r/%s: %s", sub, exc)
 
         logger.info(
-            "Reddit public scrape for %s: %d reviews from %d subreddits",
-            target.vendor_name, len(reviews), pages_scraped,
+            "Reddit public scrape [%s] for %s: %d reviews from %d subreddits",
+            profile, target.vendor_name, len(reviews), pages_scraped,
         )
         return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors)
 

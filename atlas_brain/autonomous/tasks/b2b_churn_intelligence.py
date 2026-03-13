@@ -18,6 +18,7 @@ import json
 import logging
 import math
 import uuid as _uuid
+from collections import Counter
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -224,8 +225,13 @@ def _build_validated_executive_summary(
     *,
     data_context: dict[str, Any],
     executive_sources: list[str],
+    report_type: str = "weekly_churn_feed",
 ) -> str:
-    """Build a concise deterministic executive summary from validated structured data."""
+    """Build a concise deterministic executive summary from validated structured data.
+
+    Each *report_type* gets a tailored summary.  Shared helper ``_summary_preamble``
+    produces the opening sentence; the body varies per type.
+    """
     feed = parsed.get("weekly_churn_feed", [])
     if not isinstance(feed, list) or not feed:
         return parsed.get("executive_summary", "")
@@ -236,19 +242,221 @@ def _build_validated_executive_summary(
     window_label = f"Between {start} and {end}" if start and end else "In the current analysis window"
 
     source_dist = data_context.get("source_distribution") or {}
-    executive_review_count = sum(
+    total_review_count = sum(
         int((source_dist.get(source) or {}).get("reviews") or 0)
         for source in executive_sources
     )
     source_labels = [_source_display_name(source) for source in executive_sources]
     source_label_text = ", ".join(source_labels)
 
+    # --- per-report-type summaries ------------------------------------
+
+    if report_type == "vendor_scorecard":
+        scorecards = parsed.get("vendor_scorecards", [])
+        n = len(scorecards)
+        if not scorecards:
+            return ""
+
+        # Risk distribution
+        risk_counts: dict[str, int] = {"high": 0, "medium": 0, "low": 0}
+        for s in scorecards:
+            rl = s.get("risk_level", "low")
+            if rl in risk_counts:
+                risk_counts[rl] += 1
+        risk_parts = []
+        for level in ("high", "medium", "low"):
+            if risk_counts[level]:
+                risk_parts.append(f"{risk_counts[level]} {level}-risk")
+
+        # Sentence 1: scale + risk distribution
+        lines = [
+            f"{window_label}, Atlas scored {n} vendors on churn pressure"
+            + (f" from {total_review_count:,} reviews across {source_label_text}"
+               if total_review_count else f" across {source_label_text}")
+            + f" \u2014 {', '.join(risk_parts)}."
+        ]
+
+        # Sentence 2: top-pressure vendor, score, driver, DM rate
+        top = scorecards[0]  # sorted by urgency+density descending
+        top_vendor = top.get("vendor", "")
+        top_score = top.get("churn_pressure_score", 0)
+        top_density = top.get("churn_signal_density", 0)
+        top_pain = top.get("top_pain", "")
+        dm_rate = top.get("dm_churn_rate", 0)
+
+        s2 = f"{top_vendor} scored highest at {top_score:.1f}"
+        s2 += f" ({top_density}% churn density \u2014 share of reviews containing explicit switching signals)"
+        if top_pain and top_pain.lower() not in ("other", "unknown"):
+            s2 += f", driven primarily by {top_pain} complaints"
+        if dm_rate and dm_rate >= 0.3:
+            s2 += f"; {dm_rate:.0%} of switching signals came from decision-makers"
+        s2 += "."
+        lines.append(s2)
+
+        # Sentence 3: trend direction (only when there's a clear skew)
+        trend_counts: dict[str, int] = {"worsening": 0, "improving": 0, "stable": 0, "new": 0}
+        for s in scorecards:
+            t = s.get("trend", "stable")
+            if t in trend_counts:
+                trend_counts[t] += 1
+        if trend_counts["worsening"] > trend_counts["improving"]:
+            lines.append(
+                f"{trend_counts['worsening']} vendors are trending worse than last period"
+                + (f", {trend_counts['improving']} improving." if trend_counts["improving"] else ".")
+            )
+        elif trend_counts["improving"] > trend_counts["worsening"]:
+            lines.append(
+                f"{trend_counts['improving']} vendors are improving"
+                + (f", {trend_counts['worsening']} worsening." if trend_counts["worsening"] else ".")
+            )
+
+        # Sentence 4: displacement direction for highest-risk vendor
+        top_threat = top.get("top_competitor_threat", "")
+        if top_threat and "Insufficient" not in top_threat:
+            lines.append(f"High-risk vendors are losing ground primarily to {top_threat}.")
+
+        return " ".join(lines)
+
+    if report_type == "displacement_report":
+        disp = parsed.get("displacement_map", [])
+        if not disp:
+            return ""
+        n_edges = len(disp)
+        from_vendors = {e.get("from_vendor") for e in disp if e.get("from_vendor")}
+        total_mentions = sum(e.get("mention_count", 0) for e in disp)
+
+        # Sentence 1: scale
+        lines = [
+            f"{window_label}, Atlas tracked {n_edges} competitive displacement flows"
+            f" across {len(from_vendors)} vendors"
+            + (f" from {total_review_count:,} reviews" if total_review_count else "")
+            + f", totaling {total_mentions:,} switching mentions."
+        ]
+
+        # Sentence 2: strongest flow
+        top = disp[0]  # sorted by mention_count descending
+        top_from = top.get("from_vendor", "")
+        top_to = top.get("to_vendor", "")
+        top_count = top.get("mention_count", 0)
+        top_driver = top.get("primary_driver", "")
+        s2 = f"The strongest flow is {top_from} \u2192 {top_to} ({top_count} mentions)"
+        if top_driver and top_driver.lower() != "other":
+            s2 += f", driven by {top_driver}"
+        s2 += "."
+        lines.append(s2)
+
+        # Sentence 3: driver distribution (weighted by mention count)
+        driver_counts: dict[str, int] = {}
+        for e in disp:
+            d = e.get("primary_driver", "other")
+            if d.lower() != "other":
+                driver_counts[d] = driver_counts.get(d, 0) + e.get("mention_count", 0)
+        if driver_counts and total_mentions:
+            ranked_drivers = sorted(driver_counts.items(), key=lambda x: -x[1])
+            top_d = ranked_drivers[0]
+            pct = round(top_d[1] * 100 / total_mentions)
+            parts = [f"{top_d[0]} drives {pct}% of all displacement flow"]
+            for d_name, d_count in ranked_drivers[1:3]:
+                parts.append(f"{d_name} ({round(d_count * 100 / total_mentions)}%)")
+            lines.append(", followed by ".join(parts) + "." if len(parts) > 1 else parts[0] + ".")
+
+        # Sentence 4: signal strength breakdown
+        strength_counts: dict[str, int] = {"strong": 0, "moderate": 0, "emerging": 0}
+        for e in disp:
+            ss = e.get("signal_strength", "emerging")
+            if ss in strength_counts:
+                strength_counts[ss] += 1
+        strength_parts = []
+        for level, label in [("strong", "strong signal (5+ mentions)"), ("moderate", "moderate"), ("emerging", "emerging")]:
+            if strength_counts[level]:
+                strength_parts.append(f"{strength_counts[level]} {label}")
+        if strength_parts:
+            lines.append(", ".join(strength_parts) + ".")
+
+        return " ".join(lines)
+
+    if report_type == "category_overview":
+        cats = parsed.get("category_insights", [])
+        if not cats:
+            return ""
+        n = len(cats)
+
+        # Count total unique vendors across all category rankings
+        all_cat_vendors: set[str] = set()
+        for cat in cats:
+            for vr in cat.get("vendor_rankings", []):
+                v = vr.get("vendor")
+                if v:
+                    all_cat_vendors.add(v)
+
+        # Sentence 1: scale
+        lines = [
+            f"{window_label}, Atlas analyzed churn trends across {n} product categories"
+            + (f" covering {len(all_cat_vendors)} vendors from {total_review_count:,} reviews."
+               if total_review_count and all_cat_vendors
+               else f" covering {len(all_cat_vendors)} vendors." if all_cat_vendors
+               else ".")
+        ]
+
+        # Sentence 2: hottest category (highest churn density)
+        hottest = None
+        hottest_density = 0.0
+        for cat in cats:
+            rankings = cat.get("vendor_rankings", [])
+            if rankings:
+                cd = rankings[0].get("churn_signal_density", 0)
+                if cd > hottest_density:
+                    hottest_density = cd
+                    hottest = cat
+        if hottest:
+            cat_name = hottest.get("category", "")
+            risk_vendor = hottest.get("highest_churn_risk", "")
+            pain = hottest.get("dominant_pain", "")
+            s2 = (
+                f"{cat_name} shows the highest pressure \u2014 {risk_vendor}"
+                f" at {hottest_density}% churn density"
+                " (share of reviews with explicit switching signals)"
+            )
+            if pain and pain.lower() not in ("other", "unknown"):
+                s2 += f", driven by {pain}"
+            s2 += "."
+            lines.append(s2)
+
+        # Sentence 3: market movement — categories with clear challengers
+        movements = []
+        for cat in cats:
+            challenger = cat.get("emerging_challenger", "")
+            incumbent = cat.get("highest_churn_risk", "")
+            cat_name = cat.get("category", "")
+            if challenger and incumbent and "Insufficient" not in challenger:
+                # Skip the hottest category (already covered in sentence 2)
+                if hottest and cat_name == hottest.get("category"):
+                    continue
+                movements.append(f"in {cat_name}, {challenger} is emerging as the primary alternative to {incumbent}")
+        if movements:
+            lines.append("; ".join(movements[:2]).capitalize() + ".")
+
+        # Sentence 4: cross-category pain pattern
+        pain_counts: dict[str, int] = {}
+        for cat in cats:
+            p = cat.get("dominant_pain", "")
+            if p and p.lower() not in ("other", "unknown"):
+                pain_counts[p] = pain_counts.get(p, 0) + 1
+        if pain_counts:
+            top_pain_name, top_pain_ct = max(pain_counts.items(), key=lambda x: x[1])
+            if top_pain_ct >= 2:
+                lines.append(f"{top_pain_name.capitalize()} is the dominant churn driver in {top_pain_ct} of {n} categories.")
+
+        return " ".join(lines)
+
+    # --- default: weekly_churn_feed -----------------------------------
+
     top_entries = feed[:3]
     top_vendors: list[str] = []
     top_pains: list[str] = []
     top_alternatives: list[str] = []
     quote = None
-    has_named_accounts = False
+    churn_density_defined = False
 
     for entry in top_entries:
         vendor = entry.get("vendor")
@@ -257,22 +465,26 @@ def _build_validated_executive_summary(
         if vendor:
             parts = [str(vendor)]
             if churn_density is not None:
-                parts[0] += f" ({churn_density}% churn density"
+                if not churn_density_defined:
+                    parts[0] += f" ({churn_density}% churn density -- share of reviews containing explicit switching signals"
+                    churn_density_defined = True
+                else:
+                    parts[0] += f" ({churn_density}%"
                 if total_reviews:
                     parts[0] += f", {total_reviews} reviews)"
                 else:
                     parts[0] += ")"
             top_vendors.append(parts[0])
-        # Extract pains from pain_breakdown or top_pain
+        # Extract pains from pain_breakdown or top_pain -- skip vague "other"
         pain_breakdown = entry.get("pain_breakdown", [])
         if pain_breakdown:
             for pb in pain_breakdown[:2]:
                 p = pb.get("category", "")
-                if p and p not in top_pains:
+                if p and p.lower() != "other" and p not in top_pains:
                     top_pains.append(str(p))
         elif entry.get("top_pain"):
             p = str(entry["top_pain"])
-            if p not in top_pains:
+            if p.lower() != "other" and p not in top_pains:
                 top_pains.append(p)
         # Extract alternatives from displacement targets
         for dt in entry.get("top_displacement_targets", []) or []:
@@ -281,14 +493,12 @@ def _build_validated_executive_summary(
                 top_alternatives.append(comp)
         if not quote and entry.get("key_quote"):
             quote = str(entry["key_quote"])
-        if entry.get("named_accounts"):
-            has_named_accounts = True
 
     lines = [
         (
             f"{window_label}, Atlas identified {len(feed)} vendors under elevated churn pressure "
-            f"from {executive_review_count} executive-source reviews across {source_label_text}."
-            if executive_review_count
+            f"from {total_review_count} reviews across {source_label_text}."
+            if total_review_count
             else f"{window_label}, Atlas identified {len(feed)} vendors under elevated churn pressure across {source_label_text}."
         )
     ]
@@ -303,11 +513,9 @@ def _build_validated_executive_summary(
         )
     if quote:
         lines.append(f"Representative evidence: \"{quote}\"")
-    if has_named_accounts:
-        lines.append("Named accounts identified in some vendor feeds -- see individual entries for details.")
 
     lines.append(
-        "Confidence is highest for vendors with 50+ reviews; broader market-level conclusions should be treated as directional because source mix still varies across vendors."
+        "Confidence is highest for vendors with 50+ reviews; smaller samples should be treated as directional."
     )
     return " ".join(lines)
 
@@ -439,7 +647,7 @@ def _build_deterministic_vendor_feed(
     company_lookup: dict[str, list],
     keyword_spike_lookup: dict[str, dict],
     prior_reports: list[dict[str, Any]],
-    limit: int = 15,
+    limit: int = 50,
 ) -> list[dict[str, Any]]:
     """Build vendor-level weekly churn feed from aggregated data.
 
@@ -580,6 +788,37 @@ def _build_deterministic_vendor_feed(
             for c in companies[:5]
         ]
 
+        # Risk level (derived from churn_pressure_score)
+        if score >= 70:
+            risk_level = "high"
+        elif score >= 40:
+            risk_level = "medium"
+        else:
+            risk_level = "low"
+
+        # Affected segments (aggregate industry/size from churning companies)
+        _industry_counts: dict[str, int] = {}
+        _size_counts: dict[str, int] = {}
+        for c in companies:
+            if not isinstance(c, dict):
+                continue
+            ind = c.get("industry")
+            if ind and ind != "unknown":
+                _industry_counts[ind] = _industry_counts.get(ind, 0) + 1
+            sz = c.get("company_size")
+            if sz:
+                _size_counts[sz] = _size_counts.get(sz, 0) + 1
+        affected_segments = {
+            "industries": sorted(
+                [{"industry": k, "count": v} for k, v in _industry_counts.items()],
+                key=lambda x: -x["count"],
+            )[:5],
+            "company_sizes": sorted(
+                [{"size": k, "count": v} for k, v in _size_counts.items()],
+                key=lambda x: -x["count"],
+            )[:5],
+        }
+
         # Alternatives for action recommendation
         alt_names = [c["name"] for c in comp_entries[:2]] if comp_entries else []
 
@@ -591,6 +830,7 @@ def _build_deterministic_vendor_feed(
             "avg_urgency": avg_urgency,
             "sample_size_confidence": confidence,
             "churn_pressure_score": score,
+            "risk_level": risk_level,
             "top_pain": top_pain,
             "pain_breakdown": pain_breakdown,
             "top_feature_gaps": top_feature_gaps,
@@ -605,6 +845,7 @@ def _build_deterministic_vendor_feed(
             "budget_context": budget_lookup.get(vendor, {}),
             "action_recommendation": _build_buyer_action(vendor, top_pain, alt_names),
             "named_accounts": named_accounts,
+            "affected_segments": affected_segments,
         })
 
     candidates.sort(key=lambda x: -x["churn_pressure_score"])
@@ -612,12 +853,16 @@ def _build_deterministic_vendor_feed(
 
 
 def _build_reason_lookup(competitor_reasons: list[dict[str, Any]]) -> dict[tuple[str, str], list[str]]:
-    """Map (vendor, competitor) to ordered reason strings."""
+    """Map (vendor, competitor) to ordered reason strings.
+
+    Prefers structured ``reason_category`` when available; falls back to
+    free-text ``reason`` for legacy data.
+    """
     lookup: dict[tuple[str, str], list[str]] = {}
     for row in competitor_reasons:
         vendor = _canonicalize_vendor(row.get("vendor", ""))
         competitor = _canonicalize_competitor(row.get("competitor", ""))
-        reason = row.get("reason") or ""
+        reason = row.get("reason_category") or row.get("reason") or ""
         if not vendor or not competitor or not reason:
             continue
         key = (vendor, competitor)
@@ -704,7 +949,11 @@ def _build_deterministic_displacement_map(
     *,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
-    """Build displacement report from deterministic aggregated flows."""
+    """Build displacement report from evidence-quality-filtered aggregated flows.
+
+    Quality gate: only edges with at least one explicit_switch or active_evaluation
+    survive.  Pure implied_preference edges are market-pain data, not displacement.
+    """
     reason_lookup = _build_reason_lookup(competitor_reasons)
     results: list[dict[str, Any]] = []
     for row in competitive_disp:
@@ -712,25 +961,49 @@ def _build_deterministic_displacement_map(
         competitor = _canonicalize_competitor(row.get("competitor") or "")
         if not vendor or not competitor or vendor.lower() == competitor.lower():
             continue
-        reasons = reason_lookup.get((vendor, competitor), [])
+
         mention_count = int(row.get("mention_count") or 0)
-        if mention_count >= 5:
+        explicit = int(row.get("explicit_switches") or 0)
+        active_eval = int(row.get("active_evaluations") or 0)
+        implied = int(row.get("implied_preferences") or 0)
+
+        # Quality gate: require at least one explicit switch or active evaluation
+        if explicit == 0 and active_eval == 0:
+            continue
+
+        # Primary driver: use structured reason_categories; fall back to keyword inference
+        reason_cats = row.get("reason_categories") or {}
+        if reason_cats:
+            driver = max(reason_cats.items(), key=lambda x: x[1])[0]
+        else:
+            reasons = reason_lookup.get((vendor, competitor), [])
+            driver = _infer_driver_from_reasons(reasons)
+
+        # Signal strength: weight evidence types (explicit 3x, active_eval 2x, implied 1x)
+        weighted_signal = explicit * 3 + active_eval * 2 + implied * 1
+        if weighted_signal >= 15 or explicit >= 3:
             strength = "strong"
-        elif mention_count >= 3:
+        elif weighted_signal >= 6 or explicit >= 1:
             strength = "moderate"
         else:
             strength = "emerging"
-        driver = _infer_driver_from_reasons(reasons)
+
+        reasons_for_quote = reason_lookup.get((vendor, competitor), [])
         results.append({
             "from_vendor": vendor,
             "to_vendor": competitor,
             "mention_count": mention_count,
             "primary_driver": driver,
             "signal_strength": strength,
+            "evidence_breakdown": {
+                "explicit_switches": explicit,
+                "active_evaluations": active_eval,
+                "implied_preferences": implied,
+            },
             "key_quote": _pick_displacement_quote(
                 vendor=vendor,
                 competitor=competitor,
-                reasons=reasons,
+                reasons=reasons_for_quote,
                 quote_lookup=quote_lookup,
             ),
             "industries": row.get("industries", []),
@@ -745,13 +1018,24 @@ def _build_deterministic_vendor_scorecards(
     *,
     pain_lookup: dict[str, list[dict]],
     competitor_lookup: dict[str, list[dict]],
+    feature_gap_lookup: dict[str, list[dict]],
+    quote_lookup: dict[str, list],
     budget_lookup: dict[str, dict],
     sentiment_lookup: dict[str, dict[str, int]],
+    buyer_auth_lookup: dict[str, dict],
+    dm_lookup: dict[str, float],
+    price_lookup: dict[str, float],
     company_lookup: dict[str, list[dict]],
+    product_profile_lookup: dict[str, dict],
     prior_reports: list[dict[str, Any]],
     limit: int = 15,
 ) -> list[dict[str, Any]]:
-    """Build vendor scorecards directly from aggregated numeric data."""
+    """Build vendor deep-dive scorecards from aggregated numeric data.
+
+    Merges multi-category rows into one entry per vendor, then enriches
+    with feature analysis, churn predictors, competitor overlap, and
+    customer profile data.
+    """
     prior_vendor_metrics: dict[str, dict[str, float]] = {}
     for report in prior_reports:
         if report.get("report_type") != "vendor_scorecard":
@@ -767,17 +1051,57 @@ def _build_deterministic_vendor_scorecards(
                     "avg_urgency": float(row.get("avg_urgency") or 0),
                 }
 
-    results: list[dict[str, Any]] = []
+    # ── Merge multi-category rows into one per vendor ──────────────
+    merged: dict[str, dict[str, Any]] = {}
     for row in vendor_scores:
         vendor = _canonicalize_vendor(row.get("vendor_name") or "")
-        total_reviews = int(row.get("total_reviews") or 0)
-        churn_intent = int(row.get("churn_intent") or 0)
+        if not vendor:
+            continue
+        reviews = int(row.get("total_reviews") or 0)
+        churn = int(row.get("churn_intent") or 0)
+        urgency = float(row.get("avg_urgency") or 0)
+        pos_pct = row.get("positive_review_pct")
+        rec_yes = int(row.get("recommend_yes") or 0)
+        rec_no = int(row.get("recommend_no") or 0)
+        category = row.get("product_category") or "Unknown"
+        if vendor not in merged:
+            merged[vendor] = {
+                "total_reviews": reviews,
+                "churn_intent": churn,
+                "urgency_weighted_sum": urgency * reviews,
+                "recommend_yes": rec_yes,
+                "recommend_no": rec_no,
+                "positive_pct_sum": (float(pos_pct) * reviews) if pos_pct is not None else 0,
+                "positive_pct_count": reviews if pos_pct is not None else 0,
+                "category": category,
+                "category_reviews": reviews,
+            }
+        else:
+            m = merged[vendor]
+            m["total_reviews"] += reviews
+            m["churn_intent"] += churn
+            m["urgency_weighted_sum"] += urgency * reviews
+            m["recommend_yes"] += rec_yes
+            m["recommend_no"] += rec_no
+            if pos_pct is not None:
+                m["positive_pct_sum"] += float(pos_pct) * reviews
+                m["positive_pct_count"] += reviews
+            if reviews > m["category_reviews"]:
+                m["category"] = category
+                m["category_reviews"] = reviews
+
+    # ── Build enriched scorecard per vendor ─────────────────────────
+    results: list[dict[str, Any]] = []
+    for vendor, m in merged.items():
+        total_reviews = m["total_reviews"]
+        churn_intent = m["churn_intent"]
         churn_density = round((churn_intent * 100.0 / total_reviews), 1) if total_reviews else 0.0
-        avg_urgency = round(float(row.get("avg_urgency") or 0), 1)
-        positive_pct = row.get("positive_review_pct")
-        recommend_yes = int(row.get("recommend_yes") or 0)
-        recommend_no = int(row.get("recommend_no") or 0)
+        avg_urgency = round(m["urgency_weighted_sum"] / total_reviews, 1) if total_reviews else 0.0
+        positive_pct = round(m["positive_pct_sum"] / m["positive_pct_count"], 1) if m["positive_pct_count"] else None
+        recommend_yes = m["recommend_yes"]
+        recommend_no = m["recommend_no"]
         recommend_ratio = round(((recommend_yes - recommend_no) / total_reviews) * 100, 1) if total_reviews else 0.0
+
         if total_reviews >= 50:
             confidence = "high"
         elif total_reviews >= 20:
@@ -804,17 +1128,109 @@ def _build_deterministic_vendor_scorecards(
         else:
             sentiment_direction = max(sentiment_counts.items(), key=lambda item: item[1])[0]
 
-        top_competitor = competitor_lookup.get(vendor, [])[:1]
+        # Pain breakdown (top 5)
+        pains = pain_lookup.get(vendor, [])
+        top_pain = pains[0]["category"] if pains else "unknown"
+        pain_breakdown = [{"category": p["category"], "count": p["count"]} for p in pains[:5]]
+
+        # Competitor overlap (top 5)
+        comp_entries = competitor_lookup.get(vendor, [])
+        top_competitor = comp_entries[:1]
         if top_competitor:
             comp = top_competitor[0]
             top_competitor_text = f"{comp['name']} ({comp['mentions']} mentions)"
         else:
             top_competitor_text = "Insufficient displacement data"
+        competitor_overlap = [
+            {"competitor": c["name"], "mentions": c["mentions"]}
+            for c in comp_entries[:5]
+        ]
 
-        top_pain = (pain_lookup.get(vendor, [{}])[0] or {}).get("category", "unknown")
+        # Churn pressure score
+        dm_rate = float(dm_lookup.get(vendor, 0))
+        price_rate = float(price_lookup.get(vendor, 0))
+        displacement_mentions = sum(c.get("mentions", 0) for c in comp_entries)
+        churn_pressure_score = _compute_churn_pressure_score(
+            churn_density=churn_density,
+            avg_urgency=avg_urgency,
+            dm_churn_rate=dm_rate,
+            displacement_mention_count=displacement_mentions,
+            price_complaint_rate=price_rate,
+            total_reviews=total_reviews,
+        )
 
-        # Industry and company size distributions from churning companies
+        # Risk level
+        if churn_pressure_score >= 70:
+            risk_level = "high"
+        elif churn_pressure_score >= 40:
+            risk_level = "medium"
+        else:
+            risk_level = "low"
+
+        # Feature analysis (loved from product profile, hated from feature gaps)
+        profile = product_profile_lookup.get(vendor, {})
+        strengths_raw = profile.get("strengths") or []
+        if isinstance(strengths_raw, list):
+            loved = [
+                {"feature": s.get("area", s) if isinstance(s, dict) else str(s),
+                 "score": s.get("score") if isinstance(s, dict) else None,
+                 "source": "product_profile"}
+                for s in strengths_raw[:5]
+            ]
+        else:
+            loved = []
+        gaps = feature_gap_lookup.get(vendor, [])
+        hated = [
+            {"feature": g["feature"],
+             "mentions": g.get("count", g.get("mentions", 0)),
+             "source": "reviews"}
+            for g in gaps[:5]
+        ]
+        feature_analysis = {"loved": loved, "hated": hated}
+
+        # Churn predictors (high-urgency segment correlations)
         companies = company_lookup.get(vendor, [])
+        high_urg_industries: dict[str, int] = {}
+        high_urg_sizes: dict[str, int] = {}
+        for c in companies:
+            if not isinstance(c, dict):
+                continue
+            urg = float(c.get("urgency", 0))
+            if urg >= 7:
+                ind = c.get("industry")
+                if ind and ind != "unknown":
+                    high_urg_industries[ind] = high_urg_industries.get(ind, 0) + 1
+                sz = c.get("company_size")
+                if sz:
+                    high_urg_sizes[sz] = high_urg_sizes.get(sz, 0) + 1
+        churn_predictors = {
+            "high_risk_industries": sorted(
+                [{"industry": k, "count": v} for k, v in high_urg_industries.items()],
+                key=lambda x: -x["count"],
+            )[:3],
+            "high_risk_sizes": sorted(
+                [{"size": k, "count": v} for k, v in high_urg_sizes.items()],
+                key=lambda x: -x["count"],
+            )[:3],
+            "dm_churn_rate": round(dm_rate, 2),
+            "price_complaint_rate": round(price_rate, 2),
+        }
+
+        # Evidence (top quotes)
+        quotes = quote_lookup.get(vendor, [])
+        evidence = quotes[:5]
+
+        # Named accounts
+        named_accounts = [
+            {"company": c.get("company", c) if isinstance(c, dict) else str(c),
+             "urgency": c.get("urgency", 0) if isinstance(c, dict) else 0,
+             "title": c.get("title") if isinstance(c, dict) else None,
+             "company_size": c.get("company_size") if isinstance(c, dict) else None,
+             "industry": c.get("industry") if isinstance(c, dict) else None}
+            for c in companies[:5]
+        ]
+
+        # Industry and company size distributions
         industry_counts: dict[str, int] = {}
         size_counts: dict[str, int] = {}
         for c in companies:
@@ -833,6 +1249,21 @@ def _build_deterministic_vendor_scorecards(
             key=lambda x: -x["count"],
         )[:5]
 
+        # Customer profile (from product profile + company data)
+        customer_profile = {
+            "typical_industries": profile.get("typical_industries") or [],
+            "typical_company_size": profile.get("typical_company_size") or [],
+            "primary_use_cases": profile.get("primary_use_cases") or [],
+            "top_integrations": profile.get("top_integrations") or [],
+            "industry_distribution": industry_dist,
+            "company_size_distribution": size_dist,
+        }
+
+        # Buyer authority
+        ba = buyer_auth_lookup.get(vendor, {})
+        role_types = ba.get("role_types", {})
+        dominant_role = max(role_types.items(), key=lambda x: x[1])[0] if role_types else "unknown"
+
         results.append({
             "vendor": vendor,
             "total_reviews": total_reviews,
@@ -841,11 +1272,23 @@ def _build_deterministic_vendor_scorecards(
             "avg_urgency": avg_urgency,
             "recommend_ratio": recommend_ratio,
             "sample_size_confidence": confidence,
+            "churn_pressure_score": churn_pressure_score,
+            "risk_level": risk_level,
             "top_pain": top_pain,
+            "pain_breakdown": pain_breakdown,
             "top_competitor_threat": top_competitor_text,
+            "competitor_overlap": competitor_overlap,
             "trend": trend,
             "budget_context": budget_lookup.get(vendor, {}),
             "sentiment_direction": sentiment_direction,
+            "dm_churn_rate": round(dm_rate, 2),
+            "price_complaint_rate": round(price_rate, 2),
+            "feature_analysis": feature_analysis,
+            "churn_predictors": churn_predictors,
+            "evidence": evidence,
+            "named_accounts": named_accounts,
+            "customer_profile": customer_profile,
+            "dominant_buyer_role": dominant_role,
             "industry_distribution": industry_dist,
             "company_size_distribution": size_dist,
         })
@@ -859,9 +1302,14 @@ def _build_deterministic_category_overview(
     pain_lookup: dict[str, list[dict]],
     competitive_disp: list[dict[str, Any]],
     company_lookup: dict[str, list[dict]],
+    quote_lookup: dict[str, list],
+    feature_gap_lookup: dict[str, list[dict]],
+    dm_lookup: dict[str, float],
+    price_lookup: dict[str, float],
+    competitor_lookup: dict[str, list[dict]],
     limit: int = 12,
 ) -> list[dict[str, Any]]:
-    """Build category overview directly from scorecards and competitive flows."""
+    """Build industry-specific category overview with vendor rankings and case studies."""
     by_category: dict[str, list[dict[str, Any]]] = {}
     for row in vendor_scores:
         category = row.get("product_category") or "Unknown"
@@ -914,6 +1362,66 @@ def _build_deterministic_category_overview(
             key=lambda x: -x["count"],
         )[:5]
 
+        # ── Vendor rankings (all vendors in category ranked by churn pressure) ──
+        vendor_rankings: list[dict[str, Any]] = []
+        for r in ranked[:8]:
+            v = _canonicalize_vendor(r.get("vendor_name") or "")
+            rev = int(r.get("total_reviews") or 0)
+            ci = int(r.get("churn_intent") or 0)
+            cd = round((ci * 100.0 / rev), 1) if rev else 0.0
+            urg = round(float(r.get("avg_urgency") or 0), 1)
+            dm_rate = float(dm_lookup.get(v, 0))
+            pr_rate = float(price_lookup.get(v, 0))
+            comp_ent = competitor_lookup.get(v, [])
+            disp_m = sum(c.get("mentions", 0) for c in comp_ent)
+            vr_score = _compute_churn_pressure_score(
+                churn_density=cd, avg_urgency=urg, dm_churn_rate=dm_rate,
+                displacement_mention_count=disp_m, price_complaint_rate=pr_rate,
+                total_reviews=rev,
+            )
+            vendor_rankings.append({
+                "vendor": v,
+                "churn_pressure_score": vr_score,
+                "churn_signal_density": cd,
+                "total_reviews": rev,
+                "risk_level": "high" if vr_score >= 70 else ("medium" if vr_score >= 40 else "low"),
+            })
+        vendor_rankings.sort(key=lambda x: -x["churn_pressure_score"])
+
+        # ── Case studies (top quotes per category with company context) ──
+        cat_quotes: list[dict[str, Any]] = []
+        for r in rows:
+            v = _canonicalize_vendor(r.get("vendor_name") or "")
+            for q in quote_lookup.get(v, [])[:2]:
+                if isinstance(q, dict):
+                    cat_quotes.append({
+                        "vendor": v,
+                        "quote": str(q.get("quote", q.get("text", str(q))))[:200],
+                        "company": q.get("company", "Anonymous"),
+                        "urgency": q.get("urgency", 0),
+                        "title": q.get("title"),
+                    })
+                elif isinstance(q, str):
+                    cat_quotes.append({
+                        "vendor": v, "quote": q[:200],
+                        "company": "Anonymous", "urgency": 0,
+                    })
+        cat_quotes.sort(key=lambda x: -float(x.get("urgency", 0)))
+        case_studies = cat_quotes[:3]
+
+        # ── Top feature gaps (aggregated across category) ──
+        cat_gaps: dict[str, int] = {}
+        for r in rows:
+            v = _canonicalize_vendor(r.get("vendor_name") or "")
+            for g in feature_gap_lookup.get(v, []):
+                feat = g.get("feature", "")
+                if feat:
+                    cat_gaps[feat] = cat_gaps.get(feat, 0) + g.get("count", g.get("mentions", 1))
+        top_gaps = sorted(
+            [{"feature": k, "mentions": v} for k, v in cat_gaps.items()],
+            key=lambda x: -x["mentions"],
+        )[:5]
+
         results.append({
             "category": category,
             "highest_churn_risk": highest_vendor,
@@ -925,9 +1433,247 @@ def _build_deterministic_category_overview(
             ),
             "industry_distribution": top_industries,
             "company_size_distribution": top_sizes,
+            "vendor_rankings": vendor_rankings,
+            "case_studies": case_studies,
+            "top_feature_gaps": top_gaps,
         })
     results.sort(key=lambda x: x["category"])
     return results[:limit]
+
+
+def _build_deterministic_battle_cards(
+    vendor_scores: list[dict[str, Any]],
+    *,
+    pain_lookup: dict[str, list[dict]],
+    competitor_lookup: dict[str, list[dict]],
+    feature_gap_lookup: dict[str, list[dict]],
+    quote_lookup: dict[str, list],
+    price_lookup: dict[str, float],
+    budget_lookup: dict[str, dict],
+    sentiment_lookup: dict[str, dict[str, int]],
+    dm_lookup: dict[str, float],
+    company_lookup: dict[str, list],
+    product_profile_lookup: dict[str, dict],
+    competitive_disp: list[dict[str, Any]],
+    competitor_reasons: list[dict[str, Any]],
+    limit: int = 15,
+) -> list[dict[str, Any]]:
+    """Build per-vendor battle cards from aggregated data.
+
+    Each card is a concise, sales-oriented one-pager with:
+    - Top weaknesses (merged from product profile + pain categories)
+    - Customer pain quotes (verbatim, with provenance)
+    - Competitor differentiators (who they lose to, and why)
+    - Objection data (raw metrics for LLM-generated sales copy)
+    """
+    # Build reason lookup for inferring primary driver on differentiators
+    # (reuses _build_reason_lookup and _infer_driver_from_reasons from displacement map)
+    reason_lookup = _build_reason_lookup(competitor_reasons)
+
+    # Merge multi-category rows per vendor (same pattern as vendor feed builder)
+    merged: dict[str, dict[str, Any]] = {}
+    for row in vendor_scores:
+        vendor = _canonicalize_vendor(row.get("vendor_name") or "")
+        if not vendor:
+            continue
+        reviews = int(row.get("total_reviews") or 0)
+        churn = int(row.get("churn_intent") or 0)
+        urgency = float(row.get("avg_urgency") or 0)
+        category = row.get("product_category") or "Unknown"
+        if vendor not in merged:
+            merged[vendor] = {
+                "total_reviews": reviews,
+                "churn_intent": churn,
+                "urgency_weighted_sum": urgency * reviews,
+                "category": category,
+                "category_reviews": reviews,
+            }
+        else:
+            m = merged[vendor]
+            m["total_reviews"] += reviews
+            m["churn_intent"] += churn
+            m["urgency_weighted_sum"] += urgency * reviews
+            if reviews > m["category_reviews"]:
+                m["category"] = category
+                m["category_reviews"] = reviews
+
+    cards: list[dict[str, Any]] = []
+    for vendor, m in merged.items():
+        total_reviews = m["total_reviews"]
+        churn_intent = m["churn_intent"]
+        churn_density = round(churn_intent * 100.0 / total_reviews, 1) if total_reviews else 0.0
+        avg_urgency = round(
+            m["urgency_weighted_sum"] / total_reviews, 1
+        ) if total_reviews else 0.0
+        dm_rate = float(dm_lookup.get(vendor, 0))
+        price_rate = float(price_lookup.get(vendor, 0))
+
+        # Same qualification threshold as weekly_churn_feed
+        if churn_density < 15 and avg_urgency < 6 and dm_rate < 0.3:
+            continue
+
+        # Confidence label
+        if total_reviews >= 50:
+            confidence = "high"
+        elif total_reviews >= 20:
+            confidence = "medium"
+        else:
+            confidence = "low"
+
+        comp_entries = competitor_lookup.get(vendor, [])
+        displacement_mentions = sum(c.get("mentions", 0) for c in comp_entries)
+
+        score = _compute_churn_pressure_score(
+            churn_density=churn_density,
+            avg_urgency=avg_urgency,
+            dm_churn_rate=dm_rate,
+            displacement_mention_count=displacement_mentions,
+            price_complaint_rate=price_rate,
+            total_reviews=total_reviews,
+        )
+
+        # -- Section 1: Vendor Weaknesses --
+        # Merge product profile weaknesses with pain categories
+        weaknesses: list[dict[str, Any]] = []
+        seen_areas: set[str] = set()
+
+        profile = product_profile_lookup.get(vendor, {})
+        for w in (profile.get("weaknesses") or []):
+            if not isinstance(w, dict):
+                continue
+            area = w.get("area", "")
+            if area and area not in seen_areas:
+                seen_areas.add(area)
+                weaknesses.append({
+                    "area": area,
+                    "score": w.get("score"),
+                    "evidence_count": w.get("evidence_count", 0),
+                    "source": "product_profile",
+                })
+
+        for p in pain_lookup.get(vendor, []):
+            area = p.get("category", "")
+            if area and area not in seen_areas:
+                seen_areas.add(area)
+                weaknesses.append({
+                    "area": area,
+                    "count": p.get("count", 0),
+                    "source": "pain_category",
+                })
+
+        for g in feature_gap_lookup.get(vendor, []):
+            feature = g.get("feature", "")
+            if feature and feature not in seen_areas:
+                seen_areas.add(feature)
+                weaknesses.append({
+                    "area": feature,
+                    "count": g.get("mentions", 0),
+                    "source": "feature_gap",
+                })
+
+        # Sort by evidence (higher = more actionable), take top 5
+        weaknesses.sort(
+            key=lambda w: -(w.get("evidence_count") or w.get("count") or 0),
+        )
+        weaknesses = weaknesses[:5]
+
+        # -- Section 2: Customer Pain Quotes --
+        quotes_raw = quote_lookup.get(vendor, [])
+        pain_quotes: list[dict[str, Any]] = []
+        for q in quotes_raw[:5]:
+            if isinstance(q, dict):
+                pain_quotes.append({
+                    "quote": q.get("quote", ""),
+                    "urgency": q.get("urgency", 0),
+                    "source_site": q.get("source_site", ""),
+                    "company": q.get("company", ""),
+                    "title": q.get("title", ""),
+                    "company_size": q.get("company_size", ""),
+                    "industry": q.get("industry", ""),
+                })
+            elif isinstance(q, str):
+                pain_quotes.append({"quote": q, "urgency": 0})
+
+        # -- Section 3: Competitor Differentiators --
+        differentiators: list[dict[str, Any]] = []
+        for c in comp_entries[:5]:
+            comp_name = c.get("name", "")
+            if not comp_name:
+                continue
+            comp_profile = product_profile_lookup.get(
+                _canonicalize_vendor(comp_name), {},
+            )
+            # Find which of this vendor's weaknesses the competitor solves
+            solves = None
+            comp_pain_addressed = comp_profile.get("pain_addressed") or {}
+            if isinstance(comp_pain_addressed, dict) and weaknesses:
+                for w in weaknesses:
+                    area = w.get("area", "")
+                    if area in comp_pain_addressed and comp_pain_addressed[area] >= 0.6:
+                        solves = area
+                        break
+
+            # Switch count from competitor's commonly_switched_from
+            switch_count = 0
+            for sf in (comp_profile.get("commonly_switched_from") or []):
+                if isinstance(sf, dict):
+                    sf_vendor = _canonicalize_vendor(sf.get("vendor", ""))
+                    if sf_vendor == vendor:
+                        switch_count = sf.get("count", 0)
+                        break
+
+            # Infer primary driver from competitor reasons (same as displacement map)
+            reasons = reason_lookup.get((vendor, _canonicalize_competitor(comp_name)), [])
+            driver = _infer_driver_from_reasons(reasons)
+
+            differentiators.append({
+                "competitor": comp_name,
+                "mentions": c.get("mentions", 0),
+                "primary_driver": driver,
+                "solves_weakness": solves,
+                "switch_count": switch_count,
+            })
+
+        # -- Section 4: Objection Data (raw metrics for LLM) --
+        sentiment_counts = sentiment_lookup.get(vendor, {})
+        if total_reviews < 10 or not sentiment_counts:
+            sentiment_dir = "insufficient_data"
+        else:
+            sentiment_dir = max(sentiment_counts.items(), key=lambda x: x[1])[0]
+
+        top_gaps = [
+            {"feature": g.get("feature", ""), "mentions": g.get("mentions", 0)}
+            for g in feature_gap_lookup.get(vendor, [])[:5]
+        ]
+
+        objection_data = {
+            "price_complaint_rate": round(price_rate, 3),
+            "dm_churn_rate": round(dm_rate, 3),
+            "sentiment_direction": sentiment_dir,
+            "top_feature_gaps": top_gaps,
+            "total_reviews": total_reviews,
+            "churn_signal_density": churn_density,
+            "avg_urgency": avg_urgency,
+            "budget_context": budget_lookup.get(vendor, {}),
+        }
+
+        cards.append({
+            "vendor": vendor,
+            "category": m.get("category") or "",
+            "churn_pressure_score": score,
+            "total_reviews": total_reviews,
+            "confidence": confidence,
+            "vendor_weaknesses": weaknesses,
+            "customer_pain_quotes": pain_quotes,
+            "competitor_differentiators": differentiators,
+            "objection_data": objection_data,
+            # Populated by LLM pass in run():
+            "objection_handlers": [],
+            "recommended_plays": [],
+        })
+
+    cards.sort(key=lambda x: -x["churn_pressure_score"])
+    return cards[:limit]
 
 
 def _build_exploratory_overview(
@@ -1528,7 +2274,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         },
     )
 
-    # Gather all 17 data sources + data_context + provenance in parallel
+    # Gather all data sources + data_context + provenance in parallel
     (
         vendor_scores, high_intent, competitive_disp,
         pain_dist, feature_gaps,
@@ -1540,6 +2286,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         displacement_provenance,
         pain_provenance, use_case_provenance, integration_provenance,
         buyer_profile_provenance,
+        insider_aggregates_raw,
+        product_profiles_raw,
     ) = await asyncio.gather(
         _fetch_vendor_churn_scores(pool, window_days, min_reviews),
         _fetch_high_intent_companies(pool, urgency_threshold, window_days),
@@ -1565,6 +2313,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _fetch_use_case_provenance(pool, window_days),
         _fetch_integration_provenance(pool, window_days),
         _fetch_buyer_profile_provenance(pool, window_days),
+        _fetch_insider_aggregates(pool, window_days),
+        _fetch_product_profiles(pool),
         return_exceptions=True,
     )
 
@@ -1617,6 +2367,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if isinstance(buyer_profile_provenance, Exception):
         logger.warning("buyer_profile_provenance fetch failed: %s", buyer_profile_provenance)
         buyer_profile_provenance = {}
+    if isinstance(insider_aggregates_raw, Exception):
+        logger.warning("insider_aggregates fetch failed: %s", insider_aggregates_raw)
+        insider_aggregates_raw = []
+    if isinstance(product_profiles_raw, Exception):
+        logger.warning("product_profiles fetch failed: %s", product_profiles_raw)
+        product_profiles_raw = []
+    insider_lookup = _build_insider_lookup(insider_aggregates_raw)
 
     # Check if there's enough data
     if not vendor_scores and not high_intent:
@@ -1799,6 +2556,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     buyer_auth_lookup = _build_buyer_auth_lookup(buyer_auth)
     timeline_lookup = _build_timeline_lookup(timeline_signals)
     keyword_spike_lookup = _build_keyword_spike_lookup(keyword_spikes)
+    product_profile_lookup: dict[str, dict] = {}
+    for pp in product_profiles_raw:
+        vn = _canonicalize_vendor(pp.get("vendor_name", ""))
+        if vn and vn not in product_profile_lookup:
+            product_profile_lookup[vn] = pp
 
     deterministic_weekly_feed = _build_deterministic_vendor_feed(
         vendor_scores,
@@ -1819,9 +2581,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         vendor_scores,
         pain_lookup=pain_lookup,
         competitor_lookup=competitor_lookup,
+        feature_gap_lookup=feature_gap_lookup,
+        quote_lookup=quote_lookup,
         budget_lookup=budget_lookup,
         sentiment_lookup=sentiment_lookup,
+        buyer_auth_lookup=buyer_auth_lookup,
+        dm_lookup=dm_lookup,
+        price_lookup=price_lookup,
         company_lookup=company_lookup,
+        product_profile_lookup=product_profile_lookup,
         prior_reports=prior_reports,
     )
     deterministic_displacement_map = _build_deterministic_displacement_map(
@@ -1846,17 +2614,105 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         pain_lookup=pain_lookup,
         competitive_disp=competitive_disp,
         company_lookup=company_lookup,
+        quote_lookup=quote_lookup,
+        feature_gap_lookup=feature_gap_lookup,
+        dm_lookup=dm_lookup,
+        price_lookup=price_lookup,
+        competitor_lookup=competitor_lookup,
     )
 
-    parsed["executive_summary"] = _build_validated_executive_summary(
-        {"weekly_churn_feed": deterministic_weekly_feed},
-        data_context=data_context,
-        executive_sources=_executive_source_list(),
-    )
+    # LLM pass: generate expert take for each vendor scorecard
+    scorecard_llm_failures = 0
+    for sc in deterministic_vendor_scorecards:
+        try:
+            llm_input = {k: sc[k] for k in (
+                "vendor", "churn_pressure_score", "risk_level", "churn_signal_density",
+                "avg_urgency", "feature_analysis", "churn_predictors", "competitor_overlap",
+                "trend", "sentiment_direction",
+            ) if k in sc}
+            narrative = await asyncio.wait_for(
+                asyncio.to_thread(
+                    call_llm_with_skill,
+                    "digest/vendor_deep_dive_narrative",
+                    json.dumps(llm_input, default=str),
+                    max_tokens=300, temperature=0.3,
+                    response_format={"type": "json_object"},
+                    workload=_llm_workload,
+                ),
+                timeout=45,
+            )
+            parsed_narrative = parse_json_response(narrative)
+            sc["expert_take"] = parsed_narrative.get("expert_take", "")
+        except Exception:
+            scorecard_llm_failures += 1
+            logger.warning("Vendor deep dive LLM failed for %s", sc.get("vendor"))
+            sc["expert_take"] = ""
+    if scorecard_llm_failures:
+        logger.info("Vendor scorecard LLM: %d/%d failed",
+                     scorecard_llm_failures, len(deterministic_vendor_scorecards))
+
     parsed["weekly_churn_feed"] = deterministic_weekly_feed
     parsed["vendor_scorecards"] = deterministic_vendor_scorecards
     parsed["displacement_map"] = deterministic_displacement_map
     parsed["category_insights"] = deterministic_category_overview
+
+    # Build per-report-type executive summaries
+    _exec_sources = _executive_source_list()
+    _exec_summaries: dict[str, str] = {}
+    for _rt in ("weekly_churn_feed", "vendor_scorecard", "displacement_report", "category_overview"):
+        _exec_summaries[_rt] = _build_validated_executive_summary(
+            parsed,
+            data_context=data_context,
+            executive_sources=_exec_sources,
+            report_type=_rt,
+        )
+    _fallback_summary = _exec_summaries.get("weekly_churn_feed", "")
+
+    # Build battle cards (per-vendor, persisted separately)
+    deterministic_battle_cards = _build_deterministic_battle_cards(
+        vendor_scores,
+        pain_lookup=pain_lookup,
+        competitor_lookup=competitor_lookup,
+        feature_gap_lookup=feature_gap_lookup,
+        quote_lookup=quote_lookup,
+        price_lookup=price_lookup,
+        budget_lookup=budget_lookup,
+        sentiment_lookup=sentiment_lookup,
+        dm_lookup=dm_lookup,
+        company_lookup=company_lookup,
+        product_profile_lookup=product_profile_lookup,
+        competitive_disp=competitive_disp,
+        competitor_reasons=competitor_reasons,
+    )
+    logger.info("Built %d battle cards", len(deterministic_battle_cards))
+
+    # LLM pass: generate sales copy for each battle card
+    battle_card_llm_failures = 0
+    for card in deterministic_battle_cards:
+        try:
+            sales_copy = await asyncio.wait_for(
+                asyncio.to_thread(
+                    call_llm_with_skill,
+                    "digest/battle_card_sales_copy",
+                    json.dumps(card, default=str),
+                    max_tokens=800, temperature=0.3,
+                    response_format={"type": "json_object"},
+                    workload=_llm_workload,
+                ),
+                timeout=60,
+            )
+            parsed_copy = parse_json_response(sales_copy)
+            card["objection_handlers"] = parsed_copy.get("objection_handlers", [])
+            card["recommended_plays"] = parsed_copy.get("recommended_plays", [])
+        except Exception:
+            battle_card_llm_failures += 1
+            logger.warning(
+                "Battle card LLM failed for %s, using data-only card",
+                card.get("vendor"),
+            )
+    if battle_card_llm_failures:
+        logger.info("Battle card LLM: %d/%d failed",
+                     battle_card_llm_failures, len(deterministic_battle_cards))
 
     # Persist intelligence reports
     report_types = [
@@ -1873,7 +2729,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "pain_categories": len(pain_dist),
         "feature_gaps": len(feature_gaps),
     })
-    exec_summary = parsed.get("executive_summary", "")
     exploratory_persisted = False
 
     # Provenance for intelligence reports
@@ -1905,7 +2760,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     today,
                     report_type,
                     json.dumps(data, default=str),
-                    exec_summary,
+                    _exec_summaries.get(report_type, _fallback_summary),
                     data_density,
                     "published",
                     llm_model_id,
@@ -1916,6 +2771,53 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     displacement_report_id = rid
     except Exception:
         logger.exception("Failed to store intelligence reports (rolled back)")
+
+    # Persist battle cards (one row per vendor, using vendor_filter)
+    battle_cards_persisted = 0
+    for card in deterministic_battle_cards:
+        vendor = card.get("vendor", "")
+        if not vendor:
+            continue
+        try:
+            await pool.execute(
+                """
+                INSERT INTO b2b_intelligence (
+                    report_date, report_type, vendor_filter,
+                    intelligence_data, executive_summary, data_density, status, llm_model,
+                    source_review_count, source_distribution
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                ON CONFLICT (report_date, report_type, LOWER(COALESCE(vendor_filter,'')),
+                             LOWER(COALESCE(category_filter,'')),
+                             COALESCE(account_id, '00000000-0000-0000-0000-000000000000'::uuid))
+                DO UPDATE SET intelligence_data = EXCLUDED.intelligence_data,
+                              executive_summary = EXCLUDED.executive_summary,
+                              data_density = EXCLUDED.data_density,
+                              source_review_count = EXCLUDED.source_review_count,
+                              source_distribution = EXCLUDED.source_distribution,
+                              created_at = now()
+                """,
+                today,
+                "battle_card",
+                vendor,
+                json.dumps(card, default=str),
+                (
+                    f"Battle card for {vendor}: "
+                    f"score {card.get('churn_pressure_score', 0):.0f}, "
+                    f"{len(card.get('vendor_weaknesses', []))} weaknesses, "
+                    f"{len(card.get('competitor_differentiators', []))} competitors."
+                ),
+                data_density,
+                "published",
+                llm_model_id,
+                report_source_review_count,
+                report_source_dist,
+            )
+            battle_cards_persisted += 1
+        except Exception:
+            logger.exception("Failed to persist battle card for %s", vendor)
+    if deterministic_battle_cards:
+        logger.info("Persisted %d/%d battle cards",
+                     battle_cards_persisted, len(deterministic_battle_cards))
 
     if had_llm_analysis:
         exploratory_data = _build_exploratory_overview(
@@ -2008,6 +2910,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         sentiment_lookup, buyer_auth_lookup, timeline_lookup,
         keyword_spike_lookup,
         provenance_lookup=vendor_provenance,
+        insider_lookup=insider_lookup,
     )
 
     # Persist company signals to first-class table
@@ -2608,13 +3511,31 @@ async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days
 
 
 async def _fetch_competitive_displacement(pool, window_days: int) -> list[dict[str, Any]]:
-    """Who's winning from whom -- competitive flows with 2+ mentions (per skill rules)."""
+    """Competitive displacement flows — filtered to real displacement evidence only.
+
+    Uses evidence_type (new schema) with COALESCE fallback to context (legacy).
+    Excludes reverse_flow, neutral_mention, and low-confidence implied_preference.
+    """
     sources = _intelligence_source_allowlist()
     filters = _eligible_review_filters(window_param=1, source_param=2)
     rows = await pool.fetch(
         f"""
         SELECT vendor_name,
             comp.value->>'name' AS competitor,
+            COALESCE(
+                comp.value->>'evidence_type',
+                CASE comp.value->>'context'
+                    WHEN 'switched_to' THEN 'explicit_switch'
+                    WHEN 'considering' THEN 'active_evaluation'
+                    WHEN 'compared' THEN 'implied_preference'
+                    WHEN 'switched_from' THEN 'reverse_flow'
+                    ELSE 'neutral_mention'
+                END
+            ) AS evidence_type,
+            COALESCE(
+                comp.value->>'displacement_confidence', 'low'
+            ) AS displacement_confidence,
+            comp.value->>'reason_category' AS reason_category,
             comp.value->>'context' AS direction,
             count(*) AS mention_count,
             array_agg(DISTINCT company_size_raw) FILTER (WHERE company_size_raw IS NOT NULL) AS sizes,
@@ -2623,7 +3544,29 @@ async def _fetch_competitive_displacement(pool, window_days: int) -> list[dict[s
         FROM b2b_reviews
         CROSS JOIN LATERAL jsonb_array_elements(enrichment->'competitors_mentioned') AS comp(value)
         WHERE {filters}
-        GROUP BY vendor_name, comp.value->>'name', comp.value->>'context'
+          AND COALESCE(
+                comp.value->>'evidence_type',
+                CASE comp.value->>'context'
+                    WHEN 'switched_to' THEN 'explicit_switch'
+                    WHEN 'considering' THEN 'active_evaluation'
+                    WHEN 'compared' THEN 'implied_preference'
+                    WHEN 'switched_from' THEN 'reverse_flow'
+                    ELSE 'neutral_mention'
+                END
+              ) IN ('explicit_switch', 'active_evaluation', 'implied_preference')
+          AND NOT (
+              COALESCE(
+                comp.value->>'evidence_type',
+                CASE comp.value->>'context'
+                    WHEN 'compared' THEN 'implied_preference'
+                    ELSE 'neutral_mention'
+                END
+              ) = 'implied_preference'
+              AND COALESCE(comp.value->>'displacement_confidence', 'low') = 'low'
+          )
+        GROUP BY vendor_name, comp.value->>'name',
+                 evidence_type, displacement_confidence, reason_category,
+                 comp.value->>'context'
         HAVING count(*) >= 2
         ORDER BY mention_count DESC
         """,
@@ -2631,21 +3574,27 @@ async def _fetch_competitive_displacement(pool, window_days: int) -> list[dict[s
         sources,
     )
     # Post-process: canonicalize competitors, filter self-flows, re-aggregate
-    merged: dict[tuple[str, str, str | None], int] = {}
-    merged_industries: dict[tuple[str, str, str | None], list[str]] = {}
-    merged_sizes: dict[tuple[str, str, str | None], list[str]] = {}
+    MergeKey = tuple[str, str, str]  # (vendor, competitor, evidence_type)
+    merged: dict[MergeKey, int] = {}
+    merged_industries: dict[MergeKey, list[str]] = {}
+    merged_sizes: dict[MergeKey, list[str]] = {}
+    merged_reason_cats: dict[MergeKey, dict[str, int]] = {}
     for r in rows:
         canon = _canonicalize_competitor(r["competitor"] or "")
         vendor = _canonicalize_vendor(r["vendor_name"] or "")
-        # Filter self-flows (vendor mentioning itself)
         if canon and vendor and canon.lower() == vendor.lower():
             continue
-        key = (vendor, canon, r["direction"])
+        et = r["evidence_type"] or "implied_preference"
+        key: MergeKey = (vendor, canon, et)
         merged[key] = merged.get(key, 0) + r["mention_count"]
         if r.get("industries"):
             merged_industries.setdefault(key, []).extend(r["industries"])
         if r.get("sizes"):
             merged_sizes.setdefault(key, []).extend(r["sizes"])
+        rc = r.get("reason_category")
+        if rc:
+            cats = merged_reason_cats.setdefault(key, {})
+            cats[rc] = cats.get(rc, 0) + r["mention_count"]
 
     # Re-apply HAVING count >= 2, sort by mention_count DESC
     results = []
@@ -2657,8 +3606,9 @@ async def _fetch_competitive_displacement(pool, window_days: int) -> list[dict[s
         results.append({
             "vendor": k[0],
             "competitor": k[1],
-            "direction": k[2],
+            "evidence_type": k[2],
             "mention_count": cnt,
+            "reason_categories": merged_reason_cats.get(k, {}),
             "industries": sorted(set(i for i in ind_list if i and i != "unknown")),
             "company_sizes": sorted(set(s for s in sz_list if s)),
         })
@@ -3290,6 +4240,117 @@ async def _fetch_quotable_evidence(pool, window_days: int, *, min_urgency: float
     return results
 
 
+async def _fetch_insider_aggregates(pool, window_days: int) -> list[dict[str, Any]]:
+    """Aggregate insider account signals per vendor.
+
+    Reads b2b_reviews WHERE content_type = 'insider_account' and extracts:
+    - signal count
+    - org health summary (mode of bureaucracy_level / leadership_quality / innovation_climate)
+    - talent drain rate (fraction mentioning departures)
+    - top quotable phrases from high-urgency insider posts
+    """
+    rows = await pool.fetch(
+        """
+        SELECT
+            vendor_name,
+            COUNT(DISTINCT id)::int AS signal_count,
+            ROUND(
+                COUNT(DISTINCT CASE WHEN enrichment->'insider_signals'->'talent_drain'->>'departures_mentioned' = 'true'
+                         THEN id END)::numeric
+                / NULLIF(COUNT(DISTINCT id), 0)::numeric,
+                4
+            ) AS talent_drain_rate,
+            jsonb_agg(DISTINCT
+                enrichment->'insider_signals'->'org_health'
+            ) FILTER (WHERE enrichment->'insider_signals'->'org_health' IS NOT NULL) AS org_health_array,
+            jsonb_agg(
+                jsonb_build_object(
+                    'quote', ph.value,
+                    'urgency', (enrichment->>'urgency_score')::numeric,
+                    'review_id', id::text
+                )
+                ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST
+            ) FILTER (WHERE ph.value IS NOT NULL) AS quotable_phrases
+        FROM b2b_reviews
+        LEFT JOIN LATERAL jsonb_array_elements_text(
+            COALESCE(enrichment->'quotable_phrases', '[]'::jsonb)
+        ) AS ph(value) ON true
+        WHERE content_type = 'insider_account'
+          AND enrichment_status = 'enriched'
+          AND imported_at > NOW() - make_interval(days => $1)
+        GROUP BY vendor_name
+        """,
+        window_days,
+    )
+    return list(rows)
+
+
+def _build_insider_lookup(rows: list[Any]) -> dict[str, dict]:
+    """Build vendor → insider aggregate dict from _fetch_insider_aggregates rows."""
+    result: dict[str, dict] = {}
+    for r in rows:
+        vendor = r["vendor_name"]
+        org_health_array = _safe_json(r["org_health_array"]) if r["org_health_array"] else []
+        quotable_raw = _safe_json(r["quotable_phrases"]) if r["quotable_phrases"] else []
+
+        # Mode of org health fields across all insider posts
+        bureaucracy = Counter(
+            h.get("bureaucracy_level") for h in org_health_array if h and h.get("bureaucracy_level")
+        )
+        leadership = Counter(
+            h.get("leadership_quality") for h in org_health_array if h and h.get("leadership_quality")
+        )
+        innovation = Counter(
+            h.get("innovation_climate") for h in org_health_array if h and h.get("innovation_climate")
+        )
+
+        # Flatten all culture_indicators
+        culture_indicators: list[str] = []
+        for h in org_health_array:
+            if h and isinstance(h.get("culture_indicators"), list):
+                culture_indicators.extend(h["culture_indicators"])
+        top_culture = [item for item, _ in Counter(culture_indicators).most_common(10)]
+
+        org_health_summary = {
+            "bureaucracy_level": bureaucracy.most_common(1)[0][0] if bureaucracy else "unknown",
+            "leadership_quality": leadership.most_common(1)[0][0] if leadership else "unknown",
+            "innovation_climate": innovation.most_common(1)[0][0] if innovation else "unknown",
+            "culture_indicators": top_culture,
+        }
+
+        # Keep top 5 quotable phrases, deduplicate
+        seen_quotes: set[str] = set()
+        quotable_evidence = []
+        for q in quotable_raw:
+            if isinstance(q, dict) and q.get("quote") and q["quote"] not in seen_quotes:
+                seen_quotes.add(q["quote"])
+                quotable_evidence.append(q)
+                if len(quotable_evidence) >= 5:
+                    break
+
+        result[vendor] = {
+            "signal_count": r["signal_count"] or 0,
+            "org_health_summary": org_health_summary,
+            "talent_drain_rate": float(r["talent_drain_rate"]) if r["talent_drain_rate"] is not None else None,
+            "quotable_evidence": quotable_evidence,
+        }
+    return result
+
+
+async def _fetch_product_profiles(pool) -> list[dict[str, Any]]:
+    """Fetch pre-computed product profiles for battle card enrichment."""
+    rows = await pool.fetch("""
+        SELECT vendor_name, product_category, strengths, weaknesses,
+               pain_addressed, commonly_compared_to, commonly_switched_from,
+               total_reviews_analyzed, avg_rating, recommend_rate,
+               primary_use_cases, typical_company_size, typical_industries,
+               top_integrations, profile_summary
+        FROM b2b_product_profiles
+        ORDER BY total_reviews_analyzed DESC
+    """)
+    return [dict(r) for r in rows]
+
+
 async def _fetch_budget_signals(pool, window_days: int) -> list[dict[str, Any]]:
     """Aggregate budget signals: seat_count stats and price-increase mentions per vendor."""
     sources = _intelligence_source_allowlist()
@@ -3500,7 +4561,7 @@ async def _fetch_timeline_signals(pool, window_days: int, *, limit: int = 50) ->
 
 
 async def _fetch_competitor_reasons(pool, window_days: int) -> list[dict[str, Any]]:
-    """Top reasons per vendor/competitor pair (aggregated, not raw dump)."""
+    """Top reasons per vendor/competitor pair — prefers structured reason_category."""
     sources = _intelligence_source_allowlist()
     filters = _eligible_review_filters(window_param=1, source_param=2)
     rows = await pool.fetch(
@@ -3509,7 +4570,9 @@ async def _fetch_competitor_reasons(pool, window_days: int) -> list[dict[str, An
             SELECT vendor_name,
                 comp.value->>'name' AS competitor,
                 comp.value->>'context' AS direction,
-                comp.value->>'reason' AS reason,
+                COALESCE(comp.value->>'reason_category', comp.value->>'reason') AS reason,
+                comp.value->>'reason_category' AS reason_category,
+                comp.value->>'reason_detail' AS reason_detail,
                 count(*) AS mention_count,
                 ROW_NUMBER() OVER (
                     PARTITION BY vendor_name, comp.value->>'name'
@@ -3518,10 +4581,11 @@ async def _fetch_competitor_reasons(pool, window_days: int) -> list[dict[str, An
             FROM b2b_reviews
             CROSS JOIN LATERAL jsonb_array_elements(enrichment->'competitors_mentioned') AS comp(value)
                         WHERE {filters}
-              AND comp.value->>'reason' IS NOT NULL
-            GROUP BY vendor_name, comp.value->>'name', comp.value->>'context', comp.value->>'reason'
+              AND COALESCE(comp.value->>'reason_category', comp.value->>'reason') IS NOT NULL
+            GROUP BY vendor_name, comp.value->>'name', comp.value->>'context',
+                     reason, reason_category, reason_detail
         )
-        SELECT vendor_name, competitor, direction, reason, mention_count
+        SELECT vendor_name, competitor, direction, reason, reason_category, reason_detail, mention_count
         FROM ranked_reasons WHERE rn <= 3
         ORDER BY mention_count DESC
         """,
@@ -3534,6 +4598,8 @@ async def _fetch_competitor_reasons(pool, window_days: int) -> list[dict[str, An
             "competitor": r["competitor"],
             "direction": r["direction"],
             "reason": r["reason"],
+            "reason_category": r["reason_category"],
+            "reason_detail": r["reason_detail"],
             "mention_count": r["mention_count"],
         }
         for r in rows
@@ -3764,15 +4830,44 @@ def _build_pain_lookup(pain_dist: list[dict]) -> dict[str, list[dict]]:
 
 
 def _aggregate_competitive_disp(competitive_disp: list[dict]) -> list[dict]:
-    """Merge rows with same (vendor, competitor) across directions, summing mentions."""
-    agg: dict[tuple[str, str], int] = {}
+    """Merge rows with same (vendor, competitor), preserving evidence breakdown."""
+    agg: dict[tuple[str, str], dict[str, Any]] = {}
     for row in competitive_disp:
         key = (row.get("vendor", ""), row.get("competitor", ""))
-        agg[key] = agg.get(key, 0) + int(row.get("mention_count") or 0)
-    return [
-        {"vendor": v, "competitor": c, "mention_count": m}
-        for (v, c), m in sorted(agg.items(), key=lambda x: x[1], reverse=True)
-    ]
+        if key not in agg:
+            agg[key] = {
+                "mention_count": 0,
+                "explicit_switches": 0,
+                "active_evaluations": 0,
+                "implied_preferences": 0,
+                "reason_categories": {},
+            }
+        entry = agg[key]
+        cnt = int(row.get("mention_count") or 0)
+        entry["mention_count"] += cnt
+        et = row.get("evidence_type", "implied_preference")
+        if et == "explicit_switch":
+            entry["explicit_switches"] += cnt
+        elif et == "active_evaluation":
+            entry["active_evaluations"] += cnt
+        else:
+            entry["implied_preferences"] += cnt
+        # Merge reason_categories from this row
+        for rc, rc_cnt in (row.get("reason_categories") or {}).items():
+            entry["reason_categories"][rc] = entry["reason_categories"].get(rc, 0) + rc_cnt
+
+    results = []
+    for (v, c), data in sorted(agg.items(), key=lambda x: x[1]["mention_count"], reverse=True):
+        results.append({
+            "vendor": v,
+            "competitor": c,
+            "mention_count": data["mention_count"],
+            "explicit_switches": data["explicit_switches"],
+            "active_evaluations": data["active_evaluations"],
+            "implied_preferences": data["implied_preferences"],
+            "reason_categories": data["reason_categories"],
+        })
+    return results
 
 
 def _build_competitor_lookup(competitive_disp: list[dict]) -> dict[str, list[dict]]:
@@ -3961,8 +5056,9 @@ async def _upsert_churn_signals(
     timeline_lookup: dict[str, list[dict]] | None = None,
     keyword_spike_lookup: dict[str, dict] | None = None,
     provenance_lookup: dict[str, dict] | None = None,
+    insider_lookup: dict[str, dict] | None = None,
 ) -> int:
-    """Upsert b2b_churn_signals (29 columns incl. provenance). Returns failure count."""
+    """Upsert b2b_churn_signals (29 columns incl. provenance + insider). Returns failure count."""
     now = datetime.now(timezone.utc)
     budget_lookup = budget_lookup or {}
     use_case_lookup = use_case_lookup or {}
@@ -3972,6 +5068,7 @@ async def _upsert_churn_signals(
     timeline_lookup = timeline_lookup or {}
     keyword_spike_lookup = keyword_spike_lookup or {}
     provenance_lookup = provenance_lookup or {}
+    insider_lookup = insider_lookup or {}
     failures = 0
 
     for vs in vendor_scores:
@@ -3984,6 +5081,7 @@ async def _upsert_churn_signals(
         nps = ((recommend_yes - recommend_no) / total * 100) if total > 0 else None
 
         prov = provenance_lookup.get(vendor, {})
+        insider = insider_lookup.get(vendor, {})
 
         try:
             kw_data = keyword_spike_lookup.get(vendor, {})
@@ -4006,10 +5104,13 @@ async def _upsert_churn_signals(
                     source_distribution, sample_review_ids,
                     review_window_start, review_window_end,
                     confidence_score,
+                    insider_signal_count, insider_org_health_summary,
+                    insider_talent_drain_rate, insider_quotable_evidence,
                     last_computed_at
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
                           $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
-                          $22, $23, $24, $25, $26, $27, $28, $29, $30)
+                          $22, $23, $24, $25, $26, $27, $28, $29,
+                          $30, $31, $32, $33, $34)
                 ON CONFLICT (vendor_name, COALESCE(product_category, '')) DO UPDATE SET
                     total_reviews = EXCLUDED.total_reviews,
                     negative_reviews = EXCLUDED.negative_reviews,
@@ -4038,6 +5139,10 @@ async def _upsert_churn_signals(
                     review_window_start = EXCLUDED.review_window_start,
                     review_window_end = EXCLUDED.review_window_end,
                     confidence_score = EXCLUDED.confidence_score,
+                    insider_signal_count = EXCLUDED.insider_signal_count,
+                    insider_org_health_summary = EXCLUDED.insider_org_health_summary,
+                    insider_talent_drain_rate = EXCLUDED.insider_talent_drain_rate,
+                    insider_quotable_evidence = EXCLUDED.insider_quotable_evidence,
                     last_computed_at = EXCLUDED.last_computed_at
                 """,
                 vendor,
@@ -4069,6 +5174,11 @@ async def _upsert_churn_signals(
                 prov.get("review_window_start"),
                 prov.get("review_window_end"),
                 signal_confidence,
+                # Insider aggregate columns (migration 133)
+                insider.get("signal_count", 0),
+                json.dumps(insider.get("org_health_summary", {})),
+                insider.get("talent_drain_rate"),
+                json.dumps(insider.get("quotable_evidence", [])[:5]),
                 now,
             )
         except Exception:
@@ -4416,6 +5526,39 @@ def _build_vendor_comparison_snapshot(
     }
 
 
+def _switching_triggers(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Extract common reasons customers leave a vendor, grouped by competitor.
+
+    Correlates pain categories with competitor mentions across review signals
+    to identify the primary driver behind each competitive displacement.
+    """
+    pain_by_competitor: dict[str, dict[str, int]] = {}
+    for s in signals:
+        for comp in s.get("competitors", []):
+            if not isinstance(comp, dict):
+                continue
+            cname = _canonicalize_competitor(str(comp.get("name", "")))
+            if not cname:
+                continue
+            for pain in _safe_json(s.get("pain_json")):
+                if isinstance(pain, dict) and pain.get("category"):
+                    cat = str(pain["category"])
+                    pain_by_competitor.setdefault(cname, {})
+                    pain_by_competitor[cname][cat] = pain_by_competitor[cname].get(cat, 0) + 1
+    triggers: list[dict[str, Any]] = []
+    for comp, pains in sorted(pain_by_competitor.items(), key=lambda x: -sum(x[1].values()))[:5]:
+        if not pains:
+            continue
+        top_pain = max(pains.items(), key=lambda x: x[1])
+        triggers.append({
+            "competitor": comp,
+            "primary_reason": top_pain[0],
+            "mention_count": top_pain[1],
+            "total_mentions": sum(pains.values()),
+        })
+    return triggers
+
+
 async def _fetch_vendor_head_to_head(
     pool,
     primary_vendor: str,
@@ -4515,14 +5658,80 @@ async def generate_vendor_comparison_report(
         {row["category"] for row in primary_snapshot["top_pain_categories"]} &
         {row["category"] for row in comparison_snapshot["top_pain_categories"]}
     )
+
+    # ── Competitive Benchmark enrichments ──────────────────────────
+
+    # Strengths/weaknesses from product profiles
+    profiles_raw = await _fetch_product_profiles(pool)
+    _profile_lookup: dict[str, dict] = {}
+    for pp in profiles_raw:
+        vn = _canonicalize_vendor(pp.get("vendor_name", ""))
+        if vn and vn not in _profile_lookup:
+            _profile_lookup[vn] = pp
+
+    def _extract_profile_list(vendor_name: str, field: str) -> list[dict[str, Any]]:
+        canon = _canonicalize_vendor(vendor_name)
+        raw = _profile_lookup.get(canon, {}).get(field) or []
+        if not isinstance(raw, list):
+            return []
+        return [
+            {"area": item.get("area", item) if isinstance(item, dict) else str(item),
+             "score": item.get("score") if isinstance(item, dict) else None}
+            for item in raw[:5]
+        ]
+
+    primary_strengths = _extract_profile_list(primary_name, "strengths")
+    primary_weaknesses = _extract_profile_list(primary_name, "weaknesses")
+    comparison_strengths = _extract_profile_list(comparison_name, "strengths")
+    comparison_weaknesses = _extract_profile_list(comparison_name, "weaknesses")
+
+    # Switching triggers from review data
+    primary_triggers = _switching_triggers(primary_rows)
+    comparison_triggers = _switching_triggers(comparison_rows)
+
+    # Trend analysis from prior comparison reports
+    trend_analysis = None
+    try:
+        prior_row = await pool.fetchrow("""
+            SELECT intelligence_data FROM b2b_intelligence
+            WHERE report_type = 'vendor_comparison'
+              AND vendor_filter = $1 AND category_filter = $2
+              AND report_date < $3
+            ORDER BY report_date DESC LIMIT 1
+        """, primary_name, comparison_name, today)
+        if prior_row and prior_row["intelligence_data"]:
+            prior_data = prior_row["intelligence_data"]
+            if isinstance(prior_data, str):
+                prior_data = json.loads(prior_data)
+            if isinstance(prior_data, dict):
+                prior_pm = prior_data.get("primary_metrics", {})
+                prior_cm = prior_data.get("comparison_metrics", {})
+                trend_analysis = {
+                    "primary_churn_density_change": round(
+                        primary_snapshot.get("churn_signal_density", 0) - float(prior_pm.get("churn_signal_density", 0)), 1),
+                    "comparison_churn_density_change": round(
+                        comparison_snapshot.get("churn_signal_density", 0) - float(prior_cm.get("churn_signal_density", 0)), 1),
+                    "primary_urgency_change": round(
+                        primary_snapshot.get("avg_urgency_score", 0) - float(prior_pm.get("avg_urgency_score", 0)), 1),
+                    "comparison_urgency_change": round(
+                        comparison_snapshot.get("avg_urgency_score", 0) - float(prior_cm.get("avg_urgency_score", 0)), 1),
+                    "prior_report_date": str(prior_data.get("report_date", "")),
+                }
+    except Exception:
+        logger.warning("Failed to fetch prior comparison for trend analysis")
+
+    # ── Assemble report ────────────────────────────────────────────
+
+    _snapshot_exclude = {"top_pain_categories", "top_competitors", "top_feature_gaps",
+                         "company_examples", "quote_highlights", "product_categories"}
     report_data = {
         "primary_vendor": primary_name,
         "comparison_vendor": comparison_name,
         "report_date": str(today),
         "window_days": window_days,
         "executive_summary": _build_vendor_comparison_summary(primary_snapshot, comparison_snapshot, head_to_head),
-        "primary_metrics": {k: v for k, v in primary_snapshot.items() if k not in {"top_pain_categories", "top_competitors", "top_feature_gaps", "company_examples", "quote_highlights", "product_categories"}},
-        "comparison_metrics": {k: v for k, v in comparison_snapshot.items() if k not in {"top_pain_categories", "top_competitors", "top_feature_gaps", "company_examples", "quote_highlights", "product_categories"}},
+        "primary_metrics": {k: v for k, v in primary_snapshot.items() if k not in _snapshot_exclude},
+        "comparison_metrics": {k: v for k, v in comparison_snapshot.items() if k not in _snapshot_exclude},
         "primary_top_pains": primary_snapshot["top_pain_categories"],
         "comparison_top_pains": comparison_snapshot["top_pain_categories"],
         "primary_top_competitors": primary_snapshot["top_competitors"],
@@ -4537,6 +5746,14 @@ async def generate_vendor_comparison_report(
         "comparison_quote_highlights": comparison_snapshot["quote_highlights"],
         "direct_displacement": head_to_head,
         "shared_pain_categories": shared_pains,
+        # Competitive Benchmark enrichments
+        "primary_strengths": primary_strengths,
+        "primary_weaknesses": primary_weaknesses,
+        "comparison_strengths": comparison_strengths,
+        "comparison_weaknesses": comparison_weaknesses,
+        "primary_switching_triggers": primary_triggers,
+        "comparison_switching_triggers": comparison_triggers,
+        "trend_analysis": trend_analysis,
     }
     if persist:
         row = await pool.fetchrow(
