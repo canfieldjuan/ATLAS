@@ -350,6 +350,298 @@ async def error_timeline(days: int = Query(default=30, ge=1, le=365)):
 
 
 # ---------------------------------------------------------------------------
+# Scraping observability
+# ---------------------------------------------------------------------------
+
+
+@router.get("/scraping/summary")
+async def scraping_summary(days: int = Query(default=7, ge=1, le=30)):
+    """
+    Scraping throughput, signal quality, and useful-review rates.
+
+    Throughput is grouped by source + vendor so you can see which targets
+    are producing signal vs noise.  Quality metrics come from b2b_reviews
+    using imported_at (when we scraped) not reviewed_at (when content was
+    originally posted).
+    """
+    pool = _pool_or_503()
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    # -- Throughput per source × vendor --
+    throughput_rows = await pool.fetch(
+        """
+        SELECT
+            l.source,
+            t.vendor_name,
+            COUNT(*)                                                    AS total_runs,
+            COUNT(*) FILTER (WHERE l.status = 'completed')             AS successes,
+            COUNT(*) FILTER (WHERE l.status = 'failed')                AS failures,
+            COUNT(*) FILTER (WHERE l.status = 'blocked')               AS blocked,
+            COUNT(*) FILTER (WHERE l.status = 'partial')               AS partial,
+            COALESCE(SUM(l.reviews_found), 0)                          AS reviews_found,
+            COALESCE(SUM(l.reviews_inserted), 0)                       AS reviews_inserted,
+            COALESCE(AVG(l.duration_ms), 0)                            AS avg_duration_ms,
+            COALESCE(SUM(l.captcha_attempts), 0)                       AS captcha_attempts,
+            COUNT(*) FILTER (WHERE l.block_type IS NOT NULL)           AS blocked_requests
+        FROM b2b_scrape_log l
+        JOIN b2b_scrape_targets t ON t.id = l.target_id
+        WHERE l.started_at >= $1
+        GROUP BY l.source, t.vendor_name
+        ORDER BY reviews_inserted DESC
+        """,
+        since,
+    )
+
+    # -- Signal quality from b2b_reviews (imported in period) --
+    quality_rows = await pool.fetch(
+        """
+        SELECT
+            source,
+            COUNT(*)                                                                           AS total_reviews,
+            COUNT(*) FILTER (WHERE (raw_metadata->>'source_weight')::numeric > 0.7)           AS high_signal_reviews,
+            COUNT(*) FILTER (WHERE enrichment_status = 'completed')                           AS enriched_reviews,
+            COUNT(*) FILTER (WHERE enrichment_status = 'failed')                              AS failed_enrichments,
+            ROUND(AVG((raw_metadata->>'source_weight')::numeric)::numeric, 3)                 AS avg_source_weight,
+            COUNT(*) FILTER (WHERE (raw_metadata->>'author_churn_score')::numeric >= 7)       AS high_value_authors
+        FROM b2b_reviews
+        WHERE imported_at >= $1
+        GROUP BY source
+        ORDER BY total_reviews DESC
+        """,
+        since,
+    )
+
+    # -- Today totals (quick headline numbers) --
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_row = await pool.fetchrow(
+        """
+        SELECT
+            COUNT(*)                                              AS runs_today,
+            COALESCE(SUM(reviews_inserted), 0)                   AS inserted_today,
+            COUNT(*) FILTER (WHERE status IN ('failed','blocked')) AS errors_today
+        FROM b2b_scrape_log
+        WHERE started_at >= $1
+        """,
+        today_start,
+    )
+
+    def _throughput(r: dict) -> dict:
+        found = int(r["reviews_found"])
+        inserted = int(r["reviews_inserted"])
+        runs = int(r["total_runs"])
+        return {
+            "source": r["source"],
+            "vendor_name": r["vendor_name"],
+            "total_runs": runs,
+            "successes": int(r["successes"]),
+            "failures": int(r["failures"]),
+            "blocked": int(r["blocked"]),
+            "partial": int(r["partial"]),
+            "reviews_found": found,
+            "reviews_inserted": inserted,
+            "insert_rate": round(inserted / found, 3) if found else 0.0,
+            "avg_duration_ms": round(float(r["avg_duration_ms"]), 1),
+            "captcha_attempts": int(r["captcha_attempts"]),
+            "blocked_requests": int(r["blocked_requests"]),
+        }
+
+    def _quality(r: dict) -> dict:
+        total = int(r["total_reviews"])
+        high = int(r["high_signal_reviews"])
+        enriched = int(r["enriched_reviews"])
+        return {
+            "source": r["source"],
+            "total_reviews": total,
+            "high_signal_reviews": high,
+            "high_signal_rate": round(high / total, 3) if total else 0.0,
+            "enriched_reviews": enriched,
+            "enrichment_rate": round(enriched / total, 3) if total else 0.0,
+            "failed_enrichments": int(r["failed_enrichments"]),
+            "avg_source_weight": float(r["avg_source_weight"] or 0),
+            "high_value_authors": int(r["high_value_authors"]),
+        }
+
+    return {
+        "period_days": days,
+        "today": {
+            "runs": int(today_row["runs_today"]),
+            "reviews_inserted": int(today_row["inserted_today"]),
+            "errors": int(today_row["errors_today"]),
+        },
+        "throughput": [_throughput(dict(r)) for r in throughput_rows],
+        "quality": [_quality(dict(r)) for r in quality_rows],
+    }
+
+
+@router.get("/scraping/details")
+async def scraping_details(
+    limit: int = Query(default=50, ge=1, le=200),
+    source: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+):
+    """
+    Recent scrape log entries with full debug detail: errors, duration,
+    captcha telemetry, block types, and parser version.
+
+    Filter by source (reddit, g2, …) or status (completed, failed, blocked, partial).
+    """
+    pool = _pool_or_503()
+
+    conditions = []
+    params: list = [limit]
+    idx = 2
+
+    if source:
+        conditions.append(f"l.source = ${idx}")
+        params.append(source)
+        idx += 1
+    if status:
+        conditions.append(f"l.status = ${idx}")
+        params.append(status)
+        idx += 1
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    rows = await pool.fetch(
+        f"""
+        SELECT
+            l.id,
+            l.source,
+            l.status,
+            l.reviews_found,
+            l.reviews_inserted,
+            l.pages_scraped,
+            l.duration_ms,
+            l.errors,
+            l.started_at,
+            l.captcha_attempts,
+            l.captcha_types,
+            l.captcha_solve_ms,
+            l.block_type,
+            l.parser_version,
+            l.proxy_type,
+            jsonb_array_length(l.errors)            AS error_count,
+            t.vendor_name,
+            t.product_name,
+            t.product_slug
+        FROM b2b_scrape_log l
+        JOIN b2b_scrape_targets t ON t.id = l.target_id
+        {where}
+        ORDER BY l.started_at DESC
+        LIMIT $1
+        """,
+        *params,
+    )
+
+    return {
+        "scrapes": [
+            {
+                "id": str(r["id"]),
+                "source": r["source"],
+                "status": r["status"],
+                "vendor_name": r["vendor_name"],
+                "product_name": r["product_name"],
+                "product_slug": r["product_slug"],
+                "reviews_found": r["reviews_found"],
+                "reviews_inserted": r["reviews_inserted"],
+                "insert_rate": (
+                    round(r["reviews_inserted"] / r["reviews_found"], 3)
+                    if r["reviews_found"] else 0.0
+                ),
+                "pages_scraped": r["pages_scraped"],
+                "duration_ms": r["duration_ms"],
+                "error_count": int(r["error_count"] or 0),
+                "errors": r["errors"] if isinstance(r["errors"], list) else [],
+                "captcha_attempts": r["captcha_attempts"] or 0,
+                "captcha_types": r["captcha_types"] or [],
+                "captcha_solve_ms": r["captcha_solve_ms"],
+                "block_type": r["block_type"],
+                "parser_version": r["parser_version"],
+                "proxy_type": r["proxy_type"],
+                "started_at": r["started_at"].isoformat() if r["started_at"] else None,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/scraping/top-posts")
+async def scraping_top_posts(
+    limit: int = Query(default=25, ge=1, le=100),
+    source: str = Query(default="reddit"),
+    min_weight: float = Query(default=0.6, ge=0.0, le=1.0),
+):
+    """
+    High-value scraped posts filtered by source_weight, trending score,
+    or author churn score.  Useful for spot-checking signal quality and
+    validating that the enrichment pipeline is working on the right posts.
+
+    Ordered by source_weight DESC then imported_at DESC.
+    """
+    pool = _pool_or_503()
+
+    rows = await pool.fetch(
+        """
+        SELECT
+            id,
+            source,
+            vendor_name,
+            summary,
+            source_url,
+            reviewed_at,
+            imported_at,
+            enrichment_status,
+            (raw_metadata->>'source_weight')::numeric                        AS source_weight,
+            raw_metadata->>'trending_score'                                  AS trending_score,
+            (raw_metadata->>'author_churn_score')::numeric                   AS author_churn_score,
+            raw_metadata->>'subreddit'                                       AS subreddit,
+            (raw_metadata->>'score')::int                                    AS reddit_score,
+            (raw_metadata->>'num_comments')::int                             AS num_comments,
+            raw_metadata->>'post_flair'                                      AS post_flair,
+            (raw_metadata->>'is_edited')::boolean                            AS is_edited,
+            (raw_metadata->>'is_crosspost')::boolean                         AS is_crosspost,
+            COALESCE(jsonb_array_length(raw_metadata->'comment_threads'), 0) AS comment_count
+        FROM b2b_reviews
+        WHERE source = $1
+          AND (raw_metadata->>'source_weight')::numeric >= $2
+        ORDER BY (raw_metadata->>'source_weight')::numeric DESC NULLS LAST,
+                 imported_at DESC
+        LIMIT $3
+        """,
+        source,
+        min_weight,
+        limit,
+    )
+
+    return {
+        "source": source,
+        "min_weight": min_weight,
+        "posts": [
+            {
+                "id": str(r["id"]),
+                "vendor_name": r["vendor_name"],
+                "summary": r["summary"],
+                "source_url": r["source_url"],
+                "reviewed_at": r["reviewed_at"].isoformat() if r["reviewed_at"] else None,
+                "imported_at": r["imported_at"].isoformat() if r["imported_at"] else None,
+                "enrichment_status": r["enrichment_status"],
+                "source_weight": float(r["source_weight"] or 0),
+                "trending_score": r["trending_score"],
+                "author_churn_score": float(r["author_churn_score"] or 0),
+                "subreddit": r["subreddit"],
+                "reddit_score": r["reddit_score"],
+                "num_comments": r["num_comments"],
+                "post_flair": r["post_flair"],
+                "is_edited": r["is_edited"] or False,
+                "is_crosspost": r["is_crosspost"] or False,
+                "comment_count": int(r["comment_count"]),
+            }
+            for r in rows
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
 # System resources (CPU + RAM + network + GPU)
 # ---------------------------------------------------------------------------
 
