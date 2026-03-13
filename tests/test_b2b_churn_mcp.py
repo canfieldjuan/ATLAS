@@ -26,6 +26,7 @@ for _heavy_mod in [
     "uvicorn", "anyio",
     "httpx", "httpx_sse",
     "pydantic_settings",
+    "curl_cffi", "curl_cffi.requests",
 ]:
     sys.modules.setdefault(_heavy_mod, MagicMock())
 
@@ -65,11 +66,13 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _mock_pool(fetch_return=None, fetchrow_return=None):
+def _mock_pool(fetch_return=None, fetchrow_return=None, fetchval_return=None):
     pool = MagicMock()
     pool.is_initialized = True
     pool.fetch = AsyncMock(return_value=fetch_return or [])
     pool.fetchrow = AsyncMock(return_value=fetchrow_return)
+    pool.fetchval = AsyncMock(return_value=fetchval_return)
+    pool.execute = AsyncMock(return_value=None)
     return pool
 
 
@@ -98,6 +101,17 @@ def _make_churn_signal(**kwargs) -> dict:
         "top_feature_gaps": ["reporting", "automation"],
         "company_churn_list": [{"company": "Acme Corp", "urgency": 9}],
         "quotable_evidence": ["Too expensive for what you get"],
+        "top_use_cases": None,
+        "top_integration_stacks": None,
+        "budget_signal_summary": None,
+        "sentiment_distribution": None,
+        "buyer_authority_summary": None,
+        "timeline_summary": None,
+        "source_distribution": None,
+        "sample_review_ids": [],
+        "review_window_start": None,
+        "review_window_end": None,
+        "confidence_score": Decimal("0.85"),
         "last_computed_at": datetime(2026, 2, 28, 12, 0, tzinfo=timezone.utc),
         "created_at": datetime(2026, 2, 28, 12, 0, tzinfo=timezone.utc),
     }
@@ -154,6 +168,13 @@ def _make_high_intent_row(**kwargs) -> dict:
         "pain": "pricing",
         "alternatives": [{"name": "Freshdesk"}],
         "value_signal": "mid_market",
+        "seat_count": None,
+        "lock_in_level": None,
+        "contract_end": None,
+        "buying_stage": None,
+        "reviewer_title": "VP Operations",
+        "company_size_raw": "201-500",
+        "industry": "SaaS",
     }
 
 
@@ -380,12 +401,20 @@ class TestB2BChurnMCPTools:
 
         signal = _make_churn_signal()
         counts_row = {"total_reviews": 120, "pending_enrichment": 5, "enriched": 115}
-        hi_row = {"reviewer_company": "Acme Corp", "urgency": Decimal("9"), "pain": "pricing"}
+        hi_row = {
+            "reviewer_company": "Acme Corp",
+            "urgency": Decimal("9"),
+            "pain": "pricing",
+            "reviewer_title": "VP Operations",
+            "company_size_raw": "201-500",
+            "industry": "SaaS",
+        }
         pain_row = {"pain": "pricing", "cnt": 25}
 
         pool = _mock_pool()
         pool.fetchrow = AsyncMock(side_effect=[signal, counts_row])
-        pool.fetch = AsyncMock(side_effect=[[hi_row], [pain_row]])
+        # side_effect order: hi_rows fetch, pain_rows fetch, _apply_field_overrides fetch
+        pool.fetch = AsyncMock(side_effect=[[hi_row], [pain_row], []])
 
         with _patch_pool(pool):
             raw = await get_vendor_profile(vendor_name="Zendesk")
@@ -512,6 +541,9 @@ class TestB2BChurnMCPTools:
             "intent_to_leave": True,
             "decision_maker": True,
             "enriched_at": datetime(2026, 2, 21, tzinfo=timezone.utc),
+            "reviewer_title": "VP Operations",
+            "company_size_raw": "201-500",
+            "industry": "SaaS",
         }
         pool = _mock_pool(fetch_return=[row])
 
@@ -716,3 +748,226 @@ class TestB2BChurnMCPTools:
         assert "error" in data
         assert data["targets"] == []
         assert data["count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for surgical fixes
+# ---------------------------------------------------------------------------
+
+
+class TestNoduplicateToolDefinitions:
+    """Meta-regression: fail fast if known-duplicate tools are reintroduced."""
+
+    def test_trigger_score_calibration_defined_once(self):
+        import ast
+        import pathlib
+
+        src = (pathlib.Path(__file__).parent.parent /
+               "atlas_brain/mcp/b2b_churn_server.py").read_text()
+        tree = ast.parse(src)
+        names = [n.name for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef)]
+        count = names.count("trigger_score_calibration")
+        assert count == 1, (
+            f"trigger_score_calibration defined {count} times in b2b_churn_server.py "
+            "(expected exactly 1)"
+        )
+
+
+def _patch_calibrate(fake_fn):
+    """Patch the b2b_score_calibration module via sys.modules (import is inline)."""
+    import sys as _sys
+    mod = MagicMock()
+    mod.calibrate = fake_fn
+    return patch.dict(_sys.modules, {
+        "atlas_brain.autonomous": MagicMock(),
+        "atlas_brain.autonomous.tasks": MagicMock(),
+        "atlas_brain.autonomous.tasks.b2b_score_calibration": mod,
+    })
+
+
+@pytest.mark.asyncio
+class TestTriggerScoreCalibration:
+    async def test_response_shape(self):
+        from atlas_brain.mcp.b2b_churn_server import trigger_score_calibration
+
+        pool = _mock_pool()
+        calibrate_result = {"weights_updated": 3, "sequences_used": 42}
+
+        with _patch_pool(pool), _patch_calibrate(AsyncMock(return_value=calibrate_result)):
+            raw = await trigger_score_calibration(window_days=180)
+
+        data = json.loads(raw)
+        assert data["success"] is True
+        assert "window_days" in data
+        assert "triggered_by" in data
+        assert data["triggered_by"] == "mcp"
+
+    async def test_window_clamped_to_floor(self):
+        from atlas_brain.mcp.b2b_churn_server import trigger_score_calibration
+
+        pool = _mock_pool()
+        captured = {}
+
+        async def _fake_calibrate(pool, window_days):
+            captured["window_days"] = window_days
+            return {}
+
+        with _patch_pool(pool), _patch_calibrate(_fake_calibrate):
+            await trigger_score_calibration(window_days=1)
+
+        assert captured["window_days"] >= 30
+
+    async def test_window_clamped_to_ceiling(self):
+        from atlas_brain.mcp.b2b_churn_server import trigger_score_calibration
+
+        pool = _mock_pool()
+        captured = {}
+
+        async def _fake_calibrate(pool, window_days):
+            captured["window_days"] = window_days
+            return {}
+
+        with _patch_pool(pool), _patch_calibrate(_fake_calibrate):
+            await trigger_score_calibration(window_days=9999)
+
+        assert captured["window_days"] <= 730
+
+    async def test_db_not_ready(self):
+        from atlas_brain.mcp.b2b_churn_server import trigger_score_calibration
+
+        pool = _mock_pool()
+        pool.is_initialized = False
+
+        with _patch_pool(pool), _patch_calibrate(AsyncMock(return_value={})):
+            raw = await trigger_score_calibration()
+
+        data = json.loads(raw)
+        assert data.get("success") is False or "error" in data
+
+
+@pytest.mark.asyncio
+class TestGetParserHealth:
+    async def test_no_nameerror(self):
+        """Regression: _pool_or_fail must not be referenced."""
+        from atlas_brain.mcp.b2b_churn_server import get_parser_health
+
+        pool = _mock_pool(fetch_return=[])
+        with _patch_pool(pool):
+            raw = await get_parser_health()
+        # Must return valid JSON with expected shape (regression for _pool_or_fail NameError)
+        data = json.loads(raw)
+        assert data.get("success") is True
+        assert "sources" in data
+
+    async def test_db_not_ready(self):
+        from atlas_brain.mcp.b2b_churn_server import get_parser_health
+
+        pool = _mock_pool()
+        pool.is_initialized = False
+
+        with _patch_pool(pool):
+            raw = await get_parser_health()
+
+        data = json.loads(raw)
+        assert data.get("success") is False
+        assert "Database not ready" in data.get("error", "")
+
+    async def test_success_shape(self):
+        from atlas_brain.mcp.b2b_churn_server import get_parser_health
+
+        fake_row = {
+            "source": "reddit",
+            "parser_version": "reddit:3",
+            "review_count": 500,
+            "latest_version": "reddit:3",
+            "is_stale": False,
+        }
+        pool = _mock_pool(fetch_return=[fake_row])
+        with _patch_pool(pool):
+            raw = await get_parser_health()
+
+        data = json.loads(raw)
+        assert data["success"] is True
+        assert "sources" in data
+        assert "total_stale_reviews" in data
+        assert data["total_sources"] == 1
+
+
+@pytest.mark.asyncio
+class TestCreateDataCorrectionSuppressSource:
+    async def test_suppress_source_without_entity_id(self):
+        """suppress_source must succeed without a client-supplied UUID."""
+        from atlas_brain.mcp.b2b_churn_server import create_data_correction
+
+        inserted_row = {
+            "id": str(uuid4()),
+            "entity_type": "source",
+            "entity_id": str(uuid4()),
+            "correction_type": "suppress_source",
+            "status": "applied",
+            "created_at": datetime(2026, 3, 13, tzinfo=timezone.utc),
+        }
+        pool = _mock_pool(fetchrow_return=inserted_row)
+
+        with _patch_pool(pool):
+            raw = await create_data_correction(
+                entity_type="source",
+                entity_id="",  # client provides nothing
+                correction_type="suppress_source",
+                reason="Spam source",
+                metadata='{"source_name": "reddit"}',
+                corrected_by="test",
+            )
+
+        data = json.loads(raw)
+        assert data.get("success") is True, f"Expected success, got: {data}"
+        # Verify the deterministic sentinel UUID was passed to the INSERT
+        import uuid as _uuid_mod
+        expected_uuid = _uuid_mod.uuid5(_uuid_mod.NAMESPACE_DNS, "source:reddit")
+        call_args = pool.fetchrow.call_args
+        entity_uuid_arg = call_args[0][2]  # $2 in the INSERT: entity_id
+        assert entity_uuid_arg == expected_uuid, (
+            f"Sentinel UUID mismatch: got {entity_uuid_arg}, expected {expected_uuid}"
+        )
+
+    async def test_suppress_source_missing_source_name(self):
+        """suppress_source without metadata.source_name should fail gracefully."""
+        from atlas_brain.mcp.b2b_churn_server import create_data_correction
+
+        pool = _mock_pool()
+        with _patch_pool(pool):
+            raw = await create_data_correction(
+                entity_type="source",
+                entity_id="",
+                correction_type="suppress_source",
+                reason="Test",
+                metadata="{}",
+            )
+
+        data = json.loads(raw)
+        assert data.get("success") is False
+        assert "source_name" in data.get("error", "").lower()
+
+
+@pytest.mark.asyncio
+class TestGetDisplacementHistorySuppression:
+    async def test_suppression_predicate_in_query(self):
+        """get_displacement_history must include suppression filtering."""
+        from atlas_brain.mcp.b2b_churn_server import get_displacement_history
+
+        pool = _mock_pool(fetch_return=[])
+        with _patch_pool(pool):
+            await get_displacement_history(from_vendor="Salesforce", to_vendor="HubSpot")
+
+        call_args = pool.fetch.call_args
+        sql = call_args[0][0]
+        # The suppression predicate injects a NOT EXISTS subquery against data_corrections
+        assert "NOT EXISTS (SELECT 1 FROM data_corrections dc" in sql, (
+            "get_displacement_history SQL must include NOT EXISTS suppression subquery"
+        )
+        assert "dc.correction_type = 'suppress'" in sql, (
+            "suppression predicate must check correction_type = 'suppress'"
+        )
+        assert "dc.status = 'applied'" in sql, (
+            "suppression predicate must check status = 'applied'"
+        )
