@@ -48,6 +48,7 @@ from .prospects import router as prospects_router
 from .b2b_vendor_briefing import router as b2b_vendor_briefing_router
 from .b2b_crm_events import router as b2b_crm_events_router
 from .admin_costs import router as admin_costs_router
+from .universal_scrape import router as universal_scrape_router
 
 # Main router that aggregates all sub-routers
 router = APIRouter()
@@ -96,3 +97,4 @@ router.include_router(prospects_router)
 router.include_router(b2b_vendor_briefing_router)
 router.include_router(b2b_crm_events_router)
 router.include_router(admin_costs_router)
+router.include_router(universal_scrape_router)

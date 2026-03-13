@@ -2361,6 +2361,21 @@ class CRMEventConfig(BaseSettings):
     )
 
 
+class UniversalScrapeConfig(BaseSettings):
+    """Universal web scraper configuration (data-agnostic LLM extraction)."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_UNIVERSAL_SCRAPE_", env_file=".env", extra="ignore"
+    )
+
+    enabled: bool = Field(default=True, description="Enable universal scraper")
+    default_concurrency: int = Field(default=3, ge=1, le=10, description="Default concurrent targets per job")
+    default_llm_workload: str = Field(default="triage", description="Default LLM workload tier for extraction")
+    max_pages_limit: int = Field(default=100, ge=1, description="Hard ceiling on pages per target")
+    html_max_chars: int = Field(default=30000, description="Max chars of cleaned HTML sent to LLM")
+    config_dir: str = Field(default="scrape_configs", description="Directory for JSON config files on disk")
+
+
 class B2BScrapeConfig(BaseSettings):
     """B2B review scraping pipeline configuration."""
 
@@ -2696,6 +2711,8 @@ class MCPConfig(BaseSettings):
     invoicing_port: int = Field(default=8060, description="Port for Invoicing MCP server (SSE transport)")
     intelligence_port: int = Field(default=8061, description="Port for Intelligence MCP server (SSE transport)")
     b2b_churn_port: int = Field(default=8062, description="Port for B2B Churn Intelligence MCP server (SSE transport)")
+    scraper_enabled: bool = Field(default=True, description="Enable Universal Scraper MCP server")
+    scraper_port: int = Field(default=8063, description="Port for Universal Scraper MCP server (SSE transport)")
 
 
 class AlertMonitorConfig(BaseSettings):
@@ -3101,6 +3118,7 @@ class Settings(BaseSettings):
     b2b_webhook: B2BWebhookConfig = Field(default_factory=B2BWebhookConfig)
     crm_event: CRMEventConfig = Field(default_factory=CRMEventConfig)
     b2b_scrape: B2BScrapeConfig = Field(default_factory=B2BScrapeConfig)
+    universal_scrape: UniversalScrapeConfig = Field(default_factory=UniversalScrapeConfig)
     b2b_campaign: B2BCampaignConfig = Field(default_factory=B2BCampaignConfig)
     campaign_sequence: CampaignSequenceConfig = Field(default_factory=CampaignSequenceConfig)
     seller_campaign: AmazonSellerCampaignConfig = Field(default_factory=AmazonSellerCampaignConfig)
