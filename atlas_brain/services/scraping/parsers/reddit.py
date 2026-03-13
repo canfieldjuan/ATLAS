@@ -19,6 +19,13 @@ Enhancements (v2):
   - Time-based trending score (low/medium/high vs 30-day baseline)
   - Expanded subreddits and churn qualifiers
   - Semaphore-based parallelism with rate-limit backoff
+
+Enhancements (v3):
+  - Precision-first query builder: no bare vendor_name in subreddit searches
+  - _build_queries returns ordered exact/churn/evaluation variants
+  - _global_queries replaces raw _CHURN_QUALIFIERS loops in both scrape paths
+  - Public fallback uses [:1] subreddit query and [:2] global queries to stay under 10 req/min
+  - Cleaned _CHURN_QUALIFIERS: removed non-churn noise terms (RFQ, procurement, budget approval, pilot)
 """
 
 from __future__ import annotations
@@ -53,11 +60,14 @@ _DEFAULT_SUBREDDITS = [
     "EnterpriseIT", "business", "softwarearchitecture",
 ]
 
-# Churn qualifiers for global search
+# Churn qualifiers for global search (exact phrase → vendor, e.g. "switching from Salesforce")
 _CHURN_QUALIFIERS = [
-    "switching from", "alternative to", "replacing",
-    "migrating from", "moved away from", "leaving",
-    "RFQ", "procurement", "budget approval", "pilot",
+    "switching from",
+    "alternative to",
+    "replacing",
+    "migrating from",
+    "moved away from",
+    "leaving",
 ]
 
 # Flair → source_weight boost
@@ -179,7 +189,7 @@ class RedditParser:
 
     source_name = "reddit"
     prefer_residential = False  # No proxy needed
-    version = "reddit:2"
+    version = "reddit:3"
 
     def __init__(self) -> None:
         self._token: str | None = None
@@ -320,8 +330,7 @@ class RedditParser:
                 await asyncio.sleep(0.3)
 
             # ---- Strategy 2: global churn-qualifier search ----
-            for qualifier in _CHURN_QUALIFIERS:
-                query = f'"{qualifier} {target.vendor_name}"'
+            for query in self._global_queries(target.vendor_name):
                 url = (
                     f"https://oauth.reddit.com/search"
                     f"?q={quote_plus(query)}&sort=new&limit=100&t=all"
@@ -398,14 +407,30 @@ class RedditParser:
 
     def _build_queries(self, vendor_name: str) -> list[str]:
         """
-        Build search queries for a vendor.
-        Returns vendor name + key churn variant queries.
+        Build subreddit-scoped search queries for a vendor.
+
+        Precision-first: start with an exact quoted match so that subreddit
+        searches stay on-topic.  No bare vendor_name (too noisy in broad subs).
+
+        Returns ordered list — callers may slice to [:1] for tightest mode.
+        """
+        q = vendor_name
+        return [
+            f'"{q}"',                                               # exact name
+            f'"{q}" switching OR migrating OR replacing',          # churn intent
+            f'"{q}" alternative OR "moved away" OR left',          # evaluation intent
+        ]
+
+    def _global_queries(self, vendor_name: str) -> list[str]:
+        """
+        Build global (cross-Reddit) churn-phrase searches.
+
+        Each entry is a complete query string; callers may slice to limit
+        request volume.  Uses _CHURN_QUALIFIERS — never bare vendor_name.
         """
         return [
-            vendor_name,
-            f"{vendor_name} migrating OR replacing",
-            f"{vendor_name} alternative OR switching",
-            f"{vendor_name} CTO OR budget OR procurement",
+            f'"{qualifier} {vendor_name}"'
+            for qualifier in _CHURN_QUALIFIERS
         ]
 
     # ------------------------------------------------------------------
@@ -574,13 +599,15 @@ class RedditParser:
         pages_scraped = 0
         seen_ids: set[str] = set()
 
-        vendor_encoded = quote_plus(target.vendor_name)
+        # Public mode: one query variant per subreddit (exact quoted name only)
+        # to keep request volume tight (10 req/min limit).
+        subreddit_query = self._build_queries(target.vendor_name)[0]
 
         for sub in subreddits[:target.max_pages]:
             sub_encoded = quote_plus(sub)
             url = (
                 f"https://www.reddit.com/search.json"
-                f"?q={vendor_encoded}+subreddit:{sub_encoded}&sort=new&limit=25&t=year"
+                f"?q={quote_plus(subreddit_query)}+subreddit:{sub_encoded}&sort=new&limit=25&t=year"
             )
 
             try:
@@ -631,9 +658,8 @@ class RedditParser:
                 errors.append(f"r/{sub}: {exc}")
                 logger.warning("Reddit scrape failed for r/%s: %s", sub, exc)
 
-        # Also run global churn-qualifier searches in public mode
-        for qualifier in _CHURN_QUALIFIERS[:4]:  # limit to top 4 in public mode
-            query = f'"{qualifier} {target.vendor_name}"'
+        # Global churn-phrase searches in public mode — top 2 only to stay under rate limit
+        for query in self._global_queries(target.vendor_name)[:2]:
             url = (
                 f"https://www.reddit.com/search.json"
                 f"?q={quote_plus(query)}&sort=new&limit=25&t=year"
@@ -658,7 +684,7 @@ class RedditParser:
                             reviews.append(review)
                 await asyncio.sleep(1.5)
             except Exception as exc:
-                errors.append(f"public global q={qualifier}: {exc}")
+                errors.append(f"public global q={query}: {exc}")
 
         logger.info(
             "Reddit public scrape for %s: %d reviews from %d subreddits",
