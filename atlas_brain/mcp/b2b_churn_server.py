@@ -185,6 +185,8 @@ async def list_churn_signals(
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"success": False, "error": "Database not ready"})
         conditions = []
         params = []
         idx = 1
@@ -268,6 +270,8 @@ async def get_churn_signal(
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"success": False, "error": "Database not ready"})
 
         if product_category:
             row = await pool.fetchrow(
@@ -362,6 +366,8 @@ async def list_high_intent_companies(
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"success": False, "error": "Database not ready"})
         conditions = [
             "enrichment_status = 'enriched'",
             "(enrichment->>'urgency_score')::numeric >= $1",
@@ -458,6 +464,8 @@ async def get_vendor_profile(vendor_name: str) -> str:
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"success": False, "error": "Database not ready"})
         vname = vendor_name.strip()
 
         # Churn signal
@@ -605,6 +613,8 @@ async def list_reports(
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"success": False, "error": "Database not ready"})
         conditions = []
         params = []
         idx = 1
@@ -673,6 +683,8 @@ async def get_report(report_id: str) -> str:
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"success": False, "error": "Database not ready"})
         row = await pool.fetchrow(
             "SELECT * FROM b2b_intelligence WHERE id = $1",
             _uuid.UUID(report_id),
@@ -735,6 +747,8 @@ async def search_reviews(
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"success": False, "error": "Database not ready"})
         conditions = [
             "enrichment_status = 'enriched'",
             "enriched_at > NOW() - make_interval(days => $1)",
@@ -836,6 +850,8 @@ async def get_review(review_id: str) -> str:
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"success": False, "error": "Database not ready"})
         rid = _uuid.UUID(review_id)
         row = await pool.fetchrow(
             "SELECT * FROM b2b_reviews WHERE id = $1",
@@ -902,6 +918,8 @@ async def get_pipeline_status() -> str:
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"success": False, "error": "Database not ready"})
 
         # Enrichment counts by status
         _rev_sup = _suppress_predicate('review')
@@ -970,6 +988,8 @@ async def get_parser_version_status() -> str:
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"success": False, "error": "Database not ready"})
         parsers = get_all_parsers()
         sources = []
         for source_name, parser in sorted(parsers.items()):
@@ -3785,7 +3805,9 @@ async def create_data_correction(
         pool = get_db_pool()
         import uuid as _u
         entity_uuid = _u.UUID(entity_id)
-        meta_json = metadata if metadata else "{}"
+        # Use the already-validated meta_dict (normalised, no extra whitespace/fields)
+        # rather than the raw input string so stored JSONB is canonical.
+        meta_json = json.dumps(meta_dict) if meta_dict else "{}"
 
         row = await pool.fetchrow(
             """

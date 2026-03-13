@@ -66,11 +66,13 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _mock_pool(fetch_return=None, fetchrow_return=None):
+def _mock_pool(fetch_return=None, fetchrow_return=None, fetchval_return=None):
     pool = MagicMock()
     pool.is_initialized = True
     pool.fetch = AsyncMock(return_value=fetch_return or [])
     pool.fetchrow = AsyncMock(return_value=fetchrow_return)
+    pool.fetchval = AsyncMock(return_value=fetchval_return)
+    pool.execute = AsyncMock(return_value=None)
     return pool
 
 
@@ -99,6 +101,17 @@ def _make_churn_signal(**kwargs) -> dict:
         "top_feature_gaps": ["reporting", "automation"],
         "company_churn_list": [{"company": "Acme Corp", "urgency": 9}],
         "quotable_evidence": ["Too expensive for what you get"],
+        "top_use_cases": None,
+        "top_integration_stacks": None,
+        "budget_signal_summary": None,
+        "sentiment_distribution": None,
+        "buyer_authority_summary": None,
+        "timeline_summary": None,
+        "source_distribution": None,
+        "sample_review_ids": [],
+        "review_window_start": None,
+        "review_window_end": None,
+        "confidence_score": Decimal("0.85"),
         "last_computed_at": datetime(2026, 2, 28, 12, 0, tzinfo=timezone.utc),
         "created_at": datetime(2026, 2, 28, 12, 0, tzinfo=timezone.utc),
     }
@@ -155,6 +168,13 @@ def _make_high_intent_row(**kwargs) -> dict:
         "pain": "pricing",
         "alternatives": [{"name": "Freshdesk"}],
         "value_signal": "mid_market",
+        "seat_count": None,
+        "lock_in_level": None,
+        "contract_end": None,
+        "buying_stage": None,
+        "reviewer_title": "VP Operations",
+        "company_size_raw": "201-500",
+        "industry": "SaaS",
     }
 
 
@@ -381,12 +401,20 @@ class TestB2BChurnMCPTools:
 
         signal = _make_churn_signal()
         counts_row = {"total_reviews": 120, "pending_enrichment": 5, "enriched": 115}
-        hi_row = {"reviewer_company": "Acme Corp", "urgency": Decimal("9"), "pain": "pricing"}
+        hi_row = {
+            "reviewer_company": "Acme Corp",
+            "urgency": Decimal("9"),
+            "pain": "pricing",
+            "reviewer_title": "VP Operations",
+            "company_size_raw": "201-500",
+            "industry": "SaaS",
+        }
         pain_row = {"pain": "pricing", "cnt": 25}
 
         pool = _mock_pool()
         pool.fetchrow = AsyncMock(side_effect=[signal, counts_row])
-        pool.fetch = AsyncMock(side_effect=[[hi_row], [pain_row]])
+        # side_effect order: hi_rows fetch, pain_rows fetch, _apply_field_overrides fetch
+        pool.fetch = AsyncMock(side_effect=[[hi_row], [pain_row], []])
 
         with _patch_pool(pool):
             raw = await get_vendor_profile(vendor_name="Zendesk")
@@ -513,6 +541,9 @@ class TestB2BChurnMCPTools:
             "intent_to_leave": True,
             "decision_maker": True,
             "enriched_at": datetime(2026, 2, 21, tzinfo=timezone.utc),
+            "reviewer_title": "VP Operations",
+            "company_size_raw": "201-500",
+            "industry": "SaaS",
         }
         pool = _mock_pool(fetch_return=[row])
 
@@ -823,8 +854,10 @@ class TestGetParserHealth:
         pool = _mock_pool(fetch_return=[])
         with _patch_pool(pool):
             raw = await get_parser_health()
-        # As long as it didn't raise NameError, we're good
-        assert raw  # returns something
+        # Must return valid JSON with expected shape (regression for _pool_or_fail NameError)
+        data = json.loads(raw)
+        assert data.get("success") is True
+        assert "sources" in data
 
     async def test_db_not_ready(self):
         from atlas_brain.mcp.b2b_churn_server import get_parser_health
@@ -888,6 +921,14 @@ class TestCreateDataCorrectionSuppressSource:
 
         data = json.loads(raw)
         assert data.get("success") is True, f"Expected success, got: {data}"
+        # Verify the deterministic sentinel UUID was passed to the INSERT
+        import uuid as _uuid_mod
+        expected_uuid = _uuid_mod.uuid5(_uuid_mod.NAMESPACE_DNS, "source:reddit")
+        call_args = pool.fetchrow.call_args
+        entity_uuid_arg = call_args[0][2]  # $2 in the INSERT: entity_id
+        assert entity_uuid_arg == expected_uuid, (
+            f"Sentinel UUID mismatch: got {entity_uuid_arg}, expected {expected_uuid}"
+        )
 
     async def test_suppress_source_missing_source_name(self):
         """suppress_source without metadata.source_name should fail gracefully."""
@@ -921,6 +962,12 @@ class TestGetDisplacementHistorySuppression:
         call_args = pool.fetch.call_args
         sql = call_args[0][0]
         # The suppression predicate injects a NOT EXISTS subquery against data_corrections
-        assert "data_corrections" in sql or "NOT EXISTS" in sql, (
-            "get_displacement_history SQL must include suppression predicate"
+        assert "NOT EXISTS (SELECT 1 FROM data_corrections dc" in sql, (
+            "get_displacement_history SQL must include NOT EXISTS suppression subquery"
+        )
+        assert "dc.correction_type = 'suppress'" in sql, (
+            "suppression predicate must check correction_type = 'suppress'"
+        )
+        assert "dc.status = 'applied'" in sql, (
+            "suppression predicate must check status = 'applied'"
         )
