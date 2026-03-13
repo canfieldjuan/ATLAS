@@ -737,7 +737,8 @@ async def reddit_overview(days: int = Query(default=7, ge=1, le=30)):
 
     # Derive auth mode from the most common parser version seen in this window
     dominant = log_row["dominant_parser"] or ""
-    auth_mode = "oauth2" if "reddit:2" in dominant else ("public" if dominant else "unknown")
+    # reddit:2+ = OAuth2 (authenticated API); reddit:1 = public fallback
+    auth_mode = "oauth2" if any(v in dominant for v in ("reddit:2", "reddit:3")) else ("public" if dominant else "unknown")
 
     reviews_found    = int(log_row["reviews_found"])
     reviews_inserted = int(log_row["reviews_inserted"])
