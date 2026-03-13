@@ -36,3 +36,7 @@ CREATE TABLE IF NOT EXISTS universal_scrape_results (
 
 CREATE INDEX IF NOT EXISTS idx_usr_job ON universal_scrape_results(job_id);
 CREATE INDEX IF NOT EXISTS idx_usr_url ON universal_scrape_results(target_url);
+
+-- Prevent duplicate result rows for the same page in the same job
+CREATE UNIQUE INDEX IF NOT EXISTS idx_usr_dedupe
+    ON universal_scrape_results(job_id, target_url, page_number);

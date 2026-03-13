@@ -164,6 +164,10 @@ async def scrape_multi(
 ) -> str:
     """Scrape multiple URLs in parallel with the same extraction schema.
 
+    For 4+ URLs or multi-page jobs, runs asynchronously and returns the
+    job_id. Use get_scrape_job and get_scrape_results to poll for completion.
+    For 1-3 single-page URLs, runs synchronously and returns data inline.
+
     Args:
         urls: Comma-separated list of URLs to scrape.
         extract: What to extract (natural language).
@@ -193,7 +197,25 @@ async def scrape_multi(
 
     try:
         scraper = get_universal_scraper()
-        job_id = await scraper.run_job_sync(config)
+
+        # Small jobs run sync, large jobs run async
+        is_small = len(url_list) <= 3
+        if is_small:
+            job_id = await scraper.run_job_sync(config)
+        else:
+            job_id = await scraper.run_job(config)
+            return json.dumps(
+                {
+                    "job_id": str(job_id),
+                    "status": "running",
+                    "message": (
+                        f"Job submitted with {len(url_list)} targets. "
+                        "Use get_scrape_job and get_scrape_results to poll."
+                    ),
+                    "total_targets": len(url_list),
+                },
+                default=str,
+            )
 
         pool = get_db_pool()
         job = await pool.fetchrow(

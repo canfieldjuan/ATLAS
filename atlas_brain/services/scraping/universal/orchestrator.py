@@ -253,30 +253,48 @@ class UniversalScraper:
                     break
 
             t0 = time.monotonic()
+            html: str | None = None
+            page_error: str | None = None
+            items: list[dict] = []
+            raw_llm = ""
+            page_title: str | None = None
 
-            # 1. Fetch
-            html = await self._fetch_page(current_url, target, domain)
-
-            # 2. Clean
-            text = html_to_text(html, max_chars=max_chars)
-            if not text or len(text.strip()) < 50:
-                logger.info(
-                    "Page %d of %s has insufficient content, stopping",
-                    page_num,
-                    target.url,
+            try:
+                # 1. Fetch (with timeout)
+                html = await asyncio.wait_for(
+                    self._fetch_page(current_url, target, domain),
+                    timeout=120,  # 2 minute hard timeout per page
                 )
-                break
 
-            # 3. Title
-            page_title = self._extract_title(html)
+                # 2. Clean
+                text = html_to_text(html, max_chars=max_chars)
+                if not text or len(text.strip()) < 50:
+                    logger.info(
+                        "Page %d of %s has insufficient content",
+                        page_num,
+                        target.url,
+                    )
+                    page_error = "insufficient_content"
+                else:
+                    # 3. Title
+                    page_title = self._extract_title(html)
 
-            # 4. LLM extraction
-            items, raw_llm = await extract_from_text(
-                text,
-                config.schema_def,
-                workload=config.llm_workload,
-                max_tokens=config.llm_max_tokens,
-            )
+                    # 4. LLM extraction
+                    items, raw_llm = await extract_from_text(
+                        text,
+                        config.schema_def,
+                        workload=config.llm_workload,
+                        max_tokens=config.llm_max_tokens,
+                    )
+
+            except asyncio.TimeoutError:
+                page_error = "fetch_timeout"
+                logger.warning("Fetch timeout on page %d of %s", page_num, current_url)
+            except Exception as exc:
+                page_error = str(exc)
+                logger.warning(
+                    "Page %d of %s failed: %s", page_num, current_url, exc
+                )
 
             duration_ms = int((time.monotonic() - t0) * 1000)
 
@@ -285,8 +303,10 @@ class UniversalScraper:
                 """
                 INSERT INTO universal_scrape_results
                     (job_id, target_url, page_number, page_title,
-                     extracted_data, item_count, raw_llm_response, duration_ms)
-                VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)
+                     extracted_data, item_count, raw_llm_response,
+                     duration_ms, error)
+                VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)
+                ON CONFLICT (job_id, target_url, page_number) DO NOTHING
                 """,
                 job_id,
                 current_url,
@@ -296,10 +316,11 @@ class UniversalScraper:
                 len(items),
                 raw_llm if config.store_raw_llm else None,
                 duration_ms,
+                page_error,
             )
             total_items += len(items)
 
-            # Track consecutive empty pages
+            # Track consecutive empty pages (errors count as empty)
             if not items:
                 consecutive_empty += 1
                 if consecutive_empty >= _CONSECUTIVE_EMPTY_THRESHOLD:
@@ -322,7 +343,7 @@ class UniversalScraper:
                     page=page_num + 1
                 )
             elif target.pagination.strategy == PaginationStrategy.CSS_SELECTOR:
-                if not target.pagination.css_selector:
+                if not target.pagination.css_selector or html is None:
                     break
                 next_url = extract_next_page_url(
                     html, target.pagination.css_selector, current_url
@@ -341,12 +362,20 @@ class UniversalScraper:
     async def _fetch_page(
         self, url: str, target: ScrapeTarget, domain: str
     ) -> str:
-        """Fetch page HTML using the configured client."""
+        """Fetch page HTML using the configured client.
+
+        Validates redirect targets to prevent SSRF via open redirects.
+        """
+        from .url_validation import validate_redirect_url
+
         if target.use_browser:
             browser = get_stealth_browser()
             result = await browser.scrape_page(
                 url, wait_for_selector=target.wait_for_selector
             )
+            # Browser may have followed redirects — validate final URL
+            if result.url and result.url != url:
+                validate_redirect_url(result.url, url)
             return result.html
 
         client = get_scrape_client()
@@ -357,6 +386,9 @@ class UniversalScraper:
             prefer_residential=target.prefer_residential,
             sticky_session=target.sticky_session,
         )
+        # curl_cffi may follow redirects — validate final URL
+        if hasattr(resp, "url") and resp.url and str(resp.url) != url:
+            validate_redirect_url(str(resp.url), url)
         return resp.text
 
     # ── Helpers ──────────────────────────────────────────────────────

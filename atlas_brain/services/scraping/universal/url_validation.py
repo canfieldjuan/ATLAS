@@ -129,3 +129,19 @@ def _check_ip_safety(ip_str: str, original_hostname: str) -> None:
         raise UnsafeURLError(
             f"Blocked cloud metadata endpoint: {ip_str}"
         )
+    if addr.is_multicast:
+        raise UnsafeURLError(
+            f"Blocked multicast address: {ip_str} (hostname: {original_hostname})"
+        )
+
+
+def validate_redirect_url(redirect_url: str, original_url: str) -> str:
+    """Validate a redirect target URL.
+
+    Same rules as validate_url, but logs the redirect chain for auditing.
+    Raises ``UnsafeURLError`` if the redirect target is unsafe.
+    """
+    logger.info(
+        "Redirect: %s -> %s — validating target", original_url, redirect_url
+    )
+    return validate_url(redirect_url)
