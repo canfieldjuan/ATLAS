@@ -126,12 +126,17 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("Database migration check failed: %s", e)
 
-            # Reconcile orphaned universal scraper jobs from previous crashes
+            # Reconcile orphaned universal scraper jobs, then start worker
             try:
-                from .services.scraping.universal.orchestrator import reconcile_orphaned_jobs
+                from .services.scraping.universal.orchestrator import (
+                    get_universal_scraper,
+                    reconcile_orphaned_jobs,
+                )
                 await reconcile_orphaned_jobs()
+                scraper = get_universal_scraper()
+                await scraper.start_worker()
             except Exception as e:
-                logger.debug("Universal scraper reconciliation skipped: %s", e)
+                logger.debug("Universal scraper startup skipped: %s", e)
 
         except Exception as e:
             logger.error("Failed to initialize database: %s", e)
@@ -575,6 +580,13 @@ async def lifespan(app: FastAPI):
 
     # --- Shutdown ---
     logger.info("Atlas Brain shutting down...")
+
+    # Stop universal scraper worker
+    try:
+        from .services.scraping.universal.orchestrator import get_universal_scraper
+        await get_universal_scraper().stop_worker()
+    except Exception as e:
+        logger.debug("Universal scraper worker stop skipped: %s", e)
 
     # NOTE: Presence service runs in atlas_vision, no local shutdown needed
 

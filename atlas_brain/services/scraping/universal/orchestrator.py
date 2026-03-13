@@ -4,8 +4,10 @@ Multi-target parallel scrape orchestrator.
 Manages the full job lifecycle: DB record creation, concurrent target fan-out,
 pagination handling, result storage, and status updates.
 
-Supports real cancellation, durable job recovery on startup, and correct
-partial-failure status reporting.
+Uses a Postgres-backed worker loop (``FOR UPDATE SKIP LOCKED``) so that
+pending jobs survive process restarts and can be claimed by any worker.
+Cancellation is DB-authoritative — no in-memory state is needed, which
+means cancel signals work across processes.
 """
 
 from __future__ import annotations
@@ -32,37 +34,169 @@ logger = logging.getLogger("atlas.services.scraping.universal.orchestrator")
 # Prevents false early termination from a single bad page.
 _CONSECUTIVE_EMPTY_THRESHOLD = 2
 
+# How often (seconds) the worker loop polls for pending jobs.
+_WORKER_POLL_INTERVAL = 2.0
+
 
 class UniversalScraper:
-    """Orchestrates universal scrape jobs with parallel target execution."""
+    """Orchestrates universal scrape jobs with parallel target execution.
+
+    The worker loop (``start_worker`` / ``stop_worker``) polls Postgres for
+    pending jobs using ``FOR UPDATE SKIP LOCKED``, making job execution
+    durable across restarts and safe for multi-process deployments.
+
+    Cancellation is fully DB-based: ``cancel_job`` writes
+    ``status = 'cancelled'`` and every checkpoint reads the DB to detect it.
+    """
 
     def __init__(self) -> None:
-        # Track running jobs for real cancellation
-        self._cancelled: set[UUID] = set()
+        self._worker_task: asyncio.Task | None = None
+        self._shutdown_event = asyncio.Event()
+
+    # ── Worker loop ───────────────────────────────────────────────────
+
+    async def start_worker(self) -> None:
+        """Start the background worker that polls for pending jobs."""
+        if self._worker_task is not None:
+            return
+        self._shutdown_event.clear()
+        self._worker_task = asyncio.create_task(
+            self._worker_loop(), name="universal-scraper-worker"
+        )
+        logger.info("Universal scraper worker started")
+
+    async def stop_worker(self) -> None:
+        """Signal the worker to stop and wait for it to finish."""
+        if self._worker_task is None:
+            return
+        self._shutdown_event.set()
+        try:
+            await asyncio.wait_for(self._worker_task, timeout=30)
+        except asyncio.TimeoutError:
+            logger.warning("Worker did not stop within 30s, cancelling")
+            self._worker_task.cancel()
+            try:
+                await self._worker_task
+            except asyncio.CancelledError:
+                pass
+        self._worker_task = None
+        logger.info("Universal scraper worker stopped")
+
+    async def _worker_loop(self) -> None:
+        """Poll for pending jobs and execute them.
+
+        Uses ``FOR UPDATE SKIP LOCKED`` so multiple workers can safely
+        compete for jobs without double-processing.
+        """
+        while not self._shutdown_event.is_set():
+            try:
+                claimed = await self._claim_next_job()
+                if claimed:
+                    job_id, config = claimed
+                    try:
+                        await self._execute_job(job_id, config)
+                    except Exception:
+                        logger.exception("Job %s failed unexpectedly", job_id)
+                    # Immediately check for more work
+                    continue
+            except Exception:
+                logger.exception("Worker loop error")
+
+            # No work found (or error) — wait before polling again.
+            # Use wait() so shutdown signal interrupts the sleep.
+            try:
+                await asyncio.wait_for(
+                    self._shutdown_event.wait(),
+                    timeout=_WORKER_POLL_INTERVAL,
+                )
+                # If we get here, shutdown was signalled
+                break
+            except asyncio.TimeoutError:
+                # Normal: no shutdown signal, just loop again
+                pass
+
+    async def _claim_next_job(self) -> tuple[UUID, ScrapeJobConfig] | None:
+        """Atomically claim the oldest pending job.
+
+        Returns ``(job_id, config)`` or ``None`` if no work is available.
+        The row is locked with ``SKIP LOCKED`` so concurrent workers won't
+        claim the same job.
+        """
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            return None
+
+        row = await pool.fetchrow(
+            """
+            UPDATE universal_scrape_jobs
+            SET status = 'running', started_at = now()
+            WHERE id = (
+                SELECT id FROM universal_scrape_jobs
+                WHERE status = 'pending'
+                ORDER BY created_at
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+            )
+            RETURNING id, config
+            """
+        )
+        if not row:
+            return None
+
+        job_id = row["id"]
+        config_raw = row["config"]
+        if isinstance(config_raw, str):
+            config_raw = json.loads(config_raw)
+
+        try:
+            config = ScrapeJobConfig.model_validate(config_raw)
+        except Exception:
+            logger.exception("Invalid config for job %s, marking failed", job_id)
+            await pool.execute(
+                """
+                UPDATE universal_scrape_jobs
+                SET status = 'failed', error = 'Invalid job config', finished_at = now()
+                WHERE id = $1
+                """,
+                job_id,
+            )
+            return None
+
+        logger.info("Claimed job %s (%s, %d targets)", job_id, config.name, len(config.targets))
+        return job_id, config
 
     # ── Public API ───────────────────────────────────────────────────
 
     async def run_job(self, config: ScrapeJobConfig) -> UUID:
-        """Create a job record and start scraping in the background.
+        """Create a job record and return immediately.
 
-        Returns the ``job_id`` immediately.
+        The background worker loop will pick it up. If the worker is not
+        running (e.g. during tests), the job stays ``pending`` until a
+        worker starts or ``run_job_sync`` is used.
         """
-        job_id = await self._create_job_record(config)
-        asyncio.create_task(self._execute_job(job_id, config))
-        return job_id
+        return await self._create_job_record(config)
 
     async def run_job_sync(self, config: ScrapeJobConfig) -> UUID:
         """Create a job record and execute synchronously (blocks until done).
 
-        Useful for MCP tools that return results inline.
+        Bypasses the worker loop — useful for MCP tools that return results
+        inline and for tests.
         """
         job_id = await self._create_job_record(config)
+        pool = get_db_pool()
+        await pool.execute(
+            "UPDATE universal_scrape_jobs SET status = 'running', started_at = now() WHERE id = $1",
+            job_id,
+        )
         await self._execute_job(job_id, config)
         return job_id
 
     async def cancel_job(self, job_id: UUID) -> bool:
-        """Signal a running job to stop. Returns True if the signal was sent."""
-        self._cancelled.add(job_id)
+        """Cancel a job by setting its DB status.
+
+        Works across processes — any worker executing this job will see the
+        status change at its next checkpoint.
+        """
         pool = get_db_pool()
         result = await pool.execute(
             """
@@ -72,10 +206,19 @@ class UniversalScraper:
             """,
             job_id,
         )
-        return "UPDATE 1" in result
+        cancelled = "UPDATE 1" in result
+        if cancelled:
+            logger.info("Job %s cancelled via DB", job_id)
+        return cancelled
 
-    def _is_cancelled(self, job_id: UUID) -> bool:
-        return job_id in self._cancelled
+    async def _is_cancelled(self, job_id: UUID) -> bool:
+        """Check the DB for cancellation — works across processes."""
+        pool = get_db_pool()
+        status = await pool.fetchval(
+            "SELECT status FROM universal_scrape_jobs WHERE id = $1",
+            job_id,
+        )
+        return status == "cancelled"
 
     # ── Job record ───────────────────────────────────────────────────
 
@@ -103,13 +246,8 @@ class UniversalScraper:
         pool = get_db_pool()
 
         # Check if already cancelled before starting
-        if self._is_cancelled(job_id):
+        if await self._is_cancelled(job_id):
             return
-
-        await pool.execute(
-            "UPDATE universal_scrape_jobs SET status = 'running', started_at = now() WHERE id = $1",
-            job_id,
-        )
 
         sem = asyncio.Semaphore(config.concurrency)
         lock = asyncio.Lock()
@@ -121,12 +259,12 @@ class UniversalScraper:
             nonlocal completed, failed, total_records
 
             # Check cancellation before starting target
-            if self._is_cancelled(job_id):
+            if await self._is_cancelled(job_id):
                 return
 
             async with sem:
                 # Re-check after acquiring semaphore
-                if self._is_cancelled(job_id):
+                if await self._is_cancelled(job_id):
                     return
 
                 try:
@@ -150,7 +288,7 @@ class UniversalScraper:
                     )
 
             # Update progress (only if not cancelled)
-            if not self._is_cancelled(job_id):
+            if not await self._is_cancelled(job_id):
                 async with lock:
                     c, f, t = completed, failed, total_records
                 await pool.execute(
@@ -170,15 +308,11 @@ class UniversalScraper:
             return_exceptions=True,
         )
 
-        # Clean up cancellation tracking
-        self._cancelled.discard(job_id)
-
         # Determine final status — only update if not already cancelled
         row = await pool.fetchrow(
             "SELECT status FROM universal_scrape_jobs WHERE id = $1", job_id
         )
         if row and row["status"] == "cancelled":
-            # Already cancelled — don't overwrite
             return
 
         total_targets = len(config.targets)
@@ -227,7 +361,7 @@ class UniversalScraper:
 
         for page_num in range(1, max_pages + 1):
             # Check cancellation before each page
-            if self._is_cancelled(job_id):
+            if await self._is_cancelled(job_id):
                 logger.info("Job %s cancelled, stopping target %s", job_id, target.url)
                 break
 

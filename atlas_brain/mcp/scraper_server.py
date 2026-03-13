@@ -29,10 +29,18 @@ logger = logging.getLogger("atlas.mcp.scraper")
 @asynccontextmanager
 async def _lifespan(server):
     from ..storage.database import init_database, close_database
+    from ..services.scraping.universal.orchestrator import (
+        get_universal_scraper,
+        reconcile_orphaned_jobs,
+    )
 
     await init_database()
     logger.info("Scraper MCP: database pool initialized")
+    await reconcile_orphaned_jobs()
+    scraper = get_universal_scraper()
+    await scraper.start_worker()
     yield
+    await scraper.stop_worker()
     await close_database()
 
 
