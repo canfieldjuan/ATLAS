@@ -442,6 +442,10 @@ def load_config_file(path: str | Path) -> ScrapeJobConfig:
             f"got {resolved}"
         )
 
+    if resolved.suffix.lower() != ".json":
+        raise ValueError(
+            f"Config file must have a .json extension, got '{resolved.suffix}'"
+        )
     if not resolved.exists():
         raise FileNotFoundError(f"Config file not found: {resolved}")
     if not resolved.is_file():

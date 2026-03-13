@@ -3,6 +3,9 @@ URL validation for the universal scraper.
 
 Blocks SSRF vectors: private IPs, localhost, metadata endpoints,
 non-http(s) schemes, and internal hostnames.
+
+Checks ALL resolved IPs for a hostname (not just the first) and
+fails closed when DNS resolution is suspicious.
 """
 
 from __future__ import annotations
@@ -17,8 +20,6 @@ logger = logging.getLogger("atlas.services.scraping.universal.url_validation")
 # Cloud metadata endpoints (AWS, GCP, Azure, DigitalOcean)
 _METADATA_IPS = frozenset({
     "169.254.169.254",
-    "metadata.google.internal",
-    "metadata.internal",
 })
 
 _BLOCKED_HOSTNAMES = frozenset({
@@ -34,7 +35,7 @@ class UnsafeURLError(ValueError):
 
 
 def validate_url(url: str) -> str:
-    """Validate a URL for safety. Returns the normalized URL.
+    """Validate a URL for safety. Returns the URL unchanged.
 
     Raises ``UnsafeURLError`` if the URL is blocked.
     """
@@ -61,17 +62,20 @@ def validate_url(url: str) -> str:
     if hostname_lower.endswith(".local") or hostname_lower.endswith(".internal"):
         raise UnsafeURLError(f"Blocked internal hostname: {hostname_lower}")
 
-    # 5. Resolve and check IP addresses
-    try:
-        ip_str = hostname if _is_ip_literal(hostname) else _resolve_hostname(hostname)
-        if ip_str:
+    # 5. Resolve and check ALL IP addresses (not just the first)
+    if _is_ip_literal(hostname):
+        _check_ip_safety(hostname, hostname_lower)
+    else:
+        resolved_ips = _resolve_all_ips(hostname)
+        if not resolved_ips:
+            # Fail closed: if we can't resolve, don't allow the request.
+            # The HTTP client might resolve differently and hit an internal IP.
+            raise UnsafeURLError(
+                f"DNS resolution failed for {hostname} — blocking request "
+                f"(fail-closed policy)"
+            )
+        for ip_str in resolved_ips:
             _check_ip_safety(ip_str, hostname_lower)
-    except UnsafeURLError:
-        raise
-    except Exception as exc:
-        # DNS resolution failure — allow the request to proceed;
-        # the HTTP client will fail with a more descriptive error.
-        logger.debug("DNS resolution failed for %s: %s", hostname, exc)
 
     return url
 
@@ -79,6 +83,18 @@ def validate_url(url: str) -> str:
 def validate_urls(urls: list[str]) -> list[str]:
     """Validate a list of URLs. Raises on the first unsafe URL."""
     return [validate_url(u) for u in urls]
+
+
+def validate_redirect_url(redirect_url: str, original_url: str) -> str:
+    """Validate a redirect target URL.
+
+    Same rules as validate_url, but logs the redirect chain for auditing.
+    Raises ``UnsafeURLError`` if the redirect target is unsafe.
+    """
+    logger.info(
+        "Redirect: %s -> %s — validating target", original_url, redirect_url
+    )
+    return validate_url(redirect_url)
 
 
 def _is_ip_literal(hostname: str) -> bool:
@@ -90,15 +106,26 @@ def _is_ip_literal(hostname: str) -> bool:
         return False
 
 
-def _resolve_hostname(hostname: str) -> str | None:
-    """Resolve hostname to IP for safety checks. Returns first IP or None."""
+def _resolve_all_ips(hostname: str) -> list[str]:
+    """Resolve hostname to ALL IPs for safety checks.
+
+    Returns a deduplicated list of IP strings, or empty list on failure.
+    Checks both IPv4 and IPv6 records.
+    """
     try:
-        results = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-        if results:
-            return results[0][4][0]
+        results = socket.getaddrinfo(
+            hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM
+        )
+        seen: set[str] = set()
+        ips: list[str] = []
+        for family, _, _, _, sockaddr in results:
+            ip = sockaddr[0]
+            if ip not in seen:
+                seen.add(ip)
+                ips.append(ip)
+        return ips
     except socket.gaierror:
-        pass
-    return None
+        return []
 
 
 def _check_ip_safety(ip_str: str, original_hostname: str) -> None:
@@ -106,7 +133,10 @@ def _check_ip_safety(ip_str: str, original_hostname: str) -> None:
     try:
         addr = ipaddress.ip_address(ip_str)
     except ValueError:
-        return  # Not a valid IP — let HTTP client handle it
+        # Unparseable IP — fail closed
+        raise UnsafeURLError(
+            f"Unparseable IP address: {ip_str} (hostname: {original_hostname})"
+        )
 
     if addr.is_loopback:
         raise UnsafeURLError(
@@ -124,24 +154,12 @@ def _check_ip_safety(ip_str: str, original_hostname: str) -> None:
         raise UnsafeURLError(
             f"Blocked reserved address: {ip_str} (hostname: {original_hostname})"
         )
+    if addr.is_multicast:
+        raise UnsafeURLError(
+            f"Blocked multicast address: {ip_str} (hostname: {original_hostname})"
+        )
     # Explicit metadata IP check (covers 169.254.169.254)
     if ip_str in _METADATA_IPS:
         raise UnsafeURLError(
             f"Blocked cloud metadata endpoint: {ip_str}"
         )
-    if addr.is_multicast:
-        raise UnsafeURLError(
-            f"Blocked multicast address: {ip_str} (hostname: {original_hostname})"
-        )
-
-
-def validate_redirect_url(redirect_url: str, original_url: str) -> str:
-    """Validate a redirect target URL.
-
-    Same rules as validate_url, but logs the redirect chain for auditing.
-    Raises ``UnsafeURLError`` if the redirect target is unsafe.
-    """
-    logger.info(
-        "Redirect: %s -> %s — validating target", original_url, redirect_url
-    )
-    return validate_url(redirect_url)
