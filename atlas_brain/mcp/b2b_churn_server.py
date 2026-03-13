@@ -101,6 +101,7 @@ VALID_REPORT_TYPES = (
     "account_deep_dive",
     "vendor_retention",
     "challenger_intel",
+    "battle_card",
 )
 
 from atlas_brain.services.scraping.sources import ALL_SOURCES, ReviewSource
@@ -725,6 +726,7 @@ async def search_reviews(
     min_urgency: Optional[float] = None,
     company: Optional[str] = None,
     has_churn_intent: Optional[bool] = None,
+    content_type: Optional[str] = None,
     window_days: int = 30,
     limit: int = 20,
 ) -> str:
@@ -736,6 +738,7 @@ async def search_reviews(
     min_urgency: Minimum urgency score
     company: Filter by reviewer company (partial match)
     has_churn_intent: Filter by churn intent flag
+    content_type: Filter by content type — one of: review, community_discussion, comment, insider_account
     window_days: How far back to look in days (default 30)
     limit: Maximum results (default 20, cap 100)
     """
@@ -783,7 +786,13 @@ async def search_reviews(
             params.append(has_churn_intent)
             idx += 1
 
-        conditions.append(_suppress_predicate('review'))
+        if content_type:
+            conditions.append(f"content_type = ${idx}")
+            params.append(content_type)
+            idx += 1
+        else:
+            conditions.append(_suppress_predicate('review'))
+
         capped = min(limit, 100)
         params.append(capped)
         where = " AND ".join(conditions)
@@ -797,7 +806,8 @@ async def search_reviews(
                    (enrichment->'churn_signals'->>'intent_to_leave')::boolean AS intent_to_leave,
                    (enrichment->'reviewer_context'->>'decision_maker')::boolean AS decision_maker,
                    enriched_at, reviewer_title, company_size_raw,
-                   COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry
+                   COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry,
+                   content_type, thread_id
             FROM b2b_reviews
             WHERE {where}
             ORDER BY (enrichment->>'urgency_score')::numeric DESC
@@ -821,6 +831,8 @@ async def search_reviews(
                 "reviewer_title": r["reviewer_title"],
                 "company_size": r["company_size_raw"],
                 "industry": r["industry"],
+                "content_type": r["content_type"],
+                "thread_id": r["thread_id"],
             }
             for r in rows
         ]
@@ -1759,7 +1771,7 @@ async def list_blog_posts(
         rows = await pool.fetch(
             f"""
             SELECT id, slug, title, description, topic_type, tags,
-                   status, llm_model, created_at, published_at
+                   status, llm_model, created_at, published_at, cta
             FROM blog_posts
             {where}
             ORDER BY created_at DESC
@@ -1780,6 +1792,7 @@ async def list_blog_posts(
                 "llm_model": r["llm_model"],
                 "created_at": r["created_at"],
                 "published_at": r["published_at"],
+                "cta": _safe_json(r["cta"]),
             }
             for r in rows
         ]
@@ -1845,6 +1858,7 @@ async def get_blog_post(
             "llm_model": row["llm_model"],
             "created_at": row["created_at"],
             "published_at": row["published_at"],
+            "cta": _safe_json(row["cta"]),
         }
 
         return json.dumps({"success": True, "post": post}, default=str)

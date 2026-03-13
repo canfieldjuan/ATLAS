@@ -74,6 +74,23 @@ _NOISE_PATTERNS: list[tuple[re.Pattern[str], float]] = [
 _CHURN_CAP = 0.35
 _NOISE_CAP = -0.45
 
+# Signal patterns that are *noise* for normal reviews but *signal* for insider accounts.
+# These override the noise penalties when content_type == "insider_account".
+_INSIDER_BOOST_PATTERNS: list[tuple[re.Pattern[str], float]] = [
+    # Talent drain / org health signals
+    (re.compile(r"laid\s+off|layoffs|headcount\s+reduction", re.I), 0.10),
+    (re.compile(r"\bCEO\b|\bCFO\b|\bCTO\b|executive|leadership\s+churn", re.I), 0.05),
+    (re.compile(r"revenue\s+decline|billion\s+(?:in\s+)?loss|workforce\s+cut", re.I), 0.05),
+    # Culture / morale indicators
+    (re.compile(r"\b(?:toxic|terrible|awful)\s+culture", re.I), 0.15),
+    (re.compile(r"\bmorale\b", re.I), 0.10),
+    (re.compile(r"micromanagement|bureaucracy|red\s+tape", re.I), 0.10),
+    (re.compile(r"dead[\s-]end|no\s+growth|going\s+nowhere", re.I), 0.10),
+    (re.compile(r"brain\s+drain|talent\s+exodus|everyone\s+(?:is\s+)?leaving", re.I), 0.15),
+    (re.compile(r"product\s+(?:quality\s+)?(?:is\s+)?(?:declining|getting\s+worse)", re.I), 0.10),
+    (re.compile(r"engineering\s+(?:culture|morale|quality)", re.I), 0.10),
+]
+
 # Structured review sources that bypass the filter entirely
 from .sources import STRUCTURED_SOURCES
 
@@ -82,9 +99,14 @@ from .sources import STRUCTURED_SOURCES
 # Core scorer
 # ---------------------------------------------------------------------------
 
-def score_relevance(review: dict[str, Any], vendor_name: str) -> tuple[float, str]:
+def score_relevance(
+    review: dict[str, Any],
+    vendor_name: str,
+    content_type: str | None = None,
+) -> tuple[float, str]:
     """Score a review's relevance for B2B churn intelligence.
 
+    content_type: pass explicitly to override review["content_type"] lookup.
     Returns (score 0.0-1.0, human-readable reason string).
     """
     score = 0.5
@@ -94,6 +116,10 @@ def score_relevance(review: dict[str, Any], vendor_name: str) -> tuple[float, st
     body = (review.get("review_text") or "").strip()
     text = f"{title}\n{body}"
     meta = review.get("raw_metadata") or {}
+
+    # Resolve content type (explicit arg wins, then field, then default)
+    ctype = content_type or review.get("content_type") or "review"
+    is_insider = ctype == "insider_account"
 
     # --- Signal 1: Churn / review language ---
     churn_boost = 0.0
@@ -107,17 +133,31 @@ def score_relevance(review: dict[str, Any], vendor_name: str) -> tuple[float, st
         score += churn_boost
         reasons.append(f"churn_language=+{churn_boost:.2f}")
 
-    # --- Signal 2: Noise patterns ---
-    noise_penalty = 0.0
-    for pat, weight in _NOISE_PATTERNS:
-        if noise_penalty <= _NOISE_CAP:
-            break
-        if pat.search(text):
-            noise_penalty += weight
-    noise_penalty = max(noise_penalty, _NOISE_CAP)
-    if noise_penalty < 0:
-        score += noise_penalty
-        reasons.append(f"noise_language={noise_penalty:.2f}")
+    # --- Signal 2a: Noise patterns (skipped / inverted for insider accounts) ---
+    if is_insider:
+        # For insider accounts the noise patterns are irrelevant or counter-
+        # productive (e.g. "layoffs" is signal, not noise). Apply insider boosts
+        # instead and skip standard noise scoring.
+        insider_boost = 0.0
+        for pat, weight in _INSIDER_BOOST_PATTERNS:
+            if pat.search(text):
+                insider_boost += weight
+        insider_boost = min(insider_boost, 0.40)
+        if insider_boost > 0:
+            score += insider_boost
+            reasons.append(f"insider_signals=+{insider_boost:.2f}")
+    else:
+        # --- Signal 2b: Standard noise patterns ---
+        noise_penalty = 0.0
+        for pat, weight in _NOISE_PATTERNS:
+            if noise_penalty <= _NOISE_CAP:
+                break
+            if pat.search(text):
+                noise_penalty += weight
+        noise_penalty = max(noise_penalty, _NOISE_CAP)
+        if noise_penalty < 0:
+            score += noise_penalty
+            reasons.append(f"noise_language={noise_penalty:.2f}")
 
     # --- Signal 3: Vendor name prominence ---
     vendor_lower = vendor_name.lower()
@@ -208,7 +248,8 @@ def filter_reviews(
     filtered = 0
 
     for review in reviews:
-        rel_score, reason = score_relevance(review, vendor_name)
+        # Pass content_type so insider accounts use the appropriate scoring path
+        rel_score, reason = score_relevance(review, vendor_name, review.get("content_type"))
 
         if rel_score >= threshold:
             meta = review.get("raw_metadata") or {}

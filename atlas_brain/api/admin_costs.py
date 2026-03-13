@@ -671,8 +671,9 @@ async def reddit_overview(days: int = Query(default=7, ge=1, le=30)):
             COALESCE(SUM(l.reviews_inserted), 0)                                 AS reviews_inserted,
             COALESCE(AVG(l.duration_ms), 0)                                      AS avg_duration_ms,
             COALESCE(SUM(l.pages_scraped), 0)                                    AS pages_scraped_total,
-            -- Auth mode: reddit:2 = OAuth2, reddit:1 = public
-            MODE() WITHIN GROUP (ORDER BY l.parser_version)                      AS dominant_parser,
+            -- Auth mode: reddit:3 = OAuth2 v3, reddit:2 = OAuth2 v2, reddit:1 = public
+            -- MAX picks the newest version string that ran in this window
+            MAX(l.parser_version)                                                 AS dominant_parser,
             -- Rate-limit events: count runs that had any 429 in their errors array
             COUNT(*) FILTER (
                 WHERE EXISTS (

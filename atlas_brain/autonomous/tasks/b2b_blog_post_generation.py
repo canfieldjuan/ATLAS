@@ -68,6 +68,46 @@ class PostBlueprint:
     sections: list[SectionSpec]
     charts: list[ChartSpec]
     quotable_phrases: list[dict[str, Any]] = field(default_factory=list)
+    cta: dict[str, Any] | None = None
+
+
+# -- CTA configuration --------------------------------------------
+
+_CTA_CONFIG: dict[str, dict[str, str]] = {
+    "vendor_showdown":       {"report_type": "vendor_comparison", "button_text": "Download the full benchmark report"},
+    "vendor_deep_dive":      {"report_type": "vendor_scorecard",  "button_text": "Get the exclusive deep dive report"},
+    "churn_report":          {"report_type": "weekly_churn_feed", "button_text": "See which vendors are most at risk"},
+    "vendor_alternative":    {"report_type": "battle_card",       "button_text": "Compare alternatives side by side"},
+    "market_landscape":      {"report_type": "category_overview", "button_text": "Get the full industry report"},
+    "pricing_reality_check": {"report_type": "vendor_scorecard",  "button_text": "See the full pricing analysis"},
+    "switching_story":       {"report_type": "battle_card",       "button_text": "Get the switching playbook"},
+    "migration_guide":       {"report_type": "vendor_comparison", "button_text": "Download the migration comparison"},
+    "pain_point_roundup":    {"report_type": "category_overview", "button_text": "See the full category breakdown"},
+    "best_fit_guide":        {"report_type": "category_overview", "button_text": "Check your vendor's risk score"},
+}
+
+
+def _build_cta(topic_type: str, data_context: dict[str, Any]) -> dict[str, Any] | None:
+    """Build structured CTA from topic type and data context."""
+    cfg = _CTA_CONFIG.get(topic_type)
+    if not cfg:
+        return None
+    tc = data_context.get("topic_ctx", {})
+    vendor = (
+        data_context.get("vendor")
+        or data_context.get("vendor_a")
+        or tc.get("vendor")
+        or tc.get("vendor_a")
+    )
+    category = data_context.get("category") or tc.get("category")
+    return {
+        "headline": "Want the full picture?",
+        "body": "",
+        "button_text": cfg["button_text"],
+        "report_type": cfg["report_type"],
+        "vendor_filter": vendor,
+        "category_filter": category,
+    }
 
 
 # -- entry point --------------------------------------------------
@@ -1762,7 +1802,9 @@ def _build_blueprint(
         "pain_point_roundup": _blueprint_pain_point_roundup,
         "best_fit_guide": _blueprint_best_fit_guide,
     }[topic_type]
-    return builder(topic_ctx, data)
+    bp = builder(topic_ctx, data)
+    bp.cta = _build_cta(bp.topic_type, bp.data_context)
+    return bp
 
 
 def _blueprint_vendor_alternative(ctx: dict, data: dict) -> PostBlueprint:
@@ -2850,6 +2892,12 @@ def _generate_content(
         ],
         "quotable_phrases": blueprint.quotable_phrases[:5],
     }
+    if blueprint.cta:
+        payload["cta_context"] = {
+            "button_text": blueprint.cta["button_text"],
+            "report_type": blueprint.cta["report_type"],
+            "vendor": blueprint.cta.get("vendor_filter"),
+        }
     if related_posts:
         payload["related_posts"] = related_posts
 
@@ -2919,6 +2967,10 @@ def _generate_content(
         if "faq" not in parsed or not isinstance(parsed["faq"], list):
             parsed["faq"] = []
 
+        # Extract CTA body from LLM response and inject into blueprint
+        if blueprint.cta and parsed.get("cta_body"):
+            blueprint.cta["body"] = str(parsed["cta_body"])[:200]
+
         return parsed
     except Exception:
         logger.exception("LLM content generation failed")
@@ -2986,8 +3038,8 @@ async def _assemble_and_store(
             content, charts, data_context,
             status, llm_model, source_report_date,
             seo_title, seo_description, target_keyword,
-            secondary_keywords, faq
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'draft',$9,$10,$11,$12,$13,$14,$15)
+            secondary_keywords, faq, cta
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'draft',$9,$10,$11,$12,$13,$14,$15,$16)
         ON CONFLICT (slug) DO UPDATE SET
             title = EXCLUDED.title,
             description = EXCLUDED.description,
@@ -3000,7 +3052,8 @@ async def _assemble_and_store(
             seo_description = EXCLUDED.seo_description,
             target_keyword = EXCLUDED.target_keyword,
             secondary_keywords = EXCLUDED.secondary_keywords,
-            faq = EXCLUDED.faq
+            faq = EXCLUDED.faq,
+            cta = EXCLUDED.cta
         WHERE blog_posts.status != 'published'
         RETURNING id
         """,
@@ -3019,6 +3072,7 @@ async def _assemble_and_store(
         content.get("target_keyword", ""),
         json.dumps(content.get("secondary_keywords", []), default=str),
         json.dumps(content.get("faq", []), default=str),
+        json.dumps(blueprint.cta, default=str) if blueprint.cta else None,
     )
     if not row:
         logger.warning(

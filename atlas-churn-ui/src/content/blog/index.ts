@@ -66,6 +66,14 @@ export interface BlogPost {
   secondary_keywords?: string[]
   faq?: FaqItem[]
   related_slugs?: string[]
+  cta?: {
+    headline: string
+    body: string
+    button_text: string
+    report_type: string
+    vendor_filter?: string | null
+    category_filter?: string | null
+  } | null
 }
 
 export const POSTS: BlogPost[] = [
