@@ -154,6 +154,8 @@ def _make_review_row(**kwargs) -> dict:
         "enrichment_status": "enriched",
         "enrichment_attempts": 1,
         "enriched_at": datetime(2026, 2, 21, tzinfo=timezone.utc),
+        "content_type": kwargs.get("content_type", "review"),
+        "thread_id": kwargs.get("thread_id", None),
     }
 
 
@@ -544,6 +546,8 @@ class TestB2BChurnMCPTools:
             "reviewer_title": "VP Operations",
             "company_size_raw": "201-500",
             "industry": "SaaS",
+            "content_type": "review",
+            "thread_id": None,
         }
         pool = _mock_pool(fetch_return=[row])
 
