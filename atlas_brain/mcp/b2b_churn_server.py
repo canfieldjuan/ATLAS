@@ -186,6 +186,8 @@ async def list_churn_signals(
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"success": False, "error": "Database not ready"})
         conditions = []
         params = []
         idx = 1
@@ -269,6 +271,8 @@ async def get_churn_signal(
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"success": False, "error": "Database not ready"})
 
         if product_category:
             row = await pool.fetchrow(
@@ -363,6 +367,8 @@ async def list_high_intent_companies(
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"success": False, "error": "Database not ready"})
         conditions = [
             "enrichment_status = 'enriched'",
             "(enrichment->>'urgency_score')::numeric >= $1",
@@ -459,6 +465,8 @@ async def get_vendor_profile(vendor_name: str) -> str:
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"success": False, "error": "Database not ready"})
         vname = vendor_name.strip()
 
         # Churn signal
@@ -606,6 +614,8 @@ async def list_reports(
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"success": False, "error": "Database not ready"})
         conditions = []
         params = []
         idx = 1
@@ -674,6 +684,8 @@ async def get_report(report_id: str) -> str:
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"success": False, "error": "Database not ready"})
         row = await pool.fetchrow(
             "SELECT * FROM b2b_intelligence WHERE id = $1",
             _uuid.UUID(report_id),
@@ -738,6 +750,8 @@ async def search_reviews(
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"success": False, "error": "Database not ready"})
         conditions = [
             "enrichment_status = 'enriched'",
             "enriched_at > NOW() - make_interval(days => $1)",
@@ -848,6 +862,8 @@ async def get_review(review_id: str) -> str:
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"success": False, "error": "Database not ready"})
         rid = _uuid.UUID(review_id)
         row = await pool.fetchrow(
             "SELECT * FROM b2b_reviews WHERE id = $1",
@@ -914,6 +930,8 @@ async def get_pipeline_status() -> str:
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"success": False, "error": "Database not ready"})
 
         # Enrichment counts by status
         _rev_sup = _suppress_predicate('review')
@@ -982,6 +1000,8 @@ async def get_parser_version_status() -> str:
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
+        if not pool.is_initialized:
+            return json.dumps({"success": False, "error": "Database not ready"})
         parsers = get_all_parsers()
         sources = []
         for source_name, parser in sorted(parsers.items()):
@@ -2538,13 +2558,14 @@ async def get_displacement_history(
             return json.dumps({"error": "Database not ready"})
 
         rows = await pool.fetch(
-            """
+            f"""
             SELECT computed_date, mention_count, signal_strength,
                    confidence_score, primary_driver, key_quote
             FROM b2b_displacement_edges
             WHERE LOWER(from_vendor) = LOWER($1)
               AND LOWER(to_vendor) = LOWER($2)
               AND computed_date > NOW() - make_interval(days => $3)
+              AND {_suppress_predicate('displacement_edge')}
             ORDER BY computed_date ASC
             """,
             from_vendor,
@@ -2962,6 +2983,8 @@ async def get_vendor_history(
         if not pool.is_initialized:
             return json.dumps({"error": "Database not ready"})
 
+        # suppression: N/A — b2b_vendor_snapshots is a materialized derived table;
+        # rows have no independent entity UUID in data_corrections.
         rows = await pool.fetch(
             """
             SELECT vendor_name, snapshot_date, total_reviews, churn_intent,
@@ -3025,6 +3048,8 @@ async def list_change_events(
         if not pool.is_initialized:
             return json.dumps({"error": "Database not ready"})
 
+        # suppression: intentionally excluded — b2b_change_events are structural signals,
+        # not primary data entities; no change_event entity_type in data_corrections.
         conditions: list[str] = ["event_date >= CURRENT_DATE - $1::int"]
         params: list = [days]
         idx = 2
@@ -3091,6 +3116,8 @@ async def compare_vendor_periods(
         if not pool.is_initialized:
             return json.dumps({"error": "Database not ready"})
 
+        # suppression: N/A — b2b_vendor_snapshots is a materialized derived table;
+        # rows have no independent entity UUID in data_corrections.
         async def _nearest_snapshot(target_days_ago: int):
             return await pool.fetchrow(
                 """
@@ -3390,6 +3417,8 @@ async def record_campaign_outcome(
 
         pool = get_db_pool()
 
+        # suppression: intentionally excluded — writes to outcome measurement table;
+        # suppressing campaign sequences would distort calibration math.
         row = await pool.fetchrow(
             "SELECT id, outcome, outcome_history FROM campaign_sequences WHERE id = $1",
             _uuid.UUID(sequence_id),
@@ -3497,6 +3526,8 @@ async def get_signal_effectiveness(
         buying_stage (default), role_type, target_mode,
         opportunity_score_bucket, urgency_bucket, pain_category
     """
+    # suppression: intentionally excluded — operates on campaign_sequences/b2b_campaigns
+    # (outcome measurement tables); suppressing these would distort calibration math.
     min_sequences = max(1, min(min_sequences, 100))
 
     if group_by not in _GROUP_BY_EXPRESSIONS:
@@ -3601,6 +3632,8 @@ async def get_outcome_distribution(
         if not pool.is_initialized:
             return json.dumps({"error": "Database not ready"})
 
+        # suppression: intentionally excluded — outcome measurement table;
+        # suppressing records here would distort calibration math.
         conditions: list[str] = []
         params: list = []
         idx = 1
@@ -3713,7 +3746,9 @@ async def create_data_correction(
 
     entity_type: Type of entity being corrected (review, vendor, displacement_edge,
         pain_point, churn_signal, buyer_profile, use_case, integration, source)
-    entity_id: UUID of the entity being corrected
+    entity_id: UUID of the entity being corrected. For suppress_source corrections,
+        this field is optional — a deterministic sentinel UUID is generated server-side
+        from the source_name in metadata.
     correction_type: Type of correction (suppress, flag, override_field, merge_vendor,
         reclassify, suppress_source)
     reason: Human explanation for the correction (required)
@@ -3768,6 +3803,12 @@ async def create_data_correction(
                 "success": False,
                 "error": f"Unknown source '{meta_dict['source_name']}'. Known: {sorted(_KNOWN_SOURCES)}",
             })
+        # Clients have no natural UUID for a source — generate a deterministic sentinel
+        # so the call succeeds without requiring a fake UUID in entity_id.
+        import uuid as _uuid_mod
+        entity_id = str(_uuid_mod.uuid5(
+            _uuid_mod.NAMESPACE_DNS, f"source:{meta_dict['source_name'].lower()}"
+        ))
     if not _is_uuid(entity_id):
         return json.dumps({"success": False, "error": "entity_id must be a valid UUID"})
     if not reason or not reason.strip():
@@ -3778,7 +3819,9 @@ async def create_data_correction(
         pool = get_db_pool()
         import uuid as _u
         entity_uuid = _u.UUID(entity_id)
-        meta_json = metadata if metadata else "{}"
+        # Use the already-validated meta_dict (normalised, no extra whitespace/fields)
+        # rather than the raw input string so stored JSONB is canonical.
+        meta_json = json.dumps(meta_dict) if meta_dict else "{}"
 
         row = await pool.fetchrow(
             """
@@ -4244,7 +4287,10 @@ async def get_parser_health() -> str:
     for each source, and a stale count where reviews were parsed by an older
     version than the latest for that source.
     """
-    pool = _pool_or_fail()
+    from ..storage.database import get_db_pool
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        return json.dumps({"success": False, "error": "Database not ready"})
     try:
         rows = await pool.fetch("""
             WITH version_counts AS (
@@ -4394,36 +4440,6 @@ async def get_calibration_weights(
         }, default=str)
     except Exception:
         logger.exception("get_calibration_weights error")
-        return json.dumps({"success": False, "error": "Internal error"})
-
-
-# ---------------------------------------------------------------------------
-# Tool: trigger_score_calibration
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def trigger_score_calibration(
-    window_days: int = 90,
-) -> str:
-    """
-    Manually trigger score calibration from campaign outcome data.
-
-    Computes conversion rates per signal dimension and derives weight
-    adjustments. Requires at least 20 sequences with recorded outcomes.
-
-    window_days: How far back to look for outcome data (default 90, max 365)
-    """
-    window_days = max(1, min(window_days, 365))
-    try:
-        from ..autonomous.tasks.b2b_score_calibration import calibrate
-        from ..storage.database import get_db_pool
-
-        pool = get_db_pool()
-        result = await calibrate(pool, window_days=window_days)
-        return json.dumps({"success": True, **result}, default=str)
-    except Exception:
-        logger.exception("trigger_score_calibration error")
         return json.dumps({"success": False, "error": "Internal error"})
 
 

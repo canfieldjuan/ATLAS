@@ -354,6 +354,30 @@ def _render_vendor_scorecard(pdf: IntelligenceReportPDF, data: dict, exec_summar
             txt = g.get("feature", g) if isinstance(g, dict) else _safe_str(g)
             pdf.body_text(f"  - {txt}")
 
+    # Sentiment trajectory
+    sentiment = data.get("sentiment_distribution")
+    if isinstance(sentiment, dict) and sentiment:
+        _DIRECTION_COLORS = {
+            "declining": _CLR_RED,
+            "consistently_negative": _CLR_ORANGE,
+            "improving": _CLR_GREEN,
+            "stable_positive": _CLR_GREEN,
+        }
+        _ORDER = ["declining", "consistently_negative", "improving", "stable_positive", "unknown"]
+        total = sum(v for v in sentiment.values() if isinstance(v, (int, float)))
+        rows = [
+            (k, sentiment[k])
+            for k in _ORDER
+            if isinstance(sentiment.get(k), (int, float)) and sentiment[k] > 0
+        ]
+        if rows:
+            pdf.section_title("Sentiment Trajectory")
+            for key, count in rows:
+                pct = f" ({count / total * 100:.0f}%)" if total else ""
+                label = key.replace("_", " ").title()
+                color = _DIRECTION_COLORS.get(key, _CLR_MUTED)
+                pdf.metric_row(label, f"{count}{pct}", color)
+
 
 def _render_comparison(pdf: IntelligenceReportPDF, data: dict, exec_summary: str | None) -> None:
     """Render vendor_comparison or account_comparison reports (Competitive Benchmark)."""

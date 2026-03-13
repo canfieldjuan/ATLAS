@@ -117,6 +117,41 @@ export default function VendorDetail() {
         </div>
       )}
 
+      {/* Sentiment Trajectory */}
+      {signal?.sentiment_distribution && Object.keys(signal.sentiment_distribution as Record<string, number>).length > 0 && (
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+          <h2 className="text-sm font-semibold text-slate-300 mb-3">Sentiment Trajectory</h2>
+          <div className="space-y-2">
+            {(() => {
+              const dist = signal.sentiment_distribution as Record<string, number>
+              const total = Object.values(dist).reduce((a, b) => a + b, 0)
+              const colors: Record<string, string> = {
+                declining: 'bg-red-500/60',
+                consistently_negative: 'bg-amber-500/60',
+                improving: 'bg-green-500/60',
+                stable_positive: 'bg-cyan-500/60',
+                unknown: 'bg-slate-600/60',
+              }
+              const order = ['declining', 'consistently_negative', 'improving', 'stable_positive', 'unknown']
+              return order
+                .filter(k => (dist[k] ?? 0) > 0)
+                .map(k => {
+                  const pct = total > 0 ? (dist[k] / total) * 100 : 0
+                  return (
+                    <div key={k} className="flex items-center gap-3">
+                      <span className="w-44 text-sm text-slate-400 truncate">{k.replace(/_/g, ' ')}</span>
+                      <div className="flex-1 h-2 bg-slate-800 rounded-full overflow-hidden">
+                        <div className={`h-full ${colors[k] ?? 'bg-slate-500/60'} rounded-full`} style={{ width: `${pct}%` }} />
+                      </div>
+                      <span className="text-xs text-slate-500 w-8 text-right">{dist[k]}</span>
+                    </div>
+                  )
+                })
+            })()}
+          </div>
+        </div>
+      )}
+
       {/* Quotable evidence */}
       {Array.isArray(signal?.quotable_evidence) && signal.quotable_evidence.length > 0 && (
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">

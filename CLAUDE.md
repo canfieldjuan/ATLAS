@@ -56,7 +56,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - ✅ STT/TTS for voice interface
 - ✅ PostgreSQL for conversation persistence
 - ✅ Contacts CRM — `contacts` table + NocoDB browser UI (http://localhost:8090)
-- ✅ 7 MCP servers: CRM (10 tools), Email (8), Twilio (10), Calendar (8), Invoicing (15), Intelligence (8), B2B Churn (10)
+- ✅ 7 MCP servers: CRM (10 tools), Email (8), Twilio (10), Calendar (8), Invoicing (15), Intelligence (8), B2B Churn (60+)
 
 ### Future Capabilities (Planned)
 - 🔲 Unified always-on voice interface (wake word "Hey Atlas")
@@ -247,7 +247,7 @@ atlas_brain/mcp/                 # MCP servers (Claude Desktop / Cursor compatib
 ├── calendar_server.py           # Calendar MCP server      (8 tools, port 8059)
 ├── invoicing_server.py          # Invoicing MCP server     (15 tools, port 8060)
 ├── intelligence_server.py       # Intelligence MCP server  (17 tools, port 8061)
-└── b2b_churn_server.py          # B2B Churn MCP server     (18 tools, port 8062)
+└── b2b_churn_server.py          # B2B Churn MCP server     (60+ tools, port 8062)
 ```
 
 ## Key Patterns
@@ -529,7 +529,7 @@ Tools (Consumer Product): `search_product_reviews`, `get_product_review`,
 review data (Amazon reviews, brand health scores, pain points, competitive
 flows, generated content). Two-pass enrichment pipeline.
 
-### B2B Churn Intelligence MCP Server (18 tools)
+### B2B Churn Intelligence MCP Server (60+ tools)
 ```bash
 # stdio mode (Claude Desktop / Cursor)
 python -m atlas_brain.mcp.b2b_churn_server
@@ -538,16 +538,38 @@ python -m atlas_brain.mcp.b2b_churn_server
 python -m atlas_brain.mcp.b2b_churn_server --sse
 ```
 
-Tools: `list_churn_signals`, `get_churn_signal`, `list_high_intent_companies`,
-`get_vendor_profile`, `list_reports`, `get_report`, `search_reviews`,
-`get_review`, `get_pipeline_status`, `list_scrape_targets`,
-`get_product_profile`, `match_products_tool`, `list_blog_posts`,
-`get_blog_post`, `add_scrape_target`, `manage_scrape_target`,
-`delete_scrape_target`, `list_affiliate_partners`
+**Read intelligence:** `list_churn_signals`, `get_churn_signal`, `list_high_intent_companies`,
+`get_vendor_profile`, `get_vendor_history`, `compare_vendor_periods`
 
-**B2B churn intelligence**: Query vendor churn signals, search enriched reviews,
-read intelligence reports, identify high-intent companies, monitor pipeline health,
-manage scrape targets, view blog posts, and list affiliate partners.
+**Reviews & reports:** `search_reviews`, `get_review`, `list_reports`, `get_report`, `export_report_pdf`
+
+**Product intelligence:** `get_product_profile`, `get_product_profile_history`, `match_products_tool`
+
+**Displacement graph:** `list_displacement_edges`, `get_displacement_history`, `list_vendor_pain_points`,
+`list_vendor_use_cases`, `list_vendor_integrations`, `list_vendor_buyer_profiles`
+
+**Vendor registry:** `list_vendors_registry`, `fuzzy_vendor_search`, `fuzzy_company_search`,
+`add_vendor_to_registry`, `add_vendor_alias`
+
+**Scrape target admin:** `list_scrape_targets`, `add_scrape_target`, `manage_scrape_target`, `delete_scrape_target`
+
+**Pipeline & health:** `get_pipeline_status`, `get_parser_version_status`, `get_source_health`,
+`get_source_telemetry`, `get_source_capabilities`, `get_operational_overview`, `get_parser_health`
+
+**Corrections:** `create_data_correction`, `list_data_corrections`, `revert_data_correction`,
+`get_data_correction`, `get_correction_stats`, `get_source_correction_impact`
+
+**Calibration:** `get_calibration_weights`, `trigger_score_calibration`, `record_campaign_outcome`,
+`get_signal_effectiveness`, `get_outcome_distribution`
+
+**Change events:** `list_change_events`, `list_concurrent_events`, `get_vendor_correlation`
+
+**Webhooks:** `list_webhook_subscriptions`, `send_test_webhook_tool`, `update_webhook`, `get_webhook_delivery_summary`
+
+**CRM events:** `list_crm_pushes`, `list_crm_events`, `ingest_crm_event`, `get_crm_enrichment_stats`
+
+**Content:** `list_blog_posts`, `get_blog_post`, `list_affiliate_partners`
+
 Data sourced from 16 review sites (incl. Twitter/X via Web Unlocker).
 
 ```bash

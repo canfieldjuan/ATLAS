@@ -90,3 +90,4 @@ requirements.freeze.bak
 *.crt
 *.key
 *.pem
+.claude/
