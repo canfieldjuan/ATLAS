@@ -230,7 +230,23 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             metadata=raw_meta if isinstance(raw_meta, dict) else {},
         )
 
-        parser = get_parser(target.source)
+        # Mode-aware parser dispatch: legacy, dual_run, or universal
+        from ...services.scraping.universal.b2b_mode import (
+            ScrapeMode, get_scrape_mode, log_dual_run_comparison,
+        )
+        from ...services.scraping.universal.b2b_adapter import get_universal_adapter
+
+        mode = get_scrape_mode(target.source)
+        is_dual_run = mode == ScrapeMode.DUAL_RUN
+
+        if mode == ScrapeMode.UNIVERSAL:
+            parser = get_universal_adapter(target.source)
+            if not parser:
+                logger.warning("No universal adapter for source %r, falling back to legacy", target.source)
+                parser = get_parser(target.source)
+        else:
+            parser = get_parser(target.source)
+
         if not parser:
             logger.warning("No parser for source %r, skipping target %s", target.source, target.id)
             return
@@ -243,6 +259,22 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
             try:
                 result = await parser.scrape(target, client)
+
+                # Dual-run: also run universal adapter and compare
+                if is_dual_run:
+                    universal_parser = get_universal_adapter(target.source)
+                    if universal_parser:
+                        try:
+                            universal_result = await universal_parser.scrape(target, client)
+                            await log_dual_run_comparison(
+                                target.source, target.vendor_name,
+                                result, universal_result,
+                            )
+                        except Exception as dual_exc:
+                            logger.warning(
+                                "Dual-run universal adapter failed for %s/%s: %s",
+                                target.source, target.vendor_name, dual_exc,
+                            )
             except Exception as exc:
                 logger.error("Scrape failed for %s/%s: %s", target.source, target.vendor_name, exc)
                 duration_ms = int((time.monotonic() - started_at) * 1000)

@@ -22,6 +22,10 @@ from .schemas import (
     ScrapeTarget,
 )
 
+from .b2b_adapter import UniversalReviewAdapter, get_universal_adapter
+from .b2b_mode import ScrapeMode, get_scrape_mode
+from .source_configs import SourceAdapterConfig, get_source_adapter_config
+
 __all__ = [
     "ExtractionSchema",
     "PaginationConfig",
@@ -32,4 +36,11 @@ __all__ = [
     "get_universal_scraper",
     "load_config_file",
     "reconcile_orphaned_jobs",
+    # B2B adapter layer
+    "UniversalReviewAdapter",
+    "get_universal_adapter",
+    "ScrapeMode",
+    "get_scrape_mode",
+    "SourceAdapterConfig",
+    "get_source_adapter_config",
 ]

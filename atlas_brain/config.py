@@ -2393,6 +2393,14 @@ class B2BScrapeConfig(BaseSettings):
         description="Sources allowed for automated scrape intake (comma-separated)",
     )
 
+    # Universal adapter mode per source (comma-separated "source:mode" pairs)
+    # Modes: legacy (default), dual_run (both parsers, insert from legacy), universal (LLM only)
+    # Example: "trustpilot:universal,peerspot:dual_run,getapp:legacy"
+    universal_source_modes: str = Field(
+        default="",
+        description="Per-source scrape mode overrides (source:mode,...)",
+    )
+
     # Proxies (comma-separated URLs)
     proxy_datacenter_urls: str = Field(default="", description="Datacenter proxy URLs (comma-separated)")
     proxy_residential_urls: str = Field(default="", description="Residential proxy URLs (comma-separated)")
