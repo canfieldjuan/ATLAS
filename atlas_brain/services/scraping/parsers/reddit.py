@@ -123,33 +123,43 @@ def _compute_author_churn_score(author_posts: list[dict]) -> float:
     return min(round(raw, 2), 10.0)
 
 
-def _compute_trending_score(reviewed_at: str | None, vendor_posts: list[dict]) -> str:
+def _compute_batch_trending_score(vendor_posts: list[dict]) -> str:
     """
-    Classify trending level by comparing recent (7-day) vs monthly (30-day) mention counts.
+    Classify trending level for the current scrape batch by comparing the
+    7-day daily mention rate to the 30-day daily mention rate.
 
-    Spike >2x monthly average → high; >1.25x → medium; else low.
-    vendor_posts: all posts collected so far for this vendor (used as baseline).
+    Spike ≥2× monthly daily rate → high; ≥1.25× → medium; else low.
+    vendor_posts: all posts collected for this vendor in the current batch.
+
+    Returns a single score applied uniformly to all posts in the batch —
+    this is a batch-level signal, not a per-post metric.
     """
-    if not vendor_posts or not reviewed_at:
+    if not vendor_posts:
         return "low"
 
     now = datetime.now(tz=timezone.utc)
     cutoff_7d = now - timedelta(days=7)
     cutoff_30d = now - timedelta(days=30)
 
-    recent = sum(
-        1 for p in vendor_posts
-        if p.get("reviewed_at") and datetime.fromisoformat(p["reviewed_at"]) >= cutoff_7d
-    )
-    monthly = sum(
-        1 for p in vendor_posts
-        if p.get("reviewed_at") and datetime.fromisoformat(p["reviewed_at"]) >= cutoff_30d
-    )
+    recent = 0
+    monthly = 0
+    for p in vendor_posts:
+        ts = p.get("reviewed_at")
+        if not ts:
+            continue
+        try:
+            dt = datetime.fromisoformat(ts)
+        except ValueError:
+            continue
+        if dt >= cutoff_7d:
+            recent += 1
+        if dt >= cutoff_30d:
+            monthly += 1
 
     if monthly == 0:
         return "low"
 
-    # Normalise to a daily rate: recent/7 vs monthly/30
+    # Normalise to daily rates to account for the different window sizes
     daily_recent = recent / 7
     daily_monthly = monthly / 30
 
@@ -235,7 +245,6 @@ class RedditParser:
         errors: list[str] = []
         pages_scraped = 0
         seen_ids: set[str] = set()
-        comment_fetches = 0
         # author → list of their parsed post dicts (for scoring)
         author_index: dict[str, list[dict]] = {}
 
@@ -255,6 +264,7 @@ class RedditParser:
                     if resp.status_code == 429:
                         logger.debug("Reddit rate limited, pausing 2s")
                         await asyncio.sleep(2)
+                        errors.append(f"GET {url}: 429 rate limited")
                         return None
                     return resp
                 except Exception as exc:
@@ -288,7 +298,7 @@ class RedditParser:
                 ])
                 for (sub, query, _), resp in zip(batch, resps):
                     if resp is None:
-                        errors.append(f"r/{sub} q={query}: no response")
+                        # error already appended inside _get (429 or exception)
                         continue
                     if resp.status_code != 200:
                         errors.append(f"r/{sub} q={query}: HTTP {resp.status_code}")
@@ -346,7 +356,7 @@ class RedditParser:
                     post_id = review.get("source_review_id", "")
                     subreddit = meta.get("subreddit", "")
                     if post_id and subreddit:
-                        comments = await self._fetch_comments(post_id, subreddit, http)
+                        comments = await self._fetch_comments(post_id, subreddit, http, sem, pages_scraped_ref)
                         if comments:
                             review["raw_metadata"]["comment_threads"] = comments
                             review["raw_metadata"]["comment_depth"] = 2
@@ -354,11 +364,11 @@ class RedditParser:
                         await asyncio.sleep(0.3)
 
             # ---- Phase 2: enrich with author scores + trending ----
-            all_reviewed_ats = [r.get("reviewed_at") for r in reviews]
-            # Build a lightweight list for trending baseline
+            # Trending is a batch-level signal; compute once, apply to all posts.
             trending_baseline = [
-                {"reviewed_at": ts} for ts in all_reviewed_ats if ts
+                {"reviewed_at": r.get("reviewed_at")} for r in reviews if r.get("reviewed_at")
             ]
+            batch_trending = _compute_batch_trending_score(trending_baseline)
 
             for review in reviews:
                 author = review.get("reviewer_name", "")
@@ -373,10 +383,7 @@ class RedditParser:
                 if churn_score >= _AUTHOR_HIGH_SCORE_THRESHOLD:
                     review["reviewer_title"] = f"Repeat Churn Signal (Score: {churn_score})"
 
-                # Trending score
-                meta["trending_score"] = _compute_trending_score(
-                    review.get("reviewed_at"), trending_baseline
-                )
+                meta["trending_score"] = batch_trending
 
         pages_scraped = pages_scraped_ref[0]
         logger.info(
@@ -406,7 +413,12 @@ class RedditParser:
     # ------------------------------------------------------------------
 
     async def _fetch_comments(
-        self, post_id: str, subreddit: str, http: httpx.AsyncClient
+        self,
+        post_id: str,
+        subreddit: str,
+        http: httpx.AsyncClient,
+        sem: asyncio.Semaphore,
+        pages_scraped_ref: list[int],
     ) -> list[dict]:
         """Fetch top comments for a post. Returns up to 3 top-level comments (depth=2)."""
         url = (
@@ -414,7 +426,9 @@ class RedditParser:
             f"?limit=3&depth=2&sort=top"
         )
         try:
-            resp = await http.get(url)
+            async with sem:
+                resp = await http.get(url)
+                pages_scraped_ref[0] += 1
             if resp.status_code != 200:
                 return []
             payload = resp.json()
@@ -450,6 +464,8 @@ class RedditParser:
         post_id = post.get("id", "")
         selftext = post.get("selftext", "")
 
+        if not post_id:
+            return None
         if post_id in seen_ids:
             return None
         if selftext in ("[removed]", "[deleted]"):
@@ -585,7 +601,7 @@ class RedditParser:
                     )
                     resp = await client.get(
                         fallback_url,
-                        domain=_DOMAIN,
+                        domain="old.reddit.com",
                         referer=f"https://old.reddit.com/r/{sub}/",
                         sticky_session=False,
                         prefer_residential=False,
