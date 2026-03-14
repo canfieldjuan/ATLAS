@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone, timedelta
 from urllib.parse import quote_plus
 
@@ -146,6 +147,278 @@ _FLAIR_WEIGHT_BOOST: dict[str, float] = {
 _AUTHOR_CHURN_MIGRATION_WEIGHT = 3
 _AUTHOR_CHURN_UPVOTE_WEIGHT = 0.1
 _AUTHOR_HIGH_SCORE_THRESHOLD = 7
+
+# ---------------------------------------------------------------------------
+# Subreddit priors -- weight multiplier reflecting signal density per sub
+# ---------------------------------------------------------------------------
+
+_SUBREDDIT_WEIGHT: dict[str, float] = {
+    # High-signal B2B discussion subs
+    "sysadmin": 0.8,
+    "ITManagers": 0.8,
+    "devops": 0.7,
+    "msp": 0.8,
+    "CRM": 0.9,
+    "CustomerSuccess": 0.9,
+    "SaaS": 0.8,
+    "EnterpriseIT": 0.8,
+    "projectmanagement": 0.7,
+    # Vendor-specific subs tend to be high-signal when matched
+    "salesforce": 0.85,
+    "hubspot": 0.85,
+    "Zoho": 0.85,
+    # Career / insider subs
+    "cscareerquestions": 0.6,
+    "ExperiencedDevs": 0.7,
+    "antiwork": 0.5,
+    # General subs -- lower prior, higher noise
+    "startups": 0.6,
+    "smallbusiness": 0.6,
+    "marketing": 0.5,
+    "sales": 0.5,
+    "technology": 0.4,
+    "business": 0.4,
+}
+
+_DEFAULT_SUBREDDIT_WEIGHT = 0.5
+
+# ---------------------------------------------------------------------------
+# Insider evidence extraction patterns
+# ---------------------------------------------------------------------------
+
+_EMPLOYMENT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    # Current employment
+    (re.compile(r"\b(?:I|we)\s+work(?:ed)?\s+(?:at|for)\s+", re.I), "current_or_past"),
+    (re.compile(r"\b(?:I'm|I am)\s+(?:a|an)\s+\w+\s+at\s+", re.I), "current"),
+    (re.compile(r"\bmy\s+(?:company|employer|team|org)\b", re.I), "current"),
+    # Past employment
+    (re.compile(r"\b(?:I|we)\s+(?:left|quit|resigned\s+from|was\s+laid\s+off\s+from)\s+", re.I), "past"),
+    (re.compile(r"\bformer(?:ly)?\s+(?:at|employee|engineer|dev)", re.I), "past"),
+    (re.compile(r"\bused\s+to\s+work\s+(?:at|for)\s+", re.I), "past"),
+    (re.compile(r"\bex[\s-](?:employee|engineer|dev|PM|manager)", re.I), "past"),
+]
+
+_ORG_SIGNAL_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\blayoffs?\b|\blet\s+go\b|\bheadcount\s+(?:cut|reduction)", re.I), "layoff"),
+    (re.compile(r"\breorg(?:aniz)?(?:ed|ation|ing)?\b", re.I), "reorg"),
+    (re.compile(r"\b(?:toxic|terrible|awful)\s+(?:culture|management|leadership)", re.I), "culture"),
+    (re.compile(r"\bmorale\b|\bburnout\b|\bturnover\b", re.I), "morale"),
+    (re.compile(r"\bproduct\s+(?:quality|direction)\s+(?:is\s+)?(?:declining|tanking|bad)", re.I), "quality_decline"),
+    (re.compile(r"\b(?:leadership|exec|C-suite)\s+(?:churn|turnover|exodus)", re.I), "leadership_churn"),
+    (re.compile(r"\bbrain\s+drain\b|\beveryone(?:'s| is)\s+leaving\b", re.I), "talent_exodus"),
+]
+
+# Role extraction from self-identification text
+_ROLE_PATTERN = re.compile(
+    r"\bI(?:'m| am)\s+(?:a|an)\s+([\w\s/&-]{3,30}?)\s+(?:at|for|working)\b",
+    re.I,
+)
+
+# Candidate score thresholds
+_CANDIDATE_SCORE_MIN = 2.0   # Reject posts below this score
+_MAX_AUTHOR_FETCHES = 10     # Cap selective author history lookups
+
+# ---------------------------------------------------------------------------
+# Churn / comparison / pain language for candidate scoring
+# ---------------------------------------------------------------------------
+
+_COMPARISON_WORDS = frozenset({
+    "vs", "versus", "compared", "comparison", "alternative", "alternatives",
+    "better", "worse", "competitor",
+})
+
+_PAIN_WORDS = frozenset({
+    "frustrated", "frustrating", "hate", "terrible", "awful", "broken",
+    "nightmare", "expensive", "overpriced", "buggy", "worst", "regret",
+    "sucks", "horrible", "unusable", "unreliable",
+})
+
+# Job-hunt / interview noise words (penalized in candidate scoring)
+_JOB_NOISE_WORDS = frozenset({
+    "interview", "interviewing", "interviewed", "hiring", "recruiter",
+    "resume", "salary", "leetcode", "onsite", "offer", "rejected",
+    "job hunt", "job hunting", "job search",
+})
+
+
+# ---------------------------------------------------------------------------
+# Alias builder
+# ---------------------------------------------------------------------------
+
+def _build_vendor_aliases(vendor_name: str, extra_aliases: list[str] | None = None) -> list[str]:
+    """Derive normalized alias variants from a vendor name.
+
+    Returns a list of lowercase aliases including the original name.
+    Handles cases like "Monday.com" -> ["monday.com", "monday"],
+    "HubSpot" -> ["hubspot"], "Zoho CRM" -> ["zoho crm", "zoho"].
+    """
+    base = vendor_name.lower().strip()
+    aliases = {base}
+
+    # Strip trailing ".com", ".io", etc.
+    stripped = re.sub(r"\.\w{2,4}$", "", base)
+    if stripped and stripped != base:
+        aliases.add(stripped)
+
+    # Split multi-word: "Zoho CRM" -> also match "Zoho"
+    parts = base.split()
+    if len(parts) >= 2:
+        aliases.add(parts[0])
+
+    # Add explicit aliases from target metadata
+    for alias in (extra_aliases or []):
+        a = alias.lower().strip()
+        if a:
+            aliases.add(a)
+
+    return sorted(aliases, key=len, reverse=True)
+
+
+def _build_alias_pattern(aliases: list[str]) -> re.Pattern[str]:
+    """Build a compiled regex that matches any vendor alias with word boundaries."""
+    escaped = [re.escape(a) for a in aliases]
+    joined = "|".join(escaped)
+    return re.compile(
+        r"(?<![./\w])(?:" + joined + r")(?![.\w])",
+        re.IGNORECASE,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Candidate scorer
+# ---------------------------------------------------------------------------
+
+def _score_candidate(
+    title: str,
+    selftext: str,
+    post: dict,
+    alias_pattern: re.Pattern[str],
+    subreddit: str,
+) -> tuple[float, list[str]]:
+    """Score a Reddit post candidate before full parsing.
+
+    Returns (score, list_of_reasons). Higher = more relevant.
+    Score components:
+      - Title alias hit: +3.0
+      - Early body hit (<200 chars): +2.0
+      - Total mention count: +0.5 per mention (capped at +2.0)
+      - Comparison/churn language: +1.5
+      - Pain language: +1.0
+      - Subreddit prior: +0.0 to +1.0
+      - Engagement: log-scaled from score + comments
+      - Job-hunt noise: -2.0
+      - Vendor-list pattern: -1.5
+    """
+    score = 0.0
+    reasons: list[str] = []
+    title_lower = title.lower()
+    body_preview = selftext[:2000].lower()
+    combined = f"{title_lower} {body_preview}"
+
+    # -- Vendor mention analysis --
+    title_hits = len(alias_pattern.findall(title))
+    body_hits = len(alias_pattern.findall(selftext[:2000]))
+    total_mentions = title_hits + body_hits
+
+    if title_hits > 0:
+        score += 3.0
+        reasons.append("title_hit=+3.0")
+
+    early_hit = alias_pattern.search(selftext[:200])
+    if early_hit and title_hits == 0:
+        score += 2.0
+        reasons.append("early_body=+2.0")
+
+    mention_bonus = min(total_mentions * 0.5, 2.0)
+    if mention_bonus > 0:
+        score += mention_bonus
+        reasons.append(f"mentions({total_mentions})=+{mention_bonus:.1f}")
+
+    # -- Churn / comparison language --
+    churn_hit = any(w in combined for w in _COMPARISON_WORDS)
+    if churn_hit:
+        score += 1.5
+        reasons.append("comparison=+1.5")
+
+    # -- Pain language --
+    pain_hit = any(w in combined for w in _PAIN_WORDS)
+    if pain_hit:
+        score += 1.0
+        reasons.append("pain=+1.0")
+
+    # -- Subreddit prior --
+    sub_weight = _SUBREDDIT_WEIGHT.get(subreddit, _DEFAULT_SUBREDDIT_WEIGHT)
+    sub_bonus = sub_weight * 1.0  # scale to 0.0-1.0 range
+    score += sub_bonus
+    reasons.append(f"sub_prior({subreddit})=+{sub_bonus:.1f}")
+
+    # -- Engagement --
+    reddit_score = post.get("score", 0)
+    num_comments = post.get("num_comments", 0)
+    import math
+    engagement = math.log1p(max(reddit_score, 0) + max(num_comments, 0) * 2) * 0.3
+    engagement = min(engagement, 1.5)
+    score += engagement
+    reasons.append(f"engagement=+{engagement:.1f}")
+
+    # -- Penalties --
+
+    # Job-hunt / interview noise
+    job_noise = sum(1 for w in _JOB_NOISE_WORDS if w in combined)
+    if job_noise >= 2:
+        score -= 2.0
+        reasons.append(f"job_noise({job_noise})=-2.0")
+
+    # Vendor-list detection: if the text contains 3+ other vendor/company names
+    # in a list-like pattern near the vendor mention, it's likely noise
+    # Heuristic: count commas within 100 chars of a vendor mention in title
+    if title_hits > 0 and title_lower.count(",") >= 3:
+        score -= 1.5
+        reasons.append("vendor_list=-1.5")
+
+    return round(score, 2), reasons
+
+
+# ---------------------------------------------------------------------------
+# Insider evidence extraction
+# ---------------------------------------------------------------------------
+
+def _extract_insider_evidence(text: str) -> dict:
+    """Extract employment claims and org signals from post text.
+
+    Returns a dict with:
+      - employment_claim: bool
+      - employment_tense: "current" | "past" | None
+      - org_signal_types: list[str]  (e.g. ["layoff", "culture"])
+      - extracted_role: str | None  (e.g. "senior PM")
+    """
+    employment_claim = False
+    employment_tense = None
+    org_signals: list[str] = []
+    extracted_role = None
+
+    for pat, tense in _EMPLOYMENT_PATTERNS:
+        if pat.search(text):
+            employment_claim = True
+            # "current_or_past" defers to more specific matches
+            if employment_tense is None or tense != "current_or_past":
+                employment_tense = tense if tense != "current_or_past" else "current"
+            break
+
+    for pat, signal_type in _ORG_SIGNAL_PATTERNS:
+        if pat.search(text):
+            org_signals.append(signal_type)
+
+    role_match = _ROLE_PATTERN.search(text)
+    if role_match:
+        extracted_role = role_match.group(1).strip()
+
+    return {
+        "employment_claim": employment_claim,
+        "employment_tense": employment_tense,
+        "org_signal_types": org_signals,
+        "extracted_role": extracted_role,
+    }
 
 
 def _get_reddit_credentials() -> tuple[str, str]:
@@ -319,10 +592,17 @@ class RedditParser:
         if isinstance(subreddits, str):
             subreddits = [s.strip() for s in subreddits.split(",")]
 
+        # Build alias pattern once for the entire scrape
+        aliases = _build_vendor_aliases(
+            target.vendor_name,
+            target.metadata.get("vendor_aliases"),
+        )
+        alias_pattern = _build_alias_pattern(aliases)
+
         reviews: list[dict] = []
         errors: list[str] = []
         seen_ids: set[str] = set()
-        # author → list of their parsed post dicts (for scoring)
+        # author -> list of their parsed post dicts (for scoring)
         author_index: dict[str, list[dict]] = {}
 
         headers = {
@@ -368,7 +648,7 @@ class RedditParser:
                 if resp and resp.status_code == 200:
                     data = resp.json()
                     for post_wrapper in data.get("data", {}).get("children", []):
-                        review = self._parse_post(post_wrapper, target, seen_ids, profile=profile)
+                        review = self._parse_post(post_wrapper, target, seen_ids, profile=profile, alias_pattern=alias_pattern)
                         if review:
                             reviews.append(review)
                             author = review.get("reviewer_name", "")
@@ -391,7 +671,7 @@ class RedditParser:
                 if resp and resp.status_code == 200:
                     data = resp.json()
                     for post_wrapper in data.get("data", {}).get("children", []):
-                        review = self._parse_post(post_wrapper, target, seen_ids, profile=profile)
+                        review = self._parse_post(post_wrapper, target, seen_ids, profile=profile, alias_pattern=alias_pattern)
                         if review:
                             reviews.append(review)
                             author = review.get("reviewer_name", "")
@@ -429,6 +709,74 @@ class RedditParser:
                     errors.extend(cerrs)
                     comment_fetches += 1
 
+            # ---- Selective insider author expansion ----
+            # For insider profile: fetch recent history for top insider candidates
+            # to find repeated vendor mentions and org-level signals.
+            if profile == "insider":
+                insider_candidates = [
+                    r for r in reviews
+                    if r.get("comment_depth", 0) == 0  # posts only
+                    and (r.get("raw_metadata") or {}).get("employment_claim")
+                    and (r.get("raw_metadata") or {}).get("candidate_score", 0) >= 5.0
+                ]
+                # Sort by candidate score descending, cap fetches
+                insider_candidates.sort(
+                    key=lambda r: (r.get("raw_metadata") or {}).get("candidate_score", 0),
+                    reverse=True,
+                )
+                author_fetches = 0
+                expanded_authors: set[str] = set()
+                for ic in insider_candidates:
+                    if author_fetches >= _MAX_AUTHOR_FETCHES:
+                        break
+                    author_name = ic.get("reviewer_name", "")
+                    if not author_name or author_name in expanded_authors or author_name == "[deleted]":
+                        continue
+                    expanded_authors.add(author_name)
+
+                    # Fetch recent submissions by this author
+                    author_url = (
+                        f"https://oauth.reddit.com/user/{quote_plus(author_name)}"
+                        f"/submitted?sort=new&limit=25&t=year"
+                    )
+                    resp = await _get(http, author_url)
+                    author_fetches += 1
+                    if not resp or resp.status_code != 200:
+                        continue
+
+                    author_data = resp.json()
+                    vendor_mentions_in_history = 0
+                    org_terms_in_history = 0
+                    for child in author_data.get("data", {}).get("children", []):
+                        apost = child.get("data", {})
+                        atext = f"{apost.get('title', '')} {apost.get('selftext', '')[:500]}".lower()
+                        if alias_pattern.search(atext):
+                            vendor_mentions_in_history += 1
+                        for pat, _ in _ORG_SIGNAL_PATTERNS:
+                            if pat.search(atext):
+                                org_terms_in_history += 1
+                                break
+
+                    # Enrich the original review with author history signal
+                    ic_meta = ic.get("raw_metadata") or {}
+                    ic_meta["author_vendor_history_mentions"] = vendor_mentions_in_history
+                    ic_meta["author_org_history_signals"] = org_terms_in_history
+                    if vendor_mentions_in_history >= 2:
+                        ic_meta["insider_score"] = min(
+                            10.0,
+                            ic_meta.get("candidate_score", 0)
+                            + vendor_mentions_in_history * 1.0
+                            + org_terms_in_history * 0.5,
+                        )
+                    ic["raw_metadata"] = ic_meta
+                    await asyncio.sleep(0.3)
+
+                if author_fetches > 0:
+                    logger.info(
+                        "Reddit insider author expansion: %d authors checked for %s",
+                        author_fetches, target.vendor_name,
+                    )
+
             # ---- Enrich posts with author scores + trending ----
             trending_baseline = [
                 {"reviewed_at": r.get("reviewed_at")} for r in reviews if r.get("reviewed_at")
@@ -445,7 +793,9 @@ class RedditParser:
                 meta["author_post_count_in_batch"] = len(author_posts)
 
                 if churn_score >= _AUTHOR_HIGH_SCORE_THRESHOLD:
-                    review["reviewer_title"] = f"Repeat Churn Signal (Score: {churn_score})"
+                    # Don't overwrite extracted_role with churn label
+                    if not review.get("reviewer_title"):
+                        review["reviewer_title"] = f"Repeat Churn Signal (Score: {churn_score})"
 
                 meta["trending_score"] = batch_trending
                 review["raw_metadata"] = meta
@@ -540,6 +890,7 @@ class RedditParser:
         seen_ids: set[str],
         *,
         profile: str = "churn",
+        alias_pattern: re.Pattern[str] | None = None,
     ) -> dict | None:
         """Parse a single Reddit post into a review dict. Returns None if skipped."""
         post = post_wrapper.get("data", {})
@@ -555,26 +906,31 @@ class RedditParser:
         if len(selftext) < _MIN_SELFTEXT_LEN:
             return None
 
-        # Vendor relevance gate: the post must be *about* the vendor, not just
-        # mentioning it in passing. Title match = always pass. Body-only match
-        # requires early mention (<200 chars) or 2+ occurrences to filter noise
-        # like "I interviewed at DoorDash, HubSpot, Google..." lists.
-        import re
         title = post.get("title", "")
-        vendor_lower = target.vendor_name.lower()
-        vendor_pattern = re.compile(
-            r'(?<![./\w])' + re.escape(vendor_lower) + r"(?![.\w])",
-            re.IGNORECASE,
+        subreddit = post.get("subreddit", "")
+
+        # Build alias pattern if not provided (public fallback path)
+        if alias_pattern is None:
+            aliases = _build_vendor_aliases(
+                target.vendor_name,
+                target.metadata.get("vendor_aliases"),
+            )
+            alias_pattern = _build_alias_pattern(aliases)
+
+        # ---- Candidate scoring gate ----
+        candidate_score, candidate_reasons = _score_candidate(
+            title, selftext, post, alias_pattern, subreddit,
         )
-        title_match = vendor_pattern.search(title)
-        if not title_match:
-            # No title match -- require body relevance: early mention OR 2+ occurrences
-            body_matches = vendor_pattern.findall(selftext[:2000])
-            if not body_matches:
-                return None
-            early_match = vendor_pattern.search(selftext[:200])
-            if not early_match and len(body_matches) < 2:
-                return None
+
+        # Hard reject: no alias match at all in title or body
+        title_hits = len(alias_pattern.findall(title))
+        body_hits = len(alias_pattern.findall(selftext[:2000]))
+        if title_hits == 0 and body_hits == 0:
+            return None
+
+        # Reject low-score candidates
+        if candidate_score < _CANDIDATE_SCORE_MIN:
+            return None
 
         seen_ids.add(post_id)
 
@@ -588,13 +944,17 @@ class RedditParser:
         # Content type depends on search profile
         if profile == "insider":
             content_type = "insider_account"
-            base_source_weight = 0.6  # insider accounts are high-value forward-looking signals
+            base_source_weight = 0.6
         else:
             content_type = "community_discussion"
             base_source_weight = 0.5
 
         # ---- Dynamic source_weight ----
         source_weight = base_source_weight
+
+        # Subreddit prior boost
+        sub_weight = _SUBREDDIT_WEIGHT.get(subreddit, _DEFAULT_SUBREDDIT_WEIGHT)
+        source_weight += (sub_weight - 0.5) * 0.2  # range: -0.02 to +0.08
 
         # Flair boost
         flair = (post.get("link_flair_text") or "").lower()
@@ -616,6 +976,15 @@ class RedditParser:
 
         source_weight = round(min(source_weight, 1.0), 3)
 
+        # ---- Insider evidence extraction ----
+        combined_text = f"{title}\n{selftext[:3000]}"
+        insider_evidence = _extract_insider_evidence(combined_text)
+
+        # Promote reviewer_title if we extracted a role or employment claim
+        reviewer_title = None
+        if insider_evidence["extracted_role"]:
+            reviewer_title = insider_evidence["extracted_role"]
+
         # ---- Edit history ----
         edited = post.get("edited")
         is_edited = bool(edited and edited is not False)
@@ -625,6 +994,9 @@ class RedditParser:
 
         # Reddit fullname used as thread_id (e.g. "t3_abc123")
         fullname = post.get("name", f"t3_{post_id}")
+
+        # Author flair (often contains role/company info in B2B subs)
+        author_flair = post.get("author_flair_text") or ""
 
         return {
             "source": "reddit",
@@ -640,14 +1012,14 @@ class RedditParser:
             "pros": None,
             "cons": None,
             "reviewer_name": post.get("author", ""),
-            "reviewer_title": None,
+            "reviewer_title": reviewer_title,
             "reviewer_company": None,
             "company_size_raw": None,
             "reviewer_industry": None,
             "reviewed_at": reviewed_at,
             # Threading fields
             "content_type": content_type,
-            "parent_review_id": None,  # Posts have no parent
+            "parent_review_id": None,
             "thread_id": fullname,
             "comment_depth": 0,
             "raw_metadata": {
@@ -655,12 +1027,23 @@ class RedditParser:
                 "source_weight": source_weight,
                 "source_type": content_type,
                 "search_profile": profile,
-                "subreddit": post.get("subreddit", ""),
+                "subreddit": subreddit,
+                "subreddit_weight": sub_weight,
                 "score": post.get("score", 0),
                 "num_comments": post.get("num_comments", 0),
                 "upvote_ratio": post.get("upvote_ratio", 0),
+                # Vendor match metadata
+                "vendor_in_title": title_hits > 0,
+                "vendor_mention_count": title_hits + body_hits,
+                "candidate_score": candidate_score,
+                "candidate_reason": "; ".join(candidate_reasons),
+                # Insider evidence
+                "employment_claim": insider_evidence["employment_claim"],
+                "employment_tense": insider_evidence["employment_tense"],
+                "org_signal_types": insider_evidence["org_signal_types"],
                 # Flair
                 "post_flair": post.get("link_flair_text") or "",
+                "author_flair_text": author_flair,
                 # Awards
                 "award_count": len(awards),
                 # Edit tracking
@@ -721,6 +1104,17 @@ class RedditParser:
         parent_source_review_id = parent_post.get("source_review_id")
         thread_id = parent_post.get("thread_id")
 
+        # Insider evidence from comment body
+        insider_evidence = _extract_insider_evidence(body[:3000])
+        reviewer_title = insider_evidence["extracted_role"]
+
+        subreddit = data.get("subreddit", "")
+        sub_weight = _SUBREDDIT_WEIGHT.get(subreddit, _DEFAULT_SUBREDDIT_WEIGHT)
+        author_flair = data.get("author_flair_text") or ""
+
+        # Comment source_weight: base 0.4, with subreddit prior adjustment
+        comment_source_weight = round(0.4 + (sub_weight - 0.5) * 0.1, 3)
+
         return {
             "source": "reddit",
             "source_url": (
@@ -739,7 +1133,7 @@ class RedditParser:
             "pros": None,
             "cons": None,
             "reviewer_name": data.get("author", ""),
-            "reviewer_title": None,
+            "reviewer_title": reviewer_title,
             "reviewer_company": None,
             "company_size_raw": None,
             "reviewer_industry": None,
@@ -751,16 +1145,22 @@ class RedditParser:
             "comment_depth": depth + 1,
             "raw_metadata": {
                 "extraction_method": "api_json",
-                "source_weight": 0.4,
+                "source_weight": comment_source_weight,
                 "source_type": "comment",
                 "search_profile": parent_post.get("raw_metadata", {}).get("search_profile", "churn"),
-                "subreddit": data.get("subreddit", ""),
+                "subreddit": subreddit,
+                "subreddit_weight": sub_weight,
                 "score": score,
                 "upvote_ratio": None,
                 "num_comments": None,
+                # Insider evidence
+                "employment_claim": insider_evidence["employment_claim"],
+                "employment_tense": insider_evidence["employment_tense"],
+                "org_signal_types": insider_evidence["org_signal_types"],
+                "author_flair_text": author_flair,
                 # For parent_review_id resolution after insert
                 "parent_source_review_id": parent_source_review_id,
-                # Not applicable for comments
+                # Enriched in post-processing
                 "author_churn_score": 0.0,
                 "author_post_count_in_batch": 0,
                 "trending_score": "low",

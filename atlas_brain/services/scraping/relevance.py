@@ -146,6 +146,25 @@ def score_relevance(
         if insider_boost > 0:
             score += insider_boost
             reasons.append(f"insider_signals=+{insider_boost:.2f}")
+
+        # Reddit-specific insider metadata boosts (from parser evidence extraction)
+        if meta.get("employment_claim"):
+            emp_tense = meta.get("employment_tense", "")
+            emp_boost = 0.10 if emp_tense == "past" else 0.05
+            score += emp_boost
+            reasons.append(f"employment_claim({emp_tense})=+{emp_boost:.2f}")
+
+        org_signals = meta.get("org_signal_types") or []
+        if org_signals:
+            org_boost = min(len(org_signals) * 0.05, 0.15)
+            score += org_boost
+            reasons.append(f"org_signals({','.join(org_signals)})=+{org_boost:.2f}")
+
+        # Author expansion insider_score from author history fetch
+        insider_score_val = meta.get("insider_score")
+        if isinstance(insider_score_val, (int, float)) and insider_score_val >= 6.0:
+            score += 0.10
+            reasons.append(f"insider_author_score({insider_score_val:.1f})=+0.10")
     else:
         # --- Signal 2b: Standard noise patterns ---
         noise_penalty = 0.0
@@ -160,18 +179,36 @@ def score_relevance(
             reasons.append(f"noise_language={noise_penalty:.2f}")
 
     # --- Signal 3: Vendor name prominence ---
-    vendor_lower = vendor_name.lower()
-    if vendor_lower in title.lower():
-        score += 0.05
-        reasons.append("vendor_in_title=+0.05")
+    # Use pre-computed metadata from Reddit parser when available
+    vendor_in_title = meta.get("vendor_in_title")
+    vendor_mention_count = meta.get("vendor_mention_count")
 
-    body_mentions = len(re.findall(re.escape(vendor_lower), body.lower()))
-    if body_mentions >= 3:
-        score += 0.05
-        reasons.append(f"vendor_mentions={body_mentions}=+0.05")
-    elif body_mentions <= 1 and len(body) > 500:
-        score -= 0.15
-        reasons.append("tangential_mention=-0.15")
+    if vendor_in_title is not None:
+        # Use parser-provided metadata (alias-aware)
+        if vendor_in_title:
+            score += 0.05
+            reasons.append("vendor_in_title=+0.05")
+        mention_count = vendor_mention_count or 0
+        if mention_count >= 3:
+            score += 0.05
+            reasons.append(f"vendor_mentions={mention_count}=+0.05")
+        elif mention_count <= 1 and len(body) > 500:
+            score -= 0.15
+            reasons.append("tangential_mention=-0.15")
+    else:
+        # Fallback: compute from text (non-Reddit sources)
+        vendor_lower = vendor_name.lower()
+        if vendor_lower in title.lower():
+            score += 0.05
+            reasons.append("vendor_in_title=+0.05")
+
+        body_mentions = len(re.findall(re.escape(vendor_lower), body.lower()))
+        if body_mentions >= 3:
+            score += 0.05
+            reasons.append(f"vendor_mentions={body_mentions}=+0.05")
+        elif body_mentions <= 1 and len(body) > 500:
+            score -= 0.15
+            reasons.append("tangential_mention=-0.15")
 
     # --- Signal 4: Source-specific engagement quality ---
     source = (review.get("source") or "").lower()
@@ -183,6 +220,41 @@ def score_relevance(
            (isinstance(upvote_ratio, (int, float)) and upvote_ratio < 0.55):
             score -= 0.10
             reasons.append("low_reddit_engagement=-0.10")
+
+        # --- Signal 4a: Reddit-specific metadata (candidate score, subreddit, insider) ---
+        candidate_score = meta.get("candidate_score")
+        if candidate_score is not None:
+            # High candidate score from parser = confirmed relevance
+            if candidate_score >= 7.0:
+                score += 0.10
+                reasons.append(f"high_candidate_score({candidate_score})=+0.10")
+            elif candidate_score >= 5.0:
+                score += 0.05
+                reasons.append(f"good_candidate_score({candidate_score})=+0.05")
+
+        # Subreddit weight from parser
+        sub_weight = meta.get("subreddit_weight")
+        if isinstance(sub_weight, (int, float)) and sub_weight >= 0.8:
+            score += 0.05
+            reasons.append(f"high_signal_subreddit=+0.05")
+
+        # Employment claim boost (insider path handles separately below)
+        if not is_insider and meta.get("employment_claim"):
+            score += 0.05
+            reasons.append("employment_claim=+0.05")
+
+        # Job-hunt / interview noise penalty for Reddit
+        org_signals = meta.get("org_signal_types") or []
+        if not is_insider and not org_signals:
+            # Check for job-seeker noise patterns specific to Reddit
+            _job_noise_re = re.compile(
+                r"\b(?:interview(?:ed|ing)?|job\s+hunt|salary|recruiter|leetcode|onsite)\b",
+                re.I,
+            )
+            job_noise_hits = len(_job_noise_re.findall(text[:1000]))
+            if job_noise_hits >= 2:
+                score -= 0.10
+                reasons.append(f"reddit_job_noise({job_noise_hits})=-0.10")
 
     elif source == "hackernews":
         points = meta.get("points", meta.get("score", 0))
