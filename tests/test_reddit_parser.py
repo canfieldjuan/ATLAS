@@ -262,6 +262,17 @@ class TestInsiderExtraction:
         assert result["employment_claim"] is True
         assert result["employment_tense"] == "current"
 
+    def test_current_employment_multi_word_role(self):
+        """'I'm a senior product manager at X' must detect employment."""
+        result = _extract_insider_evidence("I'm a senior product manager at HubSpot")
+        assert result["employment_claim"] is True
+        assert result["employment_tense"] == "current"
+
+    def test_current_employment_long_role(self):
+        result = _extract_insider_evidence("I am a VP of customer success at HubSpot")
+        assert result["employment_claim"] is True
+        assert result["employment_tense"] == "current"
+
     def test_past_employment(self):
         result = _extract_insider_evidence("I left HubSpot last year after 3 years")
         assert result["employment_claim"] is True

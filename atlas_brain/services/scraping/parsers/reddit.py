@@ -195,7 +195,7 @@ _EMPLOYMENT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bex[\s-](?:employee|engineer|dev|PM|manager)", re.I), "past"),
     # Current employment
     (re.compile(r"\b(?:I|we)\s+work\s+(?:at|for)\s+", re.I), "current"),
-    (re.compile(r"\b(?:I'm|I am)\s+(?:a|an)\s+\w+\s+at\s+", re.I), "current"),
+    (re.compile(r"\b(?:I'm|I am)\s+(?:a|an)\s+\w+(?:\s+\w+){0,3}\s+at\s+", re.I), "current"),
     (re.compile(r"\bmy\s+(?:company|employer|team|org)\b", re.I), "current"),
 ]
 
