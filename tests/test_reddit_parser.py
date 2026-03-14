@@ -90,15 +90,27 @@ class TestAliasMatching:
         aliases = _build_vendor_aliases("HubSpot")
         assert "hubspot" in aliases
 
-    def test_dotcom_stripped(self):
+    def test_dotcom_kept_but_common_word_not_stripped(self):
         aliases = _build_vendor_aliases("Monday.com")
         assert "monday.com" in aliases
-        assert "monday" in aliases
+        # "monday" is a common English word -- must NOT be a standalone alias
+        assert "monday" not in aliases
+
+    def test_dotcom_stripped_when_not_common(self):
+        aliases = _build_vendor_aliases("HubSpot.com")
+        assert "hubspot.com" in aliases
+        assert "hubspot" in aliases  # not a common word, safe to strip
 
     def test_multi_word_splits_first(self):
         aliases = _build_vendor_aliases("Zoho CRM")
         assert "zoho crm" in aliases
         assert "zoho" in aliases
+
+    def test_multi_word_does_not_split_common_first(self):
+        aliases = _build_vendor_aliases("Close CRM")
+        assert "close crm" in aliases
+        # "close" is a common word -- must NOT be a standalone alias
+        assert "close" not in aliases
 
     def test_extra_aliases(self):
         aliases = _build_vendor_aliases("HubSpot", extra_aliases=["HS", "hubspot.com"])
@@ -409,13 +421,25 @@ class TestParsePost:
         assert result["raw_metadata"]["vendor_in_title"] is True
 
     def test_alias_matching_dotcom(self):
+        """Monday.com should match 'Monday.com' but NOT bare 'Monday'."""
         target = _make_target("Monday.com")
-        post = _make_post(
-            title="Monday vs Asana for project management",
-            selftext="We are evaluating Monday and Asana. Monday is better for us. " * 10,
+        # Post using the full "Monday.com" name -- should match
+        post_good = _make_post(
+            title="Monday.com vs Asana for project management",
+            selftext="We are evaluating Monday.com and Asana. Monday.com is better. " * 10,
         )
-        result = self.parser._parse_post(post, target, set())
+        result = self.parser._parse_post(post_good, target, set())
         assert result is not None
+
+    def test_common_word_alias_rejected(self):
+        """Bare 'Monday' should NOT match Monday.com vendor -- it's a common word."""
+        target = _make_target("Monday.com")
+        post_noise = _make_post(
+            title="Monday was terrible for our rollout",
+            selftext="Monday morning the deployment failed. Monday afternoon we rolled back. " * 10,
+        )
+        result = self.parser._parse_post(post_noise, target, set())
+        assert result is None
 
     def test_reviewer_title_from_role_extraction(self):
         post = _make_post(

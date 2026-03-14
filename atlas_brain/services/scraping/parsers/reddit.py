@@ -246,24 +246,40 @@ _JOB_NOISE_WORDS = frozenset({
 # Alias builder
 # ---------------------------------------------------------------------------
 
+# Common English words that should NOT be used as standalone vendor aliases.
+# These arise from .com stripping (Monday.com -> "monday") or multi-word
+# splitting and would match non-product text.
+_COMMON_WORD_BLOCKLIST = frozenset({
+    "monday", "friday", "sunday", "saturday",
+    "click", "base", "smart", "team", "fresh",
+    "notion", "slack", "zoom", "power", "close",
+    "copper", "ripple", "gusto", "brevo", "wrike",
+    "help", "work", "hub", "pipe", "drive",
+    "big", "get", "go", "look", "open",
+})
+
+
 def _build_vendor_aliases(vendor_name: str, extra_aliases: list[str] | None = None) -> list[str]:
     """Derive normalized alias variants from a vendor name.
 
     Returns a list of lowercase aliases including the original name.
-    Handles cases like "Monday.com" -> ["monday.com", "monday"],
+    Handles cases like "Monday.com" -> ["monday.com"] (NOT "monday"),
     "HubSpot" -> ["hubspot"], "Zoho CRM" -> ["zoho crm", "zoho"].
+
+    Single common-word derivatives are suppressed to avoid matching
+    plain English (e.g. "Monday was terrible" != Monday.com).
     """
     base = vendor_name.lower().strip()
     aliases = {base}
 
-    # Strip trailing ".com", ".io", etc.
+    # Strip trailing ".com", ".io", etc. -- but only add if not a common word
     stripped = re.sub(r"\.\w{2,4}$", "", base)
-    if stripped and stripped != base:
+    if stripped and stripped != base and stripped not in _COMMON_WORD_BLOCKLIST:
         aliases.add(stripped)
 
-    # Split multi-word: "Zoho CRM" -> also match "Zoho"
+    # Split multi-word: "Zoho CRM" -> also match "Zoho" (unless common word)
     parts = base.split()
-    if len(parts) >= 2:
+    if len(parts) >= 2 and parts[0] not in _COMMON_WORD_BLOCKLIST:
         aliases.add(parts[0])
 
     # Add explicit aliases from target metadata
