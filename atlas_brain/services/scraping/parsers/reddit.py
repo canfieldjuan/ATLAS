@@ -187,15 +187,16 @@ _DEFAULT_SUBREDDIT_WEIGHT = 0.5
 # ---------------------------------------------------------------------------
 
 _EMPLOYMENT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    # Current employment
-    (re.compile(r"\b(?:I|we)\s+work(?:ed)?\s+(?:at|for)\s+", re.I), "current_or_past"),
-    (re.compile(r"\b(?:I'm|I am)\s+(?:a|an)\s+\w+\s+at\s+", re.I), "current"),
-    (re.compile(r"\bmy\s+(?:company|employer|team|org)\b", re.I), "current"),
-    # Past employment
+    # Past employment (checked first -- more specific matches win)
+    (re.compile(r"\b(?:I|we)\s+worked\s+(?:at|for)\s+", re.I), "past"),
     (re.compile(r"\b(?:I|we)\s+(?:left|quit|resigned\s+from|was\s+laid\s+off\s+from)\s+", re.I), "past"),
     (re.compile(r"\bformer(?:ly)?\s+(?:at|employee|engineer|dev)", re.I), "past"),
     (re.compile(r"\bused\s+to\s+work\s+(?:at|for)\s+", re.I), "past"),
     (re.compile(r"\bex[\s-](?:employee|engineer|dev|PM|manager)", re.I), "past"),
+    # Current employment
+    (re.compile(r"\b(?:I|we)\s+work\s+(?:at|for)\s+", re.I), "current"),
+    (re.compile(r"\b(?:I'm|I am)\s+(?:a|an)\s+\w+\s+at\s+", re.I), "current"),
+    (re.compile(r"\bmy\s+(?:company|employer|team|org)\b", re.I), "current"),
 ]
 
 _ORG_SIGNAL_PATTERNS: list[tuple[re.Pattern[str], str]] = [
@@ -400,9 +401,7 @@ def _extract_insider_evidence(text: str) -> dict:
     for pat, tense in _EMPLOYMENT_PATTERNS:
         if pat.search(text):
             employment_claim = True
-            # "current_or_past" defers to more specific matches
-            if employment_tense is None or tense != "current_or_past":
-                employment_tense = tense if tense != "current_or_past" else "current"
+            employment_tense = tense
             break
 
     for pat, signal_type in _ORG_SIGNAL_PATTERNS:
@@ -941,12 +940,11 @@ class RedditParser:
             else None
         )
 
-        # Content type depends on search profile
+        # Base source weight depends on search profile; content_type is
+        # determined after insider evidence extraction below.
         if profile == "insider":
-            content_type = "insider_account"
             base_source_weight = 0.6
         else:
-            content_type = "community_discussion"
             base_source_weight = 0.5
 
         # ---- Dynamic source_weight ----
@@ -979,6 +977,13 @@ class RedditParser:
         # ---- Insider evidence extraction ----
         combined_text = f"{title}\n{selftext[:3000]}"
         insider_evidence = _extract_insider_evidence(combined_text)
+
+        # Content type: only classify as insider_account when evidence supports it.
+        # Employment claim or 2+ org signals = insider. Otherwise community_discussion.
+        if insider_evidence["employment_claim"] or len(insider_evidence["org_signal_types"]) >= 2:
+            content_type = "insider_account"
+        else:
+            content_type = "community_discussion"
 
         # Promote reviewer_title if we extracted a role or employment claim
         reviewer_title = None
@@ -1108,6 +1113,13 @@ class RedditParser:
         insider_evidence = _extract_insider_evidence(body[:3000])
         reviewer_title = insider_evidence["extracted_role"]
 
+        # Comments with employment claims or strong org signals get insider_account
+        # so relevance scoring applies insider boosts instead of noise penalties.
+        if insider_evidence["employment_claim"] or len(insider_evidence["org_signal_types"]) >= 2:
+            comment_content_type = "insider_account"
+        else:
+            comment_content_type = "comment"
+
         subreddit = data.get("subreddit", "")
         sub_weight = _SUBREDDIT_WEIGHT.get(subreddit, _DEFAULT_SUBREDDIT_WEIGHT)
         author_flair = data.get("author_flair_text") or ""
@@ -1139,7 +1151,7 @@ class RedditParser:
             "reviewer_industry": None,
             "reviewed_at": reviewed_at,
             # Threading fields
-            "content_type": "comment",
+            "content_type": comment_content_type,
             "parent_review_id": None,  # resolved post-insert by b2b_scrape_intake
             "thread_id": thread_id,
             "comment_depth": depth + 1,

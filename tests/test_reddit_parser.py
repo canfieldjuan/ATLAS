@@ -427,6 +427,166 @@ class TestParsePost:
         assert result["reviewer_title"] is not None
         assert "product manager" in result["reviewer_title"].lower()
 
+    def test_insider_profile_without_employment_is_community(self):
+        """Bug 1: insider profile posts without employment claim should NOT
+        be classified as insider_account."""
+        post = _make_post(
+            title="HubSpot layoffs discussion",
+            selftext="I heard HubSpot had layoffs. Anyone know details? HubSpot seems to be struggling. " * 5,
+            subreddit="technology",
+        )
+        result = self.parser._parse_post(
+            post, self.target, set(), profile="insider",
+        )
+        assert result is not None
+        # No employment claim -> should be community_discussion, not insider_account
+        assert result["content_type"] == "community_discussion"
+        assert result["raw_metadata"]["employment_claim"] is False
+
+    def test_insider_profile_with_employment_is_insider(self):
+        """Posts with actual employment claims should get insider_account."""
+        post = _make_post(
+            title="I left HubSpot last month",
+            selftext="I worked at HubSpot for 3 years as a backend engineer. The culture got worse. " * 5,
+            subreddit="ExperiencedDevs",
+        )
+        result = self.parser._parse_post(
+            post, self.target, set(), profile="insider",
+        )
+        assert result is not None
+        assert result["content_type"] == "insider_account"
+        assert result["raw_metadata"]["employment_claim"] is True
+
+    def test_insider_profile_with_org_signals_is_insider(self):
+        """Posts with 2+ org signals (no employment claim) should get insider_account."""
+        post = _make_post(
+            title="HubSpot toxic culture and morale problems",
+            selftext="The toxic culture at HubSpot is well-known. Morale is at an all-time low. Burnout everywhere. " * 5,
+            subreddit="cscareerquestions",
+        )
+        result = self.parser._parse_post(
+            post, self.target, set(), profile="insider",
+        )
+        assert result is not None
+        assert result["content_type"] == "insider_account"
+
+
+# ---------------------------------------------------------------------------
+# Employment tense detection
+# ---------------------------------------------------------------------------
+
+class TestEmploymentTense:
+    def test_worked_at_is_past(self):
+        """Bug 2: 'I worked at X' must be past, not current."""
+        result = _extract_insider_evidence("I worked at HubSpot for 3 years")
+        assert result["employment_claim"] is True
+        assert result["employment_tense"] == "past"
+
+    def test_work_at_is_current(self):
+        result = _extract_insider_evidence("I work at HubSpot as an engineer")
+        assert result["employment_claim"] is True
+        assert result["employment_tense"] == "current"
+
+    def test_left_is_past(self):
+        result = _extract_insider_evidence("I left HubSpot last year")
+        assert result["employment_claim"] is True
+        assert result["employment_tense"] == "past"
+
+    def test_iam_at_is_current(self):
+        result = _extract_insider_evidence("I'm a PM at HubSpot right now")
+        assert result["employment_claim"] is True
+        assert result["employment_tense"] == "current"
+
+    def test_used_to_work_is_past(self):
+        result = _extract_insider_evidence("I used to work at HubSpot before the reorg")
+        assert result["employment_claim"] is True
+        assert result["employment_tense"] == "past"
+
+
+# ---------------------------------------------------------------------------
+# Comment insider classification
+# ---------------------------------------------------------------------------
+
+class TestCommentInsiderClassification:
+    def setup_method(self):
+        self.parser = RedditParser()
+        self.target = _make_target()
+
+    def _make_parent_post(self):
+        return {
+            "source_review_id": "parent123",
+            "thread_id": "t3_parent123",
+            "source_url": "https://www.reddit.com/r/CRM/comments/parent123/test/",
+            "raw_metadata": {"search_profile": "insider"},
+        }
+
+    def _make_comment(self, body: str, score: int = 10) -> dict:
+        return {
+            "kind": "t1",
+            "data": {
+                "id": "comment456",
+                "body": body,
+                "score": score,
+                "author": "insider_user",
+                "created_utc": 1710000000,
+                "subreddit": "ExperiencedDevs",
+                "permalink": "/r/ExperiencedDevs/comments/parent123/test/comment456/",
+                "author_flair_text": None,
+            },
+        }
+
+    def test_insider_comment_gets_insider_type(self):
+        """Bug 3: comments with employment claims should get insider_account type."""
+        comment = self._make_comment(
+            "I worked at HubSpot for 2 years. The toxic culture drove me out. "
+            "Morale was terrible. Management was awful. " * 3,
+        )
+        result = self.parser._parse_comment(
+            comment, self.target, self._make_parent_post(), set(),
+            depth=0, min_score=2,
+        )
+        assert result is not None
+        assert result["content_type"] == "insider_account"
+
+    def test_normal_comment_stays_comment_type(self):
+        """Comments without insider evidence should remain as 'comment' type."""
+        comment = self._make_comment(
+            "I think HubSpot is overpriced. We switched to Pipedrive last month. "
+            "Much better for small teams. " * 3,
+        )
+        result = self.parser._parse_comment(
+            comment, self.target, self._make_parent_post(), set(),
+            depth=0, min_score=2,
+        )
+        assert result is not None
+        assert result["content_type"] == "comment"
+
+    def test_insider_comment_relevance_gets_boosts(self):
+        """Insider comments should get insider boosts in relevance scoring,
+        not noise penalties."""
+        comment_review = {
+            "source": "reddit",
+            "summary": None,
+            "review_text": (
+                "I worked at HubSpot. Massive layoffs. Toxic culture. "
+                "Leadership churn was constant. Morale was terrible. " * 5
+            ),
+            "content_type": "insider_account",
+            "raw_metadata": {
+                "score": 25,
+                "upvote_ratio": 0.90,
+                "subreddit_weight": 0.7,
+                "vendor_in_title": None,
+                "employment_claim": True,
+                "employment_tense": "past",
+                "org_signal_types": ["layoff", "culture", "morale"],
+            },
+        }
+        score, reason = score_relevance(comment_review, "HubSpot")
+        assert "insider_signals" in reason or "employment_claim" in reason
+        assert "noise_language" not in reason
+        assert score >= 0.65
+
 
 # ---------------------------------------------------------------------------
 # Query profile preservation
