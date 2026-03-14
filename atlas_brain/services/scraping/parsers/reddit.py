@@ -788,16 +788,15 @@ class RedditParser:
         pages_scraped = 0
         seen_ids: set[str] = set()
 
-        # Public mode: one query variant per subreddit (exact quoted name only)
+        # Public mode: exact quoted vendor name per subreddit
         # to keep request volume tight (10 req/min limit).
-        subreddit_query = self._build_global_queries(target.vendor_name, profile)[0]
-        vendor_encoded = quote_plus(target.vendor_name)
+        vendor_encoded = quote_plus(f'"{target.vendor_name}"')
 
         for sub in subreddits[:target.max_pages]:
             sub_encoded = quote_plus(sub)
             url = (
                 f"https://www.reddit.com/search.json"
-                f"?q={quote_plus(subreddit_query)}+subreddit:{sub_encoded}&sort=new&limit=25&t=year"
+                f"?q={vendor_encoded}+subreddit:{sub_encoded}&sort=new&limit=25&t=year"
             )
 
             try:
@@ -848,8 +847,8 @@ class RedditParser:
                 errors.append(f"r/{sub}: {exc}")
                 logger.warning("Reddit scrape failed for r/%s: %s", sub, exc)
 
-        # Global churn-phrase searches in public mode — top 2 only to stay under rate limit
-        for query in self._build_global_queries(target.vendor_name)[:2]:
+        # Global intent searches in public mode — top 2 only to stay under rate limit
+        for query in self._build_global_queries(target.vendor_name, profile)[:2]:
             url = (
                 f"https://www.reddit.com/search.json"
                 f"?q={quote_plus(query)}&sort=new&limit=25&t=year"
