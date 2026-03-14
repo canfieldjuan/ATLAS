@@ -446,24 +446,23 @@ def _compute_pain_addressed_heuristic(
 # ------------------------------------------------------------------
 
 
-async def _call_vllm(messages: list[dict], max_tokens: int, cfg) -> str:
+async def _call_vllm(messages: list[dict], max_tokens: int, cfg, client: httpx.AsyncClient) -> str:
     """Call local vLLM server for profile synthesis."""
-    async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(
-            f"{cfg.product_profile_vllm_url}/v1/chat/completions",
-            json={
-                "model": cfg.product_profile_vllm_model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": 0.3,
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return data["choices"][0]["message"]["content"].strip()
+    resp = await client.post(
+        f"{cfg.product_profile_vllm_url}/v1/chat/completions",
+        json={
+            "model": cfg.product_profile_vllm_model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": 0.3,
+        },
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return data["choices"][0]["message"]["content"].strip()
 
 
-async def _call_openrouter(messages: list[dict], max_tokens: int, cfg) -> str:
+async def _call_openrouter(messages: list[dict], max_tokens: int, cfg, client: httpx.AsyncClient) -> str:
     """Call OpenRouter API for profile synthesis."""
     import os
 
@@ -471,23 +470,22 @@ async def _call_openrouter(messages: list[dict], max_tokens: int, cfg) -> str:
     if not api_key:
         raise ValueError("OpenRouter API key not configured for product profiles")
 
-    async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": cfg.product_profile_openrouter_model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": 0.3,
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return data["choices"][0]["message"]["content"].strip()
+    resp = await client.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": cfg.product_profile_openrouter_model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": 0.3,
+        },
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return data["choices"][0]["message"]["content"].strip()
 
 
 async def _synthesize_profile(
@@ -500,6 +498,7 @@ async def _synthesize_profile(
     competitive: dict,
     pain_heuristic: dict[str, float],
     max_tokens: int,
+    client: httpx.AsyncClient | None = None,
 ) -> tuple[str | None, dict[str, float]]:
     """Call LLM to generate profile summary and validate pain_addressed scores.
 
@@ -540,11 +539,14 @@ async def _synthesize_profile(
         {"role": "user", "content": json.dumps(payload, default=str)},
     ]
 
+    _client = client or httpx.AsyncClient(timeout=120)
+    _owns_client = client is None
+
     try:
         if backend == "openrouter":
-            text = await _call_openrouter(messages, max_tokens, cfg)
+            text = await _call_openrouter(messages, max_tokens, cfg, _client)
         else:
-            text = await _call_vllm(messages, max_tokens, cfg)
+            text = await _call_vllm(messages, max_tokens, cfg, _client)
 
         if not text:
             return None, pain_heuristic
@@ -582,6 +584,9 @@ async def _synthesize_profile(
     except Exception:
         logger.exception("LLM synthesis failed for %s", vendor_name)
         return None, pain_heuristic
+    finally:
+        if _owns_client:
+            await _client.aclose()
 
 
 # ------------------------------------------------------------------
@@ -808,11 +813,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         logger.info("No vendors with >= %d enriched reviews, nothing to generate", min_reviews)
         return {"_skip_synthesis": "No vendors meet min review threshold", "vendors": 0}
 
-    # 2. Build and upsert profiles
+    # 2. Build and upsert profiles (bounded concurrency for LLM calls)
     generated = 0
     failed = 0
+    _sem = asyncio.Semaphore(5)  # max 5 concurrent vLLM synthesis calls
+    _http_client = httpx.AsyncClient(timeout=120)
 
-    for raw_vendor, metrics in aggregate_metrics.items():
+    async def _process_vendor(raw_vendor: str, metrics: dict) -> bool:
+        nonlocal generated, failed
         try:
             vendor_name = await resolve_vendor_name(raw_vendor)
             satisfaction = satisfaction_data.get(raw_vendor, [])
@@ -841,18 +849,20 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 metrics["total_reviews"],
             )
 
-            # LLM synthesis (summary + validated pain scores)
-            summary, pain_addressed = await _synthesize_profile(
-                vendor_name=vendor_name,
-                metrics=metrics,
-                strengths=strengths,
-                weaknesses=weaknesses,
-                use_cases=use_cases,
-                integrations=integrations,
-                competitive=competitive_data.get(raw_vendor, {}),
-                pain_heuristic=pain_heuristic,
-                max_tokens=max_tokens,
-            )
+            # LLM synthesis (summary + validated pain scores) -- rate-limited
+            async with _sem:
+                summary, pain_addressed = await _synthesize_profile(
+                    vendor_name=vendor_name,
+                    metrics=metrics,
+                    strengths=strengths,
+                    weaknesses=weaknesses,
+                    use_cases=use_cases,
+                    integrations=integrations,
+                    competitive=competitive_data.get(raw_vendor, {}),
+                    pain_heuristic=pain_heuristic,
+                    max_tokens=max_tokens,
+                    client=_http_client,
+                )
 
             profile = {
                 "vendor_name": vendor_name,
@@ -887,10 +897,20 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 "Generated profile for %s (%d reviews, %d strengths, %d weaknesses)",
                 vendor_name, metrics["total_reviews"], len(strengths), len(weaknesses),
             )
+            return True
 
         except Exception:
             logger.exception("Failed to generate profile for %s", raw_vendor)
             failed += 1
+            return False
+
+    try:
+        await asyncio.gather(
+            *[_process_vendor(v, m) for v, m in aggregate_metrics.items()],
+            return_exceptions=True,
+        )
+    finally:
+        await _http_client.aclose()
 
     logger.info(
         "Product profile generation complete: %d generated, %d failed",

@@ -39,7 +39,16 @@ def _resolve_workload(workload: str):
         return get_draft_llm()
 
     if workload in ("synthesis", "reasoning"):
-        # Both prefer Sonnet-class models: reasoning first, draft as fallback
+        # Primary: OpenRouter o4-mini (benchmarked at 121% of Opus quality)
+        from ..config import settings as _settings
+        llm = _try_openrouter(_settings.llm.openrouter_reasoning_model)
+        if llm is not None:
+            logger.debug(
+                "Using OpenRouter %s for workload '%s'",
+                _settings.llm.openrouter_reasoning_model, workload,
+            )
+            return llm
+        # Fallback: Anthropic Sonnet singletons
         llm = get_reasoning_llm()
         if llm is not None:
             logger.debug("Using reasoning LLM for workload '%s'", workload)
@@ -74,7 +83,7 @@ def _try_openrouter(openrouter_model: str | None = None):
     try:
         llm_registry.activate(
             "openrouter",
-            model=openrouter_model or "deepseek/deepseek-chat-v3-0324",
+            model=openrouter_model or "openai/o4-mini",
             api_key=or_key,
         )
         llm = llm_registry.get_active()
@@ -184,8 +193,8 @@ def get_pipeline_llm(
     When *workload* is set, routes to the appropriate model singleton:
         triage     -> Haiku (cheap classification)
         draft      -> Sonnet (email drafts)
-        synthesis  -> Sonnet (reports, blog posts, content generation)
-        reasoning  -> Sonnet (cross-domain reasoning)
+        synthesis  -> OpenRouter o4-mini primary, Sonnet fallback
+        reasoning  -> OpenRouter o4-mini primary, Sonnet fallback
         local_fast -> local vLLM/Ollama only
         vllm       -> vLLM primary, Anthropic fallback (no Ollama)
         anthropic  -> Anthropic primary, vLLM fallback (no Ollama)

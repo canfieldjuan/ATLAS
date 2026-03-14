@@ -749,24 +749,40 @@ class TaskScheduler:
                     default_meta = task_def.get("metadata") or {}
                     existing_meta = existing.metadata or {}
                     new_keys = {k: v for k, v in default_meta.items() if k not in existing_meta}
-                    if new_keys:
-                        merged = {**existing_meta, **new_keys}
+
+                    # Sync timeout_seconds from code to DB if it drifted
+                    code_timeout = task_def.get("timeout_seconds", 120)
+                    db_timeout = existing.timeout_seconds or 120
+                    timeout_changed = code_timeout != db_timeout
+
+                    if new_keys or timeout_changed:
                         from ..storage.database import get_db_pool
                         pool = get_db_pool()
                         if not pool.is_initialized:
                             logger.warning(
-                                "DB not available; skipping metadata merge for task '%s'",
+                                "DB not available; skipping sync for task '%s'",
                                 task_def["name"],
                             )
                         else:
-                            await pool.execute(
-                                "UPDATE scheduled_tasks SET metadata = $1::jsonb WHERE id = $2",
-                                json.dumps(merged), existing.id,
-                            )
-                            logger.info(
-                                "Merged new metadata keys into task '%s': %s",
-                                task_def["name"], list(new_keys),
-                            )
+                            if new_keys:
+                                merged = {**existing_meta, **new_keys}
+                                await pool.execute(
+                                    "UPDATE scheduled_tasks SET metadata = $1::jsonb WHERE id = $2",
+                                    json.dumps(merged), existing.id,
+                                )
+                                logger.info(
+                                    "Merged new metadata keys into task '%s': %s",
+                                    task_def["name"], list(new_keys),
+                                )
+                            if timeout_changed:
+                                await pool.execute(
+                                    "UPDATE scheduled_tasks SET timeout_seconds = $1 WHERE id = $2",
+                                    code_timeout, existing.id,
+                                )
+                                logger.info(
+                                    "Synced timeout_seconds for task '%s': %d -> %d",
+                                    task_def["name"], db_timeout, code_timeout,
+                                )
                     continue
 
                 task = await repo.create(

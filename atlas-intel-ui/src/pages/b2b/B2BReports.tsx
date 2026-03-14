@@ -73,8 +73,14 @@ export default function B2BReports() {
     { value: 'weekly_churn_feed', label: 'Weekly Churn Feed' },
     { value: 'vendor_scorecard', label: 'Vendor Scorecard' },
     { value: 'displacement_report', label: 'Displacement Report' },
+    { value: 'category_overview', label: 'Category Overview' },
+    { value: 'exploratory_overview', label: 'Exploratory Overview' },
+    { value: 'vendor_comparison', label: 'Vendor Comparison' },
+    { value: 'account_comparison', label: 'Account Comparison' },
+    { value: 'account_deep_dive', label: 'Account Deep Dive' },
     { value: 'vendor_retention', label: 'Vendor Retention' },
     { value: 'challenger_intel', label: 'Challenger Intel' },
+    { value: 'battle_card', label: 'Battle Card' },
   ]
 
   return (

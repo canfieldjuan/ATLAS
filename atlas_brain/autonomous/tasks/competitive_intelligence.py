@@ -16,7 +16,6 @@ import json
 import logging
 import math
 import re
-import uuid as _uuid
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -170,10 +169,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 response_format={"type": "json_object"},
                 usage_out=usage,
             ),
-            timeout=300,
+            timeout=600,
         )
     except asyncio.TimeoutError:
-        logger.error("LLM call timed out after 300s for competitive_intelligence")
+        logger.error("LLM call timed out after 600s for competitive_intelligence")
         return {"_skip_synthesis": "LLM analysis timed out"}
     if usage.get("input_tokens"):
         logger.info("competitive_intelligence LLM tokens: in=%d out=%d model=%s",
@@ -826,6 +825,8 @@ async def _upsert_brand_intelligence(
         replacement_by_brand.setdefault(b, {})
         replacement_by_brand[b][rep] = replacement_by_brand[b].get(rep, 0) + cnt
 
+    # Build batch of parameter tuples
+    upsert_rows: list[tuple] = []
     for brand_data in brand_health:
         brand = brand_data.get("brand")
         if not brand:
@@ -858,8 +859,30 @@ async def _upsert_brand_intelligence(
             severity_counts=brand_data.get("severity_distribution"),
         )
 
+        upsert_rows.append((
+            brand,
+            "all",
+            brand_data.get("total_reviews", 0),
+            brand_data.get("avg_rating"),
+            brand_data.get("avg_pain_score"),
+            brand_data.get("repurchase_yes", 0),
+            brand_data.get("repurchase_no", 0),
+            json.dumps(sentiment),
+            json.dumps(scorecard.get("top_feature_requests", [])),
+            json.dumps(scorecard.get("top_complaints", [])),
+            json.dumps(flows_by_brand.get(brand, [])),
+            json.dumps(buyer),
+            json.dumps(scorecard.get("positive_aspects", [])),
+            health,
+            now,
+            source_review_count,
+            source_dist,
+            brand_confidence,
+        ))
+
+    if upsert_rows:
         try:
-            await pool.execute(
+            await pool.executemany(
                 """
                 INSERT INTO brand_intelligence (
                     brand, source, total_reviews, avg_rating, avg_pain_score,
@@ -887,28 +910,11 @@ async def _upsert_brand_intelligence(
                     source_distribution = EXCLUDED.source_distribution,
                     confidence_score = EXCLUDED.confidence_score
                 """,
-                brand,
-                "all",
-                brand_data.get("total_reviews", 0),
-                brand_data.get("avg_rating"),
-                brand_data.get("avg_pain_score"),
-                brand_data.get("repurchase_yes", 0),
-                brand_data.get("repurchase_no", 0),
-                json.dumps(sentiment),
-                json.dumps(scorecard.get("top_feature_requests", [])),
-                json.dumps(scorecard.get("top_complaints", [])),
-                json.dumps(flows_by_brand.get(brand, [])),
-                json.dumps(buyer),
-                json.dumps(scorecard.get("positive_aspects", [])),
-                health,
-                now,
-                source_review_count,
-                source_dist,
-                brand_confidence,
+                upsert_rows,
             )
-            upserted += 1
+            upserted = len(upsert_rows)
         except Exception:
-            logger.warning("Failed to upsert brand intelligence for %s", brand, exc_info=True)
+            logger.exception("Failed to batch-upsert brand intelligence")
 
     if upserted:
         logger.info("Upserted %d brand intelligence scorecards", upserted)
@@ -944,6 +950,7 @@ async def _persist_brand_snapshots(
     except Exception:
         logger.debug("mv_brand_summary not available for trajectory data", exc_info=True)
 
+    snapshot_rows: list[tuple] = []
     for bd in brand_health:
         brand = bd.get("brand")
         if not brand:
@@ -954,8 +961,26 @@ async def _persist_brand_snapshots(
         flows = sc.get("competitive_flows") or parsed.get("competitive_flows", [])
         flow_count = sum(1 for f in flows if isinstance(f, dict) and f.get("from_brand") == brand)
 
+        snapshot_rows.append((
+            brand, today,
+            bd.get("total_reviews", 0),
+            bd.get("avg_rating"),
+            bd.get("avg_pain_score"),
+            _compute_vulnerability_score(bd),
+            bd.get("repurchase_yes", 0),
+            bd.get("repurchase_no", 0),
+            sum(bd.get("severity_distribution", {}).values()),
+            bd.get("safety_flagged_count", 0),
+            top_complaints[0].get("complaint", "") if top_complaints else None,
+            top_features[0].get("feature", "") if top_features else None,
+            flow_count,
+            trajectory_by_brand.get(brand, (0, 0))[0],
+            trajectory_by_brand.get(brand, (0, 0))[1],
+        ))
+
+    if snapshot_rows:
         try:
-            await pool.execute(
+            await pool.executemany(
                 """
                 INSERT INTO brand_intelligence_snapshots (
                     brand, snapshot_date, total_reviews, avg_rating,
@@ -981,24 +1006,11 @@ async def _persist_brand_snapshots(
                     trajectory_positive = EXCLUDED.trajectory_positive,
                     trajectory_negative = EXCLUDED.trajectory_negative
                 """,
-                brand, today,
-                bd.get("total_reviews", 0),
-                bd.get("avg_rating"),
-                bd.get("avg_pain_score"),
-                _compute_vulnerability_score(bd),
-                bd.get("repurchase_yes", 0),
-                bd.get("repurchase_no", 0),
-                sum(bd.get("severity_distribution", {}).values()),
-                bd.get("safety_flagged_count", 0),
-                top_complaints[0].get("complaint", "") if top_complaints else None,
-                top_features[0].get("feature", "") if top_features else None,
-                flow_count,
-                trajectory_by_brand.get(brand, (0, 0))[0],
-                trajectory_by_brand.get(brand, (0, 0))[1],
+                snapshot_rows,
             )
-            persisted += 1
+            persisted = len(snapshot_rows)
         except Exception:
-            logger.warning("Failed to persist brand snapshot for %s", brand, exc_info=True)
+            logger.exception("Failed to batch-persist brand snapshots")
 
     if persisted:
         logger.info("Persisted %d brand intelligence snapshots for %s", persisted, today)
@@ -1260,7 +1272,11 @@ async def _dispatch_consumer_events(
 
 
 async def _persist_displacement_edges(pool) -> int:
-    """Extract competitive flows from deep-enriched reviews and persist as canonical edges."""
+    """Extract competitive flows from deep-enriched reviews and persist as canonical edges.
+
+    Uses SQL-level GROUP BY to pre-aggregate per (brand, product_name, direction),
+    reducing ~100k rows to ~500-1000 groups before Python brand normalization.
+    """
     from ...pipelines.comparisons import (
         ADJACENCY_DIRECTIONS,
         load_known_brands,
@@ -1271,17 +1287,20 @@ async def _persist_displacement_edges(pool) -> int:
     today = date.today()
     known_brands = await load_known_brands(pool)
 
+    # Pre-aggregate in SQL -- avoids fetching 100k+ individual rows
     rows = await pool.fetch(
         f"""
         SELECT
             pm.brand AS reviewed_brand,
             comp->>'product_name' AS product_name,
             COALESCE(comp->>'direction', 'compared') AS direction,
-            {_CAT_EXPR} AS category,
-            pr.rating,
-            pr.severity,
-            pr.deep_enrichment_status,
-            pr.id AS review_id
+            COUNT(*) AS mention_count,
+            AVG(pr.rating) AS avg_rating,
+            COUNT(*) FILTER (WHERE pr.severity = 'critical') AS sev_critical,
+            COUNT(*) FILTER (WHERE pr.severity = 'major') AS sev_major,
+            COUNT(*) FILTER (WHERE pr.severity = 'minor') AS sev_minor,
+            MODE() WITHIN GROUP (ORDER BY {_CAT_EXPR}) AS top_category,
+            (ARRAY_AGG(pr.id))[1:20] AS sample_ids
         FROM product_reviews pr
         JOIN product_metadata pm ON pm.asin = pr.asin,
              jsonb_array_elements(
@@ -1293,10 +1312,11 @@ async def _persist_displacement_edges(pool) -> int:
         WHERE pr.deep_enrichment_status = 'enriched'
           AND pr.deep_extraction->'product_comparisons' IS NOT NULL
           AND pm.brand IS NOT NULL AND pm.brand != ''
+        GROUP BY pm.brand, comp->>'product_name', comp->>'direction'
         """,
     )
 
-    # Aggregate per (from_brand, to_brand, direction)
+    # Normalize brands and merge groups that collapse to the same canonical pair
     edge_map: dict[tuple[str, str, str], dict[str, Any]] = {}
 
     for row in rows:
@@ -1327,35 +1347,39 @@ async def _persist_displacement_edges(pool) -> int:
         from_brand = resolve_brand_name_cached(from_brand)
         to_brand = resolve_brand_name_cached(to_brand)
 
+        mc = row["mention_count"]
         key = (from_brand, to_brand, direction)
         if key not in edge_map:
             edge_map[key] = {
                 "mention_count": 0,
-                "ratings": [],
+                "rating_sum": 0.0,
+                "rating_count": 0,
                 "categories": {},
                 "sample_ids": [],
                 "severity": {"critical": 0, "major": 0, "minor": 0},
                 "deep_count": 0,
-                "total": 0,
             }
 
         e = edge_map[key]
-        e["mention_count"] += 1
-        e["total"] += 1
-        if row["rating"] is not None:
-            e["ratings"].append(float(row["rating"]))
-        cat = row.get("category") or "unknown"
-        e["categories"][cat] = e["categories"].get(cat, 0) + 1
-        if row["review_id"]:
-            e["sample_ids"].append(row["review_id"])
-        sev = row.get("severity")
-        if sev in e["severity"]:
-            e["severity"][sev] += 1
-        if row["deep_enrichment_status"] == "enriched":
-            e["deep_count"] += 1
+        e["mention_count"] += mc
+        e["deep_count"] += mc  # all rows are enriched by WHERE clause
+        if row["avg_rating"] is not None:
+            e["rating_sum"] += float(row["avg_rating"]) * mc
+            e["rating_count"] += mc
+        cat = row["top_category"] or "unknown"
+        e["categories"][cat] = e["categories"].get(cat, 0) + mc
+        # Merge sample_ids (cap at 20)
+        if len(e["sample_ids"]) < 20:
+            for sid in (row["sample_ids"] or []):
+                if len(e["sample_ids"]) >= 20:
+                    break
+                e["sample_ids"].append(sid)
+        e["severity"]["critical"] += row["sev_critical"]
+        e["severity"]["major"] += row["sev_major"]
+        e["severity"]["minor"] += row["sev_minor"]
 
-    # Persist edges with >= 2 mentions
-    persisted = 0
+    # Build batch of rows for executemany (edges with >= 2 mentions)
+    upsert_rows: list[tuple] = []
     for (from_b, to_b, dirn), e in edge_map.items():
         mc = e["mention_count"]
         if mc < 2:
@@ -1368,33 +1392,40 @@ async def _persist_displacement_edges(pool) -> int:
         else:
             strength = "emerging"
 
-        avg_r = round(sum(e["ratings"]) / len(e["ratings"]), 2) if e["ratings"] else None
-        conf = _compute_consumer_confidence(mc, e["deep_count"], e["total"], e["severity"])
-        sample = [sid for sid in e["sample_ids"][:20]]
+        avg_r = round(e["rating_sum"] / e["rating_count"], 2) if e["rating_count"] else None
+        conf = _compute_consumer_confidence(mc, e["deep_count"], mc, e["severity"])
 
-        try:
-            await pool.execute(
-                """
-                INSERT INTO product_displacement_edges (
-                    from_brand, to_brand, direction, mention_count,
-                    signal_strength, avg_rating, category_distribution,
-                    sample_review_ids, confidence_score, computed_date
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::uuid[], $9, $10)
-                ON CONFLICT (from_brand, to_brand, direction, computed_date)
-                DO UPDATE SET
-                    mention_count = EXCLUDED.mention_count,
-                    signal_strength = EXCLUDED.signal_strength,
-                    avg_rating = EXCLUDED.avg_rating,
-                    category_distribution = EXCLUDED.category_distribution,
-                    sample_review_ids = EXCLUDED.sample_review_ids,
-                    confidence_score = EXCLUDED.confidence_score
-                """,
-                from_b, to_b, dirn, mc, strength, avg_r,
-                json.dumps(e["categories"]), sample, conf, today,
-            )
-            persisted += 1
-        except Exception:
-            logger.warning("Failed to persist edge %s -> %s", from_b, to_b, exc_info=True)
+        upsert_rows.append((
+            from_b, to_b, dirn, mc, strength, avg_r,
+            json.dumps(e["categories"]), e["sample_ids"][:20], conf, today,
+        ))
+
+    if not upsert_rows:
+        return 0
+
+    persisted = 0
+    try:
+        await pool.executemany(
+            """
+            INSERT INTO product_displacement_edges (
+                from_brand, to_brand, direction, mention_count,
+                signal_strength, avg_rating, category_distribution,
+                sample_review_ids, confidence_score, computed_date
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::uuid[], $9, $10)
+            ON CONFLICT (from_brand, to_brand, direction, computed_date)
+            DO UPDATE SET
+                mention_count = EXCLUDED.mention_count,
+                signal_strength = EXCLUDED.signal_strength,
+                avg_rating = EXCLUDED.avg_rating,
+                category_distribution = EXCLUDED.category_distribution,
+                sample_review_ids = EXCLUDED.sample_review_ids,
+                confidence_score = EXCLUDED.confidence_score
+            """,
+            upsert_rows,
+        )
+        persisted = len(upsert_rows)
+    except Exception:
+        logger.exception("Failed to batch-persist displacement edges")
 
     if persisted:
         logger.info("Persisted %d product displacement edges for %s", persisted, today)

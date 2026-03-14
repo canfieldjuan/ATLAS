@@ -399,7 +399,7 @@ async def scraping_summary(days: int = Query(default=7, ge=1, le=30)):
             source,
             COUNT(*)                                                                           AS total_reviews,
             COUNT(*) FILTER (WHERE (raw_metadata->>'source_weight')::numeric > 0.7)           AS high_signal_reviews,
-            COUNT(*) FILTER (WHERE enrichment_status = 'completed')                           AS enriched_reviews,
+            COUNT(*) FILTER (WHERE enrichment_status = 'enriched')                            AS enriched_reviews,
             COUNT(*) FILTER (WHERE enrichment_status = 'failed')                              AS failed_enrichments,
             ROUND(AVG((raw_metadata->>'source_weight')::numeric)::numeric, 3)                 AS avg_source_weight,
             COUNT(*) FILTER (WHERE (raw_metadata->>'author_churn_score')::numeric >= 7)       AS high_value_authors

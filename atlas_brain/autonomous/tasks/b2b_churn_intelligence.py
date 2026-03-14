@@ -2686,9 +2686,31 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     )
     logger.info("Built %d battle cards", len(deterministic_battle_cards))
 
-    # LLM pass: generate sales copy for each battle card
+    # LLM pass: generate sales copy for each battle card (with caching)
+    from ...reasoning.semantic_cache import SemanticCache, CacheEntry, compute_evidence_hash
+
+    _bc_cache = SemanticCache(pool)
     battle_card_llm_failures = 0
+    battle_card_cache_hits = 0
     for card in deterministic_battle_cards:
+        card_hash = compute_evidence_hash({
+            "vendor": card.get("vendor"),
+            "churn_pressure_score": card.get("churn_pressure_score"),
+            "vendor_weaknesses": card.get("vendor_weaknesses"),
+            "customer_pain_quotes": card.get("customer_pain_quotes"),
+            "competitor_differentiators": card.get("competitor_differentiators"),
+            "objection_data": card.get("objection_data"),
+        })
+        pattern_sig = f"battle_card:{card.get('vendor')}:{card_hash}"
+
+        cached = await _bc_cache.lookup(pattern_sig)
+        if cached:
+            card["objection_handlers"] = cached.conclusion.get("objection_handlers", [])
+            card["recommended_plays"] = cached.conclusion.get("recommended_plays", [])
+            await _bc_cache.validate(pattern_sig)
+            battle_card_cache_hits += 1
+            continue
+
         try:
             sales_copy = await asyncio.wait_for(
                 asyncio.to_thread(
@@ -2710,9 +2732,33 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 "Battle card LLM failed for %s, using data-only card",
                 card.get("vendor"),
             )
-    if battle_card_llm_failures:
-        logger.info("Battle card LLM: %d/%d failed",
-                     battle_card_llm_failures, len(deterministic_battle_cards))
+            continue
+
+        try:
+            await _bc_cache.store(CacheEntry(
+                pattern_sig=pattern_sig,
+                pattern_class="battle_card_sales_copy",
+                conclusion={
+                    "objection_handlers": card["objection_handlers"],
+                    "recommended_plays": card["recommended_plays"],
+                },
+                confidence=0.95,
+                evidence_hash=card_hash,
+                vendor_name=card.get("vendor"),
+                conclusion_type="sales_copy",
+            ))
+        except Exception:
+            logger.warning(
+                "Failed to cache battle card for %s",
+                card.get("vendor"),
+            )
+    logger.info(
+        "Battle card LLM: %d cache hits, %d generated, %d failed (of %d)",
+        battle_card_cache_hits,
+        len(deterministic_battle_cards) - battle_card_cache_hits - battle_card_llm_failures,
+        battle_card_llm_failures,
+        len(deterministic_battle_cards),
+    )
 
     # Persist intelligence reports
     report_types = [

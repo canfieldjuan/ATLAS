@@ -37,8 +37,11 @@ CREATE TABLE IF NOT EXISTS score_calibration_weights (
     UNIQUE (dimension, dimension_value, model_version)
 );
 
-ALTER TABLE score_calibration_weights ADD CONSTRAINT chk_calibration_dimension
-    CHECK (dimension IN ('role_type', 'buying_stage', 'urgency_bucket', 'seat_bucket', 'context_keyword'));
+DO $$ BEGIN
+    ALTER TABLE score_calibration_weights ADD CONSTRAINT chk_calibration_dimension
+        CHECK (dimension IN ('role_type', 'buying_stage', 'urgency_bucket', 'seat_bucket', 'context_keyword'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_calibration_active
     ON score_calibration_weights (dimension, model_version DESC);

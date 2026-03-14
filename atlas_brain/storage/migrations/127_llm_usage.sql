@@ -22,6 +22,6 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 );
 
 -- Primary query pattern: cost by day/provider
-CREATE INDEX idx_llm_usage_created ON llm_usage (created_at DESC);
-CREATE INDEX idx_llm_usage_provider ON llm_usage (model_provider, created_at DESC);
-CREATE INDEX idx_llm_usage_span ON llm_usage (span_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_created ON llm_usage (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_provider ON llm_usage (model_provider, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_span ON llm_usage (span_name, created_at DESC);

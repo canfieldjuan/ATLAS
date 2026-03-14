@@ -30,16 +30,25 @@ CREATE TABLE IF NOT EXISTS data_corrections (
     reverted_by TEXT
 );
 
--- Constraints
-ALTER TABLE data_corrections ADD CONSTRAINT chk_correction_type
-    CHECK (correction_type IN ('suppress', 'flag', 'override_field', 'merge_vendor', 'reclassify'));
-ALTER TABLE data_corrections ADD CONSTRAINT chk_correction_status
-    CHECK (status IN ('applied', 'reverted', 'pending_review'));
-ALTER TABLE data_corrections ADD CONSTRAINT chk_entity_type
-    CHECK (entity_type IN (
-        'review', 'vendor', 'displacement_edge', 'pain_point',
-        'churn_signal', 'buyer_profile', 'use_case', 'integration'
-    ));
+-- Constraints (idempotent)
+DO $$ BEGIN
+    ALTER TABLE data_corrections ADD CONSTRAINT chk_correction_type
+        CHECK (correction_type IN ('suppress', 'flag', 'override_field', 'merge_vendor', 'reclassify'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+DO $$ BEGIN
+    ALTER TABLE data_corrections ADD CONSTRAINT chk_correction_status
+        CHECK (status IN ('applied', 'reverted', 'pending_review'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+DO $$ BEGIN
+    ALTER TABLE data_corrections ADD CONSTRAINT chk_entity_type
+        CHECK (entity_type IN (
+            'review', 'vendor', 'displacement_edge', 'pain_point',
+            'churn_signal', 'buyer_profile', 'use_case', 'integration'
+        ));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_data_corrections_entity

@@ -167,6 +167,12 @@ class LLMConfig(BaseSettings):
         description="Groq API key (or set GROQ_API_KEY env var)"
     )
 
+    # OpenRouter reasoning model (synthesis/reasoning workloads)
+    openrouter_reasoning_model: str = Field(
+        default="openai/o4-mini",
+        description="OpenRouter model for synthesis/reasoning workloads",
+    )
+
     # Anthropic settings (email draft generation)
     anthropic_model: str = Field(
         default="claude-sonnet-4-5-20250929",
@@ -1604,9 +1610,9 @@ class ModelPricingConfig(BaseModel):
     groq_llama70b_input: float = 0.59
     groq_llama70b_output: float = 0.79
 
-    # OpenRouter (varies -- default to DeepSeek V3 pricing)
-    openrouter_default_input: float = 0.27
-    openrouter_default_output: float = 1.10
+    # OpenRouter (varies -- default to o4-mini pricing)
+    openrouter_default_input: float = 1.10
+    openrouter_default_output: float = 4.40
 
     # Together AI (default to Llama 70B pricing)
     together_default_input: float = 0.88

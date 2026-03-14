@@ -46,8 +46,22 @@ _DOMAIN = "reddit.com"
 _MIN_SELFTEXT_LEN = 100       # Skip short posts
 _MIN_COMMENT_LEN = 80         # Skip short comments
 _MIN_COMMENT_SCORE = 2        # Skip low-signal comments
-_MAX_SEARCH_REQUESTS = 60     # Cap total search requests per scrape to stay within rate limits
 _MAX_COMMENT_FETCHES = 30     # Cap comment fetches per scrape
+
+# Search budget & pagination
+_SEARCH_BUDGET_INITIAL = 150         # request budget for initial (full harvest) mode
+_SEARCH_BUDGET_INCREMENTAL = 80      # request budget for incremental (weekly) mode
+_MAX_PAGES_PER_QUERY = 5             # max pagination depth per query+sort (initial)
+_MAX_PAGES_PER_QUERY_INCR = 3        # max pagination depth (incremental)
+_PAGINATION_YIELD_THRESHOLD = 25     # skip pagination if page 1 < 25 results
+
+# Sort strategies per scrape mode
+_SORTS_INITIAL = ["relevance", "new", "top"]
+_SORTS_INCREMENTAL = ["new", "relevance"]
+
+# Time window per scrape mode
+_TIME_INITIAL = "all"
+_TIME_INCREMENTAL = "month"
 _COMMENT_TRIGGER_KEYWORDS = {
     "migration", "migrating", "evaluating", "replacing", "budget",
     "cto", "switch", "switching", "alternative", "leaving", "moved",
@@ -652,51 +666,35 @@ class RedditParser:
                     await asyncio.sleep(120)
 
             # ---- Strategy 1 (PRIMARY): global intent search across ALL of Reddit ----
-            # This is where the signal lives -- real people in general subreddits
-            # complaining, evaluating alternatives, sharing insider info.
-            for query in self._build_global_queries(target.vendor_name, profile):
-                url = (
-                    f"https://oauth.reddit.com/search"
-                    f"?q={quote_plus(query)}&sort=relevance&limit=100&t=all"
-                )
-                resp = await _get(http, url)
-                if resp and resp.status_code == 200:
-                    data = resp.json()
-                    for post_wrapper in data.get("data", {}).get("children", []):
-                        review = self._parse_post(post_wrapper, target, seen_ids, profile=profile, alias_pattern=alias_pattern)
-                        if review:
-                            reviews.append(review)
-                            author = review.get("reviewer_name", "")
-                            if author:
-                                author_index.setdefault(author, []).append({
-                                    "title": review.get("summary", ""),
-                                    "score": review.get("raw_metadata", {}).get("score", 0),
-                                    "reviewed_at": review.get("reviewed_at"),
-                                })
-                await _maybe_pause()
-                await asyncio.sleep(0.3)
+            # Paginated, multi-sort search with budget control.
+            scrape_mode = (target.metadata.get("scrape_mode") or "incremental").lower()
 
-            # Also search by "new" to catch recent posts that aren't top-ranked yet
-            for query in self._build_global_queries(target.vendor_name, profile)[:5]:
-                url = (
-                    f"https://oauth.reddit.com/search"
-                    f"?q={quote_plus(query)}&sort=new&limit=100&t=year"
-                )
-                resp = await _get(http, url)
-                if resp and resp.status_code == 200:
-                    data = resp.json()
-                    for post_wrapper in data.get("data", {}).get("children", []):
-                        review = self._parse_post(post_wrapper, target, seen_ids, profile=profile, alias_pattern=alias_pattern)
-                        if review:
-                            reviews.append(review)
-                            author = review.get("reviewer_name", "")
-                            if author:
-                                author_index.setdefault(author, []).append({
-                                    "title": review.get("summary", ""),
-                                    "score": review.get("raw_metadata", {}).get("score", 0),
-                                    "reviewed_at": review.get("reviewed_at"),
-                                })
-                await asyncio.sleep(0.3)
+            if scrape_mode == "initial":
+                sorts = _SORTS_INITIAL
+                time_window = _TIME_INITIAL
+                search_budget = _SEARCH_BUDGET_INITIAL
+                max_pages = _MAX_PAGES_PER_QUERY
+            else:
+                sorts = _SORTS_INCREMENTAL
+                time_window = _TIME_INCREMENTAL
+                search_budget = _SEARCH_BUDGET_INCREMENTAL
+                max_pages = _MAX_PAGES_PER_QUERY_INCR
+
+            budget_ref = [search_budget]
+            queries = self._build_global_queries(target.vendor_name, profile)
+
+            for query in queries:
+                if budget_ref[0] <= 0:
+                    break
+                for sort in sorts:
+                    if budget_ref[0] <= 0:
+                        break
+                    found = await self._search_with_pagination(
+                        http, _get, query, sort, time_window,
+                        target, seen_ids, profile, alias_pattern,
+                        author_index, budget_ref, max_pages, _maybe_pause,
+                    )
+                    reviews.extend(found)
 
             # ---- Comment harvesting for deep / insider profiles ----
             if profile in ("deep", "insider"):
@@ -723,6 +721,14 @@ class RedditParser:
                     pages_scraped_ref[0] += cpages
                     errors.extend(cerrs)
                     comment_fetches += 1
+
+                    # Attach comment IDs to parent post for admin observability
+                    if comments:
+                        post_meta = post_dict.get("raw_metadata") or {}
+                        post_meta["comment_threads"] = [
+                            c["source_review_id"] for c in comments
+                        ]
+                        post_dict["raw_metadata"] = post_meta
 
             # ---- Selective insider author expansion ----
             # For insider profile: fetch recent history for top insider candidates
@@ -817,8 +823,9 @@ class RedditParser:
 
         pages_scraped = pages_scraped_ref[0]
         logger.info(
-            "Reddit authenticated scrape [%s] for %s: %d reviews, %d pages",
-            profile, target.vendor_name, len(reviews), pages_scraped,
+            "Reddit authenticated scrape [%s/%s] for %s: %d reviews, %d search reqs used (budget %d)",
+            profile, scrape_mode, target.vendor_name, len(reviews),
+            search_budget - budget_ref[0], search_budget,
         )
         return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors)
 
@@ -869,6 +876,84 @@ class RedditParser:
             logger.warning("Reddit comment fetch failed for %s: %s", post_id, exc)
 
         return comments, 1, errors
+
+    # ------------------------------------------------------------------
+    # Paginated search helper
+    # ------------------------------------------------------------------
+
+    async def _search_with_pagination(
+        self,
+        http: httpx.AsyncClient,
+        _get,
+        query: str,
+        sort: str,
+        time_window: str,
+        target: ScrapeTarget,
+        seen_ids: set[str],
+        profile: str,
+        alias_pattern,
+        author_index: dict[str, list[dict]],
+        budget_ref: list[int],
+        max_pages: int,
+        _maybe_pause,
+    ) -> list[dict]:
+        """Search one query+sort combination with cursor-based pagination."""
+        collected: list[dict] = []
+        cursor: str | None = None
+
+        for page in range(max_pages):
+            if budget_ref[0] <= 0:
+                break
+
+            url = (
+                f"https://oauth.reddit.com/search"
+                f"?q={quote_plus(query)}&sort={sort}&limit=100&t={time_window}"
+            )
+            if cursor:
+                url += f"&after={cursor}"
+
+            budget_ref[0] -= 1
+            resp = await _get(http, url)
+            if not resp or resp.status_code != 200:
+                break
+
+            data = resp.json()
+            children = data.get("data", {}).get("children", [])
+
+            for post_wrapper in children:
+                review = self._parse_post(
+                    post_wrapper, target, seen_ids,
+                    profile=profile, alias_pattern=alias_pattern,
+                )
+                if review:
+                    meta = review.get("raw_metadata") or {}
+                    meta["search_sort"] = sort
+                    meta["search_page"] = page + 1
+                    meta["search_time_window"] = time_window
+                    review["raw_metadata"] = meta
+                    collected.append(review)
+                    author = review.get("reviewer_name", "")
+                    if author:
+                        author_index.setdefault(author, []).append({
+                            "title": review.get("summary", ""),
+                            "score": meta.get("score", 0),
+                            "reviewed_at": review.get("reviewed_at"),
+                        })
+
+            await _maybe_pause()
+            await asyncio.sleep(0.3)
+
+            # Stop conditions
+            next_cursor = data.get("data", {}).get("after")
+            if not next_cursor:
+                break
+            if len(children) < 100:
+                break
+            if page == 0 and len(children) < _PAGINATION_YIELD_THRESHOLD:
+                break
+            cursor = next_cursor
+
+        return collected
 
     # ------------------------------------------------------------------
     # Query builders
@@ -1073,6 +1158,8 @@ class RedditParser:
                 # Cross-post
                 "is_crosspost": is_crosspost,
                 "crosspost_subreddits": crosspost_subreddits,
+                # Comment threads (populated during comment harvest)
+                "comment_threads": [],
                 # Enriched in post-processing:
                 "author_churn_score": 0.0,
                 "author_post_count_in_batch": 0,

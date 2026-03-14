@@ -161,7 +161,7 @@ register_pipeline(PipelineConfig(
             module="competitive_intelligence",
             schedule_type="cron",
             cron_expression="30 21 * * *",
-            timeout_seconds=300,
+            timeout_seconds=900,
             description="Cross-brand competitive intelligence from deep-extracted product reviews",
             metadata={
                 "builtin_handler": "competitive_intelligence",
@@ -263,7 +263,7 @@ register_pipeline(PipelineConfig(
             module="b2b_product_profiles",
             schedule_type="cron",
             cron_expression="30 21 * * *",
-            timeout_seconds=600,
+            timeout_seconds=1800,
             description="Generate/refresh product profile knowledge cards from enriched reviews",
             metadata={"builtin_handler": "b2b_product_profiles"},
             cron_config_key="b2b_churn.product_profile_cron",

@@ -1,4 +1,9 @@
- Atlas System Audit
+
+https://accounts.google.com/o/oauth2/v2/auth?client_id=875644967642-fa81kcprqhe501qsa249vc0aacrocbjp.apps.googleusercontent.com&redirect_uri=http%3A%2F%2Flocalhost%3A8085&response_type=code&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcalendar+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fgmail.readonly&access_type=offline&prompt=consent
+
+
+
+Atlas System Audit
 
   1. Brain Modules (20 directories)
 
@@ -26,10 +31,8 @@
     parser
   ────────────────────────────────────────
   Module: comms/
-  Status: Active
-  Purpose: Phone/PersonaPlex processors, tool_bridge, real_services (Resend email, SignalWire SMS,
-    Google Calendar). 13 API endpoints (voice webhooks, SMS, management). PersonaPlex speech-to-speech
-    is primary call mode. Phone V2 STT/TTS pending V3 voice pipeline re-integration.
+  Status: Partial
+  Purpose: Phone/PersonaPlex processors, tool_bridge. Appears partially wired
   ────────────────────────────────────────
   Module: discovery/
   Status: Active
@@ -61,7 +64,7 @@
   ────────────────────────────────────────
   Module: services/
   Status: Active
-  Purpose: LLM backends (5), embedding, intent router, speaker ID, tool executor,
+  Purpose: LLM backends (5), embedding, intent router, speaker ID, VLM, tool executor,
     reminders, tracing
   ────────────────────────────────────────
   Module: storage/
@@ -188,10 +191,11 @@
   │ send_estimate_email    │ email.py      │ Business-specific template          │
   ├────────────────────────┼───────────────┼─────────────────────────────────────┤
   │ send_proposal_email    │ email.py      │ Business-specific template          │
+  ├────────────────────────┼───────────────┼─────────────────────────────────────┤
+  │ cancel_appointment     │ scheduling.py │ Not registered in __init__.py       │
+  ├────────────────────────┼───────────────┼─────────────────────────────────────┤
+  │ reschedule_appointment │ scheduling.py │ Not registered in __init__.py       │
   └────────────────────────┴───────────────┴─────────────────────────────────────┘
-
-  NOTE: cancel_appointment and reschedule_appointment are now registered and routed
-  through the booking workflow via cancel_booking and reschedule_booking intent routes.
 
   ---
   3. Agent Graphs (LangGraph Workflows)
@@ -366,15 +370,10 @@
 
   Planned/Incomplete:
   - Per-query LLM routing (local vs cloud) — not built
-  - Phone V2 STT/TTS re-integration with V3 voice pipeline — pending
-
-  Recently Completed:
-  - cancel_appointment / reschedule_appointment — registered, routed, integrated into booking workflow
-  - comms/ module — Active (PersonaPlex speech-to-speech, SignalWire webhooks, Resend email)
-  - Calendar write tool — CreateCalendarEventTool registered, routed (calendar_write -> create_calendar_event), workflow functional
-  - Gmail digest — OAuth token store integrated, auto-persist rotation, unified setup script (scripts/setup_google_oauth.py)
-  - Google OAuth token management — GoogleTokenStore with file persistence (data/google_tokens.json), .env fallback, health endpoint status
-  - Gmail send — GmailTransport in tools/gmail.py, EmailTool prefers Gmail when configured, Resend as fallback
+  - comms/ module (PersonaPlex phone handling) — partially wired
+  - cancel_appointment / reschedule_appointment — defined but not registered
+  - Gmail tool (OAuth partially set up) — token needed
+  - Calendar write tool (OAuth) — token needed
 
   Edge Node (Orange Pi 5 Plus)
 
@@ -383,11 +382,10 @@
   - Face recognition: RetinaFace + MobileFaceNet (NPU)
   - Gait recognition: YOLOv8n-pose (NPU)
   - Person tracking with identity fusion
-  - STT: SenseVoice int8 ONNX via sherpa-onnx (Orange Pi deployment at /opt/atlas-node/)
-         Parakeet-TDT-0.6b (atlas_edge/ in repo, for GPU-equipped nodes)
-  - TTS: Piper (en_US-amy-low, ~6.6x realtime on RK3588)
-  - Speaker ID: Resemblyzer (256-dim embeddings, brain-side)
-  - Local LLM fallback: None (static text fallback when brain unreachable)
+  - STT: SenseVoice (16x realtime CPU)
+  - TTS: Kokoro-82M (0.38x realtime CPU)
+  - Speaker ID: CampPlus (192-dim embeddings)
+  - Local LLM fallback: Phi-3-mini Q4 (slow but functional)
   - WebSocket bidirectional to Brain
   - RTSP camera via MediaMTX + FFmpeg
   - Identity sync with Brain
@@ -416,213 +414,3 @@
   - Cloud API as a service (expose Brain API externally)
   - Mobile app / web dashboard
   - Multi-tenant scheduling/booking
-
-  ---
-  7. Memory System Audit (Feb 2026)
-
-  Architecture: Two tiers, three data stores.
-
-  Short-term (in-memory): ContextAggregator - people, objects, devices, audio events, 20-turn buffer
-  Short-term (persistent): PostgreSQL conversation_turns - per-session turn history
-  Long-term (knowledge):   GraphRAG (atlas-memory HTTP) - facts, preferences, personal info
-
-  WORKING:
-
-  - PostgreSQL turn persistence (graph path):  atlas_brain/agents/graphs/atlas.py _store_turn()
-  - PostgreSQL turn persistence (streaming):   atlas_brain/voice/launcher.py _persist_streaming_turns()
-  - Session creation (voice pipeline):         atlas_brain/voice/pipeline.py _ensure_session()
-  - Session API (REST):                        atlas_brain/api/session.py
-  - Conversation history loaded into LLM:      atlas_brain/agents/graphs/atlas.py _generate_llm_response()
-  - GraphRAG READ (context retrieval):         atlas_brain/agents/graphs/atlas.py retrieve_memory node
-  - Query classification (skip RAG for cmds):  atlas_brain/memory/query_classifier.py
-  - Entity tracker (pronoun resolution):       atlas_brain/agents/entity_tracker.py (in-memory)
-
-  GAPS:
-
-  GAP-1: History query includes device commands in LLM context
-    Severity: Medium
-    Location: atlas_brain/agents/graphs/atlas.py line 820, atlas_brain/voice/launcher.py line 231
-    Issue: Raw SQL fetches ALL turn types. Device command logs pollute LLM conversation context.
-    Fix: Add AND turn_type = 'conversation' to both raw SQL queries.
-    Status: CLOSED
-    Resolution: Filter applied to both SQL locations. 3 new tests added (TestLLMContextQuery).
-                78 tests passing (75 existing + 3 new).
-
-  GAP-1 FIX PLAN
-  ~~~~~~~~~~~~~~
-  Problem: Two raw SQL queries fetch conversation history for LLM context without
-  filtering by turn_type. Device commands ("Turn on lights" / "Done.") consume
-  context window slots meant for actual conversation, degrading follow-up quality.
-
-  Affected code (2 locations, identical query):
-
-    Location A: atlas_brain/agents/graphs/atlas.py _generate_llm_response()
-      Line ~820: SELECT role, content FROM conversation_turns
-                 WHERE session_id = $1 ORDER BY created_at DESC LIMIT 6
-
-    Location B: atlas_brain/voice/launcher.py _stream_llm_response()
-      Line ~231: Same query
-
-  Change: Add turn_type filter to both:
-      SELECT role, content FROM conversation_turns
-      WHERE session_id = $1 AND turn_type = 'conversation'
-      ORDER BY created_at DESC LIMIT 6
-
-  Why this is safe:
-    - turn_type column added in migration 006_daily_sessions.sql
-    - DEFAULT 'conversation' on the column, so legacy rows are included
-    - Index idx_conversation_turns_type on (session_id, turn_type) exists in migration 006
-    - Existing index idx_turns_session_created on (session_id, created_at DESC) covers ordering
-    - ConversationRepository.get_history() already filters identically
-    - test_llm_context_excludes_commands validates the repository-level behavior
-    - No callers depend on commands appearing in LLM history
-
-  Validation:
-    1. Run existing 75 tests (27 persistence + 48 security) - must all pass
-    2. Write a targeted test that inserts mixed turns, then calls the same raw SQL
-       with the new filter, confirming commands are excluded
-    3. Verify the index covers the new query (EXPLAIN ANALYZE)
-
-  GAP-2: No real-time GraphRAG writes (long-term memory write path broken)
-    Severity: High
-    Location: atlas_brain/services/memory/client.py add_conversation_turn() - never called
-              atlas_brain/memory/service.py store_conversation() - never called (MemoryService unused)
-    Issue: Conversations are stored in PostgreSQL but never written to GraphRAG in real time.
-           Only the nightly batch sync can populate long-term memory, but see GAP-3.
-    Status: CLOSED
-    Resolution: Wired fire-and-forget GraphRAG write into AtlasAgentMemory.add_turn().
-                Both persist paths (graph _store_turn + streaming _persist_streaming_turns)
-                now write conversation turns to GraphRAG via MemoryClient.add_conversation_turn().
-                Gated by settings.memory.enabled + store_conversations. Command turns excluded.
-                5 new tests added (TestGraphRAGWriteWiring). 83 tests passing.
-
-  GAP-3: Nightly memory sync never scheduled
-    Severity: High
-    Location: atlas_brain/autonomous/runner.py line 37 (handler registered)
-              atlas_brain/autonomous/scheduler.py line 87 (loads from DB)
-    Issue: Handler exists but no scheduled_tasks DB row seeds it. Job never triggers.
-    Status: CLOSED
-    Fix: Added _DEFAULT_TASKS class variable and _ensure_default_tasks() to
-         TaskScheduler in scheduler.py. Called from start() after _load_tasks_from_db().
-         Seeds nightly_memory_sync (cron 0 3 * * *, timeout 300s) and
-         cleanup_old_executions (cron 30 3 * * *, timeout 120s) idempotently via
-         repo.get_by_name() guard. Also closes GAP-8.
-         5 new tests in TestDefaultTaskSeeding (test_default_task_seeding.py).
-         88 integration tests passing.
-
-  GAP-4: In-memory context never fed to agent graph
-    Severity: Low
-    Location: atlas_brain/agents/memory.py (build_context_string, get_in_memory_conversation)
-              atlas_brain/agents/graphs/atlas.py _generate_llm_response()
-    Issue: ContextAggregator tracks people, objects, devices, audio events.
-           No graph node reads runtime_context or calls build_context_string().
-           Physical awareness data never reaches the LLM system prompt.
-    Status: CLOSED
-    Fix: Reader side -- wired ContextAggregator.build_context_string() into LLM paths:
-         - atlas_brain/agents/graphs/atlas.py: awareness injected into system_parts
-         - atlas_brain/voice/launcher.py: same injection plus speaker_name
-         Writer side -- wired all 4 existing data sources into ContextAggregator:
-         - atlas_brain/vision/subscriber.py: _update_context() feeds update_person()
-           for person tracks and update_object() for all other YOLO classes
-         - atlas_brain/capabilities/backends/homeassistant_ws.py: _update_context_device()
-           feeds update_device() on every HA state_changed event
-         - atlas_brain/voice/pipeline.py: speaker identification feeds update_person()
-           with name, confidence, and node_id location
-         - atlas_brain/voice/pipeline.py: start() calls set_room(node_id) at boot
-         Note: Audio classification (add_audio_event) has no source yet -- YAMNet
-         integration is not implemented. When added, wire into add_audio_event().
-         11 tests in test_context_awareness.py + 17 tests in test_context_writers.py.
-
-  GAP-5: MemoryService fully implemented but never wired
-    Severity: Informational
-    Location: atlas_brain/memory/service.py (486 lines)
-    Issue: Unified layer aggregating PostgreSQL + GraphRAG + profiles + token budgets.
-           get_memory_service() exported but called by zero modules.
-           Does everything the graph does manually plus everything it is missing.
-    Status: CLOSED
-    Fix: Wired get_memory_service().gather_context() into both LLM response paths:
-         - atlas_brain/agents/graphs/atlas.py: replaced raw SQL history fetch with
-           MemoryService.gather_context(). Added user profile injection (name,
-           response_style, expertise_level) to system prompt.
-         - atlas_brain/voice/launcher.py: same gather_context() replacement + profile
-           injection. Also replaced _persist_streaming_turns to use
-           MemoryService.store_conversation() for dual-write (PostgreSQL + GraphRAG).
-         Raw SQL for conversation_turns removed from both files.
-         27 new tests in test_memory_service_wiring.py (3 singleton + 10 prompt
-         formatting + 4 atlas wiring + 5 launcher wiring + 5 integration).
-
-  GAP-6: User profiles never loaded
-    Severity: Low
-    Location: atlas_brain/storage/repositories/profile.py (301 lines + migration 004)
-    Issue: ProfileRepository exists. MemoryService._load_user_profile() calls it.
-           Since MemoryService is unused, user preferences never reach the LLM.
-    Status: CLOSED (via GAP-5 fix)
-    Fix: Wiring MemoryService (GAP-5) activates the _load_user_profile() code path
-         inside gather_context(). When user_id is provided, ProfileRepository loads
-         display_name, timezone, response_style, expertise_level, and enable_rag
-         preferences. These flow into the system prompt via the new profile injection
-         code in both atlas.py and launcher.py. User-to-speaker mapping is a separate
-         feature -- profiles activate automatically when user_id is provided.
-
-  GAP-7: Non-UUID session IDs silently break history + persistence
-    Severity: Medium
-    Location: atlas_brain/agents/graphs/atlas.py _generate_llm_response() line ~820
-              atlas_brain/voice/launcher.py _stream_llm_response() line ~231
-              atlas_brain/agents/memory.py add_turn() line ~148 (UUID() cast)
-              atlas_brain/api/openai_compat.py (sha256 truncated to 16-char hex)
-              atlas_brain/api/ollama_compat.py (same sha256 pattern)
-              atlas_brain/api/edge_routes.py (edge WebSocket sends arbitrary string)
-    Issue: The conversation_turns.session_id column is UUID. The voice pipeline
-           produces valid UUIDs via uuid4(). But three other entry points produce
-           non-UUID strings:
-             - OpenAI compat API: sha256[:16] hex hash of model name
-             - Ollama compat API: same sha256 pattern
-             - Edge WebSocket transcript handler: arbitrary client string
-           When these reach the raw SQL (WHERE session_id = $1), asyncpg raises
-           InvalidTextRepresentationError. The except block silently swallows it,
-           so: (a) no conversation history is loaded, (b) add_turn() fails at
-           UUID(session_id), so turns are never persisted. Multi-turn context is
-           silently broken for all non-voice entry points.
-    Status: CLOSED
-    Fix: Created atlas_brain/utils/session_id.py with normalize_session_id()
-         (UUID5 deterministic mapping for non-UUID strings) and ensure_session_row()
-         (idempotent INSERT INTO sessions). Wired into all 5 entry points:
-           - atlas_brain/api/openai_compat.py (replaced sha256[:16] with normalize)
-           - atlas_brain/api/ollama_compat.py (same)
-           - atlas_brain/api/llm.py (normalize arbitrary request.session_id)
-           - atlas_brain/api/comms/webhooks.py (normalize telephony call_id)
-         Hardened downstream consumers:
-           - atlas_brain/agents/graphs/atlas.py: cast session_id to UUID before asyncpg
-           - atlas_brain/voice/launcher.py: same
-           - atlas_brain/agents/memory.py: normalize before UUID() cast in get/add
-         14 new tests in test_session_id_normalization.py (9 unit + 5 integration).
-         45 integration tests passing.
-
-  GAP-8: No PostgreSQL cleanup mechanism is functional (unbounded table growth)
-    Severity: High
-    Location: atlas_brain/jobs/nightly_memory_sync.py _purge_old_messages()
-              atlas_brain/autonomous/runner.py (cleanup_job handler also registered)
-    Issue: Two cleanup mechanisms exist but neither runs:
-             - nightly_memory_sync purges conversation_turns > N days (GAP-3 blocks it)
-             - cleanup_job purges task_executions, presence_events, proactive_actions
-           Both are registered as handlers but have no scheduled_tasks DB row.
-           No migration seeds any scheduled task rows. Tables grow without bound.
-    Status: CLOSED (via GAP-3 fix -- both tasks now auto-seeded on scheduler start)
-
-  GAP-9: Voice pipeline bypasses SessionRepository, fragments conversation history
-    Severity: Low
-    Location: atlas_brain/voice/pipeline.py (session creation via uuid4())
-    Issue: The voice pipeline creates sessions via direct uuid4() + raw SQL INSERT
-           rather than using SessionRepository.get_or_create_session(). This means:
-             - Every voice pipeline restart creates a new session UUID
-             - Daily session reuse logic in SessionRepository is bypassed
-             - Conversation history is fragmented across sessions on restart
-    Status: CLOSED
-    Fix: Replaced raw SQL INSERT in VoicePipeline._ensure_session() with
-         SessionRepository. New logic:
-         1. Queries for today's active session matching terminal_id (node_id)
-         2. If found, reuses that session_id and calls touch_session()
-         3. If not found, creates via repo.create_session(terminal_id=node_id)
-         This gives daily session continuity per voice node. Conversation history
-         now persists across pipeline restarts on the same day.
-         10 new tests in test_voice_session_reuse.py (5 wiring + 5 integration).

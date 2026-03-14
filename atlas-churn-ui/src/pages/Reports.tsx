@@ -21,6 +21,7 @@ export const REPORT_TYPE_COLORS: Record<string, string> = {
   account_deep_dive: 'bg-pink-500/20 text-pink-300',
   vendor_retention: 'bg-orange-500/20 text-orange-400',
   challenger_intel: 'bg-purple-500/20 text-purple-400',
+  battle_card: 'bg-red-500/20 text-red-400',
 }
 
 function CardSkeleton() {
@@ -201,6 +202,7 @@ export default function Reports() {
             <option value="account_deep_dive">Account Deep Dive</option>
             <option value="vendor_retention">Vendor Retention</option>
             <option value="challenger_intel">Challenger Intel</option>
+            <option value="battle_card">Battle Card</option>
           </select>
           {hasFilters && (
             <button
