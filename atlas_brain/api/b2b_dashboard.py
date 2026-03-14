@@ -152,6 +152,8 @@ async def list_signals(
 
     conditions.append(_suppress_predicate('churn_signal'))
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    summary_params = list(params)  # snapshot before adding limit
+
     capped = min(limit, 100)
     params.append(capped)
 
@@ -167,6 +169,18 @@ async def list_signals(
         LIMIT ${idx}
         """,
         *params,
+    )
+
+    # Summary stats (not subject to LIMIT) for dashboard stat cards
+    summary = await pool.fetchrow(
+        f"""
+        SELECT COUNT(DISTINCT vendor_name) AS total_vendors,
+               COUNT(*) FILTER (WHERE avg_urgency_score >= 7) AS high_urgency_count,
+               COALESCE(SUM(total_reviews), 0) AS total_signal_reviews
+        FROM b2b_churn_signals
+        {where}
+        """,
+        *summary_params,
     )
 
     signals = [
@@ -185,7 +199,13 @@ async def list_signals(
         for r in rows
     ]
 
-    return {"signals": signals, "count": len(signals)}
+    return {
+        "signals": signals,
+        "count": len(signals),
+        "total_vendors": summary["total_vendors"] if summary else 0,
+        "high_urgency_count": summary["high_urgency_count"] if summary else 0,
+        "total_signal_reviews": summary["total_signal_reviews"] if summary else 0,
+    }
 
 
 # ---------------------------------------------------------------------------

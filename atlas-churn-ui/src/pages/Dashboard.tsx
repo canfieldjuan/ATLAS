@@ -11,10 +11,19 @@ import useApiData from '../hooks/useApiData'
 import { fetchSignals, fetchHighIntent, fetchPipeline } from '../api/client'
 import type { ChurnSignal, HighIntentCompany, PipelineStatus } from '../types'
 
+interface SignalsResponse {
+  signals: ChurnSignal[]
+  count: number
+  total_vendors?: number
+  high_urgency_count?: number
+  total_signal_reviews?: number
+}
+
 interface DashboardData {
   signals: ChurnSignal[]
   companies: HighIntentCompany[]
   pipeline: PipelineStatus
+  signalSummary: { totalVendors: number; highUrgency: number; totalReviews: number }
 }
 
 export default function Dashboard() {
@@ -23,11 +32,20 @@ export default function Dashboard() {
   const { data, loading, error, refresh, refreshing } = useApiData<DashboardData>(
     async () => {
       const [sigRes, hiRes, pipe] = await Promise.all([
-        fetchSignals({ limit: 20 }),
+        fetchSignals({ limit: 20 }) as Promise<SignalsResponse>,
         fetchHighIntent({ limit: 10 }),
         fetchPipeline(),
       ])
-      return { signals: sigRes.signals, companies: hiRes.companies, pipeline: pipe }
+      return {
+        signals: sigRes.signals,
+        companies: hiRes.companies,
+        pipeline: pipe,
+        signalSummary: {
+          totalVendors: sigRes.total_vendors ?? sigRes.signals.length,
+          highUrgency: sigRes.high_urgency_count ?? sigRes.signals.filter((s) => s.avg_urgency_score >= 7).length,
+          totalReviews: sigRes.total_signal_reviews ?? 0,
+        },
+      }
     },
     [],
   )
@@ -35,8 +53,8 @@ export default function Dashboard() {
   const signals = data?.signals ?? []
   const companies = data?.companies ?? []
   const pipeline = data?.pipeline ?? null
+  const summary = data?.signalSummary ?? { totalVendors: 0, highUrgency: 0, totalReviews: 0 }
 
-  const highUrgency = signals.filter((s) => s.avg_urgency_score >= 7).length
   const totalReviews = pipeline
     ? Object.values(pipeline.enrichment_counts).reduce((a, b) => a + b, 0)
     : 0
@@ -130,20 +148,20 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           label="Vendors Tracked"
-          value={signals.length}
+          value={summary.totalVendors}
           icon={<Building2 className="h-5 w-5" />}
           skeleton={loading}
         />
         <StatCard
           label="High Urgency"
-          value={highUrgency}
+          value={summary.highUrgency}
           icon={<AlertTriangle className="h-5 w-5" />}
-          sub="Urgency >= 7"
+          sub="Urgency &ge; 7"
           skeleton={loading}
         />
         <StatCard
           label="Total Reviews"
-          value={totalReviews}
+          value={totalReviews.toLocaleString()}
           icon={<MessageSquareText className="h-5 w-5" />}
           skeleton={loading}
         />
