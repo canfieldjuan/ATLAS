@@ -111,8 +111,26 @@ class StratifiedReasoner:
         if not force_reason:
             cached = await self._recall(pattern_sig, ev_hash)
             if cached is not None:
-                await self._log_metacognition("recall", 0, cached.conclusion.get("archetype", ""))
-                return cached
+                conclusion_type = cached.conclusion.get("archetype", "")
+                # Surprise detection: rare conclusion type -> escalate to full reason
+                if self._meta and conclusion_type:
+                    try:
+                        if await self._meta.is_surprise(conclusion_type):
+                            logger.info(
+                                "Surprise escalation for %s (type=%s)",
+                                vendor_name, conclusion_type,
+                            )
+                            force_reason = True
+                        else:
+                            await self._log_metacognition("recall", 0, conclusion_type)
+                            return cached
+                    except Exception:
+                        logger.debug("Surprise check failed, using cached", exc_info=True)
+                        await self._log_metacognition("recall", 0, conclusion_type)
+                        return cached
+                else:
+                    await self._log_metacognition("recall", 0, conclusion_type)
+                    return cached
 
         # 2. Try reconstitute: cache hit on vendor but evidence changed
         if not force_reason:
@@ -271,7 +289,12 @@ class StratifiedReasoner:
                 evidence = {}
                 async for record in result:
                     key = record["type"] or record["source"]
-                    val = record["value"]
+                    raw = record["value"]
+                    # Deserialize JSON-encoded values to restore types
+                    try:
+                        val = json.loads(raw)
+                    except (json.JSONDecodeError, TypeError):
+                        val = raw
                     if key in evidence:
                         if isinstance(evidence[key], list):
                             evidence[key].append(val)
@@ -487,8 +510,21 @@ class StratifiedReasoner:
 
     @staticmethod
     def _build_evidence_nodes(evidence: dict[str, Any]) -> list[EvidenceNode]:
-        """Convert evidence dict into EvidenceNode list."""
+        """Convert evidence dict into EvidenceNode list.
+
+        Values are JSON-serialized to preserve types (int, float, dict, list)
+        so that reconstitute diffing can compare accurately.
+        """
         import uuid
+
+        def _serialize(v: Any) -> str:
+            """JSON-encode non-string values to preserve types for diffing."""
+            if isinstance(v, str):
+                return v[:500]
+            try:
+                return json.dumps(v, separators=(",", ":"), default=str)[:500]
+            except (TypeError, ValueError):
+                return str(v)[:500]
 
         nodes = []
         for key, val in evidence.items():
@@ -498,14 +534,14 @@ class StratifiedReasoner:
                         id=str(uuid.uuid4()),
                         type=key,
                         source=key,
-                        value=str(item)[:500],
+                        value=_serialize(item),
                     ))
             else:
                 nodes.append(EvidenceNode(
                     id=str(uuid.uuid4()),
                     type=key,
                     source=key,
-                    value=str(val)[:500],
+                    value=_serialize(val),
                 ))
         return nodes
 

@@ -63,6 +63,41 @@ async def init_stratified_reasoner(db_pool) -> None:
             "Failed to init TemporalEngine (non-fatal)", exc_info=True,
         )
 
+    # Attach ecosystem analyzer + narrative engine
+    try:
+        from .ecosystem import EcosystemAnalyzer
+        from .narrative import NarrativeEngine
+
+        _stratified_reasoner._ecosystem = EcosystemAnalyzer(db_pool)
+        _stratified_reasoner._narrative = NarrativeEngine(db_pool)
+    except Exception:
+        import logging
+        logging.getLogger("atlas.reasoning").warning(
+            "Ecosystem/Narrative engine failed to init (non-fatal)",
+            exc_info=True,
+        )
+
+    # Attach knowledge graph query + trigger correlator
+    try:
+        from neo4j import AsyncGraphDatabase
+        from .knowledge_graph import KnowledgeGraphQuery
+        from .trigger_events import TriggerCorrelator
+
+        from .config import ReasoningConfig
+        _rcfg = ReasoningConfig()
+        _neo4j_driver = AsyncGraphDatabase.driver(
+            _rcfg.neo4j_bolt_url, auth=(_rcfg.neo4j_user, _rcfg.neo4j_password),
+        )
+        _stratified_reasoner._graph = KnowledgeGraphQuery(_neo4j_driver)
+        _stratified_reasoner._triggers = TriggerCorrelator(db_pool)
+        _stratified_reasoner._neo4j_driver = _neo4j_driver
+    except Exception:
+        import logging
+        logging.getLogger("atlas.reasoning").warning(
+            "Knowledge graph / trigger engine failed to start (non-fatal)",
+            exc_info=True,
+        )
+
 
 async def close_stratified_reasoner() -> None:
     """Flush metacognition and shutdown the episodic store connection."""
@@ -71,6 +106,12 @@ async def close_stratified_reasoner() -> None:
         if _stratified_reasoner._meta:
             try:
                 await _stratified_reasoner._meta.flush()
+            except Exception:
+                pass
+        # Close Neo4j driver if attached
+        if hasattr(_stratified_reasoner, "_neo4j_driver"):
+            try:
+                await _stratified_reasoner._neo4j_driver.close()
             except Exception:
                 pass
         await _stratified_reasoner._episodic.close()

@@ -70,9 +70,18 @@ class EpisodicStore:
 
     def __init__(
         self,
-        bolt_url: str = "bolt://localhost:7687",
-        auth: tuple[str, str] = ("neo4j", "password123"),
+        bolt_url: str | None = None,
+        auth: tuple[str, str] | None = None,
     ):
+        if bolt_url is None or auth is None:
+            try:
+                from .config import ReasoningConfig
+                _cfg = ReasoningConfig()
+                bolt_url = bolt_url or _cfg.neo4j_bolt_url
+                auth = auth or (_cfg.neo4j_user, _cfg.neo4j_password)
+            except Exception:
+                bolt_url = bolt_url or "bolt://localhost:7687"
+                auth = auth or ("neo4j", "password123")
         self._bolt_url = bolt_url
         self._auth = auth
         self._driver = None

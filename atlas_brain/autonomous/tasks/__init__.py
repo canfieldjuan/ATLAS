@@ -51,6 +51,8 @@ _BUILTIN_TASKS = [
     ("challenger_target_discovery", "run", "challenger_target_discovery"),
     ("crm_event_processing", "run", "crm_event_processing"),
     ("falsification_check", "run", "falsification_check"),
+    ("knowledge_graph_sync", "run", "knowledge_graph_sync"),
+    ("ecosystem_analysis", "run", "ecosystem_analysis"),
 ]
 
 

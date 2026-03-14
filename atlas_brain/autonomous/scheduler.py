@@ -663,6 +663,24 @@ class TaskScheduler:
             "timeout_seconds": 300,
             "metadata": {"builtin_handler": "falsification_check"},
         },
+        {
+            "name": "knowledge_graph_sync",
+            "description": "Nightly sync of B2B entities and relationships from Postgres to Neo4j knowledge graph",
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": "30 21 * * *",
+            "timeout_seconds": 600,
+            "metadata": {"builtin_handler": "knowledge_graph_sync"},
+        },
+        {
+            "name": "ecosystem_analysis",
+            "description": "Weekly category-level ecosystem analysis for Tier 4 reasoning cache",
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": "0 22 * * 0",
+            "timeout_seconds": 600,
+            "metadata": {"builtin_handler": "ecosystem_analysis"},
+        },
     ]
 
     async def _ensure_default_tasks(self) -> None:

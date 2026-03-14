@@ -31,6 +31,7 @@ class ReasoningAgentState(TypedDict, total=False):
     recent_events: list[dict[str, Any]]
     market_context: list[dict[str, Any]]
     news_context: list[dict[str, Any]]
+    b2b_churn: dict[str, Any]  # B2B churn intelligence context
 
     # Lock check
     entity_locked: bool

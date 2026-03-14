@@ -570,3 +570,513 @@ class TestArchetypes:
         # Scores should be descending
         for i in range(len(matches) - 1):
             assert matches[i].score >= matches[i + 1].score
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 tests: Knowledge graph + Trigger events
+# ---------------------------------------------------------------------------
+
+
+class TestKnowledgeGraphEntities:
+    """Pure-logic tests for knowledge_graph.py entity definitions."""
+
+    def test_vendor_node_defaults(self):
+        from atlas_brain.reasoning.knowledge_graph import VendorNode
+
+        v = VendorNode(canonical_name="Slack")
+        assert v.canonical_name == "Slack"
+        assert v.aliases == []
+        assert v.churn_density == 0.0
+
+    def test_displacement_edge(self):
+        from atlas_brain.reasoning.knowledge_graph import DisplacementEdge
+
+        e = DisplacementEdge(
+            from_vendor="Mailchimp", to_vendor="Klaviyo",
+            mention_count=28, primary_driver="pricing",
+            signal_strength="strong", confidence_score=0.85,
+        )
+        assert e.from_vendor == "Mailchimp"
+        assert e.primary_driver == "pricing"
+
+    def test_integration_edge(self):
+        from atlas_brain.reasoning.knowledge_graph import IntegrationEdge
+
+        e = IntegrationEdge(
+            vendor_name="HubSpot", integration_name="Salesforce",
+            mention_count=15, confidence_score=0.9,
+        )
+        assert e.vendor_name == "HubSpot"
+        assert e.integration_name == "Salesforce"
+
+    def test_group_id(self):
+        from atlas_brain.reasoning.knowledge_graph import GROUP_ID
+
+        assert GROUP_ID == "b2b-knowledge-graph"
+        # Must differ from episodic store group
+        from atlas_brain.reasoning.episodic_store import GROUP_ID as EPISODIC_GID
+        assert GROUP_ID != EPISODIC_GID
+
+
+class TestTriggerEvents:
+    """Pure-logic tests for trigger_events.py."""
+
+    def test_all_trigger_types_defined(self):
+        from atlas_brain.reasoning.trigger_events import EVENT_TAXONOMY, TriggerType
+
+        assert len(EVENT_TAXONOMY) == 8
+        for tt in TriggerType:
+            assert tt in EVENT_TAXONOMY
+
+    def test_archetype_affinity(self):
+        from atlas_brain.reasoning.trigger_events import EVENT_TAXONOMY, TriggerType
+
+        pricing = EVENT_TAXONOMY[TriggerType.PRICING_CHANGE]
+        assert "pricing_shock" in pricing.archetype_affinity
+        assert pricing.urgency_boost > 1.0
+
+        outage = EVENT_TAXONOMY[TriggerType.OUTAGE_INCIDENT]
+        assert "support_collapse" in outage.archetype_affinity
+        assert outage.urgency_boost == 2.0  # highest urgency
+
+    def test_get_archetype_triggers(self):
+        from atlas_brain.reasoning.trigger_events import (
+            TriggerType,
+            get_archetype_triggers,
+        )
+
+        triggers = get_archetype_triggers("pricing_shock")
+        assert TriggerType.PRICING_CHANGE in triggers
+        assert TriggerType.CONTRACT_CYCLE in triggers
+
+        triggers = get_archetype_triggers("compliance_gap")
+        assert TriggerType.COMPLIANCE_UPDATE in triggers
+
+    def test_map_event_type(self):
+        from atlas_brain.reasoning.trigger_events import TriggerType, _map_event_type
+
+        assert _map_event_type("Series B funding round") == TriggerType.FUNDING_ROUND
+        assert _map_event_type("CEO departure announced") == TriggerType.LEADERSHIP_CHANGE
+        assert _map_event_type("SOC2 certification achieved") == TriggerType.COMPLIANCE_UPDATE
+        assert _map_event_type("v3.0 feature release") == TriggerType.PRODUCT_LAUNCH
+        assert _map_event_type("pricing tier restructure") == TriggerType.PRICING_CHANGE
+        assert _map_event_type("acquired by Salesforce") == TriggerType.ACQUISITION
+        assert _map_event_type("major outage 12h downtime") == TriggerType.OUTAGE_INCIDENT
+        assert _map_event_type("annual contract renewal") == TriggerType.CONTRACT_CYCLE
+        assert _map_event_type("random unrelated text") is None
+
+    def test_correlation_strength_classification(self):
+        from atlas_brain.reasoning.trigger_events import _classify_correlation_strength
+
+        # avg_urgency thresholds: (0.05, 0.15, 0.3)
+        assert _classify_correlation_strength(0.35, "avg_urgency") == "strong"
+        assert _classify_correlation_strength(0.2, "avg_urgency") == "moderate"
+        assert _classify_correlation_strength(0.08, "avg_urgency") == "weak"
+        assert _classify_correlation_strength(0.01, "avg_urgency") == "none"
+
+    def test_risk_level_from_score(self):
+        from atlas_brain.reasoning.trigger_events import _risk_level_from_score
+
+        assert _risk_level_from_score(0.9) == "critical"
+        assert _risk_level_from_score(0.7) == "high"
+        assert _risk_level_from_score(0.4) == "medium"
+        assert _risk_level_from_score(0.2) == "low"
+
+    def test_trigger_event_creation(self):
+        from datetime import date
+
+        from atlas_brain.reasoning.trigger_events import TriggerEvent, TriggerType
+
+        ev = TriggerEvent(
+            vendor_name="Slack",
+            trigger_type=TriggerType.PRICING_CHANGE,
+            event_date=date(2026, 3, 1),
+            source="press",
+            description="Slack raises Pro plan price by 30%",
+            confidence=0.9,
+        )
+        assert ev.vendor_name == "Slack"
+        assert ev.trigger_type == TriggerType.PRICING_CHANGE
+
+    def test_event_taxonomy_serializable(self):
+        from atlas_brain.reasoning.trigger_events import get_event_taxonomy
+
+        taxonomy = get_event_taxonomy()
+        assert isinstance(taxonomy, dict)
+        assert "pricing_change" in taxonomy
+        assert "outage_incident" in taxonomy
+
+    @pytest.mark.asyncio
+    async def test_correlator_no_temporal(self):
+        """Correlator returns None when no temporal data provided."""
+        from datetime import date
+
+        from atlas_brain.reasoning.trigger_events import (
+            TriggerCorrelator,
+            TriggerEvent,
+            TriggerType,
+        )
+
+        correlator = TriggerCorrelator(pool=None)
+        event = TriggerEvent(
+            vendor_name="Test",
+            trigger_type=TriggerType.PRICING_CHANGE,
+            event_date=date.today(),
+        )
+        result = await correlator.correlate_event(event, temporal_dict=None)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_correlator_with_velocity(self):
+        """Correlator detects correlation when velocity matches expected direction."""
+        from datetime import date
+
+        from atlas_brain.reasoning.trigger_events import (
+            TriggerCorrelator,
+            TriggerEvent,
+            TriggerType,
+        )
+
+        correlator = TriggerCorrelator(pool=None)
+        event = TriggerEvent(
+            vendor_name="Test",
+            trigger_type=TriggerType.PRICING_CHANGE,
+            event_date=date.today(),
+            confidence=0.9,
+        )
+        temporal = {
+            "velocity_avg_urgency": 0.5,  # urgency increasing (expected for pricing)
+            "velocity_competitor_count": 0.3,  # competitors increasing
+        }
+        result = await correlator.correlate_event(event, temporal_dict=temporal)
+        assert result is not None
+        assert result.correlation_strength in ("strong", "moderate", "weak")
+
+    @pytest.mark.asyncio
+    async def test_composite_risk_score(self):
+        """Composite risk combines archetype score + event boosts."""
+        from datetime import date
+
+        from atlas_brain.reasoning.trigger_events import (
+            TriggerCorrelator,
+            TriggerEvent,
+            TriggerType,
+        )
+
+        correlator = TriggerCorrelator(pool=None)
+        events = [
+            TriggerEvent(
+                vendor_name="Test",
+                trigger_type=TriggerType.PRICING_CHANGE,
+                event_date=date.today(),
+                confidence=0.9,
+            ),
+            TriggerEvent(
+                vendor_name="Test",
+                trigger_type=TriggerType.OUTAGE_INCIDENT,
+                event_date=date.today(),
+                confidence=0.8,
+            ),
+        ]
+        temporal = {"velocity_avg_urgency": 0.4}
+
+        score = await correlator.compute_composite_risk(
+            "Test", events, archetype_score=0.6, temporal_dict=temporal,
+        )
+        assert score.composite_risk > 0.6  # should be boosted above base
+        assert score.risk_level in ("medium", "high", "critical")
+        assert len(score.events) == 2
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 tests: Ecosystem + Narrative
+# ---------------------------------------------------------------------------
+
+
+class TestEcosystem:
+    """Pure-logic tests for ecosystem.py."""
+
+    def test_category_health_defaults(self):
+        from atlas_brain.reasoning.ecosystem import CategoryHealth
+
+        h = CategoryHealth(category="CRM")
+        assert h.category == "CRM"
+        assert h.hhi == 0.0
+        assert h.market_structure == ""
+
+    def test_hhi_computation(self):
+        from atlas_brain.reasoning.ecosystem import EcosystemAnalyzer
+
+        analyzer = EcosystemAnalyzer(pool=None)
+        # Two vendors with equal reviews -> HHI = 2 * 50^2 = 5000
+        vendors = [
+            {"vendor_name": "A", "total_reviews": 100, "churn_density": 30,
+             "avg_urgency": 4.0, "positive_review_pct": 60,
+             "displacement_edge_count": 1},
+            {"vendor_name": "B", "total_reviews": 100, "churn_density": 40,
+             "avg_urgency": 5.0, "positive_review_pct": 50,
+             "displacement_edge_count": 2},
+        ]
+        health = analyzer._compute_health("CRM", vendors)
+        assert health.vendor_count == 2
+        assert health.total_reviews == 200
+        assert abs(health.hhi - 5000.0) < 1  # 50^2 + 50^2
+
+    def test_hhi_dominant_player(self):
+        from atlas_brain.reasoning.ecosystem import EcosystemAnalyzer
+
+        analyzer = EcosystemAnalyzer(pool=None)
+        # One dominant vendor (90% share) -> HHI = 90^2 + 10^2 = 8200
+        vendors = [
+            {"vendor_name": "Big", "total_reviews": 900, "churn_density": 20,
+             "avg_urgency": 3.0, "positive_review_pct": 70,
+             "displacement_edge_count": 0},
+            {"vendor_name": "Small", "total_reviews": 100, "churn_density": 50,
+             "avg_urgency": 6.0, "positive_review_pct": 30,
+             "displacement_edge_count": 3},
+        ]
+        health = analyzer._compute_health("CRM", vendors)
+        assert health.hhi > 8000  # concentrated market
+
+    def test_market_structure_consolidating(self):
+        from atlas_brain.reasoning.ecosystem import (
+            CategoryHealth,
+            CategoryVendorSlice,
+            EcosystemAnalyzer,
+        )
+
+        analyzer = EcosystemAnalyzer(pool=None)
+        health = CategoryHealth(
+            category="CRM", vendor_count=3, hhi=3000,
+            displacement_intensity=0.5, avg_churn_density=25,
+        )
+        slices = [
+            CategoryVendorSlice(vendor_name="Big", review_share=50, net_displacement=2),
+            CategoryVendorSlice(vendor_name="Med", review_share=30, net_displacement=0),
+            CategoryVendorSlice(vendor_name="Small", review_share=20, net_displacement=-2),
+        ]
+        assert analyzer._classify_market(health, slices) == "consolidating"
+
+    def test_market_structure_displacing(self):
+        from atlas_brain.reasoning.ecosystem import (
+            CategoryHealth,
+            CategoryVendorSlice,
+            EcosystemAnalyzer,
+        )
+
+        analyzer = EcosystemAnalyzer(pool=None)
+        health = CategoryHealth(
+            category="CRM", vendor_count=5, hhi=2000,
+            displacement_intensity=3.0, avg_churn_density=50,
+        )
+        slices = [
+            CategoryVendorSlice(vendor_name="Winner", review_share=25, net_displacement=5),
+            CategoryVendorSlice(vendor_name="Loser", review_share=25, net_displacement=-5),
+            CategoryVendorSlice(vendor_name="C", review_share=20, net_displacement=0),
+            CategoryVendorSlice(vendor_name="D", review_share=15, net_displacement=1),
+            CategoryVendorSlice(vendor_name="E", review_share=15, net_displacement=-1),
+        ]
+        assert analyzer._classify_market(health, slices) == "displacing"
+
+    def test_market_structure_stable(self):
+        from atlas_brain.reasoning.ecosystem import (
+            CategoryHealth,
+            CategoryVendorSlice,
+            EcosystemAnalyzer,
+        )
+
+        analyzer = EcosystemAnalyzer(pool=None)
+        health = CategoryHealth(
+            category="CRM", vendor_count=4, hhi=2200,
+            displacement_intensity=0.5, avg_churn_density=20,
+        )
+        slices = [
+            CategoryVendorSlice(vendor_name="A", review_share=30, net_displacement=0),
+            CategoryVendorSlice(vendor_name="B", review_share=28, net_displacement=0),
+            CategoryVendorSlice(vendor_name="C", review_share=22, net_displacement=0),
+            CategoryVendorSlice(vendor_name="D", review_share=20, net_displacement=0),
+        ]
+        assert analyzer._classify_market(health, slices) == "stable"
+
+    def test_evidence_dict_serialization(self):
+        from atlas_brain.reasoning.ecosystem import (
+            CategoryHealth,
+            CategoryVendorSlice,
+            EcosystemAnalyzer,
+            EcosystemEvidence,
+        )
+
+        ev = EcosystemEvidence(
+            category="CRM",
+            health=CategoryHealth(
+                category="CRM", vendor_count=5, total_reviews=500,
+                avg_churn_density=35.0, hhi=2000, market_structure="displacing",
+                dominant_archetype="pricing_shock",
+            ),
+            vendor_slices=[
+                CategoryVendorSlice(vendor_name="X", review_share=40, churn_density=50),
+            ],
+            pain_distribution={"pricing": 100, "support": 50},
+            archetype_distribution={"pricing_shock": 3, "feature_gap": 2},
+        )
+        d = EcosystemAnalyzer.to_evidence_dict(ev)
+        assert d["market_structure"] == "displacing"
+        assert d["hhi"] == 2000
+        assert d["dominant_archetype"] == "pricing_shock"
+        assert "vendor_positions" in d
+        assert "category_pains" in d
+
+
+class TestNarrative:
+    """Pure-logic tests for narrative.py."""
+
+    def test_evidence_chain_basics(self):
+        from atlas_brain.reasoning.narrative import EvidenceChain, EvidenceLink
+
+        chain = EvidenceChain(
+            claim="High churn density",
+            confidence=0.8,
+            vendor_name="TestCo",
+            links=[
+                EvidenceLink(source_type="snapshot", metric="churn_density", value=65.0),
+                EvidenceLink(source_type="temporal", metric="velocity_churn_density", value=0.05),
+            ],
+        )
+        assert chain.source_count == 2
+        assert chain.is_well_supported
+
+    def test_single_source_not_well_supported(self):
+        from atlas_brain.reasoning.narrative import EvidenceChain, EvidenceLink
+
+        chain = EvidenceChain(
+            claim="Some claim",
+            links=[EvidenceLink(source_type="snapshot", metric="x", value=1)],
+        )
+        assert chain.source_count == 1
+        assert not chain.is_well_supported
+
+    def test_rule_engine_triggers(self):
+        from atlas_brain.reasoning.narrative import NarrativeEngine
+
+        engine = NarrativeEngine()
+        evidence = {
+            "churn_density": 75.0,  # >= 70 -> critical_churn_density
+            "avg_urgency": 8.0,  # >= 7 -> urgency_spike
+            "displacement_edge_count": 3,  # < 5 -> no trigger
+            "positive_review_pct": 20.0,  # < 25 -> positive_collapse
+        }
+        triggered = engine.evaluate_rules("TestVendor", evidence)
+        names = [t.rule.name for t in triggered]
+        assert "critical_churn_density" in names
+        assert "urgency_spike" in names
+        assert "positive_collapse" in names
+        assert "mass_displacement" not in names
+
+    def test_rule_engine_no_triggers(self):
+        from atlas_brain.reasoning.narrative import NarrativeEngine
+
+        engine = NarrativeEngine()
+        evidence = {
+            "churn_density": 20.0,
+            "avg_urgency": 3.0,
+            "positive_review_pct": 70.0,
+        }
+        triggered = engine.evaluate_rules("HealthyVendor", evidence)
+        assert len(triggered) == 0
+
+    def test_build_narrative(self):
+        from atlas_brain.reasoning.narrative import NarrativeEngine
+
+        engine = NarrativeEngine()
+        narrative = engine.build_vendor_narrative(
+            "Mailchimp",
+            reasoning_result={
+                "archetype": "pricing_shock",
+                "executive_summary": "Mailchimp shows pricing shock signals",
+                "risk_level": "high",
+                "falsification_conditions": ["Price reverts"],
+                "uncertainty_sources": ["Limited data"],
+            },
+            archetype_match={
+                "archetype": "pricing_shock",
+                "signal_score": 0.67,
+                "risk_level": "high",
+            },
+            snapshot={"churn_density": 45.6, "avg_urgency": 4.3},
+            temporal_dict={
+                "snapshot_days": 2,
+                "velocity_churn_density": 0.03,
+                "velocity_avg_urgency": 0.1,
+            },
+            competitive_landscape={
+                "losing_to": [
+                    {"name": "Klaviyo", "mentions": 15, "driver": "pricing"},
+                    {"name": "Brevo", "mentions": 8, "driver": "pricing"},
+                ],
+            },
+        )
+        assert narrative.vendor_name == "Mailchimp"
+        assert narrative.archetype == "pricing_shock"
+        assert narrative.archetype_score == 0.67
+        assert len(narrative.evidence_chains) >= 3  # churn + competitive + urgency
+        assert narrative.falsification_conditions == ["Price reverts"]
+
+    def test_explainability(self):
+        from atlas_brain.reasoning.narrative import (
+            EvidenceChain,
+            EvidenceLink,
+            NarrativeEngine,
+            VendorNarrative,
+        )
+
+        engine = NarrativeEngine()
+        narrative = VendorNarrative(
+            vendor_name="TestCo",
+            archetype="feature_gap",
+            archetype_score=0.6,
+            risk_level="medium",
+            evidence_chains=[
+                EvidenceChain(
+                    claim="Missing SSO",
+                    confidence=0.8,
+                    links=[
+                        EvidenceLink(source_type="review", value="no SSO"),
+                        EvidenceLink(source_type="displacement", value="3 mentions"),
+                    ],
+                ),
+            ],
+            temporal_context={"snapshot_days": 14},
+            competitive_context={"losing_to": [{"name": "Competitor"}]},
+            falsification_conditions=["Vendor releases SSO"],
+        )
+        explain = engine.build_explainability(narrative)
+        assert explain["archetype"] == "feature_gap"
+        assert explain["confidence_assessment"] in ("low", "medium", "high")
+        assert "what_would_change_conclusion" in explain
+        assert explain["evidence_summary"]["well_supported"] == 1
+
+    def test_intelligence_payload(self):
+        from atlas_brain.reasoning.narrative import NarrativeEngine, VendorNarrative
+
+        engine = NarrativeEngine()
+        narrative = engine.build_vendor_narrative(
+            "Slack",
+            reasoning_result={
+                "archetype": "category_disruption",
+                "risk_level": "high",
+                "executive_summary": "AI-native tools disrupting Slack",
+            },
+            archetype_match={"signal_score": 0.55},
+            snapshot={"churn_density": 30},
+            temporal_dict={"snapshot_days": 7, "velocity_churn_density": 0.02},
+            competitive_landscape={
+                "losing_to": [{"name": "Teams", "mentions": 27}],
+                "winning_from": [],
+            },
+            ecosystem_evidence={"market_structure": "displacing", "hhi": 1800},
+        )
+        payload = NarrativeEngine.to_intelligence_payload(narrative)
+        assert payload["vendor_name"] == "Slack"
+        assert payload["archetype"] == "category_disruption"
+        assert payload["competitive"]["losing_to_count"] == 1
+        assert payload["ecosystem"]["market_structure"] == "displacing"

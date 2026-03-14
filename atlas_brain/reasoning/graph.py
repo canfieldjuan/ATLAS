@@ -197,6 +197,7 @@ async def _node_aggregate_context(
     state["recent_events"] = ctx.get("recent_events", [])
     state["market_context"] = ctx.get("market_data", [])
     state["news_context"] = ctx.get("recent_news", [])
+    state["b2b_churn"] = ctx.get("b2b_churn", {})
 
     return state
 
@@ -288,6 +289,11 @@ async def _node_reason(state: ReasoningAgentState) -> ReasoningAgentState:
         sections.append(
             f"## Recent News ({len(state['news_context'])})\n"
             + json.dumps(state["news_context"][:10], default=str)[:2000]
+        )
+    if state.get("b2b_churn"):
+        sections.append(
+            f"## B2B Churn Intelligence\n"
+            + json.dumps(state["b2b_churn"], default=str)[:3000]
         )
 
     prompt = "\n\n".join(sections)

@@ -105,6 +105,96 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             tracer.end_span(span, status="completed", output_data={"skipped": "no scoped intelligence data"})
             continue
 
+        # --- Narrative engine: structured evidence chains + rule evaluation ---
+        try:
+            from atlas_brain.reasoning.narrative import NarrativeEngine
+
+            narrative_engine = NarrativeEngine(pool)
+            narrative_payloads = []
+            all_triggered_rules = []
+
+            for vs in (payload.get("vendor_churn_scores") or []):
+                vname = vs.get("vendor_name", "")
+                if not vname:
+                    continue
+
+                # Build structured narrative from available evidence
+                narrative = narrative_engine.build_vendor_narrative(
+                    vendor_name=vname,
+                    snapshot=vs,
+                    archetype_match={"archetype": vs.get("archetype", ""),
+                                     "signal_score": vs.get("signal_score", 0)},
+                )
+
+                # Evaluate threshold rules (P5-005)
+                triggered = narrative_engine.evaluate_rules(vname, vs, narrative.archetype)
+                all_triggered_rules.extend(triggered)
+
+                # Build explainability audit trail
+                explain = narrative_engine.build_explainability(narrative)
+
+                # Add structured evidence to payload
+                intel_payload = NarrativeEngine.to_intelligence_payload(narrative)
+                intel_payload["explainability"] = explain
+                narrative_payloads.append(intel_payload)
+
+            if narrative_payloads:
+                payload["narrative_evidence"] = narrative_payloads
+
+            # P5-005: Send ntfy alerts for critical/high priority rule triggers
+            critical_rules = [t for t in all_triggered_rules
+                              if t.rule.priority in ("critical", "high")]
+            if critical_rules:
+                await _send_rule_alerts(critical_rules)
+
+        except Exception:
+            logger.debug("Narrative engine enrichment skipped", exc_info=True)
+
+        # --- Stratified reasoning: recall/reconstitute/reason per vendor ---
+        try:
+            from atlas_brain.reasoning import get_stratified_reasoner
+            from atlas_brain.reasoning.tiers import Tier, gather_tier_context
+
+            reasoner = get_stratified_reasoner()
+            if reasoner is not None:
+                stratified_results = []
+                for vs in (payload.get("vendor_churn_scores") or []):
+                    vname = vs.get("vendor_name", "")
+                    if not vname:
+                        continue
+                    category = vs.get("product_category", "")
+                    try:
+                        tier_ctx = await gather_tier_context(
+                            reasoner._cache, Tier.VENDOR_ARCHETYPE,
+                            vendor_name=vname, product_category=category,
+                        )
+                        sr = await reasoner.analyze(
+                            vendor_name=vname,
+                            evidence=vs,
+                            product_category=category,
+                            tier_context=tier_ctx,
+                        )
+                        stratified_results.append({
+                            "vendor_name": vname,
+                            "mode": sr.mode,
+                            "archetype": sr.conclusion.get("archetype", ""),
+                            "confidence": sr.confidence,
+                            "tokens_used": sr.tokens_used,
+                            "conclusion": sr.conclusion,
+                        })
+                    except Exception:
+                        logger.debug("Stratified reasoning failed for %s", vname, exc_info=True)
+
+                if stratified_results:
+                    payload["stratified_reasoning"] = stratified_results
+                    logger.info(
+                        "Stratified reasoning: %d vendors (%s)",
+                        len(stratified_results),
+                        ", ".join(f"{r['vendor_name']}={r['mode']}" for r in stratified_results),
+                    )
+        except Exception:
+            logger.debug("Stratified reasoning integration skipped", exc_info=True)
+
         # LLM synthesis with existing skill
         from ...pipelines.llm import call_llm_with_skill, parse_json_response
 
@@ -293,3 +383,32 @@ async def _send_ntfy(account_name: str, vendor_count: int) -> None:
             resp.raise_for_status()
     except Exception as exc:
         logger.warning("ntfy failed for tenant report %s: %s", account_name, exc)
+
+
+async def _send_rule_alerts(triggered_rules: list) -> None:
+    """Send ntfy alerts for critical/high priority threshold rule triggers (P5-005)."""
+    if not settings.alerts.ntfy_enabled:
+        return
+
+    # Group by vendor
+    by_vendor: dict[str, list] = {}
+    for t in triggered_rules:
+        by_vendor.setdefault(t.vendor_name, []).append(t)
+
+    ntfy_url = f"{settings.alerts.ntfy_url.rstrip('/')}/{settings.alerts.ntfy_topic}"
+
+    for vendor, rules in by_vendor.items():
+        lines = [f"- {t.rule.description} (actual: {t.actual_value:.1f})" for t in rules]
+        message = f"{vendor}: {len(rules)} threshold alert(s)\n" + "\n".join(lines)
+        headers = {
+            "Title": f"B2B Alert: {vendor}",
+            "Priority": "high",
+            "Tags": "warning,b2b,threshold",
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(ntfy_url, content=message, headers=headers)
+                resp.raise_for_status()
+        except Exception as exc:
+            logger.warning("ntfy rule alert failed for %s: %s", vendor, exc)

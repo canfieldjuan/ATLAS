@@ -192,8 +192,20 @@ class SemanticCache:
     async def lookup_by_class(
         self, pattern_class: str, vendor_name: str | None = None, limit: int = 20
     ) -> list[CacheEntry]:
-        """Find all active entries for a pattern class."""
-        if vendor_name:
+        """Find all active entries for a pattern class (or by vendor if class is empty)."""
+        if vendor_name and not pattern_class:
+            # Search by vendor only (used by reconstitute to find any prior entry)
+            rows = await self._pool.fetch(
+                """
+                SELECT * FROM reasoning_semantic_cache
+                WHERE vendor_name = $1 AND invalidated_at IS NULL
+                ORDER BY last_validated_at DESC
+                LIMIT $2
+                """,
+                vendor_name,
+                limit,
+            )
+        elif vendor_name:
             rows = await self._pool.fetch(
                 """
                 SELECT * FROM reasoning_semantic_cache
@@ -214,6 +226,59 @@ class SemanticCache:
                 LIMIT $2
                 """,
                 pattern_class,
+                limit,
+            )
+        entries = []
+        for row in rows:
+            e = self._row_to_entry(row)
+            e.effective_confidence = _apply_decay(e.confidence, e.last_validated_at, e.decay_half_life_days)
+            entries.append(e)
+        return entries
+
+    async def lookup_for_tier(
+        self,
+        conclusion_type: str,
+        product_category: str | None = None,
+        vendor_name: str | None = None,
+        limit: int = 5,
+    ) -> list[CacheEntry]:
+        """Find active entries by conclusion_type, with optional category/vendor filter.
+
+        Used by tier inheritance to find T4 ecosystem or T2 archetype entries.
+        """
+        if product_category and not vendor_name:
+            rows = await self._pool.fetch(
+                """
+                SELECT * FROM reasoning_semantic_cache
+                WHERE conclusion_type = $1 AND product_category = $2
+                  AND invalidated_at IS NULL
+                ORDER BY last_validated_at DESC
+                LIMIT $3
+                """,
+                conclusion_type,
+                product_category,
+                limit,
+            )
+        elif vendor_name:
+            rows = await self._pool.fetch(
+                """
+                SELECT * FROM reasoning_semantic_cache
+                WHERE vendor_name = $1 AND invalidated_at IS NULL
+                ORDER BY last_validated_at DESC
+                LIMIT $2
+                """,
+                vendor_name,
+                limit,
+            )
+        else:
+            rows = await self._pool.fetch(
+                """
+                SELECT * FROM reasoning_semantic_cache
+                WHERE conclusion_type = $1 AND invalidated_at IS NULL
+                ORDER BY last_validated_at DESC
+                LIMIT $2
+                """,
+                conclusion_type,
                 limit,
             )
         entries = []

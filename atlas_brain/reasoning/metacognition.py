@@ -117,13 +117,32 @@ class MetacognitiveMonitor:
         if self._state.total_queries == 0:
             return
 
+        import json as _json
+
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         tomorrow = today.replace(hour=23, minute=59, second=59)
 
+        # Merge distribution additively: read existing, sum in Python, write back
+        new_dist = dict(self._state.conclusion_types)
         try:
-            import json
-            dist_json = json.dumps(dict(self._state.conclusion_types))
+            row = await self._pool.fetchrow(
+                """SELECT conclusion_type_distribution FROM reasoning_metacognition
+                   WHERE period_start = $1""",
+                today,
+            )
+            if row and row["conclusion_type_distribution"]:
+                existing = row["conclusion_type_distribution"]
+                if isinstance(existing, str):
+                    existing = _json.loads(existing)
+                if isinstance(existing, dict):
+                    for k, v in existing.items():
+                        new_dist[k] = new_dist.get(k, 0) + (int(v) if isinstance(v, (int, float)) else 0)
+        except Exception:
+            pass  # proceed with just the new distribution
 
+        dist_json = _json.dumps(new_dist)
+
+        try:
             await self._pool.execute(
                 """
                 INSERT INTO reasoning_metacognition (
@@ -142,9 +161,7 @@ class MetacognitiveMonitor:
                     exploration_samples = reasoning_metacognition.exploration_samples + EXCLUDED.exploration_samples,
                     total_tokens_saved = reasoning_metacognition.total_tokens_saved + EXCLUDED.total_tokens_saved,
                     total_tokens_spent = reasoning_metacognition.total_tokens_spent + EXCLUDED.total_tokens_spent,
-                    conclusion_type_distribution = COALESCE(
-                        reasoning_metacognition.conclusion_type_distribution, '{}'::jsonb
-                    ) || EXCLUDED.conclusion_type_distribution
+                    conclusion_type_distribution = EXCLUDED.conclusion_type_distribution
                 """,
                 today, tomorrow,
                 self._state.total_queries,

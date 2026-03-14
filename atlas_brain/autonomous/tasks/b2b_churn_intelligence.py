@@ -3169,6 +3169,50 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         except Exception:
             logger.exception("Failed to persist vendor snapshots / change events")
 
+    # --- Stratified reasoning: recall/reconstitute/reason per vendor ---
+    # Runs AFTER snapshot persistence so the reasoner sees freshly written data.
+    try:
+        from atlas_brain.reasoning import get_stratified_reasoner
+        from atlas_brain.reasoning.tiers import Tier, gather_tier_context
+
+        reasoner = get_stratified_reasoner()
+        if reasoner is not None:
+            stratified_results = []
+            for vs in vendor_scores[:cfg.intelligence_exploratory_vendor_limit]:
+                vname = vs["vendor_name"]
+                category = vs.get("product_category", "")
+                try:
+                    tier_ctx = await gather_tier_context(
+                        reasoner._cache, Tier.VENDOR_ARCHETYPE,
+                        vendor_name=vname, product_category=category,
+                    )
+                    sr = await reasoner.analyze(
+                        vendor_name=vname,
+                        evidence=vs,
+                        product_category=category,
+                        tier_context=tier_ctx,
+                    )
+                    stratified_results.append({
+                        "vendor_name": vname,
+                        "mode": sr.mode,
+                        "archetype": sr.conclusion.get("archetype", ""),
+                        "confidence": sr.confidence,
+                        "tokens_used": sr.tokens_used,
+                        "conclusion": sr.conclusion,
+                    })
+                except Exception:
+                    logger.debug("Stratified reasoning failed for %s", vname, exc_info=True)
+
+            if stratified_results:
+                parsed["stratified_intelligence"] = stratified_results
+                logger.info(
+                    "Stratified reasoning: %d vendors (%s)",
+                    len(stratified_results),
+                    ", ".join(f"{r['vendor_name']}={r['mode']}" for r in stratified_results),
+                )
+    except Exception:
+        logger.debug("Stratified reasoning integration skipped", exc_info=True)
+
     # Send ntfy notification
     await _send_notification(task, parsed, high_intent)
 

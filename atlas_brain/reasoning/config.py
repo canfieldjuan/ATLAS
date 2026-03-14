@@ -61,3 +61,11 @@ class ReasoningConfig(BaseSettings):
     max_concurrent_reasoning: int = Field(
         default=1, description="Max concurrent reasoning graph invocations"
     )
+
+    # Neo4j (episodic memory + knowledge graph)
+    neo4j_bolt_url: str = Field(
+        default="bolt://localhost:7687",
+        description="Neo4j Bolt protocol URL",
+    )
+    neo4j_user: str = Field(default="neo4j", description="Neo4j username")
+    neo4j_password: str = Field(default="password123", description="Neo4j password")

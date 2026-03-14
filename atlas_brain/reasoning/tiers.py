@@ -141,20 +141,26 @@ async def gather_tier_context(
     for parent_tier in config.inherits_from:
         parent_config = TIER_CONFIGS[parent_tier]
 
-        # Look up cached conclusions from the parent tier
+        # Look up cached conclusions from the parent tier.
+        # T4: conclusion_type='market_dynamics' (market structure, HHI)
+        # T3: conclusion_type='category_pattern' (archetype dist, pains)
+        # T2: vendor archetype entries (conclusion_type = archetype name)
         entries = []
         if parent_tier == Tier.MARKET_DYNAMICS and product_category:
-            entries = await cache.lookup_by_class(
-                f"t4:{product_category.lower()}", limit=3,
+            entries = await cache.lookup_for_tier(
+                "market_dynamics", product_category=product_category, limit=3,
             )
         elif parent_tier == Tier.CATEGORY_PATTERN and product_category:
-            entries = await cache.lookup_by_class(
-                f"t3:{product_category.lower()}", limit=3,
+            entries = await cache.lookup_for_tier(
+                "category_pattern", product_category=product_category, limit=3,
             )
         elif parent_tier == Tier.VENDOR_ARCHETYPE and vendor_name:
-            entries = await cache.lookup_by_class(
-                "t2", vendor_name=vendor_name, limit=1,
+            # T2: find prior archetype conclusions for this vendor
+            # (exclude ecosystem entries which have vendor_name='__ecosystem__')
+            entries = await cache.lookup_for_tier(
+                "", vendor_name=vendor_name, limit=1,
             )
+            entries = [e for e in entries if e.vendor_name != "__ecosystem__"]
 
         for entry in entries:
             prior = {
