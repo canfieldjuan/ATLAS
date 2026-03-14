@@ -817,7 +817,7 @@ class RedditParser:
                     )
                     resp = await client.get(
                         fallback_url,
-                        domain=_DOMAIN,
+                        domain="old.reddit.com",
                         referer=f"https://old.reddit.com/r/{sub}/",
                         sticky_session=False,
                         prefer_residential=False,
