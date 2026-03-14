@@ -104,11 +104,13 @@ class EpisodicStore:
             self._driver = None
 
     def _get_embedder(self):
-        """Lazy-load mxbai-embed-large-v1 sentence-transformer."""
+        """Lazy-load mxbai-embed-large-v1 sentence-transformer (CPU to avoid VRAM contention)."""
         if self._embedder is None:
             from sentence_transformers import SentenceTransformer
-            self._embedder = SentenceTransformer("mixedbread-ai/mxbai-embed-large-v1")
-            logger.info("Loaded mxbai-embed-large-v1 embedding model for episodic store")
+            self._embedder = SentenceTransformer(
+                "mixedbread-ai/mxbai-embed-large-v1", device="cpu",
+            )
+            logger.info("Loaded mxbai-embed-large-v1 embedding model for episodic store (CPU)")
         return self._embedder
 
     def embed_text(self, text: str) -> list[float]:

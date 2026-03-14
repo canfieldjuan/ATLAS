@@ -454,7 +454,11 @@ class StratifiedReasoner:
         trace_id = None
         try:
             evidence_summary = self._evidence_summary(evidence, vendor_name)
-            embedding = self._episodic.embed_text(evidence_summary)
+            try:
+                embedding = self._episodic.embed_text(evidence_summary)
+            except Exception:
+                logger.debug("embed_text failed for %s, storing trace without embedding", vendor_name)
+                embedding = [0.0] * 1024  # placeholder — vector search won't match, but trace is preserved
 
             evidence_nodes = self._build_evidence_nodes(evidence)
             conclusion_node = ConclusionNode(
