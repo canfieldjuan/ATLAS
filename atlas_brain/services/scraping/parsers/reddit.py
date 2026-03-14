@@ -77,36 +77,55 @@ _INSIDER_SUBREDDITS = [
 # Query templates per profile
 # ---------------------------------------------------------------------------
 
-# Churn / evaluation qualifiers for global search (churn + deep profiles)
-_CHURN_QUALIFIERS = [
-    "switching from",
-    "alternative to",
-    "replacing",
-    "migrating from",
-    "moved away from",
-    "leaving",
-]
+# ---------------------------------------------------------------------------
+# Global search queries -- these search ALL of Reddit (primary strategy)
+# ---------------------------------------------------------------------------
 
-# Additional deep-profile query templates ({vendor} is substituted)
-_DEEP_QUERY_TEMPLATES = [
-    '"{vendor}" pricing too expensive',
-    '"{vendor}" support terrible',
-    '"{vendor}" vs',
+# Churn intent -- people actively switching or evaluating
+_CHURN_QUERIES = [
+    '"{vendor}" issues',
     '"{vendor}" problems',
+    '"switching from {vendor}"',
+    '"alternative to {vendor}"',
+    '"replacing {vendor}"',
+    '"migrating from {vendor}"',
+    '"moved away from {vendor}"',
+    '"leaving {vendor}"',
     '"{vendor}" frustrated',
+    '"{vendor}" vs',
     '"{vendor}" worth it',
+    '"{vendor}" too expensive',
+    '"{vendor}" terrible',
+    '"{vendor}" hate',
 ]
 
-# Insider-profile query templates ({vendor} is substituted)
+# Deep profile -- pain, pricing, support failures
+_DEEP_QUERY_TEMPLATES = [
+    '"{vendor}" pricing increase',
+    '"{vendor}" support nightmare',
+    '"{vendor}" downgrade',
+    '"{vendor}" cancelling',
+    '"{vendor}" regret',
+    '"{vendor}" broken',
+    '"{vendor}" outage',
+    '"{vendor}" worst experience',
+    '"{vendor}" looking for replacement',
+    '"{vendor}" contract locked',
+]
+
+# Insider profile -- employee/org intelligence
 _INSIDER_QUERY_TEMPLATES = [
-    '"{vendor}" culture toxic',
-    '"{vendor}" leaving why',
     '"worked at {vendor}"',
     '"left {vendor}"',
-    '"{vendor}" layoffs morale',
+    '"{vendor}" culture toxic',
+    '"{vendor}" layoffs',
+    '"{vendor}" morale',
     '"{vendor}" product quality declining',
     '"{vendor}" engineering culture',
-    '"{vendor}" management',
+    '"{vendor}" management terrible',
+    '"{vendor}" glassdoor',
+    '"inside {vendor}"',
+    '"{vendor}" employees',
 ]
 
 # ---------------------------------------------------------------------------
@@ -153,7 +172,8 @@ def _compute_author_churn_score(author_posts: list[dict]) -> float:
       - Use of churn qualifiers in titles: +2 each (capped at 6)
     """
     migration_keywords = {"migration", "migrating", "switching", "replacing", "leaving", "alternative"}
-    qualifier_keywords = {q.lower() for q in _CHURN_QUALIFIERS}
+    qualifier_keywords = {"switching from", "alternative to", "replacing",
+                          "migrating from", "moved away from", "leaving"}
 
     migration_count = sum(
         1 for p in author_posts
@@ -336,27 +356,16 @@ class RedditParser:
                     logger.info("Reddit: approaching rate limit, pausing 120s")
                     await asyncio.sleep(120)
 
-            # ---- Strategy 1: per-subreddit search (parallel batches of 3) ----
-            tasks = []
-            for sub in subreddits:
-                for query in self._build_queries(target.vendor_name, profile):
-                    url = (
-                        f"https://oauth.reddit.com/r/{sub}/search"
-                        f"?q={quote_plus(query)}&restrict_sr=on&sort=new&limit=100&t=all"
-                    )
-                    tasks.append((sub, query, url))
-
-            for i in range(0, len(tasks), 3):
-                batch = tasks[i:i + 3]
-                resps = await asyncio.gather(*[
-                    _get(http, url) for _, _, url in batch
-                ])
-                for (sub, query, _), resp in zip(batch, resps):
-                    if resp is None:
-                        continue
-                    if resp.status_code != 200:
-                        errors.append(f"r/{sub} q={query}: HTTP {resp.status_code}")
-                        continue
+            # ---- Strategy 1 (PRIMARY): global intent search across ALL of Reddit ----
+            # This is where the signal lives -- real people in general subreddits
+            # complaining, evaluating alternatives, sharing insider info.
+            for query in self._build_global_queries(target.vendor_name, profile):
+                url = (
+                    f"https://oauth.reddit.com/search"
+                    f"?q={quote_plus(query)}&sort=relevance&limit=100&t=all"
+                )
+                resp = await _get(http, url)
+                if resp and resp.status_code == 200:
                     data = resp.json()
                     for post_wrapper in data.get("data", {}).get("children", []):
                         review = self._parse_post(post_wrapper, target, seen_ids, profile=profile)
@@ -369,32 +378,30 @@ class RedditParser:
                                     "score": review.get("raw_metadata", {}).get("score", 0),
                                     "reviewed_at": review.get("reviewed_at"),
                                 })
-
                 await _maybe_pause()
                 await asyncio.sleep(0.3)
 
-            # ---- Strategy 2: global churn-qualifier search (churn / deep profiles only) ----
-            if profile in ("churn", "deep"):
-                for query in self._global_queries(target.vendor_name):
-                    url = (
-                        f"https://oauth.reddit.com/search"
-                        f"?q={quote_plus(query)}&sort=new&limit=100&t=all"
-                    )
-                    resp = await _get(http, url)
-                    if resp and resp.status_code == 200:
-                        data = resp.json()
-                        for post_wrapper in data.get("data", {}).get("children", []):
-                            review = self._parse_post(post_wrapper, target, seen_ids, profile=profile)
-                            if review:
-                                reviews.append(review)
-                                author = review.get("reviewer_name", "")
-                                if author:
-                                    author_index.setdefault(author, []).append({
-                                        "title": review.get("summary", ""),
-                                        "score": review.get("raw_metadata", {}).get("score", 0),
-                                        "reviewed_at": review.get("reviewed_at"),
-                                    })
-                    await asyncio.sleep(0.3)
+            # Also search by "new" to catch recent posts that aren't top-ranked yet
+            for query in self._build_global_queries(target.vendor_name, profile)[:5]:
+                url = (
+                    f"https://oauth.reddit.com/search"
+                    f"?q={quote_plus(query)}&sort=new&limit=100&t=year"
+                )
+                resp = await _get(http, url)
+                if resp and resp.status_code == 200:
+                    data = resp.json()
+                    for post_wrapper in data.get("data", {}).get("children", []):
+                        review = self._parse_post(post_wrapper, target, seen_ids, profile=profile)
+                        if review:
+                            reviews.append(review)
+                            author = review.get("reviewer_name", "")
+                            if author:
+                                author_index.setdefault(author, []).append({
+                                    "title": review.get("summary", ""),
+                                    "score": review.get("raw_metadata", {}).get("score", 0),
+                                    "reviewed_at": review.get("reviewed_at"),
+                                })
+                await asyncio.sleep(0.3)
 
             # ---- Comment harvesting for deep / insider profiles ----
             if profile in ("deep", "insider"):
@@ -502,41 +509,25 @@ class RedditParser:
     # Query builders
     # ------------------------------------------------------------------
 
-    def _build_queries(self, vendor_name: str, profile: str = "churn") -> list[str]:
+    def _build_global_queries(self, vendor_name: str, profile: str = "churn") -> list[str]:
         """
-        Build subreddit-scoped search queries for a vendor.
+        Build global (all-Reddit) search queries for a vendor.
 
-        Precision-first: starts with exact quoted match.
-        Insider profile uses dedicated query templates.
-        Deep profile adds pain/comparison/frustration variants.
-
-        Returns ordered list — callers may slice to [:1] for tightest mode.
+        These search ALL of Reddit -- no subreddit restriction.
+        This is the primary search strategy: find real people in general
+        subreddits complaining, evaluating alternatives, sharing insider info.
         """
         if profile == "insider":
             return [t.format(vendor=vendor_name) for t in _INSIDER_QUERY_TEMPLATES]
 
-        q = vendor_name
-        queries = [
-            f'"{q}"',                                               # exact name
-            f'"{q}" switching OR migrating OR replacing',          # churn intent
-            f'"{q}" alternative OR "moved away" OR left',          # evaluation intent
-        ]
+        # Base churn intent queries -- always run
+        queries = [t.format(vendor=vendor_name) for t in _CHURN_QUERIES]
+
+        # Deep profile adds pain/pricing/support failure queries
         if profile == "deep":
             queries += [t.format(vendor=vendor_name) for t in _DEEP_QUERY_TEMPLATES]
 
         return queries
-
-    def _global_queries(self, vendor_name: str) -> list[str]:
-        """
-        Build global (cross-Reddit) churn-phrase searches.
-
-        Each entry is a complete query string.  Uses _CHURN_QUALIFIERS — never bare vendor_name.
-        Callers may slice to limit request volume.
-        """
-        return [
-            f'"{qualifier} {vendor_name}"'
-            for qualifier in _CHURN_QUALIFIERS
-        ]
 
     # ------------------------------------------------------------------
     # Parsers
@@ -563,6 +554,27 @@ class RedditParser:
             return None
         if len(selftext) < _MIN_SELFTEXT_LEN:
             return None
+
+        # Vendor relevance gate: the post must be *about* the vendor, not just
+        # mentioning it in passing. Title match = always pass. Body-only match
+        # requires early mention (<200 chars) or 2+ occurrences to filter noise
+        # like "I interviewed at DoorDash, HubSpot, Google..." lists.
+        import re
+        title = post.get("title", "")
+        vendor_lower = target.vendor_name.lower()
+        vendor_pattern = re.compile(
+            r'(?<![./\w])' + re.escape(vendor_lower) + r"(?![.\w])",
+            re.IGNORECASE,
+        )
+        title_match = vendor_pattern.search(title)
+        if not title_match:
+            # No title match -- require body relevance: early mention OR 2+ occurrences
+            body_matches = vendor_pattern.findall(selftext[:2000])
+            if not body_matches:
+                return None
+            early_match = vendor_pattern.search(selftext[:200])
+            if not early_match and len(body_matches) < 2:
+                return None
 
         seen_ids.add(post_id)
 
@@ -778,7 +790,7 @@ class RedditParser:
 
         # Public mode: one query variant per subreddit (exact quoted name only)
         # to keep request volume tight (10 req/min limit).
-        subreddit_query = self._build_queries(target.vendor_name, profile)[0]
+        subreddit_query = self._build_global_queries(target.vendor_name, profile)[0]
         vendor_encoded = quote_plus(target.vendor_name)
 
         for sub in subreddits[:target.max_pages]:
@@ -837,7 +849,7 @@ class RedditParser:
                 logger.warning("Reddit scrape failed for r/%s: %s", sub, exc)
 
         # Global churn-phrase searches in public mode — top 2 only to stay under rate limit
-        for query in self._global_queries(target.vendor_name)[:2]:
+        for query in self._build_global_queries(target.vendor_name)[:2]:
             url = (
                 f"https://www.reddit.com/search.json"
                 f"?q={quote_plus(query)}&sort=new&limit=25&t=year"
