@@ -147,9 +147,9 @@ class FalsificationWatcher:
 
         # Pattern: positive review trend / improvement
         if any(kw in cond_lower for kw in ["positive trend", "improving", "improvement"]):
-            positive_pct = fresh_signals.get("positive_review_pct", 0)
+            positive_pct = float(fresh_signals.get("positive_review_pct") or 0)
             prev_positive_pct = fresh_signals.get("prev_positive_review_pct")
-            if prev_positive_pct is not None and positive_pct > prev_positive_pct + 5:
+            if prev_positive_pct is not None and positive_pct > float(prev_positive_pct) + 5:
                 return True
 
         # Pattern: competitor price drop / cheaper alternative
@@ -176,16 +176,16 @@ class FalsificationWatcher:
 
         # Pattern: urgency/churn decrease
         if any(kw in cond_lower for kw in ["urgency decreas", "churn decreas", "stabiliz"]):
-            urgency = fresh_signals.get("avg_urgency", 10)
+            urgency = float(fresh_signals.get("avg_urgency") or 10)
             prev_urgency = fresh_signals.get("prev_avg_urgency")
-            if prev_urgency is not None and urgency < prev_urgency - 1.0:
+            if prev_urgency is not None and urgency < float(prev_urgency) - 1.0:
                 return True
 
         # Pattern: review volume drop (indicates issue resolved)
         if any(kw in cond_lower for kw in ["complaint", "negative review", "review volume"]):
-            neg_count = fresh_signals.get("negative_review_count_7d", 0)
+            neg_count = float(fresh_signals.get("negative_review_count_7d") or 0)
             prev_neg = fresh_signals.get("prev_negative_review_count_7d")
-            if prev_neg is not None and neg_count < prev_neg * 0.5:
+            if prev_neg is not None and neg_count < float(prev_neg) * 0.5:
                 return True
 
         return False
