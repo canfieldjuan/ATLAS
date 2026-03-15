@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import math
+import re
 import uuid as _uuid
 from collections import Counter
 from datetime import date, datetime, timezone
@@ -77,6 +78,36 @@ def _canonicalize_competitor(raw: str) -> str:
 def _canonicalize_vendor(raw: str) -> str:
     """Normalize vendor labels using the same alias handling as competitors."""
     return resolve_vendor_name_cached(raw)
+
+
+def _battle_card_quote_sort_key(raw_quote: Any) -> tuple[float, int, int]:
+    """Rank quotes for battle cards by urgency, specificity, and metadata richness."""
+    if not isinstance(raw_quote, dict):
+        text = str(raw_quote or "")
+        return (0.0, min(len(text), 240), 0)
+
+    text = str(raw_quote.get("quote") or raw_quote.get("text") or "")
+    urgency = float(raw_quote.get("urgency") or 0.0)
+    metadata_points = sum(
+        1 for key in ("company", "title", "company_size", "industry", "source_site")
+        if raw_quote.get(key)
+    )
+    # Longer, more concrete quotes usually perform better than generic one-liners.
+    specificity = min(len(text.strip()), 240)
+    return (urgency, specificity, metadata_points)
+
+
+_BATTLE_CARD_HIGH_PRIORITY_SCORE_MIN = 60.0
+_BATTLE_CARD_HIGH_PRIORITY_URGENCY_MIN = 5.0
+_BATTLE_CARD_FEATURE_GAP_HEADLINE_MIN_MENTIONS = 5
+_BATTLE_CARD_LEAVING_PATTERNS = (
+    "customers are leaving",
+    "customer are leaving",
+    "are leaving for",
+    "capturing defectors",
+    "capture defectors",
+    "defectors",
+)
 
 
 def _build_llm_trace_metadata(
@@ -242,6 +273,125 @@ def _validate_report(
             valid_tl.append(entry)
         parsed["timeline_hot_list"] = valid_tl
 
+    return warnings
+
+
+def _battle_card_iter_text(value: Any, path: str = ""):
+    """Yield flattened string fields from nested battle-card payloads."""
+    if isinstance(value, str):
+        yield path, value
+        return
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            next_path = f"{path}.{key}" if path else str(key)
+            yield from _battle_card_iter_text(inner, next_path)
+        return
+    if isinstance(value, list):
+        for idx, inner in enumerate(value):
+            next_path = f"{path}[{idx}]"
+            yield from _battle_card_iter_text(inner, next_path)
+
+
+def _battle_card_numeric_paths(path: str) -> bool:
+    """Return True when a path should contain only input-supported claims."""
+    return (
+        path == "executive_summary"
+        or ".evidence" in path
+        or ".proof_point" in path
+        or path.startswith("competitive_landscape.")
+    )
+
+
+def _battle_card_headline_paths(path: str) -> bool:
+    """Return True for top-line summary fields that should stay on strong evidence."""
+    return path == "executive_summary" or path.startswith("weakness_analysis[0].")
+
+
+def _battle_card_numeric_tokens(text: str) -> set[str]:
+    """Extract numeric tokens from narrative sections for validation."""
+    return set(re.findall(r"\b\d[\d,]*(?:\.\d+)?%?", text or ""))
+
+
+def _battle_card_add_claim(claims: set[str], value: Any, *, pct: bool = False) -> None:
+    """Add an allowed numeric claim token derived from source data."""
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return
+    if pct:
+        num *= 100.0
+    rounded = round(num, 1)
+    if float(rounded).is_integer():
+        base = f"{int(round(rounded))}"
+    else:
+        base = f"{rounded:.1f}"
+    claims.add(base)
+    claims.add(f"{int(round(num)):,}" if not pct and num >= 1000 else base)
+    if pct:
+        claims.add(f"{base}%")
+    elif num >= 1000:
+        claims.add(f"{int(round(num))}")
+
+
+def _battle_card_allowed_claims(card: dict[str, Any]) -> set[str]:
+    """Build the set of numeric claims supported by deterministic card input."""
+    claims: set[str] = set()
+    _battle_card_add_claim(claims, card.get("total_reviews"))
+    _battle_card_add_claim(claims, card.get("churn_pressure_score"))
+    data = card.get("objection_data") or {}
+    for key in ("price_complaint_rate", "dm_churn_rate"):
+        _battle_card_add_claim(claims, data.get(key), pct=True)
+    for key in ("churn_signal_density", "avg_urgency", "total_reviews"):
+        _battle_card_add_claim(claims, data.get(key))
+    for item in card.get("vendor_weaknesses") or []:
+        _battle_card_add_claim(claims, item.get("evidence_count") or item.get("count"))
+    for item in card.get("competitor_differentiators") or []:
+        _battle_card_add_claim(claims, item.get("mentions"))
+        _battle_card_add_claim(claims, item.get("switch_count"))
+    for item in data.get("top_feature_gaps") or []:
+        _battle_card_add_claim(claims, item.get("mentions"))
+    for key in ("avg_seat_count", "max_seat_count", "median_seat_count", "price_increase_count"):
+        _battle_card_add_claim(claims, (data.get("budget_context") or {}).get(key))
+    _battle_card_add_claim(claims, (data.get("budget_context") or {}).get("price_increase_rate"), pct=True)
+    return claims
+
+
+def _validate_battle_card_sales_copy(
+    card: dict[str, Any],
+    generated: dict[str, Any],
+) -> list[str]:
+    """Reject battle-card copy that overclaims beyond deterministic evidence."""
+    if not isinstance(generated, dict):
+        return ["battle card sales copy is not a JSON object"]
+    warnings: list[str] = []
+    allowed = _battle_card_allowed_claims(card)
+    source_text = json.dumps(card, default=str).lower()
+    max_switch = max((int(c.get("switch_count") or 0) for c in card.get("competitor_differentiators") or []), default=0)
+    score = float(card.get("churn_pressure_score") or 0)
+    urgency = float(((card.get("objection_data") or {}).get("avg_urgency")) or 0)
+    low_gap_terms = [
+        str(g.get("feature") or "").strip().lower()
+        for g in ((card.get("objection_data") or {}).get("top_feature_gaps") or [])
+        if int(g.get("mentions") or 0) < _BATTLE_CARD_FEATURE_GAP_HEADLINE_MIN_MENTIONS
+    ]
+    for path, text in _battle_card_iter_text(generated):
+        lowered = text.lower()
+        if _battle_card_numeric_paths(path):
+            bad = sorted(tok for tok in _battle_card_numeric_tokens(text) if tok not in allowed)
+            if bad:
+                warnings.append(f"{path} uses unsupported numeric claims: {', '.join(bad[:4])}")
+        years = re.findall(r"\b20\d{2}\b", text)
+        if any(year not in source_text for year in years):
+            warnings.append(f"{path} references a year not present in source data")
+        if max_switch == 0 and any(term in lowered for term in _BATTLE_CARD_LEAVING_PATTERNS):
+            warnings.append(f"{path} implies switching despite zero switch_count evidence")
+        if score < _BATTLE_CARD_HIGH_PRIORITY_SCORE_MIN or urgency < _BATTLE_CARD_HIGH_PRIORITY_URGENCY_MIN:
+            if "high-priority target" in lowered or "high priority target" in lowered:
+                warnings.append(f"{path} overstates urgency for a moderate-priority card")
+        if _battle_card_headline_paths(path):
+            for term in low_gap_terms:
+                if term and term in lowered:
+                    warnings.append(f"{path} elevates low-evidence feature gap '{term}' to a headline")
     return warnings
 
 
@@ -1908,7 +2058,11 @@ def _build_deterministic_battle_cards(
         weaknesses = weaknesses[:5]
 
         # -- Section 2: Customer Pain Quotes --
-        quotes_raw = quote_lookup.get(vendor, [])
+        quotes_raw = sorted(
+            quote_lookup.get(vendor, []),
+            key=_battle_card_quote_sort_key,
+            reverse=True,
+        )
         pain_quotes: list[dict[str, Any]] = []
         for q in quotes_raw[:5]:
             if isinstance(q, dict):
@@ -2933,9 +3087,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     except Exception:
                         logger.debug("Stratified reasoning failed for %s", vname, exc_info=True)
 
+            # Reason over ALL vendors -- the exploratory_vendor_limit only
+            # constrains the LLM payload size, not per-vendor reasoning.
+            # Concurrency is bounded by the semaphore above.
             await asyncio.gather(*[
                 _analyze_one(vs)
-                for vs in vendor_scores[:cfg.intelligence_exploratory_vendor_limit]
+                for vs in vendor_scores
             ])
 
             if reasoning_lookup:
@@ -3362,11 +3519,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
         cached = await _bc_cache.lookup(pattern_sig)
         if cached:
-            for _cf in cached.conclusion:
-                card[_cf] = cached.conclusion[_cf]
-            await _bc_cache.validate(pattern_sig)
-            battle_card_cache_hits += 1
-            continue
+            cached_errors = _validate_battle_card_sales_copy(card, cached.conclusion)
+            if cached_errors:
+                await _bc_cache.invalidate(
+                    pattern_sig,
+                    reason="invalid battle card sales copy",
+                )
+            else:
+                for _cf in cached.conclusion:
+                    card[_cf] = cached.conclusion[_cf]
+                await _bc_cache.validate(pattern_sig)
+                battle_card_cache_hits += 1
+                continue
 
         try:
             sales_copy = await asyncio.wait_for(
@@ -3387,6 +3551,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 timeout=90,
             )
             parsed_copy = parse_json_response(sales_copy)
+            copy_errors = _validate_battle_card_sales_copy(card, parsed_copy)
+            if copy_errors:
+                battle_card_llm_failures += 1
+                logger.warning(
+                    "Battle card sales copy rejected for %s: %s",
+                    card.get("vendor"),
+                    "; ".join(copy_errors[:3]),
+                )
+                continue
             for _f in _bc_llm_fields:
                 if _f in parsed_copy:
                     card[_f] = parsed_copy[_f]
