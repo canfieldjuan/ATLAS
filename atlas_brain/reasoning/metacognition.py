@@ -57,15 +57,32 @@ class MetacognitiveMonitor:
     # Decision helpers (called by StratifiedReasoner before recall)
     # ------------------------------------------------------------------
 
-    def should_force_exploration(self) -> bool:
-        """Deterministic exploration: force full-reason every N calls to detect cache drift."""
+    def should_force_exploration(self, evidence_hash: str = "") -> bool:
+        """Deterministic exploration by hash bucket.
+
+        When *evidence_hash* is provided, the decision is deterministic per
+        vendor+evidence: the same input always produces the same explore/skip
+        decision.  Falls back to counter-based sampling when no hash is given.
+        """
         self._state.total_calls += 1
         interval = max(1, int(1.0 / EXPLORATION_RATE)) if EXPLORATION_RATE > 0 else 0
-        if interval > 0 and self._state.total_calls % interval == 0:
+        if interval <= 0:
+            return False
+
+        if evidence_hash:
+            # Hash-bucket: last 2 hex digits mod interval
+            bucket = int(evidence_hash[-2:], 16) % interval
+            should = bucket == 0
+        else:
+            should = self._state.total_calls % interval == 0
+
+        if should:
             self._state.exploration_samples += 1
-            logger.debug("Exploration sample triggered (call #%d, interval=%d)", self._state.total_calls, interval)
-            return True
-        return False
+            logger.debug(
+                "Exploration sample triggered (hash=%s, call #%d)",
+                evidence_hash[:8] or "counter", self._state.total_calls,
+            )
+        return should
 
     async def is_surprise(self, conclusion_type: str) -> bool:
         """Check if this conclusion type is rare enough to be 'surprising'.

@@ -55,15 +55,56 @@ class EvidenceDiff:
     def change_count(self) -> int:
         return len(self.contradicted) + len(self.novel)
 
+    # Core signal fields where changes matter more
+    _CORE_FIELDS = frozenset({
+        "churn_density", "avg_urgency", "churn_intent", "total_reviews",
+        "dm_churn_rate", "price_complaint_rate", "displacement_mention_count",
+    })
+    _CORE_WEIGHT = 3.0
+    _MINOR_WEIGHT = 1.0
+
     @property
     def diff_ratio(self) -> float:
         if self.total == 0:
-            return 1.0  # no evidence at all -> full reason
+            return 1.0
         return self.change_count / self.total
 
     @property
+    def weighted_diff_ratio(self) -> float:
+        """Importance-weighted diff ratio. Core signal changes count 3x."""
+        if self.total == 0:
+            return 1.0
+        weighted_changes = 0.0
+        weighted_total = 0.0
+        for key, _, _ in self.contradicted:
+            w = self._CORE_WEIGHT if key in self._CORE_FIELDS else self._MINOR_WEIGHT
+            weighted_changes += w
+            weighted_total += w
+        for key, _ in self.novel:
+            w = self._CORE_WEIGHT if key in self._CORE_FIELDS else self._MINOR_WEIGHT
+            weighted_changes += w
+            weighted_total += w
+        for key in self.confirmed:
+            w = self._CORE_WEIGHT if key in self._CORE_FIELDS else self._MINOR_WEIGHT
+            weighted_total += w
+        for key in self.missing:
+            w = self._CORE_WEIGHT if key in self._CORE_FIELDS else self._MINOR_WEIGHT
+            weighted_total += w
+        return weighted_changes / weighted_total if weighted_total > 0 else 1.0
+
+    @property
+    def has_core_contradiction(self) -> bool:
+        """True if any core signal field is contradicted."""
+        return any(key in self._CORE_FIELDS for key, _, _ in self.contradicted)
+
+    @property
     def should_reconstitute(self) -> bool:
-        return self.diff_ratio < RECONSTITUTE_THRESHOLD and self.total > 0
+        """Use weighted ratio and block reconstitution on core contradictions."""
+        if self.total == 0:
+            return False
+        if self.has_core_contradiction:
+            return False  # core signal changed -> full reason always
+        return self.weighted_diff_ratio < RECONSTITUTE_THRESHOLD
 
     def summary(self) -> str:
         parts = []
@@ -75,9 +116,10 @@ class EvidenceDiff:
             parts.append(f"{len(self.missing)} missing")
         if self.confirmed:
             parts.append(f"{len(self.confirmed)} confirmed")
-        ratio_pct = self.diff_ratio * 100
+        ratio_pct = self.weighted_diff_ratio * 100
         mode = "reconstitute" if self.should_reconstitute else "full_reason"
-        return f"diff_ratio={ratio_pct:.0f}% ({', '.join(parts)}) -> {mode}"
+        core = " [core contradiction]" if self.has_core_contradiction else ""
+        return f"weighted_diff={ratio_pct:.0f}% ({', '.join(parts)}){core} -> {mode}"
 
 
 def classify_evidence(
@@ -219,7 +261,7 @@ async def reconstitute(
         Message(role="system", content=_RECONSTITUTE_SYSTEM_PROMPT),
         Message(
             role="user",
-            content=json.dumps(delta, separators=(",", ":"), default=str),
+            content=json.dumps(delta, separators=(",", ":"), sort_keys=True, default=str),
         ),
     ]
 

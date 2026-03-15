@@ -33,24 +33,35 @@ logger = logging.getLogger("atlas.reasoning.stratified")
 
 # System prompt for Phase 1 (inline; replaced by skill file in WS6)
 _REASON_SYSTEM_PROMPT = """\
-You are a B2B churn intelligence analyst. Given evidence about a software \
-vendor, produce a structured JSON conclusion.
+You are a B2B churn intelligence analyst producing structured reasoning.
 
-Output JSON with these fields:
+Output ONLY valid JSON with these exact fields:
 {
-  "archetype": "<one of: pricing_shock, feature_gap, acquisition_decay, \
+  "archetype": "<exactly one of: pricing_shock, feature_gap, acquisition_decay, \
 leadership_redesign, integration_break, support_collapse, \
 category_disruption, compliance_gap, mixed, stable>",
-  "confidence": <0.0-1.0>,
-  "executive_summary": "<2-3 sentence assessment>",
-  "key_signals": ["<signal1>", "<signal2>", ...],
-  "risk_level": "<low|medium|high|critical>",
-  "falsification_conditions": ["<what would prove this wrong>"],
-  "uncertainty_sources": ["<what data is missing or weak>"]
+  "secondary_archetype": "<same options or null if confidence gap > 0.15>",
+  "confidence": <0.0-1.0, must reflect data quality and coverage>,
+  "risk_level": "<exactly one of: low, medium, high, critical>",
+  "executive_summary": "<3 sentences answering: (1) what pattern, (2) why now, (3) what to watch>",
+  "key_signals": [
+    "<metric_name: value -- specific number from evidence, max 5 items>",
+  ],
+  "falsification_conditions": [
+    "<concrete condition that would invalidate this conclusion, at least 1>"
+  ],
+  "uncertainty_sources": [
+    "<specific data gap or limitation, at least 1>"
+  ]
 }
 
-Be precise. Cite specific numbers from the evidence. If data is insufficient \
-for a confident assessment, say so and lower confidence accordingly.\
+Rules:
+1. Every key_signal MUST cite a specific metric and value from the evidence (e.g., "churn_density: 38.6%"). Generic signals like "high churn" are invalid.
+2. executive_summary MUST answer three questions: what pattern is this, why is it happening now, what should buyers watch for.
+3. If confidence < 0.6, you MUST include at least 2 uncertainty_sources.
+4. If confidence < 0.4, archetype MUST be "mixed" or "stable".
+5. secondary_archetype is null unless the second-best archetype is within 0.15 confidence of the primary.
+6. Do not invent data. If a metric is not in the evidence, do not reference it.\
 """
 
 
@@ -111,6 +122,25 @@ class StratifiedReasoner:
             logger.warning("Normalized invalid archetype %r -> 'mixed'", arch)
             conclusion["archetype"] = "mixed"
 
+        # Validate secondary_archetype
+        sec_arch = conclusion.get("secondary_archetype")
+        if sec_arch and sec_arch not in StratifiedReasoner._VALID_ARCHETYPES:
+            conclusion["secondary_archetype"] = None
+
+        # Enforce: if confidence < 0.4, archetype must be mixed or stable
+        if conclusion["confidence"] < 0.4 and conclusion["archetype"] not in ("mixed", "stable"):
+            logger.warning(
+                "Low confidence %.2f with archetype %r -- forcing to mixed",
+                conclusion["confidence"], conclusion["archetype"],
+            )
+            conclusion["archetype"] = "mixed"
+
+        # Enforce: if confidence < 0.6, need at least 2 uncertainty_sources
+        if conclusion["confidence"] < 0.6 and len(conclusion.get("uncertainty_sources", [])) < 2:
+            conclusion.setdefault("uncertainty_sources", [])
+            if len(conclusion["uncertainty_sources"]) < 2:
+                conclusion["uncertainty_sources"].append("insufficient data coverage for confident classification")
+
         # Whitelist risk_level
         risk = conclusion.get("risk_level", "")
         if risk not in StratifiedReasoner._VALID_RISK_LEVELS:
@@ -127,12 +157,124 @@ class StratifiedReasoner:
             else:
                 conclusion[fld] = [str(s) for s in val if s]
 
+        # Ground key_signals: require metric:value format, cap at 5
+        _signals = conclusion.get("key_signals", [])
+        _grounded = [s for s in _signals if ":" in s]
+        _ungrounded = [s for s in _signals if ":" not in s]
+        if _ungrounded:
+            logger.debug("Dropped %d ungrounded key_signals", len(_ungrounded))
+        conclusion["key_signals"] = _grounded[:5]
+
         # Ensure executive_summary is a string
         es = conclusion.get("executive_summary")
         if not isinstance(es, str):
             conclusion["executive_summary"] = str(es) if es else ""
 
+        # Enforce: executive_summary must address what/why/watch
+        es = conclusion.get("executive_summary", "")
+        if es and len(es) < 20:
+            logger.warning("Executive summary too short (%d chars), may lack structure", len(es))
+
+        # Enforce: at least 1 falsification + 1 uncertainty when confidence < threshold
+        if conclusion["confidence"] < 0.8:
+            if not conclusion.get("falsification_conditions"):
+                conclusion["falsification_conditions"] = [
+                    "reversal of the primary metric trend would invalidate this classification"
+                ]
+            if not conclusion.get("uncertainty_sources"):
+                conclusion["uncertainty_sources"] = [
+                    "limited temporal depth or review volume"
+                ]
+
         return conclusion
+
+    # Fields that define the core signal. Changes to these should always
+    # trigger full reasoning in the differential engine.
+    _CORE_SIGNAL_FIELDS = frozenset({
+        "churn_density", "avg_urgency", "churn_intent", "total_reviews",
+        "dm_churn_rate", "price_complaint_rate", "displacement_mention_count",
+    })
+
+    # Fields with low signal value -- remove to reduce noise
+    _LOW_VALUE_FIELDS = frozenset({
+        "recommend_yes", "recommend_no", "product_category",
+    })
+
+    @staticmethod
+    def _prepare_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
+        """Normalize, deduplicate, and rank evidence before LLM consumption.
+
+        - Normalizes metric names to canonical forms with consistent units
+        - Removes low-value and duplicate signals
+        - Pre-ranks pain/competitor/feature lists by count/mentions descending
+        - Keeps archetype pre-scores, temporal anomalies, and displacement compact
+        """
+        ev = {}
+
+        # 1. Copy core metrics first (highest signal, LLM sees them first)
+        for key in (
+            "vendor_name", "churn_density", "avg_urgency", "total_reviews",
+            "churn_intent", "dm_churn_rate", "price_complaint_rate",
+            "displacement_mention_count", "insider_signal_count",
+            "keyword_spike_count",
+        ):
+            if key in evidence:
+                val = evidence[key]
+                # Normalize numerics to consistent precision
+                if isinstance(val, float):
+                    ev[key] = round(val, 2)
+                else:
+                    ev[key] = val
+
+        # 2. Pre-ranked lists (sorted by relevance, capped)
+        for list_key, sort_field, cap in (
+            ("pain_categories", "count", 5),
+            ("competitors", "mentions", 5),
+            ("feature_gaps", "mentions", 5),
+            ("top_use_cases", None, 3),
+        ):
+            items = evidence.get(list_key)
+            if items and isinstance(items, list):
+                if sort_field:
+                    items = sorted(
+                        items, key=lambda x: -(x.get(sort_field, 0) if isinstance(x, dict) else 0),
+                    )
+                ev[list_key] = items[:cap]
+
+        # 3. Archetype pre-scores (compact: top 3 only)
+        arch_scores = evidence.get("archetype_scores")
+        if arch_scores and isinstance(arch_scores, list):
+            ev["archetype_scores"] = arch_scores[:3]
+
+        # 4. Temporal anomalies (only anomalies that fired, plus velocities)
+        anomalies = evidence.get("anomalies")
+        if anomalies and isinstance(anomalies, list):
+            ev["anomalies"] = [a for a in anomalies if isinstance(a, dict) and a.get("is_anomaly")]
+        for key in evidence:
+            if key.startswith("velocity_") or key.startswith("accel_"):
+                val = evidence[key]
+                if val is not None and val != 0:
+                    ev[key] = round(val, 4) if isinstance(val, float) else val
+
+        # 5. Compact context (budget, buyer authority -- single-value summaries)
+        for ctx_key in ("budget_context", "buyer_authority"):
+            val = evidence.get(ctx_key)
+            if val and isinstance(val, dict):
+                ev[ctx_key] = val
+
+        # 6. Quote evidence (just count + best quote, not full list)
+        if evidence.get("quote_count"):
+            ev["quote_count"] = evidence["quote_count"]
+        if evidence.get("top_quote"):
+            ev["top_quote"] = str(evidence["top_quote"])[:200]
+
+        # 7. Snapshot days (temporal depth indicator)
+        if evidence.get("snapshot_days"):
+            ev["snapshot_days"] = evidence["snapshot_days"]
+
+        # Skip low-value fields entirely (recommend_yes/no, product_category already captured)
+
+        return ev
 
     async def analyze(
         self,
@@ -156,7 +298,7 @@ class StratifiedReasoner:
 
         # 0. Metacognitive overrides
         if not force_reason and self._meta:
-            if self._meta.should_force_exploration():
+            if self._meta.should_force_exploration(ev_hash):
                 logger.info("Exploration sample forced for %s", vendor_name)
                 force_reason = True
 
@@ -423,10 +565,11 @@ class StratifiedReasoner:
         from ..services.protocols import Message
 
         # Build user payload
+        prepared = self._prepare_evidence(evidence)
         payload = {
             "vendor_name": vendor_name,
             "product_category": product_category,
-            "evidence": evidence,
+            "evidence": prepared,
         }
         if tier_context and tier_context.get("inherited_priors"):
             payload["tier_context"] = tier_context
@@ -461,7 +604,7 @@ class StratifiedReasoner:
             Message(role="system", content=_REASON_SYSTEM_PROMPT),
             Message(
                 role="user",
-                content=json.dumps(payload, separators=(",", ":"), default=str),
+                content=json.dumps(payload, separators=(",", ":"), sort_keys=True, default=str),
             ),
         ]
 
