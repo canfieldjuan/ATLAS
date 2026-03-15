@@ -76,7 +76,21 @@ export default function VendorDetail() {
     {
       key: 'company',
       header: 'Company',
-      render: (r) => <span className="text-white">{r.reviewer_company ?? '--'}</span>,
+      render: (r) => (
+        <div>
+          <span className="text-white">{r.reviewer_company ?? '--'}</span>
+          {r.reviewer_title && (
+            <span className="block text-[10px] text-slate-500">{r.reviewer_title}</span>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: 'source',
+      header: 'Source',
+      render: (r) => (
+        <span className="text-slate-400 text-xs">{r.source ?? '--'}</span>
+      ),
     },
     {
       key: 'urgency',
@@ -91,9 +105,28 @@ export default function VendorDetail() {
       render: (r) => <span className="text-slate-400">{r.pain_category ?? '--'}</span>,
     },
     {
+      key: 'sentiment',
+      header: 'Sentiment',
+      render: (r) => {
+        if (!r.sentiment_direction) return <span className="text-slate-500 text-xs">--</span>
+        const colors: Record<string, string> = {
+          improving: 'text-green-400',
+          declining: 'text-red-400',
+          stable: 'text-slate-400',
+        }
+        return (
+          <span className={`text-xs font-medium ${colors[r.sentiment_direction] ?? 'text-slate-400'}`}>
+            {r.sentiment_direction}
+          </span>
+        )
+      },
+    },
+    {
       key: 'rating',
       header: 'Rating',
       render: (r) => <span className="text-slate-300">{r.rating?.toFixed(1) ?? '--'}</span>,
+      sortable: true,
+      sortValue: (r) => r.rating ?? 0,
     },
     {
       key: 'intent',
@@ -104,6 +137,51 @@ export default function VendorDetail() {
         ) : (
           <span className="text-slate-500 text-xs">--</span>
         ),
+    },
+    {
+      key: 'authority',
+      header: 'Authority',
+      render: (r) => {
+        if (!r.decision_maker && !r.role_level && !r.buying_stage) {
+          return <span className="text-slate-500 text-xs">--</span>
+        }
+        return (
+          <div className="space-y-0.5">
+            {r.decision_maker && (
+              <span className="text-cyan-400 text-[10px] font-medium block">DM</span>
+            )}
+            {r.role_level && (
+              <span className="text-slate-400 text-[10px] block">{r.role_level}</span>
+            )}
+            {r.buying_stage && (
+              <span className="text-slate-500 text-[10px] block">{r.buying_stage.replace(/_/g, ' ')}</span>
+            )}
+          </div>
+        )
+      },
+    },
+    {
+      key: 'competitors',
+      header: 'Competitors',
+      render: (r) => {
+        const comps = r.competitors_mentioned ?? []
+        if (comps.length === 0) return <span className="text-slate-500 text-xs">--</span>
+        return (
+          <div className="flex flex-wrap gap-1">
+            {comps.slice(0, 3).map((c, i) => {
+              const name = typeof c === 'string' ? c : (c as Record<string, unknown>).name as string ?? ''
+              return (
+                <span key={i} className="px-1.5 py-0.5 bg-slate-800 rounded text-[10px] text-slate-300">
+                  {name}
+                </span>
+              )
+            })}
+            {comps.length > 3 && (
+              <span className="text-[10px] text-slate-500">+{comps.length - 3}</span>
+            )}
+          </div>
+        )
+      },
     },
   ]
 

@@ -116,7 +116,19 @@ export interface ReviewSummary {
   pain_category: string | null
   intent_to_leave: boolean | null
   decision_maker: boolean | null
+  source: string | null
+  reviewed_at: string | null
+  role_level: string | null
+  buying_stage: string | null
+  sentiment_direction: string | null
+  competitors_mentioned: string[]
+  quotable_phrases: string[]
+  positive_aspects: string[]
+  specific_complaints: string[]
   enriched_at: string | null
+  reviewer_title: string | null
+  company_size: string | null
+  industry: string | null
 }
 
 export interface ReviewDetail {

@@ -624,6 +624,164 @@ async def generate_account_deep_dive_report(
     return report
 
 
+# ---------------------------------------------------------------------------
+# On-demand vendor reasoning
+# ---------------------------------------------------------------------------
+
+
+@router.post("/vendors/{vendor_name}/reason")
+async def reason_vendor(
+    vendor_name: str,
+    force: bool = Query(False, description="Bypass reasoning cache"),
+    user: AuthUser | None = Depends(optional_auth),
+):
+    """Run stratified reasoning for a single vendor on demand.
+
+    Builds fresh evidence from current DB data, invokes the reasoning engine,
+    persists the archetype to churn_signals, and returns the full result.
+    """
+    import asyncio as _aio
+
+    pool = _pool_or_503()
+
+    from ..autonomous.tasks.b2b_churn_intelligence import (
+        fetch_vendor_evidence,
+        persist_single_vendor_reasoning,
+    )
+    from ..reasoning import get_stratified_reasoner, init_stratified_reasoner
+    from ..reasoning.tiers import Tier, gather_tier_context
+
+    evidence = await fetch_vendor_evidence(pool, vendor_name)
+    if evidence is None:
+        raise HTTPException(status_code=404, detail=f"No churn signal data for vendor: {vendor_name}")
+
+    reasoner = get_stratified_reasoner()
+    if reasoner is None:
+        try:
+            await init_stratified_reasoner(pool)
+            reasoner = get_stratified_reasoner()
+        except Exception:
+            pass
+    if reasoner is None:
+        raise HTTPException(status_code=503, detail="Reasoning engine unavailable")
+
+    canonical = evidence.get("vendor_name", vendor_name)
+    category = evidence.get("product_category", "")
+
+    try:
+        tier_ctx = await gather_tier_context(
+            reasoner._cache, Tier.VENDOR_ARCHETYPE,
+            vendor_name=canonical, product_category=category,
+        )
+        sr = await reasoner.analyze(
+            vendor_name=canonical,
+            evidence=evidence,
+            product_category=category,
+            force_reason=force,
+            tier_context=tier_ctx,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Reasoning failed: {exc}")
+
+    try:
+        await persist_single_vendor_reasoning(pool, canonical, sr)
+    except Exception:
+        pass  # non-fatal
+
+    conclusion = sr.conclusion or {}
+    return {
+        "vendor_name": canonical,
+        "mode": sr.mode,
+        "cached": sr.cached,
+        "confidence": sr.confidence,
+        "tokens_used": sr.tokens_used,
+        "archetype": conclusion.get("archetype"),
+        "risk_level": conclusion.get("risk_level"),
+        "executive_summary": conclusion.get("executive_summary"),
+        "key_signals": conclusion.get("key_signals", []),
+        "falsification_conditions": conclusion.get("falsification_conditions", []),
+        "uncertainty_sources": conclusion.get("uncertainty_sources", []),
+    }
+
+
+@router.post("/vendors/compare-reasoning")
+async def compare_vendor_reasoning(
+    body: dict,
+    user: AuthUser | None = Depends(optional_auth),
+):
+    """Side-by-side stratified reasoning for multiple vendors (2-5)."""
+    import asyncio as _aio
+
+    vendors = body.get("vendors", [])
+    force = body.get("force", False)
+
+    if not isinstance(vendors, list) or len(vendors) < 2 or len(vendors) > 5:
+        raise HTTPException(status_code=400, detail="vendors must be a list of 2-5 vendor names")
+
+    pool = _pool_or_503()
+
+    from ..autonomous.tasks.b2b_churn_intelligence import (
+        fetch_vendor_evidence,
+        persist_single_vendor_reasoning,
+    )
+    from ..reasoning import get_stratified_reasoner, init_stratified_reasoner
+    from ..reasoning.tiers import Tier, gather_tier_context
+
+    reasoner = get_stratified_reasoner()
+    if reasoner is None:
+        try:
+            await init_stratified_reasoner(pool)
+            reasoner = get_stratified_reasoner()
+        except Exception:
+            pass
+    if reasoner is None:
+        raise HTTPException(status_code=503, detail="Reasoning engine unavailable")
+
+    async def _reason_one(vname: str) -> dict:
+        evidence = await fetch_vendor_evidence(pool, vname)
+        if evidence is None:
+            return {"vendor_name": vname, "error": "No churn signal data"}
+
+        canonical = evidence.get("vendor_name", vname)
+        category = evidence.get("product_category", "")
+        try:
+            tier_ctx = await gather_tier_context(
+                reasoner._cache, Tier.VENDOR_ARCHETYPE,
+                vendor_name=canonical, product_category=category,
+            )
+            sr = await reasoner.analyze(
+                vendor_name=canonical,
+                evidence=evidence,
+                product_category=category,
+                force_reason=force,
+                tier_context=tier_ctx,
+            )
+        except Exception as exc:
+            return {"vendor_name": canonical, "error": str(exc)[:200]}
+
+        try:
+            await persist_single_vendor_reasoning(pool, canonical, sr)
+        except Exception:
+            pass
+
+        conclusion = sr.conclusion or {}
+        return {
+            "vendor_name": canonical,
+            "mode": sr.mode,
+            "cached": sr.cached,
+            "confidence": sr.confidence,
+            "tokens_used": sr.tokens_used,
+            "archetype": conclusion.get("archetype"),
+            "risk_level": conclusion.get("risk_level"),
+            "executive_summary": conclusion.get("executive_summary"),
+            "key_signals": conclusion.get("key_signals", []),
+            "falsification_conditions": conclusion.get("falsification_conditions", []),
+        }
+
+    results = await _aio.gather(*[_reason_one(v) for v in vendors])
+    return {"vendors": results, "count": len(results)}
+
+
 @router.get("/reports")
 async def list_reports(
     report_type: Optional[str] = Query(None),
@@ -850,11 +1008,18 @@ async def search_reviews(
     rows = await pool.fetch(
         f"""
         SELECT id, vendor_name, product_category, reviewer_company,
-               rating,
+               source, reviewed_at, rating,
                (enrichment->>'urgency_score')::numeric AS urgency_score,
                enrichment->>'pain_category' AS pain_category,
                (enrichment->'churn_signals'->>'intent_to_leave')::boolean AS intent_to_leave,
                (enrichment->'reviewer_context'->>'decision_maker')::boolean AS decision_maker,
+               enrichment->'reviewer_context'->>'role_level' AS role_level,
+               enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
+               enrichment->'sentiment_trajectory'->>'direction' AS sentiment_direction,
+               enrichment->'competitors_mentioned' AS competitors_raw,
+               enrichment->'quotable_phrases' AS quotable_raw,
+               enrichment->'positive_aspects' AS positive_raw,
+               enrichment->'specific_complaints' AS complaints_raw,
                enriched_at, reviewer_title, company_size_raw,
                COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry
         FROM b2b_reviews
@@ -876,6 +1041,15 @@ async def search_reviews(
             "pain_category": r["pain_category"],
             "intent_to_leave": r["intent_to_leave"],
             "decision_maker": r["decision_maker"],
+            "source": r["source"],
+            "reviewed_at": str(r["reviewed_at"]) if r["reviewed_at"] else None,
+            "role_level": r["role_level"] if r["role_level"] != "unknown" else None,
+            "buying_stage": r["buying_stage"] if r["buying_stage"] != "unknown" else None,
+            "sentiment_direction": r["sentiment_direction"] if r["sentiment_direction"] != "unknown" else None,
+            "competitors_mentioned": _safe_json(r["competitors_raw"]) or [],
+            "quotable_phrases": _safe_json(r["quotable_raw"]) or [],
+            "positive_aspects": _safe_json(r["positive_raw"]) or [],
+            "specific_complaints": _safe_json(r["complaints_raw"]) or [],
             "enriched_at": str(r["enriched_at"]) if r["enriched_at"] else None,
             "reviewer_title": r["reviewer_title"],
             "company_size": r["company_size_raw"],
