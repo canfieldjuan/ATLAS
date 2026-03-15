@@ -8,6 +8,9 @@ export interface ChurnSignal {
   nps_proxy: number | null
   price_complaint_rate: number | null
   decision_maker_churn_rate: number | null
+  archetype: string | null
+  archetype_confidence: number | null
+  reasoning_mode: string | null
   last_computed_at: string | null
 }
 
@@ -24,6 +27,7 @@ export interface ChurnSignalDetail extends ChurnSignal {
   sentiment_distribution: Record<string, number> | null
   buyer_authority_summary: Record<string, unknown> | null
   timeline_summary: { company: string | null; contract_end: string | null; evaluation_deadline: string | null; decision_timeline: string | null; urgency: number }[] | null
+  falsification_conditions: string[] | null
   created_at: string | null
 }
 
@@ -62,6 +66,10 @@ export interface VendorProfile {
     sentiment_distribution: Record<string, number> | null
     buyer_authority_summary: Record<string, unknown> | null
     timeline_summary: { company: string | null; contract_end: string | null; evaluation_deadline: string | null; decision_timeline: string | null; urgency: number }[] | null
+    archetype: string | null
+    archetype_confidence: number | null
+    reasoning_mode: string | null
+    falsification_conditions: string[] | null
     last_computed_at: string | null
   } | null
   review_counts: {

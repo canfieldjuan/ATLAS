@@ -11,6 +11,7 @@ import {
   ResponsiveContainer,
 } from 'recharts'
 import UrgencyBadge from '../components/UrgencyBadge'
+import ArchetypeBadge from '../components/ArchetypeBadge'
 import DataTable, { type Column } from '../components/DataTable'
 import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
@@ -138,7 +139,17 @@ export default function VendorDetail() {
 
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-white">{profile.vendor_name}</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-bold text-white">{profile.vendor_name}</h1>
+            {signal?.archetype && (
+              <ArchetypeBadge
+                archetype={signal.archetype}
+                confidence={signal.archetype_confidence}
+                showConfidence
+                size="md"
+              />
+            )}
+          </div>
           <p className="text-sm text-slate-400 mt-1">
             {profile.review_counts.total} reviews ({profile.review_counts.enriched} enriched)
           </p>
@@ -209,6 +220,31 @@ export default function VendorDetail() {
                   </div>
                 </dl>
               </div>
+              {signal.archetype && (
+                <div className="bg-slate-900/50 border border-cyan-500/20 rounded-xl p-5">
+                  <h3 className="text-sm font-medium text-cyan-300 mb-3">Reasoning Intelligence</h3>
+                  <dl className="space-y-2 text-sm">
+                    <div className="flex justify-between items-center">
+                      <dt className="text-slate-400">Churn Pattern</dt>
+                      <dd><ArchetypeBadge archetype={signal.archetype} confidence={signal.archetype_confidence} showConfidence /></dd>
+                    </div>
+                    <div className="flex justify-between">
+                      <dt className="text-slate-400">Reasoning Mode</dt>
+                      <dd className="text-slate-300 text-xs">{signal.reasoning_mode ?? '--'}</dd>
+                    </div>
+                  </dl>
+                  {signal.falsification_conditions && signal.falsification_conditions.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-slate-700/50">
+                      <p className="text-xs text-slate-500 mb-1.5">What would change this conclusion:</p>
+                      <ul className="space-y-1">
+                        {signal.falsification_conditions.map((c: string, i: number) => (
+                          <li key={i} className="text-xs text-slate-400 pl-3 relative before:content-['\2022'] before:absolute before:left-0 before:text-cyan-500">{c}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
               {signal.top_competitors && signal.top_competitors.length > 0 && (
                 <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
                   <h3 className="text-sm font-medium text-slate-300 mb-3">Top Competitors</h3>

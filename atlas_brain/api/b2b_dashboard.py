@@ -162,6 +162,7 @@ async def list_signals(
         SELECT vendor_name, product_category, total_reviews,
                churn_intent_count, avg_urgency_score, avg_rating_normalized,
                nps_proxy, price_complaint_rate, decision_maker_churn_rate,
+               archetype, archetype_confidence, reasoning_mode,
                last_computed_at
         FROM b2b_churn_signals
         {where}
@@ -194,6 +195,9 @@ async def list_signals(
             "nps_proxy": _safe_float(r["nps_proxy"]),
             "price_complaint_rate": _safe_float(r["price_complaint_rate"]),
             "decision_maker_churn_rate": _safe_float(r["decision_maker_churn_rate"]),
+            "archetype": r["archetype"],
+            "archetype_confidence": _safe_float(r["archetype_confidence"]),
+            "reasoning_mode": r["reasoning_mode"],
             "last_computed_at": str(r["last_computed_at"]) if r["last_computed_at"] else None,
         }
         for r in rows
@@ -287,6 +291,10 @@ async def get_signal(
         "review_window_start": str(row["review_window_start"]) if row["review_window_start"] else None,
         "review_window_end": str(row["review_window_end"]) if row["review_window_end"] else None,
         "confidence_score": _safe_float(row["confidence_score"], 0),
+        "archetype": row.get("archetype"),
+        "archetype_confidence": _safe_float(row.get("archetype_confidence")),
+        "reasoning_mode": row.get("reasoning_mode"),
+        "falsification_conditions": _safe_json(row.get("falsification_conditions")),
         "last_computed_at": str(row["last_computed_at"]) if row["last_computed_at"] else None,
         "created_at": str(row["created_at"]) if row["created_at"] else None,
     }
@@ -477,6 +485,10 @@ async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(o
             "sentiment_distribution": _safe_json(signal_row["sentiment_distribution"]),
             "buyer_authority_summary": _safe_json(signal_row["buyer_authority_summary"]),
             "timeline_summary": _safe_json(signal_row["timeline_summary"]),
+            "archetype": signal_row.get("archetype"),
+            "archetype_confidence": _safe_float(signal_row.get("archetype_confidence")),
+            "reasoning_mode": signal_row.get("reasoning_mode"),
+            "falsification_conditions": _safe_json(signal_row.get("falsification_conditions")),
             "last_computed_at": str(signal_row["last_computed_at"]) if signal_row["last_computed_at"] else None,
         }
         sig = await _apply_field_overrides(pool, "churn_signal", str(signal_row["id"]), sig)

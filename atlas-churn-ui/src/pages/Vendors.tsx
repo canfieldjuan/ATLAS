@@ -4,6 +4,7 @@ import { Search, RefreshCw, X, Loader2, Download } from 'lucide-react'
 import { clsx } from 'clsx'
 import DataTable, { type Column } from '../components/DataTable'
 import UrgencyBadge from '../components/UrgencyBadge'
+import ArchetypeBadge from '../components/ArchetypeBadge'
 import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
 import { fetchSignals, downloadCsv } from '../api/client'
@@ -101,6 +102,15 @@ export default function Vendors() {
       ),
       sortable: true,
       sortValue: (r) => r.decision_maker_churn_rate ?? 0,
+    },
+    {
+      key: 'archetype',
+      header: 'Archetype',
+      render: (r) => (
+        <ArchetypeBadge archetype={r.archetype} confidence={r.archetype_confidence} showConfidence />
+      ),
+      sortable: true,
+      sortValue: (r) => r.archetype ?? '',
     },
     {
       key: 'reviews',
