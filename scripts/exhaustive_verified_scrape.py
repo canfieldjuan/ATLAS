@@ -393,13 +393,25 @@ async def scrape_vendor(parser, target, source, pool, relevance_threshold,
         reviews = reviews[:max_reviews]
         stop_reason = "max_reviews"
 
+    # Compute duplicate pages from page_logs
+    page_logs = getattr(result, "page_logs", []) or []
+    duplicate_pages = sum(1 for pl in page_logs if pl.stop_reason == "duplicate_page")
+
     # Determine actual stop reason from parser behavior
-    if pages >= target.max_pages:
+    # Use parser-set stop_reason if available, otherwise derive from heuristics
+    if result.stop_reason:
+        stop_reason = result.stop_reason
+    elif pages >= target.max_pages:
         stop_reason = "page_cap"
+    elif duplicate_pages > 0:
+        stop_reason = "duplicate_page"
     elif not result.reviews and result.errors:
         stop_reason = "blocked_or_error"
     elif not result.reviews:
         stop_reason = "no_reviews"
+    # Check page_logs for the last page's stop reason
+    elif page_logs and page_logs[-1].stop_reason:
+        stop_reason = page_logs[-1].stop_reason
 
     # Insert into DB
     inserted = 0
@@ -429,6 +441,7 @@ async def scrape_vendor(parser, target, source, pool, relevance_threshold,
         "newest_review": str(date_info["newest"]) if date_info["newest"] else None,
         "null_dates": date_info["null_dates"],
         "parse_failures": date_info["parse_failures"],
+        "duplicate_pages": duplicate_pages,
     }
 
     await _log_scrape(pool, target.id, source, vendor, result, stats,

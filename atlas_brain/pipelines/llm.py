@@ -402,6 +402,8 @@ def call_llm_with_skill(
     response_format: dict[str, Any] | None = None,
     guided_json: dict[str, Any] | None = None,
     usage_out: dict[str, Any] | None = None,
+    span_name: str | None = None,
+    trace_metadata: dict[str, Any] | None = None,
 ) -> str | None:
     """Load a skill, resolve an LLM, call it, clean the output.
 
@@ -443,6 +445,11 @@ def call_llm_with_skill(
     if guided_json is not None:
         kwargs["guided_json"] = guided_json
 
+    call_span_name = span_name or f"pipeline.{skill_name}"
+    metadata = {"skill": skill_name, "workload": workload or "default"}
+    if trace_metadata:
+        metadata.update(trace_metadata)
+
     t0 = time.monotonic()
     try:
         result = llm.chat(
@@ -468,13 +475,13 @@ def call_llm_with_skill(
 
         # Emit FTL trace span with full I/O and provider metadata
         trace_llm_call(
-            span_name=f"pipeline.{skill_name}",
+            span_name=call_span_name,
             input_tokens=usage.get("input_tokens", 0),
             output_tokens=usage.get("output_tokens", 0),
             model=model_name,
             provider=provider_name,
             duration_ms=(time.monotonic() - t0) * 1000,
-            metadata={"skill": skill_name, "workload": workload or "default"},
+            metadata=metadata,
             input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in messages]},
             output_data={"response": text[:2000]} if text else None,
             api_endpoint=trace_meta.get("api_endpoint"),
@@ -495,11 +502,12 @@ def call_llm_with_skill(
     except Exception as exc:
         logger.exception("LLM call failed for skill '%s'", skill_name)
         trace_llm_call(
-            span_name=f"pipeline.{skill_name}",
+            span_name=call_span_name,
             model=getattr(llm, "model", ""),
             provider=getattr(llm, "name", ""),
             duration_ms=(time.monotonic() - t0) * 1000,
             status="failed",
+            metadata=metadata,
             error_message=str(exc)[:500],
             error_type=type(exc).__name__,
             input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in messages]},

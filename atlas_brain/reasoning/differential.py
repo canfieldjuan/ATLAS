@@ -225,13 +225,16 @@ async def reconstitute(
     old_conclusion: dict[str, Any],
     diff: EvidenceDiff,
     new_evidence: dict[str, Any],
+    *,
+    product_category: str = "",
 ) -> tuple[dict[str, Any], int]:
     """Patch an existing conclusion with only the evidence delta.
 
     Returns (updated_conclusion, tokens_used).
     """
-    from ..pipelines.llm import parse_json_response
+    from ..pipelines.llm import parse_json_response, trace_llm_call
     from ..services.protocols import Message
+    from ..services.tracing import build_business_trace_context
 
     # Build a compact delta payload (not the full evidence)
     delta = {
@@ -268,6 +271,21 @@ async def reconstitute(
             content=json.dumps(delta, separators=(",", ":"), sort_keys=True, default=str),
         ),
     ]
+    trace_metadata = {
+        "workflow": "stratified_reasoning",
+        "phase": "stratified_reconstitute",
+        "reasoning_mode": "reconstitute",
+        "vendor_name": vendor_name,
+    }
+    if product_category:
+        trace_metadata["product_category"] = product_category
+    business = build_business_trace_context(
+        workflow="stratified_reasoning",
+        vendor_name=vendor_name,
+        product=product_category or None,
+    )
+    if business:
+        trace_metadata["business"] = business
 
     t0 = time.monotonic()
     try:
@@ -281,17 +299,46 @@ async def reconstitute(
         text = result.get("response", "").strip()
         usage = result.get("usage", {})
         tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+        trace_meta = result.get("_trace_meta", {})
+        duration_ms = (time.monotonic() - t0) * 1000
+
+        trace_llm_call(
+            span_name="reasoning.stratified.reconstitute",
+            input_tokens=usage.get("input_tokens", 0),
+            output_tokens=usage.get("output_tokens", 0),
+            model=getattr(llm, "model", getattr(llm, "model_id", "")),
+            provider=getattr(llm, "name", ""),
+            duration_ms=duration_ms,
+            metadata=trace_metadata,
+            input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in messages]},
+            output_data={"response": text[:2000]} if text else None,
+            api_endpoint=trace_meta.get("api_endpoint"),
+            provider_request_id=trace_meta.get("provider_request_id"),
+            ttft_ms=trace_meta.get("ttft_ms"),
+            inference_time_ms=trace_meta.get("inference_time_ms"),
+            queue_time_ms=trace_meta.get("queue_time_ms"),
+        )
 
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
         updated = parse_json_response(text, recover_truncated=True)
 
-        duration_ms = (time.monotonic() - t0) * 1000
         logger.info(
             "Reconstituted %s (diff_ratio=%.0f%%, %d tokens, %.0fms)",
             vendor_name, diff.diff_ratio * 100, tokens, duration_ms,
         )
         return updated, tokens
 
-    except Exception:
+    except Exception as exc:
+        trace_llm_call(
+            span_name="reasoning.stratified.reconstitute",
+            model=getattr(llm, "model", getattr(llm, "model_id", "")),
+            provider=getattr(llm, "name", ""),
+            duration_ms=(time.monotonic() - t0) * 1000,
+            status="failed",
+            metadata=trace_metadata,
+            error_message=str(exc)[:500],
+            error_type=type(exc).__name__,
+            input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in messages]},
+        )
         logger.exception("Reconstitution LLM call failed for %s", vendor_name)
         return old_conclusion, 0

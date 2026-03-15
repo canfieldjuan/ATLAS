@@ -20,6 +20,53 @@ logger = logging.getLogger("atlas.api.admin_costs")
 router = APIRouter(prefix="/admin/costs", tags=["admin-costs"])
 
 
+def _recent_metadata_value(metadata: dict, key: str) -> str | None:
+    value = metadata.get(key)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    business = metadata.get("business")
+    if isinstance(business, dict):
+        nested = business.get(key)
+        if isinstance(nested, str) and nested.strip():
+            return nested.strip()
+    return None
+
+
+def _humanize_identifier(value: str | None) -> str:
+    if not value:
+        return ""
+    return value.replace("/", " ").replace(".", " ").replace("_", " ").strip().title()
+
+
+def _describe_recent_call(span_name: str, metadata: dict) -> tuple[str, str | None]:
+    vendor_name = _recent_metadata_value(metadata, "vendor_name")
+    report_type = _recent_metadata_value(metadata, "report_type")
+    reasoning_mode = _recent_metadata_value(metadata, "reasoning_mode")
+    phase = _recent_metadata_value(metadata, "phase")
+    skill = _recent_metadata_value(metadata, "skill")
+
+    if span_name == "reasoning.stratified.reason":
+        return "Stratified Reasoning", f"Full reason{f' for {vendor_name}' if vendor_name else ''}"
+    if span_name == "reasoning.stratified.reconstitute":
+        return "Stratified Reasoning", f"Reconstitute{f' for {vendor_name}' if vendor_name else ''}"
+    if span_name == "b2b.churn_intelligence.exploratory_overview":
+        return "Exploratory Overview", "Weekly churn feed synthesis"
+    if span_name == "b2b.churn_intelligence.scorecard_narrative":
+        return "Scorecard Narrative", vendor_name or "Vendor scorecard narrative"
+    if span_name == "b2b.churn_intelligence.executive_summary":
+        return "Executive Summary", _humanize_identifier(report_type) or "Report summary synthesis"
+    if span_name == "b2b.churn_intelligence.battle_card_sales_copy":
+        return "Battle Card Sales Copy", vendor_name or "Battle card enrichment"
+
+    if span_name.startswith("pipeline."):
+        base = skill or span_name.removeprefix("pipeline.")
+        detail = vendor_name or _humanize_identifier(report_type or phase or reasoning_mode) or None
+        return _humanize_identifier(base), detail
+
+    detail = vendor_name or _humanize_identifier(report_type or phase or reasoning_mode) or None
+    return span_name, detail
+
+
 def _pool_or_503():
     pool = get_db_pool()
     if not pool.is_initialized:
@@ -221,23 +268,27 @@ async def recent_calls(limit: int = Query(default=50, ge=1, le=200)):
            LIMIT $1""",
         limit,
     )
+    calls = []
+    for r in rows:
+        metadata = r["metadata"] if isinstance(r["metadata"], dict) else {}
+        title, detail = _describe_recent_call(r["span_name"], metadata)
+        calls.append({
+            "span_name": r["span_name"],
+            "title": title,
+            "detail": detail,
+            "model": r["model_name"],
+            "provider": r["model_provider"],
+            "input_tokens": r["input_tokens"],
+            "output_tokens": r["output_tokens"],
+            "cost_usd": float(r["cost_usd"]) if r["cost_usd"] else 0,
+            "duration_ms": r["duration_ms"],
+            "tokens_per_second": r["tokens_per_second"],
+            "status": r["status"],
+            "metadata": metadata,
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+        })
     return {
-        "calls": [
-            {
-                "span_name": r["span_name"],
-                "model": r["model_name"],
-                "provider": r["model_provider"],
-                "input_tokens": r["input_tokens"],
-                "output_tokens": r["output_tokens"],
-                "cost_usd": float(r["cost_usd"]) if r["cost_usd"] else 0,
-                "duration_ms": r["duration_ms"],
-                "tokens_per_second": r["tokens_per_second"],
-                "status": r["status"],
-                "metadata": r["metadata"] if isinstance(r["metadata"], dict) else {},
-                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
-            }
-            for r in rows
-        ],
+        "calls": calls,
     }
 
 

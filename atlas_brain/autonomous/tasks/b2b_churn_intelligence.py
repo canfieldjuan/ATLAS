@@ -79,6 +79,31 @@ def _canonicalize_vendor(raw: str) -> str:
     return resolve_vendor_name_cached(raw)
 
 
+def _build_llm_trace_metadata(
+    phase: str,
+    *,
+    report_type: str | None = None,
+    vendor_name: str | None = None,
+) -> dict[str, Any]:
+    """Build compact trace metadata for churn-intelligence LLM phases."""
+    metadata: dict[str, Any] = {
+        "workflow": "b2b_churn_intelligence",
+        "phase": phase,
+    }
+    if report_type:
+        metadata["report_type"] = report_type
+    if vendor_name:
+        metadata["vendor_name"] = vendor_name
+    business = build_business_trace_context(
+        workflow="b2b_churn_intelligence",
+        report_type=report_type,
+        vendor_name=vendor_name,
+    )
+    if business:
+        metadata["business"] = business
+    return metadata
+
+
 def _intelligence_source_allowlist() -> list[str]:
     """Return the configured intelligence source allowlist for SQL ANY() binding."""
     return parse_source_allowlist(settings.b2b_churn.intelligence_source_allowlist)
@@ -2859,10 +2884,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 )
 
     try:
-        from atlas_brain.reasoning import get_stratified_reasoner
+        from atlas_brain.reasoning import get_stratified_reasoner, init_stratified_reasoner
         from atlas_brain.reasoning.tiers import Tier, gather_tier_context
 
         reasoner = get_stratified_reasoner()
+        if reasoner is None:
+            # Lazy-init for standalone/manual runs (main app lifespan not active)
+            await init_stratified_reasoner(pool)
+            reasoner = get_stratified_reasoner()
         if reasoner is not None:
             sem = asyncio.Semaphore(cfg.stratified_reasoning_concurrency)
             total_tokens = 0
@@ -2991,6 +3020,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     ),
                     workload=_llm_workload,
                     usage_out=llm_usage,
+                    span_name="b2b.churn_intelligence.exploratory_overview",
+                    trace_metadata=_build_llm_trace_metadata(
+                        "exploratory_overview",
+                        report_type="weekly_churn_feed",
+                    ),
                 ),
                 timeout=300,
             )
@@ -3183,6 +3217,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     max_tokens=300, temperature=0.3,
                     response_format={"type": "json_object"},
                     workload=_llm_workload,
+                    span_name="b2b.churn_intelligence.scorecard_narrative",
+                    trace_metadata=_build_llm_trace_metadata(
+                        "scorecard_narrative",
+                        report_type="vendor_scorecard",
+                        vendor_name=sc.get("vendor"),
+                    ),
                 ),
                 timeout=45,
             )
@@ -3250,6 +3290,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         max_tokens=512, temperature=0.3,
                         response_format={"type": "json_object"},
                         workload=_llm_workload,
+                        span_name="b2b.churn_intelligence.executive_summary",
+                        trace_metadata=_build_llm_trace_metadata(
+                            "executive_summary",
+                            report_type=_rt,
+                        ),
                     ),
                     timeout=60,
                 )
@@ -3332,6 +3377,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     max_tokens=3000, temperature=0.5,
                     response_format={"type": "json_object"},
                     workload=_llm_workload,
+                    span_name="b2b.churn_intelligence.battle_card_sales_copy",
+                    trace_metadata=_build_llm_trace_metadata(
+                        "battle_card_sales_copy",
+                        report_type="battle_card",
+                        vendor_name=card.get("vendor"),
+                    ),
                 ),
                 timeout=90,
             )

@@ -14,6 +14,7 @@ import TaskHealthPanel from './components/TaskHealthPanel'
 import ScrapingPipeline from './components/ScrapingPipeline'
 import WorkflowTable from './components/WorkflowTable'
 import RecentCalls from './components/RecentCalls'
+import ReasoningPanel from './components/ReasoningPanel'
 
 export default function App() {
   const [summary, setSummary] = useState<Summary | null>(null)
@@ -203,6 +204,11 @@ export default function App() {
 
         {/* ── Scraping Pipeline ───────────────────── */}
         <ScrapingPipeline summary={scrapeSummary} details={scrapeDetails} topPosts={scrapeTopPosts} />
+
+        {/* ── Reasoning Activity ─────────────────── */}
+        <div className="mb-8">
+          <ReasoningPanel workflows={workflows} recent={recent} />
+        </div>
 
         {/* ── Bottom: Workflows + Recent ─────────── */}
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">

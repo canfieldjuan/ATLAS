@@ -563,6 +563,7 @@ class StratifiedReasoner:
         # Patch the conclusion with only the delta
         updated_conclusion, tokens = await reconstitute(
             vendor_name, entry.conclusion, diff, new_evidence,
+            product_category=product_category,
         )
         updated_conclusion = self._normalize_conclusion(updated_conclusion)
         validation_errors = self._validate_conclusion(
@@ -709,8 +710,9 @@ class StratifiedReasoner:
         tier_context: dict[str, Any] | None = None,
     ) -> ReasoningResult:
         """Full LLM synthesis. Store result in both memories."""
-        from ..pipelines.llm import parse_json_response
+        from ..pipelines.llm import parse_json_response, trace_llm_call
         from ..services.protocols import Message
+        from ..services.tracing import build_business_trace_context
 
         # Build user payload
         prepared = self._prepare_evidence(evidence)
@@ -757,6 +759,21 @@ class StratifiedReasoner:
                 content=json.dumps(payload, separators=(",", ":"), sort_keys=True, default=str),
             ),
         ]
+        trace_metadata = {
+            "workflow": "stratified_reasoning",
+            "phase": "stratified_reason",
+            "reasoning_mode": "reason",
+            "vendor_name": vendor_name,
+        }
+        if product_category:
+            trace_metadata["product_category"] = product_category
+        business = build_business_trace_context(
+            workflow="stratified_reasoning",
+            vendor_name=vendor_name,
+            product=product_category or None,
+        )
+        if business:
+            trace_metadata["business"] = business
 
         t0 = time.monotonic()
         try:
@@ -770,6 +787,25 @@ class StratifiedReasoner:
             text = result.get("response", "").strip()
             usage = result.get("usage", {})
             tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+            trace_meta = result.get("_trace_meta", {})
+            duration_ms = (time.monotonic() - t0) * 1000
+
+            trace_llm_call(
+                span_name="reasoning.stratified.reason",
+                input_tokens=usage.get("input_tokens", 0),
+                output_tokens=usage.get("output_tokens", 0),
+                model=getattr(llm, "model", getattr(llm, "model_id", "")),
+                provider=getattr(llm, "name", ""),
+                duration_ms=duration_ms,
+                metadata=trace_metadata,
+                input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in messages]},
+                output_data={"response": text[:2000]} if text else None,
+                api_endpoint=trace_meta.get("api_endpoint"),
+                provider_request_id=trace_meta.get("provider_request_id"),
+                ttft_ms=trace_meta.get("ttft_ms"),
+                inference_time_ms=trace_meta.get("inference_time_ms"),
+                queue_time_ms=trace_meta.get("queue_time_ms"),
+            )
 
             # Clean think tags
             import re
@@ -777,7 +813,18 @@ class StratifiedReasoner:
 
             conclusion = parse_json_response(text, recover_truncated=True)
             conclusion = self._normalize_conclusion(conclusion)
-        except Exception:
+        except Exception as exc:
+            trace_llm_call(
+                span_name="reasoning.stratified.reason",
+                model=getattr(llm, "model", getattr(llm, "model_id", "")),
+                provider=getattr(llm, "name", ""),
+                duration_ms=(time.monotonic() - t0) * 1000,
+                status="failed",
+                metadata=trace_metadata,
+                error_message=str(exc)[:500],
+                error_type=type(exc).__name__,
+                input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in messages]},
+            )
             logger.exception("LLM reasoning failed for %s", vendor_name)
             return ReasoningResult(
                 mode="reason",
@@ -791,7 +838,6 @@ class StratifiedReasoner:
 
         confidence = conclusion.get("confidence", 0.5)
         archetype = conclusion.get("archetype", "unknown")
-        duration_ms = (time.monotonic() - t0) * 1000
 
         validation_errors = self._validate_conclusion(
             conclusion,

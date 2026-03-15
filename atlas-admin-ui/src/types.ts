@@ -41,6 +41,8 @@ export interface MergedDailyEntry extends DailyEntry {
 
 export interface RecentCall {
   span_name: string
+  title?: string
+  detail?: string | null
   model: string
   provider: string
   input_tokens: number
@@ -49,6 +51,7 @@ export interface RecentCall {
   duration_ms: number
   tokens_per_second: number
   status: string
+  metadata?: Record<string, unknown>
   created_at: string
 }
 

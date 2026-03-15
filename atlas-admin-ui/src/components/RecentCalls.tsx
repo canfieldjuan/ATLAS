@@ -27,13 +27,27 @@ export default function RecentCalls({ data }: { data: RecentCall[] }) {
 
             <div className="min-w-0 flex-1">
               <div className="flex items-baseline gap-2">
-                <span className="truncate font-mono text-xs font-medium text-slate-300">
-                  {call.span_name}
+                <span className="truncate text-xs font-medium text-slate-200">
+                  {call.title || call.span_name}
                 </span>
                 <span className="shrink-0 text-[10px] text-slate-600">
                   {call.model}
                 </span>
               </div>
+              {(call.detail || (call.title && call.title !== call.span_name)) && (
+                <div className="mt-0.5 flex items-baseline gap-2">
+                  {call.detail && (
+                    <span className="truncate text-[11px] text-slate-500">
+                      {call.detail}
+                    </span>
+                  )}
+                  {call.title && call.title !== call.span_name && (
+                    <span className="truncate font-mono text-[10px] text-slate-600">
+                      {call.span_name}
+                    </span>
+                  )}
+                </div>
+              )}
               <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-slate-500">
                 <span>{(call.input_tokens + call.output_tokens).toLocaleString()} tok</span>
                 <span>{fmtDuration(call.duration_ms)}</span>
