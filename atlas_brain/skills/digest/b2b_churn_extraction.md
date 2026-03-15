@@ -55,7 +55,8 @@ You are a B2B software intelligence analyst. Given a single software review, ext
     "department": "sales",
     "company_size_segment": "enterprise",
     "industry": "Technology",
-    "decision_maker": true
+    "decision_maker": true,
+    "company_name": null
   },
 
   "pain_category": "pricing",
@@ -186,6 +187,14 @@ True when role_level is executive or director. Also true for manager titles that
 - **smb**: 51-200 employees, or "Small Business"
 - **startup**: 1-50 employees, or "Startup"
 - **unknown**: Cannot determine
+
+### reviewer_context.company_name
+Extract the reviewer's company name ONLY when explicitly stated in the review text, pros, cons, summary, or reviewer_company field. Examples: "We use this at Acme Corp", "As a Google employee", "Our team at [Company] switched to..."
+- Only extract proper company names explicitly mentioned in the text
+- Never infer from industry, company size, role, or contextual clues
+- Set to null when no company name is explicitly stated
+- Do not extract generic references like "my company" or "our organization"
+- If reviewer_company is already provided in the input and is not empty, use that value
 
 ### pain_category
 One of: pricing, features, reliability, support, integration, performance, security, ux, onboarding, other. Pick the PRIMARY driver of dissatisfaction -- the root cause that, if fixed, would retain the customer. When multiple pains co-occur, apply these tiebreakers: (1) the pain explicitly linked to switching/evaluation language wins; (2) pricing beats other categories only when dollar amounts or "too expensive" are stated; (3) "other" is a last resort -- prefer a specific category even if the fit is imperfect. For comparison/evaluation posts where no pain is expressed, use "features" (the reviewer is comparing capabilities).

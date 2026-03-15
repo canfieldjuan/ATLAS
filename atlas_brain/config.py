@@ -2191,6 +2191,10 @@ class B2BChurnConfig(BaseSettings):
         default=18,
         description="Max vendor score rows to include in exploratory_overview payload",
     )
+    stratified_reasoning_vendor_limit: int = Field(
+        default=100,
+        description="Max vendors for temporal analysis + stratified reasoning per intel run (independent of LLM payload trimming)",
+    )
     intelligence_exploratory_high_intent_limit: int = Field(
         default=8,
         description="Max high-intent company rows to include in exploratory_overview payload",

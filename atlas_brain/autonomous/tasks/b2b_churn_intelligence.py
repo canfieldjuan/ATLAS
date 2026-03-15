@@ -947,7 +947,8 @@ async def fetch_vendor_evidence(
     (
         pain_dist, competitive_disp, feature_gaps,
         price_rates, dm_rates, keyword_spikes,
-        insider_raw,
+        insider_raw, quotable_evidence, budget_signals,
+        use_case_dist, buyer_auth,
     ) = await asyncio.gather(
         _fetch_pain_distribution(pool, window_days),
         _fetch_competitive_displacement(pool, window_days),
@@ -956,6 +957,10 @@ async def fetch_vendor_evidence(
         _fetch_dm_churn_rates(pool, window_days),
         _fetch_keyword_spikes(pool),
         _fetch_insider_aggregates(pool, window_days),
+        _fetch_quotable_evidence(pool, window_days),
+        _fetch_budget_signals(pool, window_days),
+        _fetch_use_case_distribution(pool, window_days),
+        _fetch_buyer_authority_summary(pool, window_days),
     )
 
     pain_lookup = _build_pain_lookup(pain_dist)
@@ -965,6 +970,10 @@ async def fetch_vendor_evidence(
     insider_lookup = _build_insider_lookup(insider_raw)
     dm_lookup = {r["vendor"]: r["dm_churn_rate"] for r in dm_rates}
     price_lookup = {r["vendor"]: r["price_complaint_rate"] for r in price_rates}
+    quote_lookup = {r["vendor"]: r["quotes"] for r in quotable_evidence}
+    budget_lookup = {r["vendor"]: {k: v for k, v in r.items() if k != "vendor"} for r in budget_signals}
+    ba_lookup = _build_buyer_auth_lookup(buyer_auth)
+    uc_lookup = _build_use_case_lookup(use_case_dist)
 
     # Temporal analysis (non-fatal)
     temporal_lookup: dict[str, dict] = {}
@@ -996,6 +1005,10 @@ async def fetch_vendor_evidence(
         archetype_lookup=archetype_lookup or None,
         dm_lookup=dm_lookup,
         price_lookup=price_lookup,
+        quote_lookup=quote_lookup,
+        budget_lookup=budget_lookup,
+        buyer_auth_lookup=ba_lookup,
+        use_case_lookup=uc_lookup,
     )
 
 
@@ -1536,6 +1549,14 @@ def _build_deterministic_vendor_scorecards(
     prior_reports: list[dict[str, Any]],
     reasoning_lookup: dict[str, dict] | None = None,
     temporal_lookup: dict[str, dict] | None = None,
+    timeline_lookup: dict[str, list[dict]] | None = None,
+    use_case_lookup: dict[str, list[dict]] | None = None,
+    complaint_lookup: dict[str, list[dict]] | None = None,
+    positive_lookup: dict[str, list[dict]] | None = None,
+    department_lookup: dict[str, list[dict]] | None = None,
+    contract_value_lookup: dict[str, list[dict]] | None = None,
+    turning_point_lookup: dict[str, list[dict]] | None = None,
+    tenure_lookup: dict[str, list[dict]] | None = None,
     limit: int = 15,
 ) -> list[dict[str, Any]]:
     """Build vendor deep-dive scorecards from aggregated numeric data.
@@ -1800,6 +1821,34 @@ def _build_deterministic_vendor_scorecards(
             "industry_distribution": industry_dist,
             "company_size_distribution": size_dist,
         }
+        # Idle field enrichments (Tier 1: wired from existing lookups)
+        tl_entries = (timeline_lookup or {}).get(vendor, [])
+        eval_deadlines = [t for t in tl_entries if t.get("evaluation_deadline")]
+        if eval_deadlines:
+            sc_entry["upcoming_evaluation_deadlines"] = eval_deadlines[:5]
+        uc_entries = (use_case_lookup or {}).get(vendor, [])
+        if uc_entries:
+            sc_entry["product_depth"] = uc_entries[:10]
+        # Tier 3: new aggregation lookups
+        complaints = (complaint_lookup or {}).get(vendor, [])
+        if complaints:
+            sc_entry["top_complaints"] = complaints[:5]
+        positives = (positive_lookup or {}).get(vendor, [])
+        if positives:
+            sc_entry["retention_signals"] = positives[:5]
+        departments = (department_lookup or {}).get(vendor, [])
+        if departments:
+            sc_entry["department_distribution"] = departments[:5]
+        deal_sizes = (contract_value_lookup or {}).get(vendor, [])
+        if deal_sizes:
+            sc_entry["deal_size_distribution"] = deal_sizes
+        triggers = (turning_point_lookup or {}).get(vendor, [])
+        if triggers:
+            sc_entry["churn_triggers"] = triggers[:5]
+        tenures = (tenure_lookup or {}).get(vendor, [])
+        if tenures:
+            sc_entry["customer_tenure_profile"] = tenures[:5]
+
         rc = (reasoning_lookup or {}).get(vendor, {})
         if rc:
             sc_entry["archetype"] = rc.get("archetype", "")
@@ -2030,6 +2079,11 @@ def _build_deterministic_battle_cards(
     competitive_disp: list[dict[str, Any]],
     competitor_reasons: list[dict[str, Any]],
     reasoning_lookup: dict[str, dict] | None = None,
+    timeline_lookup: dict[str, list[dict]] | None = None,
+    use_case_lookup: dict[str, list[dict]] | None = None,
+    positive_lookup: dict[str, list[dict]] | None = None,
+    department_lookup: dict[str, list[dict]] | None = None,
+    usage_duration_lookup: dict[str, list[dict]] | None = None,
     limit: int = 15,
 ) -> list[dict[str, Any]]:
     """Build per-vendor battle cards from aggregated data.
@@ -2260,6 +2314,24 @@ def _build_deterministic_battle_cards(
             "objection_handlers": [],
             "recommended_plays": [],
         }
+        # Idle field enrichments for battle cards
+        positives = (positive_lookup or {}).get(vendor, [])
+        if positives:
+            card_entry["retention_signals"] = positives[:5]
+        tl_entries = (timeline_lookup or {}).get(vendor, [])
+        eval_deadlines = [t for t in tl_entries if t.get("evaluation_deadline")]
+        if eval_deadlines:
+            card_entry["active_evaluation_deadlines"] = eval_deadlines[:5]
+        uc_entries = (use_case_lookup or {}).get(vendor, [])
+        if uc_entries:
+            card_entry["objection_data"]["product_depth"] = uc_entries[:5]
+        departments = (department_lookup or {}).get(vendor, [])
+        if departments:
+            card_entry["objection_data"]["department_context"] = departments[:3]
+        durations = (usage_duration_lookup or {}).get(vendor, [])
+        if durations:
+            card_entry["objection_data"]["tenure_churn_pattern"] = durations[:5]
+
         rc = (reasoning_lookup or {}).get(vendor, {})
         if rc:
             card_entry["archetype"] = rc.get("archetype", "")
@@ -2944,6 +3016,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         buyer_profile_provenance,
         insider_aggregates_raw,
         product_profiles_raw,
+        # Idle field aggregations
+        _review_text_aggs,
+        _department_dist,
+        _contract_ctx_aggs,
+        _sentiment_tenure_raw,
+        _turning_points_raw,
     ) = await asyncio.gather(
         _fetch_vendor_churn_scores(pool, window_days, min_reviews),
         _fetch_high_intent_companies(pool, urgency_threshold, window_days),
@@ -2971,6 +3049,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _fetch_buyer_profile_provenance(pool, window_days),
         _fetch_insider_aggregates(pool, window_days),
         _fetch_product_profiles(pool),
+        # Idle field fetches
+        _fetch_review_text_aggregates(pool, window_days),
+        _fetch_department_distribution(pool, window_days),
+        _fetch_contract_context_distribution(pool, window_days),
+        _fetch_sentiment_tenure(pool, window_days),
+        _fetch_turning_points(pool, window_days),
         return_exceptions=True,
     )
 
@@ -3029,7 +3113,34 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if isinstance(product_profiles_raw, Exception):
         logger.warning("product_profiles fetch failed: %s", product_profiles_raw)
         product_profiles_raw = []
+    # Idle field aggregations -- safe handling for tuple returns
+    if isinstance(_review_text_aggs, Exception):
+        logger.warning("review_text_aggregates fetch failed: %s", _review_text_aggs)
+        _review_text_aggs = ([], [])
+    if isinstance(_department_dist, Exception):
+        logger.warning("department_distribution fetch failed: %s", _department_dist)
+        _department_dist = []
+    if isinstance(_contract_ctx_aggs, Exception):
+        logger.warning("contract_context_distribution fetch failed: %s", _contract_ctx_aggs)
+        _contract_ctx_aggs = ([], [])
+    if isinstance(_sentiment_tenure_raw, Exception):
+        logger.warning("sentiment_tenure fetch failed: %s", _sentiment_tenure_raw)
+        _sentiment_tenure_raw = []
+    if isinstance(_turning_points_raw, Exception):
+        logger.warning("turning_points fetch failed: %s", _turning_points_raw)
+        _turning_points_raw = []
     insider_lookup = _build_insider_lookup(insider_aggregates_raw)
+
+    # Build idle field lookups
+    _complaint_rows, _positive_rows = _review_text_aggs if isinstance(_review_text_aggs, tuple) else ([], [])
+    complaint_lookup = _build_complaint_lookup(_complaint_rows)
+    positive_lookup = _build_positive_lookup(_positive_rows)
+    department_lookup = _build_department_lookup(_department_dist if isinstance(_department_dist, list) else [])
+    _cv_rows, _dur_rows = _contract_ctx_aggs if isinstance(_contract_ctx_aggs, tuple) else ([], [])
+    contract_value_lookup = _build_contract_value_lookup(_cv_rows)
+    usage_duration_lookup = _build_usage_duration_lookup(_dur_rows)
+    tenure_lookup = _build_tenure_lookup(_sentiment_tenure_raw if isinstance(_sentiment_tenure_raw, list) else [])
+    turning_point_lookup = _build_turning_point_lookup(_turning_points_raw if isinstance(_turning_points_raw, list) else [])
 
     # Check if there's enough data
     if not vendor_scores and not high_intent:
@@ -3402,6 +3513,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         prior_reports=prior_reports,
         reasoning_lookup=reasoning_lookup,
         temporal_lookup=_temporal_lookup or None,
+        timeline_lookup=timeline_lookup,
+        use_case_lookup=use_case_lookup,
+        complaint_lookup=complaint_lookup,
+        positive_lookup=positive_lookup,
+        department_lookup=department_lookup,
+        contract_value_lookup=contract_value_lookup,
+        turning_point_lookup=turning_point_lookup,
+        tenure_lookup=tenure_lookup,
     )
     deterministic_displacement_map = _build_deterministic_displacement_map(
         competitive_disp,
@@ -3585,6 +3704,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         competitive_disp=competitive_disp,
         competitor_reasons=competitor_reasons,
         reasoning_lookup=reasoning_lookup,
+        timeline_lookup=timeline_lookup,
+        use_case_lookup=use_case_lookup,
+        positive_lookup=positive_lookup,
+        department_lookup=department_lookup,
+        usage_duration_lookup=usage_duration_lookup,
     )
     logger.info("Built %d battle cards", len(deterministic_battle_cards))
 
@@ -5362,7 +5486,15 @@ async def _fetch_budget_signals(pool, window_days: int) -> list[dict[str, Any]]:
             count(*) FILTER (
                 WHERE (enrichment->'budget_signals'->>'price_increase_mentioned')::boolean = true
             ) AS price_increase_count,
-            count(*) AS total
+            count(*) AS total,
+            array_agg(DISTINCT enrichment->'budget_signals'->>'annual_spend_estimate')
+                FILTER (WHERE enrichment->'budget_signals'->>'annual_spend_estimate' IS NOT NULL
+                        AND enrichment->'budget_signals'->>'annual_spend_estimate' != '')
+                AS annual_spend_values,
+            array_agg(DISTINCT enrichment->'budget_signals'->>'price_per_seat')
+                FILTER (WHERE enrichment->'budget_signals'->>'price_per_seat' IS NOT NULL
+                        AND enrichment->'budget_signals'->>'price_per_seat' != '')
+                AS price_per_seat_values
         FROM b2b_reviews
         WHERE {filters}
           AND enrichment->'budget_signals' IS NOT NULL
@@ -5380,6 +5512,8 @@ async def _fetch_budget_signals(pool, window_days: int) -> list[dict[str, Any]]:
             "max_seat_count": float(r["max_seat_count"]) if r["max_seat_count"] else None,
             "price_increase_count": r["price_increase_count"],
             "price_increase_rate": r["price_increase_count"] / r["total"] if r["total"] else 0,
+            "annual_spend_signals": [v for v in (r["annual_spend_values"] or []) if v],
+            "price_per_seat_signals": [v for v in (r["price_per_seat_values"] or []) if v],
         }
         for r in rows
     ]
@@ -5470,6 +5604,214 @@ async def _fetch_sentiment_trajectory(pool, window_days: int) -> list[dict[str, 
         }
         for r in rows
     ]
+
+
+async def _fetch_sentiment_tenure(pool, window_days: int) -> list[dict[str, Any]]:
+    """Aggregate customer tenure from sentiment_trajectory per vendor."""
+    sources = _intelligence_source_allowlist()
+    filters = _eligible_review_filters(window_param=1, source_param=2)
+    rows = await pool.fetch(
+        f"""
+        SELECT vendor_name,
+            enrichment->'sentiment_trajectory'->>'tenure' AS tenure,
+            count(*) AS cnt
+        FROM b2b_reviews
+        WHERE {filters}
+          AND enrichment->'sentiment_trajectory'->>'tenure' IS NOT NULL
+          AND enrichment->'sentiment_trajectory'->>'tenure' != ''
+        GROUP BY vendor_name, enrichment->'sentiment_trajectory'->>'tenure'
+        ORDER BY cnt DESC
+        """,
+        window_days,
+        sources,
+    )
+    return [
+        {"vendor": r["vendor_name"], "tenure": r["tenure"], "count": r["cnt"]}
+        for r in rows
+    ]
+
+
+async def _fetch_turning_points(pool, window_days: int) -> list[dict[str, Any]]:
+    """Aggregate churn turning points from sentiment_trajectory per vendor."""
+    sources = _intelligence_source_allowlist()
+    filters = _eligible_review_filters(window_param=1, source_param=2)
+    rows = await pool.fetch(
+        f"""
+        SELECT vendor_name,
+            enrichment->'sentiment_trajectory'->>'turning_point' AS turning_point,
+            count(*) AS cnt
+        FROM b2b_reviews
+        WHERE {filters}
+          AND enrichment->'sentiment_trajectory'->>'turning_point' IS NOT NULL
+          AND enrichment->'sentiment_trajectory'->>'turning_point' != ''
+          AND enrichment->'sentiment_trajectory'->>'turning_point' != 'null'
+        GROUP BY vendor_name, enrichment->'sentiment_trajectory'->>'turning_point'
+        ORDER BY cnt DESC
+        """,
+        window_days,
+        sources,
+    )
+    return [
+        {"vendor": r["vendor_name"], "trigger": r["turning_point"], "mentions": r["cnt"]}
+        for r in rows
+    ]
+
+
+async def _fetch_review_text_aggregates(pool, window_days: int) -> tuple[list[dict], list[dict]]:
+    """Aggregate specific_complaints and positive_aspects per vendor.
+
+    Returns (complaint_rows, positive_rows) where each row has
+    vendor, text, mentions. Only includes items with 2+ mentions.
+    """
+    sources = _intelligence_source_allowlist()
+    filters = _eligible_review_filters(window_param=1, source_param=2)
+
+    complaint_rows, positive_rows = await asyncio.gather(
+        pool.fetch(
+            f"""
+            SELECT vendor_name, c.value #>> '{{}}' AS text, count(*) AS mentions
+            FROM b2b_reviews
+            CROSS JOIN LATERAL jsonb_array_elements(
+                COALESCE(enrichment->'specific_complaints', '[]'::jsonb)
+            ) AS c(value)
+            WHERE {filters}
+            GROUP BY vendor_name, c.value #>> '{{}}'
+            HAVING count(*) >= 2
+            ORDER BY mentions DESC
+            """,
+            window_days,
+            sources,
+        ),
+        pool.fetch(
+            f"""
+            SELECT vendor_name, a.value #>> '{{}}' AS text, count(*) AS mentions
+            FROM b2b_reviews
+            CROSS JOIN LATERAL jsonb_array_elements(
+                COALESCE(enrichment->'positive_aspects', '[]'::jsonb)
+            ) AS a(value)
+            WHERE {filters}
+            GROUP BY vendor_name, a.value #>> '{{}}'
+            HAVING count(*) >= 2
+            ORDER BY mentions DESC
+            """,
+            window_days,
+            sources,
+        ),
+    )
+
+    complaints = [
+        {"vendor": r["vendor_name"], "text": r["text"], "mentions": r["mentions"]}
+        for r in complaint_rows
+    ]
+    positives = [
+        {"vendor": r["vendor_name"], "aspect": r["text"], "mentions": r["mentions"]}
+        for r in positive_rows
+    ]
+    return complaints, positives
+
+
+async def _fetch_department_distribution(pool, window_days: int) -> list[dict[str, Any]]:
+    """Count reviews and churn rate per department per vendor."""
+    sources = _intelligence_source_allowlist()
+    filters = _eligible_review_filters(window_param=1, source_param=2)
+    rows = await pool.fetch(
+        f"""
+        SELECT vendor_name,
+            enrichment->'reviewer_context'->>'department' AS department,
+            count(*) AS review_count,
+            count(*) FILTER (
+                WHERE (enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
+            ) AS churning_count,
+            round(avg((enrichment->>'urgency_score')::numeric), 1) AS avg_urgency
+        FROM b2b_reviews
+        WHERE {filters}
+          AND enrichment->'reviewer_context'->>'department' IS NOT NULL
+          AND enrichment->'reviewer_context'->>'department' != ''
+          AND enrichment->'reviewer_context'->>'department' != 'unknown'
+        GROUP BY vendor_name, enrichment->'reviewer_context'->>'department'
+        ORDER BY review_count DESC
+        """,
+        window_days,
+        sources,
+    )
+    return [
+        {
+            "vendor": r["vendor_name"],
+            "department": r["department"],
+            "review_count": r["review_count"],
+            "churn_rate": round(r["churning_count"] / r["review_count"], 2) if r["review_count"] else 0,
+            "avg_urgency": float(r["avg_urgency"]) if r["avg_urgency"] else 0,
+        }
+        for r in rows
+    ]
+
+
+async def _fetch_contract_context_distribution(pool, window_days: int) -> tuple[list[dict], list[dict]]:
+    """Aggregate contract_value_signal and usage_duration per vendor.
+
+    Returns (value_signal_rows, duration_rows).
+    """
+    sources = _intelligence_source_allowlist()
+    filters = _eligible_review_filters(window_param=1, source_param=2)
+
+    value_rows, duration_rows = await asyncio.gather(
+        pool.fetch(
+            f"""
+            SELECT vendor_name,
+                enrichment->'contract_context'->>'contract_value_signal' AS segment,
+                count(*) AS cnt,
+                count(*) FILTER (
+                    WHERE (enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
+                ) AS churning
+            FROM b2b_reviews
+            WHERE {filters}
+              AND enrichment->'contract_context'->>'contract_value_signal' IS NOT NULL
+              AND enrichment->'contract_context'->>'contract_value_signal' NOT IN ('unknown', '')
+            GROUP BY vendor_name, enrichment->'contract_context'->>'contract_value_signal'
+            ORDER BY cnt DESC
+            """,
+            window_days,
+            sources,
+        ),
+        pool.fetch(
+            f"""
+            SELECT vendor_name,
+                enrichment->'contract_context'->>'usage_duration' AS duration,
+                count(*) AS cnt,
+                count(*) FILTER (
+                    WHERE (enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
+                ) AS churning
+            FROM b2b_reviews
+            WHERE {filters}
+              AND enrichment->'contract_context'->>'usage_duration' IS NOT NULL
+              AND enrichment->'contract_context'->>'usage_duration' != ''
+            GROUP BY vendor_name, enrichment->'contract_context'->>'usage_duration'
+            ORDER BY cnt DESC
+            """,
+            window_days,
+            sources,
+        ),
+    )
+
+    values = [
+        {
+            "vendor": r["vendor_name"],
+            "segment": r["segment"],
+            "count": r["cnt"],
+            "churn_rate": round(r["churning"] / r["cnt"], 2) if r["cnt"] else 0,
+        }
+        for r in value_rows
+    ]
+    durations = [
+        {
+            "vendor": r["vendor_name"],
+            "duration": r["duration"],
+            "count": r["cnt"],
+            "churn_rate": round(r["churning"] / r["cnt"], 2) if r["cnt"] else 0,
+        }
+        for r in duration_rows
+    ]
+    return values, durations
 
 
 async def _fetch_buyer_authority_summary(pool, window_days: int) -> list[dict[str, Any]]:
@@ -5966,6 +6308,96 @@ def _build_timeline_lookup(timeline_signals: list[dict]) -> dict[str, list[dict]
             "company_size": row.get("company_size"),
             "industry": row.get("industry"),
         })
+    return lookup
+
+
+def _build_complaint_lookup(rows: list[dict]) -> dict[str, list[dict]]:
+    """vendor -> sorted list of {text, mentions}."""
+    lookup: dict[str, list[dict]] = {}
+    for r in rows:
+        vendor = r.get("vendor", "")
+        lookup.setdefault(vendor, []).append({"text": r["text"], "mentions": r["mentions"]})
+    for v in lookup:
+        lookup[v].sort(key=lambda x: -x["mentions"])
+    return lookup
+
+
+def _build_positive_lookup(rows: list[dict]) -> dict[str, list[dict]]:
+    """vendor -> sorted list of {aspect, mentions}."""
+    lookup: dict[str, list[dict]] = {}
+    for r in rows:
+        vendor = r.get("vendor", "")
+        lookup.setdefault(vendor, []).append({"aspect": r["aspect"], "mentions": r["mentions"]})
+    for v in lookup:
+        lookup[v].sort(key=lambda x: -x["mentions"])
+    return lookup
+
+
+def _build_department_lookup(rows: list[dict]) -> dict[str, list[dict]]:
+    """vendor -> sorted list of {department, review_count, churn_rate, avg_urgency}."""
+    lookup: dict[str, list[dict]] = {}
+    for r in rows:
+        vendor = r.get("vendor", "")
+        lookup.setdefault(vendor, []).append({
+            "department": r["department"],
+            "review_count": r["review_count"],
+            "churn_rate": r["churn_rate"],
+            "avg_urgency": r["avg_urgency"],
+        })
+    for v in lookup:
+        lookup[v].sort(key=lambda x: -x["review_count"])
+    return lookup
+
+
+def _build_contract_value_lookup(rows: list[dict]) -> dict[str, list[dict]]:
+    """vendor -> list of {segment, count, churn_rate}."""
+    lookup: dict[str, list[dict]] = {}
+    for r in rows:
+        vendor = r.get("vendor", "")
+        lookup.setdefault(vendor, []).append({
+            "segment": r["segment"],
+            "count": r["count"],
+            "churn_rate": r["churn_rate"],
+        })
+    for v in lookup:
+        lookup[v].sort(key=lambda x: -x["count"])
+    return lookup
+
+
+def _build_usage_duration_lookup(rows: list[dict]) -> dict[str, list[dict]]:
+    """vendor -> list of {duration, count, churn_rate}."""
+    lookup: dict[str, list[dict]] = {}
+    for r in rows:
+        vendor = r.get("vendor", "")
+        lookup.setdefault(vendor, []).append({
+            "duration": r["duration"],
+            "count": r["count"],
+            "churn_rate": r["churn_rate"],
+        })
+    for v in lookup:
+        lookup[v].sort(key=lambda x: -x["count"])
+    return lookup
+
+
+def _build_tenure_lookup(rows: list[dict]) -> dict[str, list[dict]]:
+    """vendor -> list of {tenure, count}."""
+    lookup: dict[str, list[dict]] = {}
+    for r in rows:
+        vendor = r.get("vendor", "")
+        lookup.setdefault(vendor, []).append({"tenure": r["tenure"], "count": r["count"]})
+    for v in lookup:
+        lookup[v].sort(key=lambda x: -x["count"])
+    return lookup
+
+
+def _build_turning_point_lookup(rows: list[dict]) -> dict[str, list[dict]]:
+    """vendor -> list of {trigger, mentions}."""
+    lookup: dict[str, list[dict]] = {}
+    for r in rows:
+        vendor = r.get("vendor", "")
+        lookup.setdefault(vendor, []).append({"trigger": r["trigger"], "mentions": r["mentions"]})
+    for v in lookup:
+        lookup[v].sort(key=lambda x: -x["mentions"])
     return lookup
 
 

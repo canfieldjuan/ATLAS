@@ -36,6 +36,7 @@ from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
     _compute_churn_pressure_score,
     _compute_evidence_confidence,
     _executive_source_list,
+    _validate_battle_card_sales_copy,
     _validate_report,
 )
 
@@ -303,6 +304,66 @@ class TestValidateReportDisplacement:
         )
         assert len(parsed["displacement_map"]) == 1
         assert not any("Unmatched" in w for w in warnings)
+
+
+# ---------------------------------------------------------------------------
+# Battle-card sales copy validation
+# ---------------------------------------------------------------------------
+
+
+def _sample_battle_card() -> dict[str, Any]:
+    return {
+        "vendor": "Shopify",
+        "churn_pressure_score": 43.1,
+        "total_reviews": 1156,
+        "vendor_weaknesses": [{"area": "pricing", "count": 246}],
+        "competitor_differentiators": [
+            {"competitor": "WooCommerce", "mentions": 53, "switch_count": 0},
+            {"competitor": "BigCommerce", "mentions": 45, "switch_count": 0},
+        ],
+        "objection_data": {
+            "avg_urgency": 4.3,
+            "dm_churn_rate": 0.39,
+            "total_reviews": 1156,
+            "churn_signal_density": 24.7,
+            "price_complaint_rate": 0.213,
+            "budget_context": {
+                "avg_seat_count": 52.6,
+                "max_seat_count": 150,
+                "median_seat_count": 12,
+                "price_increase_rate": 0.020761245674740483,
+                "price_increase_count": 24,
+            },
+            "top_feature_gaps": [{"feature": "Better SEO tools", "mentions": 3}],
+        },
+    }
+
+
+class TestBattleCardSalesCopyValidation:
+    def test_rejects_unsupported_numeric_claims(self):
+        generated = {"executive_summary": "Costs drop by 30% and 55% of buyers are leaving."}
+        warnings = _validate_battle_card_sales_copy(_sample_battle_card(), generated)
+        assert any("unsupported numeric claims" in w for w in warnings)
+
+    def test_rejects_stale_years(self):
+        generated = {"landmine_questions": ["Should these app features still require plugins in 2024?"]}
+        warnings = _validate_battle_card_sales_copy(_sample_battle_card(), generated)
+        assert any("references a year" in w for w in warnings)
+
+    def test_rejects_leaving_language_without_switches(self):
+        generated = {"competitive_landscape": {"top_alternatives": ["Customers are leaving for WooCommerce."]}}
+        warnings = _validate_battle_card_sales_copy(_sample_battle_card(), generated)
+        assert any("implies switching" in w for w in warnings)
+
+    def test_rejects_high_priority_when_score_is_moderate(self):
+        generated = {"executive_summary": "HIGH PRIORITY TARGET: Shopify is under pressure."}
+        warnings = _validate_battle_card_sales_copy(_sample_battle_card(), generated)
+        assert any("overstates urgency" in w for w in warnings)
+
+    def test_rejects_low_evidence_feature_gap_as_headline(self):
+        generated = {"executive_summary": "Shopify is vulnerable because of Better SEO tools gaps."}
+        warnings = _validate_battle_card_sales_copy(_sample_battle_card(), generated)
+        assert any("low-evidence feature gap" in w for w in warnings)
 
 
 # ---------------------------------------------------------------------------

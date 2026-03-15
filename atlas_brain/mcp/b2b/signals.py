@@ -408,3 +408,159 @@ async def get_vendor_profile(vendor_name: str) -> str:
     except Exception as exc:
         logger.exception("get_vendor_profile error")
         return json.dumps({"success": False, "error": "Internal error"})
+
+
+@mcp.tool()
+async def reason_vendor(
+    vendor_name: str,
+    force: bool = False,
+) -> str:
+    """Run on-demand stratified reasoning for a specific vendor.
+
+    Builds fresh evidence from current DB data, runs the reasoning engine
+    (recall/reconstitute/reason), persists the archetype to churn_signals,
+    and returns the full reasoning result.
+
+    vendor_name: Vendor to reason about (required)
+    force: Bypass reasoning cache and force fresh analysis (default false)
+    """
+    try:
+        pool = get_pool()
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            fetch_vendor_evidence,
+            persist_single_vendor_reasoning,
+        )
+        from atlas_brain.reasoning import get_stratified_reasoner, init_stratified_reasoner
+        from atlas_brain.reasoning.tiers import Tier, gather_tier_context
+
+        evidence = await fetch_vendor_evidence(pool, vendor_name)
+        if evidence is None:
+            return json.dumps({"success": False, "error": f"No churn signal data for vendor: {vendor_name}"})
+
+        reasoner = get_stratified_reasoner()
+        if reasoner is None:
+            await init_stratified_reasoner(pool)
+            reasoner = get_stratified_reasoner()
+        if reasoner is None:
+            return json.dumps({"success": False, "error": "Reasoning engine unavailable"})
+
+        canonical = evidence.get("vendor_name", vendor_name)
+        category = evidence.get("product_category", "")
+
+        tier_ctx = await gather_tier_context(
+            reasoner._cache, Tier.VENDOR_ARCHETYPE,
+            vendor_name=canonical, product_category=category,
+        )
+        sr = await reasoner.analyze(
+            vendor_name=canonical,
+            evidence=evidence,
+            product_category=category,
+            force_reason=force,
+            tier_context=tier_ctx,
+        )
+
+        try:
+            await persist_single_vendor_reasoning(pool, canonical, sr)
+        except Exception:
+            pass
+
+        conclusion = sr.conclusion or {}
+        return json.dumps({
+            "success": True,
+            "vendor_name": canonical,
+            "mode": sr.mode,
+            "cached": sr.cached,
+            "confidence": sr.confidence,
+            "tokens_used": sr.tokens_used,
+            "archetype": conclusion.get("archetype"),
+            "risk_level": conclusion.get("risk_level"),
+            "executive_summary": conclusion.get("executive_summary"),
+            "key_signals": conclusion.get("key_signals", []),
+            "falsification_conditions": conclusion.get("falsification_conditions", []),
+            "uncertainty_sources": conclusion.get("uncertainty_sources", []),
+        }, default=str)
+    except Exception as exc:
+        logger.exception("reason_vendor error")
+        return json.dumps({"success": False, "error": str(exc)[:200]})
+
+
+@mcp.tool()
+async def compare_vendors(
+    vendors: list[str],
+    force: bool = False,
+) -> str:
+    """Side-by-side stratified reasoning comparison for multiple vendors.
+
+    Runs reasoning for each vendor concurrently (2-5 vendors) and returns
+    a comparison with archetypes, risk levels, and key signals.
+
+    vendors: List of vendor names to compare (2-5 required)
+    force: Bypass reasoning cache (default false)
+    """
+    import asyncio as _aio
+
+    if len(vendors) < 2 or len(vendors) > 5:
+        return json.dumps({"success": False, "error": "vendors must contain 2-5 vendor names"})
+
+    try:
+        pool = get_pool()
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            fetch_vendor_evidence,
+            persist_single_vendor_reasoning,
+        )
+        from atlas_brain.reasoning import get_stratified_reasoner, init_stratified_reasoner
+        from atlas_brain.reasoning.tiers import Tier, gather_tier_context
+
+        reasoner = get_stratified_reasoner()
+        if reasoner is None:
+            await init_stratified_reasoner(pool)
+            reasoner = get_stratified_reasoner()
+        if reasoner is None:
+            return json.dumps({"success": False, "error": "Reasoning engine unavailable"})
+
+        async def _reason_one(vname: str) -> dict:
+            evidence = await fetch_vendor_evidence(pool, vname)
+            if evidence is None:
+                return {"vendor_name": vname, "error": "No churn signal data"}
+
+            canonical = evidence.get("vendor_name", vname)
+            category = evidence.get("product_category", "")
+            try:
+                tier_ctx = await gather_tier_context(
+                    reasoner._cache, Tier.VENDOR_ARCHETYPE,
+                    vendor_name=canonical, product_category=category,
+                )
+                sr = await reasoner.analyze(
+                    vendor_name=canonical,
+                    evidence=evidence,
+                    product_category=category,
+                    force_reason=force,
+                    tier_context=tier_ctx,
+                )
+            except Exception as exc:
+                return {"vendor_name": canonical, "error": str(exc)[:200]}
+
+            try:
+                await persist_single_vendor_reasoning(pool, canonical, sr)
+            except Exception:
+                pass
+
+            conclusion = sr.conclusion or {}
+            return {
+                "vendor_name": canonical,
+                "mode": sr.mode,
+                "cached": sr.cached,
+                "confidence": sr.confidence,
+                "tokens_used": sr.tokens_used,
+                "archetype": conclusion.get("archetype"),
+                "risk_level": conclusion.get("risk_level"),
+                "executive_summary": conclusion.get("executive_summary"),
+                "key_signals": conclusion.get("key_signals", []),
+                "falsification_conditions": conclusion.get("falsification_conditions", []),
+            }
+
+        results = await _aio.gather(*[_reason_one(v) for v in vendors])
+        return json.dumps({"success": True, "vendors": results, "count": len(results)}, default=str)
+    except Exception as exc:
+        logger.exception("compare_vendors error")
+        return json.dumps({"success": False, "error": str(exc)[:200]})
