@@ -597,7 +597,7 @@ def _build_validated_executive_summary(
             s2 += "."
             lines.append(s2)
 
-        # Sentence 3: market movement — categories with clear challengers
+        # Sentence 3: market movement -- categories with clear challengers
         movements = []
         for cat in cats:
             challenger = cat.get("emerging_challenger", "")
@@ -916,6 +916,111 @@ def _build_vendor_evidence(
             evidence["top_use_cases"] = [u.get("use_case", u.get("name", "")) for u in ucs[:3] if isinstance(u, dict)]
 
     return evidence
+
+
+async def fetch_vendor_evidence(
+    pool,
+    vendor_name: str,
+    *,
+    window_days: int = 90,
+) -> dict[str, Any] | None:
+    """Build a rich evidence dict for a single vendor from current DB data.
+
+    Used for on-demand reasoning (API + MCP).  Returns None if the vendor
+    has no churn signal rows.
+    """
+    from ...config import settings
+    cfg = settings.b2b_churn
+    min_reviews = cfg.intelligence_min_reviews
+    canonical = _canonicalize_vendor(vendor_name)
+    if not canonical:
+        return None
+
+    # Fetch vendor score rows
+    all_scores = await _fetch_vendor_churn_scores(pool, window_days, min_reviews)
+    vs_match = [v for v in all_scores if _canonicalize_vendor(v.get("vendor_name", "")) == canonical]
+    if not vs_match:
+        return None
+    vs = vs_match[0]
+
+    # Parallel fetches for lookups
+    (
+        pain_dist, competitive_disp, feature_gaps,
+        price_rates, dm_rates, keyword_spikes,
+        insider_raw,
+    ) = await asyncio.gather(
+        _fetch_pain_distribution(pool, window_days),
+        _fetch_competitive_displacement(pool, window_days),
+        _fetch_feature_gaps(pool, window_days),
+        _fetch_price_complaint_rates(pool, window_days),
+        _fetch_dm_churn_rates(pool, window_days),
+        _fetch_keyword_spikes(pool),
+        _fetch_insider_aggregates(pool, window_days),
+    )
+
+    pain_lookup = _build_pain_lookup(pain_dist)
+    comp_lookup = _build_competitor_lookup(competitive_disp)
+    fg_lookup = _build_feature_gap_lookup(feature_gaps)
+    kw_lookup = _build_keyword_spike_lookup(keyword_spikes)
+    insider_lookup = _build_insider_lookup(insider_raw)
+    dm_lookup = {r["vendor"]: r["dm_churn_rate"] for r in dm_rates}
+    price_lookup = {r["vendor"]: r["price_complaint_rate"] for r in price_rates}
+
+    # Temporal analysis (non-fatal)
+    temporal_lookup: dict[str, dict] = {}
+    archetype_lookup: dict[str, list[dict]] = {}
+    try:
+        from ...reasoning.temporal import TemporalEngine
+        from ...reasoning.archetypes import enrich_evidence_with_archetypes
+        te = TemporalEngine(pool)
+        td_result = await te.analyze_vendor(canonical)
+        td = TemporalEngine.to_evidence_dict(td_result)
+        temporal_lookup[canonical] = td
+        enriched = enrich_evidence_with_archetypes(
+            {"vendor_name": canonical, **td}, td,
+        )
+        arch_scores = enriched.get("archetype_scores", [])
+        if arch_scores:
+            archetype_lookup[canonical] = arch_scores
+    except Exception:
+        logger.debug("Temporal analysis unavailable for %s", canonical)
+
+    return _build_vendor_evidence(
+        vs,
+        pain_lookup=pain_lookup,
+        competitor_lookup=comp_lookup,
+        feature_gap_lookup=fg_lookup,
+        insider_lookup=insider_lookup,
+        keyword_spike_lookup=kw_lookup,
+        temporal_lookup=temporal_lookup or None,
+        archetype_lookup=archetype_lookup or None,
+        dm_lookup=dm_lookup,
+        price_lookup=price_lookup,
+    )
+
+
+async def persist_single_vendor_reasoning(
+    pool,
+    vendor_name: str,
+    reasoning_result,
+) -> None:
+    """Write archetype columns to b2b_churn_signals for a single vendor."""
+    conclusion = reasoning_result.conclusion or {}
+    await pool.execute(
+        """
+        UPDATE b2b_churn_signals
+        SET archetype = $2,
+            archetype_confidence = $3,
+            reasoning_mode = $4,
+            falsification_conditions = $5
+        WHERE vendor_name = $1
+        """,
+        vendor_name,
+        conclusion.get("archetype"),
+        reasoning_result.confidence,
+        reasoning_result.mode,
+        json.dumps(conclusion.get("falsification_conditions", [])),
+    )
 
 
 def _classify_trend(
@@ -1454,7 +1559,7 @@ def _build_deterministic_vendor_scorecards(
                     "avg_urgency": float(row.get("avg_urgency") or 0),
                 }
 
-    # ── Merge multi-category rows into one per vendor ──────────────
+    # -- Merge multi-category rows into one per vendor --------------
     merged: dict[str, dict[str, Any]] = {}
     for row in vendor_scores:
         vendor = _canonicalize_vendor(row.get("vendor_name") or "")
@@ -1493,7 +1598,7 @@ def _build_deterministic_vendor_scorecards(
                 m["category"] = category
                 m["category_reviews"] = reviews
 
-    # ── Build enriched scorecard per vendor ─────────────────────────
+    # -- Build enriched scorecard per vendor -------------------------
     results: list[dict[str, Any]] = []
     for vendor, m in merged.items():
         total_reviews = m["total_reviews"]
@@ -1807,7 +1912,7 @@ def _build_deterministic_category_overview(
             key=lambda x: -x["count"],
         )[:5]
 
-        # ── Vendor rankings (all vendors in category ranked by churn pressure) ──
+        # -- Vendor rankings (all vendors in category ranked by churn pressure) --
         vendor_rankings: list[dict[str, Any]] = []
         for r in ranked[:8]:
             v = _canonicalize_vendor(r.get("vendor_name") or "")
@@ -1838,7 +1943,7 @@ def _build_deterministic_category_overview(
             })
         vendor_rankings.sort(key=lambda x: -x["churn_pressure_score"])
 
-        # ── Case studies (top quotes per category with company context) ──
+        # -- Case studies (top quotes per category with company context) --
         cat_quotes: list[dict[str, Any]] = []
         for r in rows:
             v = _canonicalize_vendor(r.get("vendor_name") or "")
@@ -1859,7 +1964,7 @@ def _build_deterministic_category_overview(
         cat_quotes.sort(key=lambda x: -float(x.get("urgency", 0)))
         case_studies = cat_quotes[:3]
 
-        # ── Top feature gaps (aggregated across category) ──
+        # -- Top feature gaps (aggregated across category) --
         cat_gaps: dict[str, int] = {}
         for r in rows:
             v = _canonicalize_vendor(r.get("vendor_name") or "")
@@ -2967,7 +3072,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
         temporal_engine = TemporalEngine(pool)
         temporal_summaries = []
-        for vs in vendor_scores[:cfg.intelligence_exploratory_vendor_limit]:
+        for vs in vendor_scores[:cfg.stratified_reasoning_vendor_limit]:
             vname = vs["vendor_name"]
             try:
                 te = await temporal_engine.analyze_vendor(vname)
@@ -4393,7 +4498,7 @@ async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days
 
 
 async def _fetch_competitive_displacement(pool, window_days: int) -> list[dict[str, Any]]:
-    """Competitive displacement flows — filtered to real displacement evidence only.
+    """Competitive displacement flows -- filtered to real displacement evidence only.
 
     Uses evidence_type (new schema) with COALESCE fallback to context (legacy).
     Excludes reverse_flow, neutral_mention, and low-confidence implied_preference.
@@ -5168,7 +5273,7 @@ async def _fetch_insider_aggregates(pool, window_days: int) -> list[dict[str, An
 
 
 def _build_insider_lookup(rows: list[Any]) -> dict[str, dict]:
-    """Build vendor → insider aggregate dict from _fetch_insider_aggregates rows."""
+    """Build vendor -> insider aggregate dict from _fetch_insider_aggregates rows."""
     result: dict[str, dict] = {}
     for r in rows:
         vendor = r["vendor_name"]
@@ -5443,7 +5548,7 @@ async def _fetch_timeline_signals(pool, window_days: int, *, limit: int = 50) ->
 
 
 async def _fetch_competitor_reasons(pool, window_days: int) -> list[dict[str, Any]]:
-    """Top reasons per vendor/competitor pair — prefers structured reason_category."""
+    """Top reasons per vendor/competitor pair -- prefers structured reason_category."""
     sources = _intelligence_source_allowlist()
     filters = _eligible_review_filters(window_param=1, source_param=2)
     rows = await pool.fetch(
@@ -6555,7 +6660,7 @@ async def generate_vendor_comparison_report(
         {row["category"] for row in comparison_snapshot["top_pain_categories"]}
     )
 
-    # ── Competitive Benchmark enrichments ──────────────────────────
+    # -- Competitive Benchmark enrichments --------------------------
 
     # Strengths/weaknesses from product profiles
     profiles_raw = await _fetch_product_profiles(pool)
@@ -6616,7 +6721,7 @@ async def generate_vendor_comparison_report(
     except Exception:
         logger.warning("Failed to fetch prior comparison for trend analysis")
 
-    # ── Assemble report ────────────────────────────────────────────
+    # -- Assemble report --------------------------------------------
 
     _snapshot_exclude = {"top_pain_categories", "top_competitors", "top_feature_gaps",
                          "company_examples", "quote_highlights", "product_categories"}

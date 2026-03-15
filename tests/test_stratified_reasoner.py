@@ -14,12 +14,23 @@ from atlas_brain.reasoning.semantic_cache import (
     _apply_decay,
     compute_evidence_hash,
 )
-from atlas_brain.reasoning.episodic_store import (
-    ConclusionNode,
-    EpisodicStore,
-    EvidenceNode,
-    ReasoningTrace,
-)
+
+# Lazy-import episodic store types to avoid neo4j -> numpy __version__
+# AttributeError that can occur during pytest collection depending on
+# import ordering.  The types are simple dataclasses and only needed by
+# the integration tests that already skip when Neo4j is unavailable.
+try:
+    from atlas_brain.reasoning.episodic_store import (
+        ConclusionNode,
+        EpisodicStore,
+        EvidenceNode,
+        ReasoningTrace,
+    )
+except (ImportError, AttributeError):
+    EpisodicStore = None  # type: ignore[misc,assignment]
+    ReasoningTrace = None  # type: ignore[misc,assignment]
+    EvidenceNode = None  # type: ignore[misc,assignment]
+    ConclusionNode = None  # type: ignore[misc,assignment]
 
 TEST_SIG = "test_smoke:deadbeef"
 TEST_GROUP = "test-reasoning"
