@@ -210,7 +210,6 @@ _EMPLOYMENT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # Current employment
     (re.compile(r"\b(?:I|we)\s+work\s+(?:at|for)\s+", re.I), "current"),
     (re.compile(r"\b(?:I'm|I am)\s+(?:a|an)\s+\w+(?:\s+\w+){0,3}\s+at\s+", re.I), "current"),
-    (re.compile(r"\bmy\s+(?:company|employer|team|org)\b", re.I), "current"),
 ]
 
 _ORG_SIGNAL_PATTERNS: list[tuple[re.Pattern[str], str]] = [
@@ -268,12 +267,69 @@ _COMMON_WORD_BLOCKLIST = frozenset({
     "click", "base", "smart", "team", "fresh",
     "notion", "slack", "zoom", "power", "close",
     "copper", "ripple", "gusto", "brevo", "wrike",
+    "teams", "workday",
     "help", "work", "hub", "pipe", "drive",
     "big", "get", "go", "look", "open",
 })
 
+_SOFTWARE_CONTEXT_WORDS = frozenset({
+    "admin", "analytics", "api", "app", "automation", "billing",
+    "channel", "crm", "dashboard", "database", "deployment", "docs",
+    "enterprise", "erp", "feature", "hcm", "hr", "integration",
+    "license", "login", "message", "outage", "payroll", "platform",
+    "pricing", "report", "reporting", "saas", "software", "subscription",
+    "support", "sync", "template", "tenant", "tool", "workspace", "wiki",
+})
 
-def _build_vendor_aliases(vendor_name: str, extra_aliases: list[str] | None = None) -> list[str]:
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+_COREFERENCE_EMPLOYMENT_HINT = re.compile(
+    r"\b(?:there|here|the\s+company|this\s+company|the\s+org|the\s+team)\b",
+    re.I,
+)
+
+
+def _is_ambiguous_vendor_name(vendor_name: str) -> bool:
+    """Return True when the vendor name is a common single English word."""
+    tokens = re.findall(r"[a-z0-9]+", vendor_name.lower())
+    return len(tokens) == 1 and tokens[0] in _COMMON_WORD_BLOCKLIST
+
+
+def _normalize_entity_token(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+def _build_context_pattern(product_name: str | None, product_category: str | None) -> re.Pattern[str]:
+    """Build a lightweight product/software context matcher for ambiguous vendors."""
+    terms = set(_SOFTWARE_CONTEXT_WORDS)
+
+    for raw in (product_name or "", product_category or ""):
+        for token in re.findall(r"[a-z0-9]+", raw.lower()):
+            if len(token) >= 3 and token not in _COMMON_WORD_BLOCKLIST:
+                terms.add(token)
+
+    escaped = sorted({re.escape(t) for t in terms}, key=len, reverse=True)
+    return re.compile(r"\b(?:" + "|".join(escaped) + r")\b", re.I)
+
+
+def _is_vendor_specific_subreddit(subreddit: str, vendor_name: str, product_name: str | None) -> bool:
+    """Check whether the subreddit name itself disambiguates the vendor."""
+    normalized_sub = _normalize_entity_token(subreddit)
+    if not normalized_sub:
+        return False
+
+    candidates = {
+        _normalize_entity_token(vendor_name),
+        _normalize_entity_token(product_name or ""),
+    }
+    candidates.discard("")
+    return any(candidate and candidate in normalized_sub for candidate in candidates)
+
+
+def _build_vendor_aliases(
+    vendor_name: str,
+    extra_aliases: list[str] | None = None,
+    product_name: str | None = None,
+) -> list[str]:
     """Derive normalized alias variants from a vendor name.
 
     Returns a list of lowercase aliases including the original name.
@@ -285,6 +341,10 @@ def _build_vendor_aliases(vendor_name: str, extra_aliases: list[str] | None = No
     """
     base = vendor_name.lower().strip()
     aliases = {base}
+    product = (product_name or "").lower().strip()
+
+    if product and product != base:
+        aliases.add(product)
 
     # Strip trailing ".com", ".io", etc. -- but only add if not a common word
     stripped = re.sub(r"\.\w{2,4}$", "", base)
@@ -313,6 +373,52 @@ def _build_alias_pattern(aliases: list[str]) -> re.Pattern[str]:
         r"(?<![./\w])(?:" + joined + r")(?![.\w])",
         re.IGNORECASE,
     )
+
+
+def _build_strong_alias_pattern(
+    vendor_name: str,
+    aliases: list[str],
+) -> re.Pattern[str] | None:
+    """Build a matcher for aliases that are more specific than the bare vendor name."""
+    base = vendor_name.lower().strip()
+    strong_aliases = [
+        alias for alias in aliases
+        if alias != base and len(re.findall(r"[a-z0-9]+", alias)) >= 2
+    ]
+    if not strong_aliases:
+        return None
+    return _build_alias_pattern(strong_aliases)
+
+
+def _has_ambiguous_vendor_context(
+    *,
+    vendor_name: str,
+    product_name: str | None,
+    product_category: str | None,
+    title: str,
+    selftext: str,
+    subreddit: str,
+    alias_pattern: re.Pattern[str],
+    strong_alias_pattern: re.Pattern[str] | None,
+) -> bool:
+    """Require product/software context for common-word vendor matches."""
+    if not _is_ambiguous_vendor_name(vendor_name):
+        return True
+
+    combined = f"{title}\n{selftext[:3000]}"
+    if strong_alias_pattern and strong_alias_pattern.search(combined):
+        return True
+    if _is_vendor_specific_subreddit(subreddit, vendor_name, product_name):
+        return True
+
+    context_pattern = _build_context_pattern(product_name, product_category)
+    for match in alias_pattern.finditer(combined):
+        start = max(0, match.start() - 90)
+        end = min(len(combined), match.end() + 90)
+        if context_pattern.search(combined[start:end]):
+            return True
+
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -414,7 +520,7 @@ def _score_candidate(
 # Insider evidence extraction
 # ---------------------------------------------------------------------------
 
-def _extract_insider_evidence(text: str) -> dict:
+def _extract_insider_evidence(text: str, alias_pattern: re.Pattern[str] | None = None) -> dict:
     """Extract employment claims and org signals from post text.
 
     Returns a dict with:
@@ -428,10 +534,28 @@ def _extract_insider_evidence(text: str) -> dict:
     org_signals: list[str] = []
     extracted_role = None
 
-    for pat, tense in _EMPLOYMENT_PATTERNS:
-        if pat.search(text):
-            employment_claim = True
-            employment_tense = tense
+    vendor_context_seen = alias_pattern is None
+    for sentence in _SENTENCE_SPLIT_RE.split(text[:3000]):
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+
+        sentence_has_vendor = bool(alias_pattern.search(sentence)) if alias_pattern else True
+        vendor_context_seen = vendor_context_seen or sentence_has_vendor
+
+        for pat, tense in _EMPLOYMENT_PATTERNS:
+            if not pat.search(sentence):
+                continue
+
+            vendor_tied = sentence_has_vendor
+            if not vendor_tied and vendor_context_seen and _COREFERENCE_EMPLOYMENT_HINT.search(sentence):
+                vendor_tied = True
+
+            if vendor_tied:
+                employment_claim = True
+                employment_tense = tense
+                break
+        if employment_claim:
             break
 
     for pat, signal_type in _ORG_SIGNAL_PATTERNS:
@@ -1014,8 +1138,21 @@ class RedditParser:
             aliases = _build_vendor_aliases(
                 target.vendor_name,
                 target.metadata.get("vendor_aliases"),
+                target.product_name,
             )
             alias_pattern = _build_alias_pattern(aliases)
+        else:
+            aliases = None
+
+        strong_alias_pattern = _build_strong_alias_pattern(
+            target.vendor_name,
+            aliases
+            or _build_vendor_aliases(
+                target.vendor_name,
+                target.metadata.get("vendor_aliases"),
+                target.product_name,
+            ),
+        )
 
         # ---- Candidate scoring gate ----
         candidate_score, candidate_reasons = _score_candidate(
@@ -1026,6 +1163,18 @@ class RedditParser:
         title_hits = len(alias_pattern.findall(title))
         body_hits = len(alias_pattern.findall(selftext[:2000]))
         if title_hits == 0 and body_hits == 0:
+            return None
+
+        if not _has_ambiguous_vendor_context(
+            vendor_name=target.vendor_name,
+            product_name=target.product_name,
+            product_category=target.product_category,
+            title=title,
+            selftext=selftext,
+            subreddit=subreddit,
+            alias_pattern=alias_pattern,
+            strong_alias_pattern=strong_alias_pattern,
+        ):
             return None
 
         # Reject low-score candidates
@@ -1077,7 +1226,7 @@ class RedditParser:
 
         # ---- Insider evidence extraction ----
         combined_text = f"{title}\n{selftext[:3000]}"
-        insider_evidence = _extract_insider_evidence(combined_text)
+        insider_evidence = _extract_insider_evidence(combined_text, alias_pattern)
 
         # Content type: only classify as insider_account when evidence supports it.
         # Employment claim or 2+ org signals = insider. Otherwise community_discussion.
@@ -1213,7 +1362,14 @@ class RedditParser:
         thread_id = parent_post.get("thread_id")
 
         # Insider evidence from comment body
-        insider_evidence = _extract_insider_evidence(body[:3000])
+        aliases = _build_vendor_aliases(
+            target.vendor_name,
+            target.metadata.get("vendor_aliases"),
+            target.product_name,
+        )
+        comment_alias_pattern = _build_alias_pattern(aliases)
+        comment_context = f"{parent_post.get('summary') or ''}\n{body[:3000]}"
+        insider_evidence = _extract_insider_evidence(comment_context, comment_alias_pattern)
         reviewer_title = insider_evidence["extracted_role"]
 
         # Comments with employment claims or strong org signals get insider_account

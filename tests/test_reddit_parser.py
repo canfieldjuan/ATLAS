@@ -117,6 +117,11 @@ class TestAliasMatching:
         assert "hs" in aliases
         assert "hubspot.com" in aliases
 
+    def test_product_name_added_as_alias(self):
+        aliases = _build_vendor_aliases("Close", product_name="Close CRM")
+        assert "close" in aliases
+        assert "close crm" in aliases
+
     def test_pattern_matches_possessive(self):
         aliases = _build_vendor_aliases("HubSpot")
         pattern = _build_alias_pattern(aliases)
@@ -315,6 +320,15 @@ class TestInsiderExtraction:
         result = _extract_insider_evidence("HubSpot sucks and I hate it")
         assert result["extracted_role"] is None
 
+    def test_generic_company_language_is_not_vendor_employment(self):
+        aliases = _build_alias_pattern(_build_vendor_aliases("Power BI", product_name="Microsoft Power BI"))
+        result = _extract_insider_evidence(
+            "My company uses Power BI every day and I am a lowly office worker looking for career advice.",
+            aliases,
+        )
+        assert result["employment_claim"] is False
+        assert result["employment_tense"] is None
+
     def test_multiple_org_signals(self):
         result = _extract_insider_evidence(
             "After the reorg, morale tanked. Product quality is declining. Brain drain is real."
@@ -504,6 +518,47 @@ class TestParsePost:
         )
         assert result is not None
         assert result["content_type"] == "insider_account"
+
+    def test_common_word_vendor_rejects_retail_close_story(self):
+        target = _make_target("Close", product_name="Close CRM", product_category="CRM")
+        post = _make_post(
+            title="I did this exact thing to someone with a full basket",
+            selftext=(
+                "I had to close the register, close the till, and close the lane. "
+                "The customer got frustrated and kept switching lines while my company was slammed. "
+            ) * 5,
+            subreddit="retail",
+        )
+        result = self.parser._parse_post(post, target, set())
+        assert result is None
+
+    def test_common_word_vendor_accepts_explicit_product_context(self):
+        target = _make_target("Close", product_name="Close CRM", product_category="CRM")
+        post = _make_post(
+            title="Close CRM pricing is getting out of hand",
+            selftext=(
+                "We are replacing Close CRM because the CRM automation is too limited for our sales team. "
+            ) * 5,
+            subreddit="sales",
+        )
+        result = self.parser._parse_post(post, target, set())
+        assert result is not None
+        assert result["vendor_name"] == "Close"
+
+    def test_power_bi_tool_user_is_not_insider(self):
+        target = _make_target("Power BI", product_name="Microsoft Power BI", product_category="Data & Analytics")
+        post = _make_post(
+            title="Career advice for dashboard work",
+            selftext=(
+                "My company uses Power BI every day and I am a lowly office worker building dashboards. "
+                "I want career advice because I am frustrated with the role and thinking about switching jobs. "
+            ) * 5,
+            subreddit="careeradvice",
+        )
+        result = self.parser._parse_post(post, target, set(), profile="insider")
+        assert result is not None
+        assert result["content_type"] == "community_discussion"
+        assert result["raw_metadata"]["employment_claim"] is False
 
 
 # ---------------------------------------------------------------------------
