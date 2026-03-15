@@ -2692,6 +2692,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     _bc_cache = SemanticCache(pool)
     battle_card_llm_failures = 0
     battle_card_cache_hits = 0
+    _bc_llm_fields = (
+        "executive_summary", "weakness_analysis", "discovery_questions",
+        "landmine_questions", "objection_handlers", "competitive_landscape",
+        "talk_track", "recommended_plays",
+    )
     for card in deterministic_battle_cards:
         card_hash = compute_evidence_hash({
             "vendor": card.get("vendor"),
@@ -2705,8 +2710,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
         cached = await _bc_cache.lookup(pattern_sig)
         if cached:
-            card["objection_handlers"] = cached.conclusion.get("objection_handlers", [])
-            card["recommended_plays"] = cached.conclusion.get("recommended_plays", [])
+            for _cf in cached.conclusion:
+                card[_cf] = cached.conclusion[_cf]
             await _bc_cache.validate(pattern_sig)
             battle_card_cache_hits += 1
             continue
@@ -2717,15 +2722,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     call_llm_with_skill,
                     "digest/battle_card_sales_copy",
                     json.dumps(card, default=str),
-                    max_tokens=800, temperature=0.3,
+                    max_tokens=3000, temperature=0.5,
                     response_format={"type": "json_object"},
                     workload=_llm_workload,
                 ),
-                timeout=60,
+                timeout=90,
             )
             parsed_copy = parse_json_response(sales_copy)
-            card["objection_handlers"] = parsed_copy.get("objection_handlers", [])
-            card["recommended_plays"] = parsed_copy.get("recommended_plays", [])
+            for _f in _bc_llm_fields:
+                if _f in parsed_copy:
+                    card[_f] = parsed_copy[_f]
         except Exception:
             battle_card_llm_failures += 1
             logger.warning(
@@ -2738,10 +2744,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             await _bc_cache.store(CacheEntry(
                 pattern_sig=pattern_sig,
                 pattern_class="battle_card_sales_copy",
-                conclusion={
-                    "objection_handlers": card["objection_handlers"],
-                    "recommended_plays": card["recommended_plays"],
-                },
+                conclusion={_f: card[_f] for _f in _bc_llm_fields if _f in card},
                 confidence=0.95,
                 evidence_hash=card_hash,
                 vendor_name=card.get("vendor"),
