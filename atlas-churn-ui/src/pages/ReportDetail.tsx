@@ -185,7 +185,109 @@ const SCALAR_KEYS = new Set([
 
 const QUOTE_KEYS = new Set(['anonymized_quotes', 'quotable_evidence'])
 
+/** Human-readable labels for battle card / reasoning fields */
+const FIELD_LABELS: Record<string, string> = {
+  avg_urgency: 'Avg Urgency',
+  dm_churn_rate: 'DM Churn Rate',
+  total_reviews: 'Total Reviews',
+  churn_signal_density: 'Churn Signal Density',
+  price_complaint_rate: 'Price Complaint Rate',
+  sentiment_direction: 'Sentiment Direction',
+  avg_seat_count: 'Avg Seat Count',
+  max_seat_count: 'Max Seat Count',
+  median_seat_count: 'Median Seat Count',
+  price_increase_rate: 'Price Increase Rate',
+  price_increase_count: 'Price Increase Count',
+  market_structure: 'Market Structure',
+  dominant_archetype: 'Dominant Archetype',
+  displacement_intensity: 'Displacement Intensity',
+  top_feature_gaps: 'Feature Gaps',
+  budget_context: 'Budget Signals',
+  ecosystem_context: 'Ecosystem',
+  objection_data: 'Objection Data',
+}
+
+function humanLabel(key: string): string {
+  return FIELD_LABELS[key] ?? key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+}
+
+function formatValue(val: unknown): string {
+  if (val === null || val === undefined) return '--'
+  if (typeof val === 'number') {
+    if (val > 0 && val < 1) return `${(val * 100).toFixed(1)}%`
+    if (Number.isInteger(val)) return val.toLocaleString()
+    return val.toFixed(1)
+  }
+  return String(val)
+}
+
+/** Render a mixed object with scalars, nested objects, and arrays as a readable card */
+function MixedObjectCard({ obj, label }: { obj: Record<string, unknown>; label?: string }) {
+  const scalars: [string, unknown][] = []
+  const nested: [string, unknown][] = []
+
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === null || v === undefined) continue
+    if (typeof v === 'object') {
+      nested.push([k, v])
+    } else {
+      scalars.push([k, v])
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      {label && <h5 className="text-xs font-medium text-cyan-400 uppercase tracking-wider">{label}</h5>}
+      {scalars.length > 0 && (
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
+          {scalars.map(([k, v]) => (
+            <div key={k} className="flex justify-between col-span-1">
+              <dt className="text-slate-400">{humanLabel(k)}</dt>
+              <dd className="text-white font-medium">{formatValue(v)}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {nested.map(([k, v]) => {
+        if (Array.isArray(v) && v.length > 0 && typeof v[0] === 'object') {
+          return (
+            <div key={k}>
+              <h6 className="text-xs text-slate-400 mb-1.5">{humanLabel(k)}</h6>
+              <div className="space-y-1">
+                {(v as Record<string, unknown>[]).map((item, i) => {
+                  const name = String(item.feature ?? item.name ?? item.area ?? `#${i + 1}`)
+                  const count = Number(item.mentions ?? item.count ?? 0)
+                  return (
+                    <div key={i} className="flex items-center justify-between text-sm">
+                      <span className="text-slate-300">{name}</span>
+                      {count > 0 && <span className="text-xs text-slate-500">{count} mentions</span>}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        }
+        if (typeof v === 'object' && v !== null && !Array.isArray(v)) {
+          return <MixedObjectCard key={k} obj={v as Record<string, unknown>} label={humanLabel(k)} />
+        }
+        return null
+      })}
+    </div>
+  )
+}
+
 function IntelValue({ fieldKey, value }: { fieldKey: string; value: unknown }) {
+  // Battle card / reasoning structured objects: render as human-readable cards
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    (fieldKey === 'objection_data' || fieldKey === 'ecosystem_context' || fieldKey === 'budget_context')
+  ) {
+    return <MixedObjectCard obj={value as Record<string, unknown>} />
+  }
+
   // String
   if (typeof value === 'string') {
     return <p className="text-sm text-slate-300 whitespace-pre-wrap">{value}</p>
@@ -362,7 +464,7 @@ export default function ReportDetail() {
           {richEntries.map(([key, value]) => (
             <div key={key} className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
               <h4 className="text-xs font-medium text-cyan-400 uppercase tracking-wider mb-3">
-                {key.replace(/_/g, ' ')}
+                {humanLabel(key)}
               </h4>
               <IntelValue fieldKey={key} value={value} />
             </div>
