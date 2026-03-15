@@ -237,8 +237,15 @@ class OpenRouterLLM(BaseModelService):
             choice = data.get("choices", [{}])[0]
             message = choice.get("message", {})
             return message.get("content", "").strip()
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:500] if e.response else ""
+            logger.error(
+                "OpenRouter async chat error: %d %s | %s",
+                e.response.status_code if e.response else 0, e, body,
+            )
+            raise
         except httpx.HTTPError as e:
-            logger.error("OpenRouter async chat error: %s", e)
+            logger.error("OpenRouter async chat error: %s %s", type(e).__name__, e)
             raise
 
     def generate(

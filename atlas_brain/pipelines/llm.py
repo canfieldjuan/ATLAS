@@ -74,21 +74,29 @@ def _resolve_workload(workload: str):
 
 
 def _try_openrouter(openrouter_model: str | None = None):
-    """Try to activate OpenRouter as a fallback. Returns LLM or None."""
+    """Try to activate OpenRouter. Reuses existing instance if model matches."""
     from ..services import llm_registry
 
+    target_model = openrouter_model or "openai/o4-mini"
     or_key = os.environ.get("OPENROUTER_API_KEY", "")
     if not or_key:
         return None
+
+    # Reuse existing OpenRouter instance if already active with the right model
+    llm = llm_registry.get_active()
+    if llm is not None and getattr(llm, "name", "") == "openrouter":
+        if getattr(llm, "model", "") == target_model:
+            return llm
+
     try:
         llm_registry.activate(
             "openrouter",
-            model=openrouter_model or "openai/o4-mini",
+            model=target_model,
             api_key=or_key,
         )
         llm = llm_registry.get_active()
         if llm is not None:
-            logger.info("Using OpenRouter LLM")
+            logger.info("Using OpenRouter LLM (%s)", target_model)
             return llm
     except Exception as e:
         logger.debug("OpenRouter fallback failed: %s", e)
