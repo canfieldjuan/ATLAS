@@ -23,6 +23,33 @@ from ...services.scraping.sources import VERIFIED_SOURCES as _VERIFIED_SOURCES
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_enrichment")
 
+# Dedicated OpenRouter instance for enrichment — not shared with the global
+# registry singleton (which synthesis/reasoning tasks swap to o4-mini).
+_enrichment_llm = None
+
+
+def _get_enrichment_llm():
+    """Get or create a dedicated OpenRouter LLM for enrichment."""
+    global _enrichment_llm
+    import os
+    target_model = settings.b2b_churn.enrichment_openrouter_model
+    or_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not or_key:
+        return None
+
+    if _enrichment_llm is not None and getattr(_enrichment_llm, "model", "") == target_model:
+        return _enrichment_llm
+
+    try:
+        from ...services.llm.openrouter import OpenRouterLLM
+        _enrichment_llm = OpenRouterLLM(model=target_model, api_key=or_key)
+        _enrichment_llm.load()
+        logger.info("Dedicated enrichment LLM ready: %s", target_model)
+        return _enrichment_llm
+    except Exception as e:
+        logger.warning("Failed to create enrichment LLM: %s", e)
+        return None
+
 
 async def _notify_high_urgency(
     vendor_name: str,
@@ -525,18 +552,11 @@ async def _classify_review_async(row, local_only: bool, max_tokens: int,
         logger.warning("Skill 'digest/b2b_churn_extraction' not found")
         return None, None
 
-    # Primary: OpenRouter GPT-4.1 (benchmarked for structured extraction)
+    # Primary: Dedicated OpenRouter instance (not shared registry singleton)
     # Fallback: local vLLM/Ollama
+    llm = None
     if not local_only:
-        llm = get_pipeline_llm(
-            workload=None,
-            prefer_cloud=False,
-            try_openrouter=True,
-            auto_activate_ollama=False,
-            openrouter_model=settings.b2b_churn.enrichment_openrouter_model,
-        )
-    else:
-        llm = None
+        llm = _get_enrichment_llm()
     if llm is None:
         llm = get_pipeline_llm(
             prefer_cloud=False,
