@@ -277,8 +277,173 @@ function MixedObjectCard({ obj, label }: { obj: Record<string, unknown>; label?:
   )
 }
 
+// ---------------------------------------------------------------------------
+// Battle card field renderers
+// ---------------------------------------------------------------------------
+
+function CompetitorDifferentiators({ items }: { items: Record<string, unknown>[] }) {
+  return (
+    <div className="space-y-3">
+      {items.map((c, i) => (
+        <div key={i} className="bg-slate-800/50 rounded-lg p-3">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-white font-medium text-sm">{String(c.competitor ?? '')}</span>
+            <span className="text-xs text-slate-400">{Number(c.mentions ?? 0)} mentions</span>
+          </div>
+          <div className="flex gap-2 text-xs">
+            {typeof c.primary_driver === 'string' && (
+              <span className="px-2 py-0.5 bg-amber-500/15 text-amber-300 rounded">
+                {c.primary_driver}
+              </span>
+            )}
+            {typeof c.solves_weakness === 'string' && (
+              <span className="px-2 py-0.5 bg-green-500/15 text-green-300 rounded">
+                solves: {c.solves_weakness}
+              </span>
+            )}
+            {Number(c.switch_count ?? 0) > 0 && (
+              <span className="text-slate-400">{String(c.switch_count)} switches</span>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function PainQuotes({ items }: { items: Record<string, unknown>[] }) {
+  return (
+    <div className="space-y-3">
+      {items.map((q, i) => (
+        <div key={i} className="border-l-2 border-cyan-500/50 pl-3">
+          <blockquote className="text-sm text-slate-300 italic">
+            "{String(q.quote ?? '')}"
+          </blockquote>
+          <div className="flex gap-3 mt-1 text-xs text-slate-500">
+            {typeof q.company === 'string' && <span>{q.company}</span>}
+            {typeof q.title === 'string' && <span>{q.title}</span>}
+            {typeof q.industry === 'string' && <span>{q.industry}</span>}
+            {typeof q.source_site === 'string' && <span>{q.source_site}</span>}
+            {Number(q.urgency ?? 0) > 0 && (
+              <span className="text-amber-400">urgency {String(q.urgency)}/10</span>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ObjectionHandlers({ items }: { items: Record<string, unknown>[] }) {
+  return (
+    <div className="space-y-3">
+      {items.map((h, i) => (
+        <div key={i} className="bg-slate-800/50 rounded-lg p-3">
+          {typeof h.objection === 'string' && (
+            <p className="text-sm text-red-300 mb-1.5">
+              <span className="text-xs text-slate-500 uppercase mr-1">Objection:</span>
+              {h.objection}
+            </p>
+          )}
+          {typeof h.pivot === 'string' && (
+            <p className="text-sm text-green-300">
+              <span className="text-xs text-slate-500 uppercase mr-1">Pivot:</span>
+              {h.pivot}
+            </p>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function TalkTrack({ obj }: { obj: Record<string, unknown> }) {
+  const sections = [
+    { key: 'opening', label: 'Opening', color: 'border-cyan-500/50' },
+    { key: 'proof_points', label: 'Proof Points', color: 'border-amber-500/50' },
+    { key: 'closing', label: 'Closing', color: 'border-green-500/50' },
+  ]
+  return (
+    <div className="space-y-3">
+      {sections.map(({ key, label, color }) => {
+        const val = obj[key]
+        if (!val) return null
+        if (typeof val === 'string') {
+          return (
+            <div key={key} className={`border-l-2 ${color} pl-3`}>
+              <p className="text-xs text-slate-500 uppercase mb-1">{label}</p>
+              <p className="text-sm text-slate-300">{val}</p>
+            </div>
+          )
+        }
+        if (Array.isArray(val)) {
+          return (
+            <div key={key} className={`border-l-2 ${color} pl-3`}>
+              <p className="text-xs text-slate-500 uppercase mb-1">{label}</p>
+              <ul className="space-y-1">
+                {val.map((item, j) => (
+                  <li key={j} className="text-sm text-slate-300">{String(item)}</li>
+                ))}
+              </ul>
+            </div>
+          )
+        }
+        return null
+      })}
+    </div>
+  )
+}
+
+function WeaknessAnalysis({ items }: { items: Record<string, unknown>[] }) {
+  return (
+    <div className="space-y-3">
+      {items.map((w, i) => (
+        <div key={i} className="bg-slate-800/50 rounded-lg p-3">
+          <p className="text-sm text-white font-medium mb-1">{String(w.weakness ?? w.area ?? '')}</p>
+          {typeof w.evidence === 'string' && (
+            <p className="text-sm text-slate-400">{w.evidence}</p>
+          )}
+          {typeof w.recommendation === 'string' && (
+            <p className="text-sm text-cyan-300 mt-1">{w.recommendation}</p>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function RecommendedPlays({ items }: { items: Record<string, unknown>[] }) {
+  return (
+    <div className="space-y-3">
+      {items.map((p, i) => (
+        <div key={i} className="bg-slate-800/50 rounded-lg p-3">
+          <p className="text-sm text-slate-300">{String(p.play ?? p.description ?? '')}</p>
+          {typeof p.timing === 'string' && (
+            <p className="text-xs text-slate-500 mt-1">Timing: {p.timing}</p>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function NumberedList({ items }: { items: string[] }) {
+  return (
+    <ol className="space-y-2 list-none">
+      {items.map((q, i) => (
+        <li key={i} className="flex gap-3 text-sm">
+          <span className="shrink-0 w-6 h-6 rounded-full bg-cyan-500/15 text-cyan-400 flex items-center justify-center text-xs font-medium">
+            {i + 1}
+          </span>
+          <span className="text-slate-300 pt-0.5">{q}</span>
+        </li>
+      ))}
+    </ol>
+  )
+}
+
 function IntelValue({ fieldKey, value }: { fieldKey: string; value: unknown }) {
-  // Battle card / reasoning structured objects: render as human-readable cards
+  // Battle card structured objects
   if (
     typeof value === 'object' &&
     value !== null &&
@@ -286,6 +451,38 @@ function IntelValue({ fieldKey, value }: { fieldKey: string; value: unknown }) {
     (fieldKey === 'objection_data' || fieldKey === 'ecosystem_context' || fieldKey === 'budget_context')
   ) {
     return <MixedObjectCard obj={value as Record<string, unknown>} />
+  }
+
+  // Talk track (object with opening/closing/proof_points)
+  if (fieldKey === 'talk_track' && typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    return <TalkTrack obj={value as Record<string, unknown>} />
+  }
+
+  // Competitive landscape (object with text fields)
+  if (fieldKey === 'competitive_landscape' && typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    return <MixedObjectCard obj={value as Record<string, unknown>} />
+  }
+
+  // Array-based battle card fields
+  if (Array.isArray(value) && value.length > 0) {
+    if (fieldKey === 'competitor_differentiators' && typeof value[0] === 'object') {
+      return <CompetitorDifferentiators items={value as Record<string, unknown>[]} />
+    }
+    if (fieldKey === 'customer_pain_quotes' && typeof value[0] === 'object') {
+      return <PainQuotes items={value as Record<string, unknown>[]} />
+    }
+    if (fieldKey === 'objection_handlers' && typeof value[0] === 'object') {
+      return <ObjectionHandlers items={value as Record<string, unknown>[]} />
+    }
+    if ((fieldKey === 'weakness_analysis' || fieldKey === 'vendor_weaknesses') && typeof value[0] === 'object') {
+      return <WeaknessAnalysis items={value as Record<string, unknown>[]} />
+    }
+    if (fieldKey === 'recommended_plays' && typeof value[0] === 'object') {
+      return <RecommendedPlays items={value as Record<string, unknown>[]} />
+    }
+    if ((fieldKey === 'discovery_questions' || fieldKey === 'landmine_questions') && typeof value[0] === 'string') {
+      return <NumberedList items={value as string[]} />
+    }
   }
 
   // String
