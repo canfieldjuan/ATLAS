@@ -121,7 +121,7 @@ export interface ReviewSummary {
   role_level: string | null
   buying_stage: string | null
   sentiment_direction: string | null
-  competitors_mentioned: string[]
+  competitors_mentioned: (string | { name: string; context?: string; reason?: string })[]
   quotable_phrases: string[]
   positive_aspects: string[]
   specific_complaints: string[]

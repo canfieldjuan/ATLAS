@@ -75,7 +75,7 @@ export default function VendorDetail() {
   const reviewColumns: Column<ReviewSummary>[] = [
     {
       key: 'company',
-      header: 'Company',
+      header: 'Company / Title',
       render: (r) => (
         <div>
           <span className="text-white">{r.reviewer_company ?? '--'}</span>
