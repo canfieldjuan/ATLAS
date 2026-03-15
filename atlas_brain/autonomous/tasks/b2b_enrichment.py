@@ -492,7 +492,12 @@ async def _triage_review(row, local_only: bool) -> tuple[dict[str, Any] | None, 
         # Triage skill missing -- fall through to full extraction
         return None, None
 
-    llm = get_pipeline_llm(prefer_cloud=False, try_openrouter=False, auto_activate_ollama=True)
+    # Use same dedicated OpenRouter instance as extraction
+    llm = None
+    if not local_only:
+        llm = _get_enrichment_llm()
+    if llm is None:
+        llm = get_pipeline_llm(prefer_cloud=False, try_openrouter=False, auto_activate_ollama=True)
     if llm is None:
         return None, None
 
