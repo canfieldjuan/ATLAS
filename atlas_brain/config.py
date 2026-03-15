@@ -2316,6 +2316,11 @@ class B2BChurnConfig(BaseSettings):
     vendor_briefing_gate_base_url: str = Field(default="https://churnsignals.co/report", description="Base URL for briefing gate landing page")
     vendor_briefing_gate_expiry_days: int = Field(default=7, description="Gate token expiry in days")
 
+    # Stratified reasoning integration (global intelligence run)
+    stratified_reasoning_enabled: bool = Field(default=False, description="Route vendors through stratified reasoner during global intelligence run")
+    stratified_reasoning_concurrency: int = Field(default=5, description="Max concurrent vendor reasoning tasks")
+    executive_summary_llm_enabled: bool = Field(default=False, description="Use LLM-synthesized executive summaries instead of deterministic templates")
+
 
 class B2BAlertConfig(BaseSettings):
     """B2B churn signal spike alert configuration."""

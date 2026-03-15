@@ -30,6 +30,11 @@ You will receive a JSON object with:
 - `competitor_overlap`: top competitors with mention counts
 - `trend`: "worsening", "improving", "stable", or "new"
 - `sentiment_direction`: "declining", "stable", "improving", or "insufficient_history"
+- `reasoning_conclusion` (if present): stratified reasoning output with:
+  - `archetype`: reasoning archetype (e.g., "pricing_shock", "feature_gap", "acquisition_decay")
+  - `confidence`: archetype confidence (0-1)
+  - `executive_summary`: 2-3 sentence reasoning assessment
+  - `key_signals`: list of key evidence signals
 
 ## Output Schema
 
@@ -49,6 +54,7 @@ You will receive a JSON object with:
 - If trend is "worsening" or sentiment is "declining", highlight the trajectory.
 - If competitor_overlap has entries, mention the top competitive alternative.
 - Do not repeat raw metrics without context — interpret what they mean for a buyer.
+- If `reasoning_conclusion` is present and its `confidence` >= 0.6, reference the archetype in the narrative (e.g., "fits a pricing_shock pattern"). If confidence < 0.6, do not mention the archetype.
 - Be direct and specific, not generic. Avoid vague hedging.
 
 ## Output

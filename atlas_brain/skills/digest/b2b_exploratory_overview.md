@@ -29,6 +29,13 @@ You will receive the same trimmed intelligence payload used by the B2B churn pip
 - `quotable_evidence`
 - supporting vendor and category context
 - `known_companies`
+- `stratified_intelligence` (if present): per-vendor reasoning conclusions with:
+  - `vendor`: vendor name
+  - `archetype`: reasoning archetype (e.g., "pricing_shock", "feature_gap", "acquisition_decay")
+  - `confidence`: archetype confidence (0-1)
+  - `risk_level`: "low", "medium", "high", or "critical"
+  - `executive_summary`: 2-3 sentence reasoning assessment
+  - `key_signals`: list of key evidence signals
 
 ## Output Schema
 
@@ -54,6 +61,7 @@ You will receive the same trimmed intelligence payload used by the B2B churn pip
 - Respond with ONLY a valid JSON object.
 - Do not include markdown fences.
 - `exploratory_summary` must be 120 words or fewer.
+- If `stratified_intelligence` is present, synthesize archetype clusters into the narrative (e.g., "3 vendors show pricing_shock patterns"). Highlight any vendors with critical risk_level.
 - Use only evidence present in the payload.
 - `timeline_hot_list` must only include future dates relative to `date`.
 - Omit expired, stale, or ambiguous timelines.

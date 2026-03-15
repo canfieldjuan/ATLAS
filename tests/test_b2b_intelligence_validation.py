@@ -460,7 +460,10 @@ class TestVendorFeedNamedAccounts:
         )
         feed = _build_deterministic_vendor_feed(vendors, **lookups)
         assert len(feed) == 1
-        assert feed[0]["named_accounts"] == [{"company": "BrightPath", "urgency": 9}]
+        accts = feed[0]["named_accounts"]
+        assert len(accts) == 1
+        assert accts[0]["company"] == "BrightPath"
+        assert accts[0]["urgency"] == 9
 
 
 class TestVendorFeedNoCompanyRequired:

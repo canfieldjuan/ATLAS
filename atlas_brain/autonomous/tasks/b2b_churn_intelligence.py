@@ -546,7 +546,7 @@ def _join_summary_terms(items: list[str]) -> str:
     return ", ".join(cleaned[:-1]) + f", and {cleaned[-1]}"
 
 
-def _build_buyer_action(vendor: str, pain: str | None, alternatives: list[str]) -> str:
+def _build_buyer_action(vendor: str, pain: str | None, alternatives: list[str], archetype: str | None = None) -> str:
     """Deterministic buyer-facing recommendation for weekly churn feed entries."""
     alt_text = ", ".join(alternatives[:2]) if alternatives else "competing alternatives"
     pain_l = (pain or "").lower()
@@ -558,7 +558,38 @@ def _build_buyer_action(vendor: str, pain: str | None, alternatives: list[str]) 
         return f"Teams on {vendor} should map missing requirements against {alt_text} and require roadmap commitments before renewal."
     if pain_l == "ux":
         return f"Teams on {vendor} should compare admin burden and end-user adoption against {alt_text} before committing to another term."
+    if archetype == "acquisition_decay":
+        return f"Teams on {vendor} should assess post-acquisition roadmap stability against {alt_text} before committing to another term."
+    if archetype == "support_collapse":
+        return f"Teams on {vendor} should escalate support SLA concerns immediately and benchmark response times against {alt_text}."
+    if archetype == "integration_break":
+        return f"Teams on {vendor} should audit API/integration stability and evaluate migration paths to {alt_text} before renewal."
     return f"Teams on {vendor} should compare current fit against {alt_text} and validate switching costs before the next renewal decision."
+
+
+# Default scoring weights for churn pressure score.
+_DEFAULT_WEIGHTS = {
+    "churn_density": 0.30,
+    "urgency": 0.25,
+    "dm_churn_rate": 0.20,
+    "displacement": 0.15,
+    "price_complaints": 0.10,
+}
+
+# Archetype-specific weight overrides.  When the stratified reasoner
+# classifies a vendor into an archetype, the corresponding weight set
+# is used instead of the default, biasing the score toward the signal
+# that matters most for that churn pattern.
+_ARCHETYPE_WEIGHT_OVERRIDES: dict[str, dict[str, float]] = {
+    "pricing_shock":        {"churn_density": 0.20, "urgency": 0.20, "dm_churn_rate": 0.15, "displacement": 0.10, "price_complaints": 0.35},
+    "feature_gap":          {"churn_density": 0.25, "urgency": 0.20, "dm_churn_rate": 0.15, "displacement": 0.30, "price_complaints": 0.10},
+    "support_collapse":     {"churn_density": 0.30, "urgency": 0.35, "dm_churn_rate": 0.15, "displacement": 0.10, "price_complaints": 0.10},
+    "acquisition_decay":    {"churn_density": 0.35, "urgency": 0.25, "dm_churn_rate": 0.20, "displacement": 0.15, "price_complaints": 0.05},
+    "category_disruption":  {"churn_density": 0.20, "urgency": 0.15, "dm_churn_rate": 0.15, "displacement": 0.40, "price_complaints": 0.10},
+    "integration_break":    {"churn_density": 0.30, "urgency": 0.30, "dm_churn_rate": 0.20, "displacement": 0.15, "price_complaints": 0.05},
+    "leadership_redesign":  {"churn_density": 0.30, "urgency": 0.25, "dm_churn_rate": 0.15, "displacement": 0.20, "price_complaints": 0.10},
+    "compliance_gap":       {"churn_density": 0.25, "urgency": 0.30, "dm_churn_rate": 0.25, "displacement": 0.10, "price_complaints": 0.10},
+}
 
 
 def _compute_churn_pressure_score(
@@ -569,19 +600,26 @@ def _compute_churn_pressure_score(
     displacement_mention_count: int,
     price_complaint_rate: float,
     total_reviews: int,
+    archetype: str | None = None,
 ) -> float:
     """Composite 0-100 score for ranking vendors by churn pressure.
 
-    Weights: churn density 30%, urgency 25%, DM churn rate 20%,
+    Default weights: churn density 30%, urgency 25%, DM churn rate 20%,
     displacement mentions 15%, price complaints 10%.
+
+    When *archetype* is provided (from the stratified reasoner), the weights
+    shift to emphasise the signal most relevant to that churn pattern --
+    e.g. ``pricing_shock`` boosts price_complaints to 35%.
+
     Confidence multiplier: 1.0 (50+), 0.85 (20-49), 0.65 (<20).
     """
+    w = _ARCHETYPE_WEIGHT_OVERRIDES.get(archetype or "", _DEFAULT_WEIGHTS)
     raw = (
-        min(churn_density, 100.0) * 0.30
-        + min(avg_urgency, 10.0) * 10.0 * 0.25
-        + min(dm_churn_rate, 1.0) * 100.0 * 0.20
-        + min(displacement_mention_count, 50) * 2.0 * 0.15
-        + min(price_complaint_rate, 1.0) * 100.0 * 0.10
+        min(churn_density, 100.0) * w["churn_density"]
+        + min(avg_urgency, 10.0) * 10.0 * w["urgency"]
+        + min(dm_churn_rate, 1.0) * 100.0 * w["dm_churn_rate"]
+        + min(displacement_mention_count, 50) * 2.0 * w["displacement"]
+        + min(price_complaint_rate, 1.0) * 100.0 * w["price_complaints"]
     )
     if total_reviews >= 50:
         confidence = 1.0
@@ -590,6 +628,161 @@ def _compute_churn_pressure_score(
     else:
         confidence = 0.65
     return round(min(raw * confidence, 100.0), 1)
+
+
+def _build_vendor_evidence(
+    vs: dict[str, Any],
+    *,
+    pain_lookup: dict[str, list[dict]],
+    competitor_lookup: dict[str, list[dict]],
+    feature_gap_lookup: dict[str, list[dict]],
+    insider_lookup: dict[str, dict],
+    keyword_spike_lookup: dict[str, dict],
+    temporal_lookup: dict[str, dict] | None = None,
+    archetype_lookup: dict[str, list[dict]] | None = None,
+    dm_lookup: dict[str, float] | None = None,
+    price_lookup: dict[str, float] | None = None,
+    quote_lookup: dict[str, list] | None = None,
+    budget_lookup: dict[str, dict] | None = None,
+    buyer_auth_lookup: dict[str, dict] | None = None,
+    use_case_lookup: dict[str, list[dict]] | None = None,
+) -> dict[str, Any]:
+    """Merge vendor score row + all available lookups into a single evidence
+    dict for the stratified reasoner.
+
+    Includes pain, competitors, feature gaps, insider signals, keyword spikes,
+    temporal velocities, archetype pre-scores, and optionally DM rate, price
+    complaint rate, budget signals, buyer authority, use cases, and quotes.
+    """
+    vendor = _canonicalize_vendor(vs.get("vendor_name") or "")
+    total = int(vs.get("total_reviews") or 0)
+    churn = int(vs.get("churn_intent") or 0)
+    churn_density = round((churn * 100.0 / total), 1) if total else 0.0
+    avg_urgency = round(float(vs.get("avg_urgency") or 0), 1)
+
+    evidence: dict[str, Any] = {
+        "vendor_name": vendor,
+        "product_category": vs.get("product_category") or "",
+        "total_reviews": total,
+        "churn_intent": churn,
+        "churn_density": churn_density,
+        "avg_urgency": avg_urgency,
+        "recommend_yes": int(vs.get("recommend_yes") or 0),
+        "recommend_no": int(vs.get("recommend_no") or 0),
+    }
+
+    pains = pain_lookup.get(vendor, [])
+    if pains:
+        evidence["pain_categories"] = [
+            {"category": p.get("category", ""), "count": p.get("count", 0)}
+            for p in pains[:5]
+        ]
+
+    comps = competitor_lookup.get(vendor, [])
+    if comps:
+        evidence["competitors"] = [
+            {"name": c.get("name", ""), "mentions": c.get("mentions", 0)}
+            for c in comps[:5]
+        ]
+        evidence["displacement_mention_count"] = sum(c.get("mentions", 0) for c in comps)
+
+    gaps = feature_gap_lookup.get(vendor, [])
+    if gaps:
+        evidence["feature_gaps"] = [
+            {"feature": g.get("feature", ""), "mentions": g.get("count", g.get("mentions", 0))}
+            for g in gaps[:5]
+        ]
+
+    insider = insider_lookup.get(vendor, {})
+    if insider:
+        evidence["insider_signal_count"] = insider.get("signal_count", 0)
+        evidence["insider_talent_drain_rate"] = insider.get("talent_drain_rate")
+
+    kw = keyword_spike_lookup.get(vendor, {})
+    if kw.get("spike_count"):
+        evidence["keyword_spike_count"] = kw["spike_count"]
+        evidence["keyword_spike_keywords"] = kw.get("spike_keywords", [])
+
+    if temporal_lookup:
+        td = temporal_lookup.get(vendor, {})
+        if td:
+            evidence.update(td)
+
+    if archetype_lookup:
+        arch = archetype_lookup.get(vendor, [])
+        if arch:
+            evidence["archetype_scores"] = arch
+
+    # Additional context (when available)
+    if dm_lookup:
+        dm = dm_lookup.get(vendor)
+        if dm is not None:
+            evidence["dm_churn_rate"] = dm
+    if price_lookup:
+        pr = price_lookup.get(vendor)
+        if pr is not None:
+            evidence["price_complaint_rate"] = pr
+    if quote_lookup:
+        quotes = quote_lookup.get(vendor, [])
+        if quotes:
+            evidence["quote_count"] = len(quotes)
+            evidence["top_quote"] = (quotes[0].get("quote", str(quotes[0])) if isinstance(quotes[0], dict) else str(quotes[0]))[:200] if quotes else None
+    if budget_lookup:
+        budget = budget_lookup.get(vendor, {})
+        if budget:
+            evidence["budget_context"] = budget
+    if buyer_auth_lookup:
+        ba = buyer_auth_lookup.get(vendor, {})
+        if ba:
+            evidence["buyer_authority"] = ba
+    if use_case_lookup:
+        ucs = use_case_lookup.get(vendor, [])
+        if ucs:
+            evidence["top_use_cases"] = [u.get("use_case", u.get("name", "")) for u in ucs[:3] if isinstance(u, dict)]
+
+    return evidence
+
+
+def _classify_trend(
+    vendor: str,
+    churn_density: float,
+    avg_urgency: float,
+    prior_metrics: dict[str, float] | None,
+    temporal_lookup: dict[str, dict] | None = None,
+) -> str:
+    """Classify vendor trend using temporal z-scores when available, falling
+    back to hardcoded delta thresholds.
+
+    Returns one of: ``"new"``, ``"worsening"``, ``"improving"``, ``"stable"``.
+    """
+    if not prior_metrics:
+        return "new"
+
+    # Prefer temporal z-score anomalies when available
+    td = (temporal_lookup or {}).get(vendor, {})
+    anomalies = td.get("anomalies", [])
+    if anomalies:
+        anomalies_by_metric: dict[str, dict] = {}
+        for a in anomalies:
+            if isinstance(a, dict):
+                anomalies_by_metric[a.get("metric", "")] = a
+        cd_a = anomalies_by_metric.get("churn_density", {})
+        urg_a = anomalies_by_metric.get("avg_urgency", {})
+        if (cd_a.get("is_anomaly") and cd_a.get("z_score", 0) > 0) or \
+           (urg_a.get("is_anomaly") and urg_a.get("z_score", 0) > 0):
+            return "worsening"
+        if (cd_a.get("is_anomaly") and cd_a.get("z_score", 0) < 0) or \
+           (urg_a.get("is_anomaly") and urg_a.get("z_score", 0) < 0):
+            return "improving"
+
+    # Fallback: hardcoded delta thresholds
+    delta_density = churn_density - prior_metrics.get("churn_signal_density", 0)
+    delta_urgency = avg_urgency - prior_metrics.get("avg_urgency", 0)
+    if delta_density >= 5 or delta_urgency >= 1:
+        return "worsening"
+    if delta_density <= -5 or delta_urgency <= -1:
+        return "improving"
+    return "stable"
 
 
 def _build_deterministic_weekly_feed(high_intent: list[dict[str, Any]], *, limit: int = 10) -> list[dict[str, Any]]:
@@ -647,6 +840,8 @@ def _build_deterministic_vendor_feed(
     company_lookup: dict[str, list],
     keyword_spike_lookup: dict[str, dict],
     prior_reports: list[dict[str, Any]],
+    reasoning_lookup: dict[str, dict] | None = None,
+    temporal_lookup: dict[str, dict] | None = None,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
     """Build vendor-level weekly churn feed from aggregated data.
@@ -720,11 +915,16 @@ def _build_deterministic_vendor_feed(
             confidence = "medium"
         else:
             confidence = "low"
+        # Boost confidence when reasoning provides corroborating evidence
+        _rc = (reasoning_lookup or {}).get(vendor, {})
+        if _rc.get("confidence", 0) >= 0.8 and confidence == "medium":
+            confidence = "high"
 
         # Displacement mention total for this vendor
         comp_entries = competitor_lookup.get(vendor, [])
         displacement_mentions = sum(c.get("mentions", 0) for c in comp_entries)
 
+        _vendor_archetype = (reasoning_lookup or {}).get(vendor, {}).get("archetype")
         score = _compute_churn_pressure_score(
             churn_density=churn_density,
             avg_urgency=avg_urgency,
@@ -732,6 +932,7 @@ def _build_deterministic_vendor_feed(
             displacement_mention_count=displacement_mentions,
             price_complaint_rate=price_rate,
             total_reviews=total_reviews,
+            archetype=_vendor_archetype,
         )
 
         # Pain breakdown (top 3)
@@ -763,19 +964,12 @@ def _build_deterministic_vendor_feed(
         else:
             sentiment_direction = max(sentiment_counts.items(), key=lambda x: x[1])[0]
 
-        # Trend from prior reports
-        prior = prior_vendor_metrics.get(vendor)
-        if not prior:
-            trend = "new"
-        else:
-            delta_density = churn_density - prior.get("churn_signal_density", 0)
-            delta_urgency = avg_urgency - prior.get("avg_urgency", 0)
-            if delta_density >= 5 or delta_urgency >= 1:
-                trend = "worsening"
-            elif delta_density <= -5 or delta_urgency <= -1:
-                trend = "improving"
-            else:
-                trend = "stable"
+        # Trend from prior reports (z-score aware when temporal data available)
+        trend = _classify_trend(
+            vendor, churn_density, avg_urgency,
+            prior_vendor_metrics.get(vendor),
+            temporal_lookup=temporal_lookup,
+        )
 
         # Named accounts (may be empty)
         companies = company_lookup.get(vendor, [])
@@ -788,8 +982,11 @@ def _build_deterministic_vendor_feed(
             for c in companies[:5]
         ]
 
-        # Risk level (derived from churn_pressure_score)
-        if score >= 70:
+        # Risk level -- prefer reasoning conclusion, fall back to deterministic
+        _rc_risk = (reasoning_lookup or {}).get(vendor, {}).get("risk_level", "")
+        if _rc_risk:
+            risk_level = _rc_risk
+        elif score >= 70:
             risk_level = "high"
         elif score >= 40:
             risk_level = "medium"
@@ -822,7 +1019,7 @@ def _build_deterministic_vendor_feed(
         # Alternatives for action recommendation
         alt_names = [c["name"] for c in comp_entries[:2]] if comp_entries else []
 
-        candidates.append({
+        entry = {
             "vendor": vendor,
             "category": category,
             "total_reviews": total_reviews,
@@ -843,12 +1040,26 @@ def _build_deterministic_vendor_feed(
             "sentiment_direction": sentiment_direction,
             "trend": trend,
             "budget_context": budget_lookup.get(vendor, {}),
-            "action_recommendation": _build_buyer_action(vendor, top_pain, alt_names),
+            "action_recommendation": _build_buyer_action(vendor, top_pain, alt_names, archetype=_vendor_archetype),
             "named_accounts": named_accounts,
             "affected_segments": affected_segments,
-        })
+        }
+        rc = (reasoning_lookup or {}).get(vendor, {})
+        if rc:
+            entry["archetype"] = rc.get("archetype", "")
+            entry["archetype_confidence"] = rc.get("confidence", 0)
+            entry["archetype_risk_level"] = rc.get("risk_level", "")
+            entry["reasoning_mode"] = rc.get("mode", "")
+        candidates.append(entry)
 
-    candidates.sort(key=lambda x: -x["churn_pressure_score"])
+    # Reasoning-weighted sort: vendors with high-confidence archetypes get a boost
+    def _sort_key(x: dict) -> tuple:
+        score = x["churn_pressure_score"]
+        rc = (reasoning_lookup or {}).get(x.get("vendor", ""), {})
+        # High-confidence reasoning adds up to 5 points to sort priority
+        reasoning_boost = min(rc.get("confidence", 0) * 5, 5.0) if rc.get("archetype") else 0
+        return (-(score + reasoning_boost),)
+    candidates.sort(key=_sort_key)
     return candidates[:limit]
 
 
@@ -947,6 +1158,7 @@ def _build_deterministic_displacement_map(
     competitor_reasons: list[dict[str, Any]],
     quote_lookup: dict[str, list],
     *,
+    reasoning_lookup: dict[str, dict] | None = None,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
     """Build displacement report from evidence-quality-filtered aggregated flows.
@@ -955,6 +1167,7 @@ def _build_deterministic_displacement_map(
     survive.  Pure implied_preference edges are market-pain data, not displacement.
     """
     reason_lookup = _build_reason_lookup(competitor_reasons)
+    _rl = reasoning_lookup or {}
     results: list[dict[str, Any]] = []
     for row in competitive_disp:
         vendor = _canonicalize_vendor(row.get("vendor") or "")
@@ -987,9 +1200,13 @@ def _build_deterministic_displacement_map(
             strength = "moderate"
         else:
             strength = "emerging"
+        # Boost signal strength when source vendor has category_disruption or feature_gap archetype
+        src_arch = _rl.get(vendor, {}).get("archetype", "")
+        if src_arch in ("category_disruption", "feature_gap") and strength == "emerging":
+            strength = "moderate"
 
         reasons_for_quote = reason_lookup.get((vendor, competitor), [])
-        results.append({
+        edge_entry: dict[str, Any] = {
             "from_vendor": vendor,
             "to_vendor": competitor,
             "mention_count": mention_count,
@@ -1008,7 +1225,16 @@ def _build_deterministic_displacement_map(
             ),
             "industries": row.get("industries", []),
             "company_sizes": row.get("company_sizes", []),
-        })
+        }
+        _src_rc = _rl.get(vendor, {})
+        _tgt_rc = _rl.get(competitor, {})
+        if _src_rc.get("archetype"):
+            edge_entry["source_archetype"] = _src_rc["archetype"]
+            edge_entry["source_archetype_confidence"] = _src_rc.get("confidence", 0)
+        if _tgt_rc.get("archetype"):
+            edge_entry["target_archetype"] = _tgt_rc["archetype"]
+            edge_entry["target_archetype_confidence"] = _tgt_rc.get("confidence", 0)
+        results.append(edge_entry)
     results.sort(key=lambda x: x["mention_count"], reverse=True)
     return results[:limit]
 
@@ -1028,6 +1254,8 @@ def _build_deterministic_vendor_scorecards(
     company_lookup: dict[str, list[dict]],
     product_profile_lookup: dict[str, dict],
     prior_reports: list[dict[str, Any]],
+    reasoning_lookup: dict[str, dict] | None = None,
+    temporal_lookup: dict[str, dict] | None = None,
     limit: int = 15,
 ) -> list[dict[str, Any]]:
     """Build vendor deep-dive scorecards from aggregated numeric data.
@@ -1108,19 +1336,17 @@ def _build_deterministic_vendor_scorecards(
             confidence = "medium"
         else:
             confidence = "low"
+        # Boost confidence when reasoning provides corroborating evidence
+        _rc = (reasoning_lookup or {}).get(vendor, {})
+        if _rc.get("confidence", 0) >= 0.8 and confidence == "medium":
+            confidence = "high"
 
-        prior = prior_vendor_metrics.get(vendor)
-        if not prior:
-            trend = "new"
-        else:
-            delta_density = churn_density - prior.get("churn_signal_density", 0)
-            delta_urgency = avg_urgency - prior.get("avg_urgency", 0)
-            if delta_density >= 5 or delta_urgency >= 1:
-                trend = "worsening"
-            elif delta_density <= -5 or delta_urgency <= -1:
-                trend = "improving"
-            else:
-                trend = "stable"
+        # Trend (z-score aware when temporal data available)
+        trend = _classify_trend(
+            vendor, churn_density, avg_urgency,
+            prior_vendor_metrics.get(vendor),
+            temporal_lookup=temporal_lookup,
+        )
 
         sentiment_counts = sentiment_lookup.get(vendor, {})
         if total_reviews < 10 or not sentiment_counts:
@@ -1150,6 +1376,7 @@ def _build_deterministic_vendor_scorecards(
         dm_rate = float(dm_lookup.get(vendor, 0))
         price_rate = float(price_lookup.get(vendor, 0))
         displacement_mentions = sum(c.get("mentions", 0) for c in comp_entries)
+        _vendor_archetype = (reasoning_lookup or {}).get(vendor, {}).get("archetype")
         churn_pressure_score = _compute_churn_pressure_score(
             churn_density=churn_density,
             avg_urgency=avg_urgency,
@@ -1157,6 +1384,7 @@ def _build_deterministic_vendor_scorecards(
             displacement_mention_count=displacement_mentions,
             price_complaint_rate=price_rate,
             total_reviews=total_reviews,
+            archetype=_vendor_archetype,
         )
 
         # Risk level
@@ -1264,7 +1492,7 @@ def _build_deterministic_vendor_scorecards(
         role_types = ba.get("role_types", {})
         dominant_role = max(role_types.items(), key=lambda x: x[1])[0] if role_types else "unknown"
 
-        results.append({
+        sc_entry = {
             "vendor": vendor,
             "total_reviews": total_reviews,
             "churn_signal_density": churn_density,
@@ -1291,9 +1519,49 @@ def _build_deterministic_vendor_scorecards(
             "dominant_buyer_role": dominant_role,
             "industry_distribution": industry_dist,
             "company_size_distribution": size_dist,
-        })
-    results.sort(key=lambda x: (-(x["avg_urgency"]), -(x["churn_signal_density"]), x["vendor"]))
+        }
+        rc = (reasoning_lookup or {}).get(vendor, {})
+        if rc:
+            sc_entry["archetype"] = rc.get("archetype", "")
+            sc_entry["archetype_confidence"] = rc.get("confidence", 0)
+            sc_entry["reasoning_summary"] = rc.get("executive_summary", "")
+            sc_entry["falsification_conditions"] = rc.get("falsification_conditions", [])
+            sc_entry["uncertainty_sources"] = rc.get("uncertainty_sources", [])
+            sc_entry["reasoning_mode"] = rc.get("mode", "")
+            rc_risk = rc.get("risk_level", "")
+            if rc_risk:
+                sc_entry["risk_level"] = rc_risk
+        results.append(sc_entry)
+    def _sc_sort_key(x: dict) -> tuple:
+        rc = (reasoning_lookup or {}).get(x.get("vendor", ""), {})
+        reasoning_boost = min(rc.get("confidence", 0) * 5, 5.0) if rc.get("archetype") else 0
+        return (-(x["avg_urgency"] + reasoning_boost), -(x["churn_signal_density"]), x["vendor"])
+    results.sort(key=_sc_sort_key)
     return results[:limit]
+
+
+def _build_market_shift_signal(
+    category: str,
+    highest_vendor: str,
+    churn_density: float,
+    total_reviews: int,
+    emerging: str,
+    reasoning_lookup: dict[str, dict],
+) -> str:
+    """Build market shift signal with archetype context when available."""
+    base = (
+        f"Based on {total_reviews} reviews, {highest_vendor} shows "
+        f"{churn_density}% churn-signal density in {category}."
+    )
+    arch = reasoning_lookup.get(highest_vendor, {}).get("archetype", "")
+    if arch:
+        base += f" Classified as {arch} pattern."
+    challenger_part = (
+        f" {emerging} is the most visible challenger flow in this category."
+        if emerging and "Insufficient" not in emerging
+        else ""
+    )
+    return base + challenger_part
 
 
 def _build_deterministic_category_overview(
@@ -1307,6 +1575,7 @@ def _build_deterministic_category_overview(
     dm_lookup: dict[str, float],
     price_lookup: dict[str, float],
     competitor_lookup: dict[str, list[dict]],
+    reasoning_lookup: dict[str, dict] | None = None,
     limit: int = 12,
 ) -> list[dict[str, Any]]:
     """Build industry-specific category overview with vendor rankings and case studies."""
@@ -1316,6 +1585,7 @@ def _build_deterministic_category_overview(
         by_category.setdefault(category, []).append(row)
 
     results: list[dict[str, Any]] = []
+    _rl = reasoning_lookup or {}
     for category, rows in by_category.items():
         ranked = sorted(
             rows,
@@ -1374,17 +1644,22 @@ def _build_deterministic_category_overview(
             pr_rate = float(price_lookup.get(v, 0))
             comp_ent = competitor_lookup.get(v, [])
             disp_m = sum(c.get("mentions", 0) for c in comp_ent)
+            _v_arch = _rl.get(v, {}).get("archetype")
             vr_score = _compute_churn_pressure_score(
                 churn_density=cd, avg_urgency=urg, dm_churn_rate=dm_rate,
                 displacement_mention_count=disp_m, price_complaint_rate=pr_rate,
                 total_reviews=rev,
+                archetype=_v_arch,
             )
+            # Use reasoning risk_level when available (Gap #26)
+            _rc_risk = _rl.get(v, {}).get("risk_level", "")
+            _det_risk = "high" if vr_score >= 70 else ("medium" if vr_score >= 40 else "low")
             vendor_rankings.append({
                 "vendor": v,
                 "churn_pressure_score": vr_score,
                 "churn_signal_density": cd,
                 "total_reviews": rev,
-                "risk_level": "high" if vr_score >= 70 else ("medium" if vr_score >= 40 else "low"),
+                "risk_level": _rc_risk or _det_risk,
             })
         vendor_rankings.sort(key=lambda x: -x["churn_pressure_score"])
 
@@ -1422,20 +1697,38 @@ def _build_deterministic_category_overview(
             key=lambda x: -x["mentions"],
         )[:5]
 
+        # Archetype distribution: count + avg confidence per archetype in category
+        arch_counts: dict[str, int] = {}
+        arch_conf_sums: dict[str, float] = {}
+        for r in rows:
+            v = _canonicalize_vendor(r.get("vendor_name") or "")
+            _rc = _rl.get(v, {})
+            arch = _rc.get("archetype", "")
+            if arch:
+                arch_counts[arch] = arch_counts.get(arch, 0) + 1
+                arch_conf_sums[arch] = arch_conf_sums.get(arch, 0) + _rc.get("confidence", 0)
+        archetype_distribution = (
+            [
+                {"archetype": k, "count": v, "avg_confidence": round(arch_conf_sums.get(k, 0) / v, 2)}
+                for k, v in sorted(arch_counts.items(), key=lambda x: -x[1])
+            ]
+            if arch_counts else []
+        )
+
         results.append({
             "category": category,
             "highest_churn_risk": highest_vendor,
             "emerging_challenger": emerging,
             "dominant_pain": dominant_pain,
-            "market_shift_signal": (
-                f"Based on {total_reviews} reviews, {highest_vendor} shows {churn_density}% churn-signal density in {category}. "
-                f"{emerging} is the most visible challenger flow in this category."
+            "market_shift_signal": _build_market_shift_signal(
+                category, highest_vendor, churn_density, total_reviews, emerging, _rl,
             ),
             "industry_distribution": top_industries,
             "company_size_distribution": top_sizes,
             "vendor_rankings": vendor_rankings,
             "case_studies": case_studies,
             "top_feature_gaps": top_gaps,
+            "archetype_distribution": archetype_distribution,
         })
     results.sort(key=lambda x: x["category"])
     return results[:limit]
@@ -1456,6 +1749,7 @@ def _build_deterministic_battle_cards(
     product_profile_lookup: dict[str, dict],
     competitive_disp: list[dict[str, Any]],
     competitor_reasons: list[dict[str, Any]],
+    reasoning_lookup: dict[str, dict] | None = None,
     limit: int = 15,
 ) -> list[dict[str, Any]]:
     """Build per-vendor battle cards from aggregated data.
@@ -1508,8 +1802,13 @@ def _build_deterministic_battle_cards(
         dm_rate = float(dm_lookup.get(vendor, 0))
         price_rate = float(price_lookup.get(vendor, 0))
 
-        # Same qualification threshold as weekly_churn_feed
-        if churn_density < 15 and avg_urgency < 6 and dm_rate < 0.3:
+        # Qualification gate -- reasoning can lower thresholds for high-confidence archetypes
+        _rc = (reasoning_lookup or {}).get(vendor, {})
+        _has_reasoning = bool(_rc.get("archetype")) and _rc.get("confidence", 0) >= 0.7
+        _density_gate = 10 if _has_reasoning else 15
+        _urgency_gate = 5 if _has_reasoning else 6
+        _dm_gate = 0.2 if _has_reasoning else 0.3
+        if churn_density < _density_gate and avg_urgency < _urgency_gate and dm_rate < _dm_gate:
             continue
 
         # Confidence label
@@ -1519,10 +1818,15 @@ def _build_deterministic_battle_cards(
             confidence = "medium"
         else:
             confidence = "low"
+        # Boost confidence when reasoning provides corroborating evidence
+        _rc = (reasoning_lookup or {}).get(vendor, {})
+        if _rc.get("confidence", 0) >= 0.8 and confidence == "medium":
+            confidence = "high"
 
         comp_entries = competitor_lookup.get(vendor, [])
         displacement_mentions = sum(c.get("mentions", 0) for c in comp_entries)
 
+        _vendor_archetype = (reasoning_lookup or {}).get(vendor, {}).get("archetype")
         score = _compute_churn_pressure_score(
             churn_density=churn_density,
             avg_urgency=avg_urgency,
@@ -1530,6 +1834,7 @@ def _build_deterministic_battle_cards(
             displacement_mention_count=displacement_mentions,
             price_complaint_rate=price_rate,
             total_reviews=total_reviews,
+            archetype=_vendor_archetype,
         )
 
         # -- Section 1: Vendor Weaknesses --
@@ -1657,7 +1962,7 @@ def _build_deterministic_battle_cards(
             "budget_context": budget_lookup.get(vendor, {}),
         }
 
-        cards.append({
+        card_entry = {
             "vendor": vendor,
             "category": m.get("category") or "",
             "churn_pressure_score": score,
@@ -1670,9 +1975,23 @@ def _build_deterministic_battle_cards(
             # Populated by LLM pass in run():
             "objection_handlers": [],
             "recommended_plays": [],
-        })
+        }
+        rc = (reasoning_lookup or {}).get(vendor, {})
+        if rc:
+            card_entry["archetype"] = rc.get("archetype", "")
+            card_entry["archetype_confidence"] = rc.get("confidence", 0)
+            card_entry["archetype_risk_level"] = rc.get("risk_level", "")
+            card_entry["archetype_key_signals"] = rc.get("key_signals", [])
+            card_entry["falsification_conditions"] = rc.get("falsification_conditions", [])
+            card_entry["uncertainty_sources"] = rc.get("uncertainty_sources", [])
+        cards.append(card_entry)
 
-    cards.sort(key=lambda x: -x["churn_pressure_score"])
+    def _bc_sort_key(x: dict) -> tuple:
+        score = x["churn_pressure_score"]
+        rc = (reasoning_lookup or {}).get(x.get("vendor", ""), {})
+        reasoning_boost = min(rc.get("confidence", 0) * 5, 5.0) if rc.get("archetype") else 0
+        return (-(score + reasoning_boost),)
+    cards.sort(key=_bc_sort_key)
     return cards[:limit]
 
 
@@ -2051,8 +2370,15 @@ async def _detect_change_events(
     today: date,
     price_lookup: dict[str, float] | None = None,
     dm_lookup: dict[str, float] | None = None,
+    temporal_lookup: dict[str, dict] | None = None,
 ) -> int:
-    """Compare today's vendor data against prior snapshots and log change events."""
+    """Compare today's vendor data against prior snapshots and log change events.
+
+    When *temporal_lookup* is provided (from TemporalEngine), z-score anomalies
+    are used instead of hardcoded delta thresholds for urgency and churn density.
+    A new ``velocity_acceleration`` event fires when a metric has both high
+    velocity AND positive acceleration.
+    """
     detected = 0
 
     for row in vendor_scores:
@@ -2086,32 +2412,70 @@ async def _detect_change_events(
 
         events: list[tuple[str, str, float | None, float | None, float | None]] = []
 
-        # Urgency spike/drop (threshold: 1.0)
+        # Temporal evidence for this vendor (z-scores, velocities, accelerations)
+        td = (temporal_lookup or {}).get(vendor, {})
+        anomalies_by_metric: dict[str, dict] = {}
+        for a in td.get("anomalies", []):
+            if isinstance(a, dict):
+                anomalies_by_metric[a.get("metric", "")] = a
+
+        # Urgency spike/drop -- prefer z-score anomaly when available
         prior_urg = float(prior["avg_urgency"] or 0)
         urg_delta = avg_urgency - prior_urg
-        if urg_delta >= 1.0:
+        urg_anomaly = anomalies_by_metric.get("avg_urgency", {})
+        if urg_anomaly.get("is_anomaly") and urg_anomaly.get("z_score", 0) > 0:
+            z = urg_anomaly["z_score"]
+            events.append(("urgency_spike", f"Avg urgency rose from {prior_urg} to {avg_urgency} (z={z:.1f})", prior_urg, avg_urgency, urg_delta))
+        elif urg_anomaly.get("is_anomaly") and urg_anomaly.get("z_score", 0) < 0:
+            z = urg_anomaly["z_score"]
+            events.append(("urgency_drop", f"Avg urgency fell from {prior_urg} to {avg_urgency} (z={z:.1f})", prior_urg, avg_urgency, urg_delta))
+        elif urg_delta >= 1.0:
             events.append(("urgency_spike", f"Avg urgency rose from {prior_urg} to {avg_urgency}", prior_urg, avg_urgency, urg_delta))
         elif urg_delta <= -1.0:
             events.append(("urgency_drop", f"Avg urgency fell from {prior_urg} to {avg_urgency}", prior_urg, avg_urgency, urg_delta))
 
-        # Churn density spike (threshold: 5.0 pp)
+        # Churn density spike -- prefer z-score anomaly when available
         prior_cd = float(prior["churn_density"] or 0)
         cd_delta = churn_density - prior_cd
-        if cd_delta >= 5.0:
+        cd_anomaly = anomalies_by_metric.get("churn_density", {})
+        if cd_anomaly.get("is_anomaly") and cd_anomaly.get("z_score", 0) > 0:
+            z = cd_anomaly["z_score"]
+            events.append(("churn_density_spike", f"Churn density rose from {prior_cd}% to {churn_density}% (z={z:.1f})", prior_cd, churn_density, cd_delta))
+        elif cd_delta >= 5.0:
             events.append(("churn_density_spike", f"Churn density rose from {prior_cd}% to {churn_density}%", prior_cd, churn_density, cd_delta))
 
-        # NPS / recommend ratio shift (threshold: 10 pp)
+        # Velocity acceleration event: metric has both high velocity AND positive acceleration
+        for metric_key in ("churn_density", "avg_urgency", "pressure_score"):
+            vel = td.get(f"velocity_{metric_key}")
+            accel = td.get(f"accel_{metric_key}")
+            if vel is not None and accel is not None and vel > 0 and accel > 0:
+                events.append((
+                    "velocity_acceleration",
+                    f"{metric_key} accelerating: velocity={vel:.3f}/day, acceleration={accel:.3f}/day^2",
+                    vel, accel, None,
+                ))
+
+        # NPS / recommend ratio shift -- prefer z-score when available
         prior_rr = float(prior["recommend_ratio"] or 0)
         rr_delta = recommend_ratio - prior_rr
-        if abs(rr_delta) >= 10.0:
+        rr_anomaly = anomalies_by_metric.get("recommend_ratio", {})
+        if rr_anomaly.get("is_anomaly"):
+            z = rr_anomaly["z_score"]
+            direction = "improved" if rr_delta > 0 else "declined"
+            events.append(("nps_shift", f"Recommend ratio {direction} from {prior_rr} to {recommend_ratio} (z={z:.1f})", prior_rr, recommend_ratio, rr_delta))
+        elif abs(rr_delta) >= 10.0:
             direction = "improved" if rr_delta > 0 else "declined"
             events.append(("nps_shift", f"Recommend ratio {direction} from {prior_rr} to {recommend_ratio}", prior_rr, recommend_ratio, rr_delta))
 
-        # Review volume spike (threshold: 25%)
+        # Review volume spike -- prefer z-score when available
         prior_tr = int(prior["total_reviews"] or 0)
         if prior_tr > 0:
             vol_pct = ((total_reviews - prior_tr) / prior_tr) * 100
-            if vol_pct >= 25.0:
+            vol_anomaly = anomalies_by_metric.get("total_reviews", {})
+            if vol_anomaly.get("is_anomaly") and vol_anomaly.get("z_score", 0) > 0:
+                z = vol_anomaly["z_score"]
+                events.append(("review_volume_spike", f"Review count jumped from {prior_tr} to {total_reviews} (+{vol_pct:.0f}%, z={z:.1f})", float(prior_tr), float(total_reviews), vol_pct))
+            elif vol_pct >= 25.0:
                 events.append(("review_volume_spike", f"Review count jumped from {prior_tr} to {total_reviews} (+{vol_pct:.0f}%)", float(prior_tr), float(total_reviews), vol_pct))
 
         # Pressure score spike (threshold: 10.0 points on 0-100 scale)
@@ -2127,13 +2491,21 @@ async def _detect_change_events(
             total_reviews=total_reviews,
         )
         ps_delta = cur_ps - prior_ps
-        if ps_delta >= 10.0:
+        ps_anomaly = anomalies_by_metric.get("pressure_score", {})
+        if ps_anomaly.get("is_anomaly") and ps_anomaly.get("z_score", 0) > 0:
+            z = ps_anomaly["z_score"]
+            events.append(("pressure_score_spike", f"Pressure score rose from {prior_ps} to {cur_ps} (z={z:.1f})", prior_ps, cur_ps, ps_delta))
+        elif ps_delta >= 10.0:
             events.append(("pressure_score_spike", f"Pressure score rose from {prior_ps} to {cur_ps}", prior_ps, cur_ps, ps_delta))
 
-        # Decision-maker churn rate spike (threshold: 0.15 = 15 pp)
+        # Decision-maker churn rate spike -- prefer z-score when available
         prior_dm = float(prior["dm_churn_rate"] or 0)
         dm_delta = _dm_rate - prior_dm
-        if dm_delta >= 0.15:
+        dm_anomaly = anomalies_by_metric.get("dm_churn_rate", {})
+        if dm_anomaly.get("is_anomaly") and dm_anomaly.get("z_score", 0) > 0:
+            z = dm_anomaly["z_score"]
+            events.append(("dm_churn_spike", f"DM churn rate rose from {prior_dm:.2%} to {_dm_rate:.2%} (z={z:.1f})", prior_dm, _dm_rate, dm_delta))
+        elif dm_delta >= 0.15:
             events.append(("dm_churn_spike", f"DM churn rate rose from {prior_dm:.2%} to {_dm_rate:.2%}", prior_dm, _dm_rate, dm_delta))
 
         # New pain category
@@ -2408,6 +2780,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     )
 
     # Enrich payload with temporal analysis + archetype pre-scores per vendor
+    _temporal_lookup: dict[str, dict] = {}
+    _archetype_lookup: dict[str, list[dict]] = {}
     try:
         from atlas_brain.reasoning.temporal import TemporalEngine
         from atlas_brain.reasoning.archetypes import enrich_evidence_with_archetypes
@@ -2433,6 +2807,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     "archetype_scores": enriched.get("archetype_scores", []),
                     "insufficient_data": td.get("temporal_status") == "insufficient_data",
                 })
+                # Store for _build_vendor_evidence
+                _temporal_lookup[vname] = td
+                arch_scores = enriched.get("archetype_scores", [])
+                if arch_scores:
+                    _archetype_lookup[vname] = arch_scores
             except Exception:
                 logger.debug("Temporal enrichment skipped for %s", vname)
         if temporal_summaries:
@@ -2440,6 +2819,138 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             payload_size = len(json.dumps(payload, default=str))
     except Exception:
         logger.debug("Temporal/archetype enrichment unavailable", exc_info=True)
+
+    # --- Stratified reasoning: recall/reconstitute/reason per vendor ---
+    # Runs BEFORE reports so conclusions feed into all builders + LLM prompts.
+    # When stratified_reasoning_enabled, builds rich evidence dicts first.
+    reasoning_lookup: dict[str, dict] = {}
+    evidence_for_reasoning: dict[str, dict[str, Any]] | None = None
+    if cfg.stratified_reasoning_enabled:
+        _pre_pain = _build_pain_lookup(pain_dist)
+        _pre_comp = _build_competitor_lookup(competitive_disp)
+        _pre_fg = _build_feature_gap_lookup(feature_gaps)
+        _pre_kw = _build_keyword_spike_lookup(keyword_spikes)
+        _pre_dm = {r["vendor"]: r["dm_churn_rate"] for r in dm_rates}
+        _pre_price = {r["vendor"]: r["price_complaint_rate"] for r in price_rates}
+        _pre_quote = {r["vendor"]: r["quotes"] for r in quotable_evidence}
+        _pre_budget = {r["vendor"]: {k: v for k, v in r.items() if k != "vendor"} for r in budget_signals}
+        _pre_ba = _build_buyer_auth_lookup(buyer_auth)
+        _pre_uc = _build_use_case_lookup(use_case_dist)
+
+        evidence_for_reasoning = {}
+        for vs in vendor_scores:
+            vname = _canonicalize_vendor(vs.get("vendor_name") or "")
+            if vname:
+                evidence_for_reasoning[vname] = _build_vendor_evidence(
+                    vs,
+                    pain_lookup=_pre_pain,
+                    competitor_lookup=_pre_comp,
+                    feature_gap_lookup=_pre_fg,
+                    insider_lookup=insider_lookup,
+                    keyword_spike_lookup=_pre_kw,
+                    temporal_lookup=_temporal_lookup or None,
+                    archetype_lookup=_archetype_lookup or None,
+                    dm_lookup=_pre_dm,
+                    price_lookup=_pre_price,
+                    quote_lookup=_pre_quote,
+                    budget_lookup=_pre_budget,
+                    buyer_auth_lookup=_pre_ba,
+                    use_case_lookup=_pre_uc,
+                )
+
+    try:
+        from atlas_brain.reasoning import get_stratified_reasoner
+        from atlas_brain.reasoning.tiers import Tier, gather_tier_context
+
+        reasoner = get_stratified_reasoner()
+        if reasoner is not None:
+            sem = asyncio.Semaphore(cfg.stratified_reasoning_concurrency)
+            total_tokens = 0
+            mode_counts: dict[str, int] = {}
+
+            async def _analyze_one(vs: dict[str, Any]) -> None:
+                nonlocal total_tokens
+                vname = _canonicalize_vendor(vs.get("vendor_name") or "")
+                if not vname:
+                    return
+                category = vs.get("product_category", "")
+                evidence = (evidence_for_reasoning or {}).get(vname, vs)
+                async with sem:
+                    try:
+                        tier_ctx = await gather_tier_context(
+                            reasoner._cache, Tier.VENDOR_ARCHETYPE,
+                            vendor_name=vname, product_category=category,
+                        )
+                        sr = await reasoner.analyze(
+                            vendor_name=vname,
+                            evidence=evidence,
+                            product_category=category,
+                            tier_context=tier_ctx,
+                        )
+                        conclusion = sr.conclusion or {}
+                        reasoning_lookup[vname] = {
+                            "archetype": conclusion.get("archetype", ""),
+                            "confidence": sr.confidence,
+                            "risk_level": conclusion.get("risk_level", ""),
+                            "executive_summary": conclusion.get("executive_summary", ""),
+                            "key_signals": conclusion.get("key_signals", []),
+                            "falsification_conditions": conclusion.get("falsification_conditions", []),
+                            "uncertainty_sources": conclusion.get("uncertainty_sources", []),
+                            "mode": sr.mode,
+                            "tokens_used": sr.tokens_used,
+                        }
+                        total_tokens += sr.tokens_used
+                        mode_counts[sr.mode] = mode_counts.get(sr.mode, 0) + 1
+                    except Exception:
+                        logger.debug("Stratified reasoning failed for %s", vname, exc_info=True)
+
+            await asyncio.gather(*[
+                _analyze_one(vs)
+                for vs in vendor_scores[:cfg.intelligence_exploratory_vendor_limit]
+            ])
+
+            if reasoning_lookup:
+                mode_summary = ", ".join(f"{m}={c}" for m, c in sorted(mode_counts.items()))
+                logger.info(
+                    "Stratified reasoning: %d vendors, modes: %s, total_tokens: %d",
+                    len(reasoning_lookup), mode_summary, total_tokens,
+                )
+                # Inject summary into payload for exploratory overview LLM
+                payload["stratified_intelligence"] = [
+                    {
+                        "vendor": vname,
+                        "archetype": rc.get("archetype", ""),
+                        "confidence": rc.get("confidence", 0),
+                        "risk_level": rc.get("risk_level", ""),
+                        "executive_summary": rc.get("executive_summary", ""),
+                        "key_signals": rc.get("key_signals", []),
+                    }
+                    for vname, rc in reasoning_lookup.items()
+                ]
+                payload_size = len(json.dumps(payload, default=str))
+    except Exception:
+        logger.debug("Stratified reasoning integration skipped", exc_info=True)
+
+    # --- Cross-vendor ecosystem analysis (category-level intelligence) ---
+    ecosystem_evidence: dict[str, Any] = {}
+    if cfg.stratified_reasoning_enabled and reasoning_lookup:
+        try:
+            from atlas_brain.reasoning.ecosystem import EcosystemAnalyzer
+            eco = EcosystemAnalyzer(pool)
+            eco_results = await eco.analyze_all_categories()
+            for cat, ev in eco_results.items():
+                ecosystem_evidence[cat] = {
+                    "category": cat,
+                    "hhi": getattr(ev.health, "hhi", None),
+                    "market_structure": getattr(ev.health, "market_structure", None),
+                    "displacement_intensity": getattr(ev.health, "displacement_intensity", None),
+                    "dominant_archetype": getattr(ev.health, "dominant_archetype", None),
+                    "archetype_distribution": ev.archetype_distribution or {},
+                }
+            if ecosystem_evidence:
+                logger.info("Ecosystem analysis: %d categories", len(ecosystem_evidence))
+        except Exception:
+            logger.debug("Ecosystem analysis skipped", exc_info=True)
 
     from ...pipelines.llm import call_llm_with_skill, parse_json_response, get_pipeline_llm
 
@@ -2576,6 +3087,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         company_lookup=company_lookup,
         keyword_spike_lookup=keyword_spike_lookup,
         prior_reports=prior_reports,
+        reasoning_lookup=reasoning_lookup,
+        temporal_lookup=_temporal_lookup or None,
     )
     deterministic_vendor_scorecards = _build_deterministic_vendor_scorecards(
         vendor_scores,
@@ -2591,11 +3104,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         company_lookup=company_lookup,
         product_profile_lookup=product_profile_lookup,
         prior_reports=prior_reports,
+        reasoning_lookup=reasoning_lookup,
+        temporal_lookup=_temporal_lookup or None,
     )
     deterministic_displacement_map = _build_deterministic_displacement_map(
         competitive_disp,
         competitor_reasons,
         quote_lookup,
+        reasoning_lookup=reasoning_lookup,
     )
 
     # Enrich displacement edges with provenance and confidence
@@ -2619,17 +3135,46 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         dm_lookup=dm_lookup,
         price_lookup=price_lookup,
         competitor_lookup=competitor_lookup,
+        reasoning_lookup=reasoning_lookup,
     )
 
-    # LLM pass: generate expert take for each vendor scorecard
+    # Enrich category overview with ecosystem evidence (HHI, market structure)
+    if ecosystem_evidence:
+        for cat_entry in deterministic_category_overview:
+            cat_name = cat_entry.get("category", "")
+            eco = ecosystem_evidence.get(cat_name)
+            if eco:
+                cat_entry["ecosystem"] = {
+                    "hhi": eco.get("hhi"),
+                    "market_structure": eco.get("market_structure"),
+                    "displacement_intensity": eco.get("displacement_intensity"),
+                    "dominant_archetype": eco.get("dominant_archetype"),
+                }
+
+    # LLM pass: generate expert take for each vendor scorecard.
+    # When stratified reasoning provided an executive_summary, use it directly
+    # as expert_take (skip per-vendor LLM call -- saves ~300 tokens * N vendors).
     scorecard_llm_failures = 0
+    scorecard_reasoning_reused = 0
     for sc in deterministic_vendor_scorecards:
+        reasoning_summary = sc.get("reasoning_summary", "")
+        if reasoning_summary and cfg.stratified_reasoning_enabled:
+            sc["expert_take"] = reasoning_summary
+            scorecard_reasoning_reused += 1
+            continue
         try:
             llm_input = {k: sc[k] for k in (
                 "vendor", "churn_pressure_score", "risk_level", "churn_signal_density",
                 "avg_urgency", "feature_analysis", "churn_predictors", "competitor_overlap",
                 "trend", "sentiment_direction",
             ) if k in sc}
+            if sc.get("archetype"):
+                llm_input["reasoning_conclusion"] = {
+                    "archetype": sc["archetype"],
+                    "confidence": sc.get("archetype_confidence", 0),
+                    "executive_summary": reasoning_summary,
+                    "key_signals": (reasoning_lookup or {}).get(sc.get("vendor", ""), {}).get("key_signals", []),
+                }
             narrative = await asyncio.wait_for(
                 asyncio.to_thread(
                     call_llm_with_skill,
@@ -2647,9 +3192,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             scorecard_llm_failures += 1
             logger.warning("Vendor deep dive LLM failed for %s", sc.get("vendor"))
             sc["expert_take"] = ""
-    if scorecard_llm_failures:
-        logger.info("Vendor scorecard LLM: %d/%d failed",
-                     scorecard_llm_failures, len(deterministic_vendor_scorecards))
+    if scorecard_llm_failures or scorecard_reasoning_reused:
+        logger.info("Vendor scorecard LLM: %d/%d failed, %d reused reasoning summary",
+                     scorecard_llm_failures, len(deterministic_vendor_scorecards),
+                     scorecard_reasoning_reused)
 
     parsed["weekly_churn_feed"] = deterministic_weekly_feed
     parsed["vendor_scorecards"] = deterministic_vendor_scorecards
@@ -2666,6 +3212,54 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             executive_sources=_exec_sources,
             report_type=_rt,
         )
+    # LLM-synthesized executive summaries (when enabled, upgrades deterministic)
+    if cfg.executive_summary_llm_enabled and reasoning_lookup:
+        _reasoning_digest = [
+            {
+                "vendor": vname,
+                "archetype": rc.get("archetype", ""),
+                "risk_level": rc.get("risk_level", ""),
+                "key_signals": rc.get("key_signals", [])[:3],
+            }
+            for vname, rc in list(reasoning_lookup.items())[:15]
+        ]
+        _report_data_map = {
+            "weekly_churn_feed": deterministic_weekly_feed,
+            "vendor_scorecard": deterministic_vendor_scorecards,
+            "displacement_report": deterministic_displacement_map,
+            "category_overview": deterministic_category_overview,
+        }
+        for _rt in ("weekly_churn_feed", "vendor_scorecard", "displacement_report", "category_overview"):
+            try:
+                _es_input = {
+                    "report_type": _rt,
+                    "report_data": _report_data_map[_rt][:10],
+                    "reasoning_summary": _reasoning_digest,
+                    "data_context": {
+                        k: data_context.get(k)
+                        for k in ("enrichment_period", "source_distribution",
+                                  "reviews_in_analysis_window", "vendor_count")
+                        if data_context.get(k)
+                    },
+                }
+                _es_raw = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        call_llm_with_skill,
+                        "digest/b2b_executive_summary",
+                        json.dumps(_es_input, default=str),
+                        max_tokens=512, temperature=0.3,
+                        response_format={"type": "json_object"},
+                        workload=_llm_workload,
+                    ),
+                    timeout=60,
+                )
+                _es_parsed = parse_json_response(_es_raw)
+                llm_summary = _es_parsed.get("executive_summary", "")
+                if llm_summary:
+                    _exec_summaries[_rt] = llm_summary
+            except Exception:
+                logger.debug("LLM executive summary failed for %s, using deterministic", _rt)
+
     _fallback_summary = _exec_summaries.get("weekly_churn_feed", "")
 
     # Build battle cards (per-vendor, persisted separately)
@@ -2683,8 +3277,21 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         product_profile_lookup=product_profile_lookup,
         competitive_disp=competitive_disp,
         competitor_reasons=competitor_reasons,
+        reasoning_lookup=reasoning_lookup,
     )
     logger.info("Built %d battle cards", len(deterministic_battle_cards))
+
+    # Enrich battle cards with ecosystem context
+    if ecosystem_evidence:
+        for card in deterministic_battle_cards:
+            cat = card.get("category", "")
+            eco = ecosystem_evidence.get(cat)
+            if eco:
+                card["ecosystem_context"] = {
+                    "market_structure": eco.get("market_structure"),
+                    "dominant_archetype": eco.get("dominant_archetype"),
+                    "displacement_intensity": eco.get("displacement_intensity"),
+                }
 
     # LLM pass: generate sales copy for each battle card (with caching)
     from ...reasoning.semantic_cache import SemanticCache, CacheEntry, compute_evidence_hash
@@ -2960,6 +3567,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         keyword_spike_lookup,
         provenance_lookup=vendor_provenance,
         insider_lookup=insider_lookup,
+        reasoning_lookup=reasoning_lookup,
     )
 
     # Persist company signals to first-class table
@@ -3214,53 +3822,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 change_events_detected = await _detect_change_events(
                     pool, vendor_scores, pain_lookup, competitor_lookup, today,
                     price_lookup=price_lookup, dm_lookup=dm_lookup,
+                    temporal_lookup=_temporal_lookup or None,
                 )
         except Exception:
             logger.exception("Failed to persist vendor snapshots / change events")
-
-    # --- Stratified reasoning: recall/reconstitute/reason per vendor ---
-    # Runs AFTER snapshot persistence so the reasoner sees freshly written data.
-    try:
-        from atlas_brain.reasoning import get_stratified_reasoner
-        from atlas_brain.reasoning.tiers import Tier, gather_tier_context
-
-        reasoner = get_stratified_reasoner()
-        if reasoner is not None:
-            stratified_results = []
-            for vs in vendor_scores[:cfg.intelligence_exploratory_vendor_limit]:
-                vname = vs["vendor_name"]
-                category = vs.get("product_category", "")
-                try:
-                    tier_ctx = await gather_tier_context(
-                        reasoner._cache, Tier.VENDOR_ARCHETYPE,
-                        vendor_name=vname, product_category=category,
-                    )
-                    sr = await reasoner.analyze(
-                        vendor_name=vname,
-                        evidence=vs,
-                        product_category=category,
-                        tier_context=tier_ctx,
-                    )
-                    stratified_results.append({
-                        "vendor_name": vname,
-                        "mode": sr.mode,
-                        "archetype": sr.conclusion.get("archetype", ""),
-                        "confidence": sr.confidence,
-                        "tokens_used": sr.tokens_used,
-                        "conclusion": sr.conclusion,
-                    })
-                except Exception:
-                    logger.debug("Stratified reasoning failed for %s", vname, exc_info=True)
-
-            if stratified_results:
-                parsed["stratified_intelligence"] = stratified_results
-                logger.info(
-                    "Stratified reasoning: %d vendors (%s)",
-                    len(stratified_results),
-                    ", ".join(f"{r['vendor_name']}={r['mode']}" for r in stratified_results),
-                )
-    except Exception:
-        logger.debug("Stratified reasoning integration skipped", exc_info=True)
 
     # Send ntfy notification
     await _send_notification(task, parsed, high_intent)
@@ -5150,8 +5715,9 @@ async def _upsert_churn_signals(
     keyword_spike_lookup: dict[str, dict] | None = None,
     provenance_lookup: dict[str, dict] | None = None,
     insider_lookup: dict[str, dict] | None = None,
+    reasoning_lookup: dict[str, dict] | None = None,
 ) -> int:
-    """Upsert b2b_churn_signals (29 columns incl. provenance + insider). Returns failure count."""
+    """Upsert b2b_churn_signals (33 columns incl. provenance + insider + reasoning). Returns failure count."""
     now = datetime.now(timezone.utc)
     budget_lookup = budget_lookup or {}
     use_case_lookup = use_case_lookup or {}
@@ -5160,6 +5726,7 @@ async def _upsert_churn_signals(
     buyer_auth_lookup = buyer_auth_lookup or {}
     timeline_lookup = timeline_lookup or {}
     keyword_spike_lookup = keyword_spike_lookup or {}
+    reasoning_lookup = reasoning_lookup or {}
     provenance_lookup = provenance_lookup or {}
     insider_lookup = insider_lookup or {}
     failures = 0
@@ -5199,11 +5766,14 @@ async def _upsert_churn_signals(
                     confidence_score,
                     insider_signal_count, insider_org_health_summary,
                     insider_talent_drain_rate, insider_quotable_evidence,
+                    archetype, archetype_confidence,
+                    reasoning_mode, falsification_conditions,
                     last_computed_at
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
                           $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
                           $22, $23, $24, $25, $26, $27, $28, $29,
-                          $30, $31, $32, $33, $34)
+                          $30, $31, $32, $33,
+                          $34, $35, $36, $37, $38)
                 ON CONFLICT (vendor_name, COALESCE(product_category, '')) DO UPDATE SET
                     total_reviews = EXCLUDED.total_reviews,
                     negative_reviews = EXCLUDED.negative_reviews,
@@ -5236,6 +5806,10 @@ async def _upsert_churn_signals(
                     insider_org_health_summary = EXCLUDED.insider_org_health_summary,
                     insider_talent_drain_rate = EXCLUDED.insider_talent_drain_rate,
                     insider_quotable_evidence = EXCLUDED.insider_quotable_evidence,
+                    archetype = EXCLUDED.archetype,
+                    archetype_confidence = EXCLUDED.archetype_confidence,
+                    reasoning_mode = EXCLUDED.reasoning_mode,
+                    falsification_conditions = EXCLUDED.falsification_conditions,
                     last_computed_at = EXCLUDED.last_computed_at
                 """,
                 vendor,
@@ -5272,6 +5846,11 @@ async def _upsert_churn_signals(
                 json.dumps(insider.get("org_health_summary", {})),
                 insider.get("talent_drain_rate"),
                 json.dumps(insider.get("quotable_evidence", [])[:5]),
+                # Reasoning columns (migration 139)
+                reasoning_lookup.get(vendor, {}).get("archetype"),
+                reasoning_lookup.get(vendor, {}).get("confidence"),
+                reasoning_lookup.get(vendor, {}).get("mode"),
+                json.dumps(reasoning_lookup.get(vendor, {}).get("falsification_conditions", [])) if reasoning_lookup.get(vendor) else None,
                 now,
             )
         except Exception:

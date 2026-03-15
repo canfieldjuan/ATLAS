@@ -26,6 +26,9 @@ A JSON object with:
 - `vendor_weaknesses`: top weaknesses with evidence counts and source
 - `customer_pain_quotes`: verbatim customer quotes with urgency scores, titles, company sizes, industries
 - `competitor_differentiators`: top competitors with mention counts, primary drivers, switch counts
+- `archetype` (if present): reasoning archetype (e.g., "pricing_shock", "feature_gap")
+- `archetype_risk_level` (if present): "low", "medium", "high", or "critical"
+- `archetype_key_signals` (if present): list of key evidence signals from stratified reasoning
 - `objection_data`: metrics including:
   - `price_complaint_rate` (0-1)
   - `dm_churn_rate` (0-1) -- fraction of decision-makers showing churn signals
@@ -124,6 +127,7 @@ A JSON object with:
 - If `budget_context.price_increase_rate > 0`, reference the price increase wave in a displacement trigger.
 - If `dm_churn_rate >= 0.4`, this is a high-priority target -- reflect urgency in the executive summary.
 - If `churn_pressure_score >= 60`, open with "HIGH PRIORITY TARGET" in the executive summary.
+- If `archetype` is present, use it to sharpen the angle of attack in `executive_summary` and `talk_track` (e.g., a "pricing_shock" archetype means lead with cost-related pain). Reference `archetype_key_signals` in discovery questions when available.
 
 ## Output
 
