@@ -134,6 +134,21 @@ class TestPureLogic:
 
 @pytest.fixture
 async def db_pool():
+    # Restore real asyncpg if another test file's pre-mock block replaced
+    # it with a MagicMock (test_b2b_intelligence_validation.py does this).
+    import importlib
+    import sys
+    from unittest.mock import MagicMock
+
+    if isinstance(sys.modules.get("asyncpg"), MagicMock):
+        for key in [k for k in sys.modules if k.startswith("asyncpg")]:
+            del sys.modules[key]
+        importlib.import_module("asyncpg")
+        # DatabasePool already imported asyncpg -- reload it
+        db_mod_key = "atlas_brain.storage.database"
+        if db_mod_key in sys.modules:
+            importlib.reload(sys.modules[db_mod_key])
+
     from atlas_brain.storage.database import DatabasePool
 
     pool = DatabasePool()
@@ -151,6 +166,8 @@ async def db_pool():
 
 @pytest.fixture
 async def episodic():
+    if EpisodicStore is None:
+        pytest.skip("episodic_store import unavailable (neo4j dependency)")
     store = EpisodicStore()
     await store.ensure_indexes()
     yield store
