@@ -87,6 +87,7 @@ class EpisodicStore:
         self._auth = auth
         self._driver = None
         self._embedder = None
+        self._degraded = False
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -95,7 +96,9 @@ class EpisodicStore:
     async def _get_driver(self):
         if self._driver is None:
             self._driver = AsyncGraphDatabase.driver(
-                self._bolt_url, auth=self._auth,
+                self._bolt_url,
+                auth=self._auth,
+                connection_timeout=10.0,
             )
         return self._driver
 

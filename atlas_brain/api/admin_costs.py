@@ -520,6 +520,12 @@ async def scraping_details(
             l.block_type,
             l.parser_version,
             l.proxy_type,
+            l.stop_reason,
+            l.oldest_review,
+            l.newest_review,
+            l.date_dropped,
+            l.duplicate_pages,
+            l.has_page_logs,
             jsonb_array_length(l.errors)            AS error_count,
             t.vendor_name,
             t.product_name,
@@ -558,10 +564,113 @@ async def scraping_details(
                 "block_type": r["block_type"],
                 "parser_version": r["parser_version"],
                 "proxy_type": r["proxy_type"],
+                "stop_reason": r["stop_reason"],
+                "oldest_review": r["oldest_review"].isoformat() if r["oldest_review"] else None,
+                "newest_review": r["newest_review"].isoformat() if r["newest_review"] else None,
+                "date_dropped": r["date_dropped"] or 0,
+                "duplicate_pages": r["duplicate_pages"] or 0,
+                "has_page_logs": r["has_page_logs"] or False,
                 "started_at": r["started_at"].isoformat() if r["started_at"] else None,
             }
             for r in rows
         ],
+    }
+
+
+@router.get("/scraping/runs/{run_id}/pages")
+async def scraping_run_pages(run_id: str):
+    """
+    Page-level telemetry for a specific scrape run.
+
+    Returns per-page diagnostics: URL requested, status code, review counts,
+    date range, content hash, duplicate detection, and stop reason.
+    Only available when the run has ``has_page_logs=true``.
+    """
+    pool = _pool_or_503()
+    import uuid as _uuid
+
+    try:
+        rid = _uuid.UUID(run_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid run_id format")
+
+    # Verify run exists and get summary
+    run_row = await pool.fetchrow(
+        """
+        SELECT l.id, l.source, l.status, l.stop_reason, l.pages_scraped,
+               l.reviews_found, l.reviews_inserted, l.has_page_logs,
+               l.oldest_review, l.newest_review, l.date_dropped,
+               l.duplicate_pages, l.started_at, l.duration_ms,
+               t.vendor_name
+        FROM b2b_scrape_log l
+        JOIN b2b_scrape_targets t ON t.id = l.target_id
+        WHERE l.id = $1
+        """,
+        rid,
+    )
+    if not run_row:
+        raise HTTPException(status_code=404, detail="Scrape run not found")
+
+    pages = await pool.fetch(
+        """
+        SELECT page, url, requested_at, status_code, final_url,
+               response_bytes, duration_ms,
+               review_nodes_found, reviews_parsed,
+               missing_date, missing_rating, missing_body, missing_author,
+               oldest_review, newest_review,
+               next_page_found, next_page_url, content_hash,
+               duplicate_reviews, stop_reason, errors
+        FROM b2b_scrape_page_logs
+        WHERE run_id = $1
+        ORDER BY page
+        """,
+        rid,
+    )
+
+    return {
+        "run": {
+            "id": str(run_row["id"]),
+            "source": run_row["source"],
+            "vendor_name": run_row["vendor_name"],
+            "status": run_row["status"],
+            "stop_reason": run_row["stop_reason"],
+            "pages_scraped": run_row["pages_scraped"],
+            "reviews_found": run_row["reviews_found"],
+            "reviews_inserted": run_row["reviews_inserted"],
+            "oldest_review": run_row["oldest_review"].isoformat() if run_row["oldest_review"] else None,
+            "newest_review": run_row["newest_review"].isoformat() if run_row["newest_review"] else None,
+            "date_dropped": run_row["date_dropped"] or 0,
+            "duplicate_pages": run_row["duplicate_pages"] or 0,
+            "duration_ms": run_row["duration_ms"],
+            "started_at": run_row["started_at"].isoformat() if run_row["started_at"] else None,
+        },
+        "pages": [
+            {
+                "page": p["page"],
+                "url": p["url"],
+                "requested_at": p["requested_at"].isoformat() if p["requested_at"] else None,
+                "status_code": p["status_code"],
+                "final_url": p["final_url"],
+                "response_bytes": p["response_bytes"],
+                "duration_ms": p["duration_ms"],
+                "review_nodes_found": p["review_nodes_found"],
+                "reviews_parsed": p["reviews_parsed"],
+                "missing_date": p["missing_date"],
+                "missing_rating": p["missing_rating"],
+                "missing_body": p["missing_body"],
+                "missing_author": p["missing_author"],
+                "oldest_review": p["oldest_review"].isoformat() if p["oldest_review"] else None,
+                "newest_review": p["newest_review"].isoformat() if p["newest_review"] else None,
+                "next_page_found": p["next_page_found"],
+                "next_page_url": p["next_page_url"],
+                "content_hash": p["content_hash"],
+                "duplicate_reviews": p["duplicate_reviews"],
+                "stop_reason": p["stop_reason"],
+                "errors": p["errors"] if isinstance(p["errors"], list) else [],
+            }
+            for p in pages
+        ],
+        "page_count": len(pages),
     }
 
 

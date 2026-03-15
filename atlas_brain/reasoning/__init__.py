@@ -96,7 +96,9 @@ async def init_stratified_reasoner(db_pool) -> None:
         from .config import ReasoningConfig
         _rcfg = ReasoningConfig()
         _neo4j_driver = AsyncGraphDatabase.driver(
-            _rcfg.neo4j_bolt_url, auth=(_rcfg.neo4j_user, _rcfg.neo4j_password),
+            _rcfg.neo4j_bolt_url,
+            auth=(_rcfg.neo4j_user, _rcfg.neo4j_password),
+            connection_timeout=10.0,
         )
         _stratified_reasoner._graph = KnowledgeGraphQuery(_neo4j_driver)
         _stratified_reasoner._triggers = TriggerCorrelator(db_pool)

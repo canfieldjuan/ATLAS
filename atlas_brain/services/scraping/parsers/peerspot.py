@@ -22,7 +22,7 @@ from urllib.parse import quote_plus
 from bs4 import BeautifulSoup, Tag
 
 from ..client import AntiDetectionClient
-from . import ScrapeResult, ScrapeTarget, register_parser
+from . import ScrapeResult, ScrapeTarget, log_page, register_parser
 
 logger = logging.getLogger("atlas.services.scraping.parsers.peerspot")
 
@@ -93,6 +93,10 @@ class PeerSpotParser:
         errors: list[str] = []
         pages_scraped = 0
         seen_ids: set[str] = set()
+        page_logs = []
+        prior_hashes: set[str] = set()
+        prior_review_ids: set[str] = set()
+        import time as _time
 
         for page in range(1, target.max_pages + 1):
             url = f"{_BASE_URL}/{target.product_slug}-reviews"
@@ -118,6 +122,7 @@ class PeerSpotParser:
                 "Referer": referer,
             }
 
+            page_start = _time.monotonic()
             try:
                 async with httpx.AsyncClient(
                     proxy=proxy_url, verify=False, timeout=90.0,
@@ -125,45 +130,46 @@ class PeerSpotParser:
                     resp = await http.get(url, headers=headers)
 
                 pages_scraped += 1
+                elapsed_ms = int((_time.monotonic() - page_start) * 1000)
 
                 if resp.status_code == 403:
                     errors.append(f"Page {page}: blocked (403) via Web Unlocker")
+                    page_logs.append(log_page(page, url, status_code=403, duration_ms=elapsed_ms,
+                        response_bytes=len(resp.content), raw_body=resp.content,
+                        prior_hashes=prior_hashes, errors=["blocked (403)"]))
                     break
                 if resp.status_code != 200:
                     errors.append(f"Page {page}: HTTP {resp.status_code}")
+                    page_logs.append(log_page(page, url, status_code=resp.status_code, duration_ms=elapsed_ms,
+                        response_bytes=len(resp.content), raw_body=resp.content,
+                        prior_hashes=prior_hashes, errors=[f"HTTP {resp.status_code}"]))
                     continue
 
-                # Try JSON-LD first, fall back to HTML
                 page_reviews = _parse_json_ld(resp.text, target, seen_ids)
                 if not page_reviews:
                     page_reviews = _parse_html(resp.text, target, seen_ids)
 
+                page_logs.append(log_page(page, url, status_code=200, duration_ms=elapsed_ms,
+                    response_bytes=len(resp.content), reviews=page_reviews, raw_body=resp.content,
+                    prior_hashes=prior_hashes, prior_review_ids=prior_review_ids,
+                    next_page_found=bool(page_reviews)))
+
                 if not page_reviews:
                     if page == 1:
-                        logger.warning(
-                            "PeerSpot Web Unlocker page 1 returned 0 reviews for %s",
-                            target.product_slug,
-                        )
+                        logger.warning("PeerSpot Web Unlocker page 1 returned 0 reviews for %s", target.product_slug)
                     break
 
                 reviews.extend(page_reviews)
 
             except Exception as exc:
                 errors.append(f"Page {page}: {exc}")
-                logger.warning(
-                    "PeerSpot Web Unlocker page %d failed for %s: %s",
-                    page, target.product_slug, exc,
-                )
+                logger.warning("PeerSpot Web Unlocker page %d failed for %s: %s", page, target.product_slug, exc)
                 break
 
-            # Inter-page delay
             await asyncio.sleep(random.uniform(2.0, 5.0))
 
-        logger.info(
-            "PeerSpot Web Unlocker scrape for %s: %d reviews from %d pages",
-            target.vendor_name, len(reviews), pages_scraped,
-        )
-        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors)
+        logger.info("PeerSpot Web Unlocker scrape for %s: %d reviews from %d pages", target.vendor_name, len(reviews), pages_scraped)
+        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors, page_logs=page_logs)
 
     # ------------------------------------------------------------------
     # HTTP client path (curl_cffi + residential proxy)
@@ -175,6 +181,10 @@ class PeerSpotParser:
         errors: list[str] = []
         pages_scraped = 0
         seen_ids: set[str] = set()
+        page_logs = []
+        prior_hashes: set[str] = set()
+        prior_review_ids: set[str] = set()
+        import time as _time
 
         consecutive_empty = 0
         for page in range(1, target.max_pages + 1):
@@ -182,7 +192,6 @@ class PeerSpotParser:
             if page > 1:
                 url += f"?page={page}"
 
-            # Referer chain: Google for first page, previous page for subsequent
             referer = (
                 f"https://www.google.com/search?q={quote_plus(target.vendor_name)}+peerspot+reviews"
                 if page == 1
@@ -191,49 +200,51 @@ class PeerSpotParser:
                 else f"{_BASE_URL}/{target.product_slug}-reviews"
             )
 
+            page_start = _time.monotonic()
             try:
-                resp = await client.get(
-                    url,
-                    domain=_DOMAIN,
-                    referer=referer,
-                    sticky_session=True,
-                    prefer_residential=True,
-                )
+                resp = await client.get(url, domain=_DOMAIN, referer=referer,
+                    sticky_session=True, prefer_residential=True)
                 pages_scraped += 1
+                elapsed_ms = int((_time.monotonic() - page_start) * 1000)
 
                 if resp.status_code == 403:
                     errors.append(f"Page {page}: blocked (403) -- Cloudflare challenge")
+                    page_logs.append(log_page(page, url, status_code=403, duration_ms=elapsed_ms,
+                        response_bytes=len(resp.content or b""), raw_body=resp.content,
+                        prior_hashes=prior_hashes, errors=["blocked (403)"]))
                     break
                 if resp.status_code == 429:
                     errors.append(f"Page {page}: rate limited (429)")
+                    page_logs.append(log_page(page, url, status_code=429, duration_ms=elapsed_ms,
+                        prior_hashes=prior_hashes, errors=["rate limited (429)"]))
                     break
                 if resp.status_code != 200:
                     errors.append(f"Page {page}: HTTP {resp.status_code}")
+                    page_logs.append(log_page(page, url, status_code=resp.status_code, duration_ms=elapsed_ms,
+                        prior_hashes=prior_hashes, errors=[f"HTTP {resp.status_code}"]))
                     continue
 
-                # Guard against non-HTML responses
                 ct = resp.headers.get("content-type", "")
                 if "html" not in ct and "text" not in ct:
                     errors.append(f"Page {page}: unexpected content-type ({ct[:40]})")
+                    page_logs.append(log_page(page, url, status_code=resp.status_code, duration_ms=elapsed_ms,
+                        errors=[f"unexpected content-type ({ct[:40]})"]))
                     break
 
                 html = resp.text
-
-                # Strategy 1: JSON-LD extraction (most reliable when present)
                 page_reviews = _parse_json_ld(html, target, seen_ids)
-
-                # Strategy 2: HTML fallback
                 if not page_reviews:
                     page_reviews = _parse_html(html, target, seen_ids)
 
+                page_logs.append(log_page(page, url, status_code=200, duration_ms=elapsed_ms,
+                    response_bytes=len(resp.content or b""), reviews=page_reviews, raw_body=resp.content,
+                    prior_hashes=prior_hashes, prior_review_ids=prior_review_ids,
+                    next_page_found=bool(page_reviews)))
+
                 if not page_reviews:
                     if page == 1:
-                        logger.warning(
-                            "PeerSpot page 1 returned 0 reviews for %s -- "
-                            "JSON-LD and HTML selectors may be stale",
-                            target.product_slug,
-                        )
-                    break  # No more reviews
+                        logger.warning("PeerSpot page 1 returned 0 reviews for %s -- selectors may be stale", target.product_slug)
+                    break
 
                 before = len(reviews)
                 reviews.extend(page_reviews)
@@ -251,12 +262,9 @@ class PeerSpotParser:
                 logger.warning("PeerSpot page %d failed for %s: %s", page, target.product_slug, exc)
                 break
 
-        logger.info(
-            "PeerSpot scrape for %s: %d reviews from %d pages",
-            target.vendor_name, len(reviews), pages_scraped,
-        )
+        logger.info("PeerSpot scrape for %s: %d reviews from %d pages", target.vendor_name, len(reviews), pages_scraped)
 
-        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors)
+        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors, page_logs=page_logs)
 
 
 # ------------------------------------------------------------------

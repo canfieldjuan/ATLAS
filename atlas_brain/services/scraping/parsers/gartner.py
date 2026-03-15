@@ -25,7 +25,7 @@ from bs4 import BeautifulSoup
 
 from ....config import settings
 from ..client import AntiDetectionClient
-from . import ScrapeResult, ScrapeTarget, register_parser
+from . import ScrapeResult, ScrapeTarget, log_page, register_parser
 
 logger = logging.getLogger("atlas.services.scraping.parsers.gartner")
 
@@ -87,6 +87,10 @@ class GartnerParser:
         errors: list[str] = []
         pages_scraped = 0
         seen_ids: set[str] = set()
+        page_logs = []
+        prior_hashes: set[str] = set()
+        prior_review_ids: set[str] = set()
+        import time as _time
 
         for page in range(target.max_pages):
             offset = page * _REVIEWS_PER_PAGE
@@ -109,6 +113,7 @@ class GartnerParser:
                 "Referer": referer,
             }
 
+            page_start = _time.monotonic()
             try:
                 async with httpx.AsyncClient(
                     proxy=proxy_url,
@@ -118,47 +123,48 @@ class GartnerParser:
                     resp = await http.get(url, headers=headers)
 
                 pages_scraped += 1
+                elapsed_ms = int((_time.monotonic() - page_start) * 1000)
 
                 if resp.status_code == 403:
                     errors.append(f"Page {page + 1}: blocked (403) via Web Unlocker")
+                    page_logs.append(log_page(page + 1, url, status_code=403, duration_ms=elapsed_ms,
+                        response_bytes=len(resp.content), raw_body=resp.content,
+                        prior_hashes=prior_hashes, errors=["blocked (403)"]))
                     break
                 if resp.status_code != 200:
                     errors.append(f"Page {page + 1}: HTTP {resp.status_code}")
+                    page_logs.append(log_page(page + 1, url, status_code=resp.status_code, duration_ms=elapsed_ms,
+                        response_bytes=len(resp.content), raw_body=resp.content,
+                        prior_hashes=prior_hashes, errors=[f"HTTP {resp.status_code}"]))
                     continue
 
-                # Try JSON-LD first, then HTML fallback
                 page_reviews = _parse_json_ld(resp.text, target, seen_ids)
                 if not page_reviews:
                     page_reviews = _parse_next_data(resp.text, target, seen_ids)
                 if not page_reviews:
                     page_reviews = _parse_html(resp.text, target, seen_ids)
 
+                page_logs.append(log_page(page + 1, url, status_code=200, duration_ms=elapsed_ms,
+                    response_bytes=len(resp.content), reviews=page_reviews, raw_body=resp.content,
+                    prior_hashes=prior_hashes, prior_review_ids=prior_review_ids,
+                    next_page_found=bool(page_reviews)))
+
                 if not page_reviews:
                     if page == 0:
-                        logger.warning(
-                            "Gartner Web Unlocker page 1 returned 0 reviews for %s",
-                            target.product_slug,
-                        )
+                        logger.warning("Gartner Web Unlocker page 1 returned 0 reviews for %s", target.product_slug)
                     break
 
                 reviews.extend(page_reviews)
 
             except Exception as exc:
                 errors.append(f"Page {page + 1}: {exc}")
-                logger.warning(
-                    "Gartner Web Unlocker page %d failed for %s: %s",
-                    page + 1, target.product_slug, exc,
-                )
+                logger.warning("Gartner Web Unlocker page %d failed for %s: %s", page + 1, target.product_slug, exc)
                 break
 
-            # Inter-page delay
             await asyncio.sleep(random.uniform(3.0, 6.0))
 
-        logger.info(
-            "Gartner Web Unlocker scrape for %s: %d reviews from %d pages",
-            target.vendor_name, len(reviews), pages_scraped,
-        )
-        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors)
+        logger.info("Gartner Web Unlocker scrape for %s: %d reviews from %d pages", target.vendor_name, len(reviews), pages_scraped)
+        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors, page_logs=page_logs)
 
     # ------------------------------------------------------------------
     # HTTP path (curl_cffi -- fallback)
@@ -170,61 +176,69 @@ class GartnerParser:
         errors: list[str] = []
         pages_scraped = 0
         seen_ids: set[str] = set()
+        page_logs = []
+        prior_hashes: set[str] = set()
+        prior_review_ids: set[str] = set()
+        import time as _time
 
         consecutive_empty = 0
         for page in range(target.max_pages):
             offset = page * _REVIEWS_PER_PAGE
             url = _build_reviews_url(target.product_slug, offset)
 
-            # Referer chain: Google for first page, previous page for subsequent
             referer = (
                 f"https://www.google.com/search?q={quote_plus(target.vendor_name)}+gartner+peer+insights+reviews"
                 if page == 0
                 else _build_reviews_url(target.product_slug, (page - 1) * _REVIEWS_PER_PAGE)
             )
 
+            page_start = _time.monotonic()
             try:
-                resp = await client.get(
-                    url,
-                    domain=_DOMAIN,
-                    referer=referer,
-                    sticky_session=True,
-                    prefer_residential=True,
-                )
+                resp = await client.get(url, domain=_DOMAIN, referer=referer,
+                    sticky_session=True, prefer_residential=True)
                 pages_scraped += 1
+                elapsed_ms = int((_time.monotonic() - page_start) * 1000)
 
                 if resp.status_code == 403:
                     errors.append(f"Page {page + 1}: blocked (403) -- Akamai challenge")
+                    page_logs.append(log_page(page + 1, url, status_code=403, duration_ms=elapsed_ms,
+                        response_bytes=len(resp.content or b""), raw_body=resp.content,
+                        prior_hashes=prior_hashes, errors=["blocked (403)"]))
                     break
                 if resp.status_code == 429:
                     errors.append(f"Page {page + 1}: rate limited (429)")
+                    page_logs.append(log_page(page + 1, url, status_code=429, duration_ms=elapsed_ms,
+                        prior_hashes=prior_hashes, errors=["rate limited (429)"]))
                     break
                 if resp.status_code != 200:
                     errors.append(f"Page {page + 1}: HTTP {resp.status_code}")
+                    page_logs.append(log_page(page + 1, url, status_code=resp.status_code, duration_ms=elapsed_ms,
+                        prior_hashes=prior_hashes, errors=[f"HTTP {resp.status_code}"]))
                     continue
 
-                # Guard against non-HTML responses (CDN error pages, JSON errors)
                 ct = resp.headers.get("content-type", "")
                 if "html" not in ct and "text" not in ct:
                     errors.append(f"Page {page + 1}: unexpected content-type ({ct[:40]})")
+                    page_logs.append(log_page(page + 1, url, status_code=resp.status_code, duration_ms=elapsed_ms,
+                        errors=[f"unexpected content-type ({ct[:40]})"]))
                     break
 
                 before = len(reviews)
-
-                # Try JSON-LD first, then HTML fallback
                 page_reviews = _parse_json_ld(resp.text, target, seen_ids)
                 if not page_reviews:
                     page_reviews = _parse_next_data(resp.text, target, seen_ids)
                 if not page_reviews:
                     page_reviews = _parse_html(resp.text, target, seen_ids)
 
+                page_logs.append(log_page(page + 1, url, status_code=200, duration_ms=elapsed_ms,
+                    response_bytes=len(resp.content or b""), reviews=page_reviews, raw_body=resp.content,
+                    prior_hashes=prior_hashes, prior_review_ids=prior_review_ids,
+                    next_page_found=bool(page_reviews)))
+
                 if not page_reviews:
                     if page == 0:
-                        logger.warning(
-                            "Gartner page 1 returned 0 reviews for %s -- selectors may be stale",
-                            target.product_slug,
-                        )
-                    break  # No more reviews
+                        logger.warning("Gartner page 1 returned 0 reviews for %s -- selectors may be stale", target.product_slug)
+                    break
 
                 reviews.extend(page_reviews)
 
@@ -241,12 +255,8 @@ class GartnerParser:
                 logger.warning("Gartner page %d failed for %s: %s", page + 1, target.product_slug, exc)
                 break
 
-        logger.info(
-            "Gartner scrape for %s: %d reviews from %d pages",
-            target.vendor_name, len(reviews), pages_scraped,
-        )
-
-        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors)
+        logger.info("Gartner scrape for %s: %d reviews from %d pages", target.vendor_name, len(reviews), pages_scraped)
+        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors, page_logs=page_logs)
 
 
 # ------------------------------------------------------------------

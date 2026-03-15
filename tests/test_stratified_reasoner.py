@@ -59,6 +59,62 @@ class TestPureLogic:
         past = datetime.now(timezone.utc) - timedelta(days=180)
         assert abs(_apply_decay(1.0, past, 90) - 0.25) < 0.001
 
+    def test_reasoning_validation_accepts_grounded_output(self):
+        from atlas_brain.reasoning.stratified_reasoner import StratifiedReasoner
+
+        conclusion = StratifiedReasoner._normalize_conclusion({
+            "archetype": "pricing_shock",
+            "secondary_archetype": None,
+            "confidence": 0.82,
+            "risk_level": "high",
+            "executive_summary": "Pricing shock is the dominant pattern. It is surfacing now because complaint rates and urgency are rising together. Buyers should watch whether churn density normalizes over the next two snapshots.",
+            "key_signals": [
+                "churn_density: 38.6%",
+                "avg_urgency: 7.4",
+            ],
+            "falsification_conditions": [
+                "churn_density falls below 20% for two consecutive snapshots",
+            ],
+            "uncertainty_sources": [
+                "limited temporal depth",
+            ],
+        })
+        errors = StratifiedReasoner._validate_conclusion(
+            conclusion,
+            evidence_keys={"churn_density", "avg_urgency", "snapshot_days"},
+        )
+        assert errors == []
+
+    def test_reasoning_validation_rejects_parse_fallback(self):
+        from atlas_brain.reasoning.stratified_reasoner import StratifiedReasoner
+
+        errors = StratifiedReasoner._validate_conclusion({
+            "_parse_fallback": True,
+            "analysis_text": "not json",
+        })
+        assert "llm output was not valid json" in errors
+
+    def test_reasoning_validation_rejects_ungrounded_signals(self):
+        from atlas_brain.reasoning.stratified_reasoner import StratifiedReasoner
+
+        conclusion = StratifiedReasoner._normalize_conclusion({
+            "archetype": "feature_gap",
+            "secondary_archetype": None,
+            "confidence": 0.76,
+            "risk_level": "medium",
+            "executive_summary": "Feature gap is the likeliest pattern. It is appearing now because missing capability mentions are rising. Buyers should watch whether competitor mentions keep clustering around the same gap.",
+            "key_signals": ["high churn"],
+            "falsification_conditions": ["feature gap mentions stop appearing in new reviews"],
+            "uncertainty_sources": ["review sample may lag product releases"],
+        })
+        errors = StratifiedReasoner._validate_conclusion(
+            conclusion,
+            evidence_keys={"feature_gaps", "competitors"},
+        )
+        assert "key_signals must contain at least one grounded signal" in errors or (
+            "key_signals do not reference known evidence metrics" in errors
+        )
+
 
 # ---------------------------------------------------------------------------
 # Integration tests (require Postgres + Neo4j)

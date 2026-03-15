@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from .llm_utils import REASONING_CONCLUSION_JSON_SCHEMA, resolve_stratified_llm
+
 logger = logging.getLogger("atlas.reasoning.differential")
 
 RECONSTITUTE_THRESHOLD = 0.3
@@ -228,7 +230,7 @@ async def reconstitute(
 
     Returns (updated_conclusion, tokens_used).
     """
-    from ..pipelines.llm import get_pipeline_llm, parse_json_response
+    from ..pipelines.llm import parse_json_response
     from ..services.protocols import Message
 
     # Build a compact delta payload (not the full evidence)
@@ -251,10 +253,12 @@ async def reconstitute(
 
     from .config import ReasoningConfig
     _rcfg = ReasoningConfig()
-    _workload = _rcfg.stratified_llm_workload
-    llm = get_pipeline_llm(workload=_workload, auto_activate_ollama=(_workload == "vllm"))
+    llm = resolve_stratified_llm(_rcfg)
     if llm is None:
-        logger.error("No LLM available for reconstitution (workload=%s)", _workload)
+        logger.error(
+            "No LLM available for reconstitution (workload=%s)",
+            _rcfg.stratified_llm_workload,
+        )
         return old_conclusion, 0
 
     messages = [
@@ -271,6 +275,7 @@ async def reconstitute(
             messages=messages,
             max_tokens=min(_rcfg.max_tokens, 1024),
             temperature=_rcfg.temperature,
+            guided_json=REASONING_CONCLUSION_JSON_SCHEMA,
             response_format={"type": "json_object"},
         )
         text = result.get("response", "").strip()
@@ -278,7 +283,7 @@ async def reconstitute(
         tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
 
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-        updated = parse_json_response(text)
+        updated = parse_json_response(text, recover_truncated=True)
 
         duration_ms = (time.monotonic() - t0) * 1000
         logger.info(

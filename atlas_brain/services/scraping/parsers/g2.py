@@ -19,7 +19,7 @@ from bs4 import BeautifulSoup
 
 from ....config import settings
 from ..client import AntiDetectionClient
-from . import ScrapeResult, ScrapeTarget, register_parser
+from . import ScrapeResult, ScrapeTarget, log_page, register_parser
 
 logger = logging.getLogger("atlas.services.scraping.parsers.g2")
 
@@ -96,6 +96,10 @@ class G2Parser:
         errors: list[str] = []
         pages_scraped = 0
         seen_ids: set[str] = set()
+        page_logs = []
+        prior_hashes: set[str] = set()
+        prior_review_ids: set[str] = set()
+        import time as _time
 
         for page in range(1, target.max_pages + 1):
             url = f"{_BASE_URL}/{target.product_slug}/reviews"
@@ -121,6 +125,8 @@ class G2Parser:
                 "Referer": referer,
             }
 
+            page_errs: list[str] = []
+            page_start = _time.monotonic()
             try:
                 async with httpx.AsyncClient(
                     proxy=proxy_url,
@@ -130,15 +136,39 @@ class G2Parser:
                     resp = await http.get(url, headers=headers)
 
                 pages_scraped += 1
+                elapsed_ms = int((_time.monotonic() - page_start) * 1000)
 
                 if resp.status_code == 403:
+                    page_errs.append(f"blocked (403) via Web Unlocker")
                     errors.append(f"Page {page}: blocked (403) via Web Unlocker")
+                    page_logs.append(log_page(
+                        page, url, status_code=403, duration_ms=elapsed_ms,
+                        response_bytes=len(resp.content), raw_body=resp.content,
+                        prior_hashes=prior_hashes, errors=page_errs,
+                    ))
                     break
                 if resp.status_code != 200:
+                    page_errs.append(f"HTTP {resp.status_code}")
                     errors.append(f"Page {page}: HTTP {resp.status_code}")
+                    page_logs.append(log_page(
+                        page, url, status_code=resp.status_code, duration_ms=elapsed_ms,
+                        response_bytes=len(resp.content), raw_body=resp.content,
+                        prior_hashes=prior_hashes, errors=page_errs,
+                    ))
                     continue
 
                 page_reviews = _parse_page(resp.text, target, seen_ids)
+
+                pl = log_page(
+                    page, url, status_code=200, duration_ms=elapsed_ms,
+                    response_bytes=len(resp.content), reviews=page_reviews,
+                    raw_body=resp.content, prior_hashes=prior_hashes,
+                    prior_review_ids=prior_review_ids,
+                    next_page_found=page < target.max_pages,
+                    next_page_url=f"{_BASE_URL}/{target.product_slug}/reviews?page={page + 1}" if page_reviews else "",
+                )
+                page_logs.append(pl)
+
                 if not page_reviews:
                     if page == 1:
                         logger.warning(
@@ -164,7 +194,7 @@ class G2Parser:
             "G2 Web Unlocker scrape for %s: %d reviews from %d pages",
             target.vendor_name, len(reviews), pages_scraped,
         )
-        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors)
+        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors, page_logs=page_logs)
 
     # ------------------------------------------------------------------
     # Browser path (Playwright stealth)
@@ -182,6 +212,10 @@ class G2Parser:
         errors: list[str] = []
         pages_scraped = 0
         seen_ids: set[str] = set()
+        page_logs = []
+        prior_hashes: set[str] = set()
+        prior_review_ids: set[str] = set()
+        import time as _time
 
         # Get a residential proxy URL if available
         proxy_config = proxy_mgr.get_proxy(domain=_DOMAIN, sticky=True, prefer_residential=True)
@@ -200,6 +234,7 @@ class G2Parser:
                 else f"{_BASE_URL}/{target.product_slug}/reviews"
             )
 
+            page_start = _time.monotonic()
             try:
                 result = await browser.scrape_page(
                     url,
@@ -208,15 +243,36 @@ class G2Parser:
                     referer=referer,
                 )
                 pages_scraped += 1
+                elapsed_ms = int((_time.monotonic() - page_start) * 1000)
+                html_body = result.html or ""
 
                 if result.status_code == 403:
                     errors.append(f"Page {page}: blocked (403) via browser")
+                    page_logs.append(log_page(
+                        page, url, status_code=403, duration_ms=elapsed_ms,
+                        response_bytes=len(html_body), raw_body=html_body,
+                        prior_hashes=prior_hashes, errors=["blocked (403) via browser"],
+                    ))
                     break
                 if result.status_code != 200:
                     errors.append(f"Page {page}: HTTP {result.status_code}")
+                    page_logs.append(log_page(
+                        page, url, status_code=result.status_code, duration_ms=elapsed_ms,
+                        response_bytes=len(html_body), raw_body=html_body,
+                        prior_hashes=prior_hashes, errors=[f"HTTP {result.status_code}"],
+                    ))
                     continue
 
                 page_reviews = _parse_page(result.html, target, seen_ids)
+
+                page_logs.append(log_page(
+                    page, url, status_code=200, duration_ms=elapsed_ms,
+                    response_bytes=len(html_body), reviews=page_reviews,
+                    raw_body=html_body, prior_hashes=prior_hashes,
+                    prior_review_ids=prior_review_ids,
+                    next_page_found=bool(page_reviews),
+                ))
+
                 if not page_reviews:
                     if page == 1:
                         logger.warning(
@@ -239,7 +295,7 @@ class G2Parser:
             "G2 browser scrape for %s: %d reviews from %d pages",
             target.vendor_name, len(reviews), pages_scraped,
         )
-        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors)
+        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors, page_logs=page_logs)
 
     # ------------------------------------------------------------------
     # HTTP path (curl_cffi -- original)
@@ -251,6 +307,10 @@ class G2Parser:
         errors: list[str] = []
         pages_scraped = 0
         seen_ids: set[str] = set()
+        page_logs = []
+        prior_hashes: set[str] = set()
+        prior_review_ids: set[str] = set()
+        import time as _time
 
         consecutive_empty = 0
         for page in range(1, target.max_pages + 1):
@@ -267,6 +327,7 @@ class G2Parser:
                 else f"{_BASE_URL}/{target.product_slug}/reviews"
             )
 
+            page_start = _time.monotonic()
             try:
                 resp = await client.get(
                     url,
@@ -276,22 +337,46 @@ class G2Parser:
                     prefer_residential=True,
                 )
                 pages_scraped += 1
+                elapsed_ms = int((_time.monotonic() - page_start) * 1000)
 
                 if resp.status_code == 403:
                     errors.append(f"Page {page}: blocked (403) -- CAPTCHA challenge")
+                    page_logs.append(log_page(
+                        page, url, status_code=403, duration_ms=elapsed_ms,
+                        response_bytes=len(resp.content or b""), raw_body=resp.content,
+                        prior_hashes=prior_hashes, errors=["blocked (403) -- CAPTCHA"],
+                    ))
                     break
                 if resp.status_code != 200:
                     errors.append(f"Page {page}: HTTP {resp.status_code}")
+                    page_logs.append(log_page(
+                        page, url, status_code=resp.status_code, duration_ms=elapsed_ms,
+                        response_bytes=len(resp.content or b""), raw_body=resp.content,
+                        prior_hashes=prior_hashes, errors=[f"HTTP {resp.status_code}"],
+                    ))
                     continue
 
                 # Guard against non-HTML responses (CDN error pages, JSON errors)
                 ct = resp.headers.get("content-type", "")
                 if "html" not in ct and "text" not in ct:
                     errors.append(f"Page {page}: unexpected content-type ({ct[:40]})")
+                    page_logs.append(log_page(
+                        page, url, status_code=resp.status_code, duration_ms=elapsed_ms,
+                        errors=[f"unexpected content-type ({ct[:40]})"],
+                    ))
                     break
 
                 before = len(reviews)
                 page_reviews = _parse_page(resp.text, target, seen_ids)
+
+                page_logs.append(log_page(
+                    page, url, status_code=200, duration_ms=elapsed_ms,
+                    response_bytes=len(resp.content or b""), reviews=page_reviews,
+                    raw_body=resp.content, prior_hashes=prior_hashes,
+                    prior_review_ids=prior_review_ids,
+                    next_page_found=bool(page_reviews),
+                ))
+
                 if not page_reviews:
                     if page == 1:
                         logger.warning(
@@ -320,7 +405,7 @@ class G2Parser:
             target.vendor_name, len(reviews), pages_scraped,
         )
 
-        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors)
+        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors, page_logs=page_logs)
 
 
 def _parse_page(

@@ -6,7 +6,9 @@ Each parser implements the ReviewParser protocol and is registered by source nam
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import hashlib
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from ..client import AntiDetectionClient
@@ -49,6 +51,159 @@ class ScrapeTarget:
     product_category: str | None
     max_pages: int
     metadata: dict[str, Any]
+    date_cutoff: str | None = None  # ISO date (YYYY-MM-DD); parsers MAY stop when oldest review < this
+
+
+@dataclass
+class PageLog:
+    """Per-page telemetry for scraper diagnostics.
+
+    Captures what the scraper requested, what came back, what it
+    extracted, and why it continued or stopped. Populated inside
+    each parser's pagination loop via ``log_page()``.
+    """
+
+    # Request details
+    page: int
+    url: str
+    timestamp: str = ""  # ISO 8601
+
+    # Response details
+    status_code: int = 0
+    final_url: str = ""         # after redirects
+    response_bytes: int = 0
+    duration_ms: int = 0
+
+    # Extraction details
+    review_nodes_found: int = 0     # DOM containers matching selector
+    reviews_parsed: int = 0         # successfully built review dicts
+    missing_date: int = 0
+    missing_rating: int = 0
+    missing_body: int = 0
+    missing_title: int = 0
+    missing_author: int = 0
+
+    # Date details
+    oldest_review: str | None = None
+    newest_review: str | None = None
+
+    # Pagination details
+    next_page_found: bool = False
+    next_page_url: str = ""
+    content_hash: str = ""       # SHA-256 of body text (duplicate page detection)
+
+    # Dedup
+    duplicate_reviews: int = 0   # reviews matching prior pages
+
+    # Stop reason (empty = keep going)
+    stop_reason: str = ""
+
+    # Errors on this page
+    errors: list[str] = field(default_factory=list)
+
+
+def log_page(
+    page: int,
+    url: str,
+    *,
+    status_code: int = 0,
+    final_url: str = "",
+    response_bytes: int = 0,
+    duration_ms: int = 0,
+    reviews: list[dict[str, Any]] | None = None,
+    review_nodes_found: int = 0,
+    next_page_found: bool = False,
+    next_page_url: str = "",
+    raw_body: bytes | str | None = None,
+    prior_hashes: set[str] | None = None,
+    prior_review_ids: set[str] | None = None,
+    errors: list[str] | None = None,
+) -> PageLog:
+    """Build a PageLog entry from page-level scrape data.
+
+    Call this at the end of each page iteration inside a parser.
+    ``prior_hashes`` and ``prior_review_ids`` are mutated in-place
+    to track cross-page duplicates.
+    """
+    reviews = reviews or []
+    errors = errors or []
+
+    # Content hash for duplicate page detection
+    content_hash = ""
+    if raw_body:
+        body = raw_body if isinstance(raw_body, bytes) else raw_body.encode("utf-8", errors="replace")
+        content_hash = hashlib.sha256(body).hexdigest()[:16]
+
+    # Check for duplicate page (same hash as a prior page)
+    is_dup_page = False
+    if content_hash and prior_hashes is not None:
+        is_dup_page = content_hash in prior_hashes
+        prior_hashes.add(content_hash)
+
+    # Count missing fields
+    missing_date = sum(1 for r in reviews if not r.get("reviewed_at"))
+    missing_rating = sum(1 for r in reviews if r.get("rating") is None)
+    missing_body = sum(1 for r in reviews if not r.get("review_text") and not r.get("summary"))
+    missing_title = sum(1 for r in reviews if not r.get("summary"))
+    missing_author = sum(1 for r in reviews if not r.get("reviewer_name"))
+
+    # Date range on this page
+    oldest = None
+    newest = None
+    for r in reviews:
+        rd = r.get("reviewed_at")
+        if rd:
+            rd_str = str(rd)[:10]
+            if oldest is None or rd_str < oldest:
+                oldest = rd_str
+            if newest is None or rd_str > newest:
+                newest = rd_str
+
+    # Cross-page review dedup count
+    dup_count = 0
+    if prior_review_ids is not None:
+        for r in reviews:
+            rid = r.get("dedup_key") or r.get("source_review_id") or ""
+            if rid and rid in prior_review_ids:
+                dup_count += 1
+            elif rid:
+                prior_review_ids.add(rid)
+
+    pl = PageLog(
+        page=page,
+        url=url,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        status_code=status_code,
+        final_url=final_url or url,
+        response_bytes=response_bytes,
+        duration_ms=duration_ms,
+        review_nodes_found=review_nodes_found or len(reviews),
+        reviews_parsed=len(reviews),
+        missing_date=missing_date,
+        missing_rating=missing_rating,
+        missing_body=missing_body,
+        missing_title=missing_title,
+        missing_author=missing_author,
+        oldest_review=oldest,
+        newest_review=newest,
+        next_page_found=next_page_found,
+        next_page_url=next_page_url,
+        content_hash=content_hash,
+        duplicate_reviews=dup_count,
+        errors=errors,
+    )
+
+    # Auto-classify stop reasons
+    if is_dup_page:
+        pl.stop_reason = "duplicate_page"
+    elif status_code in (403, 429):
+        pl.stop_reason = "blocked_or_throttled"
+    elif status_code and status_code >= 400:
+        pl.stop_reason = "http_error"
+    elif review_nodes_found == 0 and len(reviews) == 0 and not errors:
+        pl.stop_reason = "empty_response"
+
+    return pl
 
 
 @dataclass
@@ -62,6 +217,10 @@ class ScrapeResult:
     captcha_attempts: int = 0
     captcha_types: list[str] | None = None
     captcha_solve_ms: int = 0
+    # Per-page telemetry (populated by parsers that call log_page())
+    page_logs: list[PageLog] = field(default_factory=list)
+    # Why this scrape stopped (set by parser or post-hoc by script)
+    stop_reason: str = ""
 
     @property
     def status(self) -> str:

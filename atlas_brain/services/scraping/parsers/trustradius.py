@@ -21,7 +21,7 @@ from urllib.parse import quote_plus
 from bs4 import BeautifulSoup
 
 from ..client import AntiDetectionClient
-from . import ScrapeResult, ScrapeTarget, register_parser
+from . import ScrapeResult, ScrapeTarget, log_page, register_parser
 
 logger = logging.getLogger("atlas.services.scraping.parsers.trustradius")
 
@@ -100,6 +100,10 @@ class TrustRadiusParser:
         errors: list[str] = []
         pages_scraped = 0
         seen_ids: set[str] = set()
+        page_logs = []
+        prior_hashes: set[str] = set()
+        prior_review_ids: set[str] = set()
+        import time as _time
 
         for page in range(1, target.max_pages + 1):
             url = f"{_PRODUCT_BASE}/{target.product_slug}/reviews"
@@ -122,6 +126,7 @@ class TrustRadiusParser:
                 ),
             }
 
+            page_start = _time.monotonic()
             try:
                 async with httpx.AsyncClient(
                     proxy=proxy_url, verify=False, timeout=90
@@ -129,15 +134,31 @@ class TrustRadiusParser:
                     resp = await http.get(url, headers=headers)
 
                 pages_scraped += 1
+                elapsed_ms = int((_time.monotonic() - page_start) * 1000)
 
                 if resp.status_code == 403:
                     errors.append(f"Page {page}: blocked (403) via Web Unlocker")
+                    page_logs.append(log_page(
+                        page, url, status_code=403, duration_ms=elapsed_ms,
+                        response_bytes=len(resp.content), raw_body=resp.content,
+                        prior_hashes=prior_hashes, errors=["blocked (403) via Web Unlocker"],
+                    ))
                     break
                 if resp.status_code == 404:
                     errors.append(f"Product slug not found: {target.product_slug}")
+                    page_logs.append(log_page(
+                        page, url, status_code=404, duration_ms=elapsed_ms,
+                        response_bytes=len(resp.content), raw_body=resp.content,
+                        prior_hashes=prior_hashes, errors=["product slug not found (404)"],
+                    ))
                     break
                 if resp.status_code != 200:
                     errors.append(f"Page {page}: HTTP {resp.status_code}")
+                    page_logs.append(log_page(
+                        page, url, status_code=resp.status_code, duration_ms=elapsed_ms,
+                        response_bytes=len(resp.content), raw_body=resp.content,
+                        prior_hashes=prior_hashes, errors=[f"HTTP {resp.status_code}"],
+                    ))
                     continue
 
                 html = resp.text
@@ -157,6 +178,14 @@ class TrustRadiusParser:
                 # Strategy 3: HTML review card extraction
                 if not page_reviews:
                     page_reviews = _parse_html_reviews(html, target, seen_ids)
+
+                page_logs.append(log_page(
+                    page, url, status_code=200, duration_ms=elapsed_ms,
+                    response_bytes=len(resp.content), reviews=page_reviews,
+                    raw_body=resp.content, prior_hashes=prior_hashes,
+                    prior_review_ids=prior_review_ids,
+                    next_page_found=bool(page_reviews),
+                ))
 
                 if not page_reviews:
                     if page == 1:
@@ -187,7 +216,7 @@ class TrustRadiusParser:
             "TrustRadius Web Unlocker scrape for %s: %d reviews from %d pages",
             target.vendor_name, len(reviews), pages_scraped,
         )
-        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors)
+        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors, page_logs=page_logs)
 
     async def _scrape_firecrawl(self, target: ScrapeTarget, api_key: str) -> ScrapeResult:
         """Scrape via Firecrawl JS rendering — gets individual reviews."""
