@@ -33,6 +33,10 @@ export default function VendorDetail() {
 
   const signal = detail?.churn_signal
   const skeleton = loading
+  const painDistribution = detail?.pain_distribution ?? []
+  const sentimentDistribution = signal?.sentiment_distribution as Record<string, number> | null | undefined
+  const quotableEvidence = Array.isArray(signal?.quotable_evidence) ? (signal.quotable_evidence as string[]) : []
+  const topCompetitors = Array.isArray(signal?.top_competitors) ? signal.top_competitors : []
 
   const hiColumns: Column<{ company: string; urgency: number; pain: string | null }>[] = [
     {
@@ -96,12 +100,12 @@ export default function VendorDetail() {
       </div>
 
       {/* Pain distribution */}
-      {detail?.pain_distribution && detail.pain_distribution.length > 0 && (
+      {painDistribution.length > 0 && (
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
           <h2 className="text-sm font-semibold text-slate-300 mb-3">Pain Categories</h2>
           <div className="space-y-2">
-            {detail.pain_distribution.map(p => {
-              const maxCount = Math.max(...detail.pain_distribution.map(x => x.count))
+            {painDistribution.map(p => {
+              const maxCount = Math.max(...painDistribution.map(x => x.count))
               const pct = maxCount > 0 ? (p.count / maxCount) * 100 : 0
               return (
                 <div key={p.pain_category} className="flex items-center gap-3">
@@ -118,12 +122,12 @@ export default function VendorDetail() {
       )}
 
       {/* Sentiment Trajectory */}
-      {signal?.sentiment_distribution && Object.keys(signal.sentiment_distribution as Record<string, number>).length > 0 && (
+      {sentimentDistribution && Object.keys(sentimentDistribution).length > 0 && (
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
           <h2 className="text-sm font-semibold text-slate-300 mb-3">Sentiment Trajectory</h2>
           <div className="space-y-2">
             {(() => {
-              const dist = signal.sentiment_distribution as Record<string, number>
+              const dist = sentimentDistribution
               const total = Object.values(dist).reduce((a, b) => a + b, 0)
               const colors: Record<string, string> = {
                 declining: 'bg-red-500/60',
@@ -153,11 +157,11 @@ export default function VendorDetail() {
       )}
 
       {/* Quotable evidence */}
-      {Array.isArray(signal?.quotable_evidence) && signal.quotable_evidence.length > 0 && (
+      {quotableEvidence.length > 0 && (
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
           <h2 className="text-sm font-semibold text-slate-300 mb-3">Quotable Evidence</h2>
           <div className="space-y-2">
-            {(signal.quotable_evidence as string[]).slice(0, 5).map((q, i) => (
+            {quotableEvidence.slice(0, 5).map((q, i) => (
               <blockquote key={i} className="border-l-2 border-cyan-500/30 pl-3 text-sm text-slate-400 italic">
                 "{q}"
               </blockquote>
@@ -167,11 +171,11 @@ export default function VendorDetail() {
       )}
 
       {/* Top competitors */}
-      {Array.isArray(signal?.top_competitors) && signal.top_competitors.length > 0 && (
+      {topCompetitors.length > 0 && (
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
           <h2 className="text-sm font-semibold text-slate-300 mb-3">Top Competitors Mentioned</h2>
           <div className="flex flex-wrap gap-2">
-            {(signal.top_competitors as string[]).map((c, i) => (
+            {topCompetitors.map((c, i) => (
               <span key={i} className="px-2 py-1 bg-amber-900/20 text-amber-400 text-xs rounded-full">
                 {typeof c === 'string' ? c : JSON.stringify(c)}
               </span>
