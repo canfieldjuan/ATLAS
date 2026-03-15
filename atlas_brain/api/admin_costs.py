@@ -40,8 +40,12 @@ async def cost_summary(days: int = Query(default=30, ge=1, le=365)):
              COALESCE(SUM(output_tokens), 0)     AS total_output,
              COALESCE(SUM(total_tokens), 0)      AS total_tokens,
              COUNT(*)                             AS total_calls,
-             COALESCE(AVG(duration_ms), 0)        AS avg_duration_ms,
-             COALESCE(AVG(tokens_per_second), 0)  AS avg_tps
+             COALESCE(AVG(duration_ms) FILTER (WHERE duration_ms > 0), 0) AS avg_duration_ms,
+             COALESCE(
+               PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY tokens_per_second)
+                 FILTER (WHERE duration_ms > 0 AND tokens_per_second IS NOT NULL),
+               0
+             ) AS avg_tps
            FROM llm_usage
            WHERE created_at >= $1""",
         since,
@@ -110,8 +114,12 @@ async def cost_by_model(days: int = Query(default=30, ge=1, le=365)):
              COALESCE(SUM(cost_usd), 0)            AS cost,
              COALESCE(SUM(total_tokens), 0)        AS tokens,
              COUNT(*)                               AS calls,
-             COALESCE(AVG(duration_ms), 0)          AS avg_duration_ms,
-             COALESCE(AVG(tokens_per_second), 0)    AS avg_tps
+             COALESCE(AVG(duration_ms) FILTER (WHERE duration_ms > 0), 0) AS avg_duration_ms,
+             COALESCE(
+               PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY tokens_per_second)
+                 FILTER (WHERE duration_ms > 0 AND tokens_per_second IS NOT NULL),
+               0
+             ) AS avg_tps
            FROM llm_usage
            WHERE created_at >= $1
            GROUP BY model_name, model_provider
