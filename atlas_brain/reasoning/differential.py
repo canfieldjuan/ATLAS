@@ -209,9 +209,10 @@ async def reconstitute(
 
     from .config import ReasoningConfig
     _rcfg = ReasoningConfig()
-    llm = get_pipeline_llm(workload="vllm", auto_activate_ollama=True)
+    _workload = _rcfg.stratified_llm_workload
+    llm = get_pipeline_llm(workload=_workload, auto_activate_ollama=(_workload == "vllm"))
     if llm is None:
-        logger.error("No LLM available for reconstitution")
+        logger.error("No LLM available for reconstitution (workload=%s)", _workload)
         return old_conclusion, 0
 
     messages = [
@@ -224,7 +225,12 @@ async def reconstitute(
 
     t0 = time.monotonic()
     try:
-        result = llm.chat(messages=messages, max_tokens=min(_rcfg.max_tokens, 1024), temperature=_rcfg.temperature)
+        result = llm.chat(
+            messages=messages,
+            max_tokens=min(_rcfg.max_tokens, 1024),
+            temperature=_rcfg.temperature,
+            response_format={"type": "json_object"},
+        )
         text = result.get("response", "").strip()
         usage = result.get("usage", {})
         tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)

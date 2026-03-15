@@ -108,11 +108,13 @@ class StratifiedReasoner:
         # Whitelist archetype
         arch = conclusion.get("archetype", "")
         if arch not in StratifiedReasoner._VALID_ARCHETYPES:
+            logger.warning("Normalized invalid archetype %r -> 'mixed'", arch)
             conclusion["archetype"] = "mixed"
 
         # Whitelist risk_level
         risk = conclusion.get("risk_level", "")
         if risk not in StratifiedReasoner._VALID_RISK_LEVELS:
+            logger.warning("Normalized invalid risk_level %r -> 'medium'", risk)
             conclusion["risk_level"] = "medium"
 
         # Coerce list fields
@@ -385,6 +387,8 @@ class StratifiedReasoner:
         self, evidence: dict[str, Any], vendor_name: str
     ) -> list[ReasoningTrace]:
         """Find similar episodic traces to provide context to the LLM."""
+        if getattr(self._episodic, "_degraded", False):
+            return []
         try:
             summary = self._evidence_summary(evidence, vendor_name)
             embedding = self._episodic.embed_text(summary)
@@ -439,9 +443,10 @@ class StratifiedReasoner:
 
         from .config import ReasoningConfig
         _rcfg = ReasoningConfig()
-        llm = get_pipeline_llm(workload="vllm", auto_activate_ollama=True)
+        _workload = _rcfg.stratified_llm_workload
+        llm = get_pipeline_llm(workload=_workload, auto_activate_ollama=(_workload == "vllm"))
         if llm is None:
-            logger.error("No LLM available for stratified reasoning")
+            logger.error("No LLM available for stratified reasoning (workload=%s)", _workload)
             return ReasoningResult(
                 mode="reason",
                 conclusion={"error": "no_llm_available"},
@@ -462,7 +467,12 @@ class StratifiedReasoner:
 
         t0 = time.monotonic()
         try:
-            result = llm.chat(messages=messages, max_tokens=_rcfg.max_tokens, temperature=_rcfg.temperature)
+            result = llm.chat(
+                messages=messages,
+                max_tokens=_rcfg.max_tokens,
+                temperature=_rcfg.temperature,
+                response_format={"type": "json_object"},
+            )
             text = result.get("response", "").strip()
             usage = result.get("usage", {})
             tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
@@ -524,7 +534,40 @@ class StratifiedReasoner:
         except Exception:
             logger.warning("Failed to store semantic cache for %s", pattern_sig, exc_info=True)
 
-        # Store in episodic memory
+        # Store in episodic memory (skip when degraded)
+        trace_id = None
+        if getattr(self._episodic, "_degraded", False):
+            logger.debug("Episodic store degraded, skipping trace storage for %s", vendor_name)
+        else:
+            trace_id = await self._store_episodic_trace(
+                vendor_name, product_category, archetype, confidence,
+                pattern_sig, evidence, evidence_nodes=None, conclusion=conclusion,
+            )
+
+        return ReasoningResult(
+            mode="reason",
+            conclusion=conclusion,
+            confidence=confidence,
+            pattern_sig=pattern_sig,
+            evidence_hash=evidence_hash,
+            tokens_used=tokens,
+            cached=False,
+            trace_id=trace_id,
+        )
+
+    async def _store_episodic_trace(
+        self,
+        vendor_name: str,
+        product_category: str,
+        archetype: str,
+        confidence: float,
+        pattern_sig: str,
+        evidence: dict[str, Any],
+        *,
+        evidence_nodes: list[EvidenceNode] | None = None,
+        conclusion: dict[str, Any] | None = None,
+    ) -> str | None:
+        """Store a reasoning trace in episodic memory. Returns trace_id or None."""
         trace_id = None
         try:
             evidence_summary = self._evidence_summary(evidence, vendor_name)
@@ -534,9 +577,11 @@ class StratifiedReasoner:
                 logger.debug("embed_text failed for %s, storing trace without embedding", vendor_name)
                 embedding = [0.0] * 1024  # placeholder -- vector search won't match, but trace is preserved
 
-            evidence_nodes = self._build_evidence_nodes(evidence)
+            if evidence_nodes is None:
+                evidence_nodes = self._build_evidence_nodes(evidence)
+            _conc = conclusion or {}
             conclusion_node = ConclusionNode(
-                claim=conclusion.get("executive_summary", ""),
+                claim=_conc.get("executive_summary", ""),
                 confidence=confidence,
                 evidence_chain=[e.id for e in evidence_nodes],
             )
@@ -555,17 +600,7 @@ class StratifiedReasoner:
             trace_id = await self._episodic.store_trace(trace)
         except Exception:
             logger.warning("Failed to store episodic trace for %s", vendor_name, exc_info=True)
-
-        return ReasoningResult(
-            mode="reason",
-            conclusion=conclusion,
-            confidence=confidence,
-            pattern_sig=pattern_sig,
-            evidence_hash=evidence_hash,
-            tokens_used=tokens,
-            cached=False,
-            trace_id=trace_id,
-        )
+        return trace_id
 
     # ------------------------------------------------------------------
     # Helpers

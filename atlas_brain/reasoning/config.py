@@ -21,13 +21,19 @@ class ReasoningConfig(BaseSettings):
         description="Enable the reasoning agent event bus and consumer",
     )
 
-    # LLM models
+    # LLM models (cross-domain reasoning agent)
     model: str = Field(
         default="claude-sonnet-4-5-20250929",
         description="Anthropic model for deep reasoning",
     )
     max_tokens: int = Field(default=2048, description="Max tokens for reasoning calls")
     temperature: float = Field(default=0.3, description="Temperature for reasoning calls")
+
+    # Stratified reasoning LLM backend (B2B churn pipeline)
+    stratified_llm_workload: str = Field(
+        default="vllm",
+        description="Pipeline LLM workload for stratified reasoning: 'vllm', 'anthropic', or 'auto'",
+    )
 
     triage_model: str = Field(
         default="claude-haiku-4-5-20251001",

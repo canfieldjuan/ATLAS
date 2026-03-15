@@ -42,14 +42,24 @@ async def init_stratified_reasoner(db_pool) -> None:
     episodic = EpisodicStore()
     meta = MetacognitiveMonitor(db_pool)
 
+    import asyncio as _aio
     try:
-        await episodic.ensure_indexes()
+        await _aio.wait_for(episodic.ensure_indexes(), timeout=10.0)
+    except _aio.TimeoutError:
+        import logging
+        logging.getLogger("atlas.reasoning").warning(
+            "Episodic index setup timed out after 10s -- Neo4j may be slow or unreachable. "
+            "Episodic memory will operate in degraded mode (no similarity search).",
+        )
+        episodic._degraded = True
     except Exception:
         import logging
         logging.getLogger("atlas.reasoning").warning(
-            "Failed to ensure episodic indexes (Neo4j may be unavailable)",
+            "Failed to ensure episodic indexes (Neo4j may be unavailable). "
+            "Episodic memory will operate in degraded mode.",
             exc_info=True,
         )
+        episodic._degraded = True
 
     _stratified_reasoner = StratifiedReasoner(cache, episodic, metacognition=meta)
 
