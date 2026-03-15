@@ -3,7 +3,7 @@ name: digest/b2b_churn_extraction
 domain: digest
 description: Single-pass churn signal extraction from B2B software reviews
 tags: [digest, b2b, churn, saas, autonomous]
-version: 1
+version: 2
 ---
 
 # B2B Churn Signal Extraction
@@ -158,10 +158,17 @@ For all other `content_type` values, set `"insider_signals": null`.
 ## Field Rules
 
 ### urgency_score (0-10)
-- **8-10**: Actively leaving. Migration in progress, comparing vendors with timeline, said "switching", "canceling", "not renewing".
-- **5-7**: Seriously unhappy. Considering alternatives, threatening to leave, "looking at options", major frustrations with no resolution.
-- **1-4**: Unhappy but not shopping. Complaints without mentioning alternatives or leaving. Frustrated but staying.
-- **0**: Positive review, no churn risk.
+
+IMPORTANT: This score measures INTELLIGENCE VALUE for B2B churn prediction, not just the reviewer's explicit intent to cancel. A review that reveals competitive displacement, active evaluation, or systemic vendor weakness is high-urgency intelligence even if the reviewer does not say "I am leaving."
+
+- **9-10**: Confirmed active churn. Explicit "we are switching/canceling/not renewing" with timeline or migration details. Example: "We're migrating to HubSpot next quarter, already in POC."
+- **7-8**: Strong churn signal. Actively evaluating replacements, completed a recent switch (past tense), or migration report with competitive comparison. Examples: "We switched from Jira to Height last year", "I just did a Tableau to Power BI migration for a client", "We're evaluating three CRM alternatives for renewal."
+- **5-6**: Moderate churn signal. Comparing vendors (even casually), expressing frustration with named alternatives in mind, asking the community for recommendations, or describing feature gaps that competitors solve. Examples: "Should I use Shopify or WooCommerce?", "X does this much better than Y", "Seriously considering alternatives after the latest price hike."
+- **3-4**: Weak but present signal. Complaints without naming alternatives, general dissatisfaction, poor experience report. The reviewer is unhappy but not shopping. Examples: "Support has been terrible for months", "The UI got worse after the update."
+- **1-2**: Minimal signal. Minor gripes in an otherwise neutral/positive review. Example: "Great tool but wish it had better reporting."
+- **0**: ONLY for purely positive reviews with zero complaints. Example: "Love this product, works perfectly for our team."
+
+Past tense switching ("we moved to X", "we ditched Y") scores 7-8, NOT 0. A completed switch is a confirmed displacement data point -- high-value intelligence for competitive flow analysis.
 
 ### reviewer_context.role_level
 - **executive**: C-suite (CEO, CTO, CFO, CIO, COO, CMO)
@@ -181,7 +188,7 @@ True when role_level is executive or director. Also true for manager titles that
 - **unknown**: Cannot determine
 
 ### pain_category
-One of: pricing, features, reliability, support, integration, performance, security, ux, onboarding, other. Pick the PRIMARY driver of dissatisfaction.
+One of: pricing, features, reliability, support, integration, performance, security, ux, onboarding, other. Pick the PRIMARY driver of dissatisfaction -- the root cause that, if fixed, would retain the customer. When multiple pains co-occur, apply these tiebreakers: (1) the pain explicitly linked to switching/evaluation language wins; (2) pricing beats other categories only when dollar amounts or "too expensive" are stated; (3) "other" is a last resort -- prefer a specific category even if the fit is imperfect. For comparison/evaluation posts where no pain is expressed, use "features" (the reviewer is comparing capabilities).
 
 ### competitors_mentioned
 Only include ACTUAL product/vendor names explicitly mentioned in the review text. Never invent or assume competitors.
@@ -326,9 +333,9 @@ Only populated when `content_type = "insider_account"`. All other types must set
 The `source_weight` field indicates how much to trust this review source. Calibrate your analysis accordingly:
 
 - **weight 0.8-1.0** (G2, Capterra): Verified review platforms. Trust reviewer identity and company info. Use standard urgency scoring.
-- **weight 0.4-0.7** (Reddit): Anonymous community discussion. Reduce urgency by 1 point if the post only expresses vague frustration without specific timelines or actions. Do not trust claimed titles unless corroborated by specifics.
+- **weight 0.4-0.7** (Reddit): Anonymous community discussion. Do not trust claimed titles unless corroborated by specifics. Apply standard urgency scoring -- do NOT discount Reddit posts simply for being anonymous. Reddit posts asking "which tool should I use?" or comparing alternatives are active evaluation signals (urgency 5-6+). Reddit posts describing completed switches are displacement data (urgency 7-8).
 - **weight 0.1-0.3** (TrustRadius aggregate): Product-level summary, not an individual review. Set `intent_to_leave=false`, `urgency_score=0`, `decision_maker=false`. Extract only `pain_category` and `feature_gaps` from the aggregate notes.
-- **content_type = "insider_account"**: Employee/ex-employee perspective. Prioritize `insider_signals` extraction. The standard churn fields (`urgency_score`, `churn_signals`) still apply — an insider post predicting product stagnation IS a churn signal. `urgency_score` represents the customer churn risk implied by the org health signals (e.g. mass engineer departures = high urgency for customers to evaluate alternatives).
+- **content_type = "insider_account"**: Employee/ex-employee perspective. Prioritize `insider_signals` extraction. The standard churn fields (`urgency_score`, `churn_signals`) still apply -- an insider post predicting product stagnation IS a churn signal. Map insider signals to urgency: mass departures or talent drain = urgency 7-8 (customers will see quality decline); leadership dysfunction or repeated reorgs = urgency 5-6 (product direction uncertainty); minor culture gripes = urgency 3-4. Set `intent_to_leave=true` when the insider describes conditions that will drive customer churn (product quality collapse, support degradation).
 - **content_type = "comment"**: Short reply in a thread. Lower signal confidence. Reduce urgency by 1 point. Focus on extracting `quotable_phrases` and `competitors_mentioned`.
 
 ## Reasoning Framework
@@ -336,7 +343,7 @@ The `source_weight` field indicates how much to trust this review source. Calibr
 Before filling fields, reason through these dimensions in order:
 
 ### 1. Temporal Signals
-Score language precision: "not renewing" (urgency 8-10) > "might not renew" (6-7) > "considering alternatives" (5-6) > "frustrated" (3-4). Past tense switching ("we moved to X") = urgency 3-4 (already churned, less actionable).
+Score language precision: "not renewing" (9-10) > "evaluating replacements" (7-8) > "we switched to X last year" (7-8) > "might not renew" (6-7) > "considering alternatives" (5-6) > "frustrated" (3-4). Past tense switching ("we moved to X") = urgency 7-8 (confirmed displacement -- high intelligence value). Pre-purchase evaluation ("which should I choose, X or Y?") = urgency 5-6 (reveals competitive positioning).
 
 ### 2. Compound Pain
 When multiple pain categories appear, identify the root cause and rank all pains in `pain_categories` by severity. Pricing complaints after feature complaints = features is the root cause (pricing is the rationalization). Support complaints + reliability complaints = reliability is the root cause (support is the symptom). The first entry (severity "primary") becomes `pain_category` for backward compatibility.
