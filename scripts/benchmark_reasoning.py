@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
 """
-Benchmark reasoning models on OpenRouter against Claude Opus 4.6.
+Benchmark reasoning models on OpenRouter against the production path.
 
 Runs the competitive_intelligence skill prompt through multiple models,
-captures quality/cost/latency, then has Opus grade each response.
+captures parseability, schema coverage, cost, and latency using the same
+payload construction and parse recovery path as production.
 
 Usage:
-    python scripts/benchmark_reasoning.py [--judge-only]
+    python scripts/benchmark_reasoning.py
 
 Requires: OPENROUTER_API_KEY in .env or environment.
 """
 
+import argparse
 import asyncio
 import json
 import logging
 import os
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime
 from pathlib import Path
 
 import httpx
@@ -33,7 +35,7 @@ logger = logging.getLogger("benchmark")
 # ---------------------------------------------------------------------------
 
 MODELS = [
-    # Round 2 baseline (beat Opus in round 2)
+    # Baseline
     {
         "id": "openai/o4-mini",
         "label": "o4-mini",
@@ -82,73 +84,19 @@ MODELS = [
 RESULTS_DIR = Path(__file__).resolve().parent.parent / "data" / "benchmarks"
 
 # ---------------------------------------------------------------------------
-# Grading rubric (sent to Opus as the judge)
-# ---------------------------------------------------------------------------
-
-GRADING_PROMPT = """\
-You are evaluating LLM outputs for a competitive intelligence analysis task.
-The task asks the model to analyze complaint/review data and produce a structured
-JSON report with competitive flows, feature gaps, buyer personas, brand vulnerability
-scores, insights, and recommendations.
-
-Grade the response on these 6 dimensions (0-10 each):
-
-1. **JSON Validity** (0-10): Is the output valid JSON? Does it parse without error?
-   10 = perfect JSON. 5 = minor issues (trailing comma, wrapped in markdown).
-   0 = not JSON at all.
-
-2. **Schema Compliance** (0-10): Does it include all required top-level fields
-   (analysis_text, competitive_flows, feature_gaps, buyer_personas,
-   brand_vulnerability, insights, recommendations)? Are nested fields present?
-   10 = all fields with correct types. 5 = most fields. 0 = missing structure.
-
-3. **Analytical Depth** (0-10): Quality of reasoning. Does it identify real
-   patterns in the data? Are vulnerability scores computed correctly using the
-   formula? Are competitive flows mapped with meaningful reasons?
-   10 = deep, multi-dimensional analysis. 5 = surface-level. 0 = generic filler.
-
-4. **Data Fidelity** (0-10): Does it only reference data that was in the input?
-   Are numbers accurate? Does it avoid hallucinating brands or statistics?
-   10 = perfectly grounded. 5 = mostly accurate. 0 = fabricates freely.
-
-5. **Temporal Anchoring** (0-10): Does every statistic include a timeframe?
-   The prompt requires anchoring claims with dates from data_context.
-   10 = every claim anchored. 5 = some anchored. 0 = no timeframes.
-
-6. **Actionability** (0-10): Are insights specific and actionable? Do
-   recommendations have clear urgency and reasoning? Is the analysis_text
-   suitable for a push notification (under 600 words, leads with critical finding)?
-   10 = immediately actionable. 5 = vague but directional. 0 = generic advice.
-
-Respond with ONLY a JSON object:
-{
-  "json_validity": <0-10>,
-  "schema_compliance": <0-10>,
-  "analytical_depth": <0-10>,
-  "data_fidelity": <0-10>,
-  "temporal_anchoring": <0-10>,
-  "actionability": <0-10>,
-  "total": <sum of all scores, max 60>,
-  "percentage": <total/60 * 100, rounded to 1 decimal>,
-  "notes": "Brief explanation of strengths and weaknesses"
-}
-"""
-
-
-# ---------------------------------------------------------------------------
 # Data fetching (real DB data, same as competitive_intelligence task)
 # ---------------------------------------------------------------------------
 
 
 async def fetch_benchmark_payload() -> dict:
-    """Fetch real data from the DB to use as the benchmark payload."""
+    """Fetch the exact production payload used by competitive_intelligence."""
     from atlas_brain.storage.database import init_database, get_db_pool, close_database
 
     await init_database()
     pool = get_db_pool()
 
-    # Import the actual fetchers from competitive_intelligence
     from atlas_brain.autonomous.tasks.competitive_intelligence import (
+        _build_llm_payload,
         _fetch_brand_health,
         _fetch_competitive_flows,
         _fetch_feature_gaps,
@@ -193,19 +141,16 @@ async def fetch_benchmark_payload() -> dict:
     if isinstance(data_context, Exception):
         data_context = {}
 
-    from datetime import date
-
-    payload = {
-        "date": str(date.today()),
-        "data_context": data_context if not isinstance(data_context, Exception) else {},
-        "total_brands": len(brand_health) if not isinstance(brand_health, Exception) else 0,
-        "brand_health": (brand_health if not isinstance(brand_health, Exception) else [])[:8],
-        "competitive_flows": (competitive_flows if not isinstance(competitive_flows, Exception) else [])[:10],
-        "feature_gaps": (feature_gaps if not isinstance(feature_gaps, Exception) else [])[:8],
-        "buyer_personas": (buyer_personas if not isinstance(buyer_personas, Exception) else [])[:6],
-        "safety_signals": (safety_signals if not isinstance(safety_signals, Exception) else [])[:6],
-        "loyalty_churn": (loyalty_churn if not isinstance(loyalty_churn, Exception) else [])[:8],
-    }
+    payload = _build_llm_payload(
+        date.today(),
+        brand_health if not isinstance(brand_health, Exception) else [],
+        competitive_flows if not isinstance(competitive_flows, Exception) else [],
+        feature_gaps if not isinstance(feature_gaps, Exception) else [],
+        buyer_personas if not isinstance(buyer_personas, Exception) else [],
+        safety_signals if not isinstance(safety_signals, Exception) else [],
+        loyalty_churn if not isinstance(loyalty_churn, Exception) else [],
+        data_context if not isinstance(data_context, Exception) else {},
+    )
 
     await close_database()
     logger.info(
@@ -244,9 +189,7 @@ async def call_openrouter(
         "temperature": temperature,
     }
 
-    # JSON mode for models that support it
-    if not model_id.startswith("openai/o"):  # o3/o4-mini use different format
-        body["response_format"] = {"type": "json_object"}
+    body["response_format"] = {"type": "json_object"}
 
     try:
         resp = await client.post(
@@ -290,13 +233,56 @@ async def call_openrouter(
         }
 
 
+def parse_pipeline_response(raw_text: str) -> dict:
+    """Parse model output with the same recovery path production uses."""
+    from atlas_brain.pipelines.llm import parse_json_response
+
+    return parse_json_response(raw_text or "", recover_truncated=True)
+
+
+def score_pipeline_output(parsed_output: dict) -> dict:
+    """Deterministic structural score for competitive-intelligence output."""
+    required_fields = {
+        "analysis_text": str,
+        "competitive_flows": list,
+        "feature_gaps": list,
+        "buyer_personas": list,
+        "brand_vulnerability": list,
+        "insights": list,
+        "recommendations": list,
+    }
+    present = 0
+    typed = 0
+    for field, expected_type in required_fields.items():
+        if field in parsed_output:
+            present += 1
+        if isinstance(parsed_output.get(field), expected_type):
+            typed += 1
+
+    analysis_text = parsed_output.get("analysis_text")
+    analysis_words = len(analysis_text.split()) if isinstance(analysis_text, str) else 0
+    return {
+        "required_fields_present": present,
+        "required_fields_expected": len(required_fields),
+        "required_fields_typed": typed,
+        "analysis_word_count": analysis_words,
+        "parse_fallback": bool(parsed_output.get("_parse_fallback")),
+        "flow_count": len(parsed_output.get("competitive_flows", [])) if isinstance(parsed_output.get("competitive_flows"), list) else 0,
+        "gap_count": len(parsed_output.get("feature_gaps", [])) if isinstance(parsed_output.get("feature_gaps"), list) else 0,
+        "persona_count": len(parsed_output.get("buyer_personas", [])) if isinstance(parsed_output.get("buyer_personas"), list) else 0,
+        "brand_count": len(parsed_output.get("brand_vulnerability", [])) if isinstance(parsed_output.get("brand_vulnerability"), list) else 0,
+        "insight_count": len(parsed_output.get("insights", [])) if isinstance(parsed_output.get("insights"), list) else 0,
+        "recommendation_count": len(parsed_output.get("recommendations", [])) if isinstance(parsed_output.get("recommendations"), list) else 0,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Benchmark runner
 # ---------------------------------------------------------------------------
 
 
-async def run_benchmark(judge_only: bool = False):
-    """Run the full benchmark."""
+async def run_benchmark():
+    """Run the benchmark."""
     # Load env
     env_path = Path(__file__).resolve().parent.parent / ".env"
     if env_path.exists():
@@ -317,171 +303,90 @@ async def run_benchmark(judge_only: bool = False):
     responses_dir = RESULTS_DIR / f"responses_{timestamp}"
     responses_dir.mkdir(exist_ok=True)
 
-    # Load skill prompt
-    skill_path = (
-        Path(__file__).resolve().parent.parent
-        / "atlas_brain"
-        / "skills"
-        / "digest"
-        / "competitive_intelligence.md"
+    from atlas_brain.skills import get_skill_registry
+
+    skill = get_skill_registry().get("digest/competitive_intelligence")
+    if not skill:
+        logger.error("Skill digest/competitive_intelligence not found")
+        return
+    system_prompt = skill.content
+
+    payload = await fetch_benchmark_payload()
+    user_content = json.dumps(payload, separators=(",", ":"), default=str)
+
+    (RESULTS_DIR / f"payload_{timestamp}.json").write_text(
+        json.dumps(payload, indent=2, default=str)
     )
-    skill_content = skill_path.read_text()
-    # Strip YAML frontmatter
-    if skill_content.startswith("---"):
-        _, _, skill_content = skill_content.split("---", 2)
-    system_prompt = skill_content.strip()
 
-    if not judge_only:
-        # Fetch real payload
-        payload = await fetch_benchmark_payload()
-        user_content = json.dumps(payload, default=str)
-
-        # Save payload for reproducibility
-        (RESULTS_DIR / f"payload_{timestamp}.json").write_text(
-            json.dumps(payload, indent=2, default=str)
-        )
-
-        logger.info("=" * 70)
-        logger.info("REASONING MODEL BENCHMARK")
-        logger.info("Payload: %d chars, %d brands", len(user_content), len(payload["brand_health"]))
-        logger.info("Models: %d", len(MODELS))
-        logger.info("=" * 70)
-
-        results = []
-        async with httpx.AsyncClient() as client:
-            for model in MODELS:
-                logger.info("")
-                logger.info("--- %s (%s) ---", model["label"], model["id"])
-
-                result = await call_openrouter(
-                    client,
-                    model["id"],
-                    system_prompt,
-                    user_content,
-                    api_key,
-                    max_tokens=16384,
-                    temperature=0.4,
-                )
-
-                # Compute cost
-                input_cost = (result["input_tokens"] / 1_000_000) * model["input_cost"]
-                output_cost = (result["output_tokens"] / 1_000_000) * model["output_cost"]
-                total_cost = input_cost + output_cost
-
-                entry = {
-                    **model,
-                    **result,
-                    "input_cost_usd": round(input_cost, 6),
-                    "output_cost_usd": round(output_cost, 6),
-                    "total_cost_usd": round(total_cost, 6),
-                }
-                results.append(entry)
-
-                # Save individual response
-                resp_file = responses_dir / f"{model['label'].replace(' ', '_').lower()}.txt"
-                resp_file.write_text(result["content"] or result.get("error") or "empty")
-
-                if result["success"]:
-                    # Quick JSON validity check
-                    try:
-                        json.loads(result["content"])
-                        json_valid = True
-                    except (json.JSONDecodeError, TypeError):
-                        json_valid = False
-
-                    logger.info(
-                        "  OK | %d in / %d out tokens | $%.4f | %dms | JSON: %s",
-                        result["input_tokens"],
-                        result["output_tokens"],
-                        total_cost,
-                        result["latency_ms"],
-                        "valid" if json_valid else "INVALID",
-                    )
-                else:
-                    logger.error("  FAILED: %s (%dms)", result["error"], result["latency_ms"])
-
-        # Save raw results
-        results_file.write_text(json.dumps(results, indent=2, default=str))
-        logger.info("")
-        logger.info("Raw results saved to %s", results_file)
-    else:
-        # Load most recent results
-        result_files = sorted(RESULTS_DIR.glob("reasoning_benchmark_*.json"))
-        if not result_files:
-            logger.error("No benchmark results found. Run without --judge-only first.")
-            return
-        results_file = result_files[-1]
-        results = json.loads(results_file.read_text())
-        responses_dir = RESULTS_DIR / results_file.stem.replace("reasoning_benchmark_", "responses_")
-        logger.info("Loading results from %s", results_file)
-
-    # -----------------------------------------------------------------------
-    # Phase 2: Judge each response with Opus
-    # -----------------------------------------------------------------------
-    logger.info("")
     logger.info("=" * 70)
-    logger.info("JUDGING RESPONSES WITH OPUS")
+    logger.info("REASONING MODEL BENCHMARK")
+    logger.info("Payload: %d chars, %d brands", len(user_content), len(payload["brand_health"]))
+    logger.info("Models: %d", len(MODELS))
     logger.info("=" * 70)
 
+    results = []
     async with httpx.AsyncClient() as client:
-        for entry in results:
-            if not entry.get("success"):
-                entry["grade"] = {
-                    "json_validity": 0, "schema_compliance": 0,
-                    "analytical_depth": 0, "data_fidelity": 0,
-                    "temporal_anchoring": 0, "actionability": 0,
-                    "total": 0, "percentage": 0.0,
-                    "notes": f"Model failed: {entry.get('error', 'unknown')}",
-                }
-                continue
+        for model in MODELS:
+            logger.info("")
+            logger.info("--- %s (%s) ---", model["label"], model["id"])
 
-            label = entry["label"]
-            logger.info("Judging: %s ...", label)
-
-            judge_input = (
-                f"## Model Output to Grade\n\n"
-                f"```\n{entry['content'][:12000]}\n```"
-            )
-
-            grade_result = await call_openrouter(
+            result = await call_openrouter(
                 client,
-                "anthropic/claude-opus-4-6",
-                GRADING_PROMPT,
-                judge_input,
+                model["id"],
+                system_prompt,
+                user_content,
                 api_key,
-                max_tokens=1024,
-                temperature=0.1,
+                max_tokens=16384,
+                temperature=0.4,
             )
 
-            if grade_result["success"]:
+            input_cost = (result["input_tokens"] / 1_000_000) * model["input_cost"]
+            output_cost = (result["output_tokens"] / 1_000_000) * model["output_cost"]
+            total_cost = input_cost + output_cost
+            raw_json_valid = False
+            if result["success"] and result["content"]:
                 try:
-                    # Strip thinking tags / markdown
-                    grade_text = grade_result["content"]
-                    import re
-                    grade_text = re.sub(r"<think>[\s\S]*?</think>", "", grade_text).strip()
-                    grade_text = re.sub(r"^```(?:json)?\s*\n?", "", grade_text)
-                    grade_text = re.sub(r"\n?```\s*$", "", grade_text).strip()
+                    json.loads(result["content"])
+                    raw_json_valid = True
+                except (json.JSONDecodeError, TypeError):
+                    raw_json_valid = False
 
-                    grade = json.loads(grade_text)
-                    entry["grade"] = grade
-                    logger.info(
-                        "  %s: %s/60 (%.1f%%) - %s",
-                        label, grade["total"], grade["percentage"],
-                        grade.get("notes", "")[:80],
-                    )
-                except (json.JSONDecodeError, KeyError) as e:
-                    logger.warning("  Failed to parse grade for %s: %s", label, e)
-                    entry["grade"] = {"error": str(e), "raw": grade_result["content"][:500]}
+            parsed_output = parse_pipeline_response(result["content"]) if result["success"] else {}
+            parse_fallback = bool(isinstance(parsed_output, dict) and parsed_output.get("_parse_fallback"))
+            pipeline_score = score_pipeline_output(parsed_output) if isinstance(parsed_output, dict) else {}
+
+            entry = {
+                **model,
+                **result,
+                "raw_json_valid": raw_json_valid,
+                "parsed_output": parsed_output,
+                "parse_fallback": parse_fallback,
+                "pipeline_score": pipeline_score,
+                "input_cost_usd": round(input_cost, 6),
+                "output_cost_usd": round(output_cost, 6),
+                "total_cost_usd": round(total_cost, 6),
+            }
+            results.append(entry)
+
+            resp_file = responses_dir / f"{model['label'].replace(' ', '_').lower()}.txt"
+            resp_file.write_text(result["content"] or result.get("error") or "empty")
+
+            if result["success"]:
+                logger.info(
+                    "  OK | %d in / %d out tokens | $%.4f | %dms | raw JSON: %s | parsed fallback: %s | schema typed: %d/%d",
+                    result["input_tokens"],
+                    result["output_tokens"],
+                    total_cost,
+                    result["latency_ms"],
+                    "valid" if raw_json_valid else "INVALID",
+                    "yes" if parse_fallback else "no",
+                    pipeline_score.get("required_fields_typed", 0),
+                    pipeline_score.get("required_fields_expected", 0),
+                )
             else:
-                logger.warning("  Judge call failed for %s: %s", label, grade_result["error"])
-                entry["grade"] = {"error": grade_result["error"]}
+                logger.error("  FAILED: %s (%dms)", result["error"], result["latency_ms"])
 
-            # Judge cost tracking
-            entry["judge_tokens"] = grade_result["input_tokens"] + grade_result["output_tokens"]
-
-    # Save final results with grades
-    final_file = results_file.with_name(results_file.stem + "_graded.json")
-    final_file.write_text(json.dumps(results, indent=2, default=str))
+    results_file.write_text(json.dumps(results, indent=2, default=str))
 
     # -----------------------------------------------------------------------
     # Summary table
@@ -492,51 +397,80 @@ async def run_benchmark(judge_only: bool = False):
     logger.info("=" * 70)
     logger.info("")
 
-    # Sort by grade percentage descending
-    graded = [r for r in results if isinstance(r.get("grade"), dict) and "percentage" in r["grade"]]
-    graded.sort(key=lambda r: r["grade"]["percentage"], reverse=True)
+    ranked = sorted(
+        results,
+        key=lambda r: (
+            r.get("raw_json_valid", False),
+            not r.get("parse_fallback", True),
+            (r.get("pipeline_score") or {}).get("required_fields_typed", 0),
+            (r.get("pipeline_score") or {}).get("brand_count", 0),
+            -(r.get("total_cost_usd", 0) or 0),
+        ),
+        reverse=True,
+    )
 
-    baseline_pct = None
-    for r in graded:
-        if r["id"] == "openai/o4-mini":
-            baseline_pct = r["grade"]["percentage"]
+    baseline_typed = None
+    for result in ranked:
+        if result["id"] == "openai/o4-mini":
+            baseline_typed = (result.get("pipeline_score") or {}).get("required_fields_typed", 0)
             break
 
-    header = f"{'Model':<25} {'Tier':<10} {'Score':>6} {'%':>7} {'vs Opus':>8} {'Cost':>8} {'Latency':>8} {'Out Tok':>8}"
+    header = f"{'Model':<25} {'Tier':<10} {'Typed':>7} {'vs Base':>8} {'RawJSON':>8} {'Fallback':>9} {'Cost':>8} {'Latency':>8}"
     logger.info(header)
     logger.info("-" * len(header))
 
-    for r in graded:
-        pct = r["grade"]["percentage"]
-        vs_opus = f"{pct / baseline_pct * 100:.0f}%" if baseline_pct else "N/A"
+    for result in ranked:
+        typed = (result.get("pipeline_score") or {}).get("required_fields_typed", 0)
+        vs_base = f"{typed / baseline_typed * 100:.0f}%" if baseline_typed else "N/A"
         logger.info(
-            "%-25s %-10s %5d/60 %6.1f%% %7s $%6.4f %6dms %7d",
-            r["label"],
-            r["tier"],
-            r["grade"]["total"],
-            pct,
-            vs_opus,
-            r.get("total_cost_usd", 0),
-            r.get("latency_ms", 0),
-            r.get("output_tokens", 0),
+            "%-25s %-10s %6d/%-1d %7s %7s %8s $%6.4f %6dms",
+            result["label"],
+            result["tier"],
+            typed,
+            (result.get("pipeline_score") or {}).get("required_fields_expected", 0),
+            vs_base,
+            "yes" if result.get("raw_json_valid") else "no",
+            "yes" if result.get("parse_fallback") else "no",
+            result.get("total_cost_usd", 0),
+            result.get("latency_ms", 0),
         )
 
     logger.info("")
-    logger.info("Results saved to: %s", final_file)
+    logger.info("Results saved to: %s", results_file)
+
+    logger.info("")
+    logger.info("PIPELINE PARSE SUMMARY:")
+    for result in ranked:
+        score = result.get("pipeline_score") or {}
+        logger.info(
+            "  %-25s raw_json=%-7s parse_fallback=%-5s typed=%d/%d brands=%d flows=%d insights=%d recs=%d",
+            result["label"],
+            "yes" if result.get("raw_json_valid") else "no",
+            "yes" if result.get("parse_fallback") else "no",
+            score.get("required_fields_typed", 0),
+            score.get("required_fields_expected", 0),
+            score.get("brand_count", 0),
+            score.get("flow_count", 0),
+            score.get("insight_count", 0),
+            score.get("recommendation_count", 0),
+        )
 
     # Cost efficiency ranking
     logger.info("")
-    logger.info("COST EFFICIENCY (quality per dollar):")
-    for r in graded:
-        cost = r.get("total_cost_usd", 0)
+    logger.info("COST EFFICIENCY (typed required fields per dollar):")
+    for result in ranked:
+        cost = result.get("total_cost_usd", 0)
         if cost > 0:
-            efficiency = r["grade"]["percentage"] / cost
-            logger.info("  %-25s %.1f quality/$", r["label"], efficiency)
+            efficiency = ((result.get("pipeline_score") or {}).get("required_fields_typed", 0)) / cost
+            logger.info("  %-25s %.1f typed-fields/$", result["label"], efficiency)
 
 
 def main():
-    judge_only = "--judge-only" in sys.argv
-    asyncio.run(run_benchmark(judge_only=judge_only))
+    parser = argparse.ArgumentParser(
+        description="Benchmark competitive-intelligence reasoning models against the production path"
+    )
+    parser.parse_args()
+    asyncio.run(run_benchmark())
 
 
 if __name__ == "__main__":

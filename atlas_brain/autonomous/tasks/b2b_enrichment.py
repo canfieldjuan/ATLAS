@@ -525,11 +525,24 @@ async def _classify_review_async(row, local_only: bool, max_tokens: int,
         logger.warning("Skill 'digest/b2b_churn_extraction' not found")
         return None, None
 
-    llm = get_pipeline_llm(
-        prefer_cloud=False,
-        try_openrouter=False,
-        auto_activate_ollama=True,
-    )
+    # Primary: OpenRouter GPT-4.1 (benchmarked for structured extraction)
+    # Fallback: local vLLM/Ollama
+    if not local_only:
+        llm = get_pipeline_llm(
+            workload=None,
+            prefer_cloud=False,
+            try_openrouter=True,
+            auto_activate_ollama=False,
+            openrouter_model=settings.b2b_churn.enrichment_openrouter_model,
+        )
+    else:
+        llm = None
+    if llm is None:
+        llm = get_pipeline_llm(
+            prefer_cloud=False,
+            try_openrouter=False,
+            auto_activate_ollama=True,
+        )
     if llm is None:
         logger.warning("No LLM available for B2B churn extraction")
         return None, None

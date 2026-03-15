@@ -2147,6 +2147,10 @@ class B2BChurnConfig(BaseSettings):
     enrichment_max_attempts: int = Field(default=3, description="Max enrichment attempts")
     enrichment_max_tokens: int = Field(default=2048, description="Max LLM output tokens")
     enrichment_local_only: bool = Field(default=False, description="Force local LLM only")
+    enrichment_openrouter_model: str = Field(
+        default="openai/gpt-4.1",
+        description="OpenRouter model for B2B enrichment (structured extraction)",
+    )
 
     # Intelligence aggregation
     intelligence_enabled: bool = Field(default=True, description="Enable churn intelligence aggregation")
