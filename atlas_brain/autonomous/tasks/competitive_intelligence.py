@@ -33,6 +33,42 @@ _CAT_EXPR = (
 )
 
 
+def _build_llm_payload(
+    today: date,
+    brand_health: list[dict[str, Any]],
+    competitive_flows: list[dict[str, Any]],
+    feature_gaps: list[dict[str, Any]],
+    buyer_personas: list[dict[str, Any]],
+    safety_signals: list[dict[str, Any]],
+    loyalty_churn: list[dict[str, Any]],
+    data_context: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the exact competitive-intelligence LLM payload used in production."""
+    llm_brands = [
+        {
+            "brand": brand["brand"],
+            "reviews": brand["total_reviews"],
+            "period": brand.get("review_period", ""),
+            "rating": brand["avg_rating"],
+            "pain": brand["avg_pain_score"],
+            "repurchase": f"{brand['repurchase_yes']}/{brand['repurchase_yes'] + brand['repurchase_no']}",
+            "safety": brand["safety_flagged_count"],
+        }
+        for brand in brand_health[:15]
+    ]
+    return {
+        "date": str(today),
+        "data_context": data_context,
+        "total_brands": len(brand_health),
+        "brand_health": llm_brands,
+        "competitive_flows": competitive_flows[:10],
+        "feature_gaps": feature_gaps[:8],
+        "buyer_personas": buyer_personas[:6],
+        "safety_signals": safety_signals[:6],
+        "loyalty_churn": loyalty_churn[:8],
+    }
+
+
 async def run(task: ScheduledTask) -> dict[str, Any]:
     """Autonomous task handler: daily competitive intelligence."""
     cfg = settings.external_data
@@ -129,29 +165,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     # Build LLM payload -- trim to fit ~4k token input budget (8k context - 4k output).
     # Full fetchers data used below for upserts.
-    llm_brands = [
-        {
-            "brand": b["brand"],
-            "reviews": b["total_reviews"],
-            "period": b.get("review_period", ""),
-            "rating": b["avg_rating"],
-            "pain": b["avg_pain_score"],
-            "repurchase": f"{b['repurchase_yes']}/{b['repurchase_yes'] + b['repurchase_no']}",
-            "safety": b["safety_flagged_count"],
-        }
-        for b in fetchers["brand_health"][:15]
-    ]
-    payload = {
-        "date": str(today),
-        "data_context": data_context,
-        "total_brands": len(fetchers["brand_health"]),
-        "brand_health": llm_brands,
-        "competitive_flows": fetchers["competitive_flows"][:10],
-        "feature_gaps": fetchers["feature_gaps"][:8],
-        "buyer_personas": fetchers["buyer_personas"][:6],
-        "safety_signals": fetchers["safety_signals"][:6],
-        "loyalty_churn": fetchers["loyalty_churn"][:8],
-    }
+    payload = _build_llm_payload(
+        today,
+        fetchers["brand_health"],
+        fetchers["competitive_flows"],
+        fetchers["feature_gaps"],
+        fetchers["buyer_personas"],
+        fetchers["safety_signals"],
+        fetchers["loyalty_churn"],
+        data_context,
+    )
 
     # Load skill and call LLM
     from ...pipelines.llm import call_llm_with_skill, parse_json_response
