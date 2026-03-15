@@ -4,6 +4,7 @@ import { clsx } from 'clsx'
 import StatCard from '../components/StatCard'
 import ChurnChart from '../components/ChurnChart'
 import PipelineStatusWidget from '../components/PipelineStatus'
+import ArchetypeBadge from '../components/ArchetypeBadge'
 import DataTable, { type Column } from '../components/DataTable'
 import UrgencyBadge from '../components/UrgencyBadge'
 import { PageError } from '../components/ErrorBoundary'
@@ -194,6 +195,44 @@ export default function Dashboard() {
         </div>
         <PipelineStatusWidget data={pipeline} />
       </div>
+
+      {(() => {
+        const archetypeCounts: Record<string, number> = {}
+        for (const s of signals) {
+          const arch = s.archetype
+          if (arch) archetypeCounts[arch] = (archetypeCounts[arch] ?? 0) + 1
+        }
+        const sorted = Object.entries(archetypeCounts).sort((a, b) => b[1] - a[1])
+        const classified = sorted.reduce((sum, [, count]) => sum + count, 0)
+        if (sorted.length === 0) return null
+        return (
+          <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-5">
+            <h3 className="text-sm font-medium text-slate-300 mb-4">
+              Churn Pattern Distribution
+              <span className="text-xs text-slate-500 ml-2">({classified} of {signals.length} classified)</span>
+            </h3>
+            <div className="space-y-2.5">
+              {sorted.map(([archetype, count]) => {
+                const pct = Math.round((count / signals.length) * 100)
+                return (
+                  <div key={archetype} className="flex items-center gap-3">
+                    <div className="w-32 shrink-0">
+                      <ArchetypeBadge archetype={archetype} />
+                    </div>
+                    <div className="flex-1 bg-slate-800 rounded-full h-2 overflow-hidden">
+                      <div
+                        className="h-full bg-cyan-500/60 rounded-full transition-all"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <span className="text-xs text-slate-400 w-12 text-right">{count} ({pct}%)</span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })()}
 
       <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-5">
         <h3 className="text-sm font-medium text-slate-300 mb-4">

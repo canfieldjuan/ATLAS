@@ -2,6 +2,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { ArrowLeft, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PageError } from '../components/ErrorBoundary'
+import ArchetypeBadge from '../components/ArchetypeBadge'
 import useApiData from '../hooks/useApiData'
 import { fetchReport } from '../api/client'
 import { REPORT_TYPE_COLORS } from './Reports'
@@ -134,6 +135,30 @@ function DataTable({ rows }: { rows: Record<string, unknown>[] }) {
             <tr key={i} className="border-b border-slate-800/50 hover:bg-slate-800/30">
               {columns.map(col => {
                 const val = row[col]
+                // Archetype badge rendering
+                if (col === 'archetype' && typeof val === 'string' && val) {
+                  return (
+                    <td key={col} className="px-3 py-2 whitespace-nowrap">
+                      <ArchetypeBadge archetype={val} confidence={row.archetype_confidence as number} showConfidence />
+                    </td>
+                  )
+                }
+                // Skip archetype_confidence as standalone column (shown inside badge)
+                if (col === 'archetype_confidence' && row.archetype) {
+                  return <td key={col} className="px-3 py-2 text-slate-500 whitespace-nowrap">--</td>
+                }
+                // Risk level color coding
+                if (col === 'risk_level' && typeof val === 'string') {
+                  const riskColor: Record<string, string> = {
+                    critical: 'text-red-400', high: 'text-orange-400',
+                    medium: 'text-yellow-400', low: 'text-green-400',
+                  }
+                  return (
+                    <td key={col} className="px-3 py-2 whitespace-nowrap">
+                      <span className={`text-sm font-medium ${riskColor[val] ?? 'text-slate-300'}`}>{val}</span>
+                    </td>
+                  )
+                }
                 const display = val === null || val === undefined ? '--'
                   : typeof val === 'number' ? (Number.isInteger(val) ? String(val) : val.toFixed(1))
                   : String(val)
