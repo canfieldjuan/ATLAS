@@ -23,7 +23,7 @@ from ...services.scraping.sources import VERIFIED_SOURCES as _VERIFIED_SOURCES
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_enrichment")
 
-# Dedicated OpenRouter instance for enrichment — not shared with the global
+# Dedicated OpenRouter instance for enrichment -- not shared with the global
 # registry singleton (which synthesis/reasoning tasks swap to o4-mini).
 _enrichment_llm = None
 
@@ -287,7 +287,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         total_no_signal += result.get("no_signal", 0)
         rounds += 1
 
-        # If most of the batch failed, vLLM is likely overwhelmed — stop the loop
+        # If most of the batch failed, vLLM is likely overwhelmed -- stop the loop
         if batch_failed > len(rows) * 0.5:
             logger.warning("B2B enrichment: >50%% failures in batch (%d/%d), stopping loop",
                            batch_failed, len(rows))
@@ -320,7 +320,7 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
     """Enrich a single B2B review with churn signals. Returns True on success."""
     review_id = row["id"]
 
-    # Skip reviews with insufficient text — title-only scrapes can't yield 47 fields
+    # Skip reviews with insufficient text -- title-only scrapes can't yield 47 fields
     review_text = row.get("review_text") or ""
     if len(review_text) < _MIN_REVIEW_TEXT_LENGTH:
         await pool.execute(
@@ -408,6 +408,19 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
                     )
             except Exception:
                 logger.warning("ntfy notification failed for review %s, enrichment preserved", review_id)
+
+            # Backfill reviewer_company from LLM extraction when parser left it empty
+            try:
+                _ctx = result.get("reviewer_context") or {}
+                _extracted_company = (_ctx.get("company_name") or "").strip()
+                if _extracted_company and not (row.get("reviewer_company") or "").strip():
+                    await pool.execute(
+                        "UPDATE b2b_reviews SET reviewer_company = $1 WHERE id = $2",
+                        _extracted_company,
+                        review_id,
+                    )
+            except Exception:
+                logger.debug("Company name backfill failed for %s (non-fatal)", review_id)
 
             return True
         else:
@@ -744,7 +757,7 @@ def _validate_enrichment(result: dict) -> bool:
         # Coerce unknown evidence_type; fall back from legacy context field
         et = comp.get("evidence_type")
         if et not in _VALID_EVIDENCE_TYPES:
-            # Map legacy context → evidence_type
+            # Map legacy context -> evidence_type
             legacy = comp.get("context", "")
             _CONTEXT_TO_ET = {
                 "switched_to": "explicit_switch",
@@ -759,10 +772,10 @@ def _validate_enrichment(result: dict) -> bool:
         if dc not in _VALID_DISP_CONFIDENCE:
             comp["displacement_confidence"] = "low"
 
-        # Consistency: reverse_flow → confidence "none"
+        # Consistency: reverse_flow -> confidence "none"
         if comp["evidence_type"] == "reverse_flow":
             comp["displacement_confidence"] = "none"
-        # Consistency: neutral_mention → confidence at most "low"
+        # Consistency: neutral_mention -> confidence at most "low"
         if comp["evidence_type"] == "neutral_mention" and comp.get("displacement_confidence") in ("high", "medium"):
             comp["displacement_confidence"] = "low"
 

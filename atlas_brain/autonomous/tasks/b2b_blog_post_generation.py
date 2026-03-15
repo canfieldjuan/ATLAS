@@ -405,7 +405,7 @@ async def _select_topic(pool, max_per_run: int = 1) -> tuple[str, dict[str, Any]
 
     for pair in showdowns:
         slug = f"{_slugify(pair['vendor_a'])}-vs-{_slugify(pair['vendor_b'])}-{month_suffix}"
-        # Weight reviews heavily — popular pairs are most interesting to readers.
+        # Weight reviews heavily -- popular pairs are most interesting to readers.
         # pain_diff is a bonus, not the primary driver.
         score = (pair["total_reviews"] + pair["pain_diff"] * 50) * 1.5
         raw_candidates.append((slug, score, "vendor_showdown", {**pair, "slug": slug}))

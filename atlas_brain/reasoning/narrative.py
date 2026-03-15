@@ -384,7 +384,7 @@ class NarrativeEngine:
                     source_type="displacement",
                     metric="switched_to",
                     value=l.get("mentions", 0),
-                    context=f"→ {l.get('name', '?')} ({l.get('mentions', 0)} mentions, driver: {l.get('driver', '?')})",
+                    context=f"-> {l.get('name', '?')} ({l.get('mentions', 0)} mentions, driver: {l.get('driver', '?')})",
                 ))
             chains.append(chain)
 

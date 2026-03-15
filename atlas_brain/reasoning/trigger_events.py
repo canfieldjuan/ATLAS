@@ -270,7 +270,7 @@ class TriggerCorrelator:
                 mult = strength_mult.get(corr.correlation_strength, 0.0)
                 total_boost += definition.urgency_boost * mult * event.confidence
             else:
-                # Event exists but no temporal correlation yet — still counts for half
+                # Event exists but no temporal correlation yet -- still counts for half
                 total_boost += definition.urgency_boost * 0.5 * event.confidence
 
         # Composite formula

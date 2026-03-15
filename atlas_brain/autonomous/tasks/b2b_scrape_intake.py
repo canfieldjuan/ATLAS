@@ -292,7 +292,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             if result.reviews:
                 inserted = await _insert_reviews(pool, result.reviews, batch_id, parser_version=pv)
 
-                # Fire enrichment NOW — don't wait for it, let vLLM chew
+                # Fire enrichment NOW -- don't wait for it, let vLLM chew
                 if inserted > 0:
                     asyncio.create_task(
                         _fire_enrichment(batch_id, target.source, target.vendor_name),
@@ -375,7 +375,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     )
 
     # Enrichment fires as background tasks per-target (see _fire_enrichment).
-    # No need to wait — vLLM handles concurrent requests natively.
+    # No need to wait -- vLLM handles concurrent requests natively.
     # The b2b_enrichment scheduler task catches any stragglers every 30s.
 
     return {

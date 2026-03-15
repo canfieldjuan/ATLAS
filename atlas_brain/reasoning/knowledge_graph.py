@@ -610,7 +610,7 @@ class KnowledgeGraphQuery:
         """Find integration dependencies at risk if vendor churns.
 
         Returns vendors that share integrations with the target AND show
-        displacement activity — signals integration ecosystem disruption.
+        displacement activity -- signals integration ecosystem disruption.
         """
         async with self._driver.session() as session:
             result = await session.run(

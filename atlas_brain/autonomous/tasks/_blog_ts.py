@@ -82,7 +82,7 @@ def update_blog_index(index_path: Path, slug: str, var_name: str) -> bool:
     else:
         lines.insert(0, import_line)
 
-    # Insert into POSTS array — handle both `].sort(` and plain `]` endings
+    # Insert into POSTS array -- handle both `].sort(` and plain `]` endings
     new_text = "\n".join(lines)
     if re.search(r"].sort\(", new_text):
         new_text = re.sub(
