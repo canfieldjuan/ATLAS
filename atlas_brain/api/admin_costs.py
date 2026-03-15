@@ -426,7 +426,7 @@ async def scraping_summary(days: int = Query(default=7, ge=1, le=30)):
     pool = _pool_or_503()
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
-    # -- Throughput per source × vendor --
+    # -- Throughput per source x vendor --
     throughput_rows = await pool.fetch(
         """
         SELECT
@@ -542,7 +542,7 @@ async def scraping_details(
     Recent scrape log entries with full debug detail: errors, duration,
     captcha telemetry, block types, and parser version.
 
-    Filter by source (reddit, g2, …) or status (completed, failed, blocked, partial).
+    Filter by source (reddit, g2, ...) or status (completed, failed, blocked, partial).
     """
     pool = _pool_or_503()
 
@@ -810,7 +810,7 @@ async def scraping_top_posts(
 
 
 # ---------------------------------------------------------------------------
-# Reddit scraper — deep monitoring sub-section
+# Reddit scraper -- deep monitoring sub-section
 # ---------------------------------------------------------------------------
 
 
@@ -1319,7 +1319,7 @@ async def reddit_per_vendor(
         vendor_names,
     )
 
-    # Build vendor → top subreddits map (top 3)
+    # Build vendor -> top subreddits map (top 3)
     top_subs: dict[str, list[str]] = {}
     for r in sub_rows:
         vn = r["vendor_name"]

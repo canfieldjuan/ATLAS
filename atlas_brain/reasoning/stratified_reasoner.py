@@ -21,14 +21,26 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .differential import EvidenceDiff, classify_evidence, reconstitute
-from .episodic_store import (
-    ConclusionNode,
-    EpisodicStore,
-    EvidenceNode,
-    ReasoningTrace,
-)
 from .llm_utils import REASONING_CONCLUSION_JSON_SCHEMA, resolve_stratified_llm
 from .semantic_cache import CacheEntry, SemanticCache, compute_evidence_hash
+
+# Lazy-import episodic store types to avoid pulling in the neo4j driver
+# (and its transitive numpy dependency) at module-load time.  The types
+# are only needed when actually storing or loading traces, and importing
+# neo4j can fail with an AttributeError on numpy.__version__ depending
+# on the numpy version installed.
+try:
+    from .episodic_store import (
+        ConclusionNode,
+        EpisodicStore,
+        EvidenceNode,
+        ReasoningTrace,
+    )
+except (ImportError, AttributeError):
+    EpisodicStore = None  # type: ignore[misc,assignment]
+    ReasoningTrace = None  # type: ignore[misc,assignment]
+    EvidenceNode = None  # type: ignore[misc,assignment]
+    ConclusionNode = None  # type: ignore[misc,assignment]
 
 logger = logging.getLogger("atlas.reasoning.stratified")
 
