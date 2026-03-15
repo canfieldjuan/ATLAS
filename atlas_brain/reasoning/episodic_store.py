@@ -63,6 +63,7 @@ class ReasoningTrace:
     evidence: list[EvidenceNode] = field(default_factory=list)
     conclusions: list[ConclusionNode] = field(default_factory=list)
     similarity_score: float | None = None  # set on similarity search results
+    raw_evidence: dict[str, Any] | None = None  # full evidence JSON for lossless reconstitution diffing
 
 
 class EpisodicStore:
@@ -176,6 +177,8 @@ class EpisodicStore:
         driver = await self._get_driver()
         async with driver.session() as session:
             # Create the ReasoningTrace node
+            import json as _json
+            _raw_ev = _json.dumps(trace.raw_evidence, default=str) if trace.raw_evidence else None
             await session.run(
                 """
                 CREATE (t:ReasoningTrace {
@@ -187,7 +190,8 @@ class EpisodicStore:
                     confidence: $confidence,
                     pattern_sig: $pattern_sig,
                     trace_embedding: $trace_embedding,
-                    group_id: $group_id
+                    group_id: $group_id,
+                    raw_evidence: $raw_evidence
                 })
                 """,
                 id=trace.id,
@@ -199,6 +203,7 @@ class EpisodicStore:
                 pattern_sig=trace.pattern_sig,
                 trace_embedding=trace.trace_embedding,
                 group_id=GROUP_ID,
+                raw_evidence=_raw_ev,
             )
 
             # Create evidence nodes + SUPPORTED_BY relationships

@@ -207,6 +207,8 @@ async def reconstitute(
         },
     }
 
+    from .config import ReasoningConfig
+    _rcfg = ReasoningConfig()
     llm = get_pipeline_llm(workload="vllm", auto_activate_ollama=True)
     if llm is None:
         logger.error("No LLM available for reconstitution")
@@ -222,7 +224,7 @@ async def reconstitute(
 
     t0 = time.monotonic()
     try:
-        result = llm.chat(messages=messages, max_tokens=1024, temperature=0.2)
+        result = llm.chat(messages=messages, max_tokens=min(_rcfg.max_tokens, 1024), temperature=_rcfg.temperature)
         text = result.get("response", "").strip()
         usage = result.get("usage", {})
         tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)

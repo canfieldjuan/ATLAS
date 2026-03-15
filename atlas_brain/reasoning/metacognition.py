@@ -17,7 +17,6 @@ Exploration budget:
 from __future__ import annotations
 
 import logging
-import random
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -39,6 +38,7 @@ class MetacognitiveState:
     full_reasons: int = 0
     surprise_escalations: int = 0
     exploration_samples: int = 0
+    total_calls: int = 0
     tokens_spent: int = 0
     tokens_saved: int = 0
     conclusion_types: Counter = field(default_factory=Counter)
@@ -58,10 +58,12 @@ class MetacognitiveMonitor:
     # ------------------------------------------------------------------
 
     def should_force_exploration(self) -> bool:
-        """Random exploration: force full-reason to detect cache drift."""
-        if random.random() < EXPLORATION_RATE:
+        """Deterministic exploration: force full-reason every N calls to detect cache drift."""
+        self._state.total_calls += 1
+        interval = max(1, int(1.0 / EXPLORATION_RATE)) if EXPLORATION_RATE > 0 else 0
+        if interval > 0 and self._state.total_calls % interval == 0:
             self._state.exploration_samples += 1
-            logger.debug("Exploration sample triggered (rate=%.0f%%)", EXPLORATION_RATE * 100)
+            logger.debug("Exploration sample triggered (call #%d, interval=%d)", self._state.total_calls, interval)
             return True
         return False
 

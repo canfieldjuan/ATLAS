@@ -285,7 +285,8 @@ class SemanticCache:
         for row in rows:
             e = self._row_to_entry(row)
             e.effective_confidence = _apply_decay(e.confidence, e.last_validated_at, e.decay_half_life_days)
-            entries.append(e)
+            if e.effective_confidence >= self.STALE_THRESHOLD:
+                entries.append(e)
         return entries
 
     async def get_cache_stats(self) -> dict[str, Any]:

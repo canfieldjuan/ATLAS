@@ -71,6 +71,13 @@ class ReasoningResult:
 class StratifiedReasoner:
     """Core dispatch engine: recall -> reconstitute -> reason."""
 
+    _VALID_ARCHETYPES = frozenset({
+        "pricing_shock", "feature_gap", "acquisition_decay",
+        "leadership_redesign", "integration_break", "support_collapse",
+        "category_disruption", "compliance_gap", "mixed", "stable",
+    })
+    _VALID_RISK_LEVELS = frozenset({"low", "medium", "high", "critical"})
+
     def __init__(
         self,
         cache: SemanticCache,
@@ -80,6 +87,50 @@ class StratifiedReasoner:
         self._cache = cache
         self._episodic = episodic
         self._meta = metacognition  # MetacognitiveMonitor (optional)
+
+    @staticmethod
+    def _normalize_conclusion(conclusion: dict[str, Any]) -> dict[str, Any]:
+        """Validate and normalize LLM reasoning output.
+
+        Clamps confidence to [0,1], whitelists archetype and risk_level,
+        coerces list fields, and fills missing fields with safe defaults.
+        """
+        if not isinstance(conclusion, dict) or "error" in conclusion:
+            return conclusion
+
+        # Clamp confidence
+        try:
+            conf = float(conclusion.get("confidence", 0.5))
+            conclusion["confidence"] = max(0.0, min(1.0, conf))
+        except (TypeError, ValueError):
+            conclusion["confidence"] = 0.5
+
+        # Whitelist archetype
+        arch = conclusion.get("archetype", "")
+        if arch not in StratifiedReasoner._VALID_ARCHETYPES:
+            conclusion["archetype"] = "mixed"
+
+        # Whitelist risk_level
+        risk = conclusion.get("risk_level", "")
+        if risk not in StratifiedReasoner._VALID_RISK_LEVELS:
+            conclusion["risk_level"] = "medium"
+
+        # Coerce list fields
+        for fld in ("key_signals", "falsification_conditions", "uncertainty_sources"):
+            val = conclusion.get(fld)
+            if val is None:
+                conclusion[fld] = []
+            elif not isinstance(val, list):
+                conclusion[fld] = [str(val)]
+            else:
+                conclusion[fld] = [str(s) for s in val if s]
+
+        # Ensure executive_summary is a string
+        es = conclusion.get("executive_summary")
+        if not isinstance(es, str):
+            conclusion["executive_summary"] = str(es) if es else ""
+
+        return conclusion
 
     async def analyze(
         self,
@@ -230,6 +281,7 @@ class StratifiedReasoner:
         updated_conclusion, tokens = await reconstitute(
             vendor_name, entry.conclusion, diff, new_evidence,
         )
+        updated_conclusion = self._normalize_conclusion(updated_conclusion)
 
         if not updated_conclusion or "error" in updated_conclusion:
             return None
@@ -271,12 +323,31 @@ class StratifiedReasoner:
         )
 
     async def _load_old_evidence(self, pattern_sig: str) -> dict[str, Any] | None:
-        """Load the evidence from a prior episodic trace for diffing."""
+        """Load prior evidence for reconstitution diffing.
+
+        Prefers the full raw_evidence JSON stored on the trace node.
+        Falls back to reconstructing from truncated EvidenceNode values.
+        """
         try:
-            traces = await self._episodic.get_traces_for_vendor("", limit=1)
-            # Better: search by pattern_sig
             driver = await self._episodic._get_driver()
             async with driver.session() as session:
+                # Try raw_evidence first (lossless)
+                result = await session.run(
+                    """
+                    MATCH (t:ReasoningTrace {pattern_sig: $sig, group_id: $gid})
+                    RETURN t.raw_evidence AS raw_evidence
+                    """,
+                    sig=pattern_sig,
+                    gid="b2b-reasoning",
+                )
+                record = await result.single()
+                if record and record["raw_evidence"]:
+                    try:
+                        return json.loads(record["raw_evidence"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+                # Fallback: reconstruct from truncated evidence nodes
                 result = await session.run(
                     """
                     MATCH (t:ReasoningTrace {pattern_sig: $sig, group_id: $gid})
@@ -287,10 +358,9 @@ class StratifiedReasoner:
                     gid="b2b-reasoning",
                 )
                 evidence = {}
-                async for record in result:
-                    key = record["type"] or record["source"]
-                    raw = record["value"]
-                    # Deserialize JSON-encoded values to restore types
+                async for rec in result:
+                    key = rec["type"] or rec["source"]
+                    raw = rec["value"]
                     try:
                         val = json.loads(raw)
                     except (json.JSONDecodeError, TypeError):
@@ -367,6 +437,8 @@ class StratifiedReasoner:
                 for t in prior_traces
             ]
 
+        from .config import ReasoningConfig
+        _rcfg = ReasoningConfig()
         llm = get_pipeline_llm(workload="vllm", auto_activate_ollama=True)
         if llm is None:
             logger.error("No LLM available for stratified reasoning")
@@ -390,7 +462,7 @@ class StratifiedReasoner:
 
         t0 = time.monotonic()
         try:
-            result = llm.chat(messages=messages, max_tokens=2048, temperature=0.3)
+            result = llm.chat(messages=messages, max_tokens=_rcfg.max_tokens, temperature=_rcfg.temperature)
             text = result.get("response", "").strip()
             usage = result.get("usage", {})
             tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
@@ -400,6 +472,7 @@ class StratifiedReasoner:
             text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
             conclusion = parse_json_response(text)
+            conclusion = self._normalize_conclusion(conclusion)
         except Exception:
             logger.exception("LLM reasoning failed for %s", vendor_name)
             return ReasoningResult(
@@ -429,6 +502,7 @@ class StratifiedReasoner:
             all_conds = list(set(llm_conds + archetype_conds))
         except Exception:
             all_conds = llm_conds
+        conclusion["falsification_conditions"] = all_conds
 
         # Store in semantic cache
         cache_entry = CacheEntry(
@@ -458,7 +532,7 @@ class StratifiedReasoner:
                 embedding = self._episodic.embed_text(evidence_summary)
             except Exception:
                 logger.debug("embed_text failed for %s, storing trace without embedding", vendor_name)
-                embedding = [0.0] * 1024  # placeholder — vector search won't match, but trace is preserved
+                embedding = [0.0] * 1024  # placeholder -- vector search won't match, but trace is preserved
 
             evidence_nodes = self._build_evidence_nodes(evidence)
             conclusion_node = ConclusionNode(
@@ -476,6 +550,7 @@ class StratifiedReasoner:
                 trace_embedding=embedding,
                 evidence=evidence_nodes,
                 conclusions=[conclusion_node],
+                raw_evidence=evidence,
             )
             trace_id = await self._episodic.store_trace(trace)
         except Exception:
