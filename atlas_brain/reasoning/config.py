@@ -26,13 +26,17 @@ class ReasoningConfig(BaseSettings):
         default="claude-sonnet-4-5-20250929",
         description="Anthropic model for deep reasoning",
     )
-    max_tokens: int = Field(default=2048, description="Max tokens for reasoning calls")
-    temperature: float = Field(default=0.3, description="Temperature for reasoning calls")
+    max_tokens: int = Field(default=16384, description="Max tokens for reasoning calls (includes thinking tokens for reasoning models)")
+    temperature: float = Field(default=0.3, description="Temperature for reasoning calls (ignored by reasoning models like o4-mini)")
 
     # Stratified reasoning LLM backend (B2B churn pipeline)
     stratified_llm_workload: str = Field(
-        default="vllm",
-        description="Pipeline LLM workload for stratified reasoning: 'vllm', 'anthropic', or 'auto'",
+        default="openrouter",
+        description="Pipeline LLM workload for stratified reasoning: 'openrouter', 'vllm', 'anthropic', or 'auto'",
+    )
+    stratified_openrouter_model: str = Field(
+        default="openai/o4-mini",
+        description="OpenRouter model ID for stratified reasoning (used when workload=openrouter)",
     )
 
     triage_model: str = Field(

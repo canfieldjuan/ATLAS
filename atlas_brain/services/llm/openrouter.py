@@ -94,6 +94,16 @@ class OpenRouterLLM(BaseModelService):
             result.append(m)
         return result
 
+    # Models that use reasoning tokens and require max_completion_tokens
+    # instead of max_tokens, and ignore temperature.
+    _REASONING_MODELS = frozenset({
+        "openai/o4-mini", "openai/o4-mini-high", "openai/o3", "openai/o3-mini",
+        "openai/o3-mini-high", "openai/o1", "openai/o1-mini", "openai/o1-preview",
+    })
+
+    def _is_reasoning_model(self) -> bool:
+        return self.model in self._REASONING_MODELS or "/o4" in self.model or "/o3" in self.model or "/o1" in self.model
+
     def chat(
         self,
         messages: list[Message],
@@ -104,12 +114,24 @@ class OpenRouterLLM(BaseModelService):
         if not self._sync_client:
             raise RuntimeError("OpenRouter LLM not loaded")
 
-        payload = {
+        is_reasoning = self._is_reasoning_model()
+
+        payload: dict[str, Any] = {
             "model": self.model,
             "messages": self._convert_messages(messages),
-            "max_tokens": max_tokens,
-            "temperature": temperature,
         }
+
+        # Reasoning models (o1/o3/o4) use max_completion_tokens, no temperature
+        if is_reasoning:
+            payload["max_completion_tokens"] = max_tokens
+        else:
+            payload["max_tokens"] = max_tokens
+            payload["temperature"] = temperature
+
+        # Forward response_format when requested (JSON mode)
+        response_format = kwargs.get("response_format")
+        if response_format:
+            payload["response_format"] = response_format
 
         try:
             response = self._sync_client.post(
@@ -124,8 +146,11 @@ class OpenRouterLLM(BaseModelService):
             content = message.get("content", "").strip()
 
             usage = data.get("usage", {})
-            logger.info("OpenRouter chat: model=%s tokens=%s content_len=%d",
-                       self.model, usage, len(content))
+            reasoning_tokens = usage.get("completion_tokens_details", {}).get("reasoning_tokens", 0)
+            logger.info(
+                "OpenRouter chat: model=%s tokens=%s reasoning_tokens=%d content_len=%d",
+                self.model, usage, reasoning_tokens, len(content),
+            )
 
             return {
                 "response": content,
@@ -133,6 +158,7 @@ class OpenRouterLLM(BaseModelService):
                 "usage": {
                     "input_tokens": usage.get("prompt_tokens", 0),
                     "output_tokens": usage.get("completion_tokens", 0),
+                    "reasoning_tokens": reasoning_tokens,
                 },
                 "_trace_meta": {
                     "api_endpoint": f"{self.base_url}/chat/completions",

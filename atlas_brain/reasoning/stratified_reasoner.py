@@ -27,41 +27,65 @@ from .episodic_store import (
     EvidenceNode,
     ReasoningTrace,
 )
+from .llm_utils import REASONING_CONCLUSION_JSON_SCHEMA, resolve_stratified_llm
 from .semantic_cache import CacheEntry, SemanticCache, compute_evidence_hash
 
 logger = logging.getLogger("atlas.reasoning.stratified")
 
 # System prompt for Phase 1 (inline; replaced by skill file in WS6)
 _REASON_SYSTEM_PROMPT = """\
-You are a B2B churn intelligence analyst producing structured reasoning.
+You are a B2B churn intelligence analyst. Classify the vendor's churn pattern from the evidence provided.
 
-Output ONLY valid JSON with these exact fields:
+ARCHETYPE DEFINITIONS -- choose the one that best matches the PRIMARY driver:
+- pricing_shock: churn driven mainly by price increases/complaints. Requires price_complaint_rate to be the dominant signal.
+- feature_gap: churn because competitors offer features this vendor lacks. Requires feature gaps or displacement data as primary driver.
+- acquisition_decay: quality decline after M&A. Requires evidence of post-acquisition deterioration.
+- leadership_redesign: UI/UX overhaul causing user frustration. Requires UX/usability as dominant pain category.
+- integration_break: API or integration failures. Requires integration-related pain as dominant signal.
+- support_collapse: support quality deterioration. Requires support-related pain as dominant signal.
+- category_disruption: new entrant (often AI-native) disrupting the category. Requires displacement to newer/different category entrants.
+- compliance_gap: unmet regulatory requirements. Requires compliance-related evidence.
+- mixed: no single pattern dominates (use when top two signals are close and different archetypes).
+- stable: vendor is healthy, no significant churn pattern detected.
+
+CLASSIFICATION RULES:
+1. Look at pain_categories FIRST. The category with the highest count is the primary driver.
+2. archetype_scores are heuristic pre-scores -- treat them as hypotheses, NOT as the answer. Override them when the evidence disagrees.
+3. If the top pain category is "ux" or "usability", the archetype should be leadership_redesign, NOT pricing_shock.
+4. If the top pain category is "pricing" AND price_complaint_rate > 0.15, then pricing_shock is justified.
+5. If the top pain is "other" or ambiguous, look at the SECOND pain category and displacement data.
+6. Use "mixed" when the top two pain categories are within 20% of each other and map to different archetypes.
+
+CONFIDENCE CALIBRATION:
+- 0.85-1.0: Strong, unambiguous signal with 50+ reviews and clear dominant pattern.
+- 0.65-0.84: Clear pattern but some noise or limited temporal data.
+- 0.45-0.64: Pattern visible but evidence is thin, mixed, or contradictory.
+- 0.20-0.44: Weak signal. Must use "mixed" or "stable".
+- Do NOT default to 0.82. Confidence must vary based on actual evidence strength.
+
+RISK LEVEL:
+- critical: churn_density > 40% AND avg_urgency > 7
+- high: churn_density > 25% OR (churn_density > 15% AND avg_urgency > 6)
+- medium: churn_density > 10% OR avg_urgency > 4
+- low: below all thresholds above
+
+Output ONLY valid JSON:
 {
-  "archetype": "<exactly one of: pricing_shock, feature_gap, acquisition_decay, \
-leadership_redesign, integration_break, support_collapse, \
-category_disruption, compliance_gap, mixed, stable>",
-  "secondary_archetype": "<same options or null if confidence gap > 0.15>",
-  "confidence": <0.0-1.0, must reflect data quality and coverage>,
-  "risk_level": "<exactly one of: low, medium, high, critical>",
-  "executive_summary": "<3 sentences answering: (1) what pattern, (2) why now, (3) what to watch>",
-  "key_signals": [
-    "<metric_name: value -- specific number from evidence, max 5 items>",
-  ],
-  "falsification_conditions": [
-    "<concrete condition that would invalidate this conclusion, at least 1>"
-  ],
-  "uncertainty_sources": [
-    "<specific data gap or limitation, at least 1>"
-  ]
+  "archetype": "<one archetype from the list above>",
+  "secondary_archetype": "<another archetype or null if gap > 0.15>",
+  "confidence": <number 0.0-1.0>,
+  "risk_level": "<low|medium|high|critical>",
+  "executive_summary": "<3 sentences: (1) what pattern, (2) why now citing specific metrics, (3) what to watch>",
+  "key_signals": ["<metric: value>", ...],
+  "falsification_conditions": ["<what would prove this wrong>"],
+  "uncertainty_sources": ["<what data is missing or weak>"]
 }
 
-Rules:
-1. Every key_signal MUST cite a specific metric and value from the evidence (e.g., "churn_density: 38.6%"). Generic signals like "high churn" are invalid.
-2. executive_summary MUST answer three questions: what pattern is this, why is it happening now, what should buyers watch for.
-3. If confidence < 0.6, you MUST include at least 2 uncertainty_sources.
-4. If confidence < 0.4, archetype MUST be "mixed" or "stable".
-5. secondary_archetype is null unless the second-best archetype is within 0.15 confidence of the primary.
-6. Do not invent data. If a metric is not in the evidence, do not reference it.\
+GROUNDING RULES:
+- Every key_signal MUST cite a specific metric and value from the evidence (e.g., "churn_density: 38.6%").
+- executive_summary sentence 2 MUST reference at least 2 specific numbers from the evidence.
+- If confidence < 0.6, include at least 2 uncertainty_sources.
+- Do not invent data not present in the evidence.\
 """
 
 
@@ -108,6 +132,8 @@ class StratifiedReasoner:
         """
         if not isinstance(conclusion, dict) or "error" in conclusion:
             return conclusion
+
+        conclusion = dict(conclusion)
 
         # Clamp confidence
         try:
@@ -187,6 +213,100 @@ class StratifiedReasoner:
                 ]
 
         return conclusion
+
+    @classmethod
+    def _validate_conclusion(
+        cls,
+        conclusion: dict[str, Any],
+        *,
+        evidence_keys: set[str] | None = None,
+    ) -> list[str]:
+        """Return validation errors for a normalized reasoning conclusion."""
+        if not isinstance(conclusion, dict):
+            return ["conclusion is not an object"]
+        if conclusion.get("_parse_fallback"):
+            return ["llm output was not valid json"]
+        if "error" in conclusion:
+            return [str(conclusion["error"])]
+
+        errors: list[str] = []
+        required = (
+            "archetype",
+            "confidence",
+            "risk_level",
+            "executive_summary",
+            "key_signals",
+            "falsification_conditions",
+            "uncertainty_sources",
+        )
+        for field in required:
+            if field not in conclusion:
+                errors.append(f"missing field: {field}")
+
+        archetype = conclusion.get("archetype")
+        if archetype not in cls._VALID_ARCHETYPES:
+            errors.append(f"invalid archetype: {archetype!r}")
+
+        secondary = conclusion.get("secondary_archetype")
+        if secondary is not None and secondary not in cls._VALID_ARCHETYPES:
+            errors.append(f"invalid secondary_archetype: {secondary!r}")
+
+        confidence = conclusion.get("confidence")
+        if not isinstance(confidence, (int, float)) or not 0.0 <= float(confidence) <= 1.0:
+            errors.append("confidence must be a number between 0 and 1")
+
+        risk_level = conclusion.get("risk_level")
+        if risk_level not in cls._VALID_RISK_LEVELS:
+            errors.append(f"invalid risk_level: {risk_level!r}")
+
+        executive_summary = conclusion.get("executive_summary")
+        if not isinstance(executive_summary, str) or len(executive_summary.strip()) < 20:
+            errors.append("executive_summary is missing or too short")
+
+        key_signals = conclusion.get("key_signals")
+        if not isinstance(key_signals, list) or not key_signals:
+            errors.append("key_signals must contain at least one grounded signal")
+        else:
+            grounded = [
+                signal for signal in key_signals
+                if cls._is_grounded_signal(signal, evidence_keys)
+            ]
+            if not grounded:
+                errors.append("key_signals do not reference known evidence metrics")
+
+        falsification_conditions = conclusion.get("falsification_conditions")
+        if not isinstance(falsification_conditions, list) or not falsification_conditions:
+            errors.append("at least one falsification_condition is required")
+
+        uncertainty_sources = conclusion.get("uncertainty_sources")
+        if not isinstance(uncertainty_sources, list) or not uncertainty_sources:
+            errors.append("at least one uncertainty_source is required")
+        elif float(confidence or 0.0) < 0.6 and len(uncertainty_sources) < 2:
+            errors.append("confidence < 0.6 requires at least 2 uncertainty_sources")
+
+        return errors
+
+    @classmethod
+    def _is_grounded_signal(cls, signal: Any, evidence_keys: set[str] | None = None) -> bool:
+        if not isinstance(signal, str) or ":" not in signal:
+            return False
+        metric, value = signal.split(":", 1)
+        metric = metric.strip().lower().replace(" ", "_")
+        if not metric or not value.strip():
+            return False
+        if not evidence_keys:
+            return True
+        if metric in evidence_keys or metric in cls._CORE_SIGNAL_FIELDS:
+            return True
+        if metric.endswith("_score") and "archetype_scores" in evidence_keys:
+            return True
+        return any(key.startswith(metric) or metric.startswith(key) for key in evidence_keys)
+
+    async def _invalidate_invalid_cache_entry(self, pattern_sig: str, reason: str) -> None:
+        try:
+            await self._cache.invalidate(pattern_sig, reason=reason)
+        except Exception:
+            logger.debug("Failed to invalidate cache entry %s", pattern_sig, exc_info=True)
 
     # Fields that define the core signal. Changes to these should always
     # trigger full reasoning in the differential engine.
@@ -371,9 +491,19 @@ class StratifiedReasoner:
             )
             return None
 
+        normalized = self._normalize_conclusion(entry.conclusion)
+        validation_errors = self._validate_conclusion(normalized)
+        if validation_errors:
+            logger.warning(
+                "Invalid cached reasoning for %s; treating as miss: %s",
+                pattern_sig, "; ".join(validation_errors[:3]),
+            )
+            await self._invalidate_invalid_cache_entry(pattern_sig, "invalid reasoning payload")
+            return None
+
         return ReasoningResult(
             mode="recall",
-            conclusion=entry.conclusion,
+            conclusion=normalized,
             confidence=entry.effective_confidence or entry.confidence,
             pattern_sig=pattern_sig,
             evidence_hash=evidence_hash,
@@ -408,6 +538,15 @@ class StratifiedReasoner:
         if entry.effective_confidence is not None and entry.effective_confidence < 0.3:
             return None  # too stale to reconstitute from
 
+        cached_validation_errors = self._validate_conclusion(
+            self._normalize_conclusion(entry.conclusion),
+        )
+        if cached_validation_errors:
+            await self._invalidate_invalid_cache_entry(
+                entry.pattern_sig, "invalid reconstitution source payload",
+            )
+            return None
+
         # Reconstruct old evidence from the stored evidence hash
         # We need the actual old evidence for diffing -- check episodic store
         old_evidence = await self._load_old_evidence(entry.pattern_sig)
@@ -426,8 +565,17 @@ class StratifiedReasoner:
             vendor_name, entry.conclusion, diff, new_evidence,
         )
         updated_conclusion = self._normalize_conclusion(updated_conclusion)
+        validation_errors = self._validate_conclusion(
+            updated_conclusion,
+            evidence_keys=set(self._prepare_evidence(new_evidence).keys()),
+        )
 
-        if not updated_conclusion or "error" in updated_conclusion:
+        if not updated_conclusion or "error" in updated_conclusion or validation_errors:
+            if validation_errors:
+                logger.warning(
+                    "Discarding weak reconstitution for %s; escalating to full reason: %s",
+                    vendor_name, "; ".join(validation_errors[:3]),
+                )
             return None
 
         new_confidence = updated_conclusion.get("confidence", entry.confidence)
@@ -561,7 +709,7 @@ class StratifiedReasoner:
         tier_context: dict[str, Any] | None = None,
     ) -> ReasoningResult:
         """Full LLM synthesis. Store result in both memories."""
-        from ..pipelines.llm import get_pipeline_llm, parse_json_response
+        from ..pipelines.llm import parse_json_response
         from ..services.protocols import Message
 
         # Build user payload
@@ -586,10 +734,12 @@ class StratifiedReasoner:
 
         from .config import ReasoningConfig
         _rcfg = ReasoningConfig()
-        _workload = _rcfg.stratified_llm_workload
-        llm = get_pipeline_llm(workload=_workload, auto_activate_ollama=(_workload == "vllm"))
+        llm = resolve_stratified_llm(_rcfg)
         if llm is None:
-            logger.error("No LLM available for stratified reasoning (workload=%s)", _workload)
+            logger.error(
+                "No LLM available for stratified reasoning (workload=%s)",
+                _rcfg.stratified_llm_workload,
+            )
             return ReasoningResult(
                 mode="reason",
                 conclusion={"error": "no_llm_available"},
@@ -614,6 +764,7 @@ class StratifiedReasoner:
                 messages=messages,
                 max_tokens=_rcfg.max_tokens,
                 temperature=_rcfg.temperature,
+                guided_json=REASONING_CONCLUSION_JSON_SCHEMA,
                 response_format={"type": "json_object"},
             )
             text = result.get("response", "").strip()
@@ -624,7 +775,7 @@ class StratifiedReasoner:
             import re
             text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
-            conclusion = parse_json_response(text)
+            conclusion = parse_json_response(text, recover_truncated=True)
             conclusion = self._normalize_conclusion(conclusion)
         except Exception:
             logger.exception("LLM reasoning failed for %s", vendor_name)
@@ -641,6 +792,28 @@ class StratifiedReasoner:
         confidence = conclusion.get("confidence", 0.5)
         archetype = conclusion.get("archetype", "unknown")
         duration_ms = (time.monotonic() - t0) * 1000
+
+        validation_errors = self._validate_conclusion(
+            conclusion,
+            evidence_keys=set(prepared.keys()),
+        )
+        if validation_errors:
+            logger.warning(
+                "Rejected invalid reasoning output for %s: %s",
+                vendor_name, "; ".join(validation_errors[:4]),
+            )
+            return ReasoningResult(
+                mode="reason",
+                conclusion={
+                    "error": "invalid_reasoning_output",
+                    "validation_errors": validation_errors,
+                },
+                confidence=0.0,
+                pattern_sig=pattern_sig,
+                evidence_hash=evidence_hash,
+                tokens_used=tokens,
+                cached=False,
+            )
 
         logger.info(
             "Reasoned %s -> %s (conf=%.2f, %d tokens, %.0fms)",
