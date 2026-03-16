@@ -88,6 +88,77 @@ def _fmt_score(val: Any) -> str:
         return "N/A"
 
 
+_ARCHETYPE_LABELS: dict[str, str] = {
+    "pricing_shock": "Pricing Shock",
+    "feature_gap": "Feature Gap",
+    "support_collapse": "Support Collapse",
+    "leadership_redesign": "Leadership Redesign",
+    "acquisition_decay": "Acquisition Decay",
+    "integration_break": "Integration Break",
+    "category_disruption": "Category Disruption",
+    "compliance_gap": "Compliance Gap",
+}
+
+
+def _render_archetype_section(
+    archetype: str | None,
+    confidence: float | None,
+    archetype_was: str | None,
+    archetype_changed: bool,
+    falsification: list,
+) -> str:
+    """Render the archetype intelligence section for vendor briefings."""
+    if not archetype:
+        return ""
+
+    label = escape(_ARCHETYPE_LABELS.get(archetype, archetype.replace("_", " ").title()))
+    conf_pct = f"{confidence * 100:.0f}%" if confidence is not None else "N/A"
+
+    # "What changed" line
+    change_html = ""
+    if archetype_changed and archetype_was:
+        was_label = escape(
+            _ARCHETYPE_LABELS.get(archetype_was, archetype_was.replace("_", " ").title())
+        )
+        change_html = (
+            f'<div style="font-size:13px;color:#e67e22;margin-top:8px;">'
+            f'<strong>Shifted from:</strong> {was_label}</div>'
+        )
+
+    # "What would falsify this" bullets
+    falsify_html = ""
+    if falsification:
+        items = "".join(
+            f'<li style="padding:2px 0;font-size:12px;color:#777;">{escape(str(f))}</li>'
+            for f in falsification[:3]
+        )
+        falsify_html = (
+            f'<div style="margin-top:10px;">'
+            f'<div style="font-size:11px;color:#999;text-transform:uppercase;'
+            f'letter-spacing:0.5px;margin-bottom:4px;">Watch for</div>'
+            f'<ul style="margin:0;padding-left:16px;">{items}</ul></div>'
+        )
+
+    return f"""
+  <!-- Archetype Intelligence -->
+  <tr>
+    <td style="padding:12px 24px 4px;">
+      <table cellpadding="0" cellspacing="0" border="0" style="width:100%;background:#f8f9fa;border:1px solid #eee;border-radius:6px;overflow:hidden;">
+        <tr>
+          <td style="padding:14px 18px;">
+            <div style="font-size:11px;color:#999;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Churn Pattern Classification</div>
+            <div style="font-size:16px;font-weight:700;color:#1a2332;">{label}</div>
+            <div style="font-size:13px;color:#888;margin-top:2px;">Confidence: {conf_pct}</div>
+            {change_html}
+            {falsify_html}
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+"""
+
+
 # ---------------------------------------------------------------------------
 # Main renderer
 # ---------------------------------------------------------------------------
@@ -138,6 +209,13 @@ def render_vendor_briefing_html(briefing: dict) -> str:
     is_gated_delivery = briefing.get("is_gated_delivery", False)
     prospect_mode = briefing.get("prospect_mode", False)
     challenger_mode = briefing.get("challenger_mode", False)
+
+    # Archetype context
+    archetype = briefing.get("archetype")
+    archetype_confidence = briefing.get("archetype_confidence")
+    archetype_was = briefing.get("archetype_was")
+    archetype_changed = briefing.get("archetype_changed", False)
+    falsification_conditions = briefing.get("falsification_conditions") or []
 
     # Section 4: pain breakdown
     pains = briefing.get("pain_breakdown") or []
@@ -329,6 +407,40 @@ def render_vendor_briefing_html(briefing: dict) -> str:
               </td></tr>
             </table>"""
 
+    # Section 8b: correlated articles
+    correlated_articles = briefing.get("correlated_articles") or []
+    correlated_articles_html = ""
+    if correlated_articles:
+        article_items = ""
+        for art in correlated_articles[:3]:
+            art_title = _safe(art.get("title", ""), "Untitled")
+            art_url = art.get("url", "")
+            art_source = _safe(art.get("source", ""), "")
+            source_tag = f' <span style="color:#999;">({art_source})</span>' if art_source else ""
+            if art_url:
+                article_items += (
+                    f'<li style="padding:4px 0;font-size:13px;line-height:1.4;">'
+                    f'<a href="{escape(art_url)}" style="color:#2980b9;text-decoration:none;">'
+                    f'{art_title}</a>{source_tag}</li>'
+                )
+            else:
+                article_items += (
+                    f'<li style="padding:4px 0;font-size:13px;color:#555;line-height:1.4;">'
+                    f'{art_title}{source_tag}</li>'
+                )
+
+        if article_items:
+            correlated_articles_html = f"""
+            <!-- Correlated Articles -->
+            <table cellpadding="0" cellspacing="0" border="0" style="width:100%;margin-bottom:28px;">
+              <tr><td style="padding:0 24px;">
+                <h3 style="margin:0 0 12px;font-size:16px;color:#1a2332;">Related Market Coverage</h3>
+                <ul style="margin:0;padding-left:20px;">
+                  {article_items}
+                </ul>
+              </td></tr>
+            </table>"""
+
     # Section 9: CTA content
     cta_title = f"There&#39;s more in the full report"
     if challenger_mode:
@@ -468,6 +580,8 @@ def render_vendor_briefing_html(briefing: dict) -> str:
   </tr>
   '''}
 
+  {_render_archetype_section(archetype, archetype_confidence, archetype_was, archetype_changed, falsification_conditions)}
+
   <!-- Divider -->
   <tr><td style="padding:0 24px;"><hr style="border:none;border-top:1px solid #eee;margin:0;"></td></tr>
 
@@ -542,6 +656,8 @@ def render_vendor_briefing_html(briefing: dict) -> str:
   {named_accounts_html}
 
   {feature_gap_html}
+
+  {correlated_articles_html}
 
   <!-- Section 9: CTA -->
   <tr>

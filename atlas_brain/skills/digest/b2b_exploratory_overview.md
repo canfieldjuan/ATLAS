@@ -36,6 +36,9 @@ You will receive the same trimmed intelligence payload used by the B2B churn pip
   - `risk_level`: "low", "medium", "high", or "critical"
   - `executive_summary`: 2-3 sentence reasoning assessment
   - `key_signals`: list of key evidence signals
+  - `archetype_was`: prior archetype from ~4 weeks ago (null if no history)
+  - `confidence_was`: prior confidence (null if no history)
+  - `archetype_changed`: true if archetype shifted since prior snapshot
 
 ## Output Schema
 
@@ -62,6 +65,7 @@ You will receive the same trimmed intelligence payload used by the B2B churn pip
 - Do not include markdown fences.
 - `exploratory_summary` must be 120 words or fewer.
 - If `stratified_intelligence` is present, synthesize archetype clusters into the narrative (e.g., "3 vendors show pricing_shock patterns"). Highlight any vendors with critical risk_level.
+- If any vendor has `archetype_changed: true`, lead with archetype transitions in the narrative (e.g., "Vendor X shifted from stable to leadership_redesign, confidence 0.45 -> 0.78"). Transitions signal inflection points and should be prioritized over static classifications.
 - Use only evidence present in the payload.
 - `timeline_hot_list` must only include future dates relative to `date`.
 - Omit expired, stale, or ambiguous timelines.

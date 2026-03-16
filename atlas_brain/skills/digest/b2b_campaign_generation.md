@@ -33,6 +33,7 @@ You receive a JSON object with:
 - `sentiment_direction`: Trend of their sentiment -- "declining", "stable", or "improving" (may be null)
 - `selling`: Object with `{product_name, affiliate_url, sender_name, sender_title, sender_company}` -- our product and identity
   - `selling.blog_posts` (optional): Array of `{title, url, topic_type}` -- published analysis posts relevant to this target's vendor/category. Full URLs ready to embed.
+- `archetype_context` (optional): Object with `{archetype, confidence, falsification}` -- the vendor's classified churn pattern from stratified reasoning. `archetype` is one of: "pricing_shock", "feature_gap", "support_collapse", "leadership_redesign", "acquisition_decay", "integration_break", "category_disruption", "compliance_gap". `confidence` is 0-1. `falsification` is an array of conditions that would disprove the classification.
 - `channel`: Which channel to generate for -- "email_cold", "linkedin", or "email_followup"
 - `cold_email_context` (only on `email_followup`): `{subject, body}` of the cold email already sent to this company
 
@@ -130,5 +131,16 @@ Return a JSON object with the generated content. The structure depends on the ch
 24. **CTA is separate**: The `cta` field is a standalone call-to-action string. The body should end naturally leading into the CTA. Include the affiliate/booking URL as an `<a>` tag at the end of the body, not in the `cta` field.
 
 25. **Quote framing is mandatory**: Never drop a bare quote or number into the email as an unframed fact. Wrap evidence with analyst language such as "Buyers are reporting...", "Teams evaluating alternatives are saying...", or "Across the accounts we analyzed..." before the quote or number.
+
+26. **Archetype-aware messaging**: When `archetype_context` is present, tailor messaging to the churn pattern:
+   - `pricing_shock`: Lead with cost savings, ROI, value restoration. Reference price increases or billing frustration.
+   - `feature_gap`: Lead with competitive features, capability comparison, roadmap wins. Reference specific missing features.
+   - `support_collapse`: Lead with SLA guarantees, dedicated support, response time commitments. Reference support degradation.
+   - `leadership_redesign`: Acknowledge UX/product direction frustration, offer stability and continuity. Reference post-acquisition or redesign disruption.
+   - `acquisition_decay`: Emphasize independence, product focus, and long-term roadmap commitment. Reference post-acquisition neglect.
+   - `integration_break`: Lead with API stability, ecosystem compatibility, migration support. Reference broken integrations.
+   - `category_disruption`: Position as the modern alternative, emphasize innovation velocity. Reference market shift.
+   - `compliance_gap`: Lead with compliance coverage, audit readiness, security certifications. Reference regulatory pressure.
+   - If archetype confidence is below 0.5, blend the archetype angle with general pain-based messaging rather than committing fully to one angle.
 
 Return ONLY the JSON object, no markdown fences, no explanation.

@@ -2613,6 +2613,7 @@ async def _persist_vendor_snapshots(
     today: date,
     price_lookup: dict[str, float] | None = None,
     dm_lookup: dict[str, float] | None = None,
+    reasoning_lookup: dict[str, dict] | None = None,
 ) -> int:
     """Persist daily vendor health snapshots and clean up old data."""
     cfg = settings.b2b_churn
@@ -2663,6 +2664,10 @@ async def _persist_vendor_snapshots(
             total_reviews=total_reviews,
         )
 
+        _rl = (reasoning_lookup or {}).get(vendor, {})
+        _archetype = _rl.get("archetype")
+        _arch_conf = _rl.get("confidence")
+
         try:
             await pool.execute(
                 """
@@ -2671,9 +2676,10 @@ async def _persist_vendor_snapshots(
                     churn_density, avg_urgency, positive_review_pct, recommend_ratio,
                     top_pain, top_competitor, pain_count, competitor_count,
                     displacement_edge_count, high_intent_company_count,
-                    pressure_score, dm_churn_rate, price_complaint_rate
+                    pressure_score, dm_churn_rate, price_complaint_rate,
+                    archetype, archetype_confidence
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                          $15, $16, $17)
+                          $15, $16, $17, $18, $19)
                 ON CONFLICT (vendor_name, snapshot_date) DO UPDATE SET
                     total_reviews = EXCLUDED.total_reviews,
                     churn_intent = EXCLUDED.churn_intent,
@@ -2689,7 +2695,9 @@ async def _persist_vendor_snapshots(
                     high_intent_company_count = EXCLUDED.high_intent_company_count,
                     pressure_score = EXCLUDED.pressure_score,
                     dm_churn_rate = EXCLUDED.dm_churn_rate,
-                    price_complaint_rate = EXCLUDED.price_complaint_rate
+                    price_complaint_rate = EXCLUDED.price_complaint_rate,
+                    archetype = EXCLUDED.archetype,
+                    archetype_confidence = EXCLUDED.archetype_confidence
                 """,
                 vendor, today, total_reviews, churn_intent,
                 churn_density, avg_urgency,
@@ -2700,6 +2708,7 @@ async def _persist_vendor_snapshots(
                 _disp_cnt,
                 hi_counts.get(vendor, 0),
                 _pressure, _dm_rate, _price_rate,
+                _archetype, _arch_conf,
             )
             persisted += 1
         except Exception:
@@ -2718,6 +2727,37 @@ async def _persist_vendor_snapshots(
     return persisted
 
 
+async def _fetch_prior_archetypes(
+    pool,
+    vendor_names: list[str],
+    days_ago: int = 28,
+) -> dict[str, dict]:
+    """Fetch archetype snapshots from N days ago for comparison."""
+    if not vendor_names:
+        return {}
+    rows = await pool.fetch(
+        """
+        SELECT DISTINCT ON (vendor_name)
+            vendor_name, archetype, archetype_confidence, snapshot_date
+        FROM b2b_vendor_snapshots
+        WHERE vendor_name = ANY($1)
+          AND snapshot_date <= CURRENT_DATE - $2::int
+          AND archetype IS NOT NULL
+        ORDER BY vendor_name, snapshot_date DESC
+        """,
+        vendor_names,
+        days_ago,
+    )
+    return {
+        r["vendor_name"]: {
+            "archetype": r["archetype"],
+            "confidence": float(r["archetype_confidence"]) if r["archetype_confidence"] else None,
+            "snapshot_date": str(r["snapshot_date"]),
+        }
+        for r in rows
+    }
+
+
 async def _detect_change_events(
     pool,
     vendor_scores: list[dict[str, Any]],
@@ -2727,6 +2767,7 @@ async def _detect_change_events(
     price_lookup: dict[str, float] | None = None,
     dm_lookup: dict[str, float] | None = None,
     temporal_lookup: dict[str, dict] | None = None,
+    reasoning_lookup: dict[str, dict] | None = None,
 ) -> int:
     """Compare today's vendor data against prior snapshots and log change events.
 
@@ -2874,6 +2915,22 @@ async def _detect_change_events(
         if top_competitor and prior_comp and top_competitor != prior_comp:
             events.append(("new_competitor", f"Top competitor shifted from '{prior_comp}' to '{top_competitor}'", None, None, None))
 
+        # Archetype shift (requires reasoning_lookup from stratified reasoning)
+        if reasoning_lookup:
+            current_rc = reasoning_lookup.get(vendor, {})
+            current_arch = current_rc.get("archetype")
+            current_conf = current_rc.get("confidence", 0)
+            prior_arch = prior.get("archetype")
+            prior_arch_conf = float(prior["archetype_confidence"]) if prior.get("archetype_confidence") else None
+            if current_arch and prior_arch and current_arch != prior_arch:
+                conf_was = f"{prior_arch_conf:.2f}" if prior_arch_conf is not None else "?"
+                events.append((
+                    "archetype_shift",
+                    f"Classification shifted from '{prior_arch}' to '{current_arch}' "
+                    f"(confidence {conf_was} -> {current_conf:.2f})",
+                    None, None, None,
+                ))
+
         webhook_events: list[tuple[str, dict]] = []
         for event_type, description, old_val, new_val, delta in events:
             try:
@@ -2962,6 +3019,147 @@ async def _detect_concurrent_shifts(pool, today: date) -> int:
     except Exception:
         logger.debug("Concurrent shift detection skipped", exc_info=True)
     return detected
+
+
+# SORAM channel alignment with archetype patterns
+_ARCHETYPE_SORAM_WEIGHTS: dict[str, dict[str, float]] = {
+    "pricing_shock":       {"operational": 0.4, "regulatory": 0.2, "media": 0.3},
+    "feature_gap":         {"operational": 0.5, "media": 0.3},
+    "support_collapse":    {"operational": 0.6, "media": 0.3},
+    "leadership_redesign": {"alignment": 0.6, "media": 0.3},
+    "acquisition_decay":   {"alignment": 0.5, "operational": 0.3, "media": 0.2},
+    "integration_break":   {"operational": 0.6, "societal": 0.2},
+    "category_disruption": {"societal": 0.3, "regulatory": 0.3, "media": 0.3},
+    "compliance_gap":      {"regulatory": 0.6, "alignment": 0.2},
+}
+
+
+async def _correlate_articles_with_archetypes(
+    pool,
+    vendor_names: list[str],
+    reasoning_lookup: dict[str, dict],
+    today: date,
+    window_days: int = 30,
+) -> int:
+    """Find articles mentioning tracked vendors and correlate with archetypes.
+
+    For each vendor with a current archetype:
+    1. Find articles from the last *window_days* whose entities_detected
+       overlap the vendor name (case-insensitive array match).
+    2. Score SORAM channel alignment between article and archetype.
+    3. If an archetype_shift change event exists for this vendor today,
+       link the article to that event (temporal correlation).
+    4. Persist to b2b_article_correlations (deduplicated by article+vendor).
+    """
+    if not vendor_names or not reasoning_lookup:
+        return 0
+
+    correlated = 0
+
+    # Fetch today's archetype_shift events for temporal linking
+    shift_events = await pool.fetch(
+        """
+        SELECT id, vendor_name FROM b2b_change_events
+        WHERE event_type = 'archetype_shift' AND event_date = $1
+        """,
+        today,
+    )
+    shift_by_vendor: dict[str, str] = {
+        r["vendor_name"]: str(r["id"]) for r in shift_events
+    }
+
+    for vendor in vendor_names:
+        rc = reasoning_lookup.get(vendor, {})
+        archetype = rc.get("archetype")
+        if not archetype or archetype in ("stable", "mixed"):
+            continue
+        confidence = rc.get("confidence", 0)
+
+        # Find articles mentioning this vendor (entity match, case-insensitive)
+        articles = await pool.fetch(
+            """
+            SELECT id, title, soram_channels, pressure_direction,
+                   entities_detected, published_at
+            FROM news_articles
+            WHERE enrichment_status = 'classified'
+              AND created_at > CURRENT_DATE - $2::int
+              AND EXISTS (
+                  SELECT 1 FROM unnest(entities_detected) e
+                  WHERE LOWER(e) = LOWER($1)
+              )
+            ORDER BY created_at DESC
+            LIMIT 10
+            """,
+            vendor,
+            window_days,
+        )
+
+        if not articles:
+            continue
+
+        soram_weights = _ARCHETYPE_SORAM_WEIGHTS.get(archetype, {})
+        change_event_id = shift_by_vendor.get(vendor)
+
+        for article in articles:
+            # Score SORAM alignment
+            soram = article["soram_channels"] or {}
+            if isinstance(soram, str):
+                try:
+                    soram = json.loads(soram)
+                except (json.JSONDecodeError, TypeError):
+                    soram = {}
+
+            alignment_score = 0.0
+            alignment_detail: dict[str, float] = {}
+            for channel, weight in soram_weights.items():
+                channel_val = float(soram.get(channel, 0))
+                contribution = channel_val * weight
+                alignment_score += contribution
+                if contribution > 0:
+                    alignment_detail[channel] = round(contribution, 3)
+
+            # Relevance: 60% SORAM alignment + 40% entity match (always 1.0 if here)
+            relevance = round(alignment_score * 0.6 + 0.4, 3)
+
+            # Bump relevance if there's a temporal archetype shift today
+            correlation_type = "entity_match"
+            if change_event_id:
+                correlation_type = "temporal_shift"
+                relevance = min(relevance + 0.15, 1.0)
+            elif alignment_score >= 0.3:
+                correlation_type = "soram_alignment"
+
+            try:
+                await pool.execute(
+                    """
+                    INSERT INTO b2b_article_correlations
+                        (article_id, vendor_name, correlation_type,
+                         archetype, archetype_confidence,
+                         change_event_id, soram_alignment,
+                         relevance_score)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    article["id"],
+                    vendor,
+                    correlation_type,
+                    archetype,
+                    confidence,
+                    change_event_id,
+                    json.dumps(alignment_detail) if alignment_detail else None,
+                    relevance,
+                )
+                correlated += 1
+            except Exception:
+                logger.debug(
+                    "Failed to persist article correlation for %s / %s",
+                    vendor, article["id"],
+                )
+
+    if correlated:
+        logger.info("Article-archetype correlations: %d persisted", correlated)
+
+    return correlated
 
 
 async def run(task: ScheduledTask) -> dict[str, Any]:
@@ -3317,6 +3515,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     "Stratified reasoning: %d vendors, modes: %s, total_tokens: %d",
                     len(reasoning_lookup), mode_summary, total_tokens,
                 )
+                # Fetch prior archetypes for temporal context
+                prior_archetypes = await _fetch_prior_archetypes(
+                    pool, list(reasoning_lookup.keys()),
+                )
                 # Inject summary into payload for exploratory overview LLM
                 payload["stratified_intelligence"] = [
                     {
@@ -3326,6 +3528,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         "risk_level": rc.get("risk_level", ""),
                         "executive_summary": rc.get("executive_summary", ""),
                         "key_signals": rc.get("key_signals", []),
+                        "archetype_was": prior_archetypes.get(vname, {}).get("archetype"),
+                        "confidence_was": prior_archetypes.get(vname, {}).get("confidence"),
+                        "archetype_changed": (
+                            prior_archetypes.get(vname, {}).get("archetype") != rc.get("archetype")
+                            if vname in prior_archetypes and prior_archetypes[vname].get("archetype")
+                            else None
+                        ),
                     }
                     for vname, rc in reasoning_lookup.items()
                 ]
@@ -4270,15 +4479,30 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 pool, vendor_scores, pain_lookup, competitor_lookup,
                 high_intent, today,
                 price_lookup=price_lookup, dm_lookup=dm_lookup,
+                reasoning_lookup=reasoning_lookup,
             )
             if cfg.change_detection_enabled:
                 change_events_detected = await _detect_change_events(
                     pool, vendor_scores, pain_lookup, competitor_lookup, today,
                     price_lookup=price_lookup, dm_lookup=dm_lookup,
                     temporal_lookup=_temporal_lookup or None,
+                    reasoning_lookup=reasoning_lookup or None,
                 )
         except Exception:
             logger.exception("Failed to persist vendor snapshots / change events")
+
+    # Correlate articles with vendor archetypes (best-effort)
+    article_correlations = 0
+    if reasoning_lookup:
+        try:
+            article_correlations = await _correlate_articles_with_archetypes(
+                pool,
+                list(reasoning_lookup.keys()),
+                reasoning_lookup,
+                today,
+            )
+        except Exception:
+            logger.debug("Article-archetype correlation skipped", exc_info=True)
 
     # Send ntfy notification
     await _send_notification(task, parsed, high_intent)
@@ -4303,6 +4527,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "buyer_profiles_persisted": buyer_profiles_persisted,
         "snapshots_persisted": snapshots_persisted,
         "change_events_detected": change_events_detected,
+        "article_correlations": article_correlations,
     }
     tracer.end_span(
         span,
@@ -6079,7 +6304,9 @@ async def gather_intelligence_data(
     llm_vendors = [
         {
             "vendor": v["vendor_name"],
+            "vendor_name": v["vendor_name"],
             "category": v["product_category"],
+            "product_category": v["product_category"],
             "reviews": v["total_reviews"],
             "churn": v["churn_intent"],
             "urgency": round(v["avg_urgency"], 1),
@@ -7037,6 +7264,8 @@ def _build_vendor_comparison_summary(
     primary_snapshot: dict[str, Any],
     comparison_snapshot: dict[str, Any],
     head_to_head: list[dict[str, Any]],
+    primary_archetype: str | None = None,
+    comparison_archetype: str | None = None,
 ) -> str:
     """Build a concise executive summary for a head-to-head vendor comparison."""
     snapshots = [primary_snapshot, comparison_snapshot]
@@ -7053,6 +7282,14 @@ def _build_vendor_comparison_summary(
     ) or "No direct displacement mentions were observed between the two vendors"
     high_pain = (higher_risk.get("top_pain_categories") or [{}])[0]
     low_pain = (lower_risk.get("top_pain_categories") or [{}])[0]
+    archetype_text = ""
+    if primary_archetype or comparison_archetype:
+        parts = []
+        if primary_archetype:
+            parts.append(f"{primary_snapshot['vendor_name']} classified as {primary_archetype}")
+        if comparison_archetype:
+            parts.append(f"{comparison_snapshot['vendor_name']} classified as {comparison_archetype}")
+        archetype_text = f" Archetype classification: {'; '.join(parts)}."
     return (
         f"{higher_risk['vendor_name']} shows the heavier churn signal pressure versus {lower_risk['vendor_name']}, "
         f"with {higher_risk['churn_intent_count']} of {higher_risk['signal_count']} reviews ({higher_risk['churn_signal_density']}%) "
@@ -7061,7 +7298,7 @@ def _build_vendor_comparison_summary(
         f"over {weaker_sentiment['vendor_name']} on positive-review share ({stronger_sentiment.get('positive_review_pct')}% vs "
         f"{weaker_sentiment.get('positive_review_pct')}%). Top pain themes diverge between {higher_risk['vendor_name']} "
         f"({high_pain.get('category', 'insufficient_data')}) and {lower_risk['vendor_name']} "
-        f"({low_pain.get('category', 'insufficient_data')})."
+        f"({low_pain.get('category', 'insufficient_data')}).{archetype_text}"
     )
 
 
@@ -7122,6 +7359,23 @@ async def generate_vendor_comparison_report(
     primary_triggers = _switching_triggers(primary_rows)
     comparison_triggers = _switching_triggers(comparison_rows)
 
+    # Archetype context from churn signals + prior snapshots
+    primary_arch_row = await pool.fetchrow(
+        "SELECT archetype, archetype_confidence, falsification_conditions "
+        "FROM b2b_churn_signals WHERE LOWER(vendor_name) = LOWER($1) "
+        "AND archetype IS NOT NULL "
+        "ORDER BY last_computed_at DESC LIMIT 1",
+        primary_name,
+    )
+    comparison_arch_row = await pool.fetchrow(
+        "SELECT archetype, archetype_confidence, falsification_conditions "
+        "FROM b2b_churn_signals WHERE LOWER(vendor_name) = LOWER($1) "
+        "AND archetype IS NOT NULL "
+        "ORDER BY last_computed_at DESC LIMIT 1",
+        comparison_name,
+    )
+    _prior_archs = await _fetch_prior_archetypes(pool, [primary_name, comparison_name])
+
     # Trend analysis from prior comparison reports
     trend_analysis = None
     try:
@@ -7162,7 +7416,11 @@ async def generate_vendor_comparison_report(
         "comparison_vendor": comparison_name,
         "report_date": str(today),
         "window_days": window_days,
-        "executive_summary": _build_vendor_comparison_summary(primary_snapshot, comparison_snapshot, head_to_head),
+        "executive_summary": _build_vendor_comparison_summary(
+            primary_snapshot, comparison_snapshot, head_to_head,
+            primary_archetype=primary_arch_row["archetype"] if primary_arch_row else None,
+            comparison_archetype=comparison_arch_row["archetype"] if comparison_arch_row else None,
+        ),
         "primary_metrics": {k: v for k, v in primary_snapshot.items() if k not in _snapshot_exclude},
         "comparison_metrics": {k: v for k, v in comparison_snapshot.items() if k not in _snapshot_exclude},
         "primary_top_pains": primary_snapshot["top_pain_categories"],
@@ -7187,6 +7445,15 @@ async def generate_vendor_comparison_report(
         "primary_switching_triggers": primary_triggers,
         "comparison_switching_triggers": comparison_triggers,
         "trend_analysis": trend_analysis,
+        # Archetype context
+        "primary_archetype": primary_arch_row["archetype"] if primary_arch_row else None,
+        "primary_archetype_confidence": float(primary_arch_row["archetype_confidence"]) if primary_arch_row and primary_arch_row["archetype_confidence"] else None,
+        "primary_archetype_was": _prior_archs.get(primary_name, {}).get("archetype"),
+        "primary_falsification": primary_arch_row["falsification_conditions"] if primary_arch_row and primary_arch_row["falsification_conditions"] else [],
+        "comparison_archetype": comparison_arch_row["archetype"] if comparison_arch_row else None,
+        "comparison_archetype_confidence": float(comparison_arch_row["archetype_confidence"]) if comparison_arch_row and comparison_arch_row["archetype_confidence"] else None,
+        "comparison_archetype_was": _prior_archs.get(comparison_name, {}).get("archetype"),
+        "comparison_falsification": comparison_arch_row["falsification_conditions"] if comparison_arch_row and comparison_arch_row["falsification_conditions"] else [],
     }
     if persist:
         row = await pool.fetchrow(
@@ -7410,12 +7677,31 @@ async def generate_company_deep_dive_report(
         return None
     today = date.today()
     snapshot = _build_company_comparison_snapshot(normalized_name, rows)
+
+    # Fetch vendor archetypes for the company's current vendors
+    vendor_names = [v["vendor"] for v in (snapshot.get("current_vendors") or []) if v.get("vendor")]
+    vendor_archetypes: dict[str, dict] = {}
+    if vendor_names:
+        arch_rows = await pool.fetch(
+            "SELECT vendor_name, archetype, archetype_confidence "
+            "FROM b2b_churn_signals WHERE vendor_name = ANY($1) AND archetype IS NOT NULL",
+            vendor_names,
+        )
+        vendor_archetypes = {
+            r["vendor_name"]: {
+                "archetype": r["archetype"],
+                "confidence": float(r["archetype_confidence"]) if r["archetype_confidence"] else None,
+            }
+            for r in arch_rows
+        }
+
     report_data = {
         "company_name": normalized_name,
         "report_date": str(today),
         "window_days": window_days,
         "executive_summary": _build_company_deep_dive_summary(snapshot),
         "company_metrics": snapshot,
+        "vendor_archetypes": vendor_archetypes or None,
     }
     if persist:
         row = await pool.fetchrow(
@@ -7482,6 +7768,29 @@ async def generate_company_comparison_report(
         {item["vendor"] for item in primary_snapshot["current_vendors"]} &
         {item["vendor"] for item in comparison_snapshot["current_vendors"]}
     )
+
+    # Fetch vendor archetypes for both companies' current vendors
+    all_vendor_names = list({
+        v["vendor"]
+        for s in (primary_snapshot, comparison_snapshot)
+        for v in (s.get("current_vendors") or [])
+        if v.get("vendor")
+    })
+    company_vendor_archetypes: dict[str, dict] = {}
+    if all_vendor_names:
+        arch_rows = await pool.fetch(
+            "SELECT vendor_name, archetype, archetype_confidence "
+            "FROM b2b_churn_signals WHERE vendor_name = ANY($1) AND archetype IS NOT NULL",
+            all_vendor_names,
+        )
+        company_vendor_archetypes = {
+            r["vendor_name"]: {
+                "archetype": r["archetype"],
+                "confidence": float(r["archetype_confidence"]) if r["archetype_confidence"] else None,
+            }
+            for r in arch_rows
+        }
+
     report_data = {
         "primary_company": primary_name,
         "comparison_company": comparison_name,
@@ -7493,6 +7802,7 @@ async def generate_company_comparison_report(
         "shared_alternatives": shared_alternatives,
         "shared_vendors": shared_vendors,
         "urgency_gap": round(abs(primary_snapshot["avg_urgency_score"] - comparison_snapshot["avg_urgency_score"]), 2),
+        "vendor_archetypes": company_vendor_archetypes or None,
     }
     if persist:
         row = await pool.fetchrow(

@@ -32,6 +32,7 @@ You receive a JSON object with:
 - `tier`: "report" | "dashboard" | "api"
 - `selling`: Object with `{sender_name, sender_title, sender_company, booking_url}`
   - `selling.blog_posts` (optional): Array of `{title, url, topic_type}` -- published analysis posts relevant to this challenger's space. Full URLs ready to embed.
+- `incumbent_archetypes` (optional): Object mapping churn archetype to array of incumbent vendor names losing customers with that pattern. Example: `{"pricing_shock": ["Vendor A", "Vendor B"], "feature_gap": ["Vendor C"]}`. When present, indicates WHY the challenger is winning -- the incumbents' churn patterns reveal the market dynamics.
 - `channel`: "email_cold" | "email_followup"
 - `cold_email_context` (only on `email_followup`): `{subject, body}` of the cold email already sent
 
@@ -118,5 +119,13 @@ Return a JSON object:
 23. **Key quotes**: When `key_quotes` is provided and non-empty, weave 1-2 quotes into the body as inline evidence. Frame them as market intelligence, never as bare claims and never attributed to individuals. Use wrappers like "Buyers are saying...", "Across the evaluations we flagged...", or "Teams in active evaluation are reporting..." before the quote.
 
 24. **Protect the report tier**: If `tier == "report"`, the body and CTA must not use the words "dashboard", "live feed", "free trial", "software", or "platform".
+
+25. **Incumbent archetype framing**: When `incumbent_archetypes` is present, use the churn patterns to sharpen messaging:
+   - `pricing_shock` incumbents: Frame leads as cost-sensitive buyers ready for a better-value alternative. Emphasize ROI and pricing transparency.
+   - `feature_gap` incumbents: Frame leads as capability-hungry buyers who outgrew their current tool. Emphasize your feature advantages.
+   - `support_collapse` incumbents: Frame leads as frustrated buyers seeking reliable support. Emphasize responsiveness and SLA guarantees.
+   - `leadership_redesign` / `acquisition_decay` incumbents: Frame leads as stability-seeking buyers. Emphasize product focus and roadmap continuity.
+   - If multiple archetypes are present, lead with the one that has the most incumbents. Do not list all archetypes -- weave the dominant pattern into the narrative naturally.
+   - Never name the archetype labels directly (e.g., do not say "pricing_shock pattern"). Translate into natural business language.
 
 Return ONLY the JSON object, no markdown fences, no explanation.

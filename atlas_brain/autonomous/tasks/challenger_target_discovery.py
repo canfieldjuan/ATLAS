@@ -94,6 +94,24 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     for u in raw[:5]
                 ]
 
+        # Fetch incumbent archetypes to understand *why* the challenger is winning
+        incumbent_archetypes: dict[str, list[str]] = {}
+        if losing_vendors:
+            arch_rows = await pool.fetch(
+                "SELECT vendor_name, archetype FROM b2b_churn_signals "
+                "WHERE vendor_name = ANY($1) AND archetype IS NOT NULL",
+                losing_vendors,
+            )
+            for r in arch_rows:
+                incumbent_archetypes.setdefault(r["archetype"], []).append(r["vendor_name"])
+
+        notes_text = (
+            f"Auto-discovered from displacement data: {total_mentions} mentions across {len(losing_vendors)} flows"
+        )
+        if incumbent_archetypes:
+            arch_parts = [f"{arch}: {', '.join(vs)}" for arch, vs in incumbent_archetypes.items()]
+            notes_text += f". Incumbent archetypes: {'; '.join(arch_parts)}"
+
         if existing:
             # Update competitors_tracked with latest losing vendors
             await pool.execute(
@@ -105,7 +123,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 WHERE id = $3
                 """,
                 losing_vendors,
-                f"Auto-discovered from displacement data: {total_mentions} mentions across {len(losing_vendors)} flows",
+                notes_text,
                 existing["id"],
             )
             updated += 1
@@ -121,7 +139,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 to_vendor,
                 losing_vendors,
                 products_tracked or None,
-                f"Auto-discovered from displacement data: {total_mentions} mentions across {len(losing_vendors)} flows",
+                notes_text,
             )
             created += 1
 

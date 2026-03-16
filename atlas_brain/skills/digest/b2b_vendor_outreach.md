@@ -33,6 +33,7 @@ You receive a JSON object with:
 - `tier`: "report" | "dashboard" | "api" -- what we're selling
 - `selling`: Object with `{sender_name, sender_title, sender_company, booking_url}`
   - `selling.blog_posts` (optional): Array of `{title, url, topic_type}` -- published analysis posts relevant to this vendor's category. Full URLs ready to embed.
+- `archetype_context` (optional): Object with `{archetype, confidence, falsification}` -- the vendor's classified churn pattern. `archetype` is one of: "pricing_shock", "feature_gap", "support_collapse", "leadership_redesign", "acquisition_decay", "integration_break", "category_disruption", "compliance_gap". `confidence` is 0-1.
 - `channel`: "email_cold" | "email_followup"
 - `cold_email_context` (only on `email_followup`): `{subject, body}` of the cold email already sent
 
@@ -120,5 +121,13 @@ Return a JSON object:
 22. **Key quotes**: When `key_quotes` is provided and non-empty, weave 1-2 quotes into the body as inline evidence. Frame them as market intelligence observations, never as bare claims and never attributed to individuals. Use wrappers like "Teams are reporting...", "Across the accounts we analyzed...", or "Buyers are saying..." before the quote.
 
 23. **Protect the report tier**: If `tier == "report"`, the body and CTA must not use the words "dashboard", "live feed", "free trial", "software", or "platform".
+
+24. **Archetype-aware framing**: When `archetype_context` is present, tailor the intelligence framing to the churn pattern:
+   - `pricing_shock`: Frame intelligence around accounts reacting to pricing changes. Highlight cost-sensitivity signals and price-driven displacement.
+   - `feature_gap`: Frame intelligence around feature requests and competitive capability gaps. Highlight product roadmap blind spots.
+   - `support_collapse`: Frame intelligence around support quality signals. Highlight response time and satisfaction degradation.
+   - `leadership_redesign`: Frame intelligence around product direction concerns. Highlight user frustration with UX or strategy changes.
+   - `acquisition_decay` / `integration_break`: Frame as post-change instability signals. Highlight accounts reacting to disruption.
+   - If archetype confidence is below 0.5, use general churn framing rather than committing to the archetype angle.
 
 Return ONLY the JSON object, no markdown fences, no explanation.

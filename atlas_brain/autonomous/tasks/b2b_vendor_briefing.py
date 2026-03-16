@@ -1055,6 +1055,73 @@ async def build_vendor_briefing(
                 existing.add(q_text)
         briefing["evidence"] = evidence
 
+    # ------------------------------------------------------------------
+    # Archetype context: "why now" + "what changed" + falsification
+    # ------------------------------------------------------------------
+    try:
+        arch_row = await pool.fetchrow(
+            "SELECT archetype, archetype_confidence, falsification_conditions "
+            "FROM b2b_churn_signals WHERE LOWER(vendor_name) = LOWER($1) "
+            "AND archetype IS NOT NULL "
+            "ORDER BY last_computed_at DESC LIMIT 1",
+            vendor_name,
+        )
+        if arch_row and arch_row["archetype"]:
+            briefing["archetype"] = arch_row["archetype"]
+            briefing["archetype_confidence"] = (
+                float(arch_row["archetype_confidence"])
+                if arch_row["archetype_confidence"] else None
+            )
+            falsification = arch_row["falsification_conditions"] or []
+            briefing["falsification_conditions"] = (
+                falsification if isinstance(falsification, list)
+                else []
+            )
+
+            # Prior archetype for "what changed" context
+            from .b2b_churn_intelligence import _fetch_prior_archetypes
+
+            prior = await _fetch_prior_archetypes(pool, [vendor_name])
+            prior_data = prior.get(vendor_name, {})
+            if prior_data.get("archetype"):
+                briefing["archetype_was"] = prior_data["archetype"]
+                briefing["archetype_changed"] = (
+                    prior_data["archetype"] != arch_row["archetype"]
+                )
+    except Exception:
+        logger.debug("Archetype enrichment skipped for %s", vendor_name, exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Correlated articles: news articles aligned with archetype
+    # ------------------------------------------------------------------
+    try:
+        art_rows = await pool.fetch(
+            """
+            SELECT na.title, na.url, na.source_name,
+                   bac.correlation_type, bac.relevance_score,
+                   bac.archetype AS corr_archetype
+            FROM b2b_article_correlations bac
+            JOIN news_articles na ON na.id = bac.article_id
+            WHERE bac.vendor_name = $1
+            ORDER BY bac.relevance_score DESC, bac.created_at DESC
+            LIMIT 3
+            """,
+            vendor_name,
+        )
+        if art_rows:
+            briefing["correlated_articles"] = [
+                {
+                    "title": r["title"],
+                    "url": r["url"],
+                    "source": r["source_name"],
+                    "correlation_type": r["correlation_type"],
+                    "relevance": float(r["relevance_score"] or 0),
+                }
+                for r in art_rows
+            ]
+    except Exception:
+        logger.debug("Correlated articles skipped for %s", vendor_name, exc_info=True)
+
     # Analyst enrichment (Kimi K2.5) -- adds headline, executive_summary,
     # pain_labels.  Falls back silently if OpenRouter is unavailable.
     await _enrich_with_analyst_summary(briefing)
@@ -1112,7 +1179,8 @@ async def _fetch_churn_signals(pool: Any, vendor_name: str) -> dict | None:
                avg_urgency_score, top_pain_categories, top_competitors,
                top_feature_gaps, price_complaint_rate,
                decision_maker_churn_rate, company_churn_list,
-               quotable_evidence, product_category
+               quotable_evidence, product_category,
+               archetype, archetype_confidence, falsification_conditions
         FROM b2b_churn_signals
         WHERE LOWER(vendor_name) = LOWER($1)
         ORDER BY last_computed_at DESC

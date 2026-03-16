@@ -1094,6 +1094,21 @@ async def _generate_vendor_campaigns(
         vendor_ctx["signal_summary"]["trend_vs_last_month"] = await _compute_vendor_trend(
             pool, vendor_name, products,
         )
+
+        # Fetch archetype context for the vendor
+        arch_row = await pool.fetchrow(
+            "SELECT archetype, archetype_confidence, falsification_conditions "
+            "FROM b2b_churn_signals WHERE LOWER(vendor_name) = LOWER($1) "
+            "AND archetype IS NOT NULL "
+            "ORDER BY last_computed_at DESC LIMIT 1",
+            vendor_name,
+        )
+        if arch_row and arch_row["archetype"]:
+            vendor_ctx["archetype_context"] = {
+                "archetype": arch_row["archetype"],
+                "confidence": float(arch_row["archetype_confidence"]) if arch_row["archetype_confidence"] else None,
+                "falsification": arch_row["falsification_conditions"] or [],
+            }
         best = max(vendor_signals, key=lambda o: o["opportunity_score"])
         review_ids = [o["review_id"] for o in vendor_signals if o.get("review_id")]
 
@@ -1464,6 +1479,26 @@ async def _generate_challenger_campaigns(
 
         # Build challenger-scoped context
         challenger_ctx = _build_challenger_context(challenger_name, challenger_signals)
+
+        # Fetch incumbent archetypes (the vendors losing customers to this challenger)
+        incumbent_names = [
+            inc["name"]
+            for inc in challenger_ctx.get("signal_summary", {}).get("incumbents_losing", [])
+            if inc.get("name")
+        ]
+        if incumbent_names:
+            inc_arch_rows = await pool.fetch(
+                "SELECT vendor_name, archetype FROM b2b_churn_signals "
+                "WHERE vendor_name = ANY($1) AND archetype IS NOT NULL",
+                incumbent_names,
+            )
+            if inc_arch_rows:
+                # Group by archetype: {"pricing_shock": ["Vendor A"], "feature_gap": ["Vendor B"]}
+                by_archetype: dict[str, list[str]] = {}
+                for r in inc_arch_rows:
+                    by_archetype.setdefault(r["archetype"], []).append(r["vendor_name"])
+                challenger_ctx["incumbent_archetypes"] = by_archetype
+
         best = max(challenger_signals, key=lambda o: o["opportunity_score"])
         review_ids = [o["review_id"] for o in challenger_signals if o.get("review_id")]
 

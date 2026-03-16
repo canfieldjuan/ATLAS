@@ -114,7 +114,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             all_triggered_rules = []
 
             for vs in (payload.get("vendor_churn_scores") or []):
-                vname = vs.get("vendor_name", "")
+                vname = vs.get("vendor_name") or vs.get("vendor") or ""
                 if not vname:
                     continue
 
@@ -159,10 +159,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             if reasoner is not None:
                 stratified_results = []
                 for vs in (payload.get("vendor_churn_scores") or []):
-                    vname = vs.get("vendor_name", "")
+                    vname = vs.get("vendor_name") or vs.get("vendor") or ""
                     if not vname:
                         continue
-                    category = vs.get("product_category", "")
+                    category = vs.get("product_category") or vs.get("category") or ""
                     try:
                         tier_ctx = await gather_tier_context(
                             reasoner._cache, Tier.VENDOR_ARCHETYPE,
@@ -186,6 +186,23 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         logger.debug("Stratified reasoning failed for %s", vname, exc_info=True)
 
                 if stratified_results:
+                    # Fetch prior archetypes for temporal context
+                    from .b2b_churn_intelligence import _fetch_prior_archetypes
+
+                    sr_vendor_names = [r["vendor_name"] for r in stratified_results if r.get("vendor_name")]
+                    prior_archetypes = await _fetch_prior_archetypes(pool, sr_vendor_names)
+
+                    for sr in stratified_results:
+                        vname = sr.get("vendor_name", "")
+                        prior = prior_archetypes.get(vname, {})
+                        sr["archetype_was"] = prior.get("archetype")
+                        sr["confidence_was"] = prior.get("confidence")
+                        sr["archetype_changed"] = (
+                            prior.get("archetype") != sr.get("archetype")
+                            if prior.get("archetype") and sr.get("archetype")
+                            else None
+                        )
+
                     payload["stratified_reasoning"] = stratified_results
                     logger.info(
                         "Stratified reasoning: %d vendors (%s)",
