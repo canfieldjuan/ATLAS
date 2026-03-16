@@ -10,6 +10,7 @@ from .server import mcp
 @mcp.tool()
 async def list_scrape_targets(
     source: Optional[str] = None,
+    scrape_mode: Optional[str] = None,
     enabled_only: bool = True,
     limit: int = 20,
 ) -> str:
@@ -17,12 +18,15 @@ async def list_scrape_targets(
     View scrape target configuration and last run status.
 
     source: Filter by source (g2, capterra, trustradius, reddit, gartner, getapp, github, hackernews, peerspot, producthunt, quora, rss, stackoverflow, trustpilot, youtube)
+    scrape_mode: Filter by mode -- "incremental" or "exhaustive" (optional)
     enabled_only: Only show enabled targets (default true)
     limit: Maximum results (default 20, cap 100)
     """
     limit = max(1, min(limit, 100))
     if source and source not in VALID_SOURCES:
         return json.dumps({"error": f"source must be one of {sorted(s.value for s in VALID_SOURCES)}", "targets": [], "count": 0})
+    if scrape_mode and scrape_mode not in ("incremental", "exhaustive"):
+        return json.dumps({"error": "scrape_mode must be 'incremental' or 'exhaustive'", "targets": [], "count": 0})
 
     try:
         pool = get_pool()
@@ -38,6 +42,11 @@ async def list_scrape_targets(
             params.append(source)
             idx += 1
 
+        if scrape_mode:
+            conditions.append(f"scrape_mode = ${idx}")
+            params.append(scrape_mode)
+            idx += 1
+
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         capped = min(limit, 100)
         params.append(capped)
@@ -45,7 +54,7 @@ async def list_scrape_targets(
         rows = await pool.fetch(
             f"""
             SELECT id, source, vendor_name, product_name, product_category,
-                   enabled, priority, last_scraped_at, last_scrape_status,
+                   enabled, priority, scrape_mode, last_scraped_at, last_scrape_status,
                    last_scrape_reviews
             FROM b2b_scrape_targets
             {where}
@@ -64,6 +73,7 @@ async def list_scrape_targets(
                 "product_category": r["product_category"],
                 "enabled": r["enabled"],
                 "priority": r["priority"],
+                "scrape_mode": r["scrape_mode"],
                 "last_scraped_at": r["last_scraped_at"],
                 "last_scrape_status": r["last_scrape_status"],
                 "last_scrape_reviews": r["last_scrape_reviews"],
@@ -87,6 +97,7 @@ async def add_scrape_target(
     max_pages: int = 5,
     priority: int = 0,
     scrape_interval_hours: int = 168,
+    scrape_mode: str = "incremental",
     metadata_json: Optional[str] = None,
 ) -> str:
     """
@@ -116,6 +127,7 @@ async def add_scrape_target(
     max_pages: Pages to scrape per run (default 5, max 100)
     priority: Higher = scraped first (default 0, max 100)
     scrape_interval_hours: Re-scrape interval (default 168 = weekly, max 8760)
+    scrape_mode: "incremental" (shallow, concurrent -- default) or "exhaustive" (deep pagination, sequential)
     metadata_json: Optional JSON string for source-specific config:
         reddit: '{"subreddits": ["sysadmin","projectmanagement"]}'
         twitter: '{"search_terms": ["salesforce down"], "min_likes": 2}'
@@ -124,6 +136,7 @@ async def add_scrape_target(
         github: '{"search_mode": "both", "min_stars": 10}'
         stackoverflow: '{"sites": "stackoverflow,softwarerecs", "min_score": 1}'
         rss: '{"feed_urls": ["https://..."], "keywords": ["migration","switching"]}'
+        exhaustive: '{"lookback_days": 365}' (date cutoff for exhaustive mode)
     """
     from ...config import settings
     from ...services.scraping.target_validation import is_source_allowed, validate_target_input
@@ -135,6 +148,8 @@ async def add_scrape_target(
         return json.dumps({"success": False, "error": "vendor_name is required"})
     if not product_slug or not product_slug.strip():
         return json.dumps({"success": False, "error": "product_slug is required"})
+    if scrape_mode not in ("incremental", "exhaustive"):
+        return json.dumps({"success": False, "error": "scrape_mode must be 'incremental' or 'exhaustive'"})
     if not is_source_allowed(source, settings.b2b_scrape.source_allowlist):
         return json.dumps({
             "success": False,
@@ -169,24 +184,24 @@ async def add_scrape_target(
     try:
         pool = get_pool()
 
-        # Check for duplicate
+        # Check for duplicate (same source + slug + mode)
         existing = await pool.fetchrow(
-            "SELECT id FROM b2b_scrape_targets WHERE source = $1 AND product_slug = $2",
-            source, product_slug,
+            "SELECT id FROM b2b_scrape_targets WHERE source = $1 AND product_slug = $2 AND scrape_mode = $3",
+            source, product_slug, scrape_mode,
         )
         if existing:
             return json.dumps({
                 "success": False,
-                "error": f"Target already exists for {source}/{product_slug} (id: {existing['id']})",
+                "error": f"Target already exists for {source}/{product_slug}/{scrape_mode} (id: {existing['id']})",
             })
 
         row = await pool.fetchrow(
             """
             INSERT INTO b2b_scrape_targets
                 (source, vendor_name, product_name, product_slug, product_category,
-                 max_pages, priority, scrape_interval_hours, metadata)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
-            RETURNING id, source, vendor_name, product_slug, enabled, priority
+                 max_pages, priority, scrape_interval_hours, scrape_mode, metadata)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+            RETURNING id, source, vendor_name, product_slug, enabled, priority, scrape_mode
             """,
             source,
             vendor_name.strip(),
@@ -196,6 +211,7 @@ async def add_scrape_target(
             max_pages,
             priority,
             scrape_interval_hours,
+            scrape_mode,
             json.dumps(meta),
         )
 
@@ -208,6 +224,7 @@ async def add_scrape_target(
                 "product_slug": row["product_slug"],
                 "enabled": row["enabled"],
                 "priority": row["priority"],
+                "scrape_mode": row["scrape_mode"],
             },
         }, default=str)
     except Exception:
@@ -222,6 +239,7 @@ async def manage_scrape_target(
     priority: Optional[int] = None,
     max_pages: Optional[int] = None,
     scrape_interval_hours: Optional[int] = None,
+    scrape_mode: Optional[str] = None,
     metadata_json: Optional[str] = None,
 ) -> str:
     """
@@ -232,13 +250,17 @@ async def manage_scrape_target(
     priority: Set priority (0-100, higher = scraped first)
     max_pages: Pages to scrape per run (1-100)
     scrape_interval_hours: Re-scrape interval in hours (1-8760)
+    scrape_mode: "incremental" or "exhaustive"
     metadata_json: Replace source-specific config JSON (e.g. subreddits for reddit)
     """
     if not _is_uuid(target_id):
         return json.dumps({"success": False, "error": "Invalid target_id (must be UUID)"})
 
-    if all(v is None for v in [enabled, priority, max_pages, scrape_interval_hours, metadata_json]):
+    if all(v is None for v in [enabled, priority, max_pages, scrape_interval_hours, scrape_mode, metadata_json]):
         return json.dumps({"success": False, "error": "Provide at least one field to update"})
+
+    if scrape_mode is not None and scrape_mode not in ("incremental", "exhaustive"):
+        return json.dumps({"success": False, "error": "scrape_mode must be 'incremental' or 'exhaustive'"})
 
     try:
         pool = get_pool()
@@ -267,6 +289,11 @@ async def manage_scrape_target(
             params.append(max(1, min(scrape_interval_hours, 8760)))
             idx += 1
 
+        if scrape_mode is not None:
+            sets.append(f"scrape_mode = ${idx}")
+            params.append(scrape_mode)
+            idx += 1
+
         if metadata_json is not None:
             try:
                 meta = json.loads(metadata_json)
@@ -280,16 +307,24 @@ async def manage_scrape_target(
 
         params.append(_uuid.UUID(target_id))
 
-        row = await pool.fetchrow(
-            f"""
-            UPDATE b2b_scrape_targets
-            SET {', '.join(sets)}
-            WHERE id = ${idx}
-            RETURNING id, source, vendor_name, product_name, product_slug,
-                      enabled, priority, max_pages, scrape_interval_hours
-            """,
-            *params,
-        )
+        try:
+            row = await pool.fetchrow(
+                f"""
+                UPDATE b2b_scrape_targets
+                SET {', '.join(sets)}
+                WHERE id = ${idx}
+                RETURNING id, source, vendor_name, product_name, product_slug,
+                          enabled, priority, max_pages, scrape_interval_hours, scrape_mode
+                """,
+                *params,
+            )
+        except Exception as exc:
+            if "idx_b2b_scrape_targets_dedup" in str(exc):
+                return json.dumps({
+                    "success": False,
+                    "error": "A target with that source/product_slug/scrape_mode already exists",
+                })
+            raise
 
         if not row:
             return json.dumps({"success": False, "error": "Target not found"})
@@ -306,6 +341,7 @@ async def manage_scrape_target(
                 "priority": row["priority"],
                 "max_pages": row["max_pages"],
                 "scrape_interval_hours": row["scrape_interval_hours"],
+                "scrape_mode": row["scrape_mode"],
             },
         }, default=str)
     except Exception:

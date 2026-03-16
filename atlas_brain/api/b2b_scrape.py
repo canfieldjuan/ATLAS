@@ -38,6 +38,7 @@ class ScrapeTargetCreate(BaseModel):
     enabled: bool = True
     priority: int = Field(default=0, ge=0, le=100)
     scrape_interval_hours: int = Field(default=168, ge=1, le=8760)
+    scrape_mode: str = Field(default="incremental", pattern="^(incremental|exhaustive)$")
     metadata: dict = Field(default_factory=dict)
 
 
@@ -46,6 +47,7 @@ class ScrapeTargetUpdate(BaseModel):
     priority: Optional[int] = Field(default=None, ge=0, le=100)
     max_pages: Optional[int] = Field(default=None, ge=1, le=100)
     scrape_interval_hours: Optional[int] = Field(default=None, ge=1, le=8760)
+    scrape_mode: Optional[str] = Field(default=None, pattern="^(incremental|exhaustive)$")
     metadata: Optional[dict] = None
 
 
@@ -78,7 +80,7 @@ async def list_targets(
     rows = await pool.fetch(
         f"""
         SELECT id, source, vendor_name, product_name, product_slug,
-               product_category, max_pages, enabled, priority,
+               product_category, max_pages, enabled, priority, scrape_mode,
                last_scraped_at, last_scrape_status, last_scrape_reviews,
                scrape_interval_hours, metadata, created_at
         FROM b2b_scrape_targets
@@ -126,19 +128,19 @@ async def create_target(body: ScrapeTargetCreate) -> dict:
             INSERT INTO b2b_scrape_targets
                 (source, vendor_name, product_name, product_slug,
                  product_category, max_pages, enabled, priority,
-                 scrape_interval_hours, metadata)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
-            RETURNING id, source, vendor_name, product_slug, enabled, created_at
+                 scrape_interval_hours, scrape_mode, metadata)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+            RETURNING id, source, vendor_name, product_slug, enabled, scrape_mode, created_at
             """,
             source, vendor_name, product_name, product_slug,
             product_category, body.max_pages, body.enabled, body.priority,
-            body.scrape_interval_hours, json.dumps(body.metadata),
+            body.scrape_interval_hours, body.scrape_mode, json.dumps(body.metadata),
         )
     except Exception as exc:
         if "idx_b2b_scrape_targets_dedup" in str(exc):
             raise HTTPException(
                 status_code=409,
-                detail=f"Target already exists for {source}/{product_slug}",
+                detail=f"Target already exists for {source}/{product_slug}/{body.scrape_mode}",
             )
         logger.error("Failed to create scrape target: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to create target")
@@ -173,6 +175,10 @@ async def update_target(target_id: UUID, body: ScrapeTargetUpdate) -> dict:
         updates.append(f"scrape_interval_hours = ${idx}")
         args.append(body.scrape_interval_hours)
         idx += 1
+    if body.scrape_mode is not None:
+        updates.append(f"scrape_mode = ${idx}")
+        args.append(body.scrape_mode)
+        idx += 1
     if body.metadata is not None:
         updates.append(f"metadata = ${idx}::jsonb")
         args.append(json.dumps(body.metadata))
@@ -183,15 +189,23 @@ async def update_target(target_id: UUID, body: ScrapeTargetUpdate) -> dict:
 
     updates.append("updated_at = NOW()")
 
-    row = await pool.fetchrow(
-        f"""
-        UPDATE b2b_scrape_targets
-        SET {', '.join(updates)}
-        WHERE id = $1
-        RETURNING id, source, vendor_name, product_slug, enabled, priority, updated_at
-        """,
-        target_id, *args,
-    )
+    try:
+        row = await pool.fetchrow(
+            f"""
+            UPDATE b2b_scrape_targets
+            SET {', '.join(updates)}
+            WHERE id = $1
+            RETURNING id, source, vendor_name, product_slug, enabled, priority, scrape_mode, updated_at
+            """,
+            target_id, *args,
+        )
+    except Exception as exc:
+        if "idx_b2b_scrape_targets_dedup" in str(exc):
+            raise HTTPException(
+                status_code=409,
+                detail="A target with that source/product_slug/scrape_mode already exists",
+            )
+        raise
 
     if not row:
         raise HTTPException(status_code=404, detail="Target not found")
@@ -224,7 +238,7 @@ async def trigger_scrape(target_id: UUID) -> dict:
     row = await pool.fetchrow(
         """
         SELECT id, source, vendor_name, product_name, product_slug,
-               product_category, max_pages, metadata
+               product_category, max_pages, metadata, scrape_mode
         FROM b2b_scrape_targets
         WHERE id = $1
         """,
@@ -246,6 +260,11 @@ async def trigger_scrape(target_id: UUID) -> dict:
     from ..services.scraping.parsers import ScrapeTarget, get_parser
 
     raw_meta = row["metadata"] or "{}"
+    if isinstance(raw_meta, str):
+        try:
+            raw_meta = json.loads(raw_meta)
+        except (json.JSONDecodeError, TypeError):
+            raw_meta = {}
     target = ScrapeTarget(
         id=str(row["id"]),
         source=row["source"],
@@ -254,8 +273,18 @@ async def trigger_scrape(target_id: UUID) -> dict:
         product_slug=row["product_slug"],
         product_category=row["product_category"],
         max_pages=row["max_pages"],
-        metadata=json.loads(raw_meta) if isinstance(raw_meta, str) else raw_meta,
+        metadata=raw_meta if isinstance(raw_meta, dict) else {},
     )
+
+    # Apply exhaustive mode config (date cutoff + raised max_pages cap)
+    scrape_mode = row.get("scrape_mode", "incremental")
+    if scrape_mode == "exhaustive":
+        from datetime import date, timedelta
+        cfg = settings.b2b_scrape
+        lookback_days = raw_meta.get("lookback_days", cfg.exhaustive_lookback_days)
+        target.date_cutoff = str(date.today() - timedelta(days=lookback_days))
+        if target.max_pages <= 5:
+            target.max_pages = raw_meta.get("exhaustive_max_pages", cfg.exhaustive_max_pages_default)
 
     parser = get_parser(target.source)
     if not parser:
@@ -307,6 +336,13 @@ async def trigger_scrape(target_id: UUID) -> dict:
                 result.reviews, target.vendor_name, 0.55,
             )
 
+    # Exhaustive mode: date filtering
+    date_dropped = 0
+    if scrape_mode == "exhaustive" and result.reviews and target.date_cutoff:
+        from ..autonomous.tasks.b2b_scrape_intake import _filter_by_date
+        cutoff = date.fromisoformat(target.date_cutoff)
+        result.reviews, date_dropped = _filter_by_date(result.reviews, cutoff)
+
     # Insert reviews
     inserted = 0
     pv = getattr(parser, 'version', None)
@@ -318,9 +354,29 @@ async def trigger_scrape(target_id: UUID) -> dict:
     duration_ms = int((_time.monotonic() - started_at) * 1000)
 
     # Log to scrape log
-    await _write_scrape_log(pool, target_id, target.source, result.status,
-                            len(result.reviews), inserted, result.pages_scraped,
-                            result.errors, duration_ms, parser)
+    if scrape_mode == "exhaustive":
+        from ..autonomous.tasks.b2b_scrape_intake import (
+            _determine_stop_reason, _log_scrape_exhaustive, _review_date_stats,
+        )
+        date_info = _review_date_stats(result.reviews) if result.reviews else {"oldest": None, "newest": None}
+        stop_reason = _determine_stop_reason(result, target, date_dropped)
+        await _log_scrape_exhaustive(
+            pool, target, result.status,
+            {
+                "found": len(result.reviews) + filtered_count + date_dropped,
+                "inserted": inserted,
+                "date_dropped": date_dropped,
+                "stop_reason": stop_reason,
+                "oldest_review": date_info["oldest"],
+                "newest_review": date_info["newest"],
+                "status": result.status,
+            },
+            result, parser, duration_ms,
+        )
+    else:
+        await _write_scrape_log(pool, target_id, target.source, result.status,
+                                len(result.reviews) + filtered_count, inserted, result.pages_scraped,
+                                result.errors, duration_ms, parser)
 
     # Update target status
     await pool.execute(
@@ -338,9 +394,11 @@ async def trigger_scrape(target_id: UUID) -> dict:
         "source": target.source,
         "vendor": target.vendor_name,
         "status": result.status,
-        "reviews_found": len(result.reviews) + filtered_count,
+        "scrape_mode": scrape_mode,
+        "reviews_found": len(result.reviews) + filtered_count + date_dropped,
         "reviews_inserted": inserted,
         "reviews_filtered": filtered_count,
+        "date_dropped": date_dropped,
         "pages_scraped": result.pages_scraped,
         "duration_ms": duration_ms,
         "errors": result.errors,
@@ -361,7 +419,7 @@ async def trigger_scrape_all(
 
     query = """
         SELECT id, source, vendor_name, product_name, product_slug,
-               product_category, max_pages, metadata
+               product_category, max_pages, metadata, scrape_mode
         FROM b2b_scrape_targets
         WHERE enabled = true
     """
@@ -375,7 +433,12 @@ async def trigger_scrape_all(
     if not rows:
         return {"targets": 0, "message": "No enabled targets found"}
 
-    from ..autonomous.tasks.b2b_scrape_intake import _insert_reviews
+    from datetime import date, timedelta
+
+    from ..autonomous.tasks.b2b_scrape_intake import (
+        _filter_by_date, _determine_stop_reason, _insert_reviews,
+        _log_scrape_exhaustive, _review_date_stats,
+    )
     from ..services.scraping.client import get_scrape_client
     from ..services.scraping.parsers import ScrapeTarget, get_parser
     from ..services.scraping.relevance import STRUCTURED_SOURCES, filter_reviews
@@ -389,6 +452,11 @@ async def trigger_scrape_all(
 
     for row in rows:
         raw_meta = row["metadata"] or "{}"
+        if isinstance(raw_meta, str):
+            try:
+                raw_meta = json.loads(raw_meta)
+            except (json.JSONDecodeError, TypeError):
+                raw_meta = {}
         target = ScrapeTarget(
             id=str(row["id"]),
             source=row["source"],
@@ -397,8 +465,17 @@ async def trigger_scrape_all(
             product_slug=row["product_slug"],
             product_category=row["product_category"],
             max_pages=row["max_pages"],
-            metadata=json.loads(raw_meta) if isinstance(raw_meta, str) else raw_meta,
+            metadata=raw_meta if isinstance(raw_meta, dict) else {},
         )
+
+        # Apply exhaustive mode config
+        row_mode = row.get("scrape_mode", "incremental")
+        if row_mode == "exhaustive":
+            cfg = settings.b2b_scrape
+            lookback_days = raw_meta.get("lookback_days", cfg.exhaustive_lookback_days)
+            target.date_cutoff = str(date.today() - timedelta(days=lookback_days))
+            if target.max_pages <= 5:
+                target.max_pages = raw_meta.get("exhaustive_max_pages", cfg.exhaustive_max_pages_default)
 
         parser = get_parser(target.source)
         if not parser:
@@ -427,6 +504,12 @@ async def trigger_scrape_all(
             result.reviews, filtered_count = filter_reviews(result.reviews, target.vendor_name, 0.55)
             total_filtered += filtered_count
 
+        # Exhaustive mode: date filtering
+        date_dropped = 0
+        if row_mode == "exhaustive" and result.reviews and target.date_cutoff:
+            cutoff = date.fromisoformat(target.date_cutoff)
+            result.reviews, date_dropped = _filter_by_date(result.reviews, cutoff)
+
         inserted = 0
         pv = getattr(parser, 'version', None)
         if result.reviews:
@@ -435,12 +518,31 @@ async def trigger_scrape_all(
             total_inserted += inserted
 
         duration_ms = int((_time.monotonic() - started_at) * 1000)
-        scrape_errors = list(result.errors)
-        if filtered_count:
-            scrape_errors.append(f"relevance_filtered={filtered_count}")
-        await _write_scrape_log(pool, row["id"], target.source, result.status,
-                                len(result.reviews) + filtered_count, inserted, result.pages_scraped,
-                                scrape_errors, duration_ms, parser)
+
+        if row_mode == "exhaustive":
+            date_info = _review_date_stats(result.reviews) if result.reviews else {"oldest": None, "newest": None}
+            stop_reason = _determine_stop_reason(result, target, date_dropped)
+            await _log_scrape_exhaustive(
+                pool, target, result.status,
+                {
+                    "found": len(result.reviews) + filtered_count + date_dropped,
+                    "inserted": inserted,
+                    "date_dropped": date_dropped,
+                    "stop_reason": stop_reason,
+                    "oldest_review": date_info["oldest"],
+                    "newest_review": date_info["newest"],
+                    "status": result.status,
+                },
+                result, parser, duration_ms,
+            )
+        else:
+            scrape_errors = list(result.errors)
+            if filtered_count:
+                scrape_errors.append(f"relevance_filtered={filtered_count}")
+            await _write_scrape_log(pool, row["id"], target.source, result.status,
+                                    len(result.reviews) + filtered_count, inserted, result.pages_scraped,
+                                    scrape_errors, duration_ms, parser)
+
         await pool.execute(
             "UPDATE b2b_scrape_targets SET last_scraped_at = NOW(), last_scrape_status = $2, last_scrape_reviews = $3, updated_at = NOW() WHERE id = $1",
             row["id"], result.status, inserted,
@@ -450,13 +552,15 @@ async def trigger_scrape_all(
             "source": target.source,
             "vendor": target.vendor_name,
             "status": result.status,
-            "found": len(result.reviews) + filtered_count,
+            "mode": row_mode,
+            "found": len(result.reviews) + filtered_count + date_dropped,
             "inserted": inserted,
             "filtered": filtered_count,
+            "date_dropped": date_dropped,
         })
-        logger.info("Scraped %s/%s: found=%d inserted=%d filtered=%d",
-                     target.source, target.vendor_name,
-                     len(result.reviews) + filtered_count, inserted, filtered_count)
+        logger.info("Scraped %s/%s [%s]: found=%d inserted=%d filtered=%d date_dropped=%d",
+                     target.source, target.vendor_name, row_mode,
+                     len(result.reviews) + filtered_count + date_dropped, inserted, filtered_count, date_dropped)
 
         await asyncio.sleep(1)
 

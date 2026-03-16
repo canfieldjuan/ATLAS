@@ -14,7 +14,7 @@ import re
 import time
 import uuid as _uuid
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from ...config import settings
@@ -94,6 +94,222 @@ def _make_dedup_key(
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+# ---------------------------------------------------------------------------
+# Exhaustive mode helpers (ported from scripts/exhaustive_verified_scrape.py)
+# ---------------------------------------------------------------------------
+
+def _parse_review_date(raw: str | None) -> date | None:
+    """Best-effort parse of a review date string to a date object."""
+    if not raw:
+        return None
+    raw = raw.strip()
+    for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d",
+                "%b %d, %Y", "%B %d, %Y", "%d %b %Y", "%d %B %Y",
+                "%m/%d/%Y", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(raw[:30], fmt).date()
+        except (ValueError, TypeError):
+            continue
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", raw)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            pass
+    return None
+
+
+def _filter_by_date(reviews: list[dict], cutoff: date) -> tuple[list[dict], int]:
+    """Keep reviews with reviewed_at >= cutoff. Returns (kept, dropped_count)."""
+    kept = []
+    dropped = 0
+    for r in reviews:
+        d = _parse_review_date(str(r.get("reviewed_at", "")))
+        if d is None or d >= cutoff:
+            kept.append(r)
+        else:
+            dropped += 1
+    return kept, dropped
+
+
+def _determine_stop_reason(result, target, date_dropped: int) -> str:
+    """Derive stop reason from parser result + heuristics."""
+    if result.stop_reason:
+        return result.stop_reason
+    page_logs = getattr(result, "page_logs", []) or []
+    duplicate_pages = sum(1 for pl in page_logs if pl.stop_reason == "duplicate_page")
+    if date_dropped > 0:
+        return "date_cutoff"
+    if result.pages_scraped >= target.max_pages:
+        return "page_cap"
+    if duplicate_pages > 0:
+        return "duplicate_page"
+    if not result.reviews and result.errors:
+        return "blocked_or_error"
+    if not result.reviews:
+        return "no_reviews"
+    if page_logs and page_logs[-1].stop_reason:
+        return page_logs[-1].stop_reason
+    return "pages_exhausted"
+
+
+def _should_persist_page_logs(stats: dict, page_logs: list) -> bool:
+    """Decide whether page logs warrant DB persistence."""
+    status = stats.get("status", "")
+    if status in ("error", "blocked"):
+        return True
+    stop = stats.get("stop_reason", "")
+    if stop in ("blocked_or_error", "exception"):
+        return True
+    dup_pages = sum(1 for pl in page_logs if pl.stop_reason == "duplicate_page")
+    if dup_pages > 0:
+        return True
+    total_parsed = sum(pl.reviews_parsed for pl in page_logs)
+    total_missing = sum(pl.missing_date for pl in page_logs)
+    if total_parsed > 0 and total_missing / total_parsed > 0.2:
+        return True
+    if any(pl.stop_reason in ("blocked_or_throttled", "http_error") for pl in page_logs):
+        return True
+    return False
+
+
+async def _persist_page_logs(pool, run_id, page_logs: list) -> None:
+    """Write page-level telemetry rows to b2b_scrape_page_logs."""
+    for pl in page_logs:
+        try:
+            oldest_d = None
+            newest_d = None
+            if pl.oldest_review:
+                try:
+                    oldest_d = date.fromisoformat(pl.oldest_review)
+                except (ValueError, TypeError):
+                    pass
+            if pl.newest_review:
+                try:
+                    newest_d = date.fromisoformat(pl.newest_review)
+                except (ValueError, TypeError):
+                    pass
+            await pool.execute(
+                """
+                INSERT INTO b2b_scrape_page_logs
+                    (run_id, page, url, requested_at, status_code, final_url,
+                     response_bytes, duration_ms,
+                     review_nodes_found, reviews_parsed,
+                     missing_date, missing_rating, missing_body, missing_author,
+                     oldest_review, newest_review,
+                     next_page_found, next_page_url, content_hash,
+                     duplicate_reviews, stop_reason, errors)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                        $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22::jsonb)
+                """,
+                run_id,
+                pl.page,
+                pl.url,
+                datetime.fromisoformat(pl.timestamp) if pl.timestamp else datetime.now(timezone.utc),
+                pl.status_code,
+                pl.final_url or pl.url,
+                pl.response_bytes,
+                pl.duration_ms,
+                pl.review_nodes_found,
+                pl.reviews_parsed,
+                pl.missing_date,
+                pl.missing_rating,
+                pl.missing_body,
+                pl.missing_author,
+                oldest_d,
+                newest_d,
+                pl.next_page_found,
+                pl.next_page_url or None,
+                pl.content_hash or None,
+                pl.duplicate_reviews,
+                pl.stop_reason or None,
+                json.dumps(pl.errors[:5] if pl.errors else []),
+            )
+        except Exception:
+            logger.debug("Failed to persist page log page=%d (non-fatal)", pl.page, exc_info=True)
+
+
+async def _log_scrape_exhaustive(
+    pool, target, status: str, stats: dict, result, parser, duration_ms: int,
+) -> _uuid.UUID | None:
+    """Enriched scrape log for exhaustive mode. Returns run_id or None."""
+    proxy_type = "residential" if parser.prefer_residential else "none"
+    pv = getattr(parser, "version", None)
+    block_type = _classify_block_type(status, list(result.errors) if result else [])
+
+    oldest_d = None
+    newest_d = None
+    try:
+        oldest_d = date.fromisoformat(stats["oldest_review"]) if stats.get("oldest_review") else None
+    except (ValueError, TypeError):
+        pass
+    try:
+        newest_d = date.fromisoformat(stats["newest_review"]) if stats.get("newest_review") else None
+    except (ValueError, TypeError):
+        pass
+
+    page_logs = getattr(result, "page_logs", []) if result else []
+    should_persist = bool(page_logs) and _should_persist_page_logs(stats, page_logs)
+    duplicate_pages = sum(1 for pl in page_logs if pl.stop_reason == "duplicate_page") if page_logs else 0
+
+    try:
+        run_id = await pool.fetchval(
+            """
+            INSERT INTO b2b_scrape_log
+                (target_id, source, status, reviews_found, reviews_inserted,
+                 pages_scraped, errors, duration_ms, proxy_type, parser_version,
+                 block_type, stop_reason, oldest_review, newest_review,
+                 date_dropped, duplicate_pages, has_page_logs)
+            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10,
+                    $11, $12, $13, $14, $15, $16, $17)
+            RETURNING id
+            """,
+            _uuid.UUID(target.id),
+            target.source,
+            status,
+            stats.get("found", 0),
+            stats.get("inserted", 0),
+            result.pages_scraped if result else 0,
+            json.dumps(list(result.errors[:10]) if result and result.errors else []),
+            duration_ms,
+            proxy_type,
+            pv,
+            block_type,
+            stats.get("stop_reason"),
+            oldest_d,
+            newest_d,
+            stats.get("date_dropped", 0),
+            duplicate_pages,
+            should_persist,
+        )
+    except Exception:
+        logger.warning("Failed to log exhaustive scrape result", exc_info=True)
+        return None
+
+    if should_persist and run_id:
+        await _persist_page_logs(pool, run_id, page_logs)
+
+    return run_id
+
+
+def _review_date_stats(reviews: list[dict]) -> dict:
+    """Compute date diagnostics for a batch of reviews."""
+    dates = []
+    null_count = 0
+    for r in reviews:
+        raw = r.get("reviewed_at")
+        if not raw:
+            null_count += 1
+            continue
+        d = _parse_review_date(str(raw))
+        if d:
+            dates.append(d)
+    return {
+        "oldest": str(min(dates)) if dates else None,
+        "newest": str(max(dates)) if dates else None,
+    }
+
+
 _INSERT_SQL = """
 INSERT INTO b2b_reviews (
     dedup_key, source, source_url, source_review_id,
@@ -125,7 +341,7 @@ WHERE c.import_batch_id = $1
 
 _TARGET_QUERY = """
 SELECT id, source, vendor_name, product_name, product_slug,
-       product_category, max_pages, metadata,
+       product_category, max_pages, metadata, scrape_mode,
        last_scraped_at, last_scrape_status
 FROM b2b_scrape_targets
 WHERE enabled = true
@@ -170,10 +386,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         (c.cooldown_minutes / 60 for c in all_caps.values()),
         default=cfg.blocked_cooldown_hours,
     )
+    # 0 means unlimited per config docs; Postgres LIMIT 0 returns nothing,
+    # so substitute a large cap when the user sets 0.
+    target_limit = cfg.max_targets_per_run if cfg.max_targets_per_run > 0 else 2147483647
     raw_targets = await pool.fetch(
         _TARGET_QUERY,
         max(1, int(min_cooldown_hours)),
-        cfg.max_targets_per_run,
+        target_limit,
         allowed_sources,
     )
 
@@ -219,6 +438,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             except (json.JSONDecodeError, TypeError):
                 logger.warning("Malformed metadata JSON for target %s, defaulting to empty", row["id"])
                 raw_meta = {}
+        scrape_mode = row.get("scrape_mode", "incremental")
         target = ScrapeTarget(
             id=str(row["id"]),
             source=row["source"],
@@ -229,6 +449,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             max_pages=row["max_pages"],
             metadata=raw_meta if isinstance(raw_meta, dict) else {},
         )
+
+        # Exhaustive mode: set date cutoff + raise max_pages safety cap
+        if scrape_mode == "exhaustive":
+            lookback_days = raw_meta.get("lookback_days", cfg.exhaustive_lookback_days)
+            target.date_cutoff = str(date.today() - timedelta(days=lookback_days))
+            if target.max_pages <= 5:
+                target.max_pages = raw_meta.get("exhaustive_max_pages", cfg.exhaustive_max_pages_default)
 
         parser = get_parser(target.source)
         if not parser:
@@ -286,6 +513,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         target.source, target.vendor_name,
                     )
 
+            # Exhaustive mode: date filtering
+            date_dropped = 0
+            if scrape_mode == "exhaustive" and result.reviews and target.date_cutoff:
+                cutoff = date.fromisoformat(target.date_cutoff)
+                result.reviews, date_dropped = _filter_by_date(result.reviews, cutoff)
+
             # Insert reviews + fire enrichment immediately (background task)
             inserted = 0
             pv = getattr(parser, 'version', None)
@@ -324,17 +557,34 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             duration_ms = int((time.monotonic() - started_at) * 1000)
 
             # Log + update target
-            scrape_errors = list(result.errors)
-            if filtered_count:
-                scrape_errors.append(f"relevance_filtered={filtered_count}")
-            await _log_scrape(
-                pool, target, result.status,
-                len(result.reviews) + filtered_count, inserted, result.pages_scraped,
-                scrape_errors, duration_ms, parser,
-                captcha_attempts=client.captcha_attempts,
-                captcha_types=sorted(client.captcha_types_seen) if client.captcha_types_seen else None,
-                captcha_solve_ms=client.captcha_solve_ms_total,
-            )
+            if scrape_mode == "exhaustive":
+                date_info = _review_date_stats(result.reviews) if result.reviews else {"oldest": None, "newest": None}
+                stop_reason = _determine_stop_reason(result, target, date_dropped)
+                await _log_scrape_exhaustive(
+                    pool, target, result.status,
+                    {
+                        "found": len(result.reviews) + filtered_count + date_dropped,
+                        "inserted": inserted,
+                        "date_dropped": date_dropped,
+                        "stop_reason": stop_reason,
+                        "oldest_review": date_info["oldest"],
+                        "newest_review": date_info["newest"],
+                        "status": result.status,
+                    },
+                    result, parser, duration_ms,
+                )
+            else:
+                scrape_errors = list(result.errors)
+                if filtered_count:
+                    scrape_errors.append(f"relevance_filtered={filtered_count}")
+                await _log_scrape(
+                    pool, target, result.status,
+                    len(result.reviews) + filtered_count, inserted, result.pages_scraped,
+                    scrape_errors, duration_ms, parser,
+                    captcha_attempts=client.captcha_attempts,
+                    captcha_types=sorted(client.captcha_types_seen) if client.captcha_types_seen else None,
+                    captcha_solve_ms=client.captcha_solve_ms_total,
+                )
             await pool.execute(
                 """
                 UPDATE b2b_scrape_targets
@@ -346,17 +596,21 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             )
 
             async with results_lock:
-                total_reviews += len(result.reviews) + filtered_count
+                total_reviews += len(result.reviews) + filtered_count + date_dropped
                 total_inserted += inserted
-                results_summary.append({
+                entry = {
                     "source": target.source,
                     "vendor": target.vendor_name,
                     "status": result.status,
-                    "found": len(result.reviews) + filtered_count,
+                    "found": len(result.reviews) + filtered_count + date_dropped,
                     "inserted": inserted,
                     "filtered": filtered_count,
                     "pages": result.pages_scraped,
-                })
+                    "mode": scrape_mode,
+                }
+                if date_dropped:
+                    entry["date_dropped"] = date_dropped
+                results_summary.append(entry)
 
             logger.info(
                 "Scraped %s/%s: %d found, %d inserted (%s) in %dms",
@@ -364,15 +618,41 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 len(result.reviews), inserted, result.status, duration_ms,
             )
 
-    # Fire all targets concurrently (per-source semaphores handle throttling)
-    logger.info(
-        "Scraping %d targets concurrently (%d sources, default concurrency %d)",
-        len(targets), len(source_sems), _DEFAULT_CONCURRENCY,
-    )
-    await asyncio.gather(
-        *[_scrape_one(row) for row in targets],
-        return_exceptions=True,
-    )
+    # Split targets by mode
+    incremental_targets = [t for t in targets if t.get("scrape_mode", "incremental") == "incremental"]
+    exhaustive_targets = [t for t in targets if t.get("scrape_mode") == "exhaustive"]
+
+    # Fire incremental targets concurrently (per-source semaphores handle throttling)
+    if incremental_targets:
+        logger.info(
+            "Scraping %d incremental targets concurrently (%d sources)",
+            len(incremental_targets), len(source_sems),
+        )
+        await asyncio.gather(
+            *[_scrape_one(row) for row in incremental_targets],
+            return_exceptions=True,
+        )
+
+    # Exhaustive targets: sequential per source, sources in parallel
+    if exhaustive_targets:
+        by_source: dict[str, list] = defaultdict(list)
+        for row in exhaustive_targets:
+            by_source[row["source"]].append(row)
+
+        async def _run_exhaustive_source(source: str, rows: list):
+            for i, row in enumerate(rows):
+                await _scrape_one(row)
+                if i < len(rows) - 1:
+                    await asyncio.sleep(cfg.exhaustive_inter_vendor_delay)
+
+        logger.info(
+            "Scraping %d exhaustive targets across %d sources (sequential per source)",
+            len(exhaustive_targets), len(by_source),
+        )
+        await asyncio.gather(
+            *[_run_exhaustive_source(src, rows) for src, rows in by_source.items()],
+            return_exceptions=True,
+        )
 
     # Enrichment fires as background tasks per-target (see _fire_enrichment).
     # No need to wait -- vLLM handles concurrent requests natively.

@@ -2152,6 +2152,28 @@ class B2BChurnConfig(BaseSettings):
         description="OpenRouter model for B2B enrichment (structured extraction)",
     )
 
+    # Hybrid two-pass enrichment (Tier 1 local + Tier 2 cloud)
+    enrichment_hybrid_enabled: bool = Field(
+        default=False,
+        description="Enable hybrid enrichment: Tier 1 (local vLLM, deterministic) + Tier 2 (cloud, interpretive)",
+    )
+    enrichment_tier1_vllm_url: str = Field(
+        default="http://localhost:8082",
+        description="vLLM server URL for Tier 1 deterministic extraction",
+    )
+    enrichment_tier1_model: str = Field(
+        default="stelterlab/Qwen3-30B-A3B-Instruct-2507-AWQ",
+        description="Model name on vLLM server for Tier 1 extraction",
+    )
+    enrichment_tier1_max_tokens: int = Field(
+        default=1024,
+        description="Max output tokens for Tier 1 vLLM extraction",
+    )
+    enrichment_tier2_model: str = Field(
+        default="",
+        description="OpenRouter model override for Tier 2 (empty = use enrichment_openrouter_model)",
+    )
+
     # Intelligence aggregation
     intelligence_enabled: bool = Field(default=True, description="Enable churn intelligence aggregation")
     intelligence_cron: str = Field(default="0 21 * * *", description="Daily churn intelligence (9 PM)")
@@ -2323,7 +2345,17 @@ class B2BChurnConfig(BaseSettings):
     # Stratified reasoning integration (global intelligence run)
     stratified_reasoning_enabled: bool = Field(default=False, description="Route vendors through stratified reasoner during global intelligence run")
     stratified_reasoning_concurrency: int = Field(default=5, description="Max concurrent vendor reasoning tasks")
+    stratified_reasoning_vendor_cap: int = Field(default=50, description="Max vendors to send through stratified reasoning (top N by urgency)")
     executive_summary_llm_enabled: bool = Field(default=False, description="Use LLM-synthesized executive summaries instead of deterministic templates")
+
+    # Phase time budgeting
+    intelligence_budget_seconds: int = Field(default=540, description="Total time budget for intelligence task phases (excludes persistence margin)")
+    intelligence_phase_min_reasoning: int = Field(default=120, description="Min seconds remaining to start reasoning phase")
+    intelligence_phase_min_exploratory: int = Field(default=90, description="Min seconds remaining to start exploratory LLM")
+    intelligence_phase_min_scorecard: int = Field(default=60, description="Min seconds remaining to start scorecard narrative LLM")
+    intelligence_phase_min_exec_summary: int = Field(default=45, description="Min seconds remaining to start executive summary LLM")
+    intelligence_phase_min_battle_card_copy: int = Field(default=60, description="Min seconds remaining to start battle card sales copy LLM")
+    battle_card_llm_concurrency: int = Field(default=3, description="Max concurrent battle card sales copy LLM calls")
 
 
 class B2BAlertConfig(BaseSettings):
@@ -2475,6 +2507,11 @@ class B2BScrapeConfig(BaseSettings):
     # Relevance filtering (social media noise reduction)
     relevance_filter_enabled: bool = Field(default=True, description="Enable relevance filtering for social media sources")
     relevance_threshold: float = Field(default=0.55, description="Min relevance score (0.0-1.0) for social media posts")
+
+    # Exhaustive scrape mode
+    exhaustive_lookback_days: int = Field(default=365, description="Date cutoff for exhaustive mode (days)")
+    exhaustive_max_pages_default: int = Field(default=100, description="Safety cap for exhaustive pagination")
+    exhaustive_inter_vendor_delay: float = Field(default=4.0, description="Seconds between vendors in exhaustive mode")
 
     # Playwright stealth browser (DataDome/Cloudflare bypass)
     playwright_enabled: bool = Field(default=False, description="Enable Playwright stealth browser for protected sites")
