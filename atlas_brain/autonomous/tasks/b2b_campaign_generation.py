@@ -333,12 +333,14 @@ async def load_calibration_weights() -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _compute_score(row: dict) -> int:
+def _compute_score(row: dict) -> tuple[int, dict]:
     """Compute opportunity score (0-100) from enrichment signals.
 
     Blends static defaults with calibration adjustments when available.
     Calibration adjustments are additive point shifts derived from observed
     outcome conversion rates (see b2b_score_calibration.py).
+
+    Returns (final_score, components_dict) so callers can persist the breakdown.
     """
     cal = _get_calibration_adjustments()
     score = 0.0
@@ -349,31 +351,37 @@ def _compute_score(row: dict) -> int:
     if cal.get("urgency_bucket"):
         bucket = "high" if urgency >= 8 else ("medium" if urgency >= 5 else "low")
         urgency_pts += cal["urgency_bucket"].get(bucket, 0)
-    score += max(0, min(30, urgency_pts))
+    urgency_final = max(0, min(30, urgency_pts))
+    score += urgency_final
 
     # Role component (max ~20 pts)
     role_pts = 0.0
+    role_label = None
     if row.get("is_dm"):
         role_pts = 20
+        role_label = "decision_maker"
         if cal.get("role_type"):
             role_pts += cal["role_type"].get("decision_maker", 0)
     elif row.get("role_type") in _ROLE_SCORES:
-        role_val = row["role_type"]
-        role_pts = _ROLE_SCORES[role_val]
+        role_label = row["role_type"]
+        role_pts = _ROLE_SCORES[role_label]
         if cal.get("role_type"):
-            role_pts += cal["role_type"].get(role_val, 0)
-    score += max(0, role_pts)
+            role_pts += cal["role_type"].get(role_label, 0)
+    role_final = max(0, role_pts)
+    score += role_final
 
     # Buying stage component (max ~25 pts)
     buying_stage = row.get("buying_stage") or ""
     stage_pts = _STAGE_SCORES.get(buying_stage, 0)
     if cal.get("buying_stage"):
         stage_pts += cal["buying_stage"].get(buying_stage, 0)
-    score += max(0, stage_pts)
+    stage_final = max(0, stage_pts)
+    score += stage_final
 
     # Seat count component (max ~15 pts)
     seat_count = row.get("seat_count")
     seat_pts = 0.0
+    seat_bucket = None
     if seat_count is not None:
         if seat_count >= 500:
             seat_pts = 15
@@ -388,19 +396,32 @@ def _compute_score(row: dict) -> int:
             seat_bucket = "small"
         if cal.get("seat_bucket"):
             seat_pts += cal["seat_bucket"].get(seat_bucket, 0)
-    score += max(0, seat_pts)
+    seat_final = max(0, seat_pts)
+    score += seat_final
 
     # Mention context component (max ~10 pts)
     mention_context = (row.get("mention_context") or "").lower()
+    context_final = 0.0
+    context_keyword = None
     for keyword, pts in _CONTEXT_SCORES.items():
         if keyword in mention_context:
             context_pts = pts
             if cal.get("context_keyword"):
                 context_pts += cal["context_keyword"].get(keyword, 0)
-            score += max(0, context_pts)
+            context_final = max(0, context_pts)
+            context_keyword = keyword
             break
+    score += context_final
 
-    return int(min(100, max(0, score)))
+    final = int(min(100, max(0, score)))
+    components = {
+        "urgency": {"pts": round(urgency_final, 1), "raw": round(urgency, 1), "max": 30},
+        "role": {"pts": round(role_final, 1), "label": role_label, "max": 20},
+        "stage": {"pts": round(stage_final, 1), "label": buying_stage or None, "max": 25},
+        "seats": {"pts": round(seat_final, 1), "bucket": seat_bucket, "max": 15},
+        "context": {"pts": round(context_final, 1), "keyword": context_keyword, "max": 10},
+    }
+    return final, components
 
 
 async def run(task: ScheduledTask) -> dict[str, Any]:
@@ -740,11 +761,13 @@ async def _generate_churning_company_campaigns(
                                 key_quotes, source_review_ids,
                                 channel, subject, body, cta,
                                 status, batch_id, llm_model,
-                                partner_id, industry, target_mode
+                                partner_id, industry, target_mode,
+                                score_components
                             ) VALUES (
                                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                                 $11, $12, $13, $14, $15, $16, $17, $18,
-                                $19, $20, $21, $22, $23, $24
+                                $19, $20, $21, $22, $23, $24,
+                                $25::jsonb
                             )
                             """,
                             company_name,
@@ -771,6 +794,7 @@ async def _generate_churning_company_campaigns(
                             _uuid.UUID(partner_id),
                             persona_context.get("industry"),
                             "churning_company",
+                            json.dumps(best.get("score_components")),
                         )
                         generated += 1
                     except Exception:
@@ -1159,11 +1183,12 @@ async def _generate_vendor_campaigns(
                             key_quotes, source_review_ids,
                             channel, subject, body, cta,
                             status, batch_id, llm_model, industry, target_mode,
-                            recipient_email
+                            recipient_email, score_components
                         ) VALUES (
                             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                             $11, $12, $13, $14, $15, $16, $17, $18,
-                            $19, $20, $21, $22, $23, $24
+                            $19, $20, $21, $22, $23, $24,
+                            $25::jsonb
                         )
                         """,
                         vendor_name,  # company_name = the vendor we're targeting
@@ -1190,6 +1215,7 @@ async def _generate_vendor_campaigns(
                         best.get("industry"),
                         "vendor_retention",
                         target.get("contact_email"),
+                        json.dumps(best.get("score_components")),
                     )
                     generated += 1
                 except Exception:
@@ -1548,11 +1574,12 @@ async def _generate_challenger_campaigns(
                             key_quotes, source_review_ids,
                             channel, subject, body, cta,
                             status, batch_id, llm_model, industry, target_mode,
-                            recipient_email
+                            recipient_email, score_components
                         ) VALUES (
                             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                             $11, $12, $13, $14, $15, $16, $17, $18,
-                            $19, $20, $21, $22, $23, $24
+                            $19, $20, $21, $22, $23, $24,
+                            $25::jsonb
                         )
                         """,
                         challenger_name,  # company_name = the challenger we're targeting
@@ -1579,6 +1606,7 @@ async def _generate_challenger_campaigns(
                         best.get("industry"),
                         "challenger_intel",
                         target.get("contact_email"),
+                        json.dumps(best.get("score_components")),
                     )
                     generated += 1
                 except Exception:
@@ -1721,12 +1749,13 @@ async def _fetch_opportunities(
 
         row_dict["mention_context"] = mention_context
         row_dict["urgency"] = _safe_float(row_dict.get("urgency"), 0)
-        opp_score = _compute_score(row_dict)
+        opp_score, score_components = _compute_score(row_dict)
 
         if opp_score < min_score:
             continue
 
         row_dict["opportunity_score"] = opp_score
+        row_dict["score_components"] = score_components
         row_dict["competitors"] = competitors
         row_dict["review_id"] = str(r["review_id"])
         opportunities.append(row_dict)
