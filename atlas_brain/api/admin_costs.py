@@ -47,8 +47,14 @@ def _describe_recent_call(span_name: str, metadata: dict) -> tuple[str, str | No
 
     if span_name == "reasoning.stratified.reason":
         return "Stratified Reasoning", f"Full reason{f' for {vendor_name}' if vendor_name else ''}"
+    if span_name == "reasoning.stratified.reason.challenge":
+        return "Stratified Reasoning", f"Challenge{f' for {vendor_name}' if vendor_name else ''}"
+    if span_name == "reasoning.stratified.reason.ground":
+        return "Stratified Reasoning", f"Ground{f' for {vendor_name}' if vendor_name else ''}"
     if span_name == "reasoning.stratified.reconstitute":
         return "Stratified Reasoning", f"Reconstitute{f' for {vendor_name}' if vendor_name else ''}"
+    if span_name == "reasoning.stratified.reconstitute.reason.ground":
+        return "Stratified Reasoning", f"Reconstitute ground{f' for {vendor_name}' if vendor_name else ''}"
     if span_name == "b2b.churn_intelligence.exploratory_overview":
         return "Exploratory Overview", "Weekly churn feed synthesis"
     if span_name == "b2b.churn_intelligence.scorecard_narrative":
@@ -220,6 +226,61 @@ async def cost_by_workflow(days: int = Query(default=30, ge=1, le=365)):
             }
             for r in rows
         ],
+    }
+
+
+@router.get("/reasoning-activity")
+async def reasoning_activity(days: int = Query(default=30, ge=1, le=365)):
+    """Per-pass breakdown of stratified reasoning activity (classify/challenge/ground)."""
+    pool = _pool_or_503()
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    rows = await pool.fetch(
+        """SELECT
+             span_name,
+             COALESCE((metadata->>'pass_type'), 'single') AS pass_type,
+             COALESCE((metadata->>'pass_number')::int, 1) AS pass_number,
+             COALESCE(SUM(cost_usd), 0)                    AS cost,
+             COALESCE(SUM(total_tokens), 0)                AS tokens,
+             COUNT(*)                                       AS calls,
+             COALESCE(AVG(duration_ms), 0)                  AS avg_duration_ms,
+             COUNT(*) FILTER (
+               WHERE (metadata->>'pass_changed')::boolean IS TRUE
+             )                                              AS changed_count
+           FROM llm_usage
+           WHERE created_at >= $1
+             AND span_name LIKE 'reasoning.stratified.%'
+           GROUP BY span_name, pass_type, pass_number
+           ORDER BY pass_number, span_name""",
+        since,
+    )
+    phases = []
+    total_cost = 0.0
+    total_tokens = 0
+    total_calls = 0
+    for r in rows:
+        cost = float(r["cost"])
+        total_cost += cost
+        total_tokens += int(r["tokens"])
+        total_calls += int(r["calls"])
+        phases.append({
+            "span_name": r["span_name"],
+            "pass_type": r["pass_type"],
+            "pass_number": int(r["pass_number"]),
+            "calls": int(r["calls"]),
+            "cost_usd": cost,
+            "total_tokens": int(r["tokens"]),
+            "avg_duration_ms": round(float(r["avg_duration_ms"]), 1),
+            "changed_count": int(r["changed_count"]),
+        })
+    return {
+        "period_days": days,
+        "phases": phases,
+        "summary": {
+            "total_cost_usd": round(total_cost, 4),
+            "total_tokens": total_tokens,
+            "total_calls": total_calls,
+        },
     }
 
 

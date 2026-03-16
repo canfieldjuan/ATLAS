@@ -79,3 +79,17 @@ class ReasoningConfig(BaseSettings):
     )
     neo4j_user: str = Field(default="neo4j", description="Neo4j username")
     neo4j_password: str = Field(default="password123", description="Neo4j password")
+
+    # Multi-pass reasoning (classify -> challenge -> ground)
+    multi_pass_enabled: bool = Field(
+        default=False,
+        description="Enable multi-pass reasoning (classify -> challenge -> ground)",
+    )
+    multi_pass_challenge_confidence_floor: float = Field(
+        default=0.3,
+        description="Skip challenge pass if Pass 1 confidence is at or below this",
+    )
+    multi_pass_ground_change_threshold: float = Field(
+        default=0.05,
+        description="Skip grounding pass if challenge changed conclusion by less than this delta",
+    )

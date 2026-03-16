@@ -1,0 +1,465 @@
+"""Multi-pass reasoning engine (classify -> challenge -> ground).
+
+Pass 1 (CLASSIFY): Standard LLM classification from evidence.
+Pass 2 (CHALLENGE): Deterministic contradiction detection + LLM self-critique.
+Pass 3 (GROUND): Forces every key_signal to cite exact evidence field:value.
+
+Skipping rules:
+- Pass 2 skipped if Pass 1 confidence <= challenge_confidence_floor
+- Pass 2 skipped if no contradictions found
+- Pass 3 skipped if Pass 2 didn't change the conclusion
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import re
+import time
+from dataclasses import dataclass, field
+from typing import Any, Callable
+
+logger = logging.getLogger("atlas.reasoning.multi_pass")
+
+# Maps dominant pain category to expected archetype
+_PAIN_TO_ARCHETYPE: dict[str, str] = {
+    "ux": "leadership_redesign",
+    "usability": "leadership_redesign",
+    "pricing": "pricing_shock",
+    "price": "pricing_shock",
+    "support": "support_collapse",
+    "integration": "integration_break",
+    "api": "integration_break",
+    "compliance": "compliance_gap",
+    "regulatory": "compliance_gap",
+    "feature": "feature_gap",
+    "functionality": "feature_gap",
+}
+
+
+@dataclass
+class PassResult:
+    pass_number: int        # 1, 2, or 3
+    pass_type: str          # "classify", "challenge", "ground"
+    conclusion: dict        # normalized conclusion
+    tokens_used: int
+    duration_ms: float
+    changed: bool           # did this pass change the archetype?
+
+
+@dataclass
+class MultiPassResult:
+    final_conclusion: dict
+    passes: list[PassResult] = field(default_factory=list)
+    total_tokens: int = 0
+    total_duration_ms: float = 0.0
+    passes_executed: int = 0
+
+
+_CHALLENGE_PROMPT = """\
+You classified this vendor's churn pattern. Now CHALLENGE your own conclusion.
+
+YOUR CONCLUSION:
+{conclusion_json}
+
+CONTRADICTING EVIDENCE:
+{contradictions}
+
+Rules:
+- If the contradictions are valid, REVISE the archetype and adjust confidence.
+- If you can defend with specific metrics from the evidence, KEEP the archetype but explain why.
+- You MUST output the full conclusion JSON (same schema), revised or defended.
+- Do NOT default to the same confidence -- re-evaluate based on the challenge.
+
+Output ONLY valid JSON with the same fields as the original conclusion.\
+"""
+
+_GROUND_PROMPT = """\
+You are grounding a B2B churn classification. Every key_signal MUST cite an exact field:value from the evidence.
+
+CONCLUSION TO GROUND:
+{conclusion_json}
+
+AVAILABLE EVIDENCE FIELDS:
+{evidence_fields}
+
+Rules:
+- Each key_signal must be in format "field_name: value" where field_name exists in the evidence.
+- Remove any key_signal that cannot be grounded in the evidence.
+- If all signals are removed, set confidence to 0.3 and archetype to "mixed".
+- executive_summary sentence 2 must reference at least 2 specific numbers from evidence.
+- Do NOT invent data not in the evidence fields above.
+
+Output ONLY valid JSON with the same fields.\
+"""
+
+
+def _find_contradicting_evidence(
+    conclusion: dict[str, Any],
+    evidence: dict[str, Any],
+) -> list[str]:
+    """Deterministic contradiction detection. Returns up to 3 contradiction strings."""
+    contradictions: list[str] = []
+    chosen_archetype = conclusion.get("archetype", "")
+
+    # 1. Top pain category maps to a different archetype than chosen
+    pain_categories = evidence.get("pain_categories")
+    if pain_categories and isinstance(pain_categories, list):
+        top_pain = pain_categories[0] if pain_categories else {}
+        if isinstance(top_pain, dict):
+            top_cat = top_pain.get("category", "").lower()
+            expected = _PAIN_TO_ARCHETYPE.get(top_cat)
+            if expected and expected != chosen_archetype and chosen_archetype not in ("mixed", "stable"):
+                count = top_pain.get("count", "?")
+                contradictions.append(
+                    f"Top pain category is '{top_cat}' (count={count}), "
+                    f"which maps to {expected}, not {chosen_archetype}"
+                )
+
+    # 2. Archetype pre-scores show a strong alternative
+    arch_scores = evidence.get("archetype_scores")
+    if arch_scores and isinstance(arch_scores, list):
+        for score_entry in arch_scores:
+            if not isinstance(score_entry, dict):
+                continue
+            arch_name = score_entry.get("archetype", "")
+            score_val = score_entry.get("score", 0)
+            if (
+                arch_name != chosen_archetype
+                and isinstance(score_val, (int, float))
+                and score_val > 0.4
+                and chosen_archetype not in ("mixed", "stable")
+            ):
+                contradictions.append(
+                    f"Archetype pre-score for '{arch_name}' is {score_val:.2f} (> 0.4), "
+                    f"suggesting it may be a stronger fit than {chosen_archetype}"
+                )
+                break  # only report strongest alternative
+
+    # 3. Low review count with high confidence
+    total_reviews = evidence.get("total_reviews", 0)
+    confidence = conclusion.get("confidence", 0)
+    if (
+        isinstance(total_reviews, (int, float))
+        and total_reviews < 20
+        and isinstance(confidence, (int, float))
+        and confidence > 0.7
+    ):
+        contradictions.append(
+            f"Only {total_reviews} reviews but confidence is {confidence:.2f} -- "
+            f"insufficient sample size for high confidence"
+        )
+
+    # 4. High displacement count with non-displacement archetype
+    displacement = evidence.get("displacement_mention_count", 0)
+    if (
+        isinstance(displacement, (int, float))
+        and displacement > 5
+        and chosen_archetype not in ("category_disruption", "feature_gap", "mixed", "stable")
+    ):
+        contradictions.append(
+            f"displacement_mention_count={displacement} is high, "
+            f"suggesting category_disruption or feature_gap, not {chosen_archetype}"
+        )
+
+    return contradictions[:3]
+
+
+async def multi_pass_reason(
+    *,
+    llm: Any,
+    system_prompt: str,
+    evidence_payload: dict[str, Any],
+    json_schema: dict[str, Any],
+    max_tokens: int,
+    temperature: float,
+    enabled: bool = True,
+    challenge_confidence_floor: float = 0.3,
+    ground_change_threshold: float = 0.05,
+    ground_only: bool = False,
+    span_prefix: str = "reasoning.stratified",
+    trace_metadata: dict[str, Any] | None = None,
+    normalize_fn: Callable[[dict], dict] | None = None,
+) -> MultiPassResult:
+    """Run multi-pass reasoning: classify -> challenge -> ground.
+
+    If ``enabled`` is False, runs a single classify pass (backwards compatible).
+    If ``ground_only`` is True, skips challenge and runs classify -> ground
+    (used by reconstitute to add evidence grounding without self-critique).
+    """
+    from ..pipelines.llm import parse_json_response, trace_llm_call
+    from ..services.protocols import Message
+
+    trace_metadata = dict(trace_metadata or {})
+    result = MultiPassResult(final_conclusion={})
+
+    def _normalize(c: dict) -> dict:
+        return normalize_fn(c) if normalize_fn else c
+
+    # Deferred trace: LLM calls store trace data here; _flush_trace()
+    # emits them once pass_changed is known.
+    _pending_trace: dict[str, Any] | None = None  # noqa: F841
+
+    async def _call_llm(
+        messages: list[Message],
+        pass_num: int,
+        pass_type: str,
+        *,
+        mt: int | None = None,
+        pass_changed: bool | None = None,
+    ) -> tuple[dict, int, float]:
+        """Single LLM call with tracing. Returns (conclusion, tokens, duration_ms).
+
+        ``pass_changed`` is written into trace metadata.  For Pass 1 it is
+        always None (not applicable).  For Pass 2/3, the caller should call
+        ``_emit_trace_changed()`` after comparing conclusions to retroactively
+        record the value -- but we also accept it here for the common case
+        where we already know.
+        """
+        pass_meta = {
+            **trace_metadata,
+            "pass_number": pass_num,
+            "pass_type": pass_type,
+            "multi_pass": True,
+        }
+        if pass_changed is not None:
+            pass_meta["pass_changed"] = pass_changed
+        span = f"{span_prefix}.reason" if pass_num == 1 else f"{span_prefix}.reason.{pass_type}"
+
+        t0 = time.monotonic()
+        try:
+            llm_result = await asyncio.to_thread(
+                llm.chat,
+                messages=messages,
+                max_tokens=mt or max_tokens,
+                temperature=temperature,
+                guided_json=json_schema,
+                response_format={"type": "json_object"},
+            )
+            text = llm_result.get("response", "").strip()
+            usage = llm_result.get("usage", {})
+            tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+            trace_meta_resp = llm_result.get("_trace_meta", {})
+            duration_ms = (time.monotonic() - t0) * 1000
+
+            # Store trace data for deferred emission (pass_changed not yet known)
+            nonlocal _pending_trace
+            _pending_trace = {
+                "span": span,
+                "usage": usage,
+                "trace_meta_resp": trace_meta_resp,
+                "duration_ms": duration_ms,
+                "pass_meta": pass_meta,
+                "messages": messages,
+                "text": text,
+            }
+
+            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+            conclusion = parse_json_response(text, recover_truncated=True)
+            return conclusion, tokens, duration_ms
+
+        except Exception as exc:
+            duration_ms = (time.monotonic() - t0) * 1000
+            trace_llm_call(
+                span_name=span,
+                model=getattr(llm, "model", getattr(llm, "model_id", "")),
+                provider=getattr(llm, "name", ""),
+                duration_ms=duration_ms,
+                status="failed",
+                metadata={**pass_meta, "pass_changed": False},
+                error_message=str(exc)[:500],
+                error_type=type(exc).__name__,
+                input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in messages]},
+            )
+            raise
+
+    def _flush_trace(changed: bool | None = None) -> None:
+        """Emit the deferred trace with the now-known pass_changed value."""
+        nonlocal _pending_trace
+        pt = _pending_trace
+        if pt is None:
+            return
+        _pending_trace = None
+        meta = pt["pass_meta"]
+        if changed is not None:
+            meta["pass_changed"] = changed
+        trace_llm_call(
+            span_name=pt["span"],
+            input_tokens=pt["usage"].get("input_tokens", 0),
+            output_tokens=pt["usage"].get("output_tokens", 0),
+            model=getattr(llm, "model", getattr(llm, "model_id", "")),
+            provider=getattr(llm, "name", ""),
+            duration_ms=pt["duration_ms"],
+            metadata=meta,
+            input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in pt["messages"]]},
+            output_data={"response": pt["text"][:2000]} if pt["text"] else None,
+            api_endpoint=pt["trace_meta_resp"].get("api_endpoint"),
+            provider_request_id=pt["trace_meta_resp"].get("provider_request_id"),
+            ttft_ms=pt["trace_meta_resp"].get("ttft_ms"),
+            inference_time_ms=pt["trace_meta_resp"].get("inference_time_ms"),
+            queue_time_ms=pt["trace_meta_resp"].get("queue_time_ms"),
+        )
+
+    # ------------------------------------------------------------------
+    # Pass 1: CLASSIFY
+    # ------------------------------------------------------------------
+    payload_str = json.dumps(evidence_payload, separators=(",", ":"), sort_keys=True, default=str)
+    p1_messages = [
+        Message(role="system", content=system_prompt),
+        Message(role="user", content=payload_str),
+    ]
+    p1_conclusion, p1_tokens, p1_duration = await _call_llm(p1_messages, 1, "classify")
+    _flush_trace(changed=False)  # Pass 1 never "changes"
+    p1_conclusion = _normalize(p1_conclusion)
+
+    result.passes.append(PassResult(
+        pass_number=1, pass_type="classify",
+        conclusion=p1_conclusion, tokens_used=p1_tokens,
+        duration_ms=p1_duration, changed=False,
+    ))
+    result.total_tokens += p1_tokens
+    result.total_duration_ms += p1_duration
+    result.passes_executed = 1
+    result.final_conclusion = p1_conclusion
+
+    if not enabled:
+        return result
+
+    raw_evidence = evidence_payload.get("evidence", evidence_payload)
+
+    # ------------------------------------------------------------------
+    # ground_only mode: skip challenge, go straight to ground (used by
+    # reconstitute to add evidence grounding without self-critique).
+    # ------------------------------------------------------------------
+    if ground_only:
+        return await _run_ground_pass(
+            result, p1_conclusion, raw_evidence, system_prompt,
+            _call_llm, _flush_trace, _normalize, max_tokens, 2,
+        )
+
+    # ------------------------------------------------------------------
+    # Pass 2: CHALLENGE
+    # ------------------------------------------------------------------
+    p1_confidence = p1_conclusion.get("confidence", 0.5)
+    challenge_attempted = False
+    if p1_confidence <= challenge_confidence_floor:
+        logger.info(
+            "Skipping challenge pass: confidence %.2f <= floor %.2f",
+            p1_confidence, challenge_confidence_floor,
+        )
+    else:
+        contradictions = _find_contradicting_evidence(p1_conclusion, raw_evidence)
+        if not contradictions:
+            logger.info("Skipping challenge pass: no contradictions found")
+        else:
+            challenge_attempted = True
+            challenge_prompt = _CHALLENGE_PROMPT.format(
+                conclusion_json=json.dumps(p1_conclusion, indent=2, default=str),
+                contradictions="\n".join(f"- {c}" for c in contradictions),
+            )
+            p2_messages = [
+                Message(role="system", content=system_prompt),
+                Message(role="user", content=payload_str),
+                Message(role="assistant", content=json.dumps(p1_conclusion, default=str)),
+                Message(role="user", content=challenge_prompt),
+            ]
+            p2_conclusion, p2_tokens, p2_duration = await _call_llm(p2_messages, 2, "challenge", mt=min(max_tokens, 2048))
+            p2_conclusion = _normalize(p2_conclusion)
+
+            p2_archetype_changed = p2_conclusion.get("archetype") != p1_conclusion.get("archetype")
+            p2_confidence_delta = abs(
+                p2_conclusion.get("confidence", 0.5) - p1_conclusion.get("confidence", 0.5)
+            )
+            p2_changed = p2_archetype_changed or p2_confidence_delta > ground_change_threshold
+            _flush_trace(changed=p2_changed)
+
+            result.passes.append(PassResult(
+                pass_number=2, pass_type="challenge",
+                conclusion=p2_conclusion, tokens_used=p2_tokens,
+                duration_ms=p2_duration, changed=p2_changed,
+            ))
+            result.total_tokens += p2_tokens
+            result.total_duration_ms += p2_duration
+            result.passes_executed = 2
+            result.final_conclusion = p2_conclusion
+
+            logger.info(
+                "Challenge pass: archetype %s->%s, confidence %.2f->%.2f, changed=%s",
+                p1_conclusion.get("archetype"), p2_conclusion.get("archetype"),
+                p1_conclusion.get("confidence", 0), p2_conclusion.get("confidence", 0),
+                p2_changed,
+            )
+
+    # ------------------------------------------------------------------
+    # Pass 3: GROUND -- always runs when challenge was attempted, so
+    # downstream consumers always get evidence-grounded key_signals.
+    # Also runs as standalone when ground_only=True (handled above).
+    # ------------------------------------------------------------------
+    if not challenge_attempted:
+        return result
+
+    pre_ground = result.final_conclusion
+    pass_num = result.passes_executed + 1
+    return await _run_ground_pass(
+        result, pre_ground, raw_evidence, system_prompt,
+        _call_llm, _flush_trace, _normalize, max_tokens, pass_num,
+    )
+
+
+async def _run_ground_pass(
+    result: MultiPassResult,
+    pre_ground_conclusion: dict[str, Any],
+    raw_evidence: dict[str, Any],
+    system_prompt: str,
+    _call_llm: Any,
+    _flush_trace: Any,
+    _normalize: Any,
+    max_tokens: int,
+    pass_num: int,
+) -> MultiPassResult:
+    """Execute the grounding pass and update the result."""
+    from ..services.protocols import Message
+
+    evidence_fields_str = "\n".join(
+        f"- {k}: {json.dumps(v, default=str)[:150]}"
+        for k, v in raw_evidence.items()
+    )
+    ground_prompt = _GROUND_PROMPT.format(
+        conclusion_json=json.dumps(pre_ground_conclusion, indent=2, default=str),
+        evidence_fields=evidence_fields_str,
+    )
+    pg_messages = [
+        Message(role="system", content=system_prompt),
+        Message(role="user", content=ground_prompt),
+    ]
+    pg_conclusion, pg_tokens, pg_duration = await _call_llm(pg_messages, pass_num, "ground", mt=min(max_tokens, 2048))
+    pg_conclusion = _normalize(pg_conclusion)
+
+    # Safety: if grounding removed all signals, force low confidence
+    if not pg_conclusion.get("key_signals"):
+        pg_conclusion["confidence"] = 0.3
+        pg_conclusion["archetype"] = "mixed"
+        pg_conclusion = _normalize(pg_conclusion)
+
+    pg_changed = pg_conclusion.get("archetype") != pre_ground_conclusion.get("archetype")
+    _flush_trace(changed=pg_changed)
+
+    result.passes.append(PassResult(
+        pass_number=pass_num, pass_type="ground",
+        conclusion=pg_conclusion, tokens_used=pg_tokens,
+        duration_ms=pg_duration, changed=pg_changed,
+    ))
+    result.total_tokens += pg_tokens
+    result.total_duration_ms += pg_duration
+    result.passes_executed = pass_num
+    result.final_conclusion = pg_conclusion
+
+    logger.info(
+        "Ground pass: archetype %s, confidence %.2f, %d signals grounded",
+        pg_conclusion.get("archetype"),
+        pg_conclusion.get("confidence", 0),
+        len(pg_conclusion.get("key_signals", [])),
+    )
+
+    return result

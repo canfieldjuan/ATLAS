@@ -33,7 +33,9 @@ async def get_vendor_history(
             SELECT vendor_name, snapshot_date, total_reviews, churn_intent,
                    churn_density, avg_urgency, positive_review_pct, recommend_ratio,
                    top_pain, top_competitor, pain_count, competitor_count,
-                   displacement_edge_count, high_intent_company_count
+                   displacement_edge_count, high_intent_company_count,
+                   pressure_score, dm_churn_rate, price_complaint_rate,
+                   archetype, archetype_confidence
             FROM b2b_vendor_snapshots
             WHERE vendor_name ILIKE '%' || $1 || '%'
               AND snapshot_date >= CURRENT_DATE - $2::int
@@ -60,6 +62,11 @@ async def get_vendor_history(
                 "competitor_count": r["competitor_count"],
                 "displacement_edge_count": r["displacement_edge_count"],
                 "high_intent_company_count": r["high_intent_company_count"],
+                "pressure_score": float(r["pressure_score"]) if r["pressure_score"] is not None else None,
+                "dm_churn_rate": float(r["dm_churn_rate"]) if r["dm_churn_rate"] is not None else None,
+                "price_complaint_rate": float(r["price_complaint_rate"]) if r["price_complaint_rate"] is not None else None,
+                "archetype": r["archetype"],
+                "archetype_confidence": float(r["archetype_confidence"]) if r["archetype_confidence"] is not None else None,
             })
 
         return json.dumps({"vendor_name": resolved, "snapshots": snapshots, "count": len(snapshots)}, default=str)
@@ -165,7 +172,9 @@ async def compare_vendor_periods(
                 SELECT vendor_name, snapshot_date, total_reviews, churn_intent,
                        churn_density, avg_urgency, positive_review_pct, recommend_ratio,
                        top_pain, top_competitor, pain_count, competitor_count,
-                       displacement_edge_count, high_intent_company_count
+                       displacement_edge_count, high_intent_company_count,
+                       pressure_score, dm_churn_rate, price_complaint_rate,
+                       archetype, archetype_confidence
                 FROM b2b_vendor_snapshots
                 WHERE vendor_name ILIKE '%' || $1 || '%'
                   AND snapshot_date <= CURRENT_DATE - $2::int
@@ -198,6 +207,11 @@ async def compare_vendor_periods(
                 "competitor_count": snap["competitor_count"],
                 "displacement_edge_count": snap["displacement_edge_count"],
                 "high_intent_company_count": snap["high_intent_company_count"],
+                "pressure_score": float(snap["pressure_score"]) if snap["pressure_score"] is not None else None,
+                "dm_churn_rate": float(snap["dm_churn_rate"]) if snap["dm_churn_rate"] is not None else None,
+                "price_complaint_rate": float(snap["price_complaint_rate"]) if snap["price_complaint_rate"] is not None else None,
+                "archetype": snap["archetype"],
+                "archetype_confidence": float(snap["archetype_confidence"]) if snap["archetype_confidence"] is not None else None,
             }
 
         a_fmt = _format(snap_a)

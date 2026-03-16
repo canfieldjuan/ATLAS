@@ -13,6 +13,7 @@ Also integrates:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -787,66 +788,99 @@ class StratifiedReasoner:
         if business:
             trace_metadata["business"] = business
 
-        t0 = time.monotonic()
-        try:
-            result = llm.chat(
-                messages=messages,
-                max_tokens=_rcfg.max_tokens,
-                temperature=_rcfg.temperature,
-                guided_json=REASONING_CONCLUSION_JSON_SCHEMA,
-                response_format={"type": "json_object"},
-            )
-            text = result.get("response", "").strip()
-            usage = result.get("usage", {})
-            tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
-            trace_meta = result.get("_trace_meta", {})
-            duration_ms = (time.monotonic() - t0) * 1000
+        if _rcfg.multi_pass_enabled:
+            from .multi_pass import multi_pass_reason
 
-            trace_llm_call(
-                span_name="reasoning.stratified.reason",
-                input_tokens=usage.get("input_tokens", 0),
-                output_tokens=usage.get("output_tokens", 0),
-                model=getattr(llm, "model", getattr(llm, "model_id", "")),
-                provider=getattr(llm, "name", ""),
-                duration_ms=duration_ms,
-                metadata=trace_metadata,
-                input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in messages]},
-                output_data={"response": text[:2000]} if text else None,
-                api_endpoint=trace_meta.get("api_endpoint"),
-                provider_request_id=trace_meta.get("provider_request_id"),
-                ttft_ms=trace_meta.get("ttft_ms"),
-                inference_time_ms=trace_meta.get("inference_time_ms"),
-                queue_time_ms=trace_meta.get("queue_time_ms"),
-            )
+            try:
+                mp_result = await multi_pass_reason(
+                    llm=llm,
+                    system_prompt=_REASON_SYSTEM_PROMPT,
+                    evidence_payload=payload,
+                    json_schema=REASONING_CONCLUSION_JSON_SCHEMA,
+                    max_tokens=_rcfg.max_tokens,
+                    temperature=_rcfg.temperature,
+                    challenge_confidence_floor=_rcfg.multi_pass_challenge_confidence_floor,
+                    ground_change_threshold=_rcfg.multi_pass_ground_change_threshold,
+                    span_prefix="reasoning.stratified",
+                    trace_metadata=trace_metadata,
+                    normalize_fn=self._normalize_conclusion,
+                )
+                conclusion = mp_result.final_conclusion
+                tokens = mp_result.total_tokens
+                duration_ms = mp_result.total_duration_ms
+            except Exception:
+                logger.exception("Multi-pass reasoning failed for %s", vendor_name)
+                return ReasoningResult(
+                    mode="reason",
+                    conclusion={"error": "llm_failed"},
+                    confidence=0.0,
+                    pattern_sig=pattern_sig,
+                    evidence_hash=evidence_hash,
+                    tokens_used=0,
+                    cached=False,
+                )
+        else:
+            t0 = time.monotonic()
+            try:
+                result = await asyncio.to_thread(
+                    llm.chat,
+                    messages=messages,
+                    max_tokens=_rcfg.max_tokens,
+                    temperature=_rcfg.temperature,
+                    guided_json=REASONING_CONCLUSION_JSON_SCHEMA,
+                    response_format={"type": "json_object"},
+                )
+                text = result.get("response", "").strip()
+                usage = result.get("usage", {})
+                tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+                trace_meta = result.get("_trace_meta", {})
+                duration_ms = (time.monotonic() - t0) * 1000
 
-            # Clean think tags
-            import re
-            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+                trace_llm_call(
+                    span_name="reasoning.stratified.reason",
+                    input_tokens=usage.get("input_tokens", 0),
+                    output_tokens=usage.get("output_tokens", 0),
+                    model=getattr(llm, "model", getattr(llm, "model_id", "")),
+                    provider=getattr(llm, "name", ""),
+                    duration_ms=duration_ms,
+                    metadata=trace_metadata,
+                    input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in messages]},
+                    output_data={"response": text[:2000]} if text else None,
+                    api_endpoint=trace_meta.get("api_endpoint"),
+                    provider_request_id=trace_meta.get("provider_request_id"),
+                    ttft_ms=trace_meta.get("ttft_ms"),
+                    inference_time_ms=trace_meta.get("inference_time_ms"),
+                    queue_time_ms=trace_meta.get("queue_time_ms"),
+                )
 
-            conclusion = parse_json_response(text, recover_truncated=True)
-            conclusion = self._normalize_conclusion(conclusion)
-        except Exception as exc:
-            trace_llm_call(
-                span_name="reasoning.stratified.reason",
-                model=getattr(llm, "model", getattr(llm, "model_id", "")),
-                provider=getattr(llm, "name", ""),
-                duration_ms=(time.monotonic() - t0) * 1000,
-                status="failed",
-                metadata=trace_metadata,
-                error_message=str(exc)[:500],
-                error_type=type(exc).__name__,
-                input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in messages]},
-            )
-            logger.exception("LLM reasoning failed for %s", vendor_name)
-            return ReasoningResult(
-                mode="reason",
-                conclusion={"error": "llm_failed"},
-                confidence=0.0,
-                pattern_sig=pattern_sig,
-                evidence_hash=evidence_hash,
-                tokens_used=0,
-                cached=False,
-            )
+                # Clean think tags
+                import re
+                text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+                conclusion = parse_json_response(text, recover_truncated=True)
+                conclusion = self._normalize_conclusion(conclusion)
+            except Exception as exc:
+                trace_llm_call(
+                    span_name="reasoning.stratified.reason",
+                    model=getattr(llm, "model", getattr(llm, "model_id", "")),
+                    provider=getattr(llm, "name", ""),
+                    duration_ms=(time.monotonic() - t0) * 1000,
+                    status="failed",
+                    metadata=trace_metadata,
+                    error_message=str(exc)[:500],
+                    error_type=type(exc).__name__,
+                    input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in messages]},
+                )
+                logger.exception("LLM reasoning failed for %s", vendor_name)
+                return ReasoningResult(
+                    mode="reason",
+                    conclusion={"error": "llm_failed"},
+                    confidence=0.0,
+                    pattern_sig=pattern_sig,
+                    evidence_hash=evidence_hash,
+                    tokens_used=0,
+                    cached=False,
+                )
 
         confidence = conclusion.get("confidence", 0.5)
         archetype = conclusion.get("archetype", "unknown")

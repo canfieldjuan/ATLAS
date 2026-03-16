@@ -264,13 +264,6 @@ async def reconstitute(
         )
         return old_conclusion, 0
 
-    messages = [
-        Message(role="system", content=_RECONSTITUTE_SYSTEM_PROMPT),
-        Message(
-            role="user",
-            content=json.dumps(delta, separators=(",", ":"), sort_keys=True, default=str),
-        ),
-    ]
     trace_metadata = {
         "workflow": "stratified_reasoning",
         "phase": "stratified_reconstitute",
@@ -286,6 +279,40 @@ async def reconstitute(
     )
     if business:
         trace_metadata["business"] = business
+
+    if _rcfg.multi_pass_enabled:
+        from .multi_pass import multi_pass_reason
+
+        try:
+            mp_result = await multi_pass_reason(
+                llm=llm,
+                system_prompt=_RECONSTITUTE_SYSTEM_PROMPT,
+                evidence_payload=delta,
+                json_schema=REASONING_CONCLUSION_JSON_SCHEMA,
+                max_tokens=min(_rcfg.max_tokens, 1024),
+                temperature=_rcfg.temperature,
+                ground_only=True,  # skip challenge, run classify -> ground
+                span_prefix="reasoning.stratified.reconstitute",
+                trace_metadata=trace_metadata,
+            )
+            logger.info(
+                "Reconstituted %s (multi-pass, diff_ratio=%.0f%%, %d tokens, %.0fms, %d passes)",
+                vendor_name, diff.diff_ratio * 100,
+                mp_result.total_tokens, mp_result.total_duration_ms,
+                mp_result.passes_executed,
+            )
+            return mp_result.final_conclusion, mp_result.total_tokens
+        except Exception:
+            logger.exception("Multi-pass reconstitution failed for %s", vendor_name)
+            return old_conclusion, 0
+
+    messages = [
+        Message(role="system", content=_RECONSTITUTE_SYSTEM_PROMPT),
+        Message(
+            role="user",
+            content=json.dumps(delta, separators=(",", ":"), sort_keys=True, default=str),
+        ),
+    ]
 
     t0 = time.monotonic()
     try:

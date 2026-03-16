@@ -18,6 +18,7 @@ import json
 import logging
 import math
 import re
+import time
 import uuid as _uuid
 from collections import Counter
 from datetime import date, datetime, timezone
@@ -39,6 +40,36 @@ from ...services.vendor_registry import (
 )
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_churn_intelligence")
+
+
+class _TaskBudget:
+    """Track elapsed time against a fixed budget for phase-gated execution.
+
+    For testing, pass ``_clock`` to inject a callable returning monotonic seconds.
+    """
+
+    __slots__ = ("_start", "_total", "_clock")
+
+    def __init__(self, total_seconds: float, *, _clock=time.monotonic):
+        self._clock = _clock
+        self._start = _clock()
+        self._total = total_seconds
+
+    def elapsed(self) -> float:
+        return self._clock() - self._start
+
+    def remaining(self) -> float:
+        return max(0.0, self._total - self.elapsed())
+
+    def phase_allowed(self, phase_name: str, min_seconds: float) -> bool:
+        allowed = self.remaining() >= min_seconds
+        if not allowed:
+            logger.info(
+                "Phase '%s' skipped: %.0fs remaining < %.0fs minimum",
+                phase_name, self.remaining(), min_seconds,
+            )
+        return allowed
+
 
 _EXPLORATORY_OVERVIEW_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -2084,6 +2115,7 @@ def _build_deterministic_battle_cards(
     positive_lookup: dict[str, list[dict]] | None = None,
     department_lookup: dict[str, list[dict]] | None = None,
     usage_duration_lookup: dict[str, list[dict]] | None = None,
+    buyer_auth_lookup: dict[str, dict] | None = None,
     limit: int = 15,
 ) -> list[dict[str, Any]]:
     """Build per-vendor battle cards from aggregated data.
@@ -2098,7 +2130,8 @@ def _build_deterministic_battle_cards(
     # (reuses _build_reason_lookup and _infer_driver_from_reasons from displacement map)
     reason_lookup = _build_reason_lookup(competitor_reasons)
 
-    # Merge multi-category rows per vendor (same pattern as vendor feed builder)
+    # Pick the primary category row per vendor (most reviews) instead of
+    # summing across categories, which inflates totals and averages.
     merged: dict[str, dict[str, Any]] = {}
     for row in vendor_scores:
         vendor = _canonicalize_vendor(row.get("vendor_name") or "")
@@ -2108,31 +2141,20 @@ def _build_deterministic_battle_cards(
         churn = int(row.get("churn_intent") or 0)
         urgency = float(row.get("avg_urgency") or 0)
         category = row.get("product_category") or "Unknown"
-        if vendor not in merged:
+        if vendor not in merged or reviews > merged[vendor]["total_reviews"]:
             merged[vendor] = {
                 "total_reviews": reviews,
                 "churn_intent": churn,
-                "urgency_weighted_sum": urgency * reviews,
+                "avg_urgency": urgency,
                 "category": category,
-                "category_reviews": reviews,
             }
-        else:
-            m = merged[vendor]
-            m["total_reviews"] += reviews
-            m["churn_intent"] += churn
-            m["urgency_weighted_sum"] += urgency * reviews
-            if reviews > m["category_reviews"]:
-                m["category"] = category
-                m["category_reviews"] = reviews
 
     cards: list[dict[str, Any]] = []
     for vendor, m in merged.items():
         total_reviews = m["total_reviews"]
         churn_intent = m["churn_intent"]
         churn_density = round(churn_intent * 100.0 / total_reviews, 1) if total_reviews else 0.0
-        avg_urgency = round(
-            m["urgency_weighted_sum"] / total_reviews, 1
-        ) if total_reviews else 0.0
+        avg_urgency = round(m["avg_urgency"], 1)
         dm_rate = float(dm_lookup.get(vendor, 0))
         price_rate = float(price_lookup.get(vendor, 0))
 
@@ -2216,15 +2238,34 @@ def _build_deterministic_battle_cards(
         )
         weaknesses = weaknesses[:5]
 
-        # -- Section 2: Customer Pain Quotes --
+        # -- Section 2: Customer Pain Quotes (deduplicated by review + reviewer) --
         quotes_raw = sorted(
             quote_lookup.get(vendor, []),
             key=_battle_card_quote_sort_key,
             reverse=True,
         )
         pain_quotes: list[dict[str, Any]] = []
-        for q in quotes_raw[:5]:
+        seen_review_ids: set[str] = set()
+        seen_reviewers: set[str] = set()
+        for q in quotes_raw:
+            if len(pain_quotes) >= 5:
+                break
             if isinstance(q, dict):
+                # Dedupe by review_id (exact same review)
+                rid = q.get("review_id", "")
+                if rid and rid in seen_review_ids:
+                    continue
+                # Dedupe by reviewer identity (same person, different reviews)
+                reviewer_key = (
+                    f"{(q.get('company') or '').lower().strip()}"
+                    f":{(q.get('title') or '').lower().strip()}"
+                )
+                if reviewer_key != ":" and reviewer_key in seen_reviewers:
+                    continue
+                if rid:
+                    seen_review_ids.add(rid)
+                if reviewer_key != ":":
+                    seen_reviewers.add(reviewer_key)
                 pain_quotes.append({
                     "quote": q.get("quote", ""),
                     "urgency": q.get("urgency", 0),
@@ -2279,10 +2320,12 @@ def _build_deterministic_battle_cards(
 
         # -- Section 4: Objection Data (raw metrics for LLM) --
         sentiment_counts = sentiment_lookup.get(vendor, {})
-        if total_reviews < 10 or not sentiment_counts:
+        # Exclude "unknown" to find the dominant *known* sentiment direction
+        known_sentiment = {k: v for k, v in sentiment_counts.items() if k != "unknown"}
+        if total_reviews < 10 or not known_sentiment:
             sentiment_dir = "insufficient_data"
         else:
-            sentiment_dir = max(sentiment_counts.items(), key=lambda x: x[1])[0]
+            sentiment_dir = max(known_sentiment.items(), key=lambda x: x[1])[0]
 
         top_gaps = [
             {"feature": g.get("feature", ""), "mentions": g.get("mentions", 0)}
@@ -2300,6 +2343,18 @@ def _build_deterministic_battle_cards(
             "budget_context": budget_lookup.get(vendor, {}),
         }
 
+        # -- Section 5: High-intent companies --
+        hi_companies = company_lookup.get(vendor, [])[:5]
+
+        # -- Section 6: Integration stack --
+        integrations = (product_profile_lookup.get(vendor, {}).get("top_integrations") or [])[:8]
+
+        # -- Section 7: Buyer authority summary --
+        buyer_authority = (buyer_auth_lookup or {}).get(vendor, {})
+
+        # -- Budget: prefer median for "typical" size --
+        budget_ctx = budget_lookup.get(vendor, {})
+
         card_entry = {
             "vendor": vendor,
             "category": m.get("category") or "",
@@ -2310,6 +2365,9 @@ def _build_deterministic_battle_cards(
             "customer_pain_quotes": pain_quotes,
             "competitor_differentiators": differentiators,
             "objection_data": objection_data,
+            "high_intent_companies": hi_companies,
+            "integration_stack": integrations,
+            "buyer_authority": buyer_authority or None,
             # Populated by LLM pass in run():
             "objection_handlers": [],
             "recommended_plays": [],
@@ -3172,6 +3230,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not pool.is_initialized:
         return {"_skip_synthesis": "DB not ready"}
 
+    budget = _TaskBudget(cfg.intelligence_budget_seconds)
+
     # Warm vendor registry cache so sync resolve_vendor_name_cached() calls
     # throughout this function hit the DB-backed cache rather than bootstrap.
     await _warm_vendor_cache()
@@ -3381,7 +3441,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
         temporal_engine = TemporalEngine(pool)
         temporal_summaries = []
-        for vs in vendor_scores[:cfg.stratified_reasoning_vendor_limit]:
+        _temporal_vendors = vendor_scores[:cfg.stratified_reasoning_vendor_limit] if budget.phase_allowed("temporal", 30) else []
+        for vs in _temporal_vendors:
             vname = vs["vendor_name"]
             try:
                 te = await temporal_engine.analyze_vendor(vname)
@@ -3418,7 +3479,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # When stratified_reasoning_enabled, builds rich evidence dicts first.
     reasoning_lookup: dict[str, dict] = {}
     evidence_for_reasoning: dict[str, dict[str, Any]] | None = None
-    if cfg.stratified_reasoning_enabled:
+    if cfg.stratified_reasoning_enabled and budget.phase_allowed("reasoning", cfg.intelligence_phase_min_reasoning):
         _pre_pain = _build_pain_lookup(pain_dist)
         _pre_comp = _build_competitor_lookup(competitive_disp)
         _pre_fg = _build_feature_gap_lookup(feature_gaps)
@@ -3431,7 +3492,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _pre_uc = _build_use_case_lookup(use_case_dist)
 
         evidence_for_reasoning = {}
-        for vs in vendor_scores:
+        _reasoning_cap = cfg.stratified_reasoning_vendor_cap
+        for vs in vendor_scores[:_reasoning_cap]:
             vname = _canonicalize_vendor(vs.get("vendor_name") or "")
             if vname:
                 evidence_for_reasoning[vname] = _build_vendor_evidence(
@@ -3465,8 +3527,19 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             total_tokens = 0
             mode_counts: dict[str, int] = {}
 
+            # Reserve budget for post-reasoning phases (exploratory + scorecard + exec + battle cards)
+            _post_reasoning_reserve = (
+                cfg.intelligence_phase_min_exploratory
+                + cfg.intelligence_phase_min_scorecard
+                + cfg.intelligence_phase_min_exec_summary
+                + cfg.intelligence_phase_min_battle_card_copy
+            )
+
             async def _analyze_one(vs: dict[str, Any]) -> None:
                 nonlocal total_tokens
+                # Stop reasoning if remaining budget is too low for later phases
+                if budget.remaining() < _post_reasoning_reserve:
+                    return
                 vname = _canonicalize_vendor(vs.get("vendor_name") or "")
                 if not vname:
                     return
@@ -3502,11 +3575,17 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         logger.debug("Stratified reasoning failed for %s", vname, exc_info=True)
 
             # Reason over ALL vendors -- the exploratory_vendor_limit only
-            # constrains the LLM payload size, not per-vendor reasoning.
-            # Concurrency is bounded by the semaphore above.
+            # Cap reasoning to top N vendors by urgency (vendor_scores is
+            # already ordered by avg urgency DESC from the SQL query).
+            reasoning_vendors = vendor_scores[:cfg.stratified_reasoning_vendor_cap]
+            logger.info(
+                "Reasoning over %d/%d vendors (cap=%d)",
+                len(reasoning_vendors), len(vendor_scores),
+                cfg.stratified_reasoning_vendor_cap,
+            )
             await asyncio.gather(*[
                 _analyze_one(vs)
-                for vs in vendor_scores
+                for vs in reasoning_vendors
             ])
 
             if reasoning_lookup:
@@ -3544,7 +3623,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     # --- Cross-vendor ecosystem analysis (category-level intelligence) ---
     ecosystem_evidence: dict[str, Any] = {}
-    if cfg.stratified_reasoning_enabled and reasoning_lookup:
+    if cfg.stratified_reasoning_enabled and reasoning_lookup and budget.phase_allowed("ecosystem", 20):
         try:
             from atlas_brain.reasoning.ecosystem import EcosystemAnalyzer
             eco = EcosystemAnalyzer(pool)
@@ -3587,7 +3666,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             payload_size,
             cfg.intelligence_exploratory_char_budget,
         )
-    elif cfg.intelligence_exploratory_enabled:
+    elif cfg.intelligence_exploratory_enabled and budget.phase_allowed("exploratory", cfg.intelligence_phase_min_exploratory):
         try:
             analysis = await asyncio.wait_for(
                 asyncio.to_thread(
@@ -3780,11 +3859,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # as expert_take (skip per-vendor LLM call -- saves ~300 tokens * N vendors).
     scorecard_llm_failures = 0
     scorecard_reasoning_reused = 0
+    _scorecard_budget_ok = budget.phase_allowed("scorecard_narrative", cfg.intelligence_phase_min_scorecard)
     for sc in deterministic_vendor_scorecards:
         reasoning_summary = sc.get("reasoning_summary", "")
         if reasoning_summary and cfg.stratified_reasoning_enabled:
             sc["expert_take"] = reasoning_summary
             scorecard_reasoning_reused += 1
+            continue
+        if not _scorecard_budget_ok or budget.remaining() < 20:
+            sc["expert_take"] = reasoning_summary or ""
             continue
         try:
             llm_input = {k: sc[k] for k in (
@@ -3843,7 +3926,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             report_type=_rt,
         )
     # LLM-synthesized executive summaries (when enabled, upgrades deterministic)
-    if cfg.executive_summary_llm_enabled and reasoning_lookup:
+    if cfg.executive_summary_llm_enabled and reasoning_lookup and budget.phase_allowed("exec_summary", cfg.intelligence_phase_min_exec_summary):
         _reasoning_digest = [
             {
                 "vendor": vname,
@@ -3918,6 +4001,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         positive_lookup=positive_lookup,
         department_lookup=department_lookup,
         usage_duration_lookup=usage_duration_lookup,
+        buyer_auth_lookup=_pre_ba,
     )
     logger.info("Built %d battle cards", len(deterministic_battle_cards))
 
@@ -3933,7 +4017,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     "displacement_intensity": eco.get("displacement_intensity"),
                 }
 
-    # LLM pass: generate sales copy for each battle card (with caching)
+    # LLM pass: generate sales copy for each battle card (parallel, with caching)
     from ...reasoning.semantic_cache import SemanticCache, CacheEntry, compute_evidence_hash
 
     _bc_cache = SemanticCache(pool)
@@ -3944,86 +4028,104 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "landmine_questions", "objection_handlers", "competitive_landscape",
         "talk_track", "recommended_plays",
     )
-    for card in deterministic_battle_cards:
-        card_hash = compute_evidence_hash({
-            "vendor": card.get("vendor"),
-            "churn_pressure_score": card.get("churn_pressure_score"),
-            "vendor_weaknesses": card.get("vendor_weaknesses"),
-            "customer_pain_quotes": card.get("customer_pain_quotes"),
-            "competitor_differentiators": card.get("competitor_differentiators"),
-            "objection_data": card.get("objection_data"),
-        })
-        pattern_sig = f"battle_card:{card.get('vendor')}:{card_hash}"
 
-        cached = await _bc_cache.lookup(pattern_sig)
-        if cached:
-            cached_errors = _validate_battle_card_sales_copy(card, cached.conclusion)
-            if cached_errors:
-                await _bc_cache.invalidate(
-                    pattern_sig,
-                    reason="invalid battle card sales copy",
-                )
-            else:
-                for _cf in cached.conclusion:
-                    card[_cf] = cached.conclusion[_cf]
-                await _bc_cache.validate(pattern_sig)
-                battle_card_cache_hits += 1
-                continue
+    if not budget.phase_allowed("battle_card_copy", cfg.intelligence_phase_min_battle_card_copy):
+        logger.info("Skipping battle card LLM enrichment (budget exhausted)")
+    else:
+        bc_sem = asyncio.Semaphore(cfg.battle_card_llm_concurrency)
 
-        try:
-            sales_copy = await asyncio.wait_for(
-                asyncio.to_thread(
-                    call_llm_with_skill,
-                    "digest/battle_card_sales_copy",
-                    json.dumps(card, default=str),
-                    max_tokens=3000, temperature=0.5,
-                    response_format={"type": "json_object"},
-                    workload=_llm_workload,
-                    span_name="b2b.churn_intelligence.battle_card_sales_copy",
-                    trace_metadata=_build_llm_trace_metadata(
-                        "battle_card_sales_copy",
-                        report_type="battle_card",
+        async def _enrich_one_card(card: dict[str, Any]) -> None:
+            nonlocal battle_card_llm_failures, battle_card_cache_hits
+            if budget.remaining() < 30:
+                return
+
+            card_hash = compute_evidence_hash({
+                "vendor": card.get("vendor"),
+                "churn_pressure_score": card.get("churn_pressure_score"),
+                "vendor_weaknesses": card.get("vendor_weaknesses"),
+                "customer_pain_quotes": card.get("customer_pain_quotes"),
+                "competitor_differentiators": card.get("competitor_differentiators"),
+                "objection_data": card.get("objection_data"),
+            })
+            pattern_sig = f"battle_card:{card.get('vendor')}:{card_hash}"
+
+            cached = await _bc_cache.lookup(pattern_sig)
+            if cached:
+                cached_errors = _validate_battle_card_sales_copy(card, cached.conclusion)
+                if cached_errors:
+                    await _bc_cache.invalidate(
+                        pattern_sig,
+                        reason="invalid battle card sales copy",
+                    )
+                else:
+                    for _cf in cached.conclusion:
+                        card[_cf] = cached.conclusion[_cf]
+                    await _bc_cache.validate(pattern_sig)
+                    battle_card_cache_hits += 1
+                    return
+
+            async with bc_sem:
+                if budget.remaining() < 30:
+                    return
+                try:
+                    sales_copy = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            call_llm_with_skill,
+                            "digest/battle_card_sales_copy",
+                            json.dumps(card, default=str),
+                            max_tokens=3000, temperature=0.5,
+                            response_format={"type": "json_object"},
+                            workload=_llm_workload,
+                            span_name="b2b.churn_intelligence.battle_card_sales_copy",
+                            trace_metadata=_build_llm_trace_metadata(
+                                "battle_card_sales_copy",
+                                report_type="battle_card",
+                                vendor_name=card.get("vendor"),
+                            ),
+                        ),
+                        timeout=90,
+                    )
+                    parsed_copy = parse_json_response(sales_copy)
+                    copy_errors = _validate_battle_card_sales_copy(card, parsed_copy)
+                    if copy_errors:
+                        battle_card_llm_failures += 1
+                        logger.warning(
+                            "Battle card sales copy rejected for %s: %s",
+                            card.get("vendor"),
+                            "; ".join(copy_errors[:3]),
+                        )
+                        return
+                    for _f in _bc_llm_fields:
+                        if _f in parsed_copy:
+                            card[_f] = parsed_copy[_f]
+                except Exception:
+                    battle_card_llm_failures += 1
+                    logger.warning(
+                        "Battle card LLM failed for %s, using data-only card",
+                        card.get("vendor"),
+                    )
+                    return
+
+                try:
+                    await _bc_cache.store(CacheEntry(
+                        pattern_sig=pattern_sig,
+                        pattern_class="battle_card_sales_copy",
+                        conclusion={_f: card[_f] for _f in _bc_llm_fields if _f in card},
+                        confidence=0.95,
+                        evidence_hash=card_hash,
                         vendor_name=card.get("vendor"),
-                    ),
-                ),
-                timeout=90,
-            )
-            parsed_copy = parse_json_response(sales_copy)
-            copy_errors = _validate_battle_card_sales_copy(card, parsed_copy)
-            if copy_errors:
-                battle_card_llm_failures += 1
-                logger.warning(
-                    "Battle card sales copy rejected for %s: %s",
-                    card.get("vendor"),
-                    "; ".join(copy_errors[:3]),
-                )
-                continue
-            for _f in _bc_llm_fields:
-                if _f in parsed_copy:
-                    card[_f] = parsed_copy[_f]
-        except Exception:
-            battle_card_llm_failures += 1
-            logger.warning(
-                "Battle card LLM failed for %s, using data-only card",
-                card.get("vendor"),
-            )
-            continue
+                        conclusion_type="sales_copy",
+                    ))
+                except Exception:
+                    logger.warning(
+                        "Failed to cache battle card for %s",
+                        card.get("vendor"),
+                    )
 
-        try:
-            await _bc_cache.store(CacheEntry(
-                pattern_sig=pattern_sig,
-                pattern_class="battle_card_sales_copy",
-                conclusion={_f: card[_f] for _f in _bc_llm_fields if _f in card},
-                confidence=0.95,
-                evidence_hash=card_hash,
-                vendor_name=card.get("vendor"),
-                conclusion_type="sales_copy",
-            ))
-        except Exception:
-            logger.warning(
-                "Failed to cache battle card for %s",
-                card.get("vendor"),
-            )
+        await asyncio.gather(*[
+            _enrich_one_card(card) for card in deterministic_battle_cards
+        ])
+
     logger.info(
         "Battle card LLM: %d cache hits, %d generated, %d failed (of %d)",
         battle_card_cache_hits,
@@ -4528,6 +4630,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "snapshots_persisted": snapshots_persisted,
         "change_events_detected": change_events_detected,
         "article_correlations": article_correlations,
+        "elapsed_seconds": round(budget.elapsed(), 1),
     }
     tracer.end_span(
         span,

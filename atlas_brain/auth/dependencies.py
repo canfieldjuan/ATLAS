@@ -23,6 +23,7 @@ class AuthUser:
     role: str        # owner | admin | member
     product: str = "consumer"  # consumer | b2b_retention | b2b_challenger
     trial_ends_at: Optional[datetime] = field(default=None, repr=False)
+    is_admin: bool = False
 
 
 def _synthetic_admin() -> AuthUser:
@@ -74,7 +75,8 @@ async def require_auth(request: Request) -> AuthUser:
     pool = get_db_pool()
     row = await pool.fetchrow(
         """
-        SELECT sa.plan, sa.plan_status, sa.product, sa.trial_ends_at, su.role
+        SELECT sa.plan, sa.plan_status, sa.product, sa.trial_ends_at,
+               su.role, COALESCE(su.is_admin, FALSE) AS is_admin
         FROM saas_users su
         JOIN saas_accounts sa ON sa.id = su.account_id
         WHERE su.id = $1 AND su.is_active = TRUE
@@ -103,6 +105,7 @@ async def require_auth(request: Request) -> AuthUser:
         role=row["role"],
         product=row["product"] or "consumer",
         trial_ends_at=trial_ends,
+        is_admin=bool(row["is_admin"]),
     )
 
 
@@ -139,7 +142,8 @@ async def optional_auth(request: Request) -> Optional[AuthUser]:
     try:
         row = await pool.fetchrow(
             """
-            SELECT sa.plan, sa.plan_status, sa.product, sa.trial_ends_at, su.role
+            SELECT sa.plan, sa.plan_status, sa.product, sa.trial_ends_at,
+                   su.role, COALESCE(su.is_admin, FALSE) AS is_admin
             FROM saas_users su
             JOIN saas_accounts sa ON sa.id = su.account_id
             WHERE su.id = $1 AND su.is_active = TRUE
@@ -162,6 +166,7 @@ async def optional_auth(request: Request) -> Optional[AuthUser]:
         role=row["role"],
         product=row["product"] or "consumer",
         trial_ends_at=row["trial_ends_at"],
+        is_admin=bool(row["is_admin"]),
     )
 
 

@@ -51,6 +51,265 @@ def _get_enrichment_llm():
         return None
 
 
+# ------------------------------------------------------------------
+# Hybrid enrichment: cached LLM instances + connection pool
+# ------------------------------------------------------------------
+_tier2_llm = None
+
+
+def _get_tier2_llm(cfg):
+    """Get or create a cached OpenRouter LLM for Tier 2 hybrid extraction."""
+    global _tier2_llm
+    target_model = cfg.enrichment_tier2_model
+    if not target_model:
+        return None
+
+    if _tier2_llm is not None and getattr(_tier2_llm, "model", "") == target_model:
+        return _tier2_llm
+
+    import os
+    or_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not or_key:
+        return None
+
+    try:
+        from ...services.llm.openrouter import OpenRouterLLM
+        _tier2_llm = OpenRouterLLM(model=target_model, api_key=or_key)
+        _tier2_llm.load()
+        logger.info("Dedicated Tier 2 LLM ready: %s", target_model)
+        return _tier2_llm
+    except Exception as e:
+        logger.warning("Failed to create Tier 2 LLM: %s", e)
+        return None
+
+
+_tier1_client = None
+
+
+def _get_tier1_client(cfg):
+    """Get or create a pooled httpx.AsyncClient for Tier 1 vLLM calls."""
+    global _tier1_client
+    if _tier1_client is not None and not _tier1_client.is_closed:
+        return _tier1_client
+
+    import httpx
+
+    _tier1_client = httpx.AsyncClient(
+        base_url=cfg.enrichment_tier1_vllm_url,
+        timeout=httpx.Timeout(60.0, connect=10.0),
+        limits=httpx.Limits(max_connections=30, max_keepalive_connections=15),
+    )
+    return _tier1_client
+
+
+async def _call_vllm_tier1(payload_json: str, cfg, client) -> tuple[dict | None, str | None]:
+    """Tier 1 extraction: deterministic fields via local vLLM.
+
+    Returns (result_dict, model_id) or (None, None) on failure.
+    """
+    from ...skills import get_skill_registry
+
+    skill = get_skill_registry().get("digest/b2b_churn_extraction_tier1")
+    if not skill:
+        logger.warning("Skill 'digest/b2b_churn_extraction_tier1' not found")
+        return None, None
+
+    model_id = cfg.enrichment_tier1_model
+    try:
+        resp = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": cfg.enrichment_tier1_model,
+                "messages": [
+                    {"role": "system", "content": skill.content},
+                    {"role": "user", "content": payload_json},
+                ],
+                "max_tokens": cfg.enrichment_tier1_max_tokens,
+                "temperature": 0.0,
+            },
+        )
+        resp.raise_for_status()
+        text = resp.json()["choices"][0]["message"]["content"].strip()
+        if not text:
+            return None, model_id
+
+        from ...pipelines.llm import clean_llm_output
+        text = clean_llm_output(text)
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed, model_id
+        return None, model_id
+    except json.JSONDecodeError:
+        logger.warning("Tier 1 vLLM returned invalid JSON")
+        return None, model_id
+    except Exception:
+        logger.exception("Tier 1 vLLM call failed")
+        return None, None
+
+
+async def _call_cloud_tier2(row, cfg, truncate_length: int) -> tuple[dict | None, str | None]:
+    """Tier 2 extraction: interpretive fields via cloud LLM (OpenRouter).
+
+    Returns (result_dict, model_id) or (None, None) on failure.
+    """
+    from ...skills import get_skill_registry
+    from ...services.protocols import Message
+    from ...pipelines.llm import clean_llm_output
+
+    skill = get_skill_registry().get("digest/b2b_churn_extraction_tier2")
+    if not skill:
+        logger.warning("Skill 'digest/b2b_churn_extraction_tier2' not found")
+        return None, None
+
+    # Tier 2 must use a cloud model (OpenRouter). Falling back to local would
+    # defeat the purpose -- Tier 1 already covers the local path.
+    llm = _get_tier2_llm(cfg) or _get_enrichment_llm()
+    if llm is None:
+        logger.warning("No cloud LLM available for Tier 2 -- returning None (Tier 1 result will get defaults)")
+        return None, None
+
+    model_id = getattr(llm, "model_id", None) or getattr(llm, "model", None)
+
+    payload = _build_classify_payload(row, truncate_length)
+    messages = [
+        Message(role="system", content=skill.content),
+        Message(role="user", content=json.dumps(payload)),
+    ]
+
+    try:
+        if hasattr(llm, "chat_async"):
+            text = await llm.chat_async(messages=messages, max_tokens=cfg.enrichment_max_tokens, temperature=0.1)
+        else:
+            result = await asyncio.to_thread(
+                llm.chat, messages=messages, max_tokens=cfg.enrichment_max_tokens, temperature=0.1,
+            )
+            text = result.get("response", "").strip()
+
+        if not text:
+            return None, model_id
+        text = clean_llm_output(text)
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed, model_id
+        return None, model_id
+    except json.JSONDecodeError:
+        logger.warning("Tier 2 cloud returned invalid JSON for review %s", row["id"])
+        return None, model_id
+    except Exception:
+        logger.exception("Tier 2 cloud LLM call failed")
+        return None, None
+
+
+def _merge_tier1_tier2(tier1: dict, tier2: dict | None) -> dict:
+    """Merge Tier 1 (deterministic) + Tier 2 (interpretive) into a single 47-field JSONB.
+
+    Tier 1 provides the base. Tier 2 keys are overlaid on top.
+    competitors_mentioned is merged by name (case-insensitive).
+    If tier2 is None (failed), apply safe defaults for Tier 2 fields.
+    """
+    result = dict(tier1)
+
+    if tier2 is None:
+        # Tier 2 failed -- apply minimal defaults so validation passes
+        signals = result.get("churn_signals", {})
+        any_signal = any(signals.get(f) for f in (
+            "intent_to_leave", "actively_evaluating", "migration_in_progress",
+        ))
+        result.setdefault("urgency_score", 5 if any_signal else 3)
+        result.setdefault("pain_category", "other")
+        result.setdefault("pain_categories", [{"category": "other", "severity": "primary"}])
+        result.setdefault("sentiment_trajectory", {"direction": "unknown"})
+        result.setdefault("buyer_authority", {"role_type": "unknown", "buying_stage": "unknown",
+                                              "has_budget_authority": False, "executive_sponsor_mentioned": False})
+        result.setdefault("timeline", {"decision_timeline": "unknown"})
+        result.setdefault("contract_context", {"contract_value_signal": "unknown"})
+        result.setdefault("insider_signals", None)
+        result.setdefault("would_recommend", None)
+        result.setdefault("positive_aspects", [])
+        result.setdefault("feature_gaps", [])
+        # Leave competitors_mentioned as-is from Tier 1 (partial data)
+        for comp in result.get("competitors_mentioned", []):
+            comp.setdefault("evidence_type", "neutral_mention")
+            comp.setdefault("displacement_confidence", "low")
+            comp.setdefault("reason_category", None)
+        return result
+
+    # --- Tier 2 succeeded: overlay interpretive fields ---
+    _TIER2_TOP_LEVEL_KEYS = {
+        "urgency_score", "pain_category", "pain_categories",
+        "sentiment_trajectory", "buyer_authority", "timeline",
+        "contract_context", "insider_signals",
+        "would_recommend", "positive_aspects", "feature_gaps",
+    }
+    for key in _TIER2_TOP_LEVEL_KEYS:
+        if key in tier2:
+            result[key] = tier2[key]
+
+    # Merge competitors_mentioned by name (case-insensitive)
+    tier1_comps = {c["name"].lower(): c for c in result.get("competitors_mentioned", []) if isinstance(c, dict) and "name" in c}
+    tier2_comps = tier2.get("competitors_mentioned", []) or []
+
+    merged_comps = []
+    seen = set()
+    for t2_comp in tier2_comps:
+        if not isinstance(t2_comp, dict) or "name" not in t2_comp:
+            continue
+        key = t2_comp["name"].lower()
+        seen.add(key)
+        base = dict(tier1_comps.get(key, {"name": t2_comp["name"]}))
+        # Overlay Tier 2 fields
+        for field in ("evidence_type", "displacement_confidence", "reason_category"):
+            if field in t2_comp:
+                base[field] = t2_comp[field]
+        # Ensure name comes from Tier 1 if available (preserves original casing)
+        if key in tier1_comps:
+            base["name"] = tier1_comps[key]["name"]
+        merged_comps.append(base)
+
+    # Append Tier 1 competitors not in Tier 2 (with defaults)
+    for key, t1_comp in tier1_comps.items():
+        if key not in seen:
+            t1_comp.setdefault("evidence_type", "neutral_mention")
+            t1_comp.setdefault("displacement_confidence", "low")
+            t1_comp.setdefault("reason_category", None)
+            merged_comps.append(t1_comp)
+
+    result["competitors_mentioned"] = merged_comps
+    return result
+
+
+async def _enrich_hybrid(row, cfg, truncate_length: int) -> tuple[dict | None, dict | None, str | None]:
+    """Run Tier 1 + Tier 2 extraction in parallel.
+
+    Returns (tier1_result, tier2_result, tier2_model_id).
+    """
+    payload = _build_classify_payload(row, truncate_length)
+    payload_json = json.dumps(payload)
+
+    client = _get_tier1_client(cfg)
+
+    tier1_task = _call_vllm_tier1(payload_json, cfg, client)
+    tier2_task = _call_cloud_tier2(row, cfg, truncate_length)
+
+    results = await asyncio.gather(tier1_task, tier2_task, return_exceptions=True)
+
+    # Unpack Tier 1
+    if isinstance(results[0], Exception):
+        logger.error("Tier 1 raised: %s", results[0])
+        tier1, tier1_model = None, None
+    else:
+        tier1, tier1_model = results[0]
+
+    # Unpack Tier 2
+    if isinstance(results[1], Exception):
+        logger.error("Tier 2 raised: %s", results[1])
+        tier2, tier2_model = None, None
+    else:
+        tier2, tier2_model = results[1]
+
+    return tier1, tier2, tier2_model
+
+
 async def _notify_high_urgency(
     vendor_name: str,
     reviewer_company: str,
@@ -370,10 +629,26 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
                 return False
 
         # Stage 2: Full 47-field extraction (only for reviews that passed triage)
-        result, model_id = await asyncio.wait_for(
-            _classify_review_async(row, local_only, max_tokens, truncate_length),
-            timeout=120,
-        )
+        cfg = settings.b2b_churn
+        if cfg.enrichment_hybrid_enabled:
+            tier1, tier2, tier2_model_id = await asyncio.wait_for(
+                _enrich_hybrid(row, cfg, truncate_length),
+                timeout=120,
+            )
+            if tier1 is not None:
+                result = _merge_tier1_tier2(tier1, tier2)
+                model_id = f"hybrid:{cfg.enrichment_tier1_model}+{tier2_model_id or 'none'}"
+            else:
+                # Tier 1 failed -- fall back to single-pass
+                result, model_id = await asyncio.wait_for(
+                    _classify_review_async(row, local_only, max_tokens, truncate_length),
+                    timeout=120,
+                )
+        else:
+            result, model_id = await asyncio.wait_for(
+                _classify_review_async(row, local_only, max_tokens, truncate_length),
+                timeout=120,
+            )
 
         if result and _validate_enrichment(result):
             await pool.execute(

@@ -693,3 +693,418 @@ class TestSoramAlignmentWeights:
         for archetype, weights in _ARCHETYPE_SORAM_WEIGHTS.items():
             assert all(ch in valid_channels for ch in weights), f"{archetype} has invalid channel"
             assert all(0 < w <= 1.0 for w in weights.values()), f"{archetype} has invalid weight"
+
+
+# ---------------------------------------------------------------------------
+# Battle card data fixes
+# ---------------------------------------------------------------------------
+
+
+class TestBattleCardPrimaryCategorySelection:
+    """Verify cross-category aggregation is replaced by primary category selection."""
+
+    def test_picks_largest_category(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            _build_deterministic_battle_cards,
+        )
+
+        vendor_scores = [
+            {"vendor_name": "Acme", "product_category": "CRM", "total_reviews": 100,
+             "churn_intent": 30, "avg_urgency": 5.5},
+            {"vendor_name": "Acme", "product_category": "Helpdesk", "total_reviews": 50,
+             "churn_intent": 20, "avg_urgency": 7.0},
+        ]
+        cards = _build_deterministic_battle_cards(
+            vendor_scores,
+            pain_lookup={}, competitor_lookup={}, feature_gap_lookup={},
+            quote_lookup={}, price_lookup={"Acme": 0.1}, budget_lookup={},
+            sentiment_lookup={}, dm_lookup={"Acme": 0.4}, company_lookup={},
+            product_profile_lookup={}, competitive_disp=[], competitor_reasons=[],
+            limit=10,
+        )
+        assert len(cards) == 1
+        card = cards[0]
+        # Should use the CRM row (100 reviews), not sum (150)
+        assert card["total_reviews"] == 100
+        assert card["category"] == "CRM"
+        # Urgency should be 5.5 from CRM, not weighted average
+        assert card["objection_data"]["avg_urgency"] == 5.5
+
+    def test_no_phantom_totals(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            _build_deterministic_battle_cards,
+        )
+
+        vendor_scores = [
+            {"vendor_name": "Beta", "product_category": "A", "total_reviews": 200,
+             "churn_intent": 60, "avg_urgency": 6.0},
+            {"vendor_name": "Beta", "product_category": "B", "total_reviews": 150,
+             "churn_intent": 45, "avg_urgency": 5.0},
+        ]
+        cards = _build_deterministic_battle_cards(
+            vendor_scores,
+            pain_lookup={}, competitor_lookup={}, feature_gap_lookup={},
+            quote_lookup={}, price_lookup={"Beta": 0.1}, budget_lookup={},
+            sentiment_lookup={}, dm_lookup={"Beta": 0.3}, company_lookup={},
+            product_profile_lookup={}, competitive_disp=[], competitor_reasons=[],
+            limit=10,
+        )
+        assert len(cards) == 1
+        # Must NOT be 350 (200+150)
+        assert cards[0]["total_reviews"] == 200
+
+
+class TestBattleCardQuoteDedupe:
+    """Verify quotes are deduplicated by review_id AND reviewer identity."""
+
+    def test_same_review_id_deduped(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            _build_deterministic_battle_cards,
+        )
+
+        quotes = [
+            {"quote": "Quote A", "urgency": 8, "review_id": "r1",
+             "company": "X", "title": "VP"},
+            {"quote": "Quote B", "urgency": 7, "review_id": "r1",
+             "company": "X", "title": "VP"},
+            {"quote": "Quote C", "urgency": 6, "review_id": "r2",
+             "company": "Y", "title": "CTO"},
+        ]
+        cards = _build_deterministic_battle_cards(
+            [{"vendor_name": "V", "product_category": "Cat", "total_reviews": 50,
+              "churn_intent": 20, "avg_urgency": 7.0}],
+            pain_lookup={}, competitor_lookup={}, feature_gap_lookup={},
+            quote_lookup={"V": quotes}, price_lookup={"V": 0.1}, budget_lookup={},
+            sentiment_lookup={}, dm_lookup={"V": 0.3}, company_lookup={},
+            product_profile_lookup={}, competitive_disp=[], competitor_reasons=[],
+            limit=10,
+        )
+        assert len(cards) == 1
+        # Quote B (same review_id as A) should be deduplicated
+        assert len(cards[0]["customer_pain_quotes"]) == 2
+        assert cards[0]["customer_pain_quotes"][0]["quote"] == "Quote A"
+        assert cards[0]["customer_pain_quotes"][1]["quote"] == "Quote C"
+
+    def test_same_reviewer_different_reviews_deduped(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            _build_deterministic_battle_cards,
+        )
+
+        quotes = [
+            {"quote": "Quote A", "urgency": 8, "review_id": "r1",
+             "company": "Acme Corp", "title": "Head of Marketing"},
+            {"quote": "Quote B", "urgency": 7, "review_id": "r2",
+             "company": "Acme Corp", "title": "Head of Marketing"},
+            {"quote": "Quote C", "urgency": 6, "review_id": "r3",
+             "company": "Other Inc", "title": "CTO"},
+        ]
+        cards = _build_deterministic_battle_cards(
+            [{"vendor_name": "V", "product_category": "Cat", "total_reviews": 50,
+              "churn_intent": 20, "avg_urgency": 7.0}],
+            pain_lookup={}, competitor_lookup={}, feature_gap_lookup={},
+            quote_lookup={"V": quotes}, price_lookup={"V": 0.1}, budget_lookup={},
+            sentiment_lookup={}, dm_lookup={"V": 0.3}, company_lookup={},
+            product_profile_lookup={}, competitive_disp=[], competitor_reasons=[],
+            limit=10,
+        )
+        assert len(cards) == 1
+        # Quote B (same reviewer as A) should be deduplicated
+        assert len(cards[0]["customer_pain_quotes"]) == 2
+        assert cards[0]["customer_pain_quotes"][0]["quote"] == "Quote A"
+        assert cards[0]["customer_pain_quotes"][1]["quote"] == "Quote C"
+
+
+class TestBattleCardSentimentDirection:
+    """Verify sentiment excludes 'unknown' before picking dominant."""
+
+    def test_unknown_excluded(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            _build_deterministic_battle_cards,
+        )
+
+        cards = _build_deterministic_battle_cards(
+            [{"vendor_name": "V", "product_category": "Cat", "total_reviews": 100,
+              "churn_intent": 30, "avg_urgency": 6.0}],
+            pain_lookup={}, competitor_lookup={}, feature_gap_lookup={},
+            quote_lookup={}, price_lookup={"V": 0.1}, budget_lookup={},
+            sentiment_lookup={"V": {"unknown": 400, "declining": 130, "stable": 50}},
+            dm_lookup={"V": 0.3}, company_lookup={},
+            product_profile_lookup={}, competitive_disp=[], competitor_reasons=[],
+            limit=10,
+        )
+        assert len(cards) == 1
+        assert cards[0]["objection_data"]["sentiment_direction"] == "declining"
+
+    def test_all_unknown_returns_insufficient(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            _build_deterministic_battle_cards,
+        )
+
+        cards = _build_deterministic_battle_cards(
+            [{"vendor_name": "V", "product_category": "Cat", "total_reviews": 100,
+              "churn_intent": 30, "avg_urgency": 6.0}],
+            pain_lookup={}, competitor_lookup={}, feature_gap_lookup={},
+            quote_lookup={}, price_lookup={"V": 0.1}, budget_lookup={},
+            sentiment_lookup={"V": {"unknown": 400}},
+            dm_lookup={"V": 0.3}, company_lookup={},
+            product_profile_lookup={}, competitive_disp=[], competitor_reasons=[],
+            limit=10,
+        )
+        assert len(cards) == 1
+        assert cards[0]["objection_data"]["sentiment_direction"] == "insufficient_data"
+
+
+class TestBattleCardNewSections:
+    """Verify new battle card sections are populated from lookups."""
+
+    def test_high_intent_companies_surfaced(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            _build_deterministic_battle_cards,
+        )
+
+        cards = _build_deterministic_battle_cards(
+            [{"vendor_name": "V", "product_category": "Cat", "total_reviews": 50,
+              "churn_intent": 20, "avg_urgency": 7.0}],
+            pain_lookup={}, competitor_lookup={}, feature_gap_lookup={},
+            quote_lookup={}, price_lookup={"V": 0.1}, budget_lookup={},
+            sentiment_lookup={}, dm_lookup={"V": 0.3},
+            company_lookup={"V": [{"company": "Acme", "urgency": 9}]},
+            product_profile_lookup={}, competitive_disp=[], competitor_reasons=[],
+            limit=10,
+        )
+        assert len(cards) == 1
+        assert cards[0]["high_intent_companies"] == [{"company": "Acme", "urgency": 9}]
+
+    def test_integration_stack_from_profile(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            _build_deterministic_battle_cards,
+        )
+
+        cards = _build_deterministic_battle_cards(
+            [{"vendor_name": "V", "product_category": "Cat", "total_reviews": 50,
+              "churn_intent": 20, "avg_urgency": 7.0}],
+            pain_lookup={}, competitor_lookup={}, feature_gap_lookup={},
+            quote_lookup={}, price_lookup={"V": 0.1}, budget_lookup={},
+            sentiment_lookup={}, dm_lookup={"V": 0.3}, company_lookup={},
+            product_profile_lookup={"V": {"top_integrations": ["Shopify", "Salesforce"]}},
+            competitive_disp=[], competitor_reasons=[],
+            limit=10,
+        )
+        assert len(cards) == 1
+        assert cards[0]["integration_stack"] == ["Shopify", "Salesforce"]
+
+    def test_buyer_authority_from_lookup(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            _build_deterministic_battle_cards,
+        )
+
+        ba_lookup = {
+            "V": {
+                "role_types": {"economic_buyer": 5, "evaluator": 3},
+                "buying_stages": {"active_purchase": 2, "evaluation": 6},
+            },
+        }
+        cards = _build_deterministic_battle_cards(
+            [{"vendor_name": "V", "product_category": "Cat", "total_reviews": 50,
+              "churn_intent": 20, "avg_urgency": 7.0}],
+            pain_lookup={}, competitor_lookup={}, feature_gap_lookup={},
+            quote_lookup={}, price_lookup={"V": 0.1}, budget_lookup={},
+            sentiment_lookup={}, dm_lookup={"V": 0.3}, company_lookup={},
+            product_profile_lookup={}, competitive_disp=[], competitor_reasons=[],
+            buyer_auth_lookup=ba_lookup,
+            limit=10,
+        )
+        assert len(cards) == 1
+        assert cards[0]["buyer_authority"]["role_types"]["economic_buyer"] == 5
+
+
+# ---------------------------------------------------------------------------
+# Task budget and phase gating (end-to-end with simulated elapsed time)
+# ---------------------------------------------------------------------------
+
+
+class TestTaskBudget:
+    """End-to-end tests for _TaskBudget with injectable clock to simulate elapsed time."""
+
+    @staticmethod
+    def _make_clock(start: float = 0.0):
+        """Return a controllable clock and an advance function."""
+        state = [start]
+
+        def clock():
+            return state[0]
+
+        def advance(seconds: float):
+            state[0] += seconds
+
+        return clock, advance
+
+    def test_fresh_budget_has_full_remaining(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import _TaskBudget
+
+        clock, _ = self._make_clock(0.0)
+        b = _TaskBudget(540, _clock=clock)
+        assert b.elapsed() == 0.0
+        assert b.remaining() == 540.0
+
+    def test_elapsed_tracks_clock_advance(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import _TaskBudget
+
+        clock, advance = self._make_clock(1000.0)
+        b = _TaskBudget(540, _clock=clock)
+        assert b.elapsed() == 0.0
+        advance(120)
+        assert b.elapsed() == 120.0
+        assert b.remaining() == 420.0
+
+    def test_remaining_floors_at_zero(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import _TaskBudget
+
+        clock, advance = self._make_clock(0.0)
+        b = _TaskBudget(100, _clock=clock)
+        advance(200)
+        assert b.remaining() == 0.0
+
+    def test_phase_denied_after_time_passes(self):
+        """Phase that was allowed initially is denied after elapsed time."""
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import _TaskBudget
+
+        clock, advance = self._make_clock(0.0)
+        b = _TaskBudget(540, _clock=clock)
+        assert b.phase_allowed("reasoning", 120) is True   # 540 >= 120
+        advance(450)
+        assert b.phase_allowed("reasoning", 120) is False  # 90 < 120
+
+    def test_full_phase_sequence_simulated_run(self):
+        """Simulate an entire intelligence run where reasoning takes 400s.
+
+        Proves that after an expensive reasoning phase, only cheap phases
+        run and expensive late phases are skipped.
+        """
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import _TaskBudget
+
+        clock, advance = self._make_clock(0.0)
+        b = _TaskBudget(540, _clock=clock)
+
+        # Phase 1: data fetch -- 20s
+        assert b.phase_allowed("temporal", 30) is True
+        advance(20)
+        assert b.remaining() == 520.0
+
+        # Phase 2: temporal enrichment -- 15s
+        advance(15)
+        assert b.remaining() == 505.0
+
+        # Phase 3: stratified reasoning -- 400s (the expensive phase)
+        assert b.phase_allowed("reasoning", 120) is True
+        advance(400)
+        assert b.remaining() == 105.0
+
+        # Phase 4: ecosystem -- cheap, should pass (105 >= 20)
+        assert b.phase_allowed("ecosystem", 20) is True
+        advance(5)
+
+        # Phase 5: exploratory LLM -- needs 90s, 100 >= 90, barely passes
+        assert b.phase_allowed("exploratory", 90) is True
+        advance(60)
+        assert b.remaining() == 40.0
+
+        # Phase 6: scorecard narrative -- needs 60s, 40 < 60, SKIPPED
+        assert b.phase_allowed("scorecard", 60) is False
+
+        # Phase 7: exec summary -- needs 45s, 40 < 45, SKIPPED
+        assert b.phase_allowed("exec_summary", 45) is False
+
+        # Phase 8: battle card copy -- needs 60s, 40 < 60, SKIPPED
+        assert b.phase_allowed("battle_card_copy", 60) is False
+
+    def test_mid_loop_bailout_with_elapsed_time(self):
+        """Simulate per-card budget checks inside a battle card loop.
+
+        Proves that the loop processes 2 cards then bails on the 3rd
+        when remaining drops below the per-iteration threshold.
+        """
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import _TaskBudget
+
+        clock, advance = self._make_clock(0.0)
+        b = _TaskBudget(540, _clock=clock)
+        advance(475)  # simulate 475s of prior phases, 65s remaining
+
+        # Phase entry: 65 >= 60, allowed
+        assert b.phase_allowed("battle_card_copy", 60) is True
+
+        # Card 1: 65s remaining >= 30 threshold, proceed
+        assert b.remaining() >= 30
+        advance(25)  # card takes 25s
+        assert b.remaining() == 40.0
+
+        # Card 2: 40s remaining >= 30 threshold, proceed
+        assert b.remaining() >= 30
+        advance(25)  # card takes 25s
+        assert b.remaining() == 15.0
+
+        # Card 3: 15s remaining < 30 threshold, BAIL
+        assert b.remaining() < 30
+
+    def test_budget_zero_skips_all_phases(self):
+        """An already-expired budget skips every named phase."""
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import _TaskBudget
+
+        clock, _ = self._make_clock(0.0)
+        b = _TaskBudget(0, _clock=clock)
+
+        phases = [
+            ("temporal", 30), ("reasoning", 120), ("exploratory", 90),
+            ("ecosystem", 20), ("scorecard", 60), ("exec_summary", 45),
+            ("battle_card_copy", 60),
+        ]
+        for name, min_sec in phases:
+            assert b.phase_allowed(name, min_sec) is False, f"{name} should be skipped"
+
+    def test_fast_run_allows_all_phases(self):
+        """When all prior phases are fast, every phase gets budget."""
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import _TaskBudget
+
+        clock, advance = self._make_clock(0.0)
+        b = _TaskBudget(540, _clock=clock)
+
+        phases = [
+            ("temporal", 30), ("reasoning", 120), ("ecosystem", 20),
+            ("exploratory", 90), ("scorecard", 60), ("exec_summary", 45),
+            ("battle_card_copy", 60),
+        ]
+        for name, min_sec in phases:
+            assert b.phase_allowed(name, min_sec) is True, (
+                f"{name} should be allowed at {b.remaining():.0f}s remaining"
+            )
+            advance(30)  # each phase finishes in 30s
+
+        # 7 phases * 30s = 210s elapsed, 330s remaining
+        assert b.remaining() == 330.0
+
+    def test_scorecard_per_iteration_bailout(self):
+        """Scorecard narrative loop bails mid-iteration when budget drops."""
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import _TaskBudget
+
+        clock, advance = self._make_clock(0.0)
+        b = _TaskBudget(540, _clock=clock)
+        advance(510)  # 30s remaining
+
+        # Phase entry denied: 30 < 60
+        assert b.phase_allowed("scorecard", 60) is False
+
+        # Even if phase entry was allowed, per-iteration check (20s) would fail soon
+        advance(15)  # 15s remaining
+        assert b.remaining() < 20  # per-iteration threshold
+
+
+class TestVendorReasoningCap:
+    """Verify the vendor cap limits evidence building and reasoning."""
+
+    def test_evidence_map_capped(self):
+        """Evidence map should only build for capped vendors."""
+        from atlas_brain.config import settings
+        cfg = settings.b2b_churn
+        assert hasattr(cfg, "stratified_reasoning_vendor_cap")
+        assert cfg.stratified_reasoning_vendor_cap > 0
+        assert cfg.stratified_reasoning_vendor_cap <= 100

@@ -1,8 +1,8 @@
-import { Brain, RefreshCcw, FileText, Swords, ArrowRight } from 'lucide-react'
+import { Brain, RefreshCcw, FileText, Swords, ArrowRight, ShieldAlert, Anchor } from 'lucide-react'
 import type { RecentCall, WorkflowEntry } from '../types'
 import { fmtCost, fmtTokens } from '../utils'
 
-type ReasoningBucket = 'reason' | 'reconstitute' | 'report' | 'battle_card_copy' | 'other'
+type ReasoningBucket = 'reason' | 'challenge' | 'ground' | 'reconstitute' | 'report' | 'battle_card_copy' | 'other'
 
 type ReasoningClass = {
   bucket: ReasoningBucket
@@ -18,6 +18,25 @@ function classifySpan(spanName: string): ReasoningClass {
       label: 'Full Reason',
       tone: 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300',
       description: 'Fresh stratified reasoning'
+    }
+  }
+  if (spanName === 'reasoning.stratified.reason.challenge') {
+    return {
+      bucket: 'challenge',
+      label: 'Challenge',
+      tone: 'border-orange-500/30 bg-orange-500/10 text-orange-300',
+      description: 'Self-critique against contradicting evidence'
+    }
+  }
+  if (
+    spanName === 'reasoning.stratified.reason.ground' ||
+    spanName === 'reasoning.stratified.reconstitute.reason.ground'
+  ) {
+    return {
+      bucket: 'ground',
+      label: 'Ground',
+      tone: 'border-teal-500/30 bg-teal-500/10 text-teal-300',
+      description: 'Evidence grounding pass'
     }
   }
   if (spanName === 'reasoning.stratified.reconstitute') {
@@ -58,6 +77,8 @@ function classifySpan(spanName: string): ReasoningClass {
 
 function bucketIcon(bucket: ReasoningBucket) {
   if (bucket === 'reason') return Brain
+  if (bucket === 'challenge') return ShieldAlert
+  if (bucket === 'ground') return Anchor
   if (bucket === 'reconstitute') return RefreshCcw
   if (bucket === 'battle_card_copy') return Swords
   return FileText
@@ -84,11 +105,13 @@ export default function ReasoningPanel({
   recent: RecentCall[]
 }) {
   const fullReason = bucketSummary(workflows, 'reason')
+  const challenge = bucketSummary(workflows, 'challenge')
+  const ground = bucketSummary(workflows, 'ground')
   const reconstitute = bucketSummary(workflows, 'reconstitute')
   const report = bucketSummary(workflows, 'report')
   const battleCardCopy = bucketSummary(workflows, 'battle_card_copy')
-  const totalVisibleCost = fullReason.cost + reconstitute.cost + report.cost + battleCardCopy.cost
-  const reasoningCost = fullReason.cost + reconstitute.cost
+  const totalVisibleCost = fullReason.cost + challenge.cost + ground.cost + reconstitute.cost + report.cost + battleCardCopy.cost
+  const reasoningCost = fullReason.cost + challenge.cost + ground.cost + reconstitute.cost
   const reasoningShare = totalVisibleCost > 0 ? (reasoningCost / totalVisibleCost) * 100 : 0
 
   const relevantWorkflows = workflows
@@ -101,6 +124,8 @@ export default function ReasoningPanel({
 
   const cards = [
     { title: 'Full Reason', stats: fullReason, bucket: 'reason' as const },
+    { title: 'Challenge', stats: challenge, bucket: 'challenge' as const },
+    { title: 'Ground', stats: ground, bucket: 'ground' as const },
     { title: 'Reconstitute', stats: reconstitute, bucket: 'reconstitute' as const },
     { title: 'Report Synthesis', stats: report, bucket: 'report' as const },
     { title: 'Battle Card Copy', stats: battleCardCopy, bucket: 'battle_card_copy' as const },
@@ -126,17 +151,17 @@ export default function ReasoningPanel({
         </div>
       </div>
 
-      <div className="mb-6 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <div className="mb-6 grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         {cards.map((card) => {
-          const kind = classifySpan(
-            card.bucket === 'reason'
-              ? 'reasoning.stratified.reason'
-              : card.bucket === 'reconstitute'
-                ? 'reasoning.stratified.reconstitute'
-                : card.bucket === 'battle_card_copy'
-                  ? 'b2b.churn_intelligence.battle_card_sales_copy'
-                  : 'b2b.churn_intelligence.executive_summary'
-          )
+          const spanLookup: Record<string, string> = {
+            reason: 'reasoning.stratified.reason',
+            challenge: 'reasoning.stratified.reason.challenge',
+            ground: 'reasoning.stratified.reason.ground',
+            reconstitute: 'reasoning.stratified.reconstitute',
+            battle_card_copy: 'b2b.churn_intelligence.battle_card_sales_copy',
+            report: 'b2b.churn_intelligence.executive_summary',
+          }
+          const kind = classifySpan(spanLookup[card.bucket] ?? card.bucket)
           const Icon = bucketIcon(card.bucket)
           return (
             <div key={card.title} className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">

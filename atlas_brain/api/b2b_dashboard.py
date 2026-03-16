@@ -108,6 +108,11 @@ def _pool_or_503():
     return pool
 
 
+def _should_scope(user: AuthUser | None) -> bool:
+    """Return True if the request should be tenant-scoped (non-admin authenticated user)."""
+    return user is not None and not getattr(user, "is_admin", False)
+
+
 from ..services.b2b.corrections import suppress_predicate as _suppress_predicate  # noqa: E402
 from ..services.b2b.corrections import apply_field_overrides as _apply_field_overrides  # noqa: E402
 
@@ -130,7 +135,7 @@ async def list_signals(
     params: list = []
     idx = 1
 
-    if user:
+    if _should_scope(user):
         conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
         params.append(user.account_id)
         idx += 1
@@ -229,7 +234,7 @@ async def get_signal(
     # Build optional tenant scope clause
     scope = ""
     scope_params: list = [vname]
-    if user:
+    if _should_scope(user):
         scope = f" AND vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${ len(scope_params) + 1 }::uuid)"
         scope_params.append(user.account_id)
 
@@ -325,7 +330,7 @@ async def list_high_intent(
     params: list = [min_urgency, window_days]
     idx = 3
 
-    if user:
+    if _should_scope(user):
         conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
         params.append(user.account_id)
         idx += 1
@@ -399,7 +404,7 @@ async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(o
     vname = vendor_name.strip()
 
     # When authenticated, verify vendor is tracked by the user's account
-    if user:
+    if _should_scope(user):
         is_tracked = await pool.fetchval(
             "SELECT 1 FROM tracked_vendors WHERE account_id = $1::uuid AND vendor_name ILIKE $2",
             user.account_id, vname,
@@ -552,7 +557,7 @@ async def generate_comparison_report(
         raise HTTPException(status_code=400, detail="Both vendors are required")
     if primary_vendor.lower() == comparison_vendor.lower():
         raise HTTPException(status_code=400, detail="Choose two different vendors")
-    if user:
+    if _should_scope(user):
         tracked = await pool.fetchval(
             "SELECT 1 FROM tracked_vendors WHERE account_id = $1::uuid AND vendor_name ILIKE $2 LIMIT 1",
             user.account_id,
@@ -797,7 +802,7 @@ async def list_reports(
     params: list = []
     idx = 1
 
-    if user:
+    if _should_scope(user):
         conditions.append(
             f"(vendor_filter IS NULL OR LOWER(vendor_filter) IN (SELECT LOWER(vendor_name) FROM tracked_vendors WHERE account_id = ${idx}::uuid) OR account_id = ${idx}::uuid)"
         )
@@ -865,9 +870,9 @@ async def get_report(report_id: str, user: AuthUser | None = Depends(optional_au
     if not row:
         raise HTTPException(status_code=404, detail="Report not found")
 
-    if user and row["account_id"] == user.account_id:
+    if _should_scope(user) and row["account_id"] == user.account_id:
         pass
-    elif user and row["vendor_filter"]:
+    elif _should_scope(user) and row["vendor_filter"]:
         is_tracked = await pool.fetchval(
             "SELECT 1 FROM tracked_vendors WHERE account_id = $1::uuid AND LOWER(vendor_name) = LOWER($2)",
             user.account_id, row["vendor_filter"],
@@ -911,9 +916,9 @@ async def export_report_pdf(report_id: str, user: AuthUser | None = Depends(opti
         raise HTTPException(status_code=404, detail="Report not found")
 
     # Access control (same as get_report)
-    if user and row["account_id"] == user.account_id:
+    if _should_scope(user) and row["account_id"] == user.account_id:
         pass
-    elif user and row["vendor_filter"]:
+    elif _should_scope(user) and row["vendor_filter"]:
         is_tracked = await pool.fetchval(
             "SELECT 1 FROM tracked_vendors WHERE account_id = $1::uuid AND LOWER(vendor_name) = LOWER($2)",
             user.account_id, row["vendor_filter"],
@@ -968,7 +973,7 @@ async def search_reviews(
     params: list = [window_days]
     idx = 2
 
-    if user:
+    if _should_scope(user):
         conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
         params.append(user.account_id)
         idx += 1
@@ -1088,7 +1093,7 @@ async def get_review(review_id: str, user: AuthUser | None = Depends(optional_au
     if suppressed:
         raise HTTPException(status_code=404, detail="Review not found")
 
-    if user:
+    if _should_scope(user):
         is_tracked = await pool.fetchval(
             "SELECT 1 FROM tracked_vendors WHERE account_id = $1::uuid AND vendor_name ILIKE $2",
             user.account_id, row["vendor_name"],
@@ -1137,7 +1142,7 @@ async def get_pipeline_status(user: AuthUser | None = Depends(optional_auth)):
     vendor_scope = f" WHERE {_rev_sup}"
     scrape_scope = ""
     scope_params: list = []
-    if user:
+    if _should_scope(user):
         vendor_scope = f" WHERE vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid) AND {_rev_sup}"
         scrape_scope = " WHERE vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)"
         scope_params = [user.account_id]
@@ -1714,7 +1719,7 @@ async def list_displacement_edges(
     params: list = [window_days]
     idx = 2
 
-    if user:
+    if _should_scope(user):
         conditions.append(
             f"(from_vendor IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)"
             f" OR to_vendor IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid))"
@@ -1847,7 +1852,7 @@ async def list_company_signals(
     params: list = [window_days]
     idx = 2
 
-    if user:
+    if _should_scope(user):
         conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
         params.append(user.account_id)
         idx += 1
@@ -1934,7 +1939,7 @@ async def list_vendor_pain_points(
     params: list = []
     idx = 1
 
-    if user:
+    if _should_scope(user):
         conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
         params.append(user.account_id)
         idx += 1
@@ -2019,7 +2024,7 @@ async def list_vendor_use_cases(
     params: list = []
     idx = 1
 
-    if user:
+    if _should_scope(user):
         conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
         params.append(user.account_id)
         idx += 1
@@ -2100,7 +2105,7 @@ async def list_vendor_integrations(
     params: list = []
     idx = 1
 
-    if user:
+    if _should_scope(user):
         conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
         params.append(user.account_id)
         idx += 1
@@ -2179,7 +2184,7 @@ async def list_vendor_buyer_profiles(
     params: list = []
     idx = 1
 
-    if user:
+    if _should_scope(user):
         conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
         params.append(user.account_id)
         idx += 1
@@ -2900,7 +2905,7 @@ async def signal_effectiveness(
     params: list = [min_sequences]
     idx = 2
 
-    if user:
+    if _should_scope(user):
         conditions.append(
             f"bc.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)"
         )
@@ -3133,7 +3138,7 @@ async def get_outcome_distribution(
     params: list = []
     idx = 1
 
-    if user:
+    if _should_scope(user):
         conditions.append(
             f"cs.company_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)"
         )
@@ -3226,7 +3231,7 @@ async def get_signal_to_outcome(
     params: list = [min_sequences]
     idx = 2
 
-    if user:
+    if _should_scope(user):
         conditions.append(
             f"bc.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)"
         )
@@ -3343,7 +3348,7 @@ async def export_signals(
     params: list = []
     idx = 1
 
-    if user:
+    if _should_scope(user):
         conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
         params.append(user.account_id)
         idx += 1
@@ -3422,7 +3427,7 @@ async def export_reviews(
     params: list = [window_days]
     idx = 2
 
-    if user:
+    if _should_scope(user):
         conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
         params.append(user.account_id)
         idx += 1
@@ -3514,7 +3519,7 @@ async def export_high_intent(
     params: list = [min_urgency, window_days]
     idx = 3
 
-    if user:
+    if _should_scope(user):
         conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
         params.append(user.account_id)
         idx += 1
