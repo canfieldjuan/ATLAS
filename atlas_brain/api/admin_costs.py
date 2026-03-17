@@ -522,7 +522,7 @@ async def scraping_summary(days: int = Query(default=7, ge=1, le=30)):
             COUNT(*) FILTER (WHERE enrichment_status = 'enriched')                            AS enriched_reviews,
             COUNT(*) FILTER (WHERE enrichment_status = 'failed')                              AS failed_enrichments,
             ROUND(AVG((raw_metadata->>'source_weight')::numeric)::numeric, 3)                 AS avg_source_weight,
-            COUNT(*) FILTER (WHERE (raw_metadata->>'author_churn_score')::numeric >= 7)       AS high_value_authors
+            COUNT(*) FILTER (WHERE author_churn_score >= 7)       AS high_value_authors
         FROM b2b_reviews
         WHERE imported_at >= $1
         GROUP BY source
@@ -822,7 +822,7 @@ async def scraping_top_posts(
             enrichment_status,
             (raw_metadata->>'source_weight')::numeric                        AS source_weight,
             raw_metadata->>'trending_score'                                  AS trending_score,
-            (raw_metadata->>'author_churn_score')::numeric                   AS author_churn_score,
+            author_churn_score                   AS author_churn_score,
             raw_metadata->>'subreddit'                                       AS subreddit,
             (raw_metadata->>'score')::int                                    AS reddit_score,
             (raw_metadata->>'num_comments')::int                             AS num_comments,
@@ -1184,23 +1184,23 @@ async def reddit_signal_breakdown(days: int = Query(default=30, ge=1, le=90)):
         """
         SELECT
             COUNT(*) FILTER (
-                WHERE (raw_metadata->>'author_churn_score')::numeric >= 7
+                WHERE author_churn_score >= 7
             )                                                                  AS high_score_authors,
-            ROUND(AVG((raw_metadata->>'author_churn_score')::numeric)::numeric, 2)
+            ROUND(AVG(author_churn_score)::numeric, 2)
                                                                                AS avg_churn_score,
             COUNT(*) FILTER (
-                WHERE (raw_metadata->>'author_churn_score')::numeric < 3
+                WHERE author_churn_score < 3
             )                                                                  AS score_0_2,
             COUNT(*) FILTER (
-                WHERE (raw_metadata->>'author_churn_score')::numeric >= 3
-                  AND (raw_metadata->>'author_churn_score')::numeric < 5
+                WHERE author_churn_score >= 3
+                  AND author_churn_score < 5
             )                                                                  AS score_3_4,
             COUNT(*) FILTER (
-                WHERE (raw_metadata->>'author_churn_score')::numeric >= 5
-                  AND (raw_metadata->>'author_churn_score')::numeric < 7
+                WHERE author_churn_score >= 5
+                  AND author_churn_score < 7
             )                                                                  AS score_5_6,
             COUNT(*) FILTER (
-                WHERE (raw_metadata->>'author_churn_score')::numeric >= 7
+                WHERE author_churn_score >= 7
             )                                                                  AS score_7_10
         FROM b2b_reviews
         WHERE source = 'reddit'

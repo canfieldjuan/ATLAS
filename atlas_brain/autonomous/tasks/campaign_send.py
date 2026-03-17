@@ -256,15 +256,22 @@ async def run(task: ScheduledTask) -> dict:
                 now, esp_message_id, campaign_id,
             )
 
-            # Contact fatigue: increment total sends for this recipient
-            if sequence_id:
+            # Contact fatigue: update total sends across ALL sequences for this recipient
+            if sequence_id and c.get("recipient_email"):
+                global_count = await pool.fetchval(
+                    """
+                    SELECT count(*) FROM b2b_campaigns
+                    WHERE recipient_email = $1 AND status = 'sent'
+                    """,
+                    c["recipient_email"],
+                )
                 await pool.execute(
                     """
                     UPDATE campaign_sequences
-                    SET contact_send_count = contact_send_count + 1
-                    WHERE id = $1
+                    SET contact_send_count = $1
+                    WHERE recipient_email = $2
                     """,
-                    sequence_id,
+                    global_count, c["recipient_email"],
                 )
 
             # Update sequence: last_sent_at, last_campaign_id, next_step_after
