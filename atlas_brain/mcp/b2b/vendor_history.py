@@ -118,7 +118,8 @@ async def list_change_events(
         rows = await pool.fetch(
             f"""
             SELECT vendor_name, event_date, event_type, description,
-                   old_value, new_value, delta, metadata
+                   old_value, new_value, delta, metadata,
+                   z_score, severity
             FROM b2b_change_events
             {where}
             ORDER BY event_date DESC, created_at DESC
@@ -129,7 +130,7 @@ async def list_change_events(
 
         events = []
         for r in rows:
-            events.append({
+            entry = {
                 "vendor_name": r["vendor_name"],
                 "event_date": str(r["event_date"]),
                 "event_type": r["event_type"],
@@ -138,7 +139,12 @@ async def list_change_events(
                 "new_value": float(r["new_value"]) if r["new_value"] is not None else None,
                 "delta": float(r["delta"]) if r["delta"] is not None else None,
                 "metadata": _safe_json(r["metadata"]),
-            })
+            }
+            if r["z_score"] is not None:
+                entry["z_score"] = round(float(r["z_score"]), 2)
+            if r["severity"] is not None:
+                entry["severity"] = r["severity"]
+            events.append(entry)
 
         return json.dumps({"events": events, "count": len(events)}, default=str)
     except Exception:

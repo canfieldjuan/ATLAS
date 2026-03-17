@@ -2913,7 +2913,8 @@ async def _detect_change_events(
         comps = competitor_lookup.get(vendor, [])
         top_competitor = comps[0]["name"] if comps else None
 
-        events: list[tuple[str, str, float | None, float | None, float | None]] = []
+        # (event_type, description, old_val, new_val, delta, z_score)
+        events: list[tuple[str, str, float | None, float | None, float | None, float | None]] = []
 
         # Temporal evidence for this vendor (z-scores, velocities, accelerations)
         td = (temporal_lookup or {}).get(vendor, {})
@@ -2928,14 +2929,14 @@ async def _detect_change_events(
         urg_anomaly = anomalies_by_metric.get("avg_urgency", {})
         if urg_anomaly.get("is_anomaly") and urg_anomaly.get("z_score", 0) > 0:
             z = urg_anomaly["z_score"]
-            events.append(("urgency_spike", f"Avg urgency rose from {prior_urg} to {avg_urgency} (z={z:.1f})", prior_urg, avg_urgency, urg_delta))
+            events.append(("urgency_spike", f"Avg urgency rose from {prior_urg} to {avg_urgency} (z={z:.1f})", prior_urg, avg_urgency, urg_delta, z))
         elif urg_anomaly.get("is_anomaly") and urg_anomaly.get("z_score", 0) < 0:
             z = urg_anomaly["z_score"]
-            events.append(("urgency_drop", f"Avg urgency fell from {prior_urg} to {avg_urgency} (z={z:.1f})", prior_urg, avg_urgency, urg_delta))
+            events.append(("urgency_drop", f"Avg urgency fell from {prior_urg} to {avg_urgency} (z={z:.1f})", prior_urg, avg_urgency, urg_delta, z))
         elif urg_delta >= 1.0:
-            events.append(("urgency_spike", f"Avg urgency rose from {prior_urg} to {avg_urgency}", prior_urg, avg_urgency, urg_delta))
+            events.append(("urgency_spike", f"Avg urgency rose from {prior_urg} to {avg_urgency}", prior_urg, avg_urgency, urg_delta, None))
         elif urg_delta <= -1.0:
-            events.append(("urgency_drop", f"Avg urgency fell from {prior_urg} to {avg_urgency}", prior_urg, avg_urgency, urg_delta))
+            events.append(("urgency_drop", f"Avg urgency fell from {prior_urg} to {avg_urgency}", prior_urg, avg_urgency, urg_delta, None))
 
         # Churn density spike -- prefer z-score anomaly when available
         prior_cd = float(prior["churn_density"] or 0)
@@ -2943,9 +2944,9 @@ async def _detect_change_events(
         cd_anomaly = anomalies_by_metric.get("churn_density", {})
         if cd_anomaly.get("is_anomaly") and cd_anomaly.get("z_score", 0) > 0:
             z = cd_anomaly["z_score"]
-            events.append(("churn_density_spike", f"Churn density rose from {prior_cd}% to {churn_density}% (z={z:.1f})", prior_cd, churn_density, cd_delta))
+            events.append(("churn_density_spike", f"Churn density rose from {prior_cd}% to {churn_density}% (z={z:.1f})", prior_cd, churn_density, cd_delta, z))
         elif cd_delta >= 5.0:
-            events.append(("churn_density_spike", f"Churn density rose from {prior_cd}% to {churn_density}%", prior_cd, churn_density, cd_delta))
+            events.append(("churn_density_spike", f"Churn density rose from {prior_cd}% to {churn_density}%", prior_cd, churn_density, cd_delta, None))
 
         # Velocity acceleration event: metric has both high velocity AND positive acceleration
         for metric_key in ("churn_density", "avg_urgency", "pressure_score"):
@@ -2955,7 +2956,7 @@ async def _detect_change_events(
                 events.append((
                     "velocity_acceleration",
                     f"{metric_key} accelerating: velocity={vel:.3f}/day, acceleration={accel:.3f}/day^2",
-                    vel, accel, None,
+                    vel, accel, None, None,
                 ))
 
         # NPS / recommend ratio shift -- prefer z-score when available
@@ -2965,10 +2966,10 @@ async def _detect_change_events(
         if rr_anomaly.get("is_anomaly"):
             z = rr_anomaly["z_score"]
             direction = "improved" if rr_delta > 0 else "declined"
-            events.append(("nps_shift", f"Recommend ratio {direction} from {prior_rr} to {recommend_ratio} (z={z:.1f})", prior_rr, recommend_ratio, rr_delta))
+            events.append(("nps_shift", f"Recommend ratio {direction} from {prior_rr} to {recommend_ratio} (z={z:.1f})", prior_rr, recommend_ratio, rr_delta, z))
         elif abs(rr_delta) >= 10.0:
             direction = "improved" if rr_delta > 0 else "declined"
-            events.append(("nps_shift", f"Recommend ratio {direction} from {prior_rr} to {recommend_ratio}", prior_rr, recommend_ratio, rr_delta))
+            events.append(("nps_shift", f"Recommend ratio {direction} from {prior_rr} to {recommend_ratio}", prior_rr, recommend_ratio, rr_delta, None))
 
         # Review volume spike -- prefer z-score when available
         prior_tr = int(prior["total_reviews"] or 0)
@@ -2977,9 +2978,9 @@ async def _detect_change_events(
             vol_anomaly = anomalies_by_metric.get("total_reviews", {})
             if vol_anomaly.get("is_anomaly") and vol_anomaly.get("z_score", 0) > 0:
                 z = vol_anomaly["z_score"]
-                events.append(("review_volume_spike", f"Review count jumped from {prior_tr} to {total_reviews} (+{vol_pct:.0f}%, z={z:.1f})", float(prior_tr), float(total_reviews), vol_pct))
+                events.append(("review_volume_spike", f"Review count jumped from {prior_tr} to {total_reviews} (+{vol_pct:.0f}%, z={z:.1f})", float(prior_tr), float(total_reviews), vol_pct, z))
             elif vol_pct >= 25.0:
-                events.append(("review_volume_spike", f"Review count jumped from {prior_tr} to {total_reviews} (+{vol_pct:.0f}%)", float(prior_tr), float(total_reviews), vol_pct))
+                events.append(("review_volume_spike", f"Review count jumped from {prior_tr} to {total_reviews} (+{vol_pct:.0f}%)", float(prior_tr), float(total_reviews), vol_pct, None))
 
         # Pressure score spike (threshold: 10.0 points on 0-100 scale)
         prior_ps = float(prior["pressure_score"] or 0)
@@ -2997,9 +2998,9 @@ async def _detect_change_events(
         ps_anomaly = anomalies_by_metric.get("pressure_score", {})
         if ps_anomaly.get("is_anomaly") and ps_anomaly.get("z_score", 0) > 0:
             z = ps_anomaly["z_score"]
-            events.append(("pressure_score_spike", f"Pressure score rose from {prior_ps} to {cur_ps} (z={z:.1f})", prior_ps, cur_ps, ps_delta))
+            events.append(("pressure_score_spike", f"Pressure score rose from {prior_ps} to {cur_ps} (z={z:.1f})", prior_ps, cur_ps, ps_delta, z))
         elif ps_delta >= 10.0:
-            events.append(("pressure_score_spike", f"Pressure score rose from {prior_ps} to {cur_ps}", prior_ps, cur_ps, ps_delta))
+            events.append(("pressure_score_spike", f"Pressure score rose from {prior_ps} to {cur_ps}", prior_ps, cur_ps, ps_delta, None))
 
         # Decision-maker churn rate spike -- prefer z-score when available
         prior_dm = float(prior["dm_churn_rate"] or 0)
@@ -3007,19 +3008,19 @@ async def _detect_change_events(
         dm_anomaly = anomalies_by_metric.get("dm_churn_rate", {})
         if dm_anomaly.get("is_anomaly") and dm_anomaly.get("z_score", 0) > 0:
             z = dm_anomaly["z_score"]
-            events.append(("dm_churn_spike", f"DM churn rate rose from {prior_dm:.2%} to {_dm_rate:.2%} (z={z:.1f})", prior_dm, _dm_rate, dm_delta))
+            events.append(("dm_churn_spike", f"DM churn rate rose from {prior_dm:.2%} to {_dm_rate:.2%} (z={z:.1f})", prior_dm, _dm_rate, dm_delta, z))
         elif dm_delta >= 0.15:
-            events.append(("dm_churn_spike", f"DM churn rate rose from {prior_dm:.2%} to {_dm_rate:.2%}", prior_dm, _dm_rate, dm_delta))
+            events.append(("dm_churn_spike", f"DM churn rate rose from {prior_dm:.2%} to {_dm_rate:.2%}", prior_dm, _dm_rate, dm_delta, None))
 
         # New pain category
         prior_pain = prior["top_pain"]
         if top_pain and prior_pain and top_pain != prior_pain:
-            events.append(("new_pain_category", f"Top pain shifted from '{prior_pain}' to '{top_pain}'", None, None, None))
+            events.append(("new_pain_category", f"Top pain shifted from '{prior_pain}' to '{top_pain}'", None, None, None, None))
 
         # New competitor
         prior_comp = prior["top_competitor"]
         if top_competitor and prior_comp and top_competitor != prior_comp:
-            events.append(("new_competitor", f"Top competitor shifted from '{prior_comp}' to '{top_competitor}'", None, None, None))
+            events.append(("new_competitor", f"Top competitor shifted from '{prior_comp}' to '{top_competitor}'", None, None, None, None))
 
         # Archetype shift (requires reasoning_lookup from stratified reasoning)
         if reasoning_lookup:
@@ -3034,18 +3035,33 @@ async def _detect_change_events(
                     "archetype_shift",
                     f"Classification shifted from '{prior_arch}' to '{current_arch}' "
                     f"(confidence {conf_was} -> {current_conf:.2f})",
-                    None, None, None,
+                    None, None, None, None,
                 ))
 
         webhook_events: list[tuple[str, dict]] = []
-        for event_type, description, old_val, new_val, delta in events:
+        for event_type, description, old_val, new_val, delta, z_score in events:
+            # Derive severity from z_score magnitude
+            severity = None
+            if z_score is not None:
+                az = abs(z_score)
+                if az >= 3.0:
+                    severity = "critical"
+                elif az >= 2.0:
+                    severity = "high"
+                elif az >= 1.5:
+                    severity = "moderate"
+                else:
+                    severity = "low"
             try:
                 await pool.execute(
                     """
-                    INSERT INTO b2b_change_events (vendor_name, event_date, event_type, description, old_value, new_value, delta)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    INSERT INTO b2b_change_events
+                        (vendor_name, event_date, event_type, description,
+                         old_value, new_value, delta, z_score, severity)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                     """,
-                    vendor, today, event_type, description, old_val, new_val, delta,
+                    vendor, today, event_type, description,
+                    old_val, new_val, delta, z_score, severity,
                 )
                 detected += 1
                 webhook_events.append((vendor, {
@@ -3055,6 +3071,8 @@ async def _detect_change_events(
                     "old_value": old_val,
                     "new_value": new_val,
                     "delta": delta,
+                    "z_score": z_score,
+                    "severity": severity,
                     "event_date": str(today),
                 }))
             except Exception:
