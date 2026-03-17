@@ -923,9 +923,10 @@ async def _record_with_action_plans(emails: list[dict[str, Any]]) -> None:
                     (gmail_message_id, sender, subject, category, priority,
                      replyable, contact_id, action_plan, customer_context_summary,
                      intent, message_id, in_reply_to, references_header,
-                     followup_of_draft_id, inbox_rule_id, inbox_rule_label)
+                     followup_of_draft_id, inbox_rule_id, inbox_rule_label,
+                     intent_confidence)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                        $11, $12, $13, $14, $15, $16)
+                        $11, $12, $13, $14, $15, $16, $17)
                 ON CONFLICT (gmail_message_id) DO NOTHING
                 """,
                 [
@@ -949,6 +950,7 @@ async def _record_with_action_plans(emails: list[dict[str, Any]]) -> None:
                         e.get("_followup_draft_id"),
                         e.get("_inbox_rule_id"),
                         e.get("_inbox_rule_label"),
+                        e.get("_confidence"),
                     )
                     for e in emails
                 ],
