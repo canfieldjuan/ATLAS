@@ -108,13 +108,11 @@ class FalsificationWatcher:
         # Fetch fresh evidence for this vendor
         fresh = await self._fetch_fresh_signals(vendor_name)
 
-        # Check each condition against fresh data
-        triggered = []
-        for condition in conditions:
-            if not isinstance(condition, str):
-                continue
-            if self._check_condition(condition, fresh):
-                triggered.append(condition)
+        # Evaluate all conditions via LLM
+        str_conditions = [c for c in conditions if isinstance(c, str) and c.strip()]
+        triggered = await self._check_conditions_llm(
+            str_conditions, fresh, vendor_name or "unknown",
+        )
 
         # Invalidate if any condition triggered
         invalidated = False
@@ -137,58 +135,94 @@ class FalsificationWatcher:
             invalidated=invalidated,
         )
 
-    def _check_condition(self, condition: str, fresh_signals: dict[str, Any]) -> bool:
-        """Evaluate a single falsification condition against fresh data.
+    async def _check_conditions_llm(
+        self,
+        conditions: list[str],
+        fresh_signals: dict[str, Any],
+        vendor_name: str,
+    ) -> list[str]:
+        """Evaluate falsification conditions against fresh data using local LLM.
 
-        Uses keyword-based heuristic matching. In Phase 3+, this could be
-        upgraded to LLM-based evaluation for complex conditions.
+        Returns the list of triggered condition strings.
         """
-        cond_lower = condition.lower()
+        if not conditions:
+            return []
 
-        # Pattern: positive review trend / improvement
-        if any(kw in cond_lower for kw in ["positive trend", "improving", "improvement"]):
-            positive_pct = float(fresh_signals.get("positive_review_pct") or 0)
-            prev_positive_pct = fresh_signals.get("prev_positive_review_pct")
-            if prev_positive_pct is not None and positive_pct > float(prev_positive_pct) + 5:
-                return True
+        from ..pipelines.llm import get_pipeline_llm
+        llm = get_pipeline_llm(workload="vllm")
+        if llm is None:
+            llm = get_pipeline_llm(workload="synthesis")
+        if llm is None:
+            logger.warning("No LLM available for falsification evaluation")
+            return []
 
-        # Pattern: competitor price drop / cheaper alternative
-        if any(kw in cond_lower for kw in ["price drop", "cheaper", "free tier", "drops price"]):
-            competitor_price_changes = fresh_signals.get("competitor_price_changes", [])
-            if any(c.get("direction") == "decrease" for c in competitor_price_changes):
-                return True
+        signal_summary = json.dumps(fresh_signals, indent=2, default=str)
+        conditions_text = "\n".join(
+            f"{i+1}. {c}" for i, c in enumerate(conditions)
+        )
 
-        # Pattern: feature release / launches feature
-        if any(kw in cond_lower for kw in ["releases", "launches", "ships", "adds feature"]):
-            recent_features = fresh_signals.get("recent_feature_releases", [])
-            for feature in recent_features:
-                # Check if the feature mentioned in condition was released
-                feature_name = feature.get("name", "").lower()
-                for word in cond_lower.split():
-                    if len(word) > 3 and word in feature_name:
-                        return True
+        prompt = (
+            f"Vendor: {vendor_name}\n\n"
+            f"Current signals:\n{signal_summary}\n\n"
+            f"Falsification conditions to evaluate:\n{conditions_text}\n\n"
+            "For each condition, determine if the current signal data "
+            "provides evidence that the condition has been met.\n\n"
+            "Return ONLY a JSON array of integers representing the "
+            "1-based indices of conditions that ARE triggered by the data. "
+            "If none are triggered, return an empty array [].\n"
+            "Example: [2, 5] means conditions 2 and 5 are triggered.\n"
+            "Return ONLY the JSON array, no explanation."
+        )
 
-        # Pattern: support improvement
-        if any(kw in cond_lower for kw in ["support", "response time", "csat"]):
-            support_trend = fresh_signals.get("support_trend")
-            if support_trend == "improving":
-                return True
+        from ..services.protocols import Message
+        import asyncio
 
-        # Pattern: urgency/churn decrease
-        if any(kw in cond_lower for kw in ["urgency decreas", "churn decreas", "stabiliz"]):
-            urgency = float(fresh_signals.get("avg_urgency") or 10)
-            prev_urgency = fresh_signals.get("prev_avg_urgency")
-            if prev_urgency is not None and urgency < float(prev_urgency) - 1.0:
-                return True
+        messages = [
+            Message(
+                role="system",
+                content=(
+                    "You are a data analyst evaluating whether observed metrics "
+                    "satisfy specific falsification conditions. Be conservative: "
+                    "only mark a condition as triggered if the data clearly "
+                    "supports it. Ambiguous or insufficient data means NOT triggered."
+                ),
+            ),
+            Message(role="user", content=prompt),
+        ]
 
-        # Pattern: review volume drop (indicates issue resolved)
-        if any(kw in cond_lower for kw in ["complaint", "negative review", "review volume"]):
-            neg_count = float(fresh_signals.get("negative_review_count_7d") or 0)
-            prev_neg = fresh_signals.get("prev_negative_review_count_7d")
-            if prev_neg is not None and neg_count < float(prev_neg) * 0.5:
-                return True
+        try:
+            result = await asyncio.to_thread(
+                llm.chat,
+                messages=messages,
+                max_tokens=128,
+                temperature=0.0,
+            )
+            text = (result.get("response") or "").strip() if isinstance(result, dict) else ""
+            if not text:
+                return []
 
-        return False
+            # Clean markdown fences
+            import re as _re
+            text = _re.sub(r"^```\w*\n?", "", text)
+            text = _re.sub(r"\n?```$", "", text)
+            text = text.strip()
+
+            triggered_indices = json.loads(text)
+            if not isinstance(triggered_indices, list):
+                return []
+
+            triggered = []
+            for idx in triggered_indices:
+                if isinstance(idx, int) and 1 <= idx <= len(conditions):
+                    triggered.append(conditions[idx - 1])
+            return triggered
+
+        except Exception:
+            logger.debug(
+                "LLM falsification evaluation failed for %s",
+                vendor_name, exc_info=True,
+            )
+            return []
 
     async def _fetch_fresh_signals(self, vendor_name: str | None) -> dict[str, Any]:
         """Fetch the latest signals for a vendor from existing tables."""
@@ -201,29 +235,58 @@ class FalsificationWatcher:
             # Latest snapshot
             row = await self._pool.fetchrow(
                 """
-                SELECT * FROM b2b_vendor_snapshots
+                SELECT avg_urgency, positive_review_pct, churn_density,
+                       pressure_score, total_reviews, recommend_ratio,
+                       archetype, archetype_confidence
+                FROM b2b_vendor_snapshots
                 WHERE vendor_name = $1
                 ORDER BY snapshot_date DESC LIMIT 1
                 """,
                 vendor_name,
             )
             if row:
-                signals["avg_urgency"] = row.get("avg_urgency")
-                signals["positive_review_pct"] = row.get("positive_review_pct")
-                signals["churn_density"] = row.get("churn_density")
+                for col in ("avg_urgency", "positive_review_pct", "churn_density",
+                            "pressure_score", "total_reviews", "recommend_ratio",
+                            "archetype", "archetype_confidence"):
+                    if row.get(col) is not None:
+                        signals[col] = float(row[col]) if isinstance(row[col], (int, float)) else row[col]
 
             # Previous snapshot (for delta comparison)
             prev = await self._pool.fetchrow(
                 """
-                SELECT * FROM b2b_vendor_snapshots
+                SELECT avg_urgency, positive_review_pct, churn_density,
+                       pressure_score, recommend_ratio
+                FROM b2b_vendor_snapshots
                 WHERE vendor_name = $1
                 ORDER BY snapshot_date DESC LIMIT 1 OFFSET 1
                 """,
                 vendor_name,
             )
             if prev:
-                signals["prev_avg_urgency"] = prev.get("avg_urgency")
-                signals["prev_positive_review_pct"] = prev.get("positive_review_pct")
+                for col in ("avg_urgency", "positive_review_pct", "churn_density",
+                            "pressure_score", "recommend_ratio"):
+                    if prev.get(col) is not None:
+                        signals[f"prev_{col}"] = float(prev[col]) if isinstance(prev[col], (int, float)) else prev[col]
+
+            # Churn signal enrichment (price, DM rate, competitors)
+            sig_row = await self._pool.fetchrow(
+                """
+                SELECT price_complaint_rate, decision_maker_churn_rate,
+                       archetype, archetype_confidence
+                FROM b2b_churn_signals
+                WHERE vendor_name = $1 AND archetype IS NOT NULL
+                ORDER BY last_computed_at DESC LIMIT 1
+                """,
+                vendor_name,
+            )
+            if sig_row:
+                if sig_row.get("price_complaint_rate") is not None:
+                    signals["price_complaint_rate"] = float(sig_row["price_complaint_rate"])
+                if sig_row.get("decision_maker_churn_rate") is not None:
+                    signals["dm_churn_rate"] = float(sig_row["decision_maker_churn_rate"])
+                if sig_row.get("archetype"):
+                    signals["current_archetype"] = sig_row["archetype"]
+                    signals["archetype_confidence"] = float(sig_row["archetype_confidence"] or 0)
 
             # Recent negative review count (7 days)
             neg_count = await self._pool.fetchval(
