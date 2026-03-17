@@ -21,7 +21,7 @@ import re
 import time
 import uuid as _uuid
 from collections import Counter
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from ...config import settings
@@ -2785,6 +2785,54 @@ async def _persist_vendor_snapshots(
     return persisted
 
 
+async def reconstruct_reasoning_lookup(
+    pool,
+    as_of: date | None = None,
+) -> dict[str, dict]:
+    """Rebuild reasoning_lookup from persisted b2b_churn_signals.
+
+    Returns the same dict shape that the stratified reasoner produces
+    in-memory during the core task, allowing follow-up tasks to skip
+    re-running the reasoner entirely.
+
+    When *as_of* is None, uses the most recent last_computed_at watermark.
+    """
+    if as_of is None:
+        watermark = await pool.fetchval(
+            "SELECT MAX(last_computed_at)::date FROM b2b_churn_signals"
+        )
+        if not watermark:
+            return {}
+        as_of = watermark
+
+    rows = await pool.fetch(
+        """
+        SELECT vendor_name,
+               archetype, archetype_confidence, reasoning_mode,
+               falsification_conditions,
+               reasoning_risk_level, reasoning_executive_summary,
+               reasoning_key_signals, reasoning_uncertainty_sources
+        FROM b2b_churn_signals
+        WHERE last_computed_at::date >= $1
+          AND archetype IS NOT NULL
+        """,
+        as_of,
+    )
+    lookup: dict[str, dict] = {}
+    for r in rows:
+        lookup[r["vendor_name"]] = {
+            "archetype": r["archetype"],
+            "confidence": float(r["archetype_confidence"]) if r["archetype_confidence"] else 0,
+            "mode": r["reasoning_mode"] or "",
+            "risk_level": r["reasoning_risk_level"] or "",
+            "executive_summary": r["reasoning_executive_summary"] or "",
+            "key_signals": r["reasoning_key_signals"] or [],
+            "falsification_conditions": r["falsification_conditions"] or [],
+            "uncertainty_sources": r["reasoning_uncertainty_sources"] or [],
+        }
+    return lookup
+
+
 async def _fetch_prior_archetypes(
     pool,
     vendor_names: list[str],
@@ -4279,20 +4327,62 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # Persist displacement edges to first-class table
     displacement_edges_persisted = 0
     try:
+        # Pre-fetch prior mention counts for velocity computation (single query)
+        prior_rows = await pool.fetch(
+            """
+            SELECT from_vendor, to_vendor, computed_date, mention_count
+            FROM b2b_displacement_edges
+            WHERE computed_date >= $1 - 30
+              AND computed_date < $1
+            """,
+            today,
+        )
+        # Build lookup: (from, to) -> {date: mention_count}
+        _prior: dict[tuple[str, str], dict] = {}
+        for pr in prior_rows:
+            key = (pr["from_vendor"], pr["to_vendor"])
+            _prior.setdefault(key, {})[pr["computed_date"]] = pr["mention_count"]
+
         async with pool.transaction() as conn:
             for edge in deterministic_displacement_map:
                 sample_ids = [
                     _uuid.UUID(rid) for rid in edge.get("sample_review_ids", [])
                     if rid
                 ]
+
+                # Velocity: compare current mention_count to closest prior value
+                pair_key = (edge["from_vendor"], edge["to_vendor"])
+                pair_history = _prior.get(pair_key, {})
+                cur_mentions = edge["mention_count"]
+
+                velocity_7d = None
+                velocity_30d = None
+                if pair_history:
+                    # Find the closest date within each window
+                    for window, attr_name in [(7, "velocity_7d"), (30, "velocity_30d")]:
+                        best_date = None
+                        for d in pair_history:
+                            age = (today - d).days
+                            if age <= 0 or age > window:
+                                continue
+                            if best_date is None or abs(age - window) < abs((today - best_date).days - window):
+                                best_date = d
+                        if best_date is not None:
+                            prior_val = pair_history[best_date]
+                            if attr_name == "velocity_7d":
+                                velocity_7d = cur_mentions - prior_val
+                            else:
+                                velocity_30d = cur_mentions - prior_val
+
                 await conn.execute(
                     """
                     INSERT INTO b2b_displacement_edges (
                         from_vendor, to_vendor, mention_count,
                         primary_driver, signal_strength, key_quote,
                         source_distribution, sample_review_ids,
-                        confidence_score, computed_date, report_id
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::uuid[], $9, $10, $11)
+                        confidence_score, computed_date, report_id,
+                        velocity_7d, velocity_30d
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::uuid[], $9, $10, $11, $12, $13)
                     ON CONFLICT (from_vendor, to_vendor, computed_date)
                     DO UPDATE SET
                         mention_count = EXCLUDED.mention_count,
@@ -4302,7 +4392,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         source_distribution = EXCLUDED.source_distribution,
                         sample_review_ids = EXCLUDED.sample_review_ids,
                         confidence_score = EXCLUDED.confidence_score,
-                        report_id = EXCLUDED.report_id
+                        report_id = EXCLUDED.report_id,
+                        velocity_7d = EXCLUDED.velocity_7d,
+                        velocity_30d = EXCLUDED.velocity_30d
                     """,
                     edge["from_vendor"],
                     edge["to_vendor"],
@@ -4315,6 +4407,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     edge.get("confidence_score", 0),
                     today,
                     displacement_report_id,
+                    velocity_7d,
+                    velocity_30d,
                 )
                 displacement_edges_persisted += 1
     except Exception:
@@ -6859,12 +6953,16 @@ async def _upsert_churn_signals(
                     insider_talent_drain_rate, insider_quotable_evidence,
                     archetype, archetype_confidence,
                     reasoning_mode, falsification_conditions,
+                    reasoning_risk_level, reasoning_executive_summary,
+                    reasoning_key_signals, reasoning_uncertainty_sources,
                     last_computed_at
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
                           $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
                           $22, $23, $24, $25, $26, $27, $28, $29,
                           $30, $31, $32, $33,
-                          $34, $35, $36, $37, $38)
+                          $34, $35, $36, $37,
+                          $38, $39, $40, $41,
+                          $42)
                 ON CONFLICT (vendor_name, COALESCE(product_category, '')) DO UPDATE SET
                     total_reviews = EXCLUDED.total_reviews,
                     negative_reviews = EXCLUDED.negative_reviews,
@@ -6901,6 +6999,10 @@ async def _upsert_churn_signals(
                     archetype_confidence = EXCLUDED.archetype_confidence,
                     reasoning_mode = EXCLUDED.reasoning_mode,
                     falsification_conditions = EXCLUDED.falsification_conditions,
+                    reasoning_risk_level = EXCLUDED.reasoning_risk_level,
+                    reasoning_executive_summary = EXCLUDED.reasoning_executive_summary,
+                    reasoning_key_signals = EXCLUDED.reasoning_key_signals,
+                    reasoning_uncertainty_sources = EXCLUDED.reasoning_uncertainty_sources,
                     last_computed_at = EXCLUDED.last_computed_at
                 """,
                 vendor,
@@ -6937,11 +7039,15 @@ async def _upsert_churn_signals(
                 json.dumps(insider.get("org_health_summary", {})),
                 insider.get("talent_drain_rate"),
                 json.dumps(insider.get("quotable_evidence", [])[:5]),
-                # Reasoning columns (migration 139)
+                # Reasoning columns (migration 139 + 144)
                 reasoning_lookup.get(vendor, {}).get("archetype"),
                 reasoning_lookup.get(vendor, {}).get("confidence"),
                 reasoning_lookup.get(vendor, {}).get("mode"),
                 json.dumps(reasoning_lookup.get(vendor, {}).get("falsification_conditions", [])) if reasoning_lookup.get(vendor) else None,
+                reasoning_lookup.get(vendor, {}).get("risk_level"),
+                reasoning_lookup.get(vendor, {}).get("executive_summary"),
+                json.dumps(reasoning_lookup.get(vendor, {}).get("key_signals", [])) if reasoning_lookup.get(vendor) else None,
+                json.dumps(reasoning_lookup.get(vendor, {}).get("uncertainty_sources", [])) if reasoning_lookup.get(vendor) else None,
                 now,
             )
         except Exception:

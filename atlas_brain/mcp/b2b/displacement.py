@@ -69,7 +69,8 @@ async def list_displacement_edges(
             SELECT id, from_vendor, to_vendor, mention_count,
                    primary_driver, signal_strength, key_quote,
                    source_distribution, sample_review_ids,
-                   confidence_score, computed_date, report_id, created_at
+                   confidence_score, computed_date, report_id, created_at,
+                   velocity_7d, velocity_30d
             FROM b2b_displacement_edges
             WHERE {where}
             ORDER BY confidence_score DESC, mention_count DESC
@@ -81,7 +82,7 @@ async def list_displacement_edges(
 
         edges = []
         for r in rows:
-            edges.append({
+            edge = {
                 "id": str(r["id"]),
                 "from_vendor": r["from_vendor"],
                 "to_vendor": r["to_vendor"],
@@ -95,7 +96,12 @@ async def list_displacement_edges(
                 "computed_date": str(r["computed_date"]),
                 "report_id": str(r["report_id"]) if r["report_id"] else None,
                 "created_at": str(r["created_at"]),
-            })
+            }
+            if r["velocity_7d"] is not None:
+                edge["velocity_7d"] = r["velocity_7d"]
+            if r["velocity_30d"] is not None:
+                edge["velocity_30d"] = r["velocity_30d"]
+            edges.append(edge)
 
         return json.dumps({"edges": edges, "count": len(edges)}, default=str)
     except Exception:
@@ -127,7 +133,8 @@ async def get_displacement_history(
         rows = await pool.fetch(
             f"""
             SELECT computed_date, mention_count, signal_strength,
-                   confidence_score, primary_driver, key_quote
+                   confidence_score, primary_driver, key_quote,
+                   velocity_7d, velocity_30d
             FROM b2b_displacement_edges
             WHERE LOWER(from_vendor) = LOWER($1)
               AND LOWER(to_vendor) = LOWER($2)
@@ -142,14 +149,19 @@ async def get_displacement_history(
 
         history = []
         for r in rows:
-            history.append({
+            entry = {
                 "computed_date": str(r["computed_date"]),
                 "mention_count": r["mention_count"],
                 "signal_strength": r["signal_strength"],
                 "confidence_score": float(r["confidence_score"]) if r["confidence_score"] else 0,
                 "primary_driver": r["primary_driver"],
                 "key_quote": r["key_quote"],
-            })
+            }
+            if r["velocity_7d"] is not None:
+                entry["velocity_7d"] = r["velocity_7d"]
+            if r["velocity_30d"] is not None:
+                entry["velocity_30d"] = r["velocity_30d"]
+            history.append(entry)
 
         return json.dumps({
             "from_vendor": from_vendor,
