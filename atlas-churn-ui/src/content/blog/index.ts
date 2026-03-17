@@ -20,6 +20,7 @@ import azureVsShopify202603 from './azure-vs-shopify-2026-03'
 import azureVsCrowdstrike202603 from './azure-vs-crowdstrike-2026-03'
 import notionVsShopify202603 from './notion-vs-shopify-2026-03'
 import crowdstrikeVsNotion202603 from './crowdstrike-vs-notion-2026-03'
+import crowdstrikeVsShopify202603 from './crowdstrike-vs-shopify-2026-03'
 type ChartValue = string | number | null | undefined
 type ChartDatum = Record<string, ChartValue>
 
@@ -109,4 +110,5 @@ export const POSTS: BlogPost[] = [
   azureVsCrowdstrike202603,
   notionVsShopify202603,
   crowdstrikeVsNotion202603,
+  crowdstrikeVsShopify202603,
 ]
