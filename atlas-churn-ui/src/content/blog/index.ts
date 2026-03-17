@@ -23,6 +23,7 @@ import crowdstrikeVsNotion202603 from './crowdstrike-vs-notion-2026-03'
 import crowdstrikeVsShopify202603 from './crowdstrike-vs-shopify-2026-03'
 import realCostOfHubspot202603 from './real-cost-of-hubspot-2026-03'
 import whyTeamsLeaveFortinet202603 from './why-teams-leave-fortinet-2026-03'
+import hubspotDeepDive202603 from './hubspot-deep-dive-2026-03'
 type ChartValue = string | number | null | undefined
 type ChartDatum = Record<string, ChartValue>
 
@@ -115,4 +116,5 @@ export const POSTS: BlogPost[] = [
   crowdstrikeVsShopify202603,
   realCostOfHubspot202603,
   whyTeamsLeaveFortinet202603,
+  hubspotDeepDive202603,
 ]
