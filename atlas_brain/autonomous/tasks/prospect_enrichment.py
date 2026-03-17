@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ...config import settings
+from ...services.apollo_company_overrides import fetch_company_override_map
 from ...services.company_normalization import normalize_company_name as _normalize_company
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
@@ -30,6 +31,7 @@ logger = logging.getLogger("atlas.autonomous.tasks.prospect_enrichment")
 # Loaded once from DB at task start; used to validate Apollo search results
 # before spending reveal credits.
 _vendor_domains: dict[str, str] = {}  # norm vendor name -> domain
+_company_override_cache: dict[str, dict[str, Any]] = {}
 
 _GENERIC_COMPANY_PATTERNS = (
     re.compile(r"^(msp|saas|fintech|non-?profit|university|school|fortune 500|startup)$", re.I),
@@ -45,16 +47,6 @@ _GENERIC_COMPANY_PATTERNS = (
     re.compile(r"(^| )([a-z]+-based|costa rica)( |$)", re.I),
     re.compile(r"(^| )(drop shipping|education nonprofit|nonprofit|consulting|firm)( |$)", re.I),
 )
-
-def _company_enrichment_overrides() -> dict[str, dict[str, Any]]:
-    """Return normalized Apollo enrichment overrides from runtime config."""
-    overrides: dict[str, dict[str, Any]] = {}
-    for name, value in (settings.apollo.company_enrichment_overrides or {}).items():
-        norm = _normalize_company(str(name))
-        if norm and isinstance(value, dict):
-            overrides[norm] = value
-    return overrides
-
 
 def _manual_review_block_sources() -> set[str]:
     """Return discovery sources blocked by manual-review cache rows."""
@@ -74,6 +66,12 @@ async def _load_vendor_domains(pool) -> None:
     _vendor_domains = {r["company_name_norm"]: r["domain"] for r in rows}
 
 
+async def _load_company_enrichment_overrides(pool) -> None:
+    """Cache company overrides for this task run."""
+    global _company_override_cache
+    _company_override_cache = await fetch_company_override_map(pool)
+
+
 def _is_generic_company_descriptor(name: str) -> bool:
     """Return True for reviewer-company labels that are descriptors, not orgs."""
     norm = _normalize_company(name)
@@ -84,7 +82,7 @@ def _is_generic_company_descriptor(name: str) -> bool:
 
 def _company_enrichment_override(name: str) -> dict[str, Any]:
     """Return alias/domain overrides for hard-to-match customer companies."""
-    return _company_enrichment_overrides().get(_normalize_company(name), {})
+    return _company_override_cache.get(_normalize_company(name), {})
 
 
 def _override_domains(name: str) -> list[str]:
@@ -405,7 +403,7 @@ async def _enrich_company(pool, apollo, cfg, company: dict[str, str], credits_us
     people = []
     verified: list[Any] = []
     chosen_search_name = raw
-    for seniorities in (cfg.target_seniorities, ["senior", "entry"]):
+    for seniorities in (cfg.target_seniorities,):
         for search_name in search_names:
             people = await apollo.search_people(company_name=search_name, seniorities=seniorities)
             verified = [
@@ -495,22 +493,43 @@ async def _enrich_company(pool, apollo, cfg, company: dict[str, str], credits_us
             logger.debug("Skipping suppressed email: %s", person.email)
             continue
 
-        # Upsert org cache from reveal response (free enrichment data)
+        # Upsert org cache from reveal response (free firmographic data)
         if not org_cache_id and person.company_domain:
+            org = person.raw.get("organization") or {}
             org_cache_id = await pool.fetchval(
                 """
                 INSERT INTO prospect_org_cache
                     (company_name_raw, company_name_norm, domain,
+                     apollo_org_id, industry, employee_count,
+                     annual_revenue_range, tech_stack,
                      status, enriched_at, updated_at)
-                VALUES ($1, $2, $3, 'enriched', NOW(), NOW())
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb,
+                        'enriched', NOW(), NOW())
                 ON CONFLICT (company_name_norm) DO UPDATE SET
                     domain = COALESCE(EXCLUDED.domain, prospect_org_cache.domain),
+                    apollo_org_id = COALESCE(EXCLUDED.apollo_org_id, prospect_org_cache.apollo_org_id),
+                    industry = COALESCE(EXCLUDED.industry, prospect_org_cache.industry),
+                    employee_count = COALESCE(EXCLUDED.employee_count, prospect_org_cache.employee_count),
+                    annual_revenue_range = COALESCE(EXCLUDED.annual_revenue_range, prospect_org_cache.annual_revenue_range),
+                    tech_stack = CASE WHEN EXCLUDED.tech_stack != '[]'::jsonb
+                                      THEN EXCLUDED.tech_stack
+                                      ELSE prospect_org_cache.tech_stack END,
                     status = 'enriched',
                     enriched_at = NOW(),
                     updated_at = NOW()
                 RETURNING id
                 """,
-                raw, norm, person.company_domain,
+                raw,
+                norm,
+                person.company_domain,
+                org.get("id") or None,
+                org.get("industry") or None,
+                org.get("estimated_num_employees"),
+                org.get("annual_revenue_printed") or None,
+                json.dumps([
+                    t.get("name", t) if isinstance(t, dict) else str(t)
+                    for t in (org.get("current_technologies") or [])
+                ]),
             )
 
         await pool.execute(
@@ -566,6 +585,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     # Load known vendor domains for org validation (prevents wasting reveal credits)
     await _load_vendor_domains(pool)
+    await _load_company_enrichment_overrides(pool)
 
     companies = await _discover_companies(pool, cfg)
     if not companies:

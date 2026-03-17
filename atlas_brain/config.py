@@ -2356,6 +2356,28 @@ class B2BChurnConfig(BaseSettings):
     cross_vendor_concurrency: int = Field(default=3, ge=1, le=10, description="Max concurrent cross-vendor LLM calls")
 
     battle_card_llm_concurrency: int = Field(default=3, description="Max concurrent battle card sales copy LLM calls")
+    battle_card_llm_attempts: int = Field(default=2, ge=1, le=5, description="Max generation attempts per battle card, including repair retries")
+    battle_card_llm_retry_delay_seconds: float = Field(default=1.0, ge=0.0, le=30.0, description="Delay between battle card LLM attempts")
+    battle_card_llm_feedback_limit: int = Field(default=5, ge=1, le=10, description="Max validator issues to feed back into battle card repair attempts")
+    battle_card_high_priority_score_min: float = Field(default=60.0, ge=0.0, le=100.0, description="Min churn pressure score required before battle-card copy can use high-priority language")
+    battle_card_high_priority_urgency_min: float = Field(default=5.0, ge=0.0, le=10.0, description="Min average urgency required before battle-card copy can use high-priority language")
+    battle_card_feature_gap_headline_min_mentions: int = Field(default=5, ge=1, le=100, description="Min feature-gap mention count before a battle-card headline can elevate that gap directly")
+    battle_card_leaving_patterns: list[str] = Field(
+        default=[
+            "customers are leaving",
+            "customer are leaving",
+            "are leaving for",
+            "capturing defectors",
+            "capture defectors",
+            "defectors",
+        ],
+        description="Battle-card phrases that imply explicit switching and require switch-count evidence",
+    )
+
+    # Accounts in motion
+    accounts_in_motion_cron: str = Field(default="35 21 * * *", description="Cron for accounts-in-motion prospecting lists")
+    accounts_in_motion_max_per_vendor: int = Field(default=25, ge=1, le=100, description="Max accounts per vendor in accounts_in_motion report")
+    accounts_in_motion_min_urgency: float = Field(default=5.0, ge=0, le=10, description="Min urgency to include an account in motion")
 
     # Follow-up task scheduling (staggered after core)
     reports_cron: str = Field(default="30 21 * * *", description="Cron for churn reports follow-up task")
@@ -2723,13 +2745,13 @@ class ApolloConfig(BaseSettings):
     api_key: str = Field(default="", description="Apollo.io API key")
     max_prospects_per_company: int = Field(default=3, ge=1, le=25, description="Max people to reveal per company (1 credit each)")
     target_seniorities: list[str] = Field(
-        default=["c_suite", "owner", "founder", "vp", "head", "director", "manager"],
-        description="Apollo seniority levels to target (buying committee breadth)",
+        default=["c_suite", "owner", "founder", "vp", "head", "director"],
+        description="Apollo seniority levels to target (decision makers only)",
     )
     min_urgency_score: float = Field(default=3.0, ge=0, le=10, description="Min review urgency score to count as a churn signal")
     min_churn_signals: int = Field(default=5, ge=1, description="Min churn signals a vendor must have to trigger enrichment")
     org_cache_days: int = Field(default=30, ge=1, description="Days before re-enriching a cached org")
-    max_credits_per_run: int = Field(default=200, ge=1, description="Max Apollo credits per enrichment run")
+    max_credits_per_run: int = Field(default=5000, ge=1, description="Max Apollo credits per enrichment run")
     rate_limit_per_minute: int = Field(default=50, ge=1, description="API calls per minute")
     accepted_email_statuses: list[str] = Field(
         default=["verified", "probabilistic"],
@@ -2745,7 +2767,7 @@ class ApolloConfig(BaseSettings):
     )
     enrichment_cron: str = Field(default="0 20 * * *", description="Prospect enrichment schedule (daily 8 PM)")
     matching_interval_seconds: int = Field(default=3600, ge=300, description="Prospect-to-sequence matching interval")
-    max_vendor_credits_per_run: int = Field(default=50, ge=1, description="Max Apollo credits per vendor target enrichment run")
+    max_vendor_credits_per_run: int = Field(default=2000, ge=1, description="Max Apollo credits per vendor target enrichment run")
     vendor_enrichment_cron: str = Field(default="30 19 * * *", description="Vendor target enrichment schedule (daily 7:30 PM)")
 
     @field_validator("manual_review_block_sources", mode="after")
