@@ -695,7 +695,7 @@ class EmailIntakeConfig(BaseSettings):
         default=True, description="Generate LLM action plans for CRM matches"
     )
     max_action_plans_per_cycle: int = Field(
-        default=50, ge=1, le=100, description="Cap LLM calls per polling cycle"
+        default=100, ge=1, le=200, description="Cap LLM calls per polling cycle"
     )
     auto_execute_enabled: bool = Field(
         default=False, description="Auto-execute intent actions above confidence threshold"
