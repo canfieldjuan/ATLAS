@@ -651,6 +651,12 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
             )
 
         if result and _validate_enrichment(result):
+            # Extract sentiment_trajectory subfields for indexed columns
+            st = result.get("sentiment_trajectory") or {}
+            st_direction = st.get("direction") if isinstance(st, dict) else None
+            st_tenure = st.get("tenure") if isinstance(st, dict) else None
+            st_turning = st.get("turning_point") if isinstance(st, dict) else None
+
             await pool.execute(
                 """
                 UPDATE b2b_reviews
@@ -658,13 +664,19 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
                     enrichment_status = 'enriched',
                     enrichment_attempts = enrichment_attempts + 1,
                     enriched_at = $2,
-                    enrichment_model = $4
+                    enrichment_model = $4,
+                    sentiment_direction = $5,
+                    sentiment_tenure = $6,
+                    sentiment_turning_point = $7
                 WHERE id = $3
                 """,
                 json.dumps(result),
                 datetime.now(timezone.utc),
                 review_id,
                 model_id,
+                st_direction,
+                st_tenure,
+                st_turning if st_turning and st_turning != "null" else None,
             )
 
             # Fire ntfy notification for high-urgency signals (must never

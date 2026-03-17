@@ -41,6 +41,103 @@ from ...services.vendor_registry import (
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_churn_intelligence")
 
+# ---------------------------------------------------------------------------
+# Shared helpers (extracted to _b2b_shared.py)
+# ---------------------------------------------------------------------------
+from ._b2b_shared import (  # noqa: E402
+    _canonicalize_vendor,
+    _canonicalize_competitor,
+    _compute_churn_pressure_score,
+    _compute_evidence_confidence,
+    _quote_text,
+    _safe_json,
+    _intelligence_source_allowlist,
+    _executive_source_list,
+    _eligible_review_filters,
+    _build_llm_trace_metadata,
+    _build_vendor_evidence,
+    fetch_vendor_evidence,
+    _classify_trend,
+    _build_deterministic_weekly_feed,
+    _build_deterministic_vendor_feed,
+    _build_deterministic_displacement_map,
+    _build_deterministic_vendor_scorecards,
+    _build_deterministic_category_overview,
+    _build_deterministic_battle_cards,
+    _build_exploratory_overview,
+    _build_exploratory_payload,
+    _build_validated_executive_summary,
+    _validate_report,
+    _validate_battle_card_sales_copy,
+    _build_pain_lookup,
+    _build_competitor_lookup,
+    _build_feature_gap_lookup,
+    _build_use_case_lookup,
+    _build_integration_lookup,
+    _build_sentiment_lookup,
+    _build_buyer_auth_lookup,
+    _build_timeline_lookup,
+    _build_keyword_spike_lookup,
+    _build_complaint_lookup,
+    _build_positive_lookup,
+    _build_department_lookup,
+    _build_contract_value_lookup,
+    _build_usage_duration_lookup,
+    _build_tenure_lookup,
+    _build_turning_point_lookup,
+    _build_insider_lookup,
+    _build_reason_lookup,
+    _build_market_shift_signal,
+    _aggregate_competitive_disp,
+    _vendor_match,
+    _filter_by_vendors,
+    _extract_alternative_names,
+    _join_summary_terms,
+    _build_buyer_action,
+    _infer_driver_from_reasons,
+    _pick_displacement_quote,
+    _trim_quote_bundles,
+    _trim_company_bundles,
+    _trim_use_case_distribution,
+    _strip_quote_ids,
+    _battle_card_quote_sort_key,
+    _EXPLORATORY_OVERVIEW_SCHEMA,
+    _DEFAULT_WEIGHTS,
+    _ARCHETYPE_WEIGHT_OVERRIDES,
+    _fetch_data_context,
+    _fetch_vendor_provenance,
+    _fetch_vendor_churn_scores,
+    _fetch_high_intent_companies,
+    _fetch_competitive_displacement,
+    _fetch_displacement_provenance,
+    _fetch_pain_provenance,
+    _fetch_use_case_provenance,
+    _fetch_integration_provenance,
+    _fetch_buyer_profile_provenance,
+    _fetch_pain_distribution,
+    _fetch_feature_gaps,
+    _fetch_negative_review_counts,
+    _fetch_price_complaint_rates,
+    _fetch_dm_churn_rates,
+    _fetch_churning_companies,
+    _fetch_quotable_evidence,
+    _fetch_insider_aggregates,
+    _fetch_product_profiles,
+    _fetch_budget_signals,
+    _fetch_use_case_distribution,
+    _fetch_sentiment_trajectory,
+    _fetch_sentiment_tenure,
+    _fetch_turning_points,
+    _fetch_review_text_aggregates,
+    _fetch_department_distribution,
+    _fetch_contract_context_distribution,
+    _fetch_buyer_authority_summary,
+    _fetch_timeline_signals,
+    _fetch_competitor_reasons,
+    _fetch_prior_reports,
+    _fetch_keyword_spikes,
+)
+
 
 class _TaskBudget:
     """Track elapsed time against a fixed budget for phase-gated execution.
@@ -6025,12 +6122,12 @@ async def _fetch_sentiment_trajectory(pool, window_days: int) -> list[dict[str, 
     rows = await pool.fetch(
         f"""
         SELECT vendor_name,
-            enrichment->'sentiment_trajectory'->>'direction' AS direction,
+            sentiment_direction AS direction,
             count(*) AS cnt
         FROM b2b_reviews
         WHERE {filters}
-          AND enrichment->'sentiment_trajectory'->>'direction' IS NOT NULL
-        GROUP BY vendor_name, enrichment->'sentiment_trajectory'->>'direction'
+          AND sentiment_direction IS NOT NULL
+        GROUP BY vendor_name, sentiment_direction
         ORDER BY cnt DESC
         """,
         window_days,
@@ -6053,13 +6150,13 @@ async def _fetch_sentiment_tenure(pool, window_days: int) -> list[dict[str, Any]
     rows = await pool.fetch(
         f"""
         SELECT vendor_name,
-            enrichment->'sentiment_trajectory'->>'tenure' AS tenure,
+            sentiment_tenure AS tenure,
             count(*) AS cnt
         FROM b2b_reviews
         WHERE {filters}
-          AND enrichment->'sentiment_trajectory'->>'tenure' IS NOT NULL
-          AND enrichment->'sentiment_trajectory'->>'tenure' != ''
-        GROUP BY vendor_name, enrichment->'sentiment_trajectory'->>'tenure'
+          AND sentiment_tenure IS NOT NULL
+          AND sentiment_tenure != ''
+        GROUP BY vendor_name, sentiment_tenure
         ORDER BY cnt DESC
         """,
         window_days,
@@ -6078,14 +6175,13 @@ async def _fetch_turning_points(pool, window_days: int) -> list[dict[str, Any]]:
     rows = await pool.fetch(
         f"""
         SELECT vendor_name,
-            enrichment->'sentiment_trajectory'->>'turning_point' AS turning_point,
+            sentiment_turning_point AS turning_point,
             count(*) AS cnt
         FROM b2b_reviews
         WHERE {filters}
-          AND enrichment->'sentiment_trajectory'->>'turning_point' IS NOT NULL
-          AND enrichment->'sentiment_trajectory'->>'turning_point' != ''
-          AND enrichment->'sentiment_trajectory'->>'turning_point' != 'null'
-        GROUP BY vendor_name, enrichment->'sentiment_trajectory'->>'turning_point'
+          AND sentiment_turning_point IS NOT NULL
+          AND sentiment_turning_point != ''
+        GROUP BY vendor_name, sentiment_turning_point
         ORDER BY cnt DESC
         """,
         window_days,
@@ -7163,7 +7259,7 @@ async def generate_vendor_report(
                r.enrichment->'pain_categories' AS pain_json,
                r.enrichment->'quotable_phrases' AS quotable_phrases,
                r.enrichment->'feature_gaps' AS feature_gaps,
-               r.enrichment->'sentiment_trajectory'->>'direction' AS sentiment_direction,
+               r.sentiment_direction,
                r.reviewer_title, r.company_size_raw,
                COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry
         FROM b2b_reviews r

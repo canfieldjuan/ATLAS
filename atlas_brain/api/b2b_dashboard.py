@@ -1020,7 +1020,7 @@ async def search_reviews(
                (enrichment->'reviewer_context'->>'decision_maker')::boolean AS decision_maker,
                enrichment->'reviewer_context'->>'role_level' AS role_level,
                enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
-               enrichment->'sentiment_trajectory'->>'direction' AS sentiment_direction,
+               sentiment_direction,
                enrichment->'competitors_mentioned' AS competitors_raw,
                enrichment->'quotable_phrases' AS quotable_raw,
                enrichment->'positive_aspects' AS positive_raw,

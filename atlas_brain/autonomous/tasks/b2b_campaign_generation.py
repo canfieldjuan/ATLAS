@@ -1716,7 +1716,7 @@ async def _fetch_opportunities(
                r.enrichment->'feature_gaps' AS feature_gaps,
                r.enrichment->'use_case'->>'primary_workflow' AS primary_workflow,
                r.enrichment->'use_case'->'integration_stack' AS integration_stack,
-               r.enrichment->'sentiment_trajectory'->>'direction' AS sentiment_direction,
+               r.sentiment_direction,
                COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry,
                r.reviewer_title, r.company_size_raw
         FROM b2b_reviews r
