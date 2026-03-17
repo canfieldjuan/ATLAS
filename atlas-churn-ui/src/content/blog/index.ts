@@ -10,6 +10,7 @@ import realCostOfSalesforce202603 from './real-cost-of-salesforce-2026-03'
 import jiraVsTeamwork202603 from './jira-vs-teamwork-2026-03'
 import freshsalesVsSalesforce202603 from './freshsales-vs-salesforce-2026-03'
 import insightlyVsSalesforce202603 from './insightly-vs-salesforce-2026-03'
+import mailchimpAlternatives202603 from './mailchimp-alternatives-2026-03'
 type ChartValue = string | number | null | undefined
 type ChartDatum = Record<string, ChartValue>
 
@@ -89,4 +90,5 @@ export const POSTS: BlogPost[] = [
   jiraVsTeamwork202603,
   freshsalesVsSalesforce202603,
   insightlyVsSalesforce202603,
+  mailchimpAlternatives202603,
 ]
