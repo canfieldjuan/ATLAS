@@ -2117,7 +2117,7 @@ class ExternalDataConfig(BaseSettings):
     # Blog post generation (data-backed articles with charts)
     blog_post_enabled: bool = Field(default=True, description="Enable blog post generation from review data")
     blog_post_cron: str = Field(default="0 23 * * 0", description="Cron for blog post generation (weekly, Sunday 11 PM)")
-    blog_post_max_tokens: int = Field(default=3072, description="Max tokens per blog post LLM call")
+    blog_post_max_tokens: int = Field(default=8192, description="Max tokens per blog post LLM call (reasoning models need extra budget)")
     blog_post_max_per_run: int = Field(default=1, description="Max blog posts to generate per run")
     blog_post_ui_path: str = Field(default="", description="Path to atlas-intel-ui/src/content/blog/ (empty = DB only)")
     blog_base_url: str = Field(default="https://atlas-intel-ui-two.vercel.app", description="Base URL for consumer blog (full URLs in campaign emails)")
@@ -2300,7 +2300,7 @@ class B2BChurnConfig(BaseSettings):
     # Blog post generation
     blog_post_enabled: bool = Field(default=False, description="Enable B2B blog post generation")
     blog_post_cron: str = Field(default="0 23 * * 1-5", description="Blog post schedule (weekdays 11 PM, 5x/week)")
-    blog_post_max_tokens: int = Field(default=3072, description="Max LLM output tokens for blog post")
+    blog_post_max_tokens: int = Field(default=16384, description="Max LLM output tokens for blog post (reasoning models need extra budget)")
     blog_post_max_per_run: int = Field(default=1, description="Max blog posts per run")
     blog_post_ui_path: str = Field(default="", description="Path to atlas-churn-ui blog content dir")
     blog_base_url: str = Field(default="https://churnsignals.co", description="Base URL for B2B blog (full URLs in campaign emails)")
@@ -2348,9 +2348,17 @@ class B2BChurnConfig(BaseSettings):
     stratified_reasoning_vendor_cap: int = Field(default=50, description="Max vendors to send through stratified reasoning (top N by urgency)")
     executive_summary_llm_enabled: bool = Field(default=False, description="Use LLM-synthesized executive summaries instead of deterministic templates")
 
+    # Cross-vendor reasoning (battles, category councils, asymmetry)
+    cross_vendor_reasoning_enabled: bool = Field(default=False, description="Enable cross-vendor LLM reasoning (battles, category councils, asymmetry)")
+    cross_vendor_max_battles: int = Field(default=5, ge=0, le=20, description="Max pairwise battle reasoning calls per run")
+    cross_vendor_max_categories: int = Field(default=3, ge=0, le=10, description="Max category council reasoning calls per run")
+    cross_vendor_max_asymmetry: int = Field(default=3, ge=0, le=10, description="Max resource-asymmetry reasoning calls per run")
+    cross_vendor_concurrency: int = Field(default=3, ge=1, le=10, description="Max concurrent cross-vendor LLM calls")
+
     # Phase time budgeting
     intelligence_budget_seconds: int = Field(default=540, description="Total time budget for intelligence task phases (excludes persistence margin)")
     intelligence_phase_min_reasoning: int = Field(default=120, description="Min seconds remaining to start reasoning phase")
+    intelligence_phase_min_cross_vendor: int = Field(default=90, description="Min seconds remaining to start cross-vendor reasoning phase")
     intelligence_phase_min_exploratory: int = Field(default=90, description="Min seconds remaining to start exploratory LLM")
     intelligence_phase_min_scorecard: int = Field(default=60, description="Min seconds remaining to start scorecard narrative LLM")
     intelligence_phase_min_exec_summary: int = Field(default=45, description="Min seconds remaining to start executive summary LLM")
@@ -2390,6 +2398,10 @@ class B2BWebhookConfig(BaseSettings):
     retry_delay_seconds: int = Field(default=5, ge=1, le=600, description="Delay between retries")
     max_payload_bytes: int = Field(default=65536, description="Max payload size in bytes")
     delivery_log_retention_days: int = Field(default=30, ge=1, le=365, description="Days to keep delivery logs")
+    min_change_event_severity: str = Field(
+        default="moderate",
+        description="Minimum severity level for change event webhook dispatch (low/moderate/high/critical). Events below threshold are still persisted.",
+    )
 
 
 class CRMEventConfig(BaseSettings):
@@ -2618,6 +2630,10 @@ class CampaignSequenceConfig(BaseSettings):
     send_window_end: str = Field(default="17:00", description="Latest send time (HH:MM)")
     send_timezone: str = Field(default="America/Chicago", description="Timezone for send window")
     skip_weekends: bool = Field(default=True, description="Don't send on Sat/Sun")
+    max_sends_per_contact: int = Field(
+        default=8, ge=1,
+        description="Max total emails sent to a single recipient across all sequences before fatigue suppression",
+    )
 
     @field_validator("sender_type", mode="after")
     @classmethod

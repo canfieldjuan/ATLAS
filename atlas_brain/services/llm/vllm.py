@@ -150,7 +150,7 @@ class VLLMLLM(BaseModelService):
 
             choice = data.get("choices", [{}])[0]
             message = choice.get("message", {})
-            content = message.get("content", "").strip()
+            content = (message.get("content") or "").strip()
 
             logger.info(
                 "vLLM chat: tokens=%s, content_len=%d, finish_reason=%s",
@@ -206,7 +206,7 @@ class VLLMLLM(BaseModelService):
 
             choice = data.get("choices", [{}])[0]
             message = choice.get("message", {})
-            content = message.get("content", "").strip()
+            content = (message.get("content") or "").strip()
 
             logger.info(
                 "vLLM async chat: tokens=%s, content_len=%d",

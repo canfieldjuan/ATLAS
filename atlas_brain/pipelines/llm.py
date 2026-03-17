@@ -214,6 +214,18 @@ def get_pipeline_llm(
 
     # --- Workload-based routing (preferred) ---
     if workload is not None:
+        # Explicit model override: create a standalone instance (don't swap the singleton)
+        if openrouter_model and try_openrouter:
+            or_key = os.environ.get("OPENROUTER_API_KEY", "")
+            if or_key:
+                try:
+                    from ..services.llm.openrouter import OpenRouterLLM
+                    _or = OpenRouterLLM(model=openrouter_model, api_key=or_key)
+                    _or.load()
+                    logger.info("Using explicit OpenRouter model override: %s", openrouter_model)
+                    return _or
+                except Exception as e:
+                    logger.warning("Explicit OpenRouter model %s failed: %s", openrouter_model, e)
         llm = _resolve_workload(workload)
         if llm is not None:
             return llm

@@ -54,7 +54,7 @@ class OllamaLLM(BaseModelService):
     def _extract_content(self, data: dict[str, Any]) -> str:
         """Extract response text from Ollama response, falling back to thinking field."""
         msg = data.get("message", {})
-        content = msg.get("content", "").strip()
+        content = (msg.get("content") or "").strip()
         if content:
             return content
         # Some cloud models (e.g. minimax-m2) put everything in thinking
@@ -307,7 +307,7 @@ class OllamaLLM(BaseModelService):
                 total_duration,
             )
             return {
-                "response": msg.get("content", "").strip(),
+                "response": (msg.get("content") or "").strip(),
                 "tool_calls": tool_calls,
                 "message": msg,
                 "prompt_eval_count": prompt_eval_count,

@@ -143,7 +143,39 @@ class OpenRouterLLM(BaseModelService):
 
             choice = data.get("choices", [{}])[0]
             message = choice.get("message", {})
-            content = message.get("content", "").strip()
+            content = (message.get("content") or "").strip()
+
+            # Some models (e.g. Kimi K2.5) return output in reasoning/reasoning_content
+            # when content is empty -- fall back to those fields
+            if not content:
+                for _rc_field in ("reasoning_content", "reasoning"):
+                    _rc_val = message.get(_rc_field)
+                    if isinstance(_rc_val, str) and _rc_val.strip():
+                        content = _rc_val.strip()
+                        logger.info(
+                            "OpenRouter: content was null, using %s (%d chars)",
+                            _rc_field, len(content),
+                        )
+                        break
+
+            if not content:
+                # Log the full message object so we can diagnose null-content responses
+                logger.warning(
+                    "OpenRouter returned empty content: model=%s message_keys=%s finish_reason=%s",
+                    self.model,
+                    list(message.keys()),
+                    choice.get("finish_reason"),
+                )
+                # Dump full response for diagnosis
+                import os
+                _diag_path = "/tmp/openrouter_null_content.json"
+                try:
+                    with open(_diag_path, "w") as _f:
+                        import json as _json
+                        _json.dump({"choice": choice, "usage": data.get("usage"), "model": self.model}, _f, indent=2, default=str)
+                    logger.warning("Diagnostic response written to %s", _diag_path)
+                except Exception:
+                    pass
 
             usage = data.get("usage", {})
             reasoning_tokens = usage.get("completion_tokens_details", {}).get("reasoning_tokens", 0)
@@ -262,7 +294,7 @@ class OpenRouterLLM(BaseModelService):
 
             choice = data.get("choices", [{}])[0]
             message = choice.get("message", {})
-            return message.get("content", "").strip()
+            return (message.get("content") or "").strip()
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500] if e.response else ""
             logger.error(

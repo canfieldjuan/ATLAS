@@ -146,7 +146,7 @@ class GroqLLM(BaseModelService):
 
             choice = data.get("choices", [{}])[0]
             message = choice.get("message", {})
-            content = message.get("content", "").strip()
+            content = (message.get("content") or "").strip()
 
             usage = data.get("usage", {})
             logger.info("Groq chat: tokens=%s, content_len=%d",
@@ -299,7 +299,7 @@ class GroqLLM(BaseModelService):
 
             choice = data.get("choices", [{}])[0]
             message = choice.get("message", {})
-            return message.get("content", "").strip()
+            return (message.get("content") or "").strip()
         except httpx.HTTPError as e:
             logger.error("Groq async chat error: %s", e)
             raise

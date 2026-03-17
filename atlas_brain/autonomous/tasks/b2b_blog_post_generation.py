@@ -2944,15 +2944,31 @@ def _generate_content(
                            queue_time_ms=_trace_meta.get("queue_time_ms"),
                            metadata=_biz_ctx)
         text = result.get("response", "") if isinstance(result, dict) else str(result)
+        logger.info("Blog LLM raw response length: %d chars", len(text or ""))
+        if not text:
+            logger.error("Blog LLM returned empty response for %s", blueprint.slug)
+            try:
+                with open("/tmp/blog_empty_response.txt", "w") as _ef:
+                    import json as _j2
+                    _ef.write(_j2.dumps(result, indent=2, default=str)[:5000])
+            except Exception:
+                pass
+            return None
         text = clean_llm_output(text)
         parsed = parse_json_response(text, recover_truncated=True)
 
         if parsed.get("_parse_fallback"):
-            logger.error("Failed to parse LLM response as JSON")
+            logger.error("Failed to parse LLM response as JSON (text[:500]=%s)", text[:500])
+            # Dump for diagnosis
+            try:
+                with open("/tmp/blog_llm_fail.txt", "w") as _bf:
+                    _bf.write(f"PARSE FALLBACK\ntext_len={len(text)}\ntext[:2000]={text[:2000]}\n")
+            except Exception:
+                pass
             return None
 
         if not all(k in parsed for k in ("title", "description", "content")):
-            logger.error("LLM response missing required keys: %s", list(parsed.keys()))
+            logger.error("LLM response missing required keys: %s (text[:300]=%s)", list(parsed.keys()), text[:300])
             return None
 
         # Ensure SEO fields have sane defaults if LLM didn't produce them
