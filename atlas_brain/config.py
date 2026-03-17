@@ -2355,14 +2355,6 @@ class B2BChurnConfig(BaseSettings):
     cross_vendor_max_asymmetry: int = Field(default=3, ge=0, le=10, description="Max resource-asymmetry reasoning calls per run")
     cross_vendor_concurrency: int = Field(default=3, ge=1, le=10, description="Max concurrent cross-vendor LLM calls")
 
-    # Phase time budgeting
-    intelligence_budget_seconds: int = Field(default=540, description="Total time budget for intelligence task phases (excludes persistence margin)")
-    intelligence_phase_min_reasoning: int = Field(default=120, description="Min seconds remaining to start reasoning phase")
-    intelligence_phase_min_cross_vendor: int = Field(default=90, description="Min seconds remaining to start cross-vendor reasoning phase")
-    intelligence_phase_min_exploratory: int = Field(default=90, description="Min seconds remaining to start exploratory LLM")
-    intelligence_phase_min_scorecard: int = Field(default=60, description="Min seconds remaining to start scorecard narrative LLM")
-    intelligence_phase_min_exec_summary: int = Field(default=45, description="Min seconds remaining to start executive summary LLM")
-    intelligence_phase_min_battle_card_copy: int = Field(default=60, description="Min seconds remaining to start battle card sales copy LLM")
     battle_card_llm_concurrency: int = Field(default=3, description="Max concurrent battle card sales copy LLM calls")
 
     # Follow-up task scheduling (staggered after core)
@@ -2724,7 +2716,7 @@ class ApolloConfig(BaseSettings):
     """Apollo.io prospect enrichment configuration."""
 
     model_config = SettingsConfigDict(
-        env_prefix="ATLAS_APOLLO_", env_file=".env", extra="ignore",
+        env_prefix="ATLAS_APOLLO_", env_file=(".env", ".env.local"), extra="ignore",
     )
 
     enabled: bool = Field(default=False, description="Enable Apollo.io prospect pipeline")
@@ -2743,10 +2735,27 @@ class ApolloConfig(BaseSettings):
         default=["verified", "probabilistic"],
         description="Email statuses considered usable",
     )
+    manual_review_block_sources: list[str] = Field(
+        default_factory=list,
+        description="Discovery sources blocked by prospect_org_cache manual_review rows",
+    )
+    company_enrichment_overrides: dict[str, dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Company-specific Apollo alias/domain overrides keyed by raw company name",
+    )
     enrichment_cron: str = Field(default="0 20 * * *", description="Prospect enrichment schedule (daily 8 PM)")
     matching_interval_seconds: int = Field(default=3600, ge=300, description="Prospect-to-sequence matching interval")
     max_vendor_credits_per_run: int = Field(default=50, ge=1, description="Max Apollo credits per vendor target enrichment run")
     vendor_enrichment_cron: str = Field(default="30 19 * * *", description="Vendor target enrichment schedule (daily 7:30 PM)")
+
+    @field_validator("manual_review_block_sources", mode="after")
+    @classmethod
+    def _validate_manual_review_block_sources(cls, v: list[str]) -> list[str]:
+        allowed = {"reviewer_company", "vendor_name", "campaign_sequence", "vendor_target"}
+        invalid = [source for source in v if source not in allowed]
+        if invalid:
+            raise ValueError(f"manual_review_block_sources contains invalid sources: {invalid}")
+        return v
 
 
 class TemporalPatternConfig(BaseSettings):

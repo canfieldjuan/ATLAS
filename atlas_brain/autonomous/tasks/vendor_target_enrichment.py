@@ -152,7 +152,7 @@ async def _enrich_target(pool, apollo, cfg, target: dict, credits_used: int) -> 
         "SELECT id, status, enriched_at FROM prospect_org_cache WHERE company_name_norm = $1",
         norm,
     )
-    if cached and cached["status"] == "manual_review":
+    if cached and cached["status"] == "manual_review" and "vendor_target" in set(cfg.manual_review_block_sources or []):
         stats["skipped"] = "manual_review_queued"
         return 0, stats
     if cached and cached["status"] == "not_found":

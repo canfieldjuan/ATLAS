@@ -82,7 +82,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _fetch_review_text_aggregates,
         _fetch_department_distribution,
     )
-    from .b2b_churn_intelligence import reconstruct_reasoning_lookup
+    from .b2b_churn_intelligence import (
+        reconstruct_reasoning_lookup,
+        reconstruct_cross_vendor_lookup,
+    )
 
     window_days = cfg.intelligence_window_days
     min_reviews = cfg.intelligence_min_reviews
@@ -127,8 +130,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not vendor_scores:
         return {"_skip_synthesis": "No vendor scores"}
 
-    # --- Phase 2: Reconstruct reasoning from DB ---
+    # --- Phase 2: Reconstruct reasoning + cross-vendor from DB ---
     reasoning_lookup = await reconstruct_reasoning_lookup(pool, as_of=today)
+    xv_lookup = await reconstruct_cross_vendor_lookup(pool, as_of=today)
+    logger.info(
+        "Cross-vendor enrichment: %d battles, %d councils, %d asymmetries",
+        len(xv_lookup.get("battles", {})),
+        len(xv_lookup.get("councils", {})),
+        len(xv_lookup.get("asymmetries", {})),
+    )
 
     # --- Phase 3: Build lookups ---
     pain_lookup = _build_pain_lookup(pain_dist)
@@ -194,6 +204,35 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 }
     except Exception:
         logger.debug("Ecosystem enrichment skipped", exc_info=True)
+
+    # Enrich with cross-vendor battle conclusions + resource asymmetry
+    for card in deterministic_battle_cards:
+        vendor = card.get("vendor", "")
+        # Battle conclusions involving this vendor
+        battles = []
+        for pair_key, battle in xv_lookup.get("battles", {}).items():
+            if vendor in pair_key:
+                bc = battle.get("conclusion", {})
+                battles.append({
+                    "opponent": [v for v in pair_key if v != vendor][0] if len(pair_key) > 1 else "",
+                    "conclusion": bc.get("conclusion", ""),
+                    "durability": bc.get("durability_assessment", ""),
+                    "confidence": battle.get("confidence", 0),
+                    "winner": bc.get("winner", ""),
+                    "key_insights": bc.get("key_insights", []),
+                })
+        if battles:
+            card["cross_vendor_battles"] = battles
+        # Resource asymmetry involving this vendor
+        for pair_key, asym in xv_lookup.get("asymmetries", {}).items():
+            if vendor in pair_key:
+                card["resource_asymmetry"] = {
+                    "opponent": [v for v in pair_key if v != vendor][0] if len(pair_key) > 1 else "",
+                    "conclusion": asym.get("conclusion", {}).get("conclusion", ""),
+                    "resource_advantage": asym.get("conclusion", {}).get("resource_advantage", ""),
+                    "confidence": asym.get("confidence", 0),
+                }
+                break  # first match is highest confidence (query ordered by confidence DESC)
 
     logger.info("Built %d deterministic battle cards", len(deterministic_battle_cards))
 

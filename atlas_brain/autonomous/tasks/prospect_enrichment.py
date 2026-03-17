@@ -46,30 +46,19 @@ _GENERIC_COMPANY_PATTERNS = (
     re.compile(r"(^| )(drop shipping|education nonprofit|nonprofit|consulting|firm)( |$)", re.I),
 )
 
-_RAW_COMPANY_ENRICHMENT_OVERRIDES: dict[str, dict[str, Any]] = {
-    "ovh": {"search_names": ["OVHcloud", "OVH"], "domain": "ovhcloud.com"},
-    "host gator": {"search_names": ["HostGator", "Host Gator"], "domain": "hostgator.com"},
-    "wordpress.com": {"search_names": ["WordPress", "WordPress.com"], "domain": "wordpress.com"},
-    "a2 hosting": {"search_names": ["A2 Hosting"], "domain": "a2hosting.com"},
-    "brightpod": {"search_names": ["Brightpod"], "domain": "brightpod.com"},
-    "davinci virtual": {
-        "search_names": ["DaVinci Virtual", "DaVinci Virtual Office Solutions"],
-        "domain": "davincivirtual.com",
-    },
-    "withfriends.co": {"search_names": ["Withfriends", "Withfriends.co"], "domain": "withfriends.co"},
-    "royaltyhealth.com": {"search_names": ["RoyaltyHealth", "RoyaltyHealth.com"], "domain": "royaltyhealth.com"},
-    "hackclub": {"search_names": ["Hack Club", "Hackclub"], "domain": "hackclub.com"},
-    "telepacific": {"search_names": ["TPx Communications", "TelePacific"], "domain": "tpx.com"},
-    "bolddesk": {"search_names": ["BoldDesk"], "domain": "bolddesk.com"},
-    "zulip": {"search_names": ["Zulip"], "domain": "zulip.com"},
-    "gr8.com": {"search_names": ["GR8 Tech", "GR8.com"], "domain": "gr8.tech"},
-    "cerner": {"search_names": ["Cerner", "Oracle Health"], "domains": ["cerner.com", "oracle.com"]},
-}
+def _company_enrichment_overrides() -> dict[str, dict[str, Any]]:
+    """Return normalized Apollo enrichment overrides from runtime config."""
+    overrides: dict[str, dict[str, Any]] = {}
+    for name, value in (settings.apollo.company_enrichment_overrides or {}).items():
+        norm = _normalize_company(str(name))
+        if norm and isinstance(value, dict):
+            overrides[norm] = value
+    return overrides
 
-_COMPANY_ENRICHMENT_OVERRIDES: dict[str, dict[str, Any]] = {
-    _normalize_company(name): value
-    for name, value in _RAW_COMPANY_ENRICHMENT_OVERRIDES.items()
-}
+
+def _manual_review_block_sources() -> set[str]:
+    """Return discovery sources blocked by manual-review cache rows."""
+    return set(settings.apollo.manual_review_block_sources or [])
 
 
 async def _load_vendor_domains(pool) -> None:
@@ -95,7 +84,7 @@ def _is_generic_company_descriptor(name: str) -> bool:
 
 def _company_enrichment_override(name: str) -> dict[str, Any]:
     """Return alias/domain overrides for hard-to-match customer companies."""
-    return _COMPANY_ENRICHMENT_OVERRIDES.get(_normalize_company(name), {})
+    return _company_enrichment_overrides().get(_normalize_company(name), {})
 
 
 def _override_domains(name: str) -> list[str]:
@@ -245,6 +234,17 @@ async def _discover_companies(pool, cfg) -> list[dict[str, str]]:
     """
     companies: dict[str, str] = {}  # norm -> raw
     company_sources: dict[str, str] = {}
+    manual_review_block_sources = set(cfg.manual_review_block_sources or [])
+    manual_review_blocked_norms = {
+        r["company_name_norm"]
+        for r in await pool.fetch(
+            """
+            SELECT company_name_norm
+            FROM prospect_org_cache
+            WHERE status = 'manual_review'
+            """,
+        )
+    } if manual_review_block_sources else set()
     covered_company_norms = {
         r["company_name_norm"]
         for r in await pool.fetch(
@@ -265,6 +265,8 @@ async def _discover_companies(pool, cfg) -> list[dict[str, str]]:
         if not norm or norm in companies:
             return
         if norm in covered_company_norms:
+            return
+        if source in manual_review_block_sources and norm in manual_review_blocked_norms:
             return
         if source == "reviewer_company" and _is_generic_company_descriptor(raw):
             return
@@ -291,11 +293,8 @@ async def _discover_companies(pool, cfg) -> list[dict[str, str]]:
           )
           AND reviewer_company_norm NOT IN (
               SELECT company_name_norm FROM prospect_org_cache
-              WHERE status = 'manual_review'
-                 OR (
-                     status IN ('enriched', 'not_found')
-                     AND enriched_at > NOW() - make_interval(days => $2)
-                 )
+              WHERE status IN ('enriched', 'not_found')
+                AND enriched_at > NOW() - make_interval(days => $2)
           )
         GROUP BY reviewer_company_norm
         ORDER BY
@@ -323,11 +322,8 @@ async def _discover_companies(pool, cfg) -> list[dict[str, str]]:
           AND vendor_name != ''
           AND LOWER(TRIM(vendor_name)) NOT IN (
               SELECT company_name_norm FROM prospect_org_cache
-              WHERE status = 'manual_review'
-                 OR (
-                     status IN ('enriched', 'not_found')
-                     AND enriched_at > NOW() - make_interval(days => $2)
-                 )
+              WHERE status IN ('enriched', 'not_found')
+                AND enriched_at > NOW() - make_interval(days => $2)
           )
         GROUP BY vendor_name
         HAVING COUNT(*) >= $3
@@ -350,11 +346,8 @@ async def _discover_companies(pool, cfg) -> list[dict[str, str]]:
           AND cs.recipient_email IS NULL
           AND LOWER(TRIM(cs.company_name)) NOT IN (
               SELECT company_name_norm FROM prospect_org_cache
-              WHERE status = 'manual_review'
-                 OR (
-                     status IN ('enriched', 'not_found')
-                     AND enriched_at > NOW() - make_interval(days => $1)
-                 )
+              WHERE status IN ('enriched', 'not_found')
+                AND enriched_at > NOW() - make_interval(days => $1)
           )
         LIMIT 50
         """,
@@ -392,8 +385,9 @@ async def _enrich_company(pool, apollo, cfg, company: dict[str, str], credits_us
         norm,
     )
     org_cache_id = cached["id"] if cached else None
+    manual_review_blocks = company.get("source") in _manual_review_block_sources()
 
-    if cached and cached["status"] == "manual_review":
+    if cached and cached["status"] == "manual_review" and manual_review_blocks:
         stats["skipped"] = "manual_review_queued"
         return credits, stats
 

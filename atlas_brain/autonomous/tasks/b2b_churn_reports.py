@@ -100,7 +100,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _fetch_turning_points,
         _fetch_displacement_provenance,
     )
-    from .b2b_churn_intelligence import reconstruct_reasoning_lookup
+    from .b2b_churn_intelligence import (
+        reconstruct_reasoning_lookup,
+        reconstruct_cross_vendor_lookup,
+    )
 
     window_days = cfg.intelligence_window_days
     min_reviews = cfg.intelligence_min_reviews
@@ -154,11 +157,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not vendor_scores:
         return {"_skip_synthesis": "No vendor scores"}
 
-    # --- Phase 2: Reconstruct reasoning from DB (no reasoner needed) ---
+    # --- Phase 2: Reconstruct reasoning + cross-vendor from DB ---
     reasoning_lookup = await reconstruct_reasoning_lookup(pool, as_of=today)
+    xv_lookup = await reconstruct_cross_vendor_lookup(pool, as_of=today)
     logger.info(
         "Reconstructed reasoning for %d vendors from b2b_churn_signals",
         len(reasoning_lookup),
+    )
+    logger.info(
+        "Cross-vendor enrichment: %d battles, %d councils, %d asymmetries",
+        len(xv_lookup.get("battles", {})),
+        len(xv_lookup.get("councils", {})),
+        len(xv_lookup.get("asymmetries", {})),
     )
 
     # --- Phase 3: Build lookups ---
@@ -279,6 +289,47 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 }
     except Exception:
         logger.debug("Ecosystem analysis skipped", exc_info=True)
+
+    # Enrich category overview with cross-vendor conclusions
+    for cat_entry in deterministic_category_overview:
+        cat_name = cat_entry.get("category", "")
+        council = xv_lookup.get("councils", {}).get(cat_name)
+        if council:
+            c = council.get("conclusion", {})
+            cat_entry["cross_vendor_analysis"] = {
+                "conclusion": c.get("conclusion", ""),
+                "market_regime": c.get("market_regime", ""),
+                "durability_assessment": c.get("durability_assessment", ""),
+                "key_insights": c.get("key_insights", []),
+                "winner": c.get("winner", ""),
+                "loser": c.get("loser", ""),
+                "confidence": council.get("confidence", 0),
+            }
+
+    # Enrich displacement edges with cross-vendor battle conclusions
+    for edge in deterministic_displacement_map:
+        pair = tuple(sorted([edge["from_vendor"], edge["to_vendor"]]))
+        battle = xv_lookup.get("battles", {}).get(pair)
+        if battle:
+            bc = battle.get("conclusion", {})
+            edge["battle_conclusion"] = bc.get("conclusion", "")
+            edge["durability"] = bc.get("durability_assessment", "")
+
+    # Enrich scorecards with cross-vendor comparisons
+    for sc in deterministic_vendor_scorecards:
+        vendor = sc.get("vendor", "")
+        comparisons = []
+        for pair_key, asym in xv_lookup.get("asymmetries", {}).items():
+            if vendor in pair_key:
+                ac = asym.get("conclusion", {})
+                comparisons.append({
+                    "opponent": [v for v in pair_key if v != vendor][0] if len(pair_key) > 1 else "",
+                    "conclusion": ac.get("conclusion", ""),
+                    "confidence": asym.get("confidence", 0),
+                    "resource_advantage": ac.get("resource_advantage", ""),
+                })
+        if comparisons:
+            sc["cross_vendor_comparisons"] = comparisons
 
     # --- Phase 5: Scorecard narrative LLM enrichment ---
     from ...pipelines.llm import call_llm_with_skill, parse_json_response

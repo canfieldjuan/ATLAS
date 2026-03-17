@@ -1073,7 +1073,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
         temporal_engine = TemporalEngine(pool)
         temporal_summaries = []
-        _temporal_vendors = vendor_scores[:cfg.stratified_reasoning_vendor_limit] if budget.phase_allowed("temporal", 30) else []
+        _temporal_vendors = vendor_scores[:cfg.stratified_reasoning_vendor_limit]
         for vs in _temporal_vendors:
             vname = vs["vendor_name"]
             try:
@@ -1111,7 +1111,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # When stratified_reasoning_enabled, builds rich evidence dicts first.
     reasoning_lookup: dict[str, dict] = {}
     evidence_for_reasoning: dict[str, dict[str, Any]] | None = None
-    if cfg.stratified_reasoning_enabled and budget.phase_allowed("reasoning", cfg.intelligence_phase_min_reasoning):
+    if cfg.stratified_reasoning_enabled:
         _pre_pain = _build_pain_lookup(pain_dist)
         _pre_comp = _build_competitor_lookup(competitive_disp)
         _pre_fg = _build_feature_gap_lookup(feature_gaps)
@@ -1261,7 +1261,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     # --- Cross-vendor ecosystem analysis (category-level intelligence) ---
     ecosystem_evidence: dict[str, Any] = {}
-    if cfg.stratified_reasoning_enabled and reasoning_lookup and budget.phase_allowed("ecosystem", 20):
+    if cfg.stratified_reasoning_enabled and reasoning_lookup:
         try:
             from atlas_brain.reasoning.ecosystem import EcosystemAnalyzer
             eco = EcosystemAnalyzer(pool)
@@ -1287,7 +1287,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         cfg.cross_vendor_reasoning_enabled
         and reasoning_lookup
         and evidence_for_reasoning
-        and budget.phase_allowed("cross_vendor", cfg.intelligence_phase_min_cross_vendor)
     ):
         try:
             from atlas_brain.reasoning.cross_vendor import CrossVendorReasoner

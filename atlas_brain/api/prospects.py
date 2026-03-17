@@ -3,10 +3,13 @@ REST endpoints for Prospect audit: list enriched prospects and aggregate stats.
 """
 
 import logging
+import re
+from typing import Literal
 from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 
 from ..auth.dependencies import AuthUser, require_auth
 from ..storage.database import get_db_pool
@@ -14,6 +17,19 @@ from ..storage.database import get_db_pool
 logger = logging.getLogger("atlas.api.prospects")
 
 router = APIRouter(prefix="/b2b/prospects", tags=["b2b-prospects"])
+
+
+class ManualQueueResolveRequest(BaseModel):
+    action: Literal["retry", "dismiss"]
+    domain: Optional[str] = None
+
+
+def _normalize_domain(domain: Optional[str]) -> Optional[str]:
+    if not domain:
+        return None
+    cleaned = re.sub(r"^https?://", "", domain.strip().lower())
+    cleaned = cleaned.lstrip("www.").strip("/")
+    return cleaned or None
 
 
 def _pool_or_503():
@@ -165,3 +181,55 @@ async def list_manual_prospect_queue(
         "queue": [_row_to_dict(r) for r in rows],
         "count": count_row["total"] if count_row else 0,
     }
+
+
+@router.post("/manual-queue/{queue_id}/resolve")
+async def resolve_manual_prospect_queue(
+    queue_id: UUID,
+    payload: ManualQueueResolveRequest,
+    _user: AuthUser = Depends(require_auth),
+):
+    """Resolve a manual-review queue entry by retrying or dismissing it."""
+    pool = _pool_or_503()
+    row = await pool.fetchrow(
+        """
+        SELECT id, company_name_raw, company_name_norm, status, domain
+        FROM prospect_org_cache
+        WHERE id = $1
+        """,
+        queue_id,
+    )
+    if not row or row["status"] != "manual_review":
+        raise HTTPException(status_code=404, detail="Manual-review queue entry not found")
+
+    domain = _normalize_domain(payload.domain)
+    if payload.action == "retry":
+        updated = await pool.fetchrow(
+            """
+            UPDATE prospect_org_cache
+            SET status = 'pending',
+                domain = COALESCE($2, domain),
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING id, company_name_raw, company_name_norm, domain, status,
+                      error_detail, enriched_at, created_at, updated_at
+            """,
+            queue_id,
+            domain,
+        )
+    else:
+        updated = await pool.fetchrow(
+            """
+            UPDATE prospect_org_cache
+            SET status = 'not_found',
+                domain = COALESCE($2, domain),
+                enriched_at = NOW(),
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING id, company_name_raw, company_name_norm, domain, status,
+                      error_detail, enriched_at, created_at, updated_at
+            """,
+            queue_id,
+            domain,
+        )
+    return {"entry": _row_to_dict(updated)}
