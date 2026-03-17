@@ -466,6 +466,9 @@ class StratifiedReasoner:
                     return cached
 
         # 2. Try reconstitute: cache hit on vendor but evidence changed
+        # _try_reconstitute persists the real diff when it reaches classify_evidence.
+        # Track whether a real diff was written so we don't overwrite it below.
+        self._last_diff_persisted = False
         if not force_reason:
             reconstituted = await self._try_reconstitute(
                 vendor_name, evidence, ev_hash, pattern_sig, product_category,
@@ -489,7 +492,9 @@ class StratifiedReasoner:
             tier_context=tier_context,
         )
         await self._log_metacognition("reason", result.tokens_used, result.conclusion.get("archetype", ""))
-        await _persist_diff(self._cache._pool, vendor_name, None, "full_reason")
+        # Only write a zero-diff row if no real diff was persisted by _try_reconstitute
+        if not self._last_diff_persisted:
+            await _persist_diff(self._cache._pool, vendor_name, None, "full_reason")
         return result
 
     # ------------------------------------------------------------------
@@ -580,6 +585,7 @@ class StratifiedReasoner:
         from .differential import persist_evidence_diff
         decision = "reconstitute" if diff.should_reconstitute else "full_reason"
         await persist_evidence_diff(self._cache._pool, vendor_name, diff, decision)
+        self._last_diff_persisted = True
 
         if not diff.should_reconstitute:
             return None  # delta too large, need full reason

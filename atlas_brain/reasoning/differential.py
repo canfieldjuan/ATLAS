@@ -232,6 +232,7 @@ async def persist_evidence_diff(
     evidence), a zero-diff row is written so every vendor gets a row
     every run. Contradicted/novel field lists are truncated to 20 items.
     """
+    compared = diff is not None
     if diff is None:
         confirmed = contradicted = novel = missing = total = 0
         ratio = w_ratio = 0.0
@@ -257,9 +258,10 @@ async def persist_evidence_diff(
                 vendor_name, computed_date,
                 confirmed_count, contradicted_count, novel_count, missing_count,
                 total_fields, diff_ratio, weighted_diff_ratio,
-                has_core_contradiction, decision,
+                has_core_contradiction, decision, compared,
                 contradicted_fields, novel_fields
-            ) VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb)
+            ) VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                      $12::jsonb, $13::jsonb)
             ON CONFLICT (vendor_name, computed_date) DO UPDATE SET
                 confirmed_count = EXCLUDED.confirmed_count,
                 contradicted_count = EXCLUDED.contradicted_count,
@@ -270,13 +272,14 @@ async def persist_evidence_diff(
                 weighted_diff_ratio = EXCLUDED.weighted_diff_ratio,
                 has_core_contradiction = EXCLUDED.has_core_contradiction,
                 decision = EXCLUDED.decision,
+                compared = EXCLUDED.compared,
                 contradicted_fields = EXCLUDED.contradicted_fields,
                 novel_fields = EXCLUDED.novel_fields,
                 created_at = NOW()
             """,
             vendor_name,
             confirmed, contradicted, novel, missing, total,
-            ratio, w_ratio, core, decision,
+            ratio, w_ratio, core, decision, compared,
             c_fields, n_fields,
         )
     except Exception:

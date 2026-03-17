@@ -14,9 +14,10 @@ CREATE TABLE IF NOT EXISTS reasoning_evidence_diffs (
     diff_ratio          FLOAT NOT NULL DEFAULT 0,
     weighted_diff_ratio FLOAT NOT NULL DEFAULT 0,
     has_core_contradiction BOOLEAN NOT NULL DEFAULT FALSE,
-    decision            TEXT NOT NULL DEFAULT 'full_reason',  -- reconstitute | full_reason
-    contradicted_fields JSONB DEFAULT '[]',
-    novel_fields        JSONB DEFAULT '[]',
+    decision            TEXT NOT NULL DEFAULT 'full_reason',  -- recall | reconstitute | full_reason
+    compared            BOOLEAN NOT NULL DEFAULT TRUE,       -- false for recall/cold full-reason (no old evidence to diff)
+    contradicted_fields JSONB DEFAULT '[]',                  -- truncated to 20 items
+    novel_fields        JSONB DEFAULT '[]',                  -- truncated to 20 items
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (vendor_name, computed_date)
 );

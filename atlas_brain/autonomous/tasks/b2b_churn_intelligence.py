@@ -77,6 +77,7 @@ from ._b2b_shared import (  # noqa: E402
     _fetch_data_context,
     _fetch_vendor_provenance,
     _fetch_vendor_churn_scores,
+    _sync_vendor_firmographics,
     _fetch_high_intent_companies,
     _fetch_competitive_displacement,
     _fetch_displacement_provenance,
@@ -388,16 +389,18 @@ async def reconstruct_evidence_volatility(
     rows = await pool.fetch(
         """
         SELECT vendor_name,
-               AVG(weighted_diff_ratio) AS avg_diff,
-               MAX(weighted_diff_ratio) AS max_diff,
-               SUM(CASE WHEN has_core_contradiction THEN 1 ELSE 0 END) AS core_contradictions,
+               AVG(weighted_diff_ratio) FILTER (WHERE compared) AS avg_diff,
+               MAX(weighted_diff_ratio) FILTER (WHERE compared) AS max_diff,
+               SUM(CASE WHEN has_core_contradiction AND compared THEN 1 ELSE 0 END) AS core_contradictions,
+               COUNT(*) FILTER (WHERE compared) AS days_compared,
                COUNT(*) AS days_tracked,
                (ARRAY_AGG(decision ORDER BY computed_date DESC))[1] AS latest_decision,
-               (ARRAY_AGG(contradicted_fields ORDER BY computed_date DESC))[1] AS latest_contradicted
+               (ARRAY_AGG(contradicted_fields ORDER BY computed_date DESC NULLS LAST)
+                FILTER (WHERE compared))[1] AS latest_contradicted
         FROM reasoning_evidence_diffs
         WHERE computed_date >= CURRENT_DATE - $1::int
         GROUP BY vendor_name
-        ORDER BY AVG(weighted_diff_ratio) DESC
+        ORDER BY AVG(weighted_diff_ratio) FILTER (WHERE compared) DESC NULLS LAST
         """,
         days,
     )
@@ -406,6 +409,7 @@ async def reconstruct_evidence_volatility(
             "avg_diff_ratio": round(float(r["avg_diff"] or 0), 4),
             "max_diff_ratio": round(float(r["max_diff"] or 0), 4),
             "core_contradictions": r["core_contradictions"] or 0,
+            "days_compared": r["days_compared"] or 0,
             "days_tracked": r["days_tracked"] or 0,
             "latest_decision": r["latest_decision"] or "",
             "latest_contradicted_fields": r["latest_contradicted"] or [],
@@ -950,6 +954,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # throughout this function hit the DB-backed cache rather than bootstrap.
     await _warm_vendor_cache()
 
+    try:
+        synced_firmographics = await _sync_vendor_firmographics(pool, as_of=date.today())
+        if synced_firmographics:
+            logger.info("Vendor firmographics synced: %d vendors", synced_firmographics)
+    except Exception:
+        logger.debug("Vendor firmographics sync skipped", exc_info=True)
+
     window_days = cfg.intelligence_window_days
     min_reviews = cfg.intelligence_min_reviews
     urgency_threshold = cfg.high_churn_urgency_threshold
@@ -1372,21 +1383,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             # Let's quickly reconstruct minimal TemporalEvidence for the reasoner from _temporal_lookup dicts.
             
             # Group temporal evidence by category
-            vendors_by_cat: dict[str, list[Any]] = {}
+            vendors_by_cat: dict[str, list[tuple[str, dict[str, Any]]]] = {}
             for vname, td in _temporal_lookup.items():
-                 # We need category for this vendor. reasoning_lookup or vendor_scores has it.
-                 # reasoning_lookup doesn't have category. vendor_scores does.
-                 # Let's look it up from vendor_scores
-                 cat = next((vs.get("product_category") for vs in vendor_scores if vs["vendor_name"] == vname), None)
-                 if cat:
-                     vendors_by_cat.setdefault(cat, []).append(td)
+                cat = next((vs.get("product_category") for vs in vendor_scores if vs["vendor_name"] == vname), None)
+                if cat:
+                    vendors_by_cat.setdefault(cat, []).append((vname, td))
 
-            for cat, tds in vendors_by_cat.items():
-                # Reconstruct light-weight TemporalEvidence list
-                # We only need velocities for MarketPulseReasoner currently
+            for cat, vendor_tds in vendors_by_cat.items():
                 te_list = []
-                for td in tds:
-                    # Parse velocities back
+                for vname, td in vendor_tds:
                     from atlas_brain.reasoning.temporal import TemporalEvidence, VendorVelocity
                     velocities = []
                     for k, v in td.items():
@@ -1395,16 +1400,17 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                             velocities.append(VendorVelocity(
                                 vendor_name=vname,
                                 metric=metric,
-                                current_value=0, previous_value=0, # Not needed for Pulse
+                                current_value=0,
+                                previous_value=0,
                                 velocity=float(v),
-                                days_between=1
+                                days_between=1,
                             ))
                     te_list.append(TemporalEvidence(
                         vendor_name=vname,
                         snapshot_days=td.get("snapshot_days", 0),
-                        velocities=velocities
+                        velocities=velocities,
                     ))
-                
+
                 regime = mp_reasoner.analyze_category(cat, te_list)
                 market_regimes[cat] = regime
 

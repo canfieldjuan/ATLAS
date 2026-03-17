@@ -1703,6 +1703,7 @@ class TestPersistEvidenceDiff:
         assert args[2] == 0   # confirmed_count
         assert args[3] == 0   # contradicted_count
         assert args[10] == "recall"  # decision
+        assert args[11] is False     # compared (recall = not compared)
 
     @pytest.mark.asyncio
     async def test_persist_swallows_db_error(self):
@@ -1732,6 +1733,7 @@ class TestReconstructEvidenceVolatility:
                 "avg_diff": 0.35,
                 "max_diff": 0.72,
                 "core_contradictions": 2,
+                "days_compared": 3,
                 "days_tracked": 5,
                 "latest_decision": "full_reason",
                 "latest_contradicted": [{"key": "churn_density"}],
@@ -1743,6 +1745,7 @@ class TestReconstructEvidenceVolatility:
         assert entry["avg_diff_ratio"] == 0.35
         assert entry["max_diff_ratio"] == 0.72
         assert entry["core_contradictions"] == 2
+        assert entry["days_compared"] == 3
         assert entry["days_tracked"] == 5
         assert entry["latest_decision"] == "full_reason"
 
