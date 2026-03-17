@@ -29,7 +29,7 @@ for _mod in (
 ):
     sys.modules.setdefault(_mod, MagicMock())
 
-from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+from atlas_brain.autonomous.tasks._b2b_shared import (
     _build_deterministic_vendor_feed,
     _build_validated_executive_summary,
     _canonicalize_competitor,
@@ -372,13 +372,13 @@ class TestBattleCardSalesCopyValidation:
 
 
 class TestExecutiveSourceList:
-    @patch("atlas_brain.autonomous.tasks.b2b_churn_intelligence.settings")
+    @patch("atlas_brain.autonomous.tasks._b2b_shared.settings")
     def test_parses_config(self, mock_settings):
         mock_settings.b2b_churn.intelligence_executive_sources = "g2,capterra,trustradius"
         result = _executive_source_list()
         assert result == ["g2", "capterra", "trustradius"]
 
-    @patch("atlas_brain.autonomous.tasks.b2b_churn_intelligence.settings")
+    @patch("atlas_brain.autonomous.tasks._b2b_shared.settings")
     def test_separate_from_broad_allowlist(self, mock_settings):
         """Executive sources should be a subset of the broad allowlist."""
         mock_settings.b2b_churn.intelligence_executive_sources = "g2,capterra"
@@ -386,7 +386,7 @@ class TestExecutiveSourceList:
         assert "reddit" not in exec_sources
         assert "trustpilot" not in exec_sources
 
-    @patch("atlas_brain.autonomous.tasks.b2b_churn_intelligence.settings")
+    @patch("atlas_brain.autonomous.tasks._b2b_shared.settings")
     def test_handles_whitespace(self, mock_settings):
         mock_settings.b2b_churn.intelligence_executive_sources = " g2 , capterra , trustradius "
         result = _executive_source_list()
@@ -543,7 +543,7 @@ class TestVendorFeedNoCompanyRequired:
 
 
 class TestVendorExecutiveSummary:
-    @patch("atlas_brain.autonomous.tasks.b2b_churn_intelligence.settings")
+    @patch("atlas_brain.autonomous.tasks._b2b_shared.settings")
     def test_uses_vendor_language(self, mock_settings):
         """Executive summary should say 'vendors under elevated churn pressure'."""
         mock_settings.b2b_churn.intelligence_executive_sources = "g2,capterra"

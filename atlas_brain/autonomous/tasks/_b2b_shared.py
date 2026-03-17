@@ -1156,11 +1156,11 @@ async def _fetch_vendor_churn_scores(pool, window_days: int, min_reviews: int) -
                 WHERE (enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
             ) AS churn_intent,
             -- Source-weighted urgency: weighted avg preserving 0-10 scale
-            -- Falls back to 0.7 for pre-existing reviews without source_weight
+            -- Falls back to 0.7 for pre-backfill rows without source_weight
             avg(
                 (enrichment->>'urgency_score')::numeric
-                * COALESCE((raw_metadata->>'source_weight')::numeric, 0.7)
-            ) / NULLIF(avg(COALESCE((raw_metadata->>'source_weight')::numeric, 0.7)), 0)
+                * COALESCE(source_weight, 0.7)
+            ) / NULLIF(avg(COALESCE(source_weight, 0.7)), 0)
             AS avg_urgency,
             avg(rating / NULLIF(rating_max, 0)) AS avg_rating_normalized,
             count(*) FILTER (
@@ -1183,7 +1183,7 @@ async def _fetch_vendor_churn_scores(pool, window_days: int, min_reviews: int) -
         WHERE {filters}
         GROUP BY vendor_name, product_category
         HAVING count(*) >= $2
-        ORDER BY avg((enrichment->>'urgency_score')::numeric) DESC
+        ORDER BY avg_urgency DESC
         """,
         window_days,
         min_reviews,

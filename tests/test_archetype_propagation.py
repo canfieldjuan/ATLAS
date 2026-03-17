@@ -704,7 +704,7 @@ class TestBattleCardPrimaryCategorySelection:
     """Verify cross-category aggregation is replaced by primary category selection."""
 
     def test_picks_largest_category(self):
-        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+        from atlas_brain.autonomous.tasks._b2b_shared import (
             _build_deterministic_battle_cards,
         )
 
@@ -731,7 +731,7 @@ class TestBattleCardPrimaryCategorySelection:
         assert card["objection_data"]["avg_urgency"] == 5.5
 
     def test_no_phantom_totals(self):
-        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+        from atlas_brain.autonomous.tasks._b2b_shared import (
             _build_deterministic_battle_cards,
         )
 
@@ -758,7 +758,7 @@ class TestBattleCardQuoteDedupe:
     """Verify quotes are deduplicated by review_id AND reviewer identity."""
 
     def test_same_review_id_deduped(self):
-        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+        from atlas_brain.autonomous.tasks._b2b_shared import (
             _build_deterministic_battle_cards,
         )
 
@@ -786,7 +786,7 @@ class TestBattleCardQuoteDedupe:
         assert cards[0]["customer_pain_quotes"][1]["quote"] == "Quote C"
 
     def test_same_reviewer_different_reviews_deduped(self):
-        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+        from atlas_brain.autonomous.tasks._b2b_shared import (
             _build_deterministic_battle_cards,
         )
 
@@ -818,7 +818,7 @@ class TestBattleCardSentimentDirection:
     """Verify sentiment excludes 'unknown' before picking dominant."""
 
     def test_unknown_excluded(self):
-        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+        from atlas_brain.autonomous.tasks._b2b_shared import (
             _build_deterministic_battle_cards,
         )
 
@@ -836,7 +836,7 @@ class TestBattleCardSentimentDirection:
         assert cards[0]["objection_data"]["sentiment_direction"] == "declining"
 
     def test_all_unknown_returns_insufficient(self):
-        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+        from atlas_brain.autonomous.tasks._b2b_shared import (
             _build_deterministic_battle_cards,
         )
 
@@ -858,7 +858,7 @@ class TestBattleCardNewSections:
     """Verify new battle card sections are populated from lookups."""
 
     def test_high_intent_companies_surfaced(self):
-        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+        from atlas_brain.autonomous.tasks._b2b_shared import (
             _build_deterministic_battle_cards,
         )
 
@@ -876,7 +876,7 @@ class TestBattleCardNewSections:
         assert cards[0]["high_intent_companies"] == [{"company": "Acme", "urgency": 9}]
 
     def test_integration_stack_from_profile(self):
-        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+        from atlas_brain.autonomous.tasks._b2b_shared import (
             _build_deterministic_battle_cards,
         )
 
@@ -894,7 +894,7 @@ class TestBattleCardNewSections:
         assert cards[0]["integration_stack"] == ["Shopify", "Salesforce"]
 
     def test_buyer_authority_from_lookup(self):
-        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+        from atlas_brain.autonomous.tasks._b2b_shared import (
             _build_deterministic_battle_cards,
         )
 
@@ -1096,6 +1096,166 @@ class TestTaskBudget:
         # Even if phase entry was allowed, per-iteration check (20s) would fail soon
         advance(15)  # 15s remaining
         assert b.remaining() < 20  # per-iteration threshold
+
+
+class TestReconstructReasoningLookup:
+    """Validate that reconstruct_reasoning_lookup produces the full contract
+    needed by all downstream consumers (reports, battle cards, scorecards)."""
+
+    REQUIRED_KEYS = {
+        "archetype", "confidence", "mode", "risk_level",
+        "executive_summary", "key_signals",
+        "falsification_conditions", "uncertainty_sources",
+    }
+
+    @pytest.mark.asyncio
+    async def test_returns_all_required_keys(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_reasoning_lookup,
+        )
+
+        pool = AsyncMock()
+        pool.fetchval.return_value = date(2026, 3, 16)
+        pool.fetch.return_value = [
+            {
+                "vendor_name": "Mailchimp",
+                "archetype": "pricing_shock",
+                "archetype_confidence": 0.9,
+                "reasoning_mode": "reason",
+                "falsification_conditions": ["price restored"],
+                "reasoning_risk_level": "high",
+                "reasoning_executive_summary": "Pricing pressure intensifying",
+                "reasoning_key_signals": ["164 pricing mentions", "27% complaint rate"],
+                "reasoning_uncertainty_sources": ["no time-series breakdown"],
+            },
+        ]
+
+        lookup = await reconstruct_reasoning_lookup(pool)
+        assert "Mailchimp" in lookup
+        entry = lookup["Mailchimp"]
+
+        # Every key that downstream consumers access must be present
+        missing = self.REQUIRED_KEYS - set(entry.keys())
+        assert not missing, f"Missing keys: {missing}"
+
+        # Type checks matching downstream usage patterns
+        assert isinstance(entry["archetype"], str)
+        assert isinstance(entry["confidence"], (int, float))
+        assert isinstance(entry["mode"], str)
+        assert isinstance(entry["risk_level"], str)
+        assert isinstance(entry["executive_summary"], str)
+        assert isinstance(entry["key_signals"], list)
+        assert isinstance(entry["falsification_conditions"], list)
+        assert isinstance(entry["uncertainty_sources"], list)
+
+    @pytest.mark.asyncio
+    async def test_handles_null_columns_gracefully(self):
+        """When DB columns are NULL (pre-migration data), defaults are safe."""
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_reasoning_lookup,
+        )
+
+        pool = AsyncMock()
+        pool.fetchval.return_value = date(2026, 3, 16)
+        pool.fetch.return_value = [
+            {
+                "vendor_name": "OldVendor",
+                "archetype": "feature_gap",
+                "archetype_confidence": None,
+                "reasoning_mode": None,
+                "falsification_conditions": None,
+                "reasoning_risk_level": None,
+                "reasoning_executive_summary": None,
+                "reasoning_key_signals": None,
+                "reasoning_uncertainty_sources": None,
+            },
+        ]
+
+        lookup = await reconstruct_reasoning_lookup(pool)
+        entry = lookup["OldVendor"]
+
+        # All keys present with safe defaults
+        assert entry["confidence"] == 0
+        assert entry["mode"] == ""
+        assert entry["risk_level"] == ""
+        assert entry["executive_summary"] == ""
+        assert entry["key_signals"] == []
+        assert entry["falsification_conditions"] == []
+        assert entry["uncertainty_sources"] == []
+
+    @pytest.mark.asyncio
+    async def test_empty_table_returns_empty(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_reasoning_lookup,
+        )
+
+        pool = AsyncMock()
+        pool.fetchval.return_value = None  # no rows at all
+        result = await reconstruct_reasoning_lookup(pool)
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_explicit_date_bypasses_watermark(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_reasoning_lookup,
+        )
+
+        pool = AsyncMock()
+        pool.fetch.return_value = []
+        await reconstruct_reasoning_lookup(pool, as_of=date(2026, 3, 15))
+        # Should NOT call fetchval (watermark lookup)
+        pool.fetchval.assert_not_called()
+        # Should call fetch with the explicit date
+        call_args = pool.fetch.call_args
+        assert call_args[0][1] == date(2026, 3, 15)
+
+    @pytest.mark.asyncio
+    async def test_contract_matches_in_memory_shape(self):
+        """The dict shape from reconstruct must match what run() builds in-memory."""
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_reasoning_lookup,
+        )
+
+        pool = AsyncMock()
+        pool.fetchval.return_value = date(2026, 3, 16)
+        pool.fetch.return_value = [
+            {
+                "vendor_name": "TestVendor",
+                "archetype": "support_collapse",
+                "archetype_confidence": 0.78,
+                "reasoning_mode": "reconstitute",
+                "falsification_conditions": ["support_ticket_resolution_improves"],
+                "reasoning_risk_level": "medium",
+                "reasoning_executive_summary": "Support degradation pattern",
+                "reasoning_key_signals": ["57 support mentions"],
+                "reasoning_uncertainty_sources": ["single quarter data"],
+            },
+        ]
+
+        lookup = await reconstruct_reasoning_lookup(pool)
+        entry = lookup["TestVendor"]
+
+        # This is the exact shape that run() builds at line 3550-3560:
+        # reasoning_lookup[vname] = {
+        #     "archetype": conclusion.get("archetype", ""),
+        #     "confidence": sr.confidence,
+        #     "risk_level": conclusion.get("risk_level", ""),
+        #     "executive_summary": conclusion.get("executive_summary", ""),
+        #     "key_signals": conclusion.get("key_signals", []),
+        #     "falsification_conditions": conclusion.get("falsification_conditions", []),
+        #     "uncertainty_sources": conclusion.get("uncertainty_sources", []),
+        #     "mode": sr.mode,
+        #     "tokens_used": sr.tokens_used,
+        # }
+        # We match all keys except tokens_used (not persisted, not needed downstream)
+        assert entry["archetype"] == "support_collapse"
+        assert entry["confidence"] == 0.78
+        assert entry["mode"] == "reconstitute"
+        assert entry["risk_level"] == "medium"
+        assert entry["executive_summary"] == "Support degradation pattern"
+        assert entry["key_signals"] == ["57 support mentions"]
+        assert entry["falsification_conditions"] == ["support_ticket_resolution_improves"]
+        assert entry["uncertainty_sources"] == ["single quarter data"]
 
 
 class TestVendorReasoningCap:
