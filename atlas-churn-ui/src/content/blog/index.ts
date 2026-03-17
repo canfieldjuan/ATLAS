@@ -26,6 +26,7 @@ import whyTeamsLeaveFortinet202603 from './why-teams-leave-fortinet-2026-03'
 import hubspotDeepDive202603 from './hubspot-deep-dive-2026-03'
 import migrationFromMagento202603 from './migration-from-magento-2026-03'
 import intercomAlternatives202603 from './intercom-alternatives-2026-03'
+import migrationFromFortinet202603 from './migration-from-fortinet-2026-03'
 type ChartValue = string | number | null | undefined
 type ChartDatum = Record<string, ChartValue>
 
@@ -121,4 +122,5 @@ export const POSTS: BlogPost[] = [
   hubspotDeepDive202603,
   migrationFromMagento202603,
   intercomAlternatives202603,
+  migrationFromFortinet202603,
 ]
