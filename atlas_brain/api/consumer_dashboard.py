@@ -660,25 +660,25 @@ async def _list_brands_live(
                      AND pr.deep_extraction != '{{}}'::jsonb
                ) AS deep_count,
                COUNT(*) FILTER (
-                   WHERE pr.deep_extraction->>'would_repurchase' = 'true'
+                   WHERE pr.would_repurchase IS TRUE
                ) AS repurchase_yes,
                COUNT(*) FILTER (
-                   WHERE pr.deep_extraction->>'would_repurchase' IN ('true','false')
+                   WHERE pr.would_repurchase IS NOT NULL
                ) AS repurchase_total,
                COUNT(*) FILTER (
-                   WHERE pr.deep_extraction->>'replacement_behavior'
+                   WHERE pr.replacement_behavior
                          IN ('kept_using','repurchased','replaced_same')
                ) AS retention_pos,
                COUNT(*) FILTER (
-                   WHERE pr.deep_extraction->>'replacement_behavior'
+                   WHERE pr.replacement_behavior
                          IN ('switched_to','switched_brand','returned','avoided')
                ) AS retention_neg,
                COUNT(*) FILTER (
-                   WHERE pr.deep_extraction->>'sentiment_trajectory'
+                   WHERE pr.sentiment_trajectory
                          IN ('always_positive','improved','mixed_then_positive')
                ) AS trajectory_pos,
                COUNT(*) FILTER (
-                   WHERE pr.deep_extraction->>'sentiment_trajectory'
+                   WHERE pr.sentiment_trajectory
                          IN ('always_negative','degraded','mixed_then_negative','mixed_then_bad','always_bad')
                ) AS trajectory_neg
         FROM product_metadata pm
@@ -787,10 +787,10 @@ async def compare_brands(
                      AND pr.deep_extraction != '{{}}'::jsonb
                ) AS deep_count,
                COUNT(*) FILTER (
-                   WHERE pr.deep_extraction->>'would_repurchase' = 'true'
+                   WHERE pr.would_repurchase IS TRUE
                ) AS repurchase_yes,
                COUNT(*) FILTER (
-                   WHERE pr.deep_extraction->>'would_repurchase' IN ('true','false')
+                   WHERE pr.would_repurchase IS NOT NULL
                ) AS repurchase_total,
                COUNT(*) FILTER (
                    WHERE pr.deep_extraction IS NOT NULL
@@ -799,19 +799,19 @@ async def compare_brands(
                ) AS safety_count,
                -- Health components
                COUNT(*) FILTER (
-                   WHERE pr.deep_extraction->>'replacement_behavior'
+                   WHERE pr.replacement_behavior
                          IN ('kept_using','repurchased','replaced_same')
                ) AS retention_pos,
                COUNT(*) FILTER (
-                   WHERE pr.deep_extraction->>'replacement_behavior'
+                   WHERE pr.replacement_behavior
                          IN ('switched_to','switched_brand','returned','avoided')
                ) AS retention_neg,
                COUNT(*) FILTER (
-                   WHERE pr.deep_extraction->>'sentiment_trajectory'
+                   WHERE pr.sentiment_trajectory
                          IN ('always_positive','improved','mixed_then_positive')
                ) AS trajectory_pos,
                COUNT(*) FILTER (
-                   WHERE pr.deep_extraction->>'sentiment_trajectory'
+                   WHERE pr.sentiment_trajectory
                          IN ('always_negative','degraded','mixed_then_negative','mixed_then_bad','always_bad')
                ) AS trajectory_neg
         FROM product_metadata pm
@@ -857,10 +857,10 @@ async def compare_brands(
     enum_rows = await pool.fetch(
         f"""
         SELECT pm.brand,
-               deep_extraction->>'would_repurchase'      AS repurchase,
-               deep_extraction->>'replacement_behavior'   AS replacement,
-               deep_extraction->>'sentiment_trajectory'   AS trajectory,
-               deep_extraction->>'consequence_severity'   AS consequence,
+               would_repurchase      AS repurchase,
+               replacement_behavior   AS replacement,
+               sentiment_trajectory   AS trajectory,
+               consequence_severity   AS consequence,
                deep_extraction->'switching_barrier'       AS barrier,
                deep_extraction->'failure_details'         AS failure,
                deep_extraction->'safety_flag'             AS safety,
@@ -1275,10 +1275,10 @@ async def get_brand_detail(request: Request, brand_name: str, user: AuthUser = D
                deep_extraction->>'expertise_level'       AS expertise,
                deep_extraction->>'budget_type'           AS budget,
                deep_extraction->>'discovery_channel'     AS channel,
-               deep_extraction->>'would_repurchase'      AS repurchase,
-               deep_extraction->>'replacement_behavior'  AS replacement,
-               deep_extraction->>'sentiment_trajectory'  AS trajectory,
-               deep_extraction->>'consequence_severity'  AS consequence,
+               would_repurchase      AS repurchase,
+               replacement_behavior  AS replacement,
+               sentiment_trajectory  AS trajectory,
+               consequence_severity  AS consequence,
                deep_extraction->>'frustration_threshold' AS frustration,
                deep_extraction->>'use_intensity'         AS intensity,
                deep_extraction->>'research_depth'        AS research,

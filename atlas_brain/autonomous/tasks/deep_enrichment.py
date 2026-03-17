@@ -220,19 +220,35 @@ async def _enrich_single(pool, row, max_attempts: int, max_tokens: int) -> bool:
         extraction = await _extract_review(row, max_tokens)
 
         if extraction and _validate_extraction(extraction):
+            # Extract promoted enum fields for indexed columns
+            wr = extraction.get("would_repurchase")
+            wp_bool = None
+            if isinstance(wr, bool):
+                wp_bool = wr
+            elif isinstance(wr, str):
+                wp_bool = wr.lower() == "true" if wr.lower() in ("true", "false") else None
+
             await pool.execute(
                 """
                 UPDATE product_reviews
                 SET deep_extraction = $1,
                     deep_enrichment_status = 'enriched',
                     deep_enrichment_attempts = $2,
-                    deep_enriched_at = $3
+                    deep_enriched_at = $3,
+                    would_repurchase = $5,
+                    replacement_behavior = $6,
+                    sentiment_trajectory = $7,
+                    consequence_severity = $8
                 WHERE id = $4
                 """,
                 json.dumps(extraction),
                 row["deep_enrichment_attempts"] + 1,
                 datetime.now(timezone.utc),
                 review_id,
+                wp_bool,
+                extraction.get("replacement_behavior"),
+                extraction.get("sentiment_trajectory"),
+                extraction.get("consequence_severity"),
             )
             return True
         else:

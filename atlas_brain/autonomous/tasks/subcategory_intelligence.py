@@ -156,10 +156,10 @@ async def _aggregate_subcategory_intelligence(
             COUNT(*) AS total_reviews,
             ROUND(AVG(pr.rating), 2) AS avg_rating,
             COUNT(*) FILTER (
-                WHERE pr.deep_extraction->>'would_repurchase' = 'true'
+                WHERE pr.would_repurchase IS TRUE
             ) AS repurchase_yes,
             COUNT(*) FILTER (
-                WHERE pr.deep_extraction->>'would_repurchase' = 'false'
+                WHERE pr.would_repurchase IS FALSE
             ) AS repurchase_no,
             COUNT(*) FILTER (
                 WHERE pr.deep_extraction->'safety_flag'->>'flagged' = 'true'

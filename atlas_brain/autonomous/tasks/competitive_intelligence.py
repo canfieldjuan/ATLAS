@@ -341,10 +341,10 @@ async def _fetch_brand_health(pool, *, category: str | None = None) -> list[dict
             count(*) FILTER (WHERE pr.severity = 'major') AS major_count,
             count(*) FILTER (WHERE pr.severity = 'minor') AS minor_count,
             count(*) FILTER (
-                WHERE (pr.deep_extraction->>'would_repurchase')::boolean IS TRUE
+                WHERE pr.would_repurchase IS TRUE
             ) AS repurchase_yes,
             count(*) FILTER (
-                WHERE (pr.deep_extraction->>'would_repurchase')::boolean IS FALSE
+                WHERE pr.would_repurchase IS FALSE
             ) AS repurchase_no,
             count(*) FILTER (
                 WHERE (pr.deep_extraction->'safety_flag'->>'flagged')::boolean IS TRUE
@@ -540,7 +540,7 @@ async def _fetch_safety_signals(pool, *, category: str | None = None) -> list[di
         f"""
         SELECT
             pm.brand,
-            pr.deep_extraction->>'consequence_severity' AS consequence,
+            pr.consequence_severity AS consequence,
             count(*) AS cnt
         FROM product_reviews pr
         JOIN product_metadata pm ON pm.asin = pr.asin
@@ -548,7 +548,7 @@ async def _fetch_safety_signals(pool, *, category: str | None = None) -> list[di
           AND (pr.deep_extraction->'safety_flag'->>'flagged')::boolean IS TRUE
           AND pm.brand IS NOT NULL AND pm.brand != ''
           {cat_filter}
-        GROUP BY pm.brand, pr.deep_extraction->>'consequence_severity'
+        GROUP BY pm.brand, pr.consequence_severity
         ORDER BY count(*) DESC
         LIMIT 500
         """,
@@ -615,7 +615,7 @@ async def _fetch_loyalty_churn(pool, *, category: str | None = None) -> list[dic
         SELECT
             pm.brand,
             pr.deep_extraction->>'brand_loyalty_depth' AS loyalty,
-            pr.deep_extraction->>'replacement_behavior' AS replacement,
+            pr.replacement_behavior AS replacement,
             count(*) AS cnt
         FROM product_reviews pr
         JOIN product_metadata pm ON pm.asin = pr.asin
@@ -624,7 +624,7 @@ async def _fetch_loyalty_churn(pool, *, category: str | None = None) -> list[dic
           {cat_filter}
         GROUP BY pm.brand,
             pr.deep_extraction->>'brand_loyalty_depth',
-            pr.deep_extraction->>'replacement_behavior'
+            pr.replacement_behavior
         HAVING count(*) >= 2
         ORDER BY count(*) DESC
         LIMIT 500
