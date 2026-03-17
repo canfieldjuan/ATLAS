@@ -466,11 +466,12 @@ class StratifiedReasoner:
                     return cached
 
         # 2. Try reconstitute: cache hit on vendor but evidence changed
-        # _try_reconstitute persists the real diff when it reaches classify_evidence.
-        # Track whether a real diff was written so we don't overwrite it below.
-        self._last_diff_persisted = False
+        # _try_reconstitute returns (result, diff_persisted) where diff_persisted
+        # indicates whether a real diff was written to the DB. Local variable
+        # avoids concurrency issues with shared instance state.
+        diff_persisted = False
         if not force_reason:
-            reconstituted = await self._try_reconstitute(
+            reconstituted, diff_persisted = await self._try_reconstitute(
                 vendor_name, evidence, ev_hash, pattern_sig, product_category,
             )
             if reconstituted is not None:
@@ -493,7 +494,7 @@ class StratifiedReasoner:
         )
         await self._log_metacognition("reason", result.tokens_used, result.conclusion.get("archetype", ""))
         # Only write a zero-diff row if no real diff was persisted by _try_reconstitute
-        if not self._last_diff_persisted:
+        if not diff_persisted:
             await _persist_diff(self._cache._pool, vendor_name, None, "full_reason")
         return result
 
@@ -546,21 +547,20 @@ class StratifiedReasoner:
         new_ev_hash: str,
         new_pattern_sig: str,
         product_category: str,
-    ) -> ReasoningResult | None:
+    ) -> tuple[ReasoningResult | None, bool]:
         """Try to patch an existing cached conclusion with the evidence delta.
 
-        Looks for a prior cache entry for the same vendor (any evidence hash).
-        If found and the diff ratio is < 30%, uses the LLM to patch only the
-        delta instead of re-reasoning from scratch.
+        Returns (result, diff_persisted). diff_persisted is True when a real
+        diff was written to the DB (including large-delta escalations).
         """
         # Find any active cache entry for this vendor
         entries = await self._cache.lookup_by_class("", vendor_name=vendor_name, limit=1)
         if not entries:
-            return None
+            return None, False
 
         entry = entries[0]
         if entry.effective_confidence is not None and entry.effective_confidence < 0.3:
-            return None  # too stale to reconstitute from
+            return None, False  # too stale to reconstitute from
 
         cached_validation_errors = self._validate_conclusion(
             self._normalize_conclusion(entry.conclusion),
@@ -569,13 +569,12 @@ class StratifiedReasoner:
             await self._invalidate_invalid_cache_entry(
                 entry.pattern_sig, "invalid reconstitution source payload",
             )
-            return None
+            return None, False
 
         # Reconstruct old evidence from the stored evidence hash
-        # We need the actual old evidence for diffing -- check episodic store
         old_evidence = await self._load_old_evidence(entry.pattern_sig)
         if not old_evidence:
-            return None
+            return None, False
 
         # Classify the diff
         diff = classify_evidence(old_evidence, new_evidence)
@@ -585,10 +584,9 @@ class StratifiedReasoner:
         from .differential import persist_evidence_diff
         decision = "reconstitute" if diff.should_reconstitute else "full_reason"
         await persist_evidence_diff(self._cache._pool, vendor_name, diff, decision)
-        self._last_diff_persisted = True
 
         if not diff.should_reconstitute:
-            return None  # delta too large, need full reason
+            return None, True  # delta too large, but real diff IS persisted
 
         # Patch the conclusion with only the delta
         updated_conclusion, tokens = await reconstitute(
@@ -607,7 +605,7 @@ class StratifiedReasoner:
                     "Discarding weak reconstitution for %s; escalating to full reason: %s",
                     vendor_name, "; ".join(validation_errors[:3]),
                 )
-            return None
+            return None, True  # diff was persisted even though reconstitute failed
 
         new_confidence = updated_conclusion.get("confidence", entry.confidence)
         archetype = updated_conclusion.get("archetype", entry.conclusion_type)
@@ -643,7 +641,7 @@ class StratifiedReasoner:
             evidence_hash=new_ev_hash,
             tokens_used=tokens,
             cached=False,
-        )
+        ), True
 
     async def _load_old_evidence(self, pattern_sig: str) -> dict[str, Any] | None:
         """Load prior evidence for reconstitution diffing.
