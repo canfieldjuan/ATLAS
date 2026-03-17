@@ -107,33 +107,20 @@ from ._b2b_shared import (  # noqa: E402
 )
 
 
-class _TaskBudget:
-    """Track elapsed time against a fixed budget for phase-gated execution.
+class _TaskTimer:
+    """Track elapsed wall-clock time for observability logging.
 
     For testing, pass ``_clock`` to inject a callable returning monotonic seconds.
     """
 
-    __slots__ = ("_start", "_total", "_clock")
+    __slots__ = ("_start", "_clock")
 
-    def __init__(self, total_seconds: float, *, _clock=time.monotonic):
+    def __init__(self, *, _clock=time.monotonic):
         self._clock = _clock
         self._start = _clock()
-        self._total = total_seconds
 
     def elapsed(self) -> float:
         return self._clock() - self._start
-
-    def remaining(self) -> float:
-        return max(0.0, self._total - self.elapsed())
-
-    def phase_allowed(self, phase_name: str, min_seconds: float) -> bool:
-        allowed = self.remaining() >= min_seconds
-        if not allowed:
-            logger.info(
-                "Phase '%s' skipped: %.0fs remaining < %.0fs minimum",
-                phase_name, self.remaining(), min_seconds,
-            )
-        return allowed
 
 
 async def persist_single_vendor_reasoning(
@@ -189,6 +176,17 @@ async def _persist_vendor_snapshots(
     )
     disp_counts: dict[str, int] = {r["from_vendor"]: r["cnt"] for r in disp_rows}
 
+    # Fetch displacement velocity per vendor from latest edges (leading indicator)
+    vel_rows = await pool.fetch(
+        """
+        SELECT from_vendor, SUM(COALESCE(velocity_7d, 0)) AS total_velocity
+        FROM b2b_displacement_edges
+        WHERE computed_date = (SELECT MAX(computed_date) FROM b2b_displacement_edges)
+        GROUP BY from_vendor
+        """,
+    )
+    velocity_lookup: dict[str, float] = {r["from_vendor"]: float(r["total_velocity"]) for r in vel_rows}
+
     persisted = 0
     for row in vendor_scores:
         vendor = _canonicalize_vendor(row.get("vendor_name") or "")
@@ -218,6 +216,7 @@ async def _persist_vendor_snapshots(
             displacement_mention_count=_disp_cnt,
             price_complaint_rate=_price_rate or 0.0,
             total_reviews=total_reviews,
+            displacement_velocity=velocity_lookup.get(vendor),
         )
 
         _rl = (reasoning_lookup or {}).get(vendor, {})
@@ -331,6 +330,64 @@ async def reconstruct_reasoning_lookup(
             "uncertainty_sources": r["reasoning_uncertainty_sources"] or [],
         }
     return lookup
+
+
+async def reconstruct_cross_vendor_lookup(
+    pool,
+    as_of: date | None = None,
+) -> dict[str, dict]:
+    """Rebuild cross-vendor conclusions from b2b_cross_vendor_conclusions.
+
+    Returns a dict with three keys:
+      - ``battles``:     {(vendor_a, vendor_b): conclusion_dict, ...}
+      - ``councils``:    {category: conclusion_dict, ...}
+      - ``asymmetries``: {(vendor_a, vendor_b): conclusion_dict, ...}
+
+    Keyed by sorted vendor tuple (battles/asymmetries) or category name
+    (councils).  When *as_of* is None the most recent computed_date is used.
+    """
+    if as_of is None:
+        watermark = await pool.fetchval(
+            "SELECT MAX(computed_date) FROM b2b_cross_vendor_conclusions"
+        )
+        if not watermark:
+            return {"battles": {}, "councils": {}, "asymmetries": {}}
+        as_of = watermark
+
+    rows = await pool.fetch(
+        """
+        SELECT analysis_type, vendors, category, conclusion, confidence
+        FROM b2b_cross_vendor_conclusions
+        WHERE computed_date >= $1
+        ORDER BY confidence DESC
+        """,
+        as_of,
+    )
+
+    battles: dict[tuple[str, ...], dict] = {}
+    councils: dict[str, dict] = {}
+    asymmetries: dict[tuple[str, ...], dict] = {}
+
+    for r in rows:
+        vendors = list(r["vendors"]) if r["vendors"] else []
+        conclusion = r["conclusion"] if isinstance(r["conclusion"], dict) else {}
+        entry = {
+            "conclusion": conclusion,
+            "confidence": float(r["confidence"]) if r["confidence"] is not None else 0,
+            "vendors": vendors,
+            "category": r["category"],
+        }
+        key = tuple(sorted(vendors))
+        atype = r["analysis_type"]
+        if atype == "pairwise_battle":
+            battles.setdefault(key, entry)
+        elif atype == "category_council":
+            cat = r["category"] or ""
+            councils.setdefault(cat, entry)
+        elif atype == "resource_asymmetry":
+            asymmetries.setdefault(key, entry)
+
+    return {"battles": battles, "councils": councils, "asymmetries": asymmetries}
 
 
 async def _fetch_prior_archetypes(
@@ -538,6 +595,10 @@ async def _detect_change_events(
                     None, None, None, None,
                 ))
 
+        _SEVERITY_RANK = {"low": 0, "moderate": 1, "high": 2, "critical": 3}
+        _min_sev = settings.b2b_webhook.min_change_event_severity
+        _min_rank = _SEVERITY_RANK.get(_min_sev, 1)
+
         webhook_events: list[tuple[str, dict]] = []
         for event_type, description, old_val, new_val, delta, z_score in events:
             # Derive severity from z_score magnitude
@@ -564,6 +625,11 @@ async def _detect_change_events(
                     old_val, new_val, delta, z_score, severity,
                 )
                 detected += 1
+                # Severity gating: only dispatch webhooks for events at or above threshold.
+                # Events without z_score (categorical: new_pain_category, archetype_shift)
+                # have severity=None and always dispatch.
+                if severity is not None and _SEVERITY_RANK.get(severity, 0) < _min_rank:
+                    continue
                 webhook_events.append((vendor, {
                     "event_type": event_type,
                     "vendor_name": vendor,
@@ -796,7 +862,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not pool.is_initialized:
         return {"_skip_synthesis": "DB not ready"}
 
-    budget = _TaskBudget(cfg.intelligence_budget_seconds)
+    budget = _TaskTimer()
 
     # Warm vendor registry cache so sync resolve_vendor_name_cached() calls
     # throughout this function hit the DB-backed cache rather than bootstrap.
@@ -1057,6 +1123,22 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _pre_ba = _build_buyer_auth_lookup(buyer_auth)
         _pre_uc = _build_use_case_lookup(use_case_dist)
 
+        # Displacement velocity per vendor for evidence (7d + 30d detail)
+        _vel_detail_rows = await pool.fetch(
+            """
+            SELECT from_vendor,
+                   SUM(COALESCE(velocity_7d, 0)) AS velocity_7d,
+                   SUM(COALESCE(velocity_30d, 0)) AS velocity_30d
+            FROM b2b_displacement_edges
+            WHERE computed_date = (SELECT MAX(computed_date) FROM b2b_displacement_edges)
+            GROUP BY from_vendor
+            """,
+        )
+        _pre_velocity: dict[str, dict] = {
+            r["from_vendor"]: {"velocity_7d": float(r["velocity_7d"]), "velocity_30d": float(r["velocity_30d"])}
+            for r in _vel_detail_rows
+        }
+
         evidence_for_reasoning = {}
         _reasoning_cap = cfg.stratified_reasoning_vendor_cap
         for vs in vendor_scores[:_reasoning_cap]:
@@ -1077,6 +1159,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     budget_lookup=_pre_budget,
                     buyer_auth_lookup=_pre_ba,
                     use_case_lookup=_pre_uc,
+                    velocity_lookup=_pre_velocity or None,
                 )
 
     try:
@@ -1093,19 +1176,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             total_tokens = 0
             mode_counts: dict[str, int] = {}
 
-            # Reserve budget for post-reasoning phases (exploratory + scorecard + exec + battle cards)
-            _post_reasoning_reserve = (
-                cfg.intelligence_phase_min_exploratory
-                + cfg.intelligence_phase_min_scorecard
-                + cfg.intelligence_phase_min_exec_summary
-                + cfg.intelligence_phase_min_battle_card_copy
-            )
-
             async def _analyze_one(vs: dict[str, Any]) -> None:
                 nonlocal total_tokens
-                # Stop reasoning if remaining budget is too low for later phases
-                if budget.remaining() < _post_reasoning_reserve:
-                    return
                 vname = _canonicalize_vendor(vs.get("vendor_name") or "")
                 if not vname:
                     return
@@ -1197,6 +1269,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             for cat, ev in eco_results.items():
                 ecosystem_evidence[cat] = {
                     "category": cat,
+                    "vendor_count": getattr(ev.health, "vendor_count", 0),
                     "hhi": getattr(ev.health, "hhi", None),
                     "market_structure": getattr(ev.health, "market_structure", None),
                     "displacement_intensity": getattr(ev.health, "displacement_intensity", None),
@@ -1207,6 +1280,174 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 logger.info("Ecosystem analysis: %d categories", len(ecosystem_evidence))
         except Exception:
             logger.debug("Ecosystem analysis skipped", exc_info=True)
+
+    # --- Cross-vendor reasoning (battles + category councils + asymmetry) ---
+    cross_vendor_lookup: dict[str, dict] = {}
+    if (
+        cfg.cross_vendor_reasoning_enabled
+        and reasoning_lookup
+        and evidence_for_reasoning
+        and budget.phase_allowed("cross_vendor", cfg.intelligence_phase_min_cross_vendor)
+    ):
+        try:
+            from atlas_brain.reasoning.cross_vendor import CrossVendorReasoner
+            from atlas_brain.reasoning.cross_vendor_selection import (
+                select_asymmetry_pairs,
+                select_battles,
+                select_categories,
+            )
+            from atlas_brain.reasoning import get_stratified_reasoner
+
+            _xv_reasoner_src = get_stratified_reasoner()
+            if _xv_reasoner_src is not None:
+                xv_reasoner = CrossVendorReasoner(_xv_reasoner_src._cache)
+                xv_sem = asyncio.Semaphore(cfg.cross_vendor_concurrency)
+
+                # Build temporary displacement map for selection (pre-persistence)
+                _xv_disp_map = _build_deterministic_displacement_map(
+                    competitive_disp,
+                    competitor_reasons,
+                    {r["vendor"]: r["quotes"] for r in quotable_evidence},
+                    reasoning_lookup=reasoning_lookup,
+                )
+
+                # Build product_profile_lookup early (needed for asymmetry)
+                _xv_pp_lookup: dict[str, dict] = {}
+                for pp in product_profiles_raw:
+                    vn = _canonicalize_vendor(pp.get("vendor_name", ""))
+                    if vn and vn not in _xv_pp_lookup:
+                        _xv_pp_lookup[vn] = pp
+
+                # Select targets
+                battles = await select_battles(
+                    pool, _xv_disp_map, evidence_for_reasoning,
+                    max_battles=cfg.cross_vendor_max_battles,
+                )
+                categories = select_categories(
+                    ecosystem_evidence, reasoning_lookup,
+                    max_categories=cfg.cross_vendor_max_categories,
+                )
+                asymmetry_pairs = await select_asymmetry_pairs(
+                    vendor_scores, evidence_for_reasoning, _xv_pp_lookup,
+                    max_pairs=cfg.cross_vendor_max_asymmetry,
+                )
+
+                # Run all cross-vendor reasoning concurrently
+                from atlas_brain.reasoning.cross_vendor import CrossVendorResult
+                xv_results: list[CrossVendorResult] = []
+
+                async def _xv_battle(va: str, vb: str, edge: dict) -> None:
+                    ev_a = evidence_for_reasoning.get(va)
+                    ev_b = evidence_for_reasoning.get(vb)
+                    if not ev_a or not ev_b:
+                        return
+                    async with xv_sem:
+                        try:
+                            r = await xv_reasoner.analyze_battle(
+                                va, vb,
+                                evidence_a=ev_a,
+                                evidence_b=ev_b,
+                                displacement_edge=edge,
+                                product_profile_a=_xv_pp_lookup.get(va),
+                                product_profile_b=_xv_pp_lookup.get(vb),
+                            )
+                            xv_results.append(r)
+                        except Exception:
+                            logger.debug("Battle reasoning failed: %s vs %s", va, vb, exc_info=True)
+
+                async def _xv_category(cat: str, eco: dict) -> None:
+                    cat_evidence = {
+                        v: evidence_for_reasoning[v]
+                        for v in evidence_for_reasoning
+                        if evidence_for_reasoning[v].get("product_category") == cat
+                    }
+                    if len(cat_evidence) < 3:
+                        return
+                    cat_flows = [
+                        e for e in _xv_disp_map
+                        if e.get("from_vendor") in cat_evidence or e.get("to_vendor") in cat_evidence
+                    ]
+                    async with xv_sem:
+                        try:
+                            r = await xv_reasoner.analyze_category(
+                                cat,
+                                vendor_evidence=cat_evidence,
+                                ecosystem=eco,
+                                displacement_flows=cat_flows,
+                            )
+                            # Tag conclusion with category for persistence
+                            r.conclusion["_category"] = cat
+                            xv_results.append(r)
+                        except Exception:
+                            logger.debug("Category council failed: %s", cat, exc_info=True)
+
+                async def _xv_asymmetry(va: str, vb: str) -> None:
+                    ev_a = evidence_for_reasoning.get(va)
+                    ev_b = evidence_for_reasoning.get(vb)
+                    if not ev_a or not ev_b:
+                        return
+                    async with xv_sem:
+                        try:
+                            r = await xv_reasoner.analyze_asymmetry(
+                                va, vb,
+                                evidence_a=ev_a,
+                                evidence_b=ev_b,
+                                profile_a=_xv_pp_lookup.get(va),
+                                profile_b=_xv_pp_lookup.get(vb),
+                            )
+                            xv_results.append(r)
+                        except Exception:
+                            logger.debug("Asymmetry reasoning failed: %s vs %s", va, vb, exc_info=True)
+
+                await asyncio.gather(
+                    *[_xv_battle(va, vb, e) for va, vb, e in battles],
+                    *[_xv_category(cat, eco) for cat, eco in categories],
+                    *[_xv_asymmetry(va, vb) for va, vb in asymmetry_pairs],
+                )
+
+                # Build cross_vendor_lookup for downstream consumers
+                xv_tokens_total = 0
+                xv_cached = 0
+                for r in xv_results:
+                    key = f"{r.analysis_type}:{':'.join(sorted(r.vendors))}"
+                    cross_vendor_lookup[key] = r.conclusion
+                    xv_tokens_total += r.tokens_used
+                    if r.cached:
+                        xv_cached += 1
+
+                if xv_results:
+                    logger.info(
+                        "Cross-vendor reasoning: %d results (%d cached), tokens: %d",
+                        len(xv_results), xv_cached, xv_tokens_total,
+                    )
+
+                # Persist conclusions to DB
+                for r in xv_results:
+                    if r.conclusion.get("error"):
+                        continue
+                    try:
+                        sorted_vendors = sorted(r.vendors)
+                        category_val = r.conclusion.pop("_category", None)
+                        await pool.execute(
+                            """
+                            INSERT INTO b2b_cross_vendor_conclusions
+                                (analysis_type, vendors, category, conclusion, confidence,
+                                 evidence_hash, tokens_used, cached)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                            """,
+                            r.analysis_type,
+                            sorted_vendors,
+                            category_val,
+                            json.dumps(r.conclusion, default=str),
+                            r.confidence,
+                            r.evidence_hash,
+                            r.tokens_used,
+                            r.cached,
+                        )
+                    except Exception:
+                        logger.debug("Failed to persist cross-vendor conclusion", exc_info=True)
+        except Exception:
+            logger.debug("Cross-vendor reasoning phase skipped", exc_info=True)
 
     # Exploratory overview LLM, post-processing, and report validation are
     # now handled by the b2b_churn_reports follow-up task.
@@ -2707,6 +2948,9 @@ async def _fetch_company_comparison_rows(
     window_days: int,
 ) -> list[dict[str, Any]]:
     """Fetch enriched review rows for a named reviewer company."""
+    company_norm = normalize_company_name(company_name)
+    if not company_norm:
+        return []
     sources = _intelligence_source_allowlist()
     filters = _eligible_review_filters(window_param=1, source_param=3, alias="r")
     rows = await pool.fetch(
@@ -2728,12 +2972,12 @@ async def _fetch_company_comparison_rows(
                COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry
         FROM b2b_reviews r
         WHERE {filters}
-          AND LOWER(r.reviewer_company) = LOWER($2)
+          AND r.reviewer_company_norm = $2
         ORDER BY (r.enrichment->>'urgency_score')::numeric DESC
         LIMIT 100
         """,
         window_days,
-        company_name,
+        company_norm,
         sources,
     )
     return [dict(row) for row in rows]

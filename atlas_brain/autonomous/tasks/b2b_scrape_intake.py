@@ -18,6 +18,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from ...config import settings
+from ...services.company_normalization import normalize_company_name
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from ...services.scraping.sources import parse_source_allowlist
@@ -315,19 +316,21 @@ INSERT INTO b2b_reviews (
     dedup_key, source, source_url, source_review_id,
     vendor_name, product_name, product_category,
     rating, rating_max, summary, review_text, pros, cons,
-    reviewer_name, reviewer_title, reviewer_company,
+    reviewer_name, reviewer_title, reviewer_company, reviewer_company_norm,
     company_size_raw, reviewer_industry, reviewed_at,
     import_batch_id, raw_metadata, parser_version,
     content_type, thread_id, comment_depth,
     relevance_score, author_churn_score, source_weight,
     reddit_subreddit, reddit_trending, reddit_flair,
-    reddit_is_edited, reddit_is_crosspost, reddit_num_comments
+    reddit_is_edited, reddit_is_crosspost, reddit_num_comments,
+    reddit_score, reddit_comment_thread_count, reddit_crosspost_subreddits
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-    $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
-    $23, $24, $25,
-    $26, $27, $28,
-    $29, $30, $31, $32, $33, $34
+    $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23,
+    $24, $25, $26,
+    $27, $28, $29,
+    $30, $31, $32, $33, $34, $35,
+    $36, $37, $38::jsonb
 )
 ON CONFLICT (dedup_key) DO NOTHING
 """
@@ -723,6 +726,9 @@ async def _insert_reviews(pool, reviews: list[dict], batch_id: str, parser_versi
             r.get("reviewed_at"),
         )
 
+        reviewer_company = r.get("reviewer_company")
+        reviewer_company_norm = normalize_company_name(reviewer_company or "") or None
+
         rows.append((
             dedup_key,
             r["source"],
@@ -739,7 +745,8 @@ async def _insert_reviews(pool, reviews: list[dict], batch_id: str, parser_versi
             r.get("cons"),
             r.get("reviewer_name"),
             r.get("reviewer_title"),
-            r.get("reviewer_company"),
+            reviewer_company,
+            reviewer_company_norm,
             r.get("company_size_raw"),
             r.get("reviewer_industry"),
             reviewed_at_ts,
@@ -763,6 +770,11 @@ async def _insert_reviews(pool, reviews: list[dict], batch_id: str, parser_versi
             (r.get("raw_metadata") or {}).get("is_edited"),
             (r.get("raw_metadata") or {}).get("is_crosspost"),
             (r.get("raw_metadata") or {}).get("num_comments"),
+            (r.get("raw_metadata") or {}).get("score"),
+            len((r.get("raw_metadata") or {}).get("comment_threads") or []),
+            json.dumps((r.get("raw_metadata") or {}).get("crosspost_subreddits"))
+            if (r.get("raw_metadata") or {}).get("crosspost_subreddits") is not None
+            else None,
         ))
 
     if skipped_short:

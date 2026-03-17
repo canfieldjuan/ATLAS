@@ -2,17 +2,21 @@
 Autonomous task: prospect enrichment via Apollo.io.
 
 Runs daily at 8 PM (before campaign generation at 10 PM).
-Discovers vendors from two sources:
-  1. Proactive: vendors with high churn signal volume from b2b_reviews
-  2. Reactive: campaign_sequences with NULL recipient_email
+Discovers companies from three sources:
+  1. Proactive: named customer companies showing complaint/churn signals
+  2. Proactive: vendors with high churn signal volume from b2b_reviews
+  3. Reactive: campaign_sequences with NULL recipient_email
 
-For each vendor: search_people by name (FREE) -> reveal_person (1 credit each) -> upsert prospects.
-Org data comes from person reveal responses, not a separate enrich_organization call.
-Respects credit budget (max_credits_per_run) and org cache TTL (org_cache_days).
+For each company: search_people by name (FREE) -> reveal_person (1 credit each)
+-> upsert prospects. Org data comes from person reveal responses, not a
+separate enrich_organization call. Respects credit budget
+(max_credits_per_run) and org cache TTL (org_cache_days).
 """
 
 import json
 import logging
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ...config import settings
@@ -27,6 +31,46 @@ logger = logging.getLogger("atlas.autonomous.tasks.prospect_enrichment")
 # before spending reveal credits.
 _vendor_domains: dict[str, str] = {}  # norm vendor name -> domain
 
+_GENERIC_COMPANY_PATTERNS = (
+    re.compile(r"^(msp|saas|fintech|non-?profit|university|school|fortune 500|startup)$", re.I),
+    re.compile(r"^(fortune \d+|government|automation|pharma|recruitment|techfirm|software house|video studio)$", re.I),
+    re.compile(r"(^| )(start up|startup)( |$)", re.I),
+    re.compile(r"(^| )(software company|erp software company|tech company|tech start up|b2b tech|manufacturer)( |$)", re.I),
+    re.compile(r"(^| )(saas provider|saas company|b2b saas|b2b e-?commerce)( |$)", re.I),
+    re.compile(r"(^| )(email marketing agency|design agency)( |$)", re.I),
+    re.compile(r"(^| )(erp software|security [& ]+business intelligence manufacturer)( |$)", re.I),
+    re.compile(r"(^| )(small|mid.?sized|midsized|series [a-z]|b2b|toronto|swiss|finnish|vietnam|germany'?s biggest)( .*)?(software|tech|manufacturer|agency|provider)( |$)", re.I),
+    re.compile(r"(^| )\d+\s+employees?( |$)", re.I),
+    re.compile(r"(^| )(it\s*-\s*\d+\s+employees?|big 4 firm|consulting company|company i'?m currently employed with)( |$)", re.I),
+    re.compile(r"(^| )([a-z]+-based|costa rica)( |$)", re.I),
+    re.compile(r"(^| )(drop shipping|education nonprofit|nonprofit|consulting|firm)( |$)", re.I),
+)
+
+_RAW_COMPANY_ENRICHMENT_OVERRIDES: dict[str, dict[str, Any]] = {
+    "ovh": {"search_names": ["OVHcloud", "OVH"], "domain": "ovhcloud.com"},
+    "host gator": {"search_names": ["HostGator", "Host Gator"], "domain": "hostgator.com"},
+    "wordpress.com": {"search_names": ["WordPress", "WordPress.com"], "domain": "wordpress.com"},
+    "a2 hosting": {"search_names": ["A2 Hosting"], "domain": "a2hosting.com"},
+    "brightpod": {"search_names": ["Brightpod"], "domain": "brightpod.com"},
+    "davinci virtual": {
+        "search_names": ["DaVinci Virtual", "DaVinci Virtual Office Solutions"],
+        "domain": "davincivirtual.com",
+    },
+    "withfriends.co": {"search_names": ["Withfriends", "Withfriends.co"], "domain": "withfriends.co"},
+    "royaltyhealth.com": {"search_names": ["RoyaltyHealth", "RoyaltyHealth.com"], "domain": "royaltyhealth.com"},
+    "hackclub": {"search_names": ["Hack Club", "Hackclub"], "domain": "hackclub.com"},
+    "telepacific": {"search_names": ["TPx Communications", "TelePacific"], "domain": "tpx.com"},
+    "bolddesk": {"search_names": ["BoldDesk"], "domain": "bolddesk.com"},
+    "zulip": {"search_names": ["Zulip"], "domain": "zulip.com"},
+    "gr8.com": {"search_names": ["GR8 Tech", "GR8.com"], "domain": "gr8.tech"},
+    "cerner": {"search_names": ["Cerner", "Oracle Health"], "domains": ["cerner.com", "oracle.com"]},
+}
+
+_COMPANY_ENRICHMENT_OVERRIDES: dict[str, dict[str, Any]] = {
+    _normalize_company(name): value
+    for name, value in _RAW_COMPANY_ENRICHMENT_OVERRIDES.items()
+}
+
 
 async def _load_vendor_domains(pool) -> None:
     """Build vendor domain lookup from prospect_org_cache + scrape targets."""
@@ -39,6 +83,63 @@ async def _load_vendor_domains(pool) -> None:
         """,
     )
     _vendor_domains = {r["company_name_norm"]: r["domain"] for r in rows}
+
+
+def _is_generic_company_descriptor(name: str) -> bool:
+    """Return True for reviewer-company labels that are descriptors, not orgs."""
+    norm = _normalize_company(name)
+    if not norm:
+        return True
+    return any(pattern.search(norm) for pattern in _GENERIC_COMPANY_PATTERNS)
+
+
+def _company_enrichment_override(name: str) -> dict[str, Any]:
+    """Return alias/domain overrides for hard-to-match customer companies."""
+    return _COMPANY_ENRICHMENT_OVERRIDES.get(_normalize_company(name), {})
+
+
+def _override_domains(name: str) -> list[str]:
+    """Return normalized expected domains for a company override."""
+    override = _company_enrichment_override(name)
+    raw_domains = override.get("domains") or ([] if not override.get("domain") else [override["domain"]])
+    domains: list[str] = []
+    for domain in raw_domains:
+        d = str(domain).strip().lower().lstrip("www.")
+        if d and d not in domains:
+            domains.append(d)
+    return domains
+
+
+def _candidate_company_search_names(name: str) -> list[str]:
+    """Return deduplicated search names for Apollo company search."""
+    raw = name.strip()
+    norm = _normalize_company(raw)
+    override = _company_enrichment_override(raw)
+    candidates: list[str] = []
+
+    def _add(value: str) -> None:
+        value = value.strip()
+        if not value:
+            return
+        if value.lower() not in {c.lower() for c in candidates}:
+            candidates.append(value)
+
+    for alias in override.get("search_names", []):
+        _add(alias)
+    _add(raw)
+
+    if "." in raw:
+        stripped = re.sub(r"\.(com|co|io|ai|net|org|uk)$", "", raw, flags=re.I)
+        stripped = re.sub(r"\.(co|com)$", "", stripped, flags=re.I)
+        _add(stripped)
+    if " " in raw and not any(ch in raw for ch in ".&"):
+        _add("".join(part for part in raw.split()))
+    if "&" in raw:
+        _add(raw.replace("&", "and"))
+    if norm and norm != raw.lower():
+        _add(norm)
+
+    return candidates
 
 
 def _org_matches_vendor(
@@ -57,16 +158,22 @@ def _org_matches_vendor(
     vendor_norm = _normalize_company(vendor_name)
 
     # 1. Domain check (most reliable)
-    known_domain = _vendor_domains.get(vendor_norm, "")
-    if known_domain and org_domain:
+    known_domains: list[str] = []
+    vd = _vendor_domains.get(vendor_norm, "")
+    if vd:
+        known_domains.append(vd.lower().lstrip("www."))
+    for domain in _override_domains(vendor_name):
+        if domain not in known_domains:
+            known_domains.append(domain)
+    if known_domains and org_domain:
         # Strip www. and compare
         od = org_domain.lower().lstrip("www.")
-        kd = known_domain.lower().lstrip("www.")
-        return od == kd
+        for kd in known_domains:
+            if od == kd or od.endswith(f".{kd}") or kd.endswith(f".{od}"):
+                return True
 
     # 2. No known domain -- exact name match only (zero tolerance for junk).
     #    Once a vendor is enriched with a real domain, future runs use path 1.
-    import re
     strip = {
         "inc", "llc", "ltd", "corp", "co", "company",
         "the", "a", "an", "and",
@@ -78,24 +185,134 @@ def _org_matches_vendor(
         return [t for t in n.split() if t and t not in strip]
 
     org_tokens = _clean(org_name)
-    vendor_tokens = _clean(vendor_name)
-    if not vendor_tokens or not org_tokens:
+    if not org_tokens:
         return False
-    return org_tokens == vendor_tokens
+    org_joined = "".join(org_tokens)
+    for candidate in _candidate_company_search_names(vendor_name):
+        vendor_tokens = _clean(candidate)
+        if not vendor_tokens:
+            continue
+        if org_tokens == vendor_tokens or org_joined == "".join(vendor_tokens):
+            return True
+    return False
+
+
+async def _route_manual_domain_assist(
+    pool,
+    *,
+    raw: str,
+    norm: str,
+    reason: str,
+    search_attempts: list[dict[str, Any]] | None = None,
+) -> None:
+    """Queue a hard org-match case for manual/domain-assisted enrichment."""
+    payload = {
+        "route": "manual_domain_assist",
+        "reason": reason,
+        "search_names": _candidate_company_search_names(raw),
+        "suggested_domains": _override_domains(raw),
+        "search_attempts": search_attempts or [],
+    }
+    await pool.execute(
+        """
+        INSERT INTO prospect_org_cache
+            (company_name_raw, company_name_norm, domain, status, error_detail, enriched_at, updated_at)
+        VALUES ($1, $2, NULLIF($3, ''), 'manual_review', $4, NOW(), NOW())
+        ON CONFLICT (company_name_norm) DO UPDATE SET
+            company_name_raw = EXCLUDED.company_name_raw,
+            domain = COALESCE(prospect_org_cache.domain, EXCLUDED.domain),
+            status = 'manual_review',
+            error_detail = EXCLUDED.error_detail,
+            enriched_at = NOW(),
+            updated_at = NOW()
+        """,
+        raw,
+        norm,
+        (_override_domains(raw) or [""])[0],
+        json.dumps(payload),
+    )
 
 
 async def _discover_companies(pool, cfg) -> list[dict[str, str]]:
-    """Find vendor companies at risk of losing customers.
+    """Find companies worth Apollo enrichment.
 
-    Targets vendors with high churn signal volume -- these are the companies
-    whose customers are complaining, and who (along with their competitors)
-    would pay for this intelligence.
+    Priority order:
+    1. Named customer companies with explicit churn/complaint signals
+    2. Vendors with high churn signal volume
+    3. Active campaign sequences still missing recipients
 
-    Returns list of {"raw": original_name, "norm": normalized_name}.
+    Returns list of {"raw": original_name, "norm": normalized_name, "source": source_name}.
     """
     companies: dict[str, str] = {}  # norm -> raw
+    company_sources: dict[str, str] = {}
+    covered_company_norms = {
+        r["company_name_norm"]
+        for r in await pool.fetch(
+            """
+            SELECT DISTINCT company_name_norm
+            FROM prospects
+            WHERE company_name_norm IS NOT NULL
+              AND company_name_norm != ''
+              AND status = 'active'
+              AND email IS NOT NULL
+              AND TRIM(email) != ''
+            """,
+        )
+    }
 
-    # 1. Proactive: vendors with significant churn signal volume
+    def _add_company(raw: str, source: str) -> None:
+        norm = _normalize_company(raw)
+        if not norm or norm in companies:
+            return
+        if norm in covered_company_norms:
+            return
+        if source == "reviewer_company" and _is_generic_company_descriptor(raw):
+            return
+        companies[norm] = raw
+        company_sources[norm] = source
+
+    # 1. Proactive: named customer companies showing strong complaint signals.
+    complaint_rows = await pool.fetch(
+        """
+        SELECT MIN(reviewer_company) AS reviewer_company,
+               reviewer_company_norm,
+               COUNT(*) AS signal_count,
+               COUNT(*) FILTER (
+                   WHERE COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+               ) AS leave_count,
+               AVG(COALESCE((enrichment->>'urgency_score')::numeric, 0)) AS avg_urgency
+        FROM b2b_reviews
+        WHERE enrichment_status = 'enriched'
+          AND reviewer_company_norm IS NOT NULL
+          AND reviewer_company_norm != ''
+          AND (
+              COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+              OR COALESCE((enrichment->>'urgency_score')::numeric, 0) >= $1
+          )
+          AND reviewer_company_norm NOT IN (
+              SELECT company_name_norm FROM prospect_org_cache
+              WHERE status = 'manual_review'
+                 OR (
+                     status IN ('enriched', 'not_found')
+                     AND enriched_at > NOW() - make_interval(days => $2)
+                 )
+          )
+        GROUP BY reviewer_company_norm
+        ORDER BY
+            COUNT(*) FILTER (
+                WHERE COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+            ) DESC,
+            COUNT(*) DESC,
+            AVG(COALESCE((enrichment->>'urgency_score')::numeric, 0)) DESC
+        LIMIT 200
+        """,
+        cfg.min_urgency_score,
+        cfg.org_cache_days,
+    )
+    for r in complaint_rows:
+        _add_company(r["reviewer_company"], "reviewer_company")
+
+    # 2. Proactive: vendors with significant churn signal volume
     rows = await pool.fetch(
         """
         SELECT vendor_name, COUNT(*) AS signal_count
@@ -106,8 +323,11 @@ async def _discover_companies(pool, cfg) -> list[dict[str, str]]:
           AND vendor_name != ''
           AND LOWER(TRIM(vendor_name)) NOT IN (
               SELECT company_name_norm FROM prospect_org_cache
-              WHERE status IN ('enriched', 'not_found')
-                AND enriched_at > NOW() - make_interval(days => $2)
+              WHERE status = 'manual_review'
+                 OR (
+                     status IN ('enriched', 'not_found')
+                     AND enriched_at > NOW() - make_interval(days => $2)
+                 )
           )
         GROUP BY vendor_name
         HAVING COUNT(*) >= $3
@@ -119,12 +339,9 @@ async def _discover_companies(pool, cfg) -> list[dict[str, str]]:
         cfg.min_churn_signals,
     )
     for r in rows:
-        raw = r["vendor_name"]
-        norm = _normalize_company(raw)
-        if norm and norm not in companies:
-            companies[norm] = raw
+        _add_company(r["vendor_name"], "vendor_name")
 
-    # 2. Reactive: sequences with NULL recipient_email
+    # 3. Reactive: sequences with NULL recipient_email
     seq_rows = await pool.fetch(
         """
         SELECT DISTINCT cs.company_name
@@ -133,20 +350,23 @@ async def _discover_companies(pool, cfg) -> list[dict[str, str]]:
           AND cs.recipient_email IS NULL
           AND LOWER(TRIM(cs.company_name)) NOT IN (
               SELECT company_name_norm FROM prospect_org_cache
-              WHERE status IN ('enriched', 'not_found')
-                AND enriched_at > NOW() - make_interval(days => $1)
+              WHERE status = 'manual_review'
+                 OR (
+                     status IN ('enriched', 'not_found')
+                     AND enriched_at > NOW() - make_interval(days => $1)
+                 )
           )
         LIMIT 50
         """,
         cfg.org_cache_days,
     )
     for r in seq_rows:
-        raw = r["company_name"]
-        norm = _normalize_company(raw)
-        if norm and norm not in companies:
-            companies[norm] = raw
+        _add_company(r["company_name"], "campaign_sequence")
 
-    return [{"raw": raw, "norm": norm} for norm, raw in companies.items()]
+    return [
+        {"raw": raw, "norm": norm, "source": company_sources.get(norm, "unknown")}
+        for norm, raw in companies.items()
+    ]
 
 
 async def _enrich_company(pool, apollo, cfg, company: dict[str, str], credits_used: int) -> tuple[int, dict[str, Any]]:
@@ -160,7 +380,11 @@ async def _enrich_company(pool, apollo, cfg, company: dict[str, str], credits_us
     norm = company["norm"]
     raw = company["raw"]
     credits = 0
-    stats: dict[str, Any] = {"company": raw, "prospects_created": 0}
+    stats: dict[str, Any] = {
+        "company": raw,
+        "discovery_source": company.get("source", "unknown"),
+        "prospects_created": 0,
+    }
 
     # Check org cache -- skip if recently processed (even if no prospects found)
     cached = await pool.fetchrow(
@@ -169,50 +393,86 @@ async def _enrich_company(pool, apollo, cfg, company: dict[str, str], credits_us
     )
     org_cache_id = cached["id"] if cached else None
 
-    if cached and cached["status"] == "not_found":
-        stats["skipped"] = "previously_not_found"
+    if cached and cached["status"] == "manual_review":
+        stats["skipped"] = "manual_review_queued"
         return credits, stats
 
-    # People search by company name (FREE -- no credits)
-    people = await apollo.search_people(company_name=raw, seniorities=cfg.target_seniorities)
-    if not people:
-        # Widen to any seniority and retry once
-        people = await apollo.search_people(company_name=raw, seniorities=["senior", "entry"])
+    if cached and cached["status"] == "not_found":
+        retry_after = datetime.now(timezone.utc) - timedelta(days=cfg.org_cache_days)
+        enriched_at = cached["enriched_at"]
+        has_override = bool(_company_enrichment_override(raw).get("search_names") or _override_domains(raw))
+        if enriched_at and enriched_at.replace(tzinfo=timezone.utc) > retry_after and not has_override:
+            stats["skipped"] = "previously_not_found"
+            return credits, stats
+
+    # People search by company name (FREE -- no credits). Retry aliases before spending credits.
+    search_attempts: list[dict[str, int | str]] = []
+    search_names = _candidate_company_search_names(raw)
+    people = []
+    verified: list[Any] = []
+    chosen_search_name = raw
+    for seniorities in (cfg.target_seniorities, ["senior", "entry"]):
+        for search_name in search_names:
+            people = await apollo.search_people(company_name=search_name, seniorities=seniorities)
+            verified = [
+                p for p in people
+                if _org_matches_vendor(p.organization_name, p.organization_domain, raw)
+            ]
+            search_attempts.append({
+                "search_name": search_name,
+                "people_found": len(people),
+                "verified": len(verified),
+                "seniority_mode": "primary" if seniorities == cfg.target_seniorities else "fallback",
+            })
+            if verified:
+                chosen_search_name = search_name
+                break
+        if verified:
+            break
 
     if not people:
         stats["people_found"] = 0
-        # Cache as not_found to avoid re-searching
-        await pool.execute(
-            """
-            INSERT INTO prospect_org_cache
-                (company_name_raw, company_name_norm, status, enriched_at, updated_at)
-            VALUES ($1, $2, 'not_found', NOW(), NOW())
-            ON CONFLICT (company_name_norm) DO UPDATE SET
-                status = 'not_found', enriched_at = NOW(), updated_at = NOW()
-            """,
-            raw, norm,
-        )
+        stats["search_attempts"] = search_attempts[:5]
+        if company.get("source") == "reviewer_company":
+            await _route_manual_domain_assist(
+                pool, raw=raw, norm=norm, reason="no_people_found", search_attempts=search_attempts[:5],
+            )
+            stats["queued_manual_review"] = True
+        else:
+            # Cache as not_found to avoid re-searching
+            await pool.execute(
+                """
+                INSERT INTO prospect_org_cache
+                    (company_name_raw, company_name_norm, status, enriched_at, updated_at)
+                VALUES ($1, $2, 'not_found', NOW(), NOW())
+                ON CONFLICT (company_name_norm) DO UPDATE SET
+                    status = 'not_found', enriched_at = NOW(), updated_at = NOW()
+                """,
+                raw, norm,
+            )
         return credits, stats
 
-    # Filter: org must actually match the vendor (prevent fuzzy junk)
-    verified = [
-        p for p in people
-        if _org_matches_vendor(p.organization_name, p.organization_domain, raw)
-    ]
     rejected = len(people) - len(verified)
     if rejected:
         logger.info(
             "Org filter for %s: %d/%d people rejected (wrong org)",
             raw, rejected, len(people),
         )
+    stats["search_name"] = chosen_search_name
     stats["people_found"] = len(people)
     stats["org_rejected"] = rejected
+    stats["search_attempts"] = search_attempts[:5]
 
     # Filter to people with email available
     with_email = [p for p in verified if p.has_email]
     stats["people_with_email"] = len(with_email)
 
     if not with_email:
+        if company.get("source") == "reviewer_company":
+            await _route_manual_domain_assist(
+                pool, raw=raw, norm=norm, reason="no_verified_email", search_attempts=search_attempts[:5],
+            )
+            stats["queued_manual_review"] = True
         return credits, stats
 
     # Pick top N for reveal (1 credit each)
@@ -285,6 +545,12 @@ async def _enrich_company(pool, apollo, cfg, company: dict[str, str], credits_us
             org_cache_id, json.dumps(person.raw),
         )
         stats["prospects_created"] += 1
+
+    if stats["prospects_created"] == 0 and company.get("source") == "reviewer_company":
+        await _route_manual_domain_assist(
+            pool, raw=raw, norm=norm, reason="reveals_no_usable_contact", search_attempts=search_attempts[:5],
+        )
+        stats["queued_manual_review"] = True
 
     return credits, stats
 

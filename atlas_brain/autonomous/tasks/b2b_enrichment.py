@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ...config import settings
+from ...services.company_normalization import normalize_company_name
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from ...services.scraping.sources import VERIFIED_SOURCES as _VERIFIED_SOURCES
@@ -701,9 +702,11 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
                 _ctx = result.get("reviewer_context") or {}
                 _extracted_company = (_ctx.get("company_name") or "").strip()
                 if _extracted_company and not (row.get("reviewer_company") or "").strip():
+                    _extracted_company_norm = normalize_company_name(_extracted_company) or None
                     await pool.execute(
-                        "UPDATE b2b_reviews SET reviewer_company = $1 WHERE id = $2",
+                        "UPDATE b2b_reviews SET reviewer_company = $1, reviewer_company_norm = $2 WHERE id = $3",
                         _extracted_company,
+                        _extracted_company_norm,
                         review_id,
                     )
             except Exception:

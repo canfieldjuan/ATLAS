@@ -54,6 +54,7 @@ from . import calibration  # noqa: E402, F401
 from . import webhooks  # noqa: E402, F401
 from . import crm_events  # noqa: E402, F401
 from . import content  # noqa: E402, F401
+from . import cross_vendor  # noqa: E402, F401
 
 
 def main():

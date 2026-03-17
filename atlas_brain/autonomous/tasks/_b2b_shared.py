@@ -618,6 +618,7 @@ def _compute_churn_pressure_score(
     price_complaint_rate: float,
     total_reviews: int,
     archetype: str | None = None,
+    displacement_velocity: float | None = None,
 ) -> float:
     """Composite 0-100 score for ranking vendors by churn pressure.
 
@@ -627,6 +628,9 @@ def _compute_churn_pressure_score(
     When *archetype* is provided (from the stratified reasoner), the weights
     shift to emphasise the signal most relevant to that churn pattern --
     e.g. ``pricing_shock`` boosts price_complaints to 35%.
+
+    Optional *displacement_velocity* adds a 0-5 point bonus for vendors
+    with accelerating competitive displacement (leading indicator).
 
     Confidence multiplier: 1.0 (50+), 0.85 (20-49), 0.65 (<20).
     """
@@ -638,6 +642,9 @@ def _compute_churn_pressure_score(
         + min(displacement_mention_count, 50) * 2.0 * w["displacement"]
         + min(price_complaint_rate, 1.0) * 100.0 * w["price_complaints"]
     )
+    # Displacement velocity bonus: 0-5 points on top of weighted score
+    if displacement_velocity is not None and displacement_velocity > 0:
+        raw += min(displacement_velocity / 5.0, 1.0) * 5.0
     if total_reviews >= 50:
         confidence = 1.0
     elif total_reviews >= 20:
@@ -1155,13 +1162,20 @@ async def _fetch_vendor_churn_scores(pool, window_days: int, min_reviews: int) -
             count(*) FILTER (
                 WHERE (enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
             ) AS churn_intent,
-            -- Source-weighted urgency: weighted avg preserving 0-10 scale
-            -- Falls back to 0.7 for pre-backfill rows without source_weight
+            -- Source-weighted + relevance-quality urgency: weighted avg preserving 0-10 scale
+            -- source_weight: falls back to 0.7 for pre-backfill rows
+            -- relevance multiplier: 0.7 + 0.3 * relevance_score (floor 0.7, ceiling 1.0)
             avg(
                 (enrichment->>'urgency_score')::numeric
                 * COALESCE(source_weight, 0.7)
-            ) / NULLIF(avg(COALESCE(source_weight, 0.7)), 0)
+                * (0.7 + 0.3 * COALESCE(relevance_score, 0.5))
+            ) / NULLIF(avg(
+                COALESCE(source_weight, 0.7)
+                * (0.7 + 0.3 * COALESCE(relevance_score, 0.5))
+            ), 0)
             AS avg_urgency,
+            avg(author_churn_score) FILTER (WHERE author_churn_score IS NOT NULL)
+            AS avg_author_churn_score,
             avg(rating / NULLIF(rating_max, 0)) AS avg_rating_normalized,
             count(*) FILTER (
                 WHERE (enrichment->>'would_recommend')::boolean = true
@@ -1200,6 +1214,7 @@ async def _fetch_vendor_churn_scores(pool, window_days: int, min_reviews: int) -
             "recommend_yes": r["recommend_yes"],
             "recommend_no": r["recommend_no"],
             "positive_review_pct": float(r["positive_review_pct"]) if r["positive_review_pct"] is not None else None,
+            "avg_author_churn_score": float(r["avg_author_churn_score"]) if r["avg_author_churn_score"] is not None else None,
         }
         for r in rows
     ]
@@ -1222,12 +1237,16 @@ async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days
             enrichment->'contract_context'->>'contract_value_signal' AS value_signal,
             enrichment->'budget_signals'->>'seat_count' AS seat_count,
             enrichment->'timeline'->>'contract_end' AS contract_end,
-            enrichment->'buyer_authority'->>'buying_stage' AS buying_stage
+            enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
+            relevance_score,
+            author_churn_score
         FROM b2b_reviews
         WHERE {filters}
           AND (enrichment->>'urgency_score')::numeric >= $1
           AND reviewer_company IS NOT NULL AND reviewer_company != ''
-        ORDER BY (enrichment->>'urgency_score')::numeric DESC
+          AND COALESCE(relevance_score, 0.5) >= 0.3
+        ORDER BY (enrichment->>'urgency_score')::numeric
+                 * (0.7 + 0.3 * COALESCE(relevance_score, 0.5)) DESC
         """,
         urgency_threshold,
         window_days,
@@ -1262,6 +1281,8 @@ async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days
             "seat_count": seat_count,
             "contract_end": r["contract_end"],
             "buying_stage": r["buying_stage"],
+            "relevance_score": float(r["relevance_score"]) if r["relevance_score"] is not None else None,
+            "author_churn_score": float(r["author_churn_score"]) if r["author_churn_score"] is not None else None,
         })
     return results
 
@@ -2943,6 +2964,7 @@ def _build_vendor_evidence(
     budget_lookup: dict[str, dict] | None = None,
     buyer_auth_lookup: dict[str, dict] | None = None,
     use_case_lookup: dict[str, list[dict]] | None = None,
+    velocity_lookup: dict[str, dict] | None = None,
 ) -> dict[str, Any]:
     """Merge vendor score row + all available lookups into a single evidence
     dict for the stratified reasoner.
@@ -3036,6 +3058,17 @@ def _build_vendor_evidence(
         ucs = use_case_lookup.get(vendor, [])
         if ucs:
             evidence["top_use_cases"] = [u.get("use_case", u.get("name", "")) for u in ucs[:3] if isinstance(u, dict)]
+    if velocity_lookup:
+        vel = velocity_lookup.get(vendor, {})
+        if vel:
+            evidence["displacement_velocity_7d"] = vel.get("velocity_7d")
+            evidence["displacement_velocity_30d"] = vel.get("velocity_30d")
+            v7 = vel.get("velocity_7d") or 0
+            evidence["velocity_trend"] = (
+                "accelerating" if v7 > 0
+                else "decelerating" if v7 < 0
+                else "stable"
+            )
 
     return evidence
 

@@ -824,12 +824,12 @@ async def scraping_top_posts(
             reddit_trending                                  AS trending_score,
             author_churn_score                   AS author_churn_score,
             reddit_subreddit                                       AS subreddit,
-            (raw_metadata->>'score')::int                                    AS reddit_score,
+            reddit_score                                        AS reddit_score,
             reddit_num_comments                             AS num_comments,
             reddit_flair                                      AS post_flair,
             reddit_is_edited                            AS is_edited,
             reddit_is_crosspost                         AS is_crosspost,
-            COALESCE(jsonb_array_length(raw_metadata->'comment_threads'), 0) AS comment_count
+            COALESCE(reddit_comment_thread_count, 0)          AS comment_count
         FROM b2b_reviews
         WHERE source = $1
           AND COALESCE(source_weight, 0.7) >= $2
@@ -1041,14 +1041,13 @@ async def reddit_by_subreddit(days: int = Query(default=30, ge=1, le=90)):
                      THEN (enrichment->>'urgency_score')::numeric END
             )::numeric, 2)                                                                AS avg_urgency_score,
             ROUND(AVG(
-                CASE WHEN (raw_metadata->>'score') ~ '^\-?[0-9]+$'
-                     THEN (raw_metadata->>'score')::int END
+                reddit_score
             )::numeric, 1)                                                                AS avg_reddit_score,
             COUNT(*) FILTER (
                 WHERE reddit_trending = 'high'
             )                                                                             AS trending_high_count,
             COUNT(*) FILTER (
-                WHERE COALESCE(jsonb_array_length(raw_metadata->'comment_threads'), 0) > 0
+                WHERE COALESCE(reddit_comment_thread_count, 0) > 0
             )                                                                             AS comment_harvested_count
         FROM b2b_reviews
         WHERE source = 'reddit'
@@ -1149,10 +1148,10 @@ async def reddit_signal_breakdown(days: int = Query(default=30, ge=1, le=90)):
             COALESCE((
                 SELECT COUNT(DISTINCT sub)
                 FROM b2b_reviews r2,
-                     jsonb_array_elements_text(r2.raw_metadata->'crosspost_subreddits') AS sub
+                     jsonb_array_elements_text(r2.reddit_crosspost_subreddits) AS sub
                 WHERE r2.source = 'reddit'
                   AND r2.imported_at >= $1
-                  AND (r2.raw_metadata->>'is_crosspost')::boolean
+                  AND r2.reddit_is_crosspost
             ), 0)                                                              AS crosspost_subreddits_reached
         FROM b2b_reviews
         WHERE source = 'reddit'
@@ -1166,10 +1165,10 @@ async def reddit_signal_breakdown(days: int = Query(default=30, ge=1, le=90)):
         """
         SELECT
             COUNT(*) FILTER (
-                WHERE COALESCE(jsonb_array_length(raw_metadata->'comment_threads'), 0) > 0
+                WHERE COALESCE(reddit_comment_thread_count, 0) > 0
             )                                                                  AS posts_with_comments,
             ROUND(AVG(
-                COALESCE(jsonb_array_length(raw_metadata->'comment_threads'), 0)
+                COALESCE(reddit_comment_thread_count, 0)
             )::numeric, 2)                                                     AS avg_comments_fetched,
             COUNT(*)                                                            AS total_posts
         FROM b2b_reviews

@@ -147,11 +147,14 @@ async def _enrich_target(pool, apollo, cfg, target: dict, credits_used: int) -> 
                 stats["contact"] = best["email"]
                 return 0, stats
 
-    # 2. Check org cache -- skip if recently marked not_found
+    # 2. Check org cache before Apollo spend.
     cached = await pool.fetchrow(
         "SELECT id, status, enriched_at FROM prospect_org_cache WHERE company_name_norm = $1",
         norm,
     )
+    if cached and cached["status"] == "manual_review":
+        stats["skipped"] = "manual_review_queued"
+        return 0, stats
     if cached and cached["status"] == "not_found":
         stats["skipped"] = "org_not_found_cached"
         return 0, stats

@@ -1718,8 +1718,16 @@ async def _fetch_opportunities(
                r.enrichment->'use_case'->'integration_stack' AS integration_stack,
                r.sentiment_direction,
                COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry,
-               r.reviewer_title, r.company_size_raw
+               r.reviewer_title, r.company_size_raw,
+               prior_eng.avg_open_hours
         FROM b2b_reviews r
+        LEFT JOIN LATERAL (
+            SELECT AVG(hours_to_first_open) AS avg_open_hours
+            FROM b2b_campaigns
+            WHERE vendor_name = r.vendor_name
+              AND hours_to_first_open IS NOT NULL
+              AND sent_at > NOW() - INTERVAL '90 days'
+        ) prior_eng ON true
         WHERE r.enrichment_status = 'enriched'
           AND r.enriched_at > NOW() - make_interval(days => $1)
           AND (r.enrichment->>'urgency_score')::numeric >= $2
@@ -1749,6 +1757,7 @@ async def _fetch_opportunities(
 
         row_dict["mention_context"] = mention_context
         row_dict["urgency"] = _safe_float(row_dict.get("urgency"), 0)
+        row_dict["avg_open_hours"] = float(r["avg_open_hours"]) if r["avg_open_hours"] is not None else None
         opp_score, score_components = _compute_score(row_dict)
 
         if opp_score < min_score:
@@ -1760,7 +1769,11 @@ async def _fetch_opportunities(
         row_dict["review_id"] = str(r["review_id"])
         opportunities.append(row_dict)
 
-    opportunities.sort(key=lambda o: o["opportunity_score"], reverse=True)
+    # Sort by score, then by prior engagement speed as tie-breaker (lower open hours = better)
+    opportunities.sort(
+        key=lambda o: (o["opportunity_score"], -(o.get("avg_open_hours") or 999)),
+        reverse=True,
+    )
     return opportunities[:limit]
 
 

@@ -242,12 +242,40 @@ async def calibrate(
         total_weights += dim_weight_count
         dimensions_calibrated.append(dimension)
 
+    # 4. Engagement timing correlation: compare open speed for positive vs negative outcomes
+    engagement_timing: dict[str, Any] | None = None
+    try:
+        timing_row = await pool.fetchrow(
+            """
+            SELECT
+                AVG(bc.hours_to_first_open) FILTER (
+                    WHERE cs.outcome IN ('meeting_booked', 'deal_opened', 'deal_won')
+                ) AS avg_open_positive,
+                AVG(bc.hours_to_first_open) FILTER (
+                    WHERE cs.outcome NOT IN ('pending', 'meeting_booked', 'deal_opened', 'deal_won')
+                ) AS avg_open_negative
+            FROM campaign_sequences cs
+            JOIN b2b_campaigns bc ON bc.sequence_id = cs.id AND bc.step_number = 1
+            WHERE cs.outcome != 'pending'
+              AND bc.hours_to_first_open IS NOT NULL
+              AND cs.outcome_recorded_at > NOW() - make_interval(days => $1)
+            """,
+            window_days,
+        )
+        if timing_row and (timing_row["avg_open_positive"] is not None or timing_row["avg_open_negative"] is not None):
+            engagement_timing = {
+                "avg_open_hours_positive": round(float(timing_row["avg_open_positive"]), 2) if timing_row["avg_open_positive"] is not None else None,
+                "avg_open_hours_negative": round(float(timing_row["avg_open_negative"]), 2) if timing_row["avg_open_negative"] is not None else None,
+            }
+    except Exception:
+        logger.debug("Engagement timing correlation unavailable")
+
     logger.info(
         "Score calibration complete: version=%d, weights=%d, dimensions=%s",
         new_version, total_weights, dimensions_calibrated,
     )
 
-    return {
+    result: dict[str, Any] = {
         "calibrated": True,
         "model_version": new_version,
         "total_weights": total_weights,
@@ -256,3 +284,6 @@ async def calibrate(
         "total_with_outcomes": total_with_outcomes,
         "sample_window_days": window_days,
     }
+    if engagement_timing:
+        result["engagement_timing"] = engagement_timing
+    return result

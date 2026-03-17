@@ -120,3 +120,48 @@ async def prospect_stats(
         "contacted": row["contacted"],
         "this_month": row["this_month"],
     }
+
+
+@router.get("/manual-queue")
+async def list_manual_prospect_queue(
+    company: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    _user: AuthUser = Depends(require_auth),
+):
+    """List prospect-org entries routed to manual/domain-assisted enrichment."""
+    pool = _pool_or_503()
+
+    conditions = ["status = 'manual_review'"]
+    params: list = []
+    idx = 1
+
+    if company:
+        conditions.append(f"(LOWER(company_name_raw) LIKE ${idx} OR LOWER(company_name_norm) LIKE ${idx})")
+        params.append(f"%{company.lower()}%")
+        idx += 1
+
+    where = f"WHERE {' AND '.join(conditions)}"
+    params.extend([limit, offset])
+
+    rows = await pool.fetch(
+        f"""
+        SELECT id, company_name_raw, company_name_norm, domain, status,
+               error_detail, enriched_at, created_at, updated_at
+        FROM prospect_org_cache
+        {where}
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT ${idx} OFFSET ${idx + 1}
+        """,
+        *params,
+    )
+
+    count_row = await pool.fetchrow(
+        f"SELECT COUNT(*) AS total FROM prospect_org_cache {where}",
+        *params[:-2],
+    )
+
+    return {
+        "queue": [_row_to_dict(r) for r in rows],
+        "count": count_row["total"] if count_row else 0,
+    }

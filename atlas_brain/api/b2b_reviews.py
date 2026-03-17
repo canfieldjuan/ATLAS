@@ -15,6 +15,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from ..services.company_normalization import normalize_company_name
 from ..services.scraping.sources import ReviewSource
 from ..services.vendor_registry import resolve_vendor_name
 from ..storage.database import get_db_pool
@@ -54,12 +55,12 @@ INSERT INTO b2b_reviews (
     dedup_key, source, source_url, source_review_id,
     vendor_name, product_name, product_category,
     rating, rating_max, summary, review_text, pros, cons,
-    reviewer_name, reviewer_title, reviewer_company,
+    reviewer_name, reviewer_title, reviewer_company, reviewer_company_norm,
     company_size_raw, reviewer_industry, reviewed_at,
     import_batch_id, raw_metadata, parser_version
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-    $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
+    $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
 )
 ON CONFLICT (dedup_key) DO NOTHING
 """
@@ -112,6 +113,7 @@ async def import_b2b_reviews(reviews: list[B2BReviewInput]) -> dict:
             r.source, canonical_vendor, r.source_review_id,
             r.reviewer_name, r.reviewed_at,
         )
+        reviewer_company_norm = normalize_company_name(r.reviewer_company or "") or None
 
         rows.append((
             dedup_key,
@@ -130,6 +132,7 @@ async def import_b2b_reviews(reviews: list[B2BReviewInput]) -> dict:
             r.reviewer_name,
             r.reviewer_title,
             r.reviewer_company,
+            reviewer_company_norm,
             r.company_size_raw,
             r.reviewer_industry,
             reviewed_at_ts,

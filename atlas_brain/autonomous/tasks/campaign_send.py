@@ -221,6 +221,38 @@ async def run(task: ScheduledTask) -> dict:
             )
             continue
 
+        # Fatigue suppression: cap total sends per contact across all sequences.
+        # Query actual sent count directly (not the cached column) so brand-new
+        # sequences that haven't been synchronized yet are still gated correctly.
+        if sequence_id is not None:
+            contact_sends = await pool.fetchval(
+                "SELECT count(*) FROM b2b_campaigns WHERE recipient_email = $1 AND status = 'sent'",
+                c["recipient_email"],
+            )
+            if contact_sends is not None and contact_sends >= cfg.max_sends_per_contact:
+                await pool.execute(
+                    "UPDATE b2b_campaigns SET status = 'cancelled' WHERE id = $1",
+                    campaign_id,
+                )
+                await log_campaign_event(
+                    pool, event_type="fatigue_suppressed", source="system",
+                    campaign_id=campaign_id, sequence_id=sequence_id,
+                    step_number=c.get("step_number"),
+                    recipient_email=c["recipient_email"],
+                    metadata={
+                        "reason": "contact_send_count exceeded max_sends_per_contact",
+                        "contact_send_count": contact_sends,
+                        "max_sends_per_contact": cfg.max_sends_per_contact,
+                    },
+                )
+                suppressed_count += 1
+                logger.info(
+                    "Campaign %s fatigue-suppressed: %s (sends=%d, cap=%d)",
+                    campaign_id, c["recipient_email"],
+                    contact_sends, cfg.max_sends_per_contact,
+                )
+                continue
+
         try:
             # CAN-SPAM: inject unsubscribe footer + headers
             send_body = _wrap_with_footer(
