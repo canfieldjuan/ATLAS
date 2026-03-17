@@ -695,7 +695,7 @@ class EmailIntakeConfig(BaseSettings):
         default=True, description="Generate LLM action plans for CRM matches"
     )
     max_action_plans_per_cycle: int = Field(
-        default=5, ge=1, le=20, description="Cap LLM calls per polling cycle"
+        default=50, ge=1, le=100, description="Cap LLM calls per polling cycle"
     )
     auto_execute_enabled: bool = Field(
         default=False, description="Auto-execute intent actions above confidence threshold"
@@ -2356,6 +2356,11 @@ class B2BChurnConfig(BaseSettings):
     intelligence_phase_min_exec_summary: int = Field(default=45, description="Min seconds remaining to start executive summary LLM")
     intelligence_phase_min_battle_card_copy: int = Field(default=60, description="Min seconds remaining to start battle card sales copy LLM")
     battle_card_llm_concurrency: int = Field(default=3, description="Max concurrent battle card sales copy LLM calls")
+
+    # Follow-up task scheduling (staggered after core)
+    reports_cron: str = Field(default="30 21 * * *", description="Cron for churn reports follow-up task")
+    battle_cards_cron: str = Field(default="30 21 * * *", description="Cron for battle cards follow-up task")
+    article_correlation_cron: str = Field(default="35 21 * * *", description="Cron for article correlation follow-up task")
 
 
 class B2BAlertConfig(BaseSettings):
