@@ -821,14 +821,14 @@ async def scraping_top_posts(
             imported_at,
             enrichment_status,
             COALESCE(source_weight, 0.7)                        AS source_weight,
-            raw_metadata->>'trending_score'                                  AS trending_score,
+            reddit_trending                                  AS trending_score,
             author_churn_score                   AS author_churn_score,
-            raw_metadata->>'subreddit'                                       AS subreddit,
+            reddit_subreddit                                       AS subreddit,
             (raw_metadata->>'score')::int                                    AS reddit_score,
-            (raw_metadata->>'num_comments')::int                             AS num_comments,
-            raw_metadata->>'post_flair'                                      AS post_flair,
-            (raw_metadata->>'is_edited')::boolean                            AS is_edited,
-            (raw_metadata->>'is_crosspost')::boolean                         AS is_crosspost,
+            reddit_num_comments                             AS num_comments,
+            reddit_flair                                      AS post_flair,
+            reddit_is_edited                            AS is_edited,
+            reddit_is_crosspost                         AS is_crosspost,
             COALESCE(jsonb_array_length(raw_metadata->'comment_threads'), 0) AS comment_count
         FROM b2b_reviews
         WHERE source = $1
@@ -1029,7 +1029,7 @@ async def reddit_by_subreddit(days: int = Query(default=30, ge=1, le=90)):
     rows = await pool.fetch(
         """
         SELECT
-            raw_metadata->>'subreddit'                                                   AS subreddit,
+            reddit_subreddit                                                   AS subreddit,
             COUNT(*)                                                                      AS total_posts,
             COUNT(*) FILTER (WHERE COALESCE(source_weight, 0.7) > 0.7)      AS high_signal_posts,
             COUNT(*) FILTER (WHERE enrichment_status = 'enriched')                       AS enriched_posts,
@@ -1045,7 +1045,7 @@ async def reddit_by_subreddit(days: int = Query(default=30, ge=1, le=90)):
                      THEN (raw_metadata->>'score')::int END
             )::numeric, 1)                                                                AS avg_reddit_score,
             COUNT(*) FILTER (
-                WHERE raw_metadata->>'trending_score' = 'high'
+                WHERE reddit_trending = 'high'
             )                                                                             AS trending_high_count,
             COUNT(*) FILTER (
                 WHERE COALESCE(jsonb_array_length(raw_metadata->'comment_threads'), 0) > 0
@@ -1053,9 +1053,9 @@ async def reddit_by_subreddit(days: int = Query(default=30, ge=1, le=90)):
         FROM b2b_reviews
         WHERE source = 'reddit'
           AND imported_at >= $1
-          AND raw_metadata->>'subreddit' IS NOT NULL
-          AND raw_metadata->>'subreddit' != ''
-        GROUP BY raw_metadata->>'subreddit'
+          AND reddit_subreddit IS NOT NULL
+          AND reddit_subreddit != ''
+        GROUP BY reddit_subreddit
         ORDER BY enriched_posts DESC, total_posts DESC
         """,
         since,
@@ -1105,14 +1105,14 @@ async def reddit_signal_breakdown(days: int = Query(default=30, ge=1, le=90)):
     flair_rows = await pool.fetch(
         """
         SELECT
-            COALESCE(NULLIF(raw_metadata->>'post_flair', ''), '(no flair)')  AS flair,
+            COALESCE(NULLIF(reddit_flair, ''), '(no flair)')  AS flair,
             COUNT(*)                                                           AS count,
             COUNT(*) FILTER (WHERE enrichment_status = 'enriched')            AS enriched,
             ROUND(AVG(COALESCE(source_weight, 0.7))::numeric, 3) AS avg_weight
         FROM b2b_reviews
         WHERE source = 'reddit'
           AND imported_at >= $1
-        GROUP BY raw_metadata->>'post_flair'
+        GROUP BY reddit_flair
         ORDER BY count DESC
         LIMIT 15
         """,
@@ -1123,13 +1123,13 @@ async def reddit_signal_breakdown(days: int = Query(default=30, ge=1, le=90)):
     edit_row = await pool.fetchrow(
         """
         SELECT
-            COUNT(*) FILTER (WHERE (raw_metadata->>'is_edited')::boolean)    AS edited_posts,
-            COUNT(*) FILTER (WHERE NOT (raw_metadata->>'is_edited')::boolean
-                               OR raw_metadata->>'is_edited' IS NULL)        AS unedited_posts,
-            COUNT(*) FILTER (WHERE (raw_metadata->>'is_edited')::boolean
+            COUNT(*) FILTER (WHERE reddit_is_edited)    AS edited_posts,
+            COUNT(*) FILTER (WHERE NOT reddit_is_edited
+                               OR reddit_is_edited IS NULL)        AS unedited_posts,
+            COUNT(*) FILTER (WHERE reddit_is_edited
                                AND enrichment_status = 'enriched')           AS edited_enriched,
-            COUNT(*) FILTER (WHERE (NOT (raw_metadata->>'is_edited')::boolean
-                               OR raw_metadata->>'is_edited' IS NULL)
+            COUNT(*) FILTER (WHERE (NOT reddit_is_edited
+                               OR reddit_is_edited IS NULL)
                                AND enrichment_status = 'enriched')           AS unedited_enriched
         FROM b2b_reviews
         WHERE source = 'reddit'
@@ -1142,8 +1142,8 @@ async def reddit_signal_breakdown(days: int = Query(default=30, ge=1, le=90)):
     crosspost_row = await pool.fetchrow(
         """
         SELECT
-            COUNT(*) FILTER (WHERE (raw_metadata->>'is_crosspost')::boolean)  AS crossposts,
-            COUNT(*) FILTER (WHERE (raw_metadata->>'is_crosspost')::boolean
+            COUNT(*) FILTER (WHERE reddit_is_crosspost)  AS crossposts,
+            COUNT(*) FILTER (WHERE reddit_is_crosspost
                                AND enrichment_status = 'enriched')            AS crosspost_enriched,
             -- Count total unique extra subreddits reached via crossposts
             COALESCE((
@@ -1231,10 +1231,10 @@ async def reddit_signal_breakdown(days: int = Query(default=30, ge=1, le=90)):
     trending_row = await pool.fetchrow(
         """
         SELECT
-            COUNT(*) FILTER (WHERE raw_metadata->>'trending_score' = 'high')   AS trending_high,
-            COUNT(*) FILTER (WHERE raw_metadata->>'trending_score' = 'medium') AS trending_medium,
-            COUNT(*) FILTER (WHERE raw_metadata->>'trending_score' = 'low'
-                               OR raw_metadata->>'trending_score' IS NULL)     AS trending_low
+            COUNT(*) FILTER (WHERE reddit_trending = 'high')   AS trending_high,
+            COUNT(*) FILTER (WHERE reddit_trending = 'medium') AS trending_medium,
+            COUNT(*) FILTER (WHERE reddit_trending = 'low'
+                               OR reddit_trending IS NULL)     AS trending_low
         FROM b2b_reviews
         WHERE source = 'reddit'
           AND imported_at >= $1
@@ -1342,7 +1342,7 @@ async def reddit_per_vendor(
                 WHERE (enrichment->>'urgency_score')::numeric >= 7
             )                                                                            AS high_urgency_count,
             COUNT(*) FILTER (
-                WHERE raw_metadata->>'trending_score' = 'high'
+                WHERE reddit_trending = 'high'
             )                                                                            AS trending_high_count
         FROM b2b_reviews
         WHERE source = 'reddit'
@@ -1365,15 +1365,15 @@ async def reddit_per_vendor(
         """
         SELECT
             vendor_name,
-            raw_metadata->>'subreddit'   AS subreddit,
+            reddit_subreddit   AS subreddit,
             COUNT(*)                      AS cnt
         FROM b2b_reviews
         WHERE source = 'reddit'
           AND imported_at >= $1
           AND vendor_name = ANY($2)
-          AND raw_metadata->>'subreddit' IS NOT NULL
-          AND raw_metadata->>'subreddit' != ''
-        GROUP BY vendor_name, raw_metadata->>'subreddit'
+          AND reddit_subreddit IS NOT NULL
+          AND reddit_subreddit != ''
+        GROUP BY vendor_name, reddit_subreddit
         ORDER BY vendor_name, cnt DESC
         """,
         since,

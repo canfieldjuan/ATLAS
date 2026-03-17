@@ -319,12 +319,15 @@ INSERT INTO b2b_reviews (
     company_size_raw, reviewer_industry, reviewed_at,
     import_batch_id, raw_metadata, parser_version,
     content_type, thread_id, comment_depth,
-    relevance_score, author_churn_score, source_weight
+    relevance_score, author_churn_score, source_weight,
+    reddit_subreddit, reddit_trending, reddit_flair,
+    reddit_is_edited, reddit_is_crosspost, reddit_num_comments
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
     $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
     $23, $24, $25,
-    $26, $27, $28
+    $26, $27, $28,
+    $29, $30, $31, $32, $33, $34
 )
 ON CONFLICT (dedup_key) DO NOTHING
 """
@@ -753,6 +756,13 @@ async def _insert_reviews(pool, reviews: list[dict], batch_id: str, parser_versi
             (r.get("raw_metadata") or {}).get("author_churn_score"),
             # Source weight (migration 152) -- set by all parsers
             (r.get("raw_metadata") or {}).get("source_weight"),
+            # Reddit analytics (migration 156) -- only Reddit reviews have these
+            (r.get("raw_metadata") or {}).get("subreddit"),
+            (r.get("raw_metadata") or {}).get("trending_score"),
+            (r.get("raw_metadata") or {}).get("post_flair"),
+            (r.get("raw_metadata") or {}).get("is_edited"),
+            (r.get("raw_metadata") or {}).get("is_crosspost"),
+            (r.get("raw_metadata") or {}).get("num_comments"),
         ))
 
     if skipped_short:
