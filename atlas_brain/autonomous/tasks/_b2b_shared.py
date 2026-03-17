@@ -56,17 +56,25 @@ _EXPLORATORY_OVERVIEW_SCHEMA: dict[str, Any] = {
 }
 
 
-_BATTLE_CARD_HIGH_PRIORITY_SCORE_MIN = 60.0
-_BATTLE_CARD_HIGH_PRIORITY_URGENCY_MIN = 5.0
-_BATTLE_CARD_FEATURE_GAP_HEADLINE_MIN_MENTIONS = 5
-_BATTLE_CARD_LEAVING_PATTERNS = (
-    "customers are leaving",
-    "customer are leaving",
-    "are leaving for",
-    "capturing defectors",
-    "capture defectors",
-    "defectors",
-)
+def _battle_card_high_priority_score_min() -> float:
+    """Return the configured score threshold for high-priority language."""
+    return float(settings.b2b_churn.battle_card_high_priority_score_min)
+
+
+def _battle_card_high_priority_urgency_min() -> float:
+    """Return the configured urgency threshold for high-priority language."""
+    return float(settings.b2b_churn.battle_card_high_priority_urgency_min)
+
+
+def _battle_card_feature_gap_headline_min_mentions() -> int:
+    """Return the configured feature-gap mention threshold for headlines."""
+    return int(settings.b2b_churn.battle_card_feature_gap_headline_min_mentions)
+
+
+def _battle_card_leaving_patterns() -> tuple[str, ...]:
+    """Return configured phrases that imply unsupported switching claims."""
+    patterns = settings.b2b_churn.battle_card_leaving_patterns or []
+    return tuple(str(item).strip().lower() for item in patterns if str(item).strip())
 
 
 # Default scoring weights for churn pressure score.
@@ -275,13 +283,14 @@ def _battle_card_add_claim(claims: set[str], value: Any, *, pct: bool = False) -
     claims.add(f"{int(round(num)):,}" if not pct and num >= 1000 else base)
     if pct:
         claims.add(f"{base}%")
+        claims.add(f"{int(round(num))}%")
     elif num >= 1000:
         claims.add(f"{int(round(num))}")
 
 
 def _battle_card_allowed_claims(card: dict[str, Any]) -> set[str]:
     """Build the set of numeric claims supported by deterministic card input."""
-    claims: set[str] = set()
+    claims: set[str] = _battle_card_numeric_tokens(json.dumps(card, default=str))
     _battle_card_add_claim(claims, card.get("total_reviews"))
     _battle_card_add_claim(claims, card.get("churn_pressure_score"))
     data = card.get("objection_data") or {}
@@ -302,6 +311,18 @@ def _battle_card_allowed_claims(card: dict[str, Any]) -> set[str]:
     return claims
 
 
+def _battle_card_competitor_names(card: dict[str, Any], *, limit: int = 2) -> list[str]:
+    """Return top competitor names already present in deterministic card input."""
+    names: list[str] = []
+    for item in card.get("competitor_differentiators") or []:
+        competitor = str(item.get("competitor") or "").strip()
+        if competitor and competitor not in names:
+            names.append(competitor)
+        if len(names) >= limit:
+            break
+    return names
+
+
 def _join_summary_terms(items: list[str]) -> str:
     """Join short label lists into readable executive-summary phrasing."""
     cleaned = [str(item).strip() for item in items if str(item).strip()]
@@ -312,6 +333,136 @@ def _join_summary_terms(items: list[str]) -> str:
     if len(cleaned) == 2:
         return f"{cleaned[0]} and {cleaned[1]}"
     return ", ".join(cleaned[:-1]) + f", and {cleaned[-1]}"
+
+
+def _battle_card_safe_summary(card: dict[str, Any]) -> str:
+    """Build a grounded executive summary when generated copy overclaims."""
+    vendor = str(card.get("vendor") or "This vendor").strip() or "This vendor"
+    weaknesses = [
+        str(item.get("area") or item.get("weakness") or "").strip().lower()
+        for item in card.get("vendor_weaknesses") or []
+        if str(item.get("area") or item.get("weakness") or "").strip()
+    ]
+    pain = weaknesses[0] if weaknesses else "customer fit"
+    competitors = _battle_card_competitor_names(card)
+    if competitors:
+        return (
+            f"{vendor} is showing churn pressure around {pain} while buyers "
+            f"re-evaluate fit against {_join_summary_terms(competitors)}."
+        )
+    return f"{vendor} is showing churn pressure around {pain} in recent buyer feedback."
+
+
+def _battle_card_safe_text(card: dict[str, Any], path: str) -> str:
+    """Return grounded replacement text for numeric-sensitive paths."""
+    if path == "executive_summary":
+        return _battle_card_safe_summary(card)
+    if path.endswith(".evidence"):
+        return "Supported by recurring customer complaints and churn-oriented review evidence."
+    if path.endswith(".proof_point"):
+        return "The input shows recurring buyer friction and credible evaluation pressure."
+    if path.startswith("competitive_landscape."):
+        competitors = _battle_card_competitor_names(card)
+        if "top_alternatives" in path and competitors:
+            return (
+                "Alternatives appearing most often in buyer evaluation sets include "
+                f"{_join_summary_terms(competitors)}."
+            )
+        return "Competitive pressure is present where buyers are re-evaluating fit and value."
+    return ""
+
+
+def _sanitize_battle_card_text(
+    card: dict[str, Any],
+    path: str,
+    text: str,
+    *,
+    allowed_claims: set[str],
+    source_text: str,
+    max_switch: int,
+    score: float,
+    urgency: float,
+    low_gap_terms: list[str],
+) -> str:
+    """Rewrite overclaiming battle-card strings into validator-safe text."""
+    cleaned = str(text or "")
+    if _battle_card_numeric_paths(path):
+        bad = sorted(tok for tok in _battle_card_numeric_tokens(cleaned) if tok not in allowed_claims)
+        if bad:
+            cleaned = _battle_card_safe_text(card, path)
+    years = [year for year in re.findall(r"\b20\d{2}\b", cleaned) if year not in source_text]
+    for year in years:
+        cleaned = re.sub(rf"\s*\b{re.escape(year)}\b", "", cleaned)
+    if max_switch == 0:
+        replacements = (
+            ("customers are leaving", "buyers are evaluating alternatives"),
+            ("customer are leaving", "buyers are evaluating alternatives"),
+            ("are leaving for", "are evaluating"),
+            ("capturing defectors", "winning evaluations"),
+            ("capture defectors", "win evaluations"),
+            ("defectors", "evaluators"),
+        )
+        lowered = cleaned.lower()
+        for src, dst in replacements:
+            if src in lowered:
+                cleaned = re.sub(re.escape(src), dst, cleaned, flags=re.IGNORECASE)
+                lowered = cleaned.lower()
+    if score < _battle_card_high_priority_score_min() or urgency < _battle_card_high_priority_urgency_min():
+        cleaned = re.sub(r"high[- ]priority target:?\s*", "Emerging vulnerability: ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(
+            r"\b(a|an)\s+Emerging vulnerability:\s*",
+            "an emerging vulnerability for ",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+    if _battle_card_headline_paths(path):
+        for term in low_gap_terms:
+            if term and term in cleaned.lower():
+                return _battle_card_safe_summary(card) if path == "executive_summary" else "Workflow friction is showing up in customer feedback."
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _sanitize_battle_card_sales_copy(card: dict[str, Any], generated: dict[str, Any]) -> dict[str, Any]:
+    """Deterministically rewrite near-miss sales copy before final rejection."""
+    if not isinstance(generated, dict):
+        return {}
+    allowed = _battle_card_allowed_claims(card)
+    source_text = json.dumps(card, default=str).lower()
+    max_switch = max(
+        (int(c.get("switch_count") or 0) for c in card.get("competitor_differentiators") or []),
+        default=0,
+    )
+    score = float(card.get("churn_pressure_score") or 0)
+    urgency = float(((card.get("objection_data") or {}).get("avg_urgency")) or 0)
+    low_gap_terms = [
+        str(g.get("feature") or "").strip().lower()
+        for g in ((card.get("objection_data") or {}).get("top_feature_gaps") or [])
+        if int(g.get("mentions") or 0) < _battle_card_feature_gap_headline_min_mentions()
+    ]
+
+    def _walk(value: Any, path: str = "") -> Any:
+        if isinstance(value, str):
+            return _sanitize_battle_card_text(
+                card,
+                path,
+                value,
+                allowed_claims=allowed,
+                source_text=source_text,
+                max_switch=max_switch,
+                score=score,
+                urgency=urgency,
+                low_gap_terms=low_gap_terms,
+            )
+        if isinstance(value, list):
+            return [_walk(item, f"{path}[{idx}]") for idx, item in enumerate(value)]
+        if isinstance(value, dict):
+            return {
+                key: _walk(inner, f"{path}.{key}" if path else str(key))
+                for key, inner in value.items()
+            }
+        return value
+
+    return _walk(generated)
 
 
 def _build_buyer_action(vendor: str, pain: str | None, alternatives: list[str], archetype: str | None = None) -> str:
@@ -572,7 +723,7 @@ def _validate_battle_card_sales_copy(
     low_gap_terms = [
         str(g.get("feature") or "").strip().lower()
         for g in ((card.get("objection_data") or {}).get("top_feature_gaps") or [])
-        if int(g.get("mentions") or 0) < _BATTLE_CARD_FEATURE_GAP_HEADLINE_MIN_MENTIONS
+        if int(g.get("mentions") or 0) < _battle_card_feature_gap_headline_min_mentions()
     ]
     for path, text in _battle_card_iter_text(generated):
         lowered = text.lower()
@@ -583,9 +734,9 @@ def _validate_battle_card_sales_copy(
         years = re.findall(r"\b20\d{2}\b", text)
         if any(year not in source_text for year in years):
             warnings.append(f"{path} references a year not present in source data")
-        if max_switch == 0 and any(term in lowered for term in _BATTLE_CARD_LEAVING_PATTERNS):
+        if max_switch == 0 and any(term in lowered for term in _battle_card_leaving_patterns()):
             warnings.append(f"{path} implies switching despite zero switch_count evidence")
-        if score < _BATTLE_CARD_HIGH_PRIORITY_SCORE_MIN or urgency < _BATTLE_CARD_HIGH_PRIORITY_URGENCY_MIN:
+        if score < _battle_card_high_priority_score_min() or urgency < _battle_card_high_priority_urgency_min():
             if "high-priority target" in lowered or "high priority target" in lowered:
                 warnings.append(f"{path} overstates urgency for a moderate-priority card")
         if _battle_card_headline_paths(path):

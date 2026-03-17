@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .llm_utils import resolve_stratified_llm
+from .multi_pass import multi_pass_reason
 from .semantic_cache import CacheEntry, SemanticCache
 
 logger = logging.getLogger("atlas.reasoning.cross_vendor")
@@ -92,6 +93,10 @@ CROSS_VENDOR_JSON_SCHEMA: dict[str, Any] = {
         "uncertainty_sources": {
             "type": "array",
             "items": {"type": "string"},
+        },
+        "resource_advantage": {
+            "type": ["string", "null"],
+            "description": "Which vendor holds the resource advantage and why (1 sentence). Null if parity.",
         },
     },
 }
@@ -167,6 +172,9 @@ GROUNDING RULES:
 - conclusion MUST reference at least 3 specific numbers from the evidence.
 - durability_assessment: "structural" if resource gap is deep; "temporary" if fixable.
 - winner: which vendor is better positioned long-term, or null.
+- resource_advantage: one sentence naming which vendor holds the resource edge and
+  the primary reason (e.g., "Vendor A holds the resource advantage due to 3x review
+  share and deeper enterprise penetration"). Null if approximate parity.
 - falsification_conditions: what specific evidence would prove this analysis wrong?
 - Do not invent data not present in the evidence.
 
@@ -213,6 +221,27 @@ def _compact_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
         else:
             out[k] = v
     return out
+
+
+def _vendor_name_tokens(raw: Any) -> tuple[str, ...]:
+    """Tokenize vendor names for tolerant but bounded matching."""
+    return tuple(re.findall(r"[a-z0-9]+", str(raw or "").lower()))
+
+
+def _vendor_name_key_tokens(raw: Any) -> set[str]:
+    """Return the meaningful subset of vendor tokens for matching."""
+    tokens = _vendor_name_tokens(raw)
+    long_tokens = {tok for tok in tokens if len(tok) > 3}
+    return long_tokens or set(tokens)
+
+
+def _vendor_name_matches(target_name: Any, candidate_name: Any) -> bool:
+    """Match vendor labels while tolerating common suffix variations."""
+    target_tokens = _vendor_name_key_tokens(target_name)
+    candidate_tokens = _vendor_name_key_tokens(candidate_name)
+    if not target_tokens or not candidate_tokens:
+        return False
+    return target_tokens.issubset(candidate_tokens) or candidate_tokens.issubset(target_tokens)
 
 
 def _build_battle_payload(
@@ -276,6 +305,151 @@ def _build_asymmetry_payload(
     if profile_b:
         payload["vendor_b"]["product_profile"] = _compact_evidence(profile_b)
     return payload
+
+
+def _find_battle_contradictions(
+    conclusion: dict[str, Any],
+    payload: dict[str, Any],
+) -> list[str]:
+    """Check for contradictions in pairwise battle reasoning."""
+    contradictions = []
+    winner = conclusion.get("winner")
+    loser = conclusion.get("loser")
+    
+    if winner and loser:
+        v_a = payload.get("vendor_a", {})
+        v_b = payload.get("vendor_b", {})
+
+        def _get_data(target_name: Any) -> dict[str, Any]:
+            name_a = v_a.get("name", "")
+            name_b = v_b.get("name", "")
+            if _vendor_name_matches(target_name, name_a):
+                return v_a
+            if _vendor_name_matches(target_name, name_b):
+                return v_b
+            return {}
+
+        loser_data = _get_data(loser)
+        winner_data = _get_data(winner)
+        
+        # 1. Check velocity contradiction
+        l_vel = loser_data.get("velocity_churn_density", 0) or 0
+        w_vel = winner_data.get("velocity_churn_density", 0) or 0
+        
+        if l_vel < -0.1 and w_vel > 0.1:
+            contradictions.append(
+                f"Winner is declared as {winner}, but {loser} has improving churn velocity ({l_vel}) "
+                f"while {winner} is worsening ({w_vel})"
+            )
+            
+        # 2. Check sentiment contradiction (recommend_ratio)
+        # Higher is better
+        l_rr = loser_data.get("recommend_ratio", 0) or 0
+        w_rr = winner_data.get("recommend_ratio", 0) or 0
+        
+        # If loser has much better sentiment (>20 points higher)
+        if l_rr > (w_rr + 20):
+             contradictions.append(
+                f"Winner is declared as {winner}, but {loser} has significantly better net sentiment "
+                f"(NPS proxy: {l_rr} vs {w_rr})"
+            )
+
+    return contradictions
+
+
+def _find_category_contradictions(
+    conclusion: dict[str, Any],
+    payload: dict[str, Any],
+) -> list[str]:
+    """Check for contradictions in category council reasoning."""
+    contradictions = []
+    regime = conclusion.get("market_regime")
+    
+    eco = payload.get("ecosystem", {})
+    hhi = eco.get("hhi")
+    vendor_count = eco.get("vendor_count", 0)
+    
+    # Check HHI/Count vs Regime
+    if regime == "platform_consolidation":
+        if hhi and hhi < 1000:
+            contradictions.append(
+                f"Market regime is 'platform_consolidation' but HHI is low ({hhi}), suggesting fragmentation"
+            )
+        if vendor_count > 20:
+             contradictions.append(
+                f"Market regime is 'platform_consolidation' but vendor count is high ({vendor_count})"
+            )
+            
+    elif regime == "fragmentation":
+        if hhi and hhi > 2500:
+            contradictions.append(
+                f"Market regime is 'fragmentation' but HHI is high ({hhi}), suggesting concentration"
+            )
+        if vendor_count < 5:
+             contradictions.append(
+                f"Market regime is 'fragmentation' but vendor count is low ({vendor_count})"
+            )
+        
+    return contradictions
+
+
+def _find_asymmetry_contradictions(
+    conclusion: dict[str, Any],
+    payload: dict[str, Any],
+) -> list[str]:
+    """Check for contradictions in resource asymmetry reasoning."""
+    contradictions = []
+    advantage = conclusion.get("resource_advantage") # text description
+    if not advantage:
+        return []
+        
+    v_a = payload.get("vendor_a", {})
+    v_b = payload.get("vendor_b", {})
+    name_a = v_a.get("name", "")
+    name_b = v_b.get("name", "")
+    
+    # Helper to check who the LLM attributed advantage to
+    def _attributed_to(name: Any) -> bool:
+        return _vendor_name_matches(name, advantage)
+        
+    attributed_a = _attributed_to(name_a) or "Vendor A" in advantage
+    attributed_b = _attributed_to(name_b) or "Vendor B" in advantage
+    
+    # 1. Review Count Contradiction
+    reviews_a = v_a.get("total_reviews", 0) or 0
+    reviews_b = v_b.get("total_reviews", 0) or 0
+    
+    if attributed_a and reviews_b > (reviews_a * 5):
+        contradictions.append(
+            f"Resource advantage attributed to {name_a}, but {name_b} has 5x more reviews "
+            f"({reviews_b} vs {reviews_a})"
+        )
+    elif attributed_b and reviews_a > (reviews_b * 5):
+        contradictions.append(
+            f"Resource advantage attributed to {name_b}, but {name_a} has 5x more reviews "
+            f"({reviews_a} vs {reviews_b})"
+        )
+        
+    # 2. Funding/Insider Contradiction (if available)
+    # Check for 'insider_signal_count' or 'budget_context' if present in compact payload
+    # Note: _compact_evidence might strip some of this, but let's check what we have.
+    # Assuming insider_signal_count is preserved if high signal.
+    
+    insider_a = v_a.get("insider_signal_count", 0) or 0
+    insider_b = v_b.get("insider_signal_count", 0) or 0
+    
+    if attributed_a and insider_b > (insider_a + 5):
+         contradictions.append(
+            f"Resource advantage attributed to {name_a}, but {name_b} has significantly more insider signals "
+            f"({insider_b} vs {insider_a})"
+        )
+    elif attributed_b and insider_a > (insider_b + 5):
+         contradictions.append(
+            f"Resource advantage attributed to {name_b}, but {name_a} has significantly more insider signals "
+            f"({insider_a} vs {insider_b})"
+        )
+
+    return contradictions
 
 
 # ---------------------------------------------------------------------------
@@ -356,41 +530,68 @@ class CrossVendorReasoner:
             trace_metadata["business"] = business
 
         t0 = time.monotonic()
+
+        # Select contradiction finder
+        finder = None
+        if _rcfg.multi_pass_enabled:
+            if analysis_type == "pairwise_battle":
+                finder = _find_battle_contradictions
+            elif analysis_type == "category_council":
+                finder = _find_category_contradictions
+            elif analysis_type == "resource_asymmetry":
+                finder = _find_asymmetry_contradictions
+
         try:
-            result = await asyncio.to_thread(
-                llm.chat,
-                messages=messages,
-                max_tokens=_rcfg.max_tokens,
-                temperature=_rcfg.temperature,
-                guided_json=CROSS_VENDOR_JSON_SCHEMA,
-                response_format={"type": "json_object"},
-            )
-            text = result.get("response", "").strip()
-            usage = result.get("usage", {})
-            tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
-            trace_meta = result.get("_trace_meta", {})
-            duration_ms = (time.monotonic() - t0) * 1000
+            if _rcfg.multi_pass_enabled and finder:
+                mp_result = await multi_pass_reason(
+                    llm=llm,
+                    system_prompt=system_prompt,
+                    evidence_payload=payload,
+                    json_schema=CROSS_VENDOR_JSON_SCHEMA,
+                    max_tokens=_rcfg.max_tokens,
+                    temperature=_rcfg.temperature,
+                    enabled=True,
+                    span_prefix=f"reasoning.cross_vendor.{analysis_type}",
+                    trace_metadata=trace_metadata,
+                    contradiction_finder=finder,
+                )
+                conclusion = mp_result.final_conclusion
+                tokens = mp_result.total_tokens
+            else:
+                result = await asyncio.to_thread(
+                    llm.chat,
+                    messages=messages,
+                    max_tokens=_rcfg.max_tokens,
+                    temperature=_rcfg.temperature,
+                    guided_json=CROSS_VENDOR_JSON_SCHEMA,
+                    response_format={"type": "json_object"},
+                )
+                text = result.get("response", "").strip()
+                usage = result.get("usage", {})
+                tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+                trace_meta = result.get("_trace_meta", {})
+                duration_ms = (time.monotonic() - t0) * 1000
 
-            trace_llm_call(
-                span_name=f"reasoning.cross_vendor.{analysis_type}",
-                input_tokens=usage.get("input_tokens", 0),
-                output_tokens=usage.get("output_tokens", 0),
-                model=getattr(llm, "model", getattr(llm, "model_id", "")),
-                provider=getattr(llm, "name", ""),
-                duration_ms=duration_ms,
-                metadata=trace_metadata,
-                input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in messages]},
-                output_data={"response": text[:2000]} if text else None,
-                api_endpoint=trace_meta.get("api_endpoint"),
-                provider_request_id=trace_meta.get("provider_request_id"),
-                ttft_ms=trace_meta.get("ttft_ms"),
-                inference_time_ms=trace_meta.get("inference_time_ms"),
-                queue_time_ms=trace_meta.get("queue_time_ms"),
-            )
+                trace_llm_call(
+                    span_name=f"reasoning.cross_vendor.{analysis_type}",
+                    input_tokens=usage.get("input_tokens", 0),
+                    output_tokens=usage.get("output_tokens", 0),
+                    model=getattr(llm, "model", getattr(llm, "model_id", "")),
+                    provider=getattr(llm, "name", ""),
+                    duration_ms=duration_ms,
+                    metadata=trace_metadata,
+                    input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in messages]},
+                    output_data={"response": text[:2000]} if text else None,
+                    api_endpoint=trace_meta.get("api_endpoint"),
+                    provider_request_id=trace_meta.get("provider_request_id"),
+                    ttft_ms=trace_meta.get("ttft_ms"),
+                    inference_time_ms=trace_meta.get("inference_time_ms"),
+                    queue_time_ms=trace_meta.get("queue_time_ms"),
+                )
 
-            # Clean think tags
-            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-            conclusion = parse_json_response(text, recover_truncated=True)
+                # Clean think tags
+                text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+                conclusion = parse_json_response(text, recover_truncated=True)
 
         except Exception:
             logger.exception("Cross-vendor LLM call failed for %s", pattern_sig)

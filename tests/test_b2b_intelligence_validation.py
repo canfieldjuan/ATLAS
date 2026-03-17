@@ -36,6 +36,7 @@ from atlas_brain.autonomous.tasks._b2b_shared import (
     _compute_churn_pressure_score,
     _compute_evidence_confidence,
     _executive_source_list,
+    _sanitize_battle_card_sales_copy,
     _validate_battle_card_sales_copy,
     _validate_report,
 )
@@ -345,6 +346,31 @@ class TestBattleCardSalesCopyValidation:
         warnings = _validate_battle_card_sales_copy(_sample_battle_card(), generated)
         assert any("unsupported numeric claims" in w for w in warnings)
 
+    def test_allows_supported_rounded_percentage_variants(self):
+        generated = {
+            "executive_summary": "A recent 2% price increase wave is creating budget pressure."
+        }
+        warnings = _validate_battle_card_sales_copy(_sample_battle_card(), generated)
+        assert not any("unsupported numeric claims" in w for w in warnings)
+
+    def test_allows_numeric_claims_present_in_cross_vendor_input(self):
+        card = _sample_battle_card()
+        card["cross_vendor_battles"] = [{
+            "opponent": "WooCommerce",
+            "conclusion": "Shopify is winning in the 52% SMB segment with 43 explicit switches.",
+            "durability": "structural",
+            "confidence": 0.85,
+            "winner": "Shopify",
+            "key_insights": ["52% SMB share", "43 explicit switches"],
+        }]
+        generated = {
+            "competitive_landscape": {
+                "top_alternatives": "WooCommerce remains relevant, but Shopify is winning in the 52% SMB segment."
+            }
+        }
+        warnings = _validate_battle_card_sales_copy(card, generated)
+        assert not any("unsupported numeric claims" in w for w in warnings)
+
     def test_rejects_stale_years(self):
         generated = {"landmine_questions": ["Should these app features still require plugins in 2024?"]}
         warnings = _validate_battle_card_sales_copy(_sample_battle_card(), generated)
@@ -364,6 +390,52 @@ class TestBattleCardSalesCopyValidation:
         generated = {"executive_summary": "Shopify is vulnerable because of Better SEO tools gaps."}
         warnings = _validate_battle_card_sales_copy(_sample_battle_card(), generated)
         assert any("low-evidence feature gap" in w for w in warnings)
+
+
+class TestBattleCardSalesCopySanitization:
+    def test_sanitizes_unsupported_numeric_summary(self):
+        card = _sample_battle_card()
+        generated = {"executive_summary": "HIGH PRIORITY TARGET: Costs drop by 30% and 55% of buyers are leaving."}
+        sanitized = _sanitize_battle_card_sales_copy(card, generated)
+        warnings = _validate_battle_card_sales_copy(card, sanitized)
+        assert not warnings
+        assert "30%" not in sanitized["executive_summary"]
+        assert "55%" not in sanitized["executive_summary"]
+        assert "HIGH PRIORITY TARGET" not in sanitized["executive_summary"]
+
+    def test_sanitizes_switching_language_without_switch_evidence(self):
+        card = _sample_battle_card()
+        generated = {
+            "competitive_landscape": {
+                "top_alternatives": ["Customers are leaving for WooCommerce in 2024."]
+            }
+        }
+        sanitized = _sanitize_battle_card_sales_copy(card, generated)
+        warnings = _validate_battle_card_sales_copy(card, sanitized)
+        assert not warnings
+        assert "leaving" not in sanitized["competitive_landscape"]["top_alternatives"][0].lower()
+        assert "2024" not in sanitized["competitive_landscape"]["top_alternatives"][0]
+
+    def test_sanitizes_low_evidence_headline(self):
+        card = _sample_battle_card()
+        generated = {"weakness_analysis": [{"headline": "Better SEO tools is the main reason Shopify is vulnerable."}]}
+        sanitized = _sanitize_battle_card_sales_copy(card, generated)
+        warnings = _validate_battle_card_sales_copy(card, sanitized)
+        assert not warnings
+        assert "better seo tools" not in sanitized["weakness_analysis"][0]["headline"].lower()
+
+    def test_sanitizes_mid_sentence_high_priority_phrase_cleanly(self):
+        card = _sample_battle_card()
+        generated = {
+            "executive_summary": (
+                "Magento has a strong churn pattern, making it a high-priority target "
+                "for mid-market teams."
+            )
+        }
+        sanitized = _sanitize_battle_card_sales_copy(card, generated)
+        warnings = _validate_battle_card_sales_copy(card, sanitized)
+        assert not warnings
+        assert "a Emerging vulnerability" not in sanitized["executive_summary"]
 
 
 # ---------------------------------------------------------------------------

@@ -41,6 +41,11 @@ A JSON object with:
   - `top_feature_gaps` (list of {feature, mentions})
   - `total_reviews`, `churn_signal_density`, `avg_urgency`
   - `budget_context` (seat counts, price increase data)
+- `cross_vendor_battles` (if present): list of pairwise battle conclusions involving this vendor, each with `opponent`, `conclusion` (3-5 sentence synthesis), `durability` (structural/cyclical/temporary/uncertain), `confidence` (0-1), `winner`, and `key_insights`
+- `resource_asymmetry` (if present): resource-gap assessment with `opponent`, `conclusion`, `resource_advantage`, and `confidence`
+- `ecosystem_context` (if present): category-level market data with `hhi`, `market_structure`, `displacement_intensity`, and `dominant_archetype`
+- `prior_attempt` (if present): the previous JSON draft that needs revision
+- `validation_feedback` (if present): specific errors the prior attempt must fix before returning
 
 ## Output Schema
 
@@ -103,6 +108,7 @@ A JSON object with:
 
 ### Data integrity
 - Every number, percentage, and metric MUST come directly from the input data. Never fabricate statistics.
+- Reuse numeric values exactly as supported by the input. If you convert a 0-1 rate into a percentage, use only the exact implied percentage and do not invent a new rounded claim unless it is directly supported.
 - Customer quotes in `weakness_analysis` MUST be exact text from `customer_pain_quotes` in the input. Do not paraphrase or invent quotes.
 - Do not reference weaknesses with zero evidence count.
 - `top_alternatives` must come from `competitor_differentiators` in the input.
@@ -155,6 +161,10 @@ A JSON object with:
 - If pricing is the dominant signal, lead with spend visibility, app sprawl, and fee compounding. Do not force unrelated feature or support narratives unless the evidence is strong.
 - If feature gaps are the dominant signal, emphasize native capability coverage and operational simplification rather than generic "more features."
 - Each objection handler must use a different primary angle. Good angle set: pricing predictability, app sprawl, switching risk, scale complexity, support/operations.
+- If `cross_vendor_battles` is present, use the battle `conclusion` and `key_insights` to sharpen the `competitive_landscape` section and inform `displacement_triggers`. If a battle has `durability` of "structural", reflect this as a long-term vulnerability in the executive summary. Cite the battle `winner` in `top_alternatives` when it names a specific competitor.
+- If `resource_asymmetry` is present, use `resource_advantage` to inform the `talk_track` mid-call pivot and `recommended_plays` targeting. If the target vendor lacks the resource advantage, this strengthens the urgency angle.
+- If `ecosystem_context` is present and `market_structure` indicates consolidation or fragmentation, reference this in `competitive_landscape.vulnerability_window` to explain WHY the market is moving.
+- If `validation_feedback` is present, treat it as a hard correction list. Revise `prior_attempt` to remove every flagged issue, keep supported claims, and return clean JSON only.
 
 ## Output
 

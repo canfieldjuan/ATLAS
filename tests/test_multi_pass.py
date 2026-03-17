@@ -259,15 +259,12 @@ async def test_ground_fires_when_challenge_changes():
 
 
 @pytest.mark.asyncio
-async def test_ground_runs_even_when_challenge_unchanged():
-    """Ground always runs when challenge was attempted, even if it didn't
-    change the conclusion -- so downstream consumers always get grounded
-    key_signals."""
+async def test_ground_skips_when_challenge_unchanged():
+    """Ground is skipped when challenge does not materially change the result."""
     p1 = _make_conclusion(archetype="pricing_shock", confidence=0.75)
     # Challenge keeps same archetype and confidence within threshold
     p2 = _make_conclusion(archetype="pricing_shock", confidence=0.74)
-    p3 = _make_conclusion(archetype="pricing_shock", confidence=0.74)
-    llm = MockLLM([p1, p2, p3])
+    llm = MockLLM([p1, p2])
     result = await multi_pass_reason(
         llm=llm,
         system_prompt="test",
@@ -282,9 +279,9 @@ async def test_ground_runs_even_when_challenge_unchanged():
         temperature=0.3,
         ground_change_threshold=0.05,
     )
-    assert result.passes_executed == 3
-    assert result.passes[2].pass_type == "ground"
-    assert llm.call_count == 3
+    assert result.passes_executed == 2
+    assert all(p.pass_type != "ground" for p in result.passes)
+    assert llm.call_count == 2
 
 
 @pytest.mark.asyncio

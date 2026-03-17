@@ -54,10 +54,15 @@ class VLLMLLM(BaseModelService):
     def load(self) -> None:
         headers = {"Content-Type": "application/json"}
         limits = httpx.Limits(max_connections=500, max_keepalive_connections=200)
-        self._sync_client = httpx.Client(timeout=self.timeout, headers=headers)
+        self._sync_client = httpx.Client(timeout=self.timeout, headers=headers, limits=limits)
         self._client = httpx.AsyncClient(timeout=self.timeout, headers=headers, limits=limits)
         self._loaded = True
         logger.info("vLLM initialized: model=%s, base_url=%s", self.model, self.base_url)
+
+    def _build_sync_client(self) -> httpx.Client:
+        headers = {"Content-Type": "application/json"}
+        limits = httpx.Limits(max_connections=500, max_keepalive_connections=200)
+        return httpx.Client(timeout=self.timeout, headers=headers, limits=limits)
 
     def unload(self) -> None:
         if self._sync_client:
@@ -135,16 +140,17 @@ class VLLMLLM(BaseModelService):
         temperature: float = 0.7,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        if not self._sync_client:
+        if not self.is_loaded:
             raise RuntimeError("vLLM not loaded")
 
         payload = self._build_payload(messages, max_tokens, temperature, **kwargs)
 
         try:
-            response = self._sync_client.post(
-                f"{self.base_url}/v1/chat/completions",
-                json=payload,
-            )
+            with self._build_sync_client() as client:
+                response = client.post(
+                    f"{self.base_url}/v1/chat/completions",
+                    json=payload,
+                )
             response.raise_for_status()
             data = response.json()
 

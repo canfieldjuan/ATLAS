@@ -6,6 +6,8 @@ from typing import Optional
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+ENV_FILES = (".env", ".env.local")
+
 
 class RoomConfig(BaseModel):
     """Configuration for a single room."""
@@ -33,7 +35,7 @@ class PresenceConfig(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="ATLAS_PRESENCE_",
-        env_file=".env",
+        env_file=ENV_FILES,
         extra="ignore",
     )
 

@@ -18,6 +18,7 @@ VALID_REPORT_TYPES = (
     "vendor_retention",
     "challenger_intel",
     "battle_card",
+    "accounts_in_motion",
 )
 
 from atlas_brain.services.scraping.sources import ALL_SOURCES, ReviewSource  # noqa: E402

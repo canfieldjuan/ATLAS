@@ -269,6 +269,16 @@ register_pipeline(PipelineConfig(
             cron_config_key="b2b_churn.battle_cards_cron",
         ),
         TaskDef(
+            name="b2b_accounts_in_motion",
+            module="b2b_accounts_in_motion",
+            schedule_type="cron",
+            cron_expression="35 21 * * *",
+            timeout_seconds=600,
+            description="Build per-vendor accounts-in-motion prospecting lists",
+            metadata={"builtin_handler": "b2b_accounts_in_motion"},
+            cron_config_key="b2b_churn.accounts_in_motion_cron",
+        ),
+        TaskDef(
             name="b2b_article_correlation",
             module="b2b_article_correlation",
             schedule_type="cron",

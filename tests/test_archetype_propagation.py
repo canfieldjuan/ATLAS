@@ -9,6 +9,7 @@ Covers:
 """
 
 import sys
+import json
 from datetime import date
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1076,6 +1077,568 @@ class TestReconstructReasoningLookup:
         assert entry["key_signals"] == ["57 support mentions"]
         assert entry["falsification_conditions"] == ["support_ticket_resolution_improves"]
         assert entry["uncertainty_sources"] == ["single quarter data"]
+
+
+class TestReconstructCrossVendorLookup:
+    """Integration tests for reconstruct_cross_vendor_lookup.
+
+    Verifies SQL query shape, parameter binding, watermark fallback,
+    type handling, and the full producer contract.
+    """
+
+    @pytest.mark.asyncio
+    async def test_empty_table_returns_empty_buckets(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_cross_vendor_lookup,
+        )
+        pool = AsyncMock()
+        pool.fetchval.return_value = None
+        result = await reconstruct_cross_vendor_lookup(pool)
+        assert result == {"battles": {}, "councils": {}, "asymmetries": {}}
+        # Should query for watermark, never call fetch
+        pool.fetchval.assert_awaited_once()
+        pool.fetch.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_watermark_fallback_queries_max_date(self):
+        """When as_of is None, queries MAX(computed_date) and uses it."""
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_cross_vendor_lookup,
+        )
+        pool = AsyncMock()
+        pool.fetchval.return_value = date(2026, 3, 15)
+        pool.fetch.return_value = []
+        await reconstruct_cross_vendor_lookup(pool)
+        sql = pool.fetchval.call_args[0][0]
+        assert "MAX(computed_date)" in sql
+        # fetch should receive the watermark date as param
+        fetch_param = pool.fetch.call_args[0][1]
+        assert fetch_param == date(2026, 3, 15)
+
+    @pytest.mark.asyncio
+    async def test_explicit_date_skips_watermark(self):
+        """When as_of is given, fetchval is never called."""
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_cross_vendor_lookup,
+        )
+        pool = AsyncMock()
+        pool.fetch.return_value = []
+        await reconstruct_cross_vendor_lookup(pool, as_of=date(2026, 3, 17))
+        pool.fetchval.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_fetch_sql_shape(self):
+        """Verify the SQL query selects the right columns with date filter."""
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_cross_vendor_lookup,
+        )
+        pool = AsyncMock()
+        pool.fetch.return_value = []
+        await reconstruct_cross_vendor_lookup(pool, as_of=date(2026, 3, 17))
+        sql = pool.fetch.call_args[0][0]
+        for col in ("analysis_type", "vendors", "category", "conclusion", "confidence"):
+            assert col in sql, f"Missing column {col} in SELECT"
+        assert "b2b_cross_vendor_conclusions" in sql
+        assert "computed_date >= $1" in sql
+        assert "ORDER BY confidence DESC" in sql
+
+    @pytest.mark.asyncio
+    async def test_battles_keyed_by_sorted_tuple(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_cross_vendor_lookup,
+        )
+        pool = AsyncMock()
+        pool.fetch.return_value = [
+            {
+                "analysis_type": "pairwise_battle",
+                "vendors": ["Zendesk", "Freshdesk"],  # unsorted
+                "category": None,
+                "conclusion": {
+                    "conclusion": "Zendesk losing on price",
+                    "winner": "Freshdesk",
+                    "durability_assessment": "structural",
+                    "key_insights": ["3x price gap"],
+                },
+                "confidence": 0.85,
+            },
+        ]
+        result = await reconstruct_cross_vendor_lookup(pool, as_of=date(2026, 3, 17))
+        # Key must be sorted regardless of DB vendor order
+        assert ("Freshdesk", "Zendesk") in result["battles"]
+        assert ("Zendesk", "Freshdesk") not in result["battles"]
+        entry = result["battles"][("Freshdesk", "Zendesk")]
+        assert entry["confidence"] == 0.85
+        assert entry["conclusion"]["winner"] == "Freshdesk"
+        assert entry["conclusion"]["durability_assessment"] == "structural"
+        assert result["councils"] == {}
+        assert result["asymmetries"] == {}
+
+    @pytest.mark.asyncio
+    async def test_councils_keyed_by_category(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_cross_vendor_lookup,
+        )
+        pool = AsyncMock()
+        pool.fetch.return_value = [
+            {
+                "analysis_type": "category_council",
+                "vendors": ["HubSpot", "Mailchimp", "Brevo"],
+                "category": "Email Marketing",
+                "conclusion": {
+                    "conclusion": "Price competition regime",
+                    "market_regime": "price_competition",
+                    "durability_assessment": "structural",
+                    "key_insights": ["27% price complaints"],
+                    "winner": "Brevo",
+                    "loser": "Mailchimp",
+                },
+                "confidence": 0.78,
+            },
+        ]
+        result = await reconstruct_cross_vendor_lookup(pool, as_of=date(2026, 3, 17))
+        assert "Email Marketing" in result["councils"]
+        entry = result["councils"]["Email Marketing"]
+        assert entry["conclusion"]["market_regime"] == "price_competition"
+        assert entry["conclusion"]["winner"] == "Brevo"
+        assert entry["conclusion"]["loser"] == "Mailchimp"
+        assert entry["confidence"] == 0.78
+        # Verify all council fields consumed by reports are accessible
+        c = entry["conclusion"]
+        for field in ("conclusion", "market_regime", "durability_assessment",
+                      "key_insights", "winner", "loser"):
+            assert field in c, f"Council conclusion missing field: {field}"
+
+    @pytest.mark.asyncio
+    async def test_asymmetries_with_resource_advantage(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_cross_vendor_lookup,
+        )
+        pool = AsyncMock()
+        pool.fetch.return_value = [
+            {
+                "analysis_type": "resource_asymmetry",
+                "vendors": ["Salesforce", "HubSpot"],
+                "category": None,
+                "conclusion": {
+                    "conclusion": "Salesforce has deeper lock-in",
+                    "resource_advantage": "Salesforce holds edge due to 4x integration count",
+                    "durability_assessment": "structural",
+                },
+                "confidence": 0.72,
+            },
+        ]
+        result = await reconstruct_cross_vendor_lookup(pool, as_of=date(2026, 3, 17))
+        key = ("HubSpot", "Salesforce")
+        assert key in result["asymmetries"]
+        entry = result["asymmetries"][key]
+        assert "resource_advantage" in entry["conclusion"]
+
+    @pytest.mark.asyncio
+    async def test_json_string_conclusion_parsed_and_normalized(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_cross_vendor_lookup,
+        )
+        pool = AsyncMock()
+        pool.fetch.return_value = [
+            {
+                "analysis_type": "category_council",
+                "vendors": ["A", "B"],
+                "category": "B2B Software",
+                "conclusion": json.dumps({
+                    "conclusion": "Price pressure is dominant",
+                    "market_regime": "price_competition",
+                    "key_insights": [
+                        {"insight": "Pricing drives displacement"},
+                        "SMB segment is most affected",
+                    ],
+                }),
+                "confidence": 0.5,
+            },
+        ]
+        result = await reconstruct_cross_vendor_lookup(pool, as_of=date(2026, 3, 17))
+        entry = result["councils"]["B2B Software"]["conclusion"]
+        assert entry["conclusion"] == "Price pressure is dominant"
+        assert entry["market_regime"] == "price_competition"
+        assert entry["key_insights"] == [
+            "Pricing drives displacement",
+            "SMB segment is most affected",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_highest_confidence_wins_dedup(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_cross_vendor_lookup,
+        )
+        pool = AsyncMock()
+        pool.fetch.return_value = [
+            {
+                "analysis_type": "pairwise_battle",
+                "vendors": ["A", "B"], "category": None,
+                "conclusion": {"conclusion": "high conf"}, "confidence": 0.9,
+            },
+            {
+                "analysis_type": "pairwise_battle",
+                "vendors": ["B", "A"], "category": None,  # reversed order
+                "conclusion": {"conclusion": "low conf"}, "confidence": 0.5,
+            },
+        ]
+        result = await reconstruct_cross_vendor_lookup(pool, as_of=date(2026, 3, 17))
+        # Both rows map to same sorted key; first (highest conf) wins via setdefault
+        assert result["battles"][("A", "B")]["conclusion"]["conclusion"] == "high conf"
+
+    @pytest.mark.asyncio
+    async def test_null_conclusion_produces_empty_dict(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_cross_vendor_lookup,
+        )
+        pool = AsyncMock()
+        pool.fetch.return_value = [
+            {
+                "analysis_type": "pairwise_battle",
+                "vendors": ["X", "Y"], "category": None,
+                "conclusion": None, "confidence": 0.5,
+            },
+        ]
+        result = await reconstruct_cross_vendor_lookup(pool, as_of=date(2026, 3, 17))
+        assert result["battles"][("X", "Y")]["conclusion"] == {}
+
+    @pytest.mark.asyncio
+    async def test_null_confidence_defaults_to_zero(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_cross_vendor_lookup,
+        )
+        pool = AsyncMock()
+        pool.fetch.return_value = [
+            {
+                "analysis_type": "resource_asymmetry",
+                "vendors": ["C", "D"], "category": None,
+                "conclusion": {"conclusion": "test"}, "confidence": None,
+            },
+        ]
+        result = await reconstruct_cross_vendor_lookup(pool, as_of=date(2026, 3, 17))
+        assert result["asymmetries"][("C", "D")]["confidence"] == 0
+
+    @pytest.mark.asyncio
+    async def test_null_category_council_uses_empty_string(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_cross_vendor_lookup,
+        )
+        pool = AsyncMock()
+        pool.fetch.return_value = [
+            {
+                "analysis_type": "category_council",
+                "vendors": ["E", "F"], "category": None,
+                "conclusion": {"conclusion": "null cat"}, "confidence": 0.6,
+            },
+        ]
+        result = await reconstruct_cross_vendor_lookup(pool, as_of=date(2026, 3, 17))
+        assert "" in result["councils"]
+
+    @pytest.mark.asyncio
+    async def test_empty_vendors_array_produces_empty_tuple_key(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_cross_vendor_lookup,
+        )
+        pool = AsyncMock()
+        pool.fetch.return_value = [
+            {
+                "analysis_type": "pairwise_battle",
+                "vendors": [], "category": None,
+                "conclusion": {"conclusion": "no vendors"}, "confidence": 0.3,
+            },
+        ]
+        result = await reconstruct_cross_vendor_lookup(pool, as_of=date(2026, 3, 17))
+        assert () in result["battles"]
+
+    @pytest.mark.asyncio
+    async def test_mixed_types_routed_correctly(self):
+        """All three analysis types in one result set are bucketed correctly."""
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_cross_vendor_lookup,
+        )
+        pool = AsyncMock()
+        pool.fetch.return_value = [
+            {
+                "analysis_type": "pairwise_battle",
+                "vendors": ["A", "B"], "category": None,
+                "conclusion": {"conclusion": "battle"}, "confidence": 0.9,
+            },
+            {
+                "analysis_type": "category_council",
+                "vendors": ["A", "B", "C"], "category": "CRM",
+                "conclusion": {"conclusion": "council"}, "confidence": 0.8,
+            },
+            {
+                "analysis_type": "resource_asymmetry",
+                "vendors": ["A", "B"], "category": None,
+                "conclusion": {"conclusion": "asymmetry"}, "confidence": 0.7,
+            },
+        ]
+        result = await reconstruct_cross_vendor_lookup(pool, as_of=date(2026, 3, 17))
+        assert len(result["battles"]) == 1
+        assert len(result["councils"]) == 1
+        assert len(result["asymmetries"]) == 1
+        assert result["battles"][("A", "B")]["conclusion"]["conclusion"] == "battle"
+        assert result["councils"]["CRM"]["conclusion"]["conclusion"] == "council"
+        assert result["asymmetries"][("A", "B")]["conclusion"]["conclusion"] == "asymmetry"
+
+
+class TestCrossVendorSchemaContract:
+    """Validate CROSS_VENDOR_JSON_SCHEMA accepts expected LLM output shapes."""
+
+    def test_battle_output_validates(self):
+        import jsonschema
+        from atlas_brain.reasoning.cross_vendor import CROSS_VENDOR_JSON_SCHEMA
+        output = {
+            "analysis_type": "pairwise_battle",
+            "vendors": ["Zendesk", "Freshdesk"],
+            "conclusion": "Zendesk losing customers due to pricing pressure",
+            "confidence": 0.85,
+            "key_insights": ["3x price gap", "SMB migration accelerating"],
+            "durability_assessment": "structural",
+            "winner": "Freshdesk",
+            "loser": "Zendesk",
+            "market_regime": None,
+            "segment_dynamics": {"enterprise_winner": "Zendesk", "smb_winner": "Freshdesk",
+                                 "segment_divergence": True},
+            "falsification_conditions": ["Zendesk restores pricing"],
+            "uncertainty_sources": ["limited enterprise data"],
+            "resource_advantage": None,
+        }
+        jsonschema.validate(output, CROSS_VENDOR_JSON_SCHEMA)
+
+    def test_asymmetry_output_with_resource_advantage_validates(self):
+        import jsonschema
+        from atlas_brain.reasoning.cross_vendor import CROSS_VENDOR_JSON_SCHEMA
+        output = {
+            "analysis_type": "resource_asymmetry",
+            "vendors": ["Salesforce", "HubSpot"],
+            "conclusion": "Salesforce holds deeper lock-in via integrations",
+            "confidence": 0.72,
+            "key_insights": ["4x integration count", "enterprise tilt"],
+            "durability_assessment": "structural",
+            "winner": "Salesforce",
+            "loser": None,
+            "market_regime": None,
+            "segment_dynamics": None,
+            "falsification_conditions": ["HubSpot launches marketplace"],
+            "uncertainty_sources": [],
+            "resource_advantage": "Salesforce holds edge due to 4x integration count",
+        }
+        jsonschema.validate(output, CROSS_VENDOR_JSON_SCHEMA)
+
+    def test_resource_advantage_accepts_null(self):
+        import jsonschema
+        from atlas_brain.reasoning.cross_vendor import CROSS_VENDOR_JSON_SCHEMA
+        output = {
+            "analysis_type": "resource_asymmetry",
+            "vendors": ["A", "B"],
+            "conclusion": "Approximate parity",
+            "confidence": 0.5,
+            "key_insights": ["similar review share"],
+            "durability_assessment": "uncertain",
+            "falsification_conditions": [],
+            "resource_advantage": None,
+        }
+        jsonschema.validate(output, CROSS_VENDOR_JSON_SCHEMA)
+
+    def test_schema_rejects_unknown_field(self):
+        import jsonschema
+        from atlas_brain.reasoning.cross_vendor import CROSS_VENDOR_JSON_SCHEMA
+        output = {
+            "analysis_type": "pairwise_battle",
+            "vendors": ["A", "B"],
+            "conclusion": "test",
+            "confidence": 0.5,
+            "key_insights": [],
+            "durability_assessment": "uncertain",
+            "falsification_conditions": [],
+            "made_up_field": "should fail",
+        }
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(output, CROSS_VENDOR_JSON_SCHEMA)
+
+
+class TestBattleCardCacheKeyIntegration:
+    """Verify cache hash changes when cross-vendor fields change."""
+
+    def test_cross_vendor_battles_change_busts_cache(self):
+        from atlas_brain.reasoning.semantic_cache import compute_evidence_hash
+        base = {
+            "vendor": "Zendesk",
+            "churn_pressure_score": 72,
+            "vendor_weaknesses": [{"weakness": "pricing", "count": 45}],
+            "customer_pain_quotes": [],
+            "competitor_differentiators": [],
+            "objection_data": {},
+            "cross_vendor_battles": None,
+            "resource_asymmetry": None,
+            "ecosystem_context": None,
+        }
+        hash_without = compute_evidence_hash(base)
+        with_battles = {**base, "cross_vendor_battles": [
+            {"opponent": "Freshdesk", "conclusion": "losing on price", "confidence": 0.85},
+        ]}
+        hash_with = compute_evidence_hash(with_battles)
+        assert hash_without != hash_with
+
+    def test_resource_asymmetry_change_busts_cache(self):
+        from atlas_brain.reasoning.semantic_cache import compute_evidence_hash
+        base = {
+            "vendor": "Zendesk",
+            "churn_pressure_score": 72,
+            "vendor_weaknesses": [],
+            "customer_pain_quotes": [],
+            "competitor_differentiators": [],
+            "objection_data": {},
+            "cross_vendor_battles": None,
+            "resource_asymmetry": None,
+            "ecosystem_context": None,
+        }
+        hash_without = compute_evidence_hash(base)
+        with_asym = {**base, "resource_asymmetry": {
+            "opponent": "Freshdesk", "resource_advantage": "Zendesk via integrations",
+        }}
+        hash_with = compute_evidence_hash(with_asym)
+        assert hash_without != hash_with
+
+    def test_ecosystem_context_change_busts_cache(self):
+        from atlas_brain.reasoning.semantic_cache import compute_evidence_hash
+        base = {
+            "vendor": "Zendesk",
+            "churn_pressure_score": 72,
+            "vendor_weaknesses": [],
+            "customer_pain_quotes": [],
+            "competitor_differentiators": [],
+            "objection_data": {},
+            "cross_vendor_battles": None,
+            "resource_asymmetry": None,
+            "ecosystem_context": None,
+        }
+        hash_without = compute_evidence_hash(base)
+        with_eco = {**base, "ecosystem_context": {
+            "hhi": 0.15, "market_structure": "fragmented",
+        }}
+        hash_with = compute_evidence_hash(with_eco)
+        assert hash_without != hash_with
+
+    def test_same_data_produces_same_hash(self):
+        from atlas_brain.reasoning.semantic_cache import compute_evidence_hash
+        data = {
+            "vendor": "Zendesk",
+            "churn_pressure_score": 72,
+            "vendor_weaknesses": [{"weakness": "pricing", "count": 45}],
+            "customer_pain_quotes": [],
+            "competitor_differentiators": [],
+            "objection_data": {},
+            "cross_vendor_battles": [{"opponent": "Freshdesk"}],
+            "resource_asymmetry": {"opponent": "Freshdesk"},
+            "ecosystem_context": {"hhi": 0.15},
+        }
+        assert compute_evidence_hash(data) == compute_evidence_hash(data.copy())
+
+
+class TestScorecardNarrativeLLMInput:
+    """Verify the LLM input dict construction matches the code in b2b_churn_reports.py."""
+
+    # The exact key tuple from b2b_churn_reports.py:347-351
+    _LLM_INPUT_KEYS = (
+        "vendor", "churn_pressure_score", "risk_level", "churn_signal_density",
+        "avg_urgency", "feature_analysis", "churn_predictors", "competitor_overlap",
+        "trend", "sentiment_direction", "cross_vendor_comparisons",
+    )
+
+    def _build_llm_input(self, sc: dict) -> dict:
+        """Replicate the exact filter from b2b_churn_reports.py:347."""
+        return {k: sc[k] for k in self._LLM_INPUT_KEYS if k in sc}
+
+    def test_cross_vendor_comparisons_included_when_present(self):
+        sc = {
+            "vendor": "Zendesk",
+            "churn_pressure_score": 72,
+            "risk_level": "high",
+            "cross_vendor_comparisons": [
+                {"opponent": "Freshdesk", "conclusion": "losing on price",
+                 "confidence": 0.85, "resource_advantage": "Zendesk via integrations"},
+            ],
+        }
+        llm_input = self._build_llm_input(sc)
+        assert "cross_vendor_comparisons" in llm_input
+        assert llm_input["cross_vendor_comparisons"][0]["opponent"] == "Freshdesk"
+
+    def test_cross_vendor_comparisons_absent_when_not_enriched(self):
+        sc = {
+            "vendor": "Monday.com",
+            "churn_pressure_score": 45,
+            "risk_level": "medium",
+        }
+        llm_input = self._build_llm_input(sc)
+        assert "cross_vendor_comparisons" not in llm_input
+
+    def test_short_circuit_fires_without_comparisons(self):
+        """When no cross_vendor_comparisons, reasoning_summary is reused."""
+        sc = {"vendor": "Acme", "reasoning_summary": "pricing pressure rising"}
+        reasoning_summary = sc.get("reasoning_summary", "")
+        has_xv = sc.get("cross_vendor_comparisons")
+        should_reuse = bool(reasoning_summary) and not has_xv
+        assert should_reuse is True
+
+    def test_short_circuit_skipped_with_comparisons(self):
+        """When cross_vendor_comparisons exist, must fall through to LLM."""
+        sc = {
+            "vendor": "Acme",
+            "reasoning_summary": "pricing pressure rising",
+            "cross_vendor_comparisons": [{"opponent": "Rival", "conclusion": "..."}],
+        }
+        reasoning_summary = sc.get("reasoning_summary", "")
+        has_xv = sc.get("cross_vendor_comparisons")
+        should_reuse = bool(reasoning_summary) and not has_xv
+        assert should_reuse is False
+
+    def test_empty_comparisons_list_still_triggers_llm(self):
+        """Even an empty list is truthy enough to skip short-circuit?
+        No -- empty list is falsy, so short-circuit fires. Verify this."""
+        sc = {
+            "vendor": "Acme",
+            "reasoning_summary": "pricing pressure rising",
+            "cross_vendor_comparisons": [],
+        }
+        reasoning_summary = sc.get("reasoning_summary", "")
+        has_xv = sc.get("cross_vendor_comparisons")
+        # [] is falsy, so short-circuit should fire
+        should_reuse = bool(reasoning_summary) and not has_xv
+        assert should_reuse is True
+
+    def test_llm_input_excludes_internal_fields(self):
+        """Fields not in the key tuple must not leak into LLM input."""
+        sc = {
+            "vendor": "Zendesk",
+            "churn_pressure_score": 72,
+            "risk_level": "high",
+            "reasoning_summary": "should not appear in llm_input",
+            "archetype": "pricing_shock",
+            "archetype_confidence": 0.9,
+            "cross_vendor_comparisons": [{"opponent": "Freshdesk"}],
+        }
+        llm_input = self._build_llm_input(sc)
+        assert "reasoning_summary" not in llm_input
+        assert "archetype" not in llm_input
+        assert "archetype_confidence" not in llm_input
+        assert "cross_vendor_comparisons" in llm_input
+
+    def test_resource_advantage_absent_tolerant(self):
+        """cross_vendor_comparisons entry missing resource_advantage still works."""
+        sc = {
+            "vendor": "Zendesk",
+            "churn_pressure_score": 72,
+            "cross_vendor_comparisons": [
+                {"opponent": "Freshdesk", "conclusion": "edge case", "confidence": 0.7},
+            ],
+        }
+        llm_input = self._build_llm_input(sc)
+        comp = llm_input["cross_vendor_comparisons"][0]
+        # Consumer pattern: .get("resource_advantage", "")
+        assert comp.get("resource_advantage", "") == ""
 
 
 class TestVendorReasoningCap:

@@ -48,6 +48,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         return {"_skip_synthesis": "Core signals not fresh for today"}
 
     from ._b2b_shared import (
+        _aggregate_competitive_disp,
         _build_deterministic_battle_cards,
         _build_pain_lookup,
         _build_competitor_lookup,
@@ -61,6 +62,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _build_usage_duration_lookup,
         _build_timeline_lookup,
         _canonicalize_vendor,
+        _sanitize_battle_card_sales_copy,
         _validate_battle_card_sales_copy,
         _fetch_competitive_displacement,
         _fetch_vendor_churn_scores,
@@ -81,6 +83,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _fetch_data_context,
         _fetch_review_text_aggregates,
         _fetch_department_distribution,
+        _fetch_contract_context_distribution,
     )
     from .b2b_churn_intelligence import (
         reconstruct_reasoning_lookup,
@@ -101,16 +104,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             sentiment_traj, buyer_auth, timeline_signals,
             competitor_reasons, keyword_spikes,
             data_context, product_profiles_raw,
-            review_text_agg, department_dist,
+            review_text_agg, department_dist, contract_ctx,
         ) = await asyncio.gather(
             _fetch_vendor_churn_scores(pool, window_days, min_reviews),
             _fetch_competitive_displacement(pool, window_days),
             _fetch_pain_distribution(pool, window_days),
-            _fetch_feature_gaps(pool, window_days, cfg.feature_gap_min_mentions),
+            _fetch_feature_gaps(pool, window_days, min_mentions=cfg.feature_gap_min_mentions),
             _fetch_price_complaint_rates(pool, window_days),
             _fetch_dm_churn_rates(pool, window_days),
             _fetch_churning_companies(pool, window_days),
-            _fetch_quotable_evidence(pool, window_days, cfg.quotable_phrase_min_urgency),
+            _fetch_quotable_evidence(pool, window_days, min_urgency=cfg.quotable_phrase_min_urgency),
             _fetch_budget_signals(pool, window_days),
             _fetch_use_case_distribution(pool, window_days),
             _fetch_sentiment_trajectory(pool, window_days),
@@ -122,6 +125,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             _fetch_product_profiles(pool),
             _fetch_review_text_aggregates(pool, window_days),
             _fetch_department_distribution(pool, window_days),
+            _fetch_contract_context_distribution(pool, window_days),
         )
     except Exception:
         logger.exception("Battle card data fetch failed")
@@ -129,6 +133,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     if not vendor_scores:
         return {"_skip_synthesis": "No vendor scores"}
+    competitive_disp = _aggregate_competitive_disp(competitive_disp)
 
     # --- Phase 2: Reconstruct reasoning + cross-vendor from DB ---
     reasoning_lookup = await reconstruct_reasoning_lookup(pool, as_of=today)
@@ -153,9 +158,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     buyer_auth_lookup = _build_buyer_auth_lookup(buyer_auth)
     timeline_lookup = _build_timeline_lookup(timeline_signals)
     keyword_spike_lookup = _build_keyword_spike_lookup(keyword_spikes)
-    positive_lookup = _build_positive_lookup(review_text_agg)
+    _complaints_raw, _positives_raw = review_text_agg
+    positive_lookup = _build_positive_lookup(_positives_raw)
     department_lookup = _build_department_lookup(department_dist)
-    usage_duration_lookup = _build_usage_duration_lookup(review_text_agg)
+    _contract_values_raw, _durations_raw = contract_ctx
+    usage_duration_lookup = _build_usage_duration_lookup(_durations_raw)
 
     product_profile_lookup: dict[str, dict] = {}
     for pp in product_profiles_raw:
@@ -249,6 +256,28 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "talk_track", "recommended_plays",
     )
     bc_sem = asyncio.Semaphore(cfg.battle_card_llm_concurrency)
+    max_attempts = cfg.battle_card_llm_attempts
+    retry_delay = cfg.battle_card_llm_retry_delay_seconds
+    feedback_limit = cfg.battle_card_llm_feedback_limit
+    llm_max_tokens = cfg.battle_card_llm_max_tokens
+    llm_temperature = cfg.battle_card_llm_temperature
+    llm_timeout = cfg.battle_card_llm_timeout_seconds
+    cache_confidence = cfg.battle_card_cache_confidence
+
+    async def _request_sales_copy(payload: dict[str, Any]) -> dict[str, Any]:
+        sales_copy = await asyncio.wait_for(
+            asyncio.to_thread(
+                call_llm_with_skill,
+                "digest/battle_card_sales_copy",
+                json.dumps(payload, default=str),
+                max_tokens=llm_max_tokens,
+                temperature=llm_temperature,
+                response_format={"type": "json_object"},
+                workload="synthesis",
+            ),
+            timeout=llm_timeout,
+        )
+        return parse_json_response(sales_copy)
 
     async def _enrich_one(card: dict[str, Any]) -> None:
         nonlocal bc_llm_failures, bc_cache_hits
@@ -260,6 +289,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             "customer_pain_quotes": card.get("customer_pain_quotes"),
             "competitor_differentiators": card.get("competitor_differentiators"),
             "objection_data": card.get("objection_data"),
+            "cross_vendor_battles": card.get("cross_vendor_battles"),
+            "resource_asymmetry": card.get("resource_asymmetry"),
+            "ecosystem_context": card.get("ecosystem_context"),
         })
         pattern_sig = f"battle_card:{card.get('vendor')}:{card_hash}"
 
@@ -276,39 +308,48 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 return
 
         async with bc_sem:
-            try:
-                sales_copy = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        call_llm_with_skill,
-                        "digest/battle_card_sales_copy",
-                        json.dumps(card, default=str),
-                        max_tokens=3000, temperature=0.5,
-                        response_format={"type": "json_object"},
-                        workload="synthesis",
-                    ),
-                    timeout=90,
-                )
-                parsed_copy = parse_json_response(sales_copy)
-                copy_errors = _validate_battle_card_sales_copy(card, parsed_copy)
-                if copy_errors:
+            payload = dict(card)
+            failure_reasons: list[str] = []
+            for attempt in range(max_attempts):
+                try:
+                    parsed_copy = await _request_sales_copy(payload)
+                except Exception as exc:
+                    parsed_copy = {}
+                    failure_reasons = [f"transport failure: {type(exc).__name__}"]
+                else:
+                    if parsed_copy.get("_parse_fallback"):
+                        failure_reasons = ["LLM did not return valid JSON"]
+                    else:
+                        copy_errors = _validate_battle_card_sales_copy(card, parsed_copy)
+                        if copy_errors:
+                            sanitized_copy = _sanitize_battle_card_sales_copy(card, parsed_copy)
+                            sanitized_errors = _validate_battle_card_sales_copy(card, sanitized_copy)
+                            if not sanitized_errors:
+                                parsed_copy = sanitized_copy
+                                copy_errors = []
+                        if not copy_errors:
+                            for _f in _bc_llm_fields:
+                                if _f in parsed_copy:
+                                    card[_f] = parsed_copy[_f]
+                            break
+                        failure_reasons = copy_errors
+                if attempt + 1 >= max_attempts:
                     bc_llm_failures += 1
                     logger.warning("Battle card rejected for %s: %s",
-                                   card.get("vendor"), "; ".join(copy_errors[:3]))
+                                   card.get("vendor"), "; ".join(failure_reasons[:3]))
                     return
-                for _f in _bc_llm_fields:
-                    if _f in parsed_copy:
-                        card[_f] = parsed_copy[_f]
-            except Exception:
-                bc_llm_failures += 1
-                logger.warning("Battle card LLM failed for %s", card.get("vendor"))
-                return
+                payload = dict(card)
+                payload["prior_attempt"] = parsed_copy
+                payload["validation_feedback"] = failure_reasons[:feedback_limit]
+                if retry_delay > 0:
+                    await asyncio.sleep(retry_delay)
 
             try:
                 await _bc_cache.store(CacheEntry(
                     pattern_sig=pattern_sig,
                     pattern_class="battle_card_sales_copy",
                     conclusion={_f: card[_f] for _f in _bc_llm_fields if _f in card},
-                    confidence=0.95,
+                    confidence=cache_confidence,
                     evidence_hash=card_hash,
                     vendor_name=card.get("vendor"),
                     conclusion_type="sales_copy",
@@ -338,6 +379,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         vendor = card.get("vendor", "")
         if not vendor:
             continue
+        persisted_summary = str(card.get("executive_summary") or (
+            f"Battle card for {vendor}: "
+            f"score {card.get('churn_pressure_score', 0):.0f}, "
+            f"{len(card.get('vendor_weaknesses', []))} weaknesses, "
+            f"{len(card.get('competitor_differentiators', []))} competitors."
+        ))
+        card["executive_summary"] = persisted_summary
         try:
             await pool.execute(
                 """
@@ -360,12 +408,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 "battle_card",
                 vendor,
                 json.dumps(card, default=str),
-                (
-                    f"Battle card for {vendor}: "
-                    f"score {card.get('churn_pressure_score', 0):.0f}, "
-                    f"{len(card.get('vendor_weaknesses', []))} weaknesses, "
-                    f"{len(card.get('competitor_differentiators', []))} competitors."
-                ),
+                persisted_summary,
                 data_density,
                 "published",
                 "pipeline_deterministic",

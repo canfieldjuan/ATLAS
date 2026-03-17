@@ -4629,3 +4629,181 @@ async def get_source_correction_impact(
         ],
         "total": len(rows),
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /accounts-in-motion
+# ---------------------------------------------------------------------------
+
+
+@router.get("/accounts-in-motion")
+async def list_accounts_in_motion(
+    vendor_name: str = Query(..., description="Target vendor (companies leaving this vendor)"),
+    min_urgency: float = Query(5, ge=0, le=10),
+    window_days: int = Query(90, ge=1, le=3650),
+    limit: int = Query(25, ge=1, le=100),
+    user: AuthUser | None = Depends(optional_auth),
+):
+    """Ranked list of companies showing churn intent for a specific vendor.
+
+    Each account includes urgency, buyer context, pain evidence, firmographic
+    data (from Apollo), and decision-maker contacts with verified emails.
+    Designed for SDR prospecting lists.
+    """
+    pool = _pool_or_503()
+    import json as _json
+
+    conditions = [
+        "r.enrichment_status = 'enriched'",
+        "(r.enrichment->'churn_signals'->>'intent_to_leave')::boolean = true",
+        "r.reviewer_company IS NOT NULL",
+        "LENGTH(TRIM(r.reviewer_company)) > 3",
+        "(r.enrichment->>'urgency_score')::numeric >= $1",
+        "r.enriched_at > NOW() - make_interval(days => $2)",
+        "r.vendor_name ILIKE '%' || $3 || '%'",
+    ]
+    params: list = [min_urgency, window_days, vendor_name.strip()]
+    idx = 4
+
+    if _should_scope(user):
+        conditions.append(
+            f"r.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)"
+        )
+        params.append(user.account_id)
+        idx += 1
+
+    where = " AND ".join(conditions)
+
+    rows = await pool.fetch(
+        f"""
+        SELECT DISTINCT ON (LOWER(r.reviewer_company))
+            r.reviewer_company,
+            r.vendor_name,
+            r.product_category,
+            (r.enrichment->>'urgency_score')::numeric AS urgency,
+            r.enrichment->'buyer_authority'->>'role_type' AS role_type,
+            r.enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
+            (r.enrichment->'buyer_authority'->>'has_budget_authority')::boolean AS budget_authority,
+            r.enrichment->>'pain_categories' AS pain_categories,
+            r.enrichment->>'quotable_phrases' AS quotable_phrases,
+            r.enrichment->'competitors_mentioned' AS competitors,
+            r.enrichment->'churn_signals'->>'contract_signal' AS contract_signal,
+            r.reviewer_title,
+            r.company_size_raw,
+            COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry,
+            r.enriched_at
+        FROM b2b_reviews r
+        WHERE {where}
+        ORDER BY LOWER(r.reviewer_company), (r.enrichment->>'urgency_score')::numeric DESC
+        """,
+        *params,
+    )
+
+    accounts = []
+    for row in rows[:limit]:
+        company = row["reviewer_company"]
+        company_lower = company.lower()
+
+        org = await pool.fetchrow(
+            """
+            SELECT employee_count, industry, annual_revenue_range, domain
+            FROM prospect_org_cache
+            WHERE company_name_norm = $1 AND status = 'enriched'
+            """,
+            company_lower,
+        )
+
+        contacts = await pool.fetch(
+            """
+            SELECT first_name || ' ' || last_name AS name,
+                   title, seniority, email, linkedin_url
+            FROM prospects
+            WHERE LOWER(company_name) = $1
+              AND seniority IN ('c_suite', 'owner', 'founder', 'vp', 'head', 'director')
+              AND email IS NOT NULL
+            ORDER BY CASE seniority
+                WHEN 'c_suite' THEN 1 WHEN 'founder' THEN 2
+                WHEN 'owner' THEN 2 WHEN 'vp' THEN 3
+                WHEN 'head' THEN 4 WHEN 'director' THEN 5
+            END
+            LIMIT 5
+            """,
+            company_lower,
+        )
+
+        pain_cats = []
+        try:
+            raw = row["pain_categories"]
+            if raw:
+                parsed = _json.loads(raw) if isinstance(raw, str) else raw
+                pain_cats = [
+                    {"category": p.get("category", ""), "severity": p.get("severity", "")}
+                    for p in (parsed if isinstance(parsed, list) else [])
+                    if isinstance(p, dict)
+                ]
+        except (ValueError, TypeError):
+            pass
+
+        quotes = []
+        try:
+            raw = row["quotable_phrases"]
+            if raw:
+                parsed = _json.loads(raw) if isinstance(raw, str) else raw
+                quotes = [q for q in (parsed if isinstance(parsed, list) else []) if isinstance(q, str)][:3]
+        except (ValueError, TypeError):
+            pass
+
+        alts = []
+        try:
+            raw = row["competitors"]
+            if raw:
+                parsed = _json.loads(raw) if isinstance(raw, str) else raw
+                alts = [
+                    {"name": c.get("name", ""), "reason": c.get("reason", "")}
+                    for c in (parsed if isinstance(parsed, list) else [])
+                    if isinstance(c, dict) and c.get("name")
+                ][:5]
+        except (ValueError, TypeError):
+            pass
+
+        accounts.append({
+            "company": company,
+            "vendor": row["vendor_name"],
+            "category": row["product_category"],
+            "urgency": _safe_float(row["urgency"], 0),
+            "role_type": row["role_type"],
+            "buying_stage": row["buying_stage"],
+            "budget_authority": row["budget_authority"],
+            "pain_categories": pain_cats,
+            "evidence": quotes,
+            "alternatives_considering": alts,
+            "contract_signal": row["contract_signal"],
+            "reviewer_title": row["reviewer_title"],
+            "employee_count": org["employee_count"] if org else None,
+            "industry": (org["industry"] if org else None) or row["industry"],
+            "annual_revenue": org["annual_revenue_range"] if org else None,
+            "domain": org["domain"] if org else None,
+            "company_size_raw": row["company_size_raw"],
+            "contacts": [
+                {
+                    "name": c["name"],
+                    "title": c["title"],
+                    "seniority": c["seniority"],
+                    "email": c["email"],
+                    "linkedin_url": c["linkedin_url"],
+                }
+                for c in contacts
+            ],
+            "contact_count": len(contacts),
+            "enriched_at": str(row["enriched_at"]) if row["enriched_at"] else None,
+        })
+
+    accounts.sort(key=lambda a: -(a.get("urgency") or 0))
+
+    return {
+        "vendor": vendor_name.strip(),
+        "accounts": accounts,
+        "count": len(accounts),
+        "window_days": window_days,
+        "min_urgency": min_urgency,
+    }

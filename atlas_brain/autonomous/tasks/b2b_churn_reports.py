@@ -51,6 +51,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         return {"_skip_synthesis": "Core signals not fresh for today"}
 
     from ._b2b_shared import (
+        _aggregate_competitive_disp,
         _build_deterministic_category_overview,
         _build_deterministic_displacement_map,
         _build_deterministic_vendor_feed,
@@ -127,12 +128,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             _fetch_vendor_churn_scores(pool, window_days, min_reviews),
             _fetch_competitive_displacement(pool, window_days),
             _fetch_pain_distribution(pool, window_days),
-            _fetch_feature_gaps(pool, window_days, cfg.feature_gap_min_mentions),
+            _fetch_feature_gaps(pool, window_days, min_mentions=cfg.feature_gap_min_mentions),
             _fetch_negative_review_counts(pool, window_days),
             _fetch_price_complaint_rates(pool, window_days),
             _fetch_dm_churn_rates(pool, window_days),
             _fetch_churning_companies(pool, window_days),
-            _fetch_quotable_evidence(pool, window_days, cfg.quotable_phrase_min_urgency),
+            _fetch_quotable_evidence(pool, window_days, min_urgency=cfg.quotable_phrase_min_urgency),
             _fetch_budget_signals(pool, window_days),
             _fetch_use_case_distribution(pool, window_days),
             _fetch_sentiment_trajectory(pool, window_days),
@@ -156,6 +157,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     if not vendor_scores:
         return {"_skip_synthesis": "No vendor scores"}
+    competitive_disp = _aggregate_competitive_disp(competitive_disp)
 
     # --- Phase 2: Reconstruct reasoning + cross-vendor from DB ---
     reasoning_lookup = await reconstruct_reasoning_lookup(pool, as_of=today)
@@ -187,10 +189,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     buyer_auth_lookup = _build_buyer_auth_lookup(buyer_auth)
     timeline_lookup = _build_timeline_lookup(timeline_signals)
     keyword_spike_lookup = _build_keyword_spike_lookup(keyword_spikes)
-    complaint_lookup = _build_complaint_lookup(review_text_agg)
-    positive_lookup = _build_positive_lookup(review_text_agg)
+    _complaints_raw, _positives_raw = review_text_agg
+    complaint_lookup = _build_complaint_lookup(_complaints_raw)
+    positive_lookup = _build_positive_lookup(_positives_raw)
     department_lookup = _build_department_lookup(department_dist)
-    contract_value_lookup = _build_contract_value_lookup(contract_ctx)
+    _contract_values_raw, _durations_raw = contract_ctx
+    contract_value_lookup = _build_contract_value_lookup(_contract_values_raw)
     turning_point_lookup = _build_turning_point_lookup(turning_points)
     tenure_lookup = _build_tenure_lookup(sentiment_tenure)
 
@@ -339,7 +343,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     scorecard_reasoning_reused = 0
     for sc in deterministic_vendor_scorecards:
         reasoning_summary = sc.get("reasoning_summary", "")
-        if reasoning_summary and cfg.stratified_reasoning_enabled:
+        if reasoning_summary and cfg.stratified_reasoning_enabled and not sc.get("cross_vendor_comparisons"):
             sc["expert_take"] = reasoning_summary
             scorecard_reasoning_reused += 1
             continue
@@ -347,7 +351,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             llm_input = {k: sc[k] for k in (
                 "vendor", "churn_pressure_score", "risk_level", "churn_signal_density",
                 "avg_urgency", "feature_analysis", "churn_predictors", "competitor_overlap",
-                "trend", "sentiment_direction",
+                "trend", "sentiment_direction", "cross_vendor_comparisons",
             ) if k in sc}
             if sc.get("archetype"):
                 llm_input["reasoning_conclusion"] = {

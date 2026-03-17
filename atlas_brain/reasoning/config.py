@@ -3,6 +3,8 @@
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+ENV_FILES = (".env", ".env.local")
+
 
 class ReasoningConfig(BaseSettings):
     """Cross-domain reasoning agent configuration.
@@ -12,7 +14,7 @@ class ReasoningConfig(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="ATLAS_REASONING__",
-        env_file=".env",
+        env_file=ENV_FILES,
         extra="ignore",
     )
 
@@ -82,7 +84,7 @@ class ReasoningConfig(BaseSettings):
 
     # Multi-pass reasoning (classify -> challenge -> ground)
     multi_pass_enabled: bool = Field(
-        default=False,
+        default=True,
         description="Enable multi-pass reasoning (classify -> challenge -> ground)",
     )
     multi_pass_challenge_confidence_floor: float = Field(

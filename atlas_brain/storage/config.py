@@ -9,13 +9,15 @@ from typing import Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+ENV_FILES = (".env", ".env.local")
+
 
 class DatabaseConfig(BaseSettings):
     """Database configuration."""
 
     model_config = SettingsConfigDict(
         env_prefix="ATLAS_DB_",
-        env_file=".env",
+        env_file=ENV_FILES,
         extra="ignore",
     )
 

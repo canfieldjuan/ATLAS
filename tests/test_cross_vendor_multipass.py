@@ -1,0 +1,138 @@
+"""Direct tests for cross-vendor contradiction finders and multi-pass wiring."""
+
+import json
+
+import pytest
+
+from atlas_brain.reasoning.cross_vendor import (
+    CrossVendorReasoner,
+    _find_asymmetry_contradictions,
+    _find_battle_contradictions,
+    _find_category_contradictions,
+)
+
+
+class _FakeCache:
+    def __init__(self):
+        self.stored = []
+
+    async def lookup(self, pattern_sig):
+        return None
+
+    async def store(self, entry):
+        self.stored.append(entry)
+
+
+class _MockLLM:
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self._call_count = 0
+        self.model = "mock-model"
+        self.name = "mock"
+
+    def chat(self, **kwargs):
+        resp = self._responses[min(self._call_count, len(self._responses) - 1)]
+        self._call_count += 1
+        return {
+            "response": json.dumps(resp),
+            "usage": {"input_tokens": 100, "output_tokens": 50},
+            "_trace_meta": {},
+        }
+
+    @property
+    def call_count(self):
+        return self._call_count
+
+
+def _make_xv_conclusion(**overrides):
+    base = {
+        "analysis_type": "pairwise_battle",
+        "vendors": ["Acme", "Bravo"],
+        "conclusion": "Acme is winning on current metrics.",
+        "confidence": 0.8,
+        "key_insights": ["recommend_ratio: 10", "velocity_churn_density: 0.3"],
+        "durability_assessment": "temporary",
+        "falsification_conditions": ["Bravo improves sentiment"],
+        "winner": "Acme",
+        "loser": "Bravo",
+        "uncertainty_sources": [],
+    }
+    base.update(overrides)
+    return base
+
+
+def test_battle_contradictions_flag_velocity_and_sentiment():
+    conclusion = {"winner": "Acme", "loser": "Bravo"}
+    payload = {
+        "vendor_a": {"name": "Acme", "velocity_churn_density": 0.3, "recommend_ratio": 10},
+        "vendor_b": {"name": "Bravo", "velocity_churn_density": -0.2, "recommend_ratio": 35},
+    }
+    contradictions = _find_battle_contradictions(conclusion, payload)
+    assert any("improving churn velocity" in c for c in contradictions)
+    assert any("better net sentiment" in c for c in contradictions)
+
+
+def test_category_contradictions_flag_hhi_and_vendor_count():
+    conclusion = {"market_regime": "platform_consolidation"}
+    payload = {"ecosystem": {"hhi": 900, "vendor_count": 25}}
+    contradictions = _find_category_contradictions(conclusion, payload)
+    assert any("HHI is low" in c for c in contradictions)
+    assert any("vendor count is high" in c for c in contradictions)
+
+
+def test_asymmetry_contradictions_match_suffix_variation_and_insider_gap():
+    conclusion = {"resource_advantage": "Shopify holds the resource advantage due to brand trust."}
+    payload = {
+        "vendor_a": {"name": "Shopify Inc.", "total_reviews": 10, "insider_signal_count": 1},
+        "vendor_b": {"name": "BigCommerce", "total_reviews": 80, "insider_signal_count": 10},
+    }
+    contradictions = _find_asymmetry_contradictions(conclusion, payload)
+    assert any("5x more reviews" in c for c in contradictions)
+    assert any("more insider signals" in c for c in contradictions)
+
+
+@pytest.mark.asyncio
+async def test_cross_vendor_reasoner_runs_classify_challenge_ground(monkeypatch):
+    cache = _FakeCache()
+    llm = _MockLLM([
+        _make_xv_conclusion(winner="Acme", loser="Bravo", confidence=0.8),
+        _make_xv_conclusion(winner="Bravo", loser="Acme", confidence=0.7),
+        _make_xv_conclusion(winner="Bravo", loser="Acme", confidence=0.72),
+    ])
+    monkeypatch.setattr("atlas_brain.reasoning.cross_vendor.resolve_stratified_llm", lambda cfg: llm)
+
+    reasoner = CrossVendorReasoner(cache)
+    result = await reasoner.analyze_battle(
+        "Acme",
+        "Bravo",
+        evidence_a={"velocity_churn_density": 0.3, "recommend_ratio": 10, "total_reviews": 50},
+        evidence_b={"velocity_churn_density": -0.2, "recommend_ratio": 35, "total_reviews": 55},
+        displacement_edge={"mention_count": 12},
+    )
+
+    assert llm.call_count == 3
+    assert result.conclusion["winner"] == "Bravo"
+    assert len(cache.stored) == 1
+
+
+@pytest.mark.asyncio
+async def test_cross_vendor_reasoner_skips_ground_when_challenge_unchanged(monkeypatch):
+    cache = _FakeCache()
+    llm = _MockLLM([
+        _make_xv_conclusion(winner="Acme", loser="Bravo", confidence=0.8),
+        _make_xv_conclusion(winner="Acme", loser="Bravo", confidence=0.79),
+    ])
+    monkeypatch.setattr("atlas_brain.reasoning.cross_vendor.resolve_stratified_llm", lambda cfg: llm)
+
+    reasoner = CrossVendorReasoner(cache)
+    result = await reasoner.analyze_battle(
+        "Acme",
+        "Bravo",
+        evidence_a={"velocity_churn_density": 0.3, "recommend_ratio": 10, "total_reviews": 50},
+        evidence_b={"velocity_churn_density": -0.2, "recommend_ratio": 35, "total_reviews": 55},
+        displacement_edge={"mention_count": 12},
+    )
+
+    assert llm.call_count == 2
+    assert result.conclusion["winner"] == "Acme"
+    assert len(cache.stored) == 1

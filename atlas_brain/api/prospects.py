@@ -9,9 +9,15 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..auth.dependencies import AuthUser, require_auth
+from ..services.apollo_company_overrides import (
+    bootstrap_company_overrides_from_settings,
+    delete_company_override,
+    fetch_company_override_map,
+    upsert_company_override,
+)
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.prospects")
@@ -22,6 +28,12 @@ router = APIRouter(prefix="/b2b/prospects", tags=["b2b-prospects"])
 class ManualQueueResolveRequest(BaseModel):
     action: Literal["retry", "dismiss"]
     domain: Optional[str] = None
+
+
+class CompanyOverrideUpsertRequest(BaseModel):
+    company_name_raw: str
+    search_names: list[str] = Field(default_factory=list)
+    domains: list[str] = Field(default_factory=list)
 
 
 def _normalize_domain(domain: Optional[str]) -> Optional[str]:
@@ -183,6 +195,24 @@ async def list_manual_prospect_queue(
     }
 
 
+@router.get("/company-overrides")
+async def list_company_overrides(
+    company: Optional[str] = Query(None),
+    _user: AuthUser = Depends(require_auth),
+):
+    """List DB-backed Apollo company overrides."""
+    pool = _pool_or_503()
+    overrides = list((await fetch_company_override_map(pool)).values())
+    if company:
+        term = company.lower()
+        overrides = [
+            row for row in overrides
+            if term in str(row.get("company_name_raw", "")).lower()
+            or term in str(row.get("company_name_norm", "")).lower()
+        ]
+    return {"overrides": [_row_to_dict(r) for r in overrides], "count": len(overrides)}
+
+
 @router.post("/manual-queue/{queue_id}/resolve")
 async def resolve_manual_prospect_queue(
     queue_id: UUID,
@@ -233,3 +263,39 @@ async def resolve_manual_prospect_queue(
             domain,
         )
     return {"entry": _row_to_dict(updated)}
+
+
+@router.post("/company-overrides")
+async def create_or_update_company_override(
+    payload: CompanyOverrideUpsertRequest,
+    _user: AuthUser = Depends(require_auth),
+):
+    """Create or update an Apollo company override."""
+    pool = _pool_or_503()
+    try:
+        row = await upsert_company_override(pool, payload.company_name_raw, payload.search_names, payload.domains)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"override": _row_to_dict(row)}
+
+
+@router.post("/company-overrides/bootstrap")
+async def bootstrap_company_overrides(
+    _user: AuthUser = Depends(require_auth),
+):
+    """Import Apollo company overrides from settings into the DB table."""
+    pool = _pool_or_503()
+    return await bootstrap_company_overrides_from_settings(pool)
+
+
+@router.delete("/company-overrides/{override_id}")
+async def remove_company_override(
+    override_id: UUID,
+    _user: AuthUser = Depends(require_auth),
+):
+    """Delete an Apollo company override."""
+    pool = _pool_or_503()
+    deleted = await delete_company_override(pool, override_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Company override not found")
+    return {"deleted": True}

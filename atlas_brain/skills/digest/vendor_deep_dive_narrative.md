@@ -35,6 +35,11 @@ You will receive a JSON object with:
   - `confidence`: archetype confidence (0-1)
   - `executive_summary`: 2-3 sentence reasoning assessment
   - `key_signals`: list of key evidence signals
+- `cross_vendor_comparisons` (if present): list of cross-vendor asymmetry conclusions, each with:
+  - `opponent`: the compared vendor
+  - `conclusion`: 3-5 sentence synthesis of the asymmetry analysis
+  - `confidence`: confidence (0-1)
+  - `resource_advantage`: which vendor holds the resource edge and why
 
 ## Output Schema
 
@@ -55,6 +60,7 @@ You will receive a JSON object with:
 - If competitor_overlap has entries, mention the top competitive alternative.
 - Do not repeat raw metrics without context — interpret what they mean for a buyer.
 - If `reasoning_conclusion` is present and its `confidence` >= 0.6, reference the archetype in the narrative (e.g., "fits a pricing_shock pattern"). If confidence < 0.6, do not mention the archetype.
+- If `cross_vendor_comparisons` is present and any entry has `confidence` >= 0.6, weave the relative positioning into the narrative (e.g., "positioned weaker than [opponent] due to [resource_advantage]"). Do not enumerate all comparisons -- pick the single most relevant one. If all comparisons have confidence < 0.6, ignore them.
 - Be direct and specific, not generic. Avoid vague hedging.
 
 ## Output

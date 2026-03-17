@@ -10,11 +10,13 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+ENV_FILES = (".env", ".env.local")
+
 
 class SaaSAuthConfig(BaseSettings):
     """SaaS authentication and billing configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_SAAS_")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_SAAS_", env_file=ENV_FILES, extra="ignore")
 
     enabled: bool = Field(default=False, description="Enable SaaS auth (when off, dashboard works without auth)")
     jwt_secret: str = Field(default="change-me-in-production", description="JWT signing secret")
@@ -55,7 +57,7 @@ class SaaSAuthConfig(BaseSettings):
 class STTConfig(BaseSettings):
     """STT-specific configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_STT_")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_STT_", env_file=ENV_FILES, extra="ignore")
 
     default_model: str = Field(default="nemotron", description="Default STT to load on startup")
 
@@ -63,7 +65,7 @@ class STTConfig(BaseSettings):
 class MQTTConfig(BaseSettings):
     """MQTT backend configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_MQTT_")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_MQTT_", env_file=ENV_FILES, extra="ignore")
 
     enabled: bool = Field(default=False, description="Enable MQTT backend")
     host: str = Field(default="localhost", description="MQTT broker host")
@@ -75,7 +77,7 @@ class MQTTConfig(BaseSettings):
 class HomeAssistantConfig(BaseSettings):
     """Home Assistant backend configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_HA_")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_HA_", env_file=ENV_FILES, extra="ignore")
 
     enabled: bool = Field(default=False, description="Enable Home Assistant backend")
     url: str = Field(default="http://homeassistant.local:8123", description="Home Assistant URL")
@@ -103,7 +105,7 @@ class HomeAssistantConfig(BaseSettings):
 class LLMConfig(BaseSettings):
     """LLM (reasoning model) configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_LLM_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_LLM_", env_file=ENV_FILES, extra="ignore")
 
     # Backend selection: "llama-cpp", "transformers-flash", "ollama", "together", "cloud", or "hybrid"
     default_model: str = Field(default="llama-cpp", description="Default LLM backend")
@@ -235,7 +237,7 @@ class LLMConfig(BaseSettings):
 class TTSConfig(BaseSettings):
     """TTS configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_TTS_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_TTS_", env_file=ENV_FILES, extra="ignore")
 
     default_model: str = Field(default="piper", description="Default TTS backend")
     voice: str = Field(default="en_US-ryan-medium", description="Voice model")
@@ -247,7 +249,7 @@ class TTSConfig(BaseSettings):
 class OmniConfig(BaseSettings):
     """Omni (unified speech-to-speech) configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_OMNI_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_OMNI_", env_file=ENV_FILES, extra="ignore")
 
     enabled: bool = Field(default=False, description="Enable unified omni mode (Qwen-Omni)")
     default_model: str = Field(default="qwen-omni", description="Default omni model")
@@ -260,7 +262,7 @@ class SpeakerIDConfig(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="ATLAS_SPEAKER_ID_",
-        env_file=".env",
+        env_file=ENV_FILES,
         extra="ignore",
     )
 
@@ -289,7 +291,7 @@ class RecognitionConfig(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="ATLAS_RECOGNITION_",
-        env_file=".env",
+        env_file=ENV_FILES,
         extra="ignore",
     )
 
@@ -353,7 +355,7 @@ class OrchestrationConfig(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="ATLAS_ORCH_",
-        env_file=".env",
+        env_file=ENV_FILES,
         extra="ignore",
     )
 
@@ -400,7 +402,7 @@ class OrchestrationConfig(BaseSettings):
 class DiscoveryConfig(BaseSettings):
     """Network device discovery configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_DISCOVERY_")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_DISCOVERY_", env_file=ENV_FILES, extra="ignore")
 
     enabled: bool = Field(default=True, description="Enable device discovery")
     scan_on_startup: bool = Field(default=True, description="Scan network on startup")
@@ -415,7 +417,7 @@ class DiscoveryConfig(BaseSettings):
 class MemoryConfig(BaseSettings):
     """Long-term memory configuration (atlas-memory integration)."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_MEMORY_")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_MEMORY_", env_file=ENV_FILES, extra="ignore")
 
     enabled: bool = Field(default=True, description="Enable memory service")
     base_url: str = Field(
@@ -488,7 +490,7 @@ class MemoryConfig(BaseSettings):
 class ToolsConfig(BaseSettings):
     """Configuration for Atlas tools (weather, traffic, etc.)."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_TOOLS_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_TOOLS_", env_file=ENV_FILES, extra="ignore")
 
     enabled: bool = Field(default=True, description="Enable tools system")
 
@@ -553,7 +555,7 @@ class ToolsConfig(BaseSettings):
 class IntentConfig(BaseSettings):
     """Intent parsing configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_INTENT_")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_INTENT_", env_file=ENV_FILES, extra="ignore")
 
     # LLM settings for intent parsing
     temperature: float = Field(default=0.1, description="LLM temperature for intent parsing")
@@ -572,7 +574,7 @@ class IntentConfig(BaseSettings):
 class AlertsConfig(BaseSettings):
     """Centralized alerts configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_ALERTS_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_ALERTS_", env_file=ENV_FILES, extra="ignore")
 
     enabled: bool = Field(default=True, description="Enable centralized alert system")
     default_cooldown_seconds: int = Field(default=30, description="Default cooldown between alerts")
@@ -586,7 +588,7 @@ class AlertsConfig(BaseSettings):
 class EmailConfig(BaseSettings):
     """Email tool configuration (Resend API + Gmail + IMAP)."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_EMAIL_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_EMAIL_", env_file=ENV_FILES, extra="ignore")
 
     enabled: bool = Field(default=False, description="Enable email tool")
     gmail_send_enabled: bool = Field(
@@ -625,7 +627,7 @@ class EmailDraftConfig(BaseSettings):
     """Email draft generation configuration (Anthropic LLM for reply drafting)."""
 
     model_config = SettingsConfigDict(
-        env_prefix="ATLAS_EMAIL_DRAFT_", env_file=".env", extra="ignore",
+        env_prefix="ATLAS_EMAIL_DRAFT_", env_file=ENV_FILES, extra="ignore",
     )
 
     enabled: bool = Field(default=False, description="Enable email draft generation")
@@ -685,7 +687,7 @@ class EmailIntakeConfig(BaseSettings):
     """Near-real-time email intake polling configuration."""
 
     model_config = SettingsConfigDict(
-        env_prefix="ATLAS_EMAIL_INTAKE_", env_file=".env", extra="ignore",
+        env_prefix="ATLAS_EMAIL_INTAKE_", env_file=ENV_FILES, extra="ignore",
     )
 
     enabled: bool = Field(default=False, description="Enable 10-min email polling")
@@ -723,7 +725,7 @@ class EmailStaleCheckConfig(BaseSettings):
     """Stale email re-engagement: detect stale drafts, unactioned emails, unanswered estimates."""
 
     model_config = SettingsConfigDict(
-        env_prefix="ATLAS_EMAIL_STALE_CHECK_", env_file=".env", extra="ignore",
+        env_prefix="ATLAS_EMAIL_STALE_CHECK_", env_file=ENV_FILES, extra="ignore",
     )
 
     enabled: bool = Field(default=False, description="Enable stale email re-engagement checks")
@@ -764,7 +766,7 @@ class ReminderConfig(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="ATLAS_REMINDER_",
-        env_file=".env",
+        env_file=ENV_FILES,
         extra="ignore",
     )
 
@@ -803,7 +805,7 @@ class ReminderConfig(BaseSettings):
 class VoiceClientConfig(BaseSettings):
     """Voice client configuration - local voice pipeline with wake word detection."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_VOICE_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_VOICE_", env_file=ENV_FILES, extra="ignore")
 
     enabled: bool = Field(default=True, description="Enable voice pipeline on startup")
 
@@ -1077,7 +1079,7 @@ class WebcamConfig(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="ATLAS_WEBCAM_",
-        env_file=".env",
+        env_file=ENV_FILES,
         extra="ignore",
     )
 
@@ -1113,7 +1115,7 @@ class RTSPConfig(BaseSettings):
     Detection now runs in atlas_vision to avoid GPU contention with voice pipeline.
     """
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_RTSP_")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_RTSP_", env_file=ENV_FILES, extra="ignore")
 
     enabled: bool = Field(default=False, description="DEPRECATED - detection moved to atlas_vision")
     wyze_bridge_host: str = Field(default="localhost", description="DEPRECATED")
@@ -1125,7 +1127,7 @@ class RTSPConfig(BaseSettings):
 class SecurityConfig(BaseSettings):
     """Security system configuration (video processing, cameras, zones)."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_SECURITY_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_SECURITY_", env_file=ENV_FILES, extra="ignore")
 
     enabled: bool = Field(default=True, description="Enable security tools")
     video_processing_url: str = Field(
@@ -1307,7 +1309,7 @@ class SecurityConfig(BaseSettings):
 class ModeManagerConfig(BaseSettings):
     """Mode manager configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_MODE_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_MODE_", env_file=ENV_FILES, extra="ignore")
 
     timeout_seconds: int = Field(
         default=120,
@@ -1326,7 +1328,7 @@ class IntentRouterConfig(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="ATLAS_INTENT_ROUTER_",
-        env_file=".env",
+        env_file=ENV_FILES,
         extra="ignore",
     )
 
@@ -1394,7 +1396,7 @@ class DeviceResolverConfig(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="ATLAS_DEVICE_RESOLVER_",
-        env_file=".env",
+        env_file=ENV_FILES,
         extra="ignore",
     )
 
@@ -1414,7 +1416,7 @@ class EntityContextConfig(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="ATLAS_ENTITY_CONTEXT__",
-        env_file=".env",
+        env_file=ENV_FILES,
         extra="ignore",
     )
 
@@ -1458,7 +1460,7 @@ class FreeModeConfig(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="ATLAS_FREE_MODE_",
-        env_file=".env",
+        env_file=ENV_FILES,
         extra="ignore",
     )
 
@@ -1511,7 +1513,7 @@ class VoiceFilterConfig(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="ATLAS_VOICE_FILTER_",
-        env_file=".env",
+        env_file=ENV_FILES,
         extra="ignore",
     )
 
@@ -1678,7 +1680,7 @@ class PersonaConfig(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="ATLAS_PERSONA_",
-        env_file=".env",
+        env_file=ENV_FILES,
         extra="ignore",
     )
 
@@ -1700,7 +1702,7 @@ class PersonaConfig(BaseSettings):
 class HomeAgentConfig(BaseSettings):
     """Home agent LLM generation parameters."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_HOME_AGENT_")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_HOME_AGENT_", env_file=ENV_FILES, extra="ignore")
 
     max_tokens: int = Field(default=150, ge=50, le=1024, description="Max tokens for LLM response")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Sampling temperature for conversation")
@@ -1711,7 +1713,7 @@ class HomeAgentConfig(BaseSettings):
 class AgentConfig(BaseSettings):
     """Agent system configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_AGENT_")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_AGENT_", env_file=ENV_FILES, extra="ignore")
 
     backend: str = Field(
         default="langgraph",
@@ -1724,7 +1726,7 @@ class WorkflowConfig(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="ATLAS_WORKFLOW_",
-        env_file=".env",
+        env_file=ENV_FILES,
         extra="ignore",
     )
 
@@ -1745,7 +1747,7 @@ class OrchestratedConfig(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="ATLAS_ORCHESTRATED_",
-        env_file=".env",
+        env_file=ENV_FILES,
         extra="ignore",
     )
 
@@ -1776,7 +1778,7 @@ class EdgeConfig(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="ATLAS_EDGE_",
-        env_file=".env",
+        env_file=ENV_FILES,
         extra="ignore",
     )
 
@@ -1807,7 +1809,7 @@ class AutonomousConfig(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="ATLAS_AUTONOMOUS_",
-        env_file=".env",
+        env_file=ENV_FILES,
         extra="ignore",
     )
 
@@ -1953,7 +1955,7 @@ class AutonomousConfig(BaseSettings):
 class EscalationConfig(BaseSettings):
     """Edge-local narration + brain-side escalation configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_ESCALATION_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_ESCALATION_", env_file=ENV_FILES, extra="ignore")
 
     enabled: bool = Field(default=True, description="Enable escalation evaluation for security events")
     unknown_empty_enabled: bool = Field(default=True, description="Escalate unknown face when house is empty")
@@ -1970,7 +1972,7 @@ class CallIntelligenceConfig(BaseSettings):
     """Post-call transcription and data extraction."""
 
     model_config = SettingsConfigDict(
-        env_prefix="ATLAS_CALL_INTELLIGENCE_", env_file=".env", extra="ignore"
+        env_prefix="ATLAS_CALL_INTELLIGENCE_", env_file=ENV_FILES, extra="ignore"
     )
     enabled: bool = Field(default=False, description="Enable call recording and processing")
     min_duration_seconds: int = Field(default=10, ge=0, description="Skip calls shorter than this")
@@ -1986,7 +1988,7 @@ class SMSIntelligenceConfig(BaseSettings):
     """SMS classification, extraction, and notification."""
 
     model_config = SettingsConfigDict(
-        env_prefix="ATLAS_SMS_INTELLIGENCE_", env_file=".env", extra="ignore"
+        env_prefix="ATLAS_SMS_INTELLIGENCE_", env_file=ENV_FILES, extra="ignore"
     )
     enabled: bool = Field(default=True, description="Enable SMS intelligence pipeline")
     llm_max_tokens: int = Field(default=512, ge=128, le=2048)
@@ -2000,7 +2002,7 @@ class InvoicingConfig(BaseSettings):
     """Invoicing and payment tracking configuration."""
 
     model_config = SettingsConfigDict(
-        env_prefix="ATLAS_INVOICING_", env_file=".env", extra="ignore"
+        env_prefix="ATLAS_INVOICING_", env_file=ENV_FILES, extra="ignore"
     )
     enabled: bool = Field(default=False, description="Enable invoicing system")
     default_payment_terms_days: int = Field(default=30, ge=1, le=365, description="Default days until due")
@@ -2018,7 +2020,7 @@ class ExternalDataConfig(BaseSettings):
     """External data producers: news feeds and financial markets."""
 
     model_config = SettingsConfigDict(
-        env_prefix="ATLAS_EXTERNAL_DATA_", env_file=".env", extra="ignore"
+        env_prefix="ATLAS_EXTERNAL_DATA_", env_file=ENV_FILES, extra="ignore"
     )
 
     enabled: bool = Field(default=False, description="Master switch for external data producers")
@@ -2136,7 +2138,7 @@ class B2BChurnConfig(BaseSettings):
     """B2B software churn prediction pipeline configuration."""
 
     model_config = SettingsConfigDict(
-        env_prefix="ATLAS_B2B_CHURN_", env_file=".env", extra="ignore"
+        env_prefix="ATLAS_B2B_CHURN_", env_file=ENV_FILES, extra="ignore"
     )
 
     enabled: bool = Field(default=False, description="Enable B2B churn prediction pipeline")
@@ -2359,6 +2361,10 @@ class B2BChurnConfig(BaseSettings):
     battle_card_llm_attempts: int = Field(default=2, ge=1, le=5, description="Max generation attempts per battle card, including repair retries")
     battle_card_llm_retry_delay_seconds: float = Field(default=1.0, ge=0.0, le=30.0, description="Delay between battle card LLM attempts")
     battle_card_llm_feedback_limit: int = Field(default=5, ge=1, le=10, description="Max validator issues to feed back into battle card repair attempts")
+    battle_card_llm_max_tokens: int = Field(default=3000, ge=256, le=12000, description="Max output tokens for battle card sales copy generation")
+    battle_card_llm_temperature: float = Field(default=0.5, ge=0.0, le=1.5, description="Sampling temperature for battle card sales copy generation")
+    battle_card_llm_timeout_seconds: float = Field(default=90.0, ge=5.0, le=300.0, description="Timeout for a single battle card LLM generation attempt")
+    battle_card_cache_confidence: float = Field(default=0.95, ge=0.0, le=1.0, description="Confidence assigned to validated battle card sales copy cache entries")
     battle_card_high_priority_score_min: float = Field(default=60.0, ge=0.0, le=100.0, description="Min churn pressure score required before battle-card copy can use high-priority language")
     battle_card_high_priority_urgency_min: float = Field(default=5.0, ge=0.0, le=10.0, description="Min average urgency required before battle-card copy can use high-priority language")
     battle_card_feature_gap_headline_min_mentions: int = Field(default=5, ge=1, le=100, description="Min feature-gap mention count before a battle-card headline can elevate that gap directly")
@@ -2389,7 +2395,7 @@ class B2BAlertConfig(BaseSettings):
     """B2B churn signal spike alert configuration."""
 
     model_config = SettingsConfigDict(
-        env_prefix="ATLAS_B2B_ALERT_", env_file=".env", extra="ignore"
+        env_prefix="ATLAS_B2B_ALERT_", env_file=ENV_FILES, extra="ignore"
     )
 
     enabled: bool = Field(default=False, description="Enable churn signal spike alerts")
@@ -2403,7 +2409,7 @@ class B2BWebhookConfig(BaseSettings):
     """B2B outbound webhook delivery configuration."""
 
     model_config = SettingsConfigDict(
-        env_prefix="ATLAS_B2B_WEBHOOK_", env_file=".env", extra="ignore"
+        env_prefix="ATLAS_B2B_WEBHOOK_", env_file=ENV_FILES, extra="ignore"
     )
 
     enabled: bool = Field(default=False, description="Enable outbound webhook delivery")
@@ -2422,7 +2428,7 @@ class CRMEventConfig(BaseSettings):
     """Inbound CRM event ingestion configuration."""
 
     model_config = SettingsConfigDict(
-        env_prefix="ATLAS_CRM_EVENT_", env_file=".env", extra="ignore"
+        env_prefix="ATLAS_CRM_EVENT_", env_file=ENV_FILES, extra="ignore"
     )
 
     enabled: bool = Field(default=False, description="Enable CRM event ingestion")
@@ -2447,7 +2453,7 @@ class UniversalScrapeConfig(BaseSettings):
     """Universal web scraper configuration (data-agnostic LLM extraction)."""
 
     model_config = SettingsConfigDict(
-        env_prefix="ATLAS_UNIVERSAL_SCRAPE_", env_file=".env", extra="ignore"
+        env_prefix="ATLAS_UNIVERSAL_SCRAPE_", env_file=ENV_FILES, extra="ignore"
     )
 
     enabled: bool = Field(default=True, description="Enable universal scraper")
@@ -2462,7 +2468,7 @@ class B2BScrapeConfig(BaseSettings):
     """B2B review scraping pipeline configuration."""
 
     model_config = SettingsConfigDict(
-        env_prefix="ATLAS_B2B_SCRAPE_", env_file=".env", extra="ignore"
+        env_prefix="ATLAS_B2B_SCRAPE_", env_file=ENV_FILES, extra="ignore"
     )
 
     enabled: bool = Field(default=False, description="Enable B2B review scraping pipeline")
@@ -2565,7 +2571,7 @@ class B2BCampaignConfig(BaseSettings):
     """B2B ABM campaign generation configuration."""
 
     model_config = SettingsConfigDict(
-        env_prefix="ATLAS_B2B_CAMPAIGN_", env_file=".env", extra="ignore",
+        env_prefix="ATLAS_B2B_CAMPAIGN_", env_file=ENV_FILES, extra="ignore",
     )
 
     enabled: bool = Field(default=False, description="Enable B2B campaign engine")
@@ -2599,7 +2605,7 @@ class CampaignSequenceConfig(BaseSettings):
     """B2B campaign email sequence configuration."""
 
     model_config = SettingsConfigDict(
-        env_prefix="ATLAS_CAMPAIGN_SEQ_", env_file=".env", extra="ignore",
+        env_prefix="ATLAS_CAMPAIGN_SEQ_", env_file=ENV_FILES, extra="ignore",
     )
 
     enabled: bool = Field(default=False, description="Enable stateful campaign sequences")
@@ -2680,7 +2686,7 @@ class AmazonSellerCampaignConfig(BaseSettings):
     """Amazon Seller Intelligence campaign outreach configuration."""
 
     model_config = SettingsConfigDict(
-        env_prefix="ATLAS_SELLER_CAMPAIGN_", env_file=".env", extra="ignore",
+        env_prefix="ATLAS_SELLER_CAMPAIGN_", env_file=ENV_FILES, extra="ignore",
     )
 
     enabled: bool = Field(default=False, description="Enable Amazon seller campaign engine")
@@ -2705,7 +2711,7 @@ class SubcategoryIntelligenceConfig(BaseSettings):
     """Subcategory-level intelligence report configuration."""
 
     model_config = SettingsConfigDict(
-        env_prefix="ATLAS_SUBCATEGORY_INTEL_", env_file=".env", extra="ignore",
+        env_prefix="ATLAS_SUBCATEGORY_INTEL_", env_file=ENV_FILES, extra="ignore",
     )
 
     enabled: bool = Field(default=False, description="Enable subcategory intelligence reports")
@@ -2723,7 +2729,7 @@ class ComparisonNormalizationConfig(BaseSettings):
     """Competitive flow brand normalization configuration."""
 
     model_config = SettingsConfigDict(
-        env_prefix="ATLAS_COMPARISON_NORMALIZATION_", env_file=(".env", ".env.local"), extra="ignore",
+        env_prefix="ATLAS_COMPARISON_NORMALIZATION_", env_file=ENV_FILES, extra="ignore",
     )
 
     known_brand_max_words: int = Field(default=4, ge=1, le=8, description="Max words allowed for trusted canonical brands")
@@ -2738,7 +2744,7 @@ class ApolloConfig(BaseSettings):
     """Apollo.io prospect enrichment configuration."""
 
     model_config = SettingsConfigDict(
-        env_prefix="ATLAS_APOLLO_", env_file=(".env", ".env.local"), extra="ignore",
+        env_prefix="ATLAS_APOLLO_", env_file=ENV_FILES, extra="ignore",
     )
 
     enabled: bool = Field(default=False, description="Enable Apollo.io prospect pipeline")
@@ -2783,7 +2789,7 @@ class ApolloConfig(BaseSettings):
 class TemporalPatternConfig(BaseSettings):
     """Temporal pattern context configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_TEMPORAL_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_TEMPORAL_", env_file=ENV_FILES, extra="ignore")
 
     enabled: bool = Field(default=True, description="Enable temporal pattern context in LLM prompts")
     min_samples: int = Field(default=5, ge=1, le=100, description="Minimum sample count per pattern row")
@@ -2799,7 +2805,7 @@ class MCPConfig(BaseSettings):
     endpoints instead.
     """
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_MCP_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_MCP_", env_file=ENV_FILES, extra="ignore")
 
     client_enabled: bool = Field(default=True, description="Enable Atlas as MCP client")
     crm_enabled: bool = Field(default=True, description="Enable CRM MCP server")
@@ -2826,7 +2832,7 @@ class MCPConfig(BaseSettings):
 class AlertMonitorConfig(BaseSettings):
     """Proactive weather and traffic alert monitoring configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="ATLAS_ALERT_MONITOR__", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="ATLAS_ALERT_MONITOR__", env_file=ENV_FILES, extra="ignore")
 
     enabled: bool = Field(default=False, description="Enable proactive weather/traffic alerts")
     check_interval_seconds: int = Field(default=600, description="Poll interval (10 min default)")
@@ -2865,7 +2871,7 @@ class NewsIntelligenceConfig(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_prefix="ATLAS_NEWS_", env_file=".env", extra="ignore"
+        env_prefix="ATLAS_NEWS_", env_file=ENV_FILES, extra="ignore"
     )
 
     enabled: bool = Field(default=False, description="Enable daily news intelligence analysis")
@@ -3152,7 +3158,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="ATLAS_",
-        env_file=(".env", ".env.local"),
+        env_file=ENV_FILES,
         env_nested_delimiter="__",
         extra="ignore",
     )

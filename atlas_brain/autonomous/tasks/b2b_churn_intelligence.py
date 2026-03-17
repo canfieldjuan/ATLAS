@@ -123,6 +123,33 @@ class _TaskTimer:
         return self._clock() - self._start
 
 
+def _normalize_cross_vendor_conclusion(raw: Any) -> dict[str, Any]:
+    """Coerce JSONB read-back into a normalized dict for downstream consumers."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+    if not isinstance(raw, dict):
+        return {}
+    normalized = dict(raw)
+    key_insights = raw.get("key_insights") or []
+    if isinstance(key_insights, list):
+        insights: list[str] = []
+        for item in key_insights:
+            if isinstance(item, str) and item:
+                insights.append(item)
+            elif isinstance(item, dict):
+                text = item.get("insight") or item.get("text")
+                if isinstance(text, str) and text:
+                    insights.append(text)
+        normalized["key_insights"] = insights
+    durability = normalized.get("durability_assessment") or raw.get("displacement_flows_nature")
+    if isinstance(durability, str) and durability:
+        normalized["durability_assessment"] = durability
+    return normalized
+
+
 async def persist_single_vendor_reasoning(
     pool,
     vendor_name: str,
@@ -370,7 +397,7 @@ async def reconstruct_cross_vendor_lookup(
 
     for r in rows:
         vendors = list(r["vendors"]) if r["vendors"] else []
-        conclusion = r["conclusion"] if isinstance(r["conclusion"], dict) else {}
+        conclusion = _normalize_cross_vendor_conclusion(r["conclusion"])
         entry = {
             "conclusion": conclusion,
             "confidence": float(r["confidence"]) if r["confidence"] is not None else 0,

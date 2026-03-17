@@ -7,7 +7,7 @@ Pass 3 (GROUND): Forces every key_signal to cite exact evidence field:value.
 Skipping rules:
 - Pass 2 skipped if Pass 1 confidence <= challenge_confidence_floor
 - Pass 2 skipped if no contradictions found
-- Pass 3 skipped if Pass 2 didn't change the conclusion
+- Pass 3 skipped if Pass 2 didn't materially change the conclusion
 """
 
 from __future__ import annotations
@@ -181,6 +181,7 @@ async def multi_pass_reason(
     span_prefix: str = "reasoning.stratified",
     trace_metadata: dict[str, Any] | None = None,
     normalize_fn: Callable[[dict], dict] | None = None,
+    contradiction_finder: Callable[[dict, dict], list[str]] | None = None,
 ) -> MultiPassResult:
     """Run multi-pass reasoning: classify -> challenge -> ground.
 
@@ -193,6 +194,7 @@ async def multi_pass_reason(
 
     trace_metadata = dict(trace_metadata or {})
     result = MultiPassResult(final_conclusion={})
+    finder = contradiction_finder or _find_contradicting_evidence
 
     def _normalize(c: dict) -> dict:
         return normalize_fn(c) if normalize_fn else c
@@ -349,7 +351,7 @@ async def multi_pass_reason(
             p1_confidence, challenge_confidence_floor,
         )
     else:
-        contradictions = _find_contradicting_evidence(p1_conclusion, raw_evidence)
+        contradictions = finder(p1_conclusion, raw_evidence)
         if not contradictions:
             logger.info("Skipping challenge pass: no contradictions found")
         else:
@@ -392,11 +394,19 @@ async def multi_pass_reason(
             )
 
     # ------------------------------------------------------------------
-    # Pass 3: GROUND -- always runs when challenge was attempted, so
-    # downstream consumers always get evidence-grounded key_signals.
-    # Also runs as standalone when ground_only=True (handled above).
+    # Pass 3: GROUND -- runs only when the challenge pass materially
+    # changed the conclusion. Also runs as standalone when ground_only=True
+    # (handled above).
     # ------------------------------------------------------------------
-    if not challenge_attempted:
+    if not challenge_attempted or not result.passes[-1].changed:
+        return result
+
+    # Respect ground_change_threshold: if challenge didn't change enough,
+    # skip grounding to save tokens/time (unless forced).
+    # Note: result.passes[-1] is the challenge pass here.
+    last_pass = result.passes[-1]
+    if not last_pass.changed:
+        logger.info("Skipping ground pass: challenge did not materially change conclusion")
         return result
 
     pre_ground = result.final_conclusion
