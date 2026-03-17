@@ -570,6 +570,14 @@ class StratifiedReasoner:
         diff = classify_evidence(old_evidence, new_evidence)
         logger.info("Diff for %s: %s", vendor_name, diff.summary())
 
+        # Persist the diff for evidence volatility tracking
+        from .differential import persist_evidence_diff
+        decision = "reconstitute" if diff.should_reconstitute else "full_reason"
+        await persist_evidence_diff(
+            self._cache._pool, vendor_name, diff, decision,
+            product_category=product_category,
+        )
+
         if not diff.should_reconstitute:
             return None  # delta too large, need full reason
 

@@ -19,6 +19,7 @@ import logging
 import re
 import time
 import uuid as _uuid
+from dataclasses import asdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -51,6 +52,7 @@ from ._b2b_shared import (  # noqa: E402
     _intelligence_source_allowlist,
     _eligible_review_filters,
     _build_vendor_evidence,
+    _build_deterministic_vendor_feed,
     _build_deterministic_displacement_map,
     _build_exploratory_payload,
     _build_pain_lookup,
@@ -104,6 +106,8 @@ from ._b2b_shared import (  # noqa: E402
     _fetch_competitor_reasons,
     _fetch_prior_reports,
     _fetch_keyword_spikes,
+    _build_validated_executive_summary,
+    _executive_source_list,
 )
 
 
@@ -357,6 +361,45 @@ async def reconstruct_reasoning_lookup(
             "uncertainty_sources": r["reasoning_uncertainty_sources"] or [],
         }
     return lookup
+
+
+async def reconstruct_evidence_volatility(
+    pool,
+    days: int = 14,
+) -> dict[str, dict]:
+    """Read evidence volatility per vendor from persisted diffs.
+
+    Returns vendor -> {avg_diff_ratio, max_diff_ratio, core_contradictions,
+    days_tracked, latest_decision, latest_contradicted_fields}.
+    Used by vulnerability_report and accounts_in_motion for instability signals.
+    """
+    rows = await pool.fetch(
+        """
+        SELECT vendor_name,
+               AVG(weighted_diff_ratio) AS avg_diff,
+               MAX(weighted_diff_ratio) AS max_diff,
+               SUM(CASE WHEN has_core_contradiction THEN 1 ELSE 0 END) AS core_contradictions,
+               COUNT(*) AS days_tracked,
+               (ARRAY_AGG(decision ORDER BY computed_date DESC))[1] AS latest_decision,
+               (ARRAY_AGG(contradicted_fields ORDER BY computed_date DESC))[1] AS latest_contradicted
+        FROM reasoning_evidence_diffs
+        WHERE computed_date >= CURRENT_DATE - $1::int
+        GROUP BY vendor_name
+        ORDER BY AVG(weighted_diff_ratio) DESC
+        """,
+        days,
+    )
+    return {
+        r["vendor_name"]: {
+            "avg_diff_ratio": round(float(r["avg_diff"] or 0), 4),
+            "max_diff_ratio": round(float(r["max_diff"] or 0), 4),
+            "core_contradictions": r["core_contradictions"] or 0,
+            "days_tracked": r["days_tracked"] or 0,
+            "latest_decision": r["latest_decision"] or "",
+            "latest_contradicted_fields": r["latest_contradicted"] or [],
+        }
+        for r in rows
+    }
 
 
 async def reconstruct_cross_vendor_lookup(
@@ -1288,9 +1331,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     # --- Cross-vendor ecosystem analysis (category-level intelligence) ---
     ecosystem_evidence: dict[str, Any] = {}
+    market_regimes: dict[str, Any] = {}
     if cfg.stratified_reasoning_enabled and reasoning_lookup:
         try:
             from atlas_brain.reasoning.ecosystem import EcosystemAnalyzer
+            from atlas_brain.reasoning.market_pulse import MarketPulseReasoner, TemporalEvidence
+
+            # Run Ecosystem Analyzer (Neo4j based)
             eco = EcosystemAnalyzer(pool)
             eco_results = await eco.analyze_all_categories()
             for cat, ev in eco_results.items():
@@ -1303,6 +1350,52 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     "dominant_archetype": getattr(ev.health, "dominant_archetype", None),
                     "archetype_distribution": ev.archetype_distribution or {},
                 }
+            
+            # Run Market Pulse Reasoner (Temporal based)
+            mp_reasoner = MarketPulseReasoner()
+            # We need TemporalEvidence objects. 
+            # We have _temporal_lookup which stores dicts. We need to reconstruct TemporalEvidence objects or pass dicts if modified.
+            # MarketPulseReasoner expects list[TemporalEvidence]. 
+            # Ideally, we should have kept the TemporalEvidence objects, but we serialized them.
+            # Let's quickly reconstruct minimal TemporalEvidence for the reasoner from _temporal_lookup dicts.
+            
+            # Group temporal evidence by category
+            vendors_by_cat: dict[str, list[Any]] = {}
+            for vname, td in _temporal_lookup.items():
+                 # We need category for this vendor. reasoning_lookup or vendor_scores has it.
+                 # reasoning_lookup doesn't have category. vendor_scores does.
+                 # Let's look it up from vendor_scores
+                 cat = next((vs.get("product_category") for vs in vendor_scores if vs["vendor_name"] == vname), None)
+                 if cat:
+                     vendors_by_cat.setdefault(cat, []).append(td)
+
+            for cat, tds in vendors_by_cat.items():
+                # Reconstruct light-weight TemporalEvidence list
+                # We only need velocities for MarketPulseReasoner currently
+                te_list = []
+                for td in tds:
+                    # Parse velocities back
+                    from atlas_brain.reasoning.temporal import TemporalEvidence, VendorVelocity
+                    velocities = []
+                    for k, v in td.items():
+                        if k.startswith("velocity_"):
+                            metric = k.replace("velocity_", "")
+                            velocities.append(VendorVelocity(
+                                vendor_name=td.get("vendor_name", ""),
+                                metric=metric,
+                                current_value=0, previous_value=0, # Not needed for Pulse
+                                velocity=float(v),
+                                days_between=1
+                            ))
+                    te_list.append(TemporalEvidence(
+                        vendor_name=td.get("vendor_name", ""),
+                        snapshot_days=td.get("snapshot_days", 0),
+                        velocities=velocities
+                    ))
+                
+                regime = mp_reasoner.analyze_category(cat, te_list)
+                market_regimes[cat] = regime
+
             if ecosystem_evidence:
                 logger.info("Ecosystem analysis: %d categories", len(ecosystem_evidence))
         except Exception:
@@ -1400,6 +1493,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                                 vendor_evidence=cat_evidence,
                                 ecosystem=eco,
                                 displacement_flows=cat_flows,
+                                market_regime=asdict(market_regimes.get(cat)) if market_regimes.get(cat) else None,
                             )
                             # Tag conclusion with category for persistence
                             r.conclusion["_category"] = cat
@@ -1916,11 +2010,36 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     except Exception:
         logger.warning("Failed to write core_run_complete marker")
 
+    notification_feed = _build_deterministic_vendor_feed(
+        vendor_scores,
+        pain_lookup=pain_lookup,
+        competitor_lookup=competitor_lookup,
+        feature_gap_lookup=feature_gap_lookup,
+        quote_lookup=quote_lookup,
+        budget_lookup=budget_lookup,
+        sentiment_lookup=sentiment_lookup,
+        buyer_auth_lookup=buyer_auth_lookup,
+        dm_lookup=dm_lookup,
+        price_lookup=price_lookup,
+        company_lookup=company_lookup,
+        keyword_spike_lookup=keyword_spike_lookup,
+        prior_reports=prior_reports,
+        reasoning_lookup=reasoning_lookup or None,
+        temporal_lookup=_temporal_lookup or None,
+    )
+    notification_payload = {"weekly_churn_feed": notification_feed}
+    notification_payload["executive_summary"] = _build_validated_executive_summary(
+        notification_payload,
+        data_context=data_context,
+        executive_sources=_executive_source_list(),
+        report_type="weekly_churn_feed",
+    )
+
     # Send ntfy notification
-    await _send_notification(task, parsed, high_intent)
+    await _send_notification(task, notification_payload, high_intent)
 
     # Emit reasoning events (no-op when reasoning disabled)
-    await _emit_reasoning_events(parsed, high_intent, vendor_scores)
+    await _emit_reasoning_events(notification_payload, high_intent, vendor_scores)
 
     response = {
         "_skip_synthesis": "B2B churn intelligence complete",
@@ -1944,8 +2063,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         span,
         status="completed",
         output_data=response,
-        input_tokens=llm_usage.get("input_tokens"),
-        output_tokens=llm_usage.get("output_tokens"),
         metadata={
             "reasoning": build_reasoning_trace_context(
                 decision={"vendors_analyzed": len(vendor_scores)},
@@ -1954,7 +2071,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     "upsert_failures": upsert_failures,
                     "competitive_flows": len(competitive_disp),
                 },
-                rationale=parsed.get("executive_summary"),
+                rationale=notification_payload.get("executive_summary"),
             ),
         },
     )

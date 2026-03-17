@@ -220,6 +220,56 @@ Rules:
 """
 
 
+async def persist_evidence_diff(
+    pool,
+    vendor_name: str,
+    diff: EvidenceDiff,
+    decision: str,
+    product_category: str = "",
+) -> None:
+    """Persist an evidence diff to reasoning_evidence_diffs table."""
+    try:
+        await pool.execute(
+            """
+            INSERT INTO reasoning_evidence_diffs (
+                vendor_name, product_category, computed_date,
+                confirmed_count, contradicted_count, novel_count, missing_count,
+                total_fields, diff_ratio, weighted_diff_ratio,
+                has_core_contradiction, decision,
+                contradicted_fields, novel_fields
+            ) VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb)
+            ON CONFLICT (vendor_name, computed_date) DO UPDATE SET
+                confirmed_count = EXCLUDED.confirmed_count,
+                contradicted_count = EXCLUDED.contradicted_count,
+                novel_count = EXCLUDED.novel_count,
+                missing_count = EXCLUDED.missing_count,
+                total_fields = EXCLUDED.total_fields,
+                diff_ratio = EXCLUDED.diff_ratio,
+                weighted_diff_ratio = EXCLUDED.weighted_diff_ratio,
+                has_core_contradiction = EXCLUDED.has_core_contradiction,
+                decision = EXCLUDED.decision,
+                contradicted_fields = EXCLUDED.contradicted_fields,
+                novel_fields = EXCLUDED.novel_fields,
+                created_at = NOW()
+            """,
+            vendor_name,
+            product_category or None,
+            len(diff.confirmed),
+            len(diff.contradicted),
+            len(diff.novel),
+            len(diff.missing),
+            diff.total,
+            round(diff.diff_ratio, 4),
+            round(diff.weighted_diff_ratio, 4),
+            diff.has_core_contradiction,
+            decision,
+            json.dumps([{"key": k, "old": o, "new": n} for k, o, n in diff.contradicted[:20]]),
+            json.dumps([{"key": k, "value": v} for k, v in diff.novel[:20]]),
+        )
+    except Exception:
+        logger.debug("Failed to persist evidence diff for %s", vendor_name, exc_info=True)
+
+
 async def reconstitute(
     vendor_name: str,
     old_conclusion: dict[str, Any],
