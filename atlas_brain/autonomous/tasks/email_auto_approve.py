@@ -33,7 +33,7 @@ async def run(task: ScheduledTask) -> dict:
     rows = await pool.fetch(
         """
         SELECT ed.id, ed.gmail_message_id, ed.created_at,
-               pe.action_plan, pe.intent
+               pe.action_plan, pe.intent, pe.intent_confidence
         FROM email_drafts ed
         JOIN processed_emails pe ON ed.gmail_message_id = pe.gmail_message_id
         WHERE ed.status = 'pending'
@@ -67,14 +67,13 @@ async def run(task: ScheduledTask) -> dict:
             skipped += 1
             continue
 
-        # Extract confidence from action_plan JSON
-        confidence = 0.0
-        if action_plan_raw:
+        # Use indexed column; fall back to action_plan JSON for legacy rows
+        confidence = float(row["intent_confidence"]) if row["intent_confidence"] is not None else 0.0
+        if confidence == 0.0 and action_plan_raw:
             try:
                 plan = json.loads(action_plan_raw) if isinstance(action_plan_raw, str) else action_plan_raw
                 if isinstance(plan, dict):
                     confidence = float(plan.get("confidence", 0.0))
-                # Legacy format: action_plan is a list (no confidence stored)
             except (json.JSONDecodeError, TypeError, ValueError):
                 pass
 

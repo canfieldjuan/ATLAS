@@ -31,7 +31,8 @@ async def _get_draftable_emails() -> list[dict[str, Any]]:
     rows = await pool.fetch(
         """
         SELECT pe.gmail_message_id, pe.sender, pe.subject, pe.category,
-               pe.priority, pe.replyable, pe.intent, pe.action_plan
+               pe.priority, pe.replyable, pe.intent, pe.action_plan,
+               pe.intent_confidence
         FROM processed_emails pe
         LEFT JOIN email_drafts ed ON pe.gmail_message_id = ed.gmail_message_id
             AND ed.status IN ('pending', 'approved', 'sent')
@@ -393,15 +394,7 @@ async def run(task: ScheduledTask) -> dict:
 
         # Extract intent + confidence for auto-approve notification
         email_intent = email_meta.get("intent")
-        email_confidence = 0.0
-        ap_raw = email_meta.get("action_plan")
-        if ap_raw:
-            try:
-                ap = json.loads(ap_raw) if isinstance(ap_raw, str) else ap_raw
-                if isinstance(ap, dict):
-                    email_confidence = float(ap.get("confidence", 0.0))
-            except (json.JSONDecodeError, TypeError, ValueError):
-                pass
+        email_confidence = float(email_meta["intent_confidence"]) if email_meta.get("intent_confidence") is not None else 0.0
 
         # Send notification
         await _send_draft_notification(

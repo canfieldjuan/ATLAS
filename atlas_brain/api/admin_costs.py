@@ -518,10 +518,10 @@ async def scraping_summary(days: int = Query(default=7, ge=1, le=30)):
         SELECT
             source,
             COUNT(*)                                                                           AS total_reviews,
-            COUNT(*) FILTER (WHERE (raw_metadata->>'source_weight')::numeric > 0.7)           AS high_signal_reviews,
+            COUNT(*) FILTER (WHERE COALESCE(source_weight, 0.7) > 0.7)           AS high_signal_reviews,
             COUNT(*) FILTER (WHERE enrichment_status = 'enriched')                            AS enriched_reviews,
             COUNT(*) FILTER (WHERE enrichment_status = 'failed')                              AS failed_enrichments,
-            ROUND(AVG((raw_metadata->>'source_weight')::numeric)::numeric, 3)                 AS avg_source_weight,
+            ROUND(AVG(COALESCE(source_weight, 0.7))::numeric, 3)                 AS avg_source_weight,
             COUNT(*) FILTER (WHERE author_churn_score >= 7)       AS high_value_authors
         FROM b2b_reviews
         WHERE imported_at >= $1
@@ -820,7 +820,7 @@ async def scraping_top_posts(
             reviewed_at,
             imported_at,
             enrichment_status,
-            (raw_metadata->>'source_weight')::numeric                        AS source_weight,
+            COALESCE(source_weight, 0.7)                        AS source_weight,
             raw_metadata->>'trending_score'                                  AS trending_score,
             author_churn_score                   AS author_churn_score,
             raw_metadata->>'subreddit'                                       AS subreddit,
@@ -832,8 +832,8 @@ async def scraping_top_posts(
             COALESCE(jsonb_array_length(raw_metadata->'comment_threads'), 0) AS comment_count
         FROM b2b_reviews
         WHERE source = $1
-          AND (raw_metadata->>'source_weight')::numeric >= $2
-        ORDER BY (raw_metadata->>'source_weight')::numeric DESC NULLS LAST,
+          AND COALESCE(source_weight, 0.7) >= $2
+        ORDER BY COALESCE(source_weight, 0.7) DESC NULLS LAST,
                  imported_at DESC
         LIMIT $3
         """,
@@ -1031,11 +1031,11 @@ async def reddit_by_subreddit(days: int = Query(default=30, ge=1, le=90)):
         SELECT
             raw_metadata->>'subreddit'                                                   AS subreddit,
             COUNT(*)                                                                      AS total_posts,
-            COUNT(*) FILTER (WHERE (raw_metadata->>'source_weight')::numeric > 0.7)      AS high_signal_posts,
+            COUNT(*) FILTER (WHERE COALESCE(source_weight, 0.7) > 0.7)      AS high_signal_posts,
             COUNT(*) FILTER (WHERE enrichment_status = 'enriched')                       AS enriched_posts,
             COUNT(*) FILTER (WHERE enrichment_status = 'no_signal')                      AS no_signal_posts,
             COUNT(*) FILTER (WHERE enrichment_status = 'failed')                         AS failed_posts,
-            ROUND(AVG((raw_metadata->>'source_weight')::numeric)::numeric, 3)            AS avg_source_weight,
+            ROUND(AVG(COALESCE(source_weight, 0.7))::numeric, 3)            AS avg_source_weight,
             ROUND(AVG(
                 CASE WHEN enrichment_status = 'enriched'
                      THEN (enrichment->>'urgency_score')::numeric END
@@ -1108,7 +1108,7 @@ async def reddit_signal_breakdown(days: int = Query(default=30, ge=1, le=90)):
             COALESCE(NULLIF(raw_metadata->>'post_flair', ''), '(no flair)')  AS flair,
             COUNT(*)                                                           AS count,
             COUNT(*) FILTER (WHERE enrichment_status = 'enriched')            AS enriched,
-            ROUND(AVG((raw_metadata->>'source_weight')::numeric)::numeric, 3) AS avg_weight
+            ROUND(AVG(COALESCE(source_weight, 0.7))::numeric, 3) AS avg_weight
         FROM b2b_reviews
         WHERE source = 'reddit'
           AND imported_at >= $1
@@ -1330,7 +1330,7 @@ async def reddit_per_vendor(
             COUNT(*) FILTER (WHERE enrichment_status = 'enriched')                      AS enriched,
             COUNT(*) FILTER (WHERE enrichment_status = 'no_signal')                     AS no_signal,
             COUNT(*) FILTER (WHERE enrichment_status = 'failed')                        AS failed,
-            ROUND(AVG((raw_metadata->>'source_weight')::numeric)::numeric, 3)           AS avg_source_weight,
+            ROUND(AVG(COALESCE(source_weight, 0.7))::numeric, 3)           AS avg_source_weight,
             ROUND(AVG(
                 CASE WHEN enrichment_status = 'enriched'
                      THEN (enrichment->>'urgency_score')::numeric END
