@@ -13,6 +13,7 @@ import insightlyVsSalesforce202603 from './insightly-vs-salesforce-2026-03'
 import mailchimpAlternatives202603 from './mailchimp-alternatives-2026-03'
 import mailchimpChurnReport202603 from './mailchimp-churn-report-2026-03'
 import b2bSoftwareLandscape202603 from './b2b-software-landscape-2026-03'
+import topComplaintEveryB2bSoftware202603 from './top-complaint-every-b2b-software-2026-03'
 type ChartValue = string | number | null | undefined
 type ChartDatum = Record<string, ChartValue>
 
@@ -95,4 +96,5 @@ export const POSTS: BlogPost[] = [
   mailchimpAlternatives202603,
   mailchimpChurnReport202603,
   b2bSoftwareLandscape202603,
+  topComplaintEveryB2bSoftware202603,
 ]
