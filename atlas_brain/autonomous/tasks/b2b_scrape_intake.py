@@ -319,12 +319,12 @@ INSERT INTO b2b_reviews (
     company_size_raw, reviewer_industry, reviewed_at,
     import_batch_id, raw_metadata, parser_version,
     content_type, thread_id, comment_depth,
-    relevance_score
+    relevance_score, author_churn_score
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
     $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
     $23, $24, $25,
-    $26
+    $26, $27
 )
 ON CONFLICT (dedup_key) DO NOTHING
 """
@@ -749,6 +749,8 @@ async def _insert_reviews(pool, reviews: list[dict], batch_id: str, parser_versi
             r.get("comment_depth") or 0,
             # Relevance score (migration 145) -- set by filter_reviews() in raw_metadata
             (r.get("raw_metadata") or {}).get("relevance_score"),
+            # Author churn score (migration 148) -- set by Reddit parser
+            (r.get("raw_metadata") or {}).get("author_churn_score"),
         ))
 
     if skipped_short:
