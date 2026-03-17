@@ -436,6 +436,8 @@ class StratifiedReasoner:
                 force_reason = True
 
         # 1. Try recall (unless forced)
+        from .differential import persist_evidence_diff as _persist_diff
+
         if not force_reason:
             cached = await self._recall(pattern_sig, ev_hash)
             if cached is not None:
@@ -451,13 +453,16 @@ class StratifiedReasoner:
                             force_reason = True
                         else:
                             await self._log_metacognition("recall", 0, conclusion_type)
+                            await _persist_diff(self._cache._pool, vendor_name, None, "recall")
                             return cached
                     except Exception:
                         logger.debug("Surprise check failed, using cached", exc_info=True)
                         await self._log_metacognition("recall", 0, conclusion_type)
+                        await _persist_diff(self._cache._pool, vendor_name, None, "recall")
                         return cached
                 else:
                     await self._log_metacognition("recall", 0, conclusion_type)
+                    await _persist_diff(self._cache._pool, vendor_name, None, "recall")
                     return cached
 
         # 2. Try reconstitute: cache hit on vendor but evidence changed
@@ -484,6 +489,7 @@ class StratifiedReasoner:
             tier_context=tier_context,
         )
         await self._log_metacognition("reason", result.tokens_used, result.conclusion.get("archetype", ""))
+        await _persist_diff(self._cache._pool, vendor_name, None, "full_reason")
         return result
 
     # ------------------------------------------------------------------
@@ -573,10 +579,7 @@ class StratifiedReasoner:
         # Persist the diff for evidence volatility tracking
         from .differential import persist_evidence_diff
         decision = "reconstitute" if diff.should_reconstitute else "full_reason"
-        await persist_evidence_diff(
-            self._cache._pool, vendor_name, diff, decision,
-            product_category=product_category,
-        )
+        await persist_evidence_diff(self._cache._pool, vendor_name, diff, decision)
 
         if not diff.should_reconstitute:
             return None  # delta too large, need full reason

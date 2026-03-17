@@ -5,7 +5,6 @@
 CREATE TABLE IF NOT EXISTS reasoning_evidence_diffs (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     vendor_name         TEXT NOT NULL,
-    product_category    TEXT,
     computed_date       DATE NOT NULL DEFAULT CURRENT_DATE,
     confirmed_count     INT NOT NULL DEFAULT 0,
     contradicted_count  INT NOT NULL DEFAULT 0,

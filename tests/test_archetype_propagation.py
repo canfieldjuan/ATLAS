@@ -1651,3 +1651,108 @@ class TestVendorReasoningCap:
         assert hasattr(cfg, "stratified_reasoning_vendor_cap")
         assert cfg.stratified_reasoning_vendor_cap > 0
         assert cfg.stratified_reasoning_vendor_cap <= 100
+
+
+# ---------------------------------------------------------------------------
+# Evidence diff persistence
+# ---------------------------------------------------------------------------
+
+
+class TestPersistEvidenceDiff:
+    """Verify persist_evidence_diff handles all code paths."""
+
+    @pytest.mark.asyncio
+    async def test_persist_with_real_diff(self):
+        from atlas_brain.reasoning.differential import (
+            EvidenceDiff, persist_evidence_diff,
+        )
+
+        pool = AsyncMock()
+        pool.execute.return_value = None
+
+        diff = EvidenceDiff(
+            confirmed=["urgency", "reviews"],
+            contradicted=[("churn_density", "30", "45")],
+            novel=[("new_metric", "100")],
+            missing=["old_field"],
+        )
+        await persist_evidence_diff(pool, "Zendesk", diff, "full_reason")
+
+        pool.execute.assert_called_once()
+        args = pool.execute.call_args[0]
+        assert "INSERT INTO reasoning_evidence_diffs" in args[0]
+        assert args[1] == "Zendesk"
+        assert args[2] == 2   # confirmed_count
+        assert args[3] == 1   # contradicted_count
+        assert args[4] == 1   # novel_count
+        assert args[5] == 1   # missing_count
+        assert args[6] == 5   # total_fields
+
+    @pytest.mark.asyncio
+    async def test_persist_with_none_diff(self):
+        """Recall and cold full-reason pass diff=None."""
+        from atlas_brain.reasoning.differential import persist_evidence_diff
+
+        pool = AsyncMock()
+        pool.execute.return_value = None
+
+        await persist_evidence_diff(pool, "Slack", None, "recall")
+
+        args = pool.execute.call_args[0]
+        assert args[1] == "Slack"
+        assert args[2] == 0   # confirmed_count
+        assert args[3] == 0   # contradicted_count
+        assert args[10] == "recall"  # decision
+
+    @pytest.mark.asyncio
+    async def test_persist_swallows_db_error(self):
+        """DB errors are logged but don't raise."""
+        from atlas_brain.reasoning.differential import persist_evidence_diff
+
+        pool = AsyncMock()
+        pool.execute.side_effect = Exception("connection lost")
+
+        # Should not raise
+        await persist_evidence_diff(pool, "Acme", None, "full_reason")
+
+
+class TestReconstructEvidenceVolatility:
+    """Verify reconstruct_evidence_volatility returns correct structure."""
+
+    @pytest.mark.asyncio
+    async def test_returns_vendor_keyed_dict(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_evidence_volatility,
+        )
+
+        pool = AsyncMock()
+        pool.fetch.return_value = [
+            {
+                "vendor_name": "Zendesk",
+                "avg_diff": 0.35,
+                "max_diff": 0.72,
+                "core_contradictions": 2,
+                "days_tracked": 5,
+                "latest_decision": "full_reason",
+                "latest_contradicted": [{"key": "churn_density"}],
+            },
+        ]
+        result = await reconstruct_evidence_volatility(pool, days=14)
+        assert "Zendesk" in result
+        entry = result["Zendesk"]
+        assert entry["avg_diff_ratio"] == 0.35
+        assert entry["max_diff_ratio"] == 0.72
+        assert entry["core_contradictions"] == 2
+        assert entry["days_tracked"] == 5
+        assert entry["latest_decision"] == "full_reason"
+
+    @pytest.mark.asyncio
+    async def test_empty_table_returns_empty(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_evidence_volatility,
+        )
+
+        pool = AsyncMock()
+        pool.fetch.return_value = []
+        result = await reconstruct_evidence_volatility(pool)
+        assert result == {}

@@ -253,6 +253,12 @@ async def _persist_vendor_snapshots(
         _rl = (reasoning_lookup or {}).get(vendor, {})
         _archetype = _rl.get("archetype")
         _arch_conf = _rl.get("confidence")
+        
+        # New metrics for deeper reasoning
+        _support_sent = round(float(row.get("support_sentiment") or 0.0), 2)
+        _legacy_supp = round(float(row.get("legacy_support_score") or 0.0), 2)
+        _new_feat = round(float(row.get("new_feature_velocity") or 0.0), 2)
+        _emp_growth = float(row.get("employee_growth_rate")) if row.get("employee_growth_rate") is not None else None
 
         try:
             await pool.execute(
@@ -263,9 +269,10 @@ async def _persist_vendor_snapshots(
                     top_pain, top_competitor, pain_count, competitor_count,
                     displacement_edge_count, high_intent_company_count,
                     pressure_score, dm_churn_rate, price_complaint_rate,
-                    archetype, archetype_confidence
+                    archetype, archetype_confidence,
+                    support_sentiment, legacy_support_score, new_feature_velocity, employee_growth_rate
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                          $15, $16, $17, $18, $19)
+                          $15, $16, $17, $18, $19, $20, $21, $22, $23)
                 ON CONFLICT (vendor_name, snapshot_date) DO UPDATE SET
                     total_reviews = EXCLUDED.total_reviews,
                     churn_intent = EXCLUDED.churn_intent,
@@ -283,7 +290,11 @@ async def _persist_vendor_snapshots(
                     dm_churn_rate = EXCLUDED.dm_churn_rate,
                     price_complaint_rate = EXCLUDED.price_complaint_rate,
                     archetype = EXCLUDED.archetype,
-                    archetype_confidence = EXCLUDED.archetype_confidence
+                    archetype_confidence = EXCLUDED.archetype_confidence,
+                    support_sentiment = EXCLUDED.support_sentiment,
+                    legacy_support_score = EXCLUDED.legacy_support_score,
+                    new_feature_velocity = EXCLUDED.new_feature_velocity,
+                    employee_growth_rate = EXCLUDED.employee_growth_rate
                 """,
                 vendor, today, total_reviews, churn_intent,
                 churn_density, avg_urgency,
@@ -295,6 +306,7 @@ async def _persist_vendor_snapshots(
                 hi_counts.get(vendor, 0),
                 _pressure, _dm_rate, _price_rate,
                 _archetype, _arch_conf,
+                _support_sent, _legacy_supp, _new_feat, _emp_growth,
             )
             persisted += 1
         except Exception:
@@ -1381,14 +1393,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         if k.startswith("velocity_"):
                             metric = k.replace("velocity_", "")
                             velocities.append(VendorVelocity(
-                                vendor_name=td.get("vendor_name", ""),
+                                vendor_name=vname,
                                 metric=metric,
                                 current_value=0, previous_value=0, # Not needed for Pulse
                                 velocity=float(v),
                                 days_between=1
                             ))
                     te_list.append(TemporalEvidence(
-                        vendor_name=td.get("vendor_name", ""),
+                        vendor_name=vname,
                         snapshot_days=td.get("snapshot_days", 0),
                         velocities=velocities
                     ))

@@ -223,21 +223,43 @@ Rules:
 async def persist_evidence_diff(
     pool,
     vendor_name: str,
-    diff: EvidenceDiff,
+    diff: EvidenceDiff | None,
     decision: str,
-    product_category: str = "",
 ) -> None:
-    """Persist an evidence diff to reasoning_evidence_diffs table."""
+    """Persist an evidence diff to reasoning_evidence_diffs table.
+
+    When *diff* is None (cold full-reason or pure recall with no prior
+    evidence), a zero-diff row is written so every vendor gets a row
+    every run. Contradicted/novel field lists are truncated to 20 items.
+    """
+    if diff is None:
+        confirmed = contradicted = novel = missing = total = 0
+        ratio = w_ratio = 0.0
+        core = False
+        c_fields = "[]"
+        n_fields = "[]"
+    else:
+        confirmed = len(diff.confirmed)
+        contradicted = len(diff.contradicted)
+        novel = len(diff.novel)
+        missing = len(diff.missing)
+        total = diff.total
+        ratio = round(diff.diff_ratio, 4)
+        w_ratio = round(diff.weighted_diff_ratio, 4)
+        core = diff.has_core_contradiction
+        c_fields = json.dumps([{"key": k, "old": o, "new": n} for k, o, n in diff.contradicted[:20]])
+        n_fields = json.dumps([{"key": k, "value": v} for k, v in diff.novel[:20]])
+
     try:
         await pool.execute(
             """
             INSERT INTO reasoning_evidence_diffs (
-                vendor_name, product_category, computed_date,
+                vendor_name, computed_date,
                 confirmed_count, contradicted_count, novel_count, missing_count,
                 total_fields, diff_ratio, weighted_diff_ratio,
                 has_core_contradiction, decision,
                 contradicted_fields, novel_fields
-            ) VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb)
+            ) VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb)
             ON CONFLICT (vendor_name, computed_date) DO UPDATE SET
                 confirmed_count = EXCLUDED.confirmed_count,
                 contradicted_count = EXCLUDED.contradicted_count,
@@ -253,18 +275,9 @@ async def persist_evidence_diff(
                 created_at = NOW()
             """,
             vendor_name,
-            product_category or None,
-            len(diff.confirmed),
-            len(diff.contradicted),
-            len(diff.novel),
-            len(diff.missing),
-            diff.total,
-            round(diff.diff_ratio, 4),
-            round(diff.weighted_diff_ratio, 4),
-            diff.has_core_contradiction,
-            decision,
-            json.dumps([{"key": k, "old": o, "new": n} for k, o, n in diff.contradicted[:20]]),
-            json.dumps([{"key": k, "value": v} for k, v in diff.novel[:20]]),
+            confirmed, contradicted, novel, missing, total,
+            ratio, w_ratio, core, decision,
+            c_fields, n_fields,
         )
     except Exception:
         logger.debug("Failed to persist evidence diff for %s", vendor_name, exc_info=True)
