@@ -15,6 +15,7 @@ import mailchimpChurnReport202603 from './mailchimp-churn-report-2026-03'
 import b2bSoftwareLandscape202603 from './b2b-software-landscape-2026-03'
 import topComplaintEveryB2bSoftware202603 from './top-complaint-every-b2b-software-2026-03'
 import bestB2bSoftwareFor51200202603 from './best-b2b-software-for-51-200-2026-03'
+import azureVsNotion202603 from './azure-vs-notion-2026-03'
 type ChartValue = string | number | null | undefined
 type ChartDatum = Record<string, ChartValue>
 
@@ -99,4 +100,5 @@ export const POSTS: BlogPost[] = [
   b2bSoftwareLandscape202603,
   topComplaintEveryB2bSoftware202603,
   bestB2bSoftwareFor51200202603,
+  azureVsNotion202603,
 ]
