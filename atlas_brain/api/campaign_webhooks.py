@@ -135,9 +135,25 @@ async def campaign_email_webhook(request: Request):
     now = datetime.now(timezone.utc)
 
     if event_type == "email.opened":
+        # Compute hours_to_first_open on the FIRST open event only
+        campaign_detail = await pool.fetchrow(
+            "SELECT sent_at, opened_at FROM b2b_campaigns WHERE id = $1",
+            campaign_id,
+        )
+        hours_to_open = None
+        is_first_open = campaign_detail and campaign_detail["opened_at"] is None
+        if is_first_open and campaign_detail["sent_at"]:
+            delta = (now - campaign_detail["sent_at"]).total_seconds() / 3600
+            hours_to_open = round(delta, 2)
+
         await pool.execute(
-            "UPDATE b2b_campaigns SET opened_at = COALESCE(opened_at, $1) WHERE id = $2",
-            now, campaign_id,
+            """
+            UPDATE b2b_campaigns
+            SET opened_at = COALESCE(opened_at, $1),
+                hours_to_first_open = COALESCE(hours_to_first_open, $2)
+            WHERE id = $3
+            """,
+            now, hours_to_open, campaign_id,
         )
         if sequence_id:
             await pool.execute(
@@ -158,9 +174,25 @@ async def campaign_email_webhook(request: Request):
         )
 
     elif event_type == "email.clicked":
+        # Compute hours_to_first_click on the FIRST click event only
+        campaign_detail = await pool.fetchrow(
+            "SELECT sent_at, clicked_at FROM b2b_campaigns WHERE id = $1",
+            campaign_id,
+        )
+        hours_to_click = None
+        is_first_click = campaign_detail and campaign_detail["clicked_at"] is None
+        if is_first_click and campaign_detail["sent_at"]:
+            delta = (now - campaign_detail["sent_at"]).total_seconds() / 3600
+            hours_to_click = round(delta, 2)
+
         await pool.execute(
-            "UPDATE b2b_campaigns SET clicked_at = COALESCE(clicked_at, $1) WHERE id = $2",
-            now, campaign_id,
+            """
+            UPDATE b2b_campaigns
+            SET clicked_at = COALESCE(clicked_at, $1),
+                hours_to_first_click = COALESCE(hours_to_first_click, $2)
+            WHERE id = $3
+            """,
+            now, hours_to_click, campaign_id,
         )
         if sequence_id:
             await pool.execute(

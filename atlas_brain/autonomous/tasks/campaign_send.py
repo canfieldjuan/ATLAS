@@ -256,6 +256,17 @@ async def run(task: ScheduledTask) -> dict:
                 now, esp_message_id, campaign_id,
             )
 
+            # Contact fatigue: increment total sends for this recipient
+            if sequence_id:
+                await pool.execute(
+                    """
+                    UPDATE campaign_sequences
+                    SET contact_send_count = contact_send_count + 1
+                    WHERE id = $1
+                    """,
+                    sequence_id,
+                )
+
             # Update sequence: last_sent_at, last_campaign_id, next_step_after
             if sequence_id:
                 step = c.get("step_number", 1)
