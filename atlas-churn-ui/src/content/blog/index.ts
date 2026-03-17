@@ -17,6 +17,7 @@ import topComplaintEveryB2bSoftware202603 from './top-complaint-every-b2b-softwa
 import bestB2bSoftwareFor51200202603 from './best-b2b-software-for-51-200-2026-03'
 import azureVsNotion202603 from './azure-vs-notion-2026-03'
 import azureVsShopify202603 from './azure-vs-shopify-2026-03'
+import azureVsCrowdstrike202603 from './azure-vs-crowdstrike-2026-03'
 type ChartValue = string | number | null | undefined
 type ChartDatum = Record<string, ChartValue>
 
@@ -103,4 +104,5 @@ export const POSTS: BlogPost[] = [
   bestB2bSoftwareFor51200202603,
   azureVsNotion202603,
   azureVsShopify202603,
+  azureVsCrowdstrike202603,
 ]
