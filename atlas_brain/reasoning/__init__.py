@@ -112,7 +112,7 @@ async def init_stratified_reasoner(db_pool) -> None:
 
 
 async def close_stratified_reasoner() -> None:
-    """Flush metacognition and shutdown the episodic store connection."""
+    """Flush metacognition, release LLM slots, and shutdown connections."""
     global _stratified_reasoner
     if _stratified_reasoner is not None:
         if _stratified_reasoner._meta:
@@ -128,3 +128,13 @@ async def close_stratified_reasoner() -> None:
                 pass
         await _stratified_reasoner._episodic.close()
         _stratified_reasoner = None
+
+    # Release reasoning LLM slots (heavy + light) without touching the
+    # primary registry slot used by voice/chat/agents.
+    try:
+        from ..services import llm_registry
+        from .llm_utils import _SLOT_HEAVY, _SLOT_LIGHT
+        llm_registry.release_slot(_SLOT_HEAVY)
+        llm_registry.release_slot(_SLOT_LIGHT)
+    except Exception:
+        pass

@@ -2372,6 +2372,19 @@ class B2BChurnConfig(BaseSettings):
     battle_card_llm_attempts: int = Field(default=2, ge=1, le=5, description="Max generation attempts per battle card, including repair retries")
     battle_card_llm_retry_delay_seconds: float = Field(default=1.0, ge=0.0, le=30.0, description="Delay between battle card LLM attempts")
     battle_card_llm_feedback_limit: int = Field(default=5, ge=1, le=10, description="Max validator issues to feed back into battle card repair attempts")
+    battle_card_llm_backend: str = Field(
+        default="auto",
+        description=(
+            "LLM backend for battle-card sales copy. "
+            "'auto' = default synthesis routing, "
+            "'anthropic' = Anthropic Sonnet only, "
+            "'openrouter' = OpenRouter only."
+        ),
+    )
+    battle_card_openrouter_model: str = Field(
+        default="",
+        description="Optional OpenRouter model override for battle-card sales copy (empty = use global reasoning model)",
+    )
     battle_card_llm_max_tokens: int = Field(default=16384, ge=256, le=32768, description="Max output tokens for battle card sales copy (reasoning models need extra budget)")
     battle_card_llm_temperature: float = Field(default=0.5, ge=0.0, le=1.5, description="Sampling temperature for battle card sales copy generation")
     battle_card_llm_timeout_seconds: float = Field(default=90.0, ge=5.0, le=300.0, description="Timeout for a single battle card LLM generation attempt")

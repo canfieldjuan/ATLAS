@@ -5,9 +5,9 @@ Pass 2 (CHALLENGE): Deterministic contradiction detection + LLM self-critique.
 Pass 3 (GROUND): Forces every key_signal to cite exact evidence field:value.
 
 Skipping rules:
-- Pass 2 skipped if Pass 1 confidence <= challenge_confidence_floor
-- Pass 2 skipped if no contradictions found
-- Pass 3 skipped if Pass 2 didn't materially change the conclusion
+- Pass 2 skipped if no contradictions are found
+- Pass 2 skipped when low-confidence conclusions are also low-impact and thinly evidenced
+- Pass 3 can run even when challenge is skipped when lightweight grounding is enabled
 """
 
 from __future__ import annotations
@@ -166,6 +166,57 @@ def _find_contradicting_evidence(
     return contradictions[:3]
 
 
+def _safe_float(value: Any) -> float | None:
+    """Return float(value) when possible."""
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _should_attempt_challenge(
+    *,
+    conclusion: dict[str, Any],
+    evidence: dict[str, Any],
+    contradictions: list[str],
+    confidence_floor: float,
+    min_reviews: int,
+    mixed_polarity_min_share: float,
+    high_impact_churn_density: float,
+    high_impact_avg_urgency: float,
+    high_impact_displacement_mentions: int,
+) -> tuple[bool, str]:
+    """Evidence-aware gate for the challenge pass."""
+    if not contradictions:
+        return False, "no contradictions found"
+
+    total_reviews = _safe_float(evidence.get("total_reviews"))
+    churn_density = _safe_float(evidence.get("churn_density")) or 0.0
+    avg_urgency = _safe_float(evidence.get("avg_urgency")) or 0.0
+    displacement = _safe_float(evidence.get("displacement_mention_count")) or 0.0
+    recommend_yes = _safe_float(evidence.get("recommend_yes")) or 0.0
+    recommend_no = _safe_float(evidence.get("recommend_no")) or 0.0
+    recommend_total = recommend_yes + recommend_no
+    minority_share = (min(recommend_yes, recommend_no) / recommend_total) if recommend_total > 0 else 0.0
+    enough_evidence = total_reviews is None or total_reviews >= min_reviews
+    mixed_polarity = recommend_total > 0 and minority_share >= mixed_polarity_min_share
+    high_impact = (
+        churn_density >= high_impact_churn_density
+        or avg_urgency >= high_impact_avg_urgency
+        or displacement >= high_impact_displacement_mentions
+    )
+    confidence = _safe_float(conclusion.get("confidence")) or 0.0
+    if confidence > confidence_floor:
+        return True, "confidence above floor"
+    if enough_evidence and mixed_polarity:
+        return True, "low-confidence but mixed polarity"
+    if enough_evidence and high_impact:
+        return True, "low-confidence but high impact"
+    return False, "low-confidence and not high-impact enough to challenge"
+
+
 async def multi_pass_reason(
     *,
     llm: Any,
@@ -176,18 +227,29 @@ async def multi_pass_reason(
     temperature: float,
     enabled: bool = True,
     challenge_confidence_floor: float = 0.3,
+    challenge_min_reviews: int = 8,
+    challenge_mixed_polarity_min_share: float = 0.2,
+    challenge_high_impact_churn_density: float = 20.0,
+    challenge_high_impact_avg_urgency: float = 6.0,
+    challenge_high_impact_displacement_mentions: int = 5,
     ground_change_threshold: float = 0.05,
+    ground_always: bool = False,
     ground_only: bool = False,
     span_prefix: str = "reasoning.stratified",
     trace_metadata: dict[str, Any] | None = None,
     normalize_fn: Callable[[dict], dict] | None = None,
     contradiction_finder: Callable[[dict, dict], list[str]] | None = None,
+    llm_light: Any = None,
 ) -> MultiPassResult:
     """Run multi-pass reasoning: classify -> challenge -> ground.
 
     If ``enabled`` is False, runs a single classify pass (backwards compatible).
     If ``ground_only`` is True, skips challenge and runs classify -> ground
     (used by reconstitute to add evidence grounding without self-critique).
+
+    ``llm`` is the Tier 1 (heavy) model used for the classify pass.
+    ``llm_light``, when provided, is the Tier 2 (light) model used for
+    challenge and ground passes.  Falls back to ``llm`` when None.
     """
     from ..pipelines.llm import parse_json_response, trace_llm_call
     from ..services.protocols import Message
@@ -195,6 +257,7 @@ async def multi_pass_reason(
     trace_metadata = dict(trace_metadata or {})
     result = MultiPassResult(final_conclusion={})
     finder = contradiction_finder or _find_contradicting_evidence
+    _llm_light = llm_light or llm  # fallback to heavy when no light model
 
     def _normalize(c: dict) -> dict:
         return normalize_fn(c) if normalize_fn else c
@@ -210,8 +273,12 @@ async def multi_pass_reason(
         *,
         mt: int | None = None,
         pass_changed: bool | None = None,
+        use_llm: Any = None,
     ) -> tuple[dict, int, float]:
         """Single LLM call with tracing. Returns (conclusion, tokens, duration_ms).
+
+        ``use_llm`` overrides which LLM instance to call.  Defaults to the
+        heavy model (``llm``).
 
         ``pass_changed`` is written into trace metadata.  For Pass 1 it is
         always None (not applicable).  For Pass 2/3, the caller should call
@@ -219,11 +286,13 @@ async def multi_pass_reason(
         record the value -- but we also accept it here for the common case
         where we already know.
         """
+        _active_llm = use_llm or llm
         pass_meta = {
             **trace_metadata,
             "pass_number": pass_num,
             "pass_type": pass_type,
             "multi_pass": True,
+            "model_tier": "light" if _active_llm is _llm_light and _llm_light is not llm else "heavy",
         }
         if pass_changed is not None:
             pass_meta["pass_changed"] = pass_changed
@@ -232,7 +301,7 @@ async def multi_pass_reason(
         t0 = time.monotonic()
         try:
             llm_result = await asyncio.to_thread(
-                llm.chat,
+                _active_llm.chat,
                 messages=messages,
                 max_tokens=mt or max_tokens,
                 temperature=temperature,
@@ -255,6 +324,7 @@ async def multi_pass_reason(
                 "pass_meta": pass_meta,
                 "messages": messages,
                 "text": text,
+                "llm_ref": _active_llm,
             }
 
             text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
@@ -265,8 +335,8 @@ async def multi_pass_reason(
             duration_ms = (time.monotonic() - t0) * 1000
             trace_llm_call(
                 span_name=span,
-                model=getattr(llm, "model", getattr(llm, "model_id", "")),
-                provider=getattr(llm, "name", ""),
+                model=getattr(_active_llm, "model", getattr(_active_llm, "model_id", "")),
+                provider=getattr(_active_llm, "name", ""),
                 duration_ms=duration_ms,
                 status="failed",
                 metadata={**pass_meta, "pass_changed": False},
@@ -286,12 +356,13 @@ async def multi_pass_reason(
         meta = pt["pass_meta"]
         if changed is not None:
             meta["pass_changed"] = changed
+        _traced_llm = pt.get("llm_ref") or llm
         trace_llm_call(
             span_name=pt["span"],
             input_tokens=pt["usage"].get("input_tokens", 0),
             output_tokens=pt["usage"].get("output_tokens", 0),
-            model=getattr(llm, "model", getattr(llm, "model_id", "")),
-            provider=getattr(llm, "name", ""),
+            model=getattr(_traced_llm, "model", getattr(_traced_llm, "model_id", "")),
+            provider=getattr(_traced_llm, "name", ""),
             duration_ms=pt["duration_ms"],
             metadata=meta,
             input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in pt["messages"]]},
@@ -338,6 +409,7 @@ async def multi_pass_reason(
         return await _run_ground_pass(
             result, p1_conclusion, raw_evidence, system_prompt,
             _call_llm, _flush_trace, _normalize, max_tokens, 2,
+            use_llm=_llm_light,
         )
 
     # ------------------------------------------------------------------
@@ -345,68 +417,66 @@ async def multi_pass_reason(
     # ------------------------------------------------------------------
     p1_confidence = p1_conclusion.get("confidence", 0.5)
     challenge_attempted = False
-    if p1_confidence <= challenge_confidence_floor:
-        logger.info(
-            "Skipping challenge pass: confidence %.2f <= floor %.2f",
-            p1_confidence, challenge_confidence_floor,
-        )
+    contradictions = finder(p1_conclusion, raw_evidence)
+    should_challenge, challenge_reason = _should_attempt_challenge(
+        conclusion=p1_conclusion,
+        evidence=raw_evidence,
+        contradictions=contradictions,
+        confidence_floor=challenge_confidence_floor,
+        min_reviews=challenge_min_reviews,
+        mixed_polarity_min_share=challenge_mixed_polarity_min_share,
+        high_impact_churn_density=challenge_high_impact_churn_density,
+        high_impact_avg_urgency=challenge_high_impact_avg_urgency,
+        high_impact_displacement_mentions=challenge_high_impact_displacement_mentions,
+    )
+    if not should_challenge:
+        logger.info("Skipping challenge pass: %s", challenge_reason)
     else:
-        contradictions = finder(p1_conclusion, raw_evidence)
-        if not contradictions:
-            logger.info("Skipping challenge pass: no contradictions found")
-        else:
-            challenge_attempted = True
-            challenge_prompt = _CHALLENGE_PROMPT.format(
-                conclusion_json=json.dumps(p1_conclusion, indent=2, default=str),
-                contradictions="\n".join(f"- {c}" for c in contradictions),
-            )
-            p2_messages = [
-                Message(role="system", content=system_prompt),
-                Message(role="user", content=payload_str),
-                Message(role="assistant", content=json.dumps(p1_conclusion, default=str)),
-                Message(role="user", content=challenge_prompt),
-            ]
-            p2_conclusion, p2_tokens, p2_duration = await _call_llm(p2_messages, 2, "challenge", mt=min(max_tokens, 2048))
-            p2_conclusion = _normalize(p2_conclusion)
+        challenge_attempted = True
+        challenge_prompt = _CHALLENGE_PROMPT.format(
+            conclusion_json=json.dumps(p1_conclusion, indent=2, default=str),
+            contradictions="\n".join(f"- {c}" for c in contradictions),
+        )
+        p2_messages = [
+            Message(role="system", content=system_prompt),
+            Message(role="user", content=payload_str),
+            Message(role="assistant", content=json.dumps(p1_conclusion, default=str)),
+            Message(role="user", content=challenge_prompt),
+        ]
+        p2_conclusion, p2_tokens, p2_duration = await _call_llm(p2_messages, 2, "challenge", mt=min(max_tokens, 2048), use_llm=_llm_light)
+        p2_conclusion = _normalize(p2_conclusion)
 
-            p2_archetype_changed = p2_conclusion.get("archetype") != p1_conclusion.get("archetype")
-            p2_confidence_delta = abs(
-                p2_conclusion.get("confidence", 0.5) - p1_conclusion.get("confidence", 0.5)
-            )
-            p2_changed = p2_archetype_changed or p2_confidence_delta > ground_change_threshold
-            _flush_trace(changed=p2_changed)
+        p2_archetype_changed = p2_conclusion.get("archetype") != p1_conclusion.get("archetype")
+        p2_confidence_delta = abs(
+            p2_conclusion.get("confidence", 0.5) - p1_conclusion.get("confidence", 0.5)
+        )
+        p2_changed = p2_archetype_changed or p2_confidence_delta > ground_change_threshold
+        _flush_trace(changed=p2_changed)
 
-            result.passes.append(PassResult(
-                pass_number=2, pass_type="challenge",
-                conclusion=p2_conclusion, tokens_used=p2_tokens,
-                duration_ms=p2_duration, changed=p2_changed,
-            ))
-            result.total_tokens += p2_tokens
-            result.total_duration_ms += p2_duration
-            result.passes_executed = 2
-            result.final_conclusion = p2_conclusion
+        result.passes.append(PassResult(
+            pass_number=2, pass_type="challenge",
+            conclusion=p2_conclusion, tokens_used=p2_tokens,
+            duration_ms=p2_duration, changed=p2_changed,
+        ))
+        result.total_tokens += p2_tokens
+        result.total_duration_ms += p2_duration
+        result.passes_executed = 2
+        result.final_conclusion = p2_conclusion
 
-            logger.info(
-                "Challenge pass: archetype %s->%s, confidence %.2f->%.2f, changed=%s",
-                p1_conclusion.get("archetype"), p2_conclusion.get("archetype"),
-                p1_conclusion.get("confidence", 0), p2_conclusion.get("confidence", 0),
-                p2_changed,
-            )
+        logger.info(
+            "Challenge pass: archetype %s->%s, confidence %.2f->%.2f, changed=%s (%s)",
+            p1_conclusion.get("archetype"), p2_conclusion.get("archetype"),
+            p1_conclusion.get("confidence", 0), p2_conclusion.get("confidence", 0),
+            p2_changed, challenge_reason,
+        )
 
     # ------------------------------------------------------------------
-    # Pass 3: GROUND -- runs only when the challenge pass materially
-    # changed the conclusion. Also runs as standalone when ground_only=True
-    # (handled above).
+    # Pass 3: GROUND -- runs after any attempted challenge pass so the
+    # final answer cites concrete evidence even when the challenge defends
+    # the original conclusion. It can also run as a cheap final check when
+    # challenge is skipped and ground_always=True.
     # ------------------------------------------------------------------
-    if not challenge_attempted or not result.passes[-1].changed:
-        return result
-
-    # Respect ground_change_threshold: if challenge didn't change enough,
-    # skip grounding to save tokens/time (unless forced).
-    # Note: result.passes[-1] is the challenge pass here.
-    last_pass = result.passes[-1]
-    if not last_pass.changed:
-        logger.info("Skipping ground pass: challenge did not materially change conclusion")
+    if not challenge_attempted and not ground_always:
         return result
 
     pre_ground = result.final_conclusion
@@ -414,6 +484,7 @@ async def multi_pass_reason(
     return await _run_ground_pass(
         result, pre_ground, raw_evidence, system_prompt,
         _call_llm, _flush_trace, _normalize, max_tokens, pass_num,
+        use_llm=_llm_light,
     )
 
 
@@ -427,6 +498,8 @@ async def _run_ground_pass(
     _normalize: Any,
     max_tokens: int,
     pass_num: int,
+    *,
+    use_llm: Any = None,
 ) -> MultiPassResult:
     """Execute the grounding pass and update the result."""
     from ..services.protocols import Message
@@ -443,7 +516,7 @@ async def _run_ground_pass(
         Message(role="system", content=system_prompt),
         Message(role="user", content=ground_prompt),
     ]
-    pg_conclusion, pg_tokens, pg_duration = await _call_llm(pg_messages, pass_num, "ground", mt=min(max_tokens, 2048))
+    pg_conclusion, pg_tokens, pg_duration = await _call_llm(pg_messages, pass_num, "ground", mt=min(max_tokens, 2048), use_llm=use_llm)
     pg_conclusion = _normalize(pg_conclusion)
 
     # Safety: if grounding removed all signals, force low confidence

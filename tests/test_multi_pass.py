@@ -1,5 +1,6 @@
 """Tests for the multi-pass reasoning engine."""
 
+import asyncio
 import json
 import pytest
 
@@ -9,6 +10,19 @@ from atlas_brain.reasoning.multi_pass import (
     _find_contradicting_evidence,
     multi_pass_reason,
 )
+
+
+@pytest.fixture(autouse=True)
+def _stub_trace_llm_call(monkeypatch):
+    monkeypatch.setattr("atlas_brain.pipelines.llm.trace_llm_call", lambda *args, **kwargs: None)
+
+
+@pytest.fixture(autouse=True)
+def _stub_to_thread(monkeypatch):
+    async def _direct_to_thread(func, /, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("atlas_brain.reasoning.multi_pass.asyncio.to_thread", _direct_to_thread)
 
 
 # ---------------------------------------------------------------------------
@@ -171,9 +185,10 @@ async def test_single_pass_when_disabled():
 
 @pytest.mark.asyncio
 async def test_skip_challenge_low_confidence():
-    """Pass 2 skipped when Pass 1 confidence <= floor."""
-    conclusion = _make_conclusion(confidence=0.25)
-    llm = MockLLM([conclusion])
+    """Low-confidence cases skip challenge but still get lightweight grounding."""
+    p1 = _make_conclusion(confidence=0.25)
+    p_ground = _make_conclusion(confidence=0.3)
+    llm = MockLLM([p1, p_ground])
     result = await multi_pass_reason(
         llm=llm,
         system_prompt="test",
@@ -182,16 +197,19 @@ async def test_skip_challenge_low_confidence():
         max_tokens=1024,
         temperature=0.3,
         challenge_confidence_floor=0.3,
+        ground_always=True,
     )
-    assert result.passes_executed == 1
-    assert llm.call_count == 1
+    assert result.passes_executed == 2
+    assert result.passes[1].pass_type == "ground"
+    assert llm.call_count == 2
 
 
 @pytest.mark.asyncio
 async def test_skip_challenge_no_contradictions():
-    """Pass 2 skipped when no contradictions found."""
+    """No contradictions skips challenge but still runs grounding by default."""
     conclusion = _make_conclusion(archetype="pricing_shock", confidence=0.75)
-    llm = MockLLM([conclusion])
+    p_ground = _make_conclusion(archetype="pricing_shock", confidence=0.75)
+    llm = MockLLM([conclusion, p_ground])
     result = await multi_pass_reason(
         llm=llm,
         system_prompt="test",
@@ -204,9 +222,11 @@ async def test_skip_challenge_no_contradictions():
         json_schema={},
         max_tokens=1024,
         temperature=0.3,
+        ground_always=True,
     )
-    assert result.passes_executed == 1
-    assert llm.call_count == 1
+    assert result.passes_executed == 2
+    assert result.passes[1].pass_type == "ground"
+    assert llm.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -234,11 +254,11 @@ async def test_challenge_fires_on_contradiction():
 
 
 @pytest.mark.asyncio
-async def test_ground_fires_when_challenge_changes():
-    """Pass 3 fires when challenge changed the archetype."""
-    p1 = _make_conclusion(archetype="pricing_shock", confidence=0.75)
-    p2 = _make_conclusion(archetype="leadership_redesign", confidence=0.70)
-    p3 = _make_conclusion(archetype="leadership_redesign", confidence=0.72)
+async def test_challenge_fires_for_low_confidence_high_impact_case():
+    """Low-confidence but high-impact cases still get challenged."""
+    p1 = _make_conclusion(archetype="pricing_shock", confidence=0.25)
+    p2 = _make_conclusion(archetype="leadership_redesign", confidence=0.42)
+    p3 = _make_conclusion(archetype="leadership_redesign", confidence=0.43)
     llm = MockLLM([p1, p2, p3])
     result = await multi_pass_reason(
         llm=llm,
@@ -246,42 +266,95 @@ async def test_ground_fires_when_challenge_changes():
         evidence_payload={
             "evidence": {
                 "pain_categories": [{"category": "ux", "count": 15}],
-                "total_reviews": 50,
+                "total_reviews": 40,
+                "churn_density": 28.0,
             }
         },
         json_schema={},
         max_tokens=1024,
         temperature=0.3,
+        challenge_confidence_floor=0.3,
+        ground_always=True,
     )
+    assert result.passes_executed == 3
+    assert result.passes[1].pass_type == "challenge"
+    assert llm.call_count == 3
+
+
+def test_ground_fires_when_challenge_changes():
+    """Pass 3 fires when challenge changed the archetype."""
+    p1 = _make_conclusion(archetype="pricing_shock", confidence=0.75)
+    p2 = _make_conclusion(archetype="leadership_redesign", confidence=0.70)
+    p3 = _make_conclusion(archetype="leadership_redesign", confidence=0.72)
+    llm = MockLLM([p1, p2, p3])
+    async def _run():
+        return await multi_pass_reason(
+            llm=llm,
+            system_prompt="test",
+            evidence_payload={
+                "evidence": {
+                    "pain_categories": [{"category": "ux", "count": 15}],
+                    "total_reviews": 50,
+                }
+            },
+            json_schema={},
+            max_tokens=1024,
+            temperature=0.3,
+        )
+    result = asyncio.run(_run())
     assert result.passes_executed == 3
     assert result.passes[2].pass_type == "ground"
     assert result.final_conclusion["archetype"] == "leadership_redesign"
 
 
-@pytest.mark.asyncio
-async def test_ground_skips_when_challenge_unchanged():
-    """Ground is skipped when challenge does not materially change the result."""
+def test_ground_runs_when_challenge_unchanged():
+    """Ground still runs after a challenge pass even if the conclusion holds."""
     p1 = _make_conclusion(archetype="pricing_shock", confidence=0.75)
     # Challenge keeps same archetype and confidence within threshold
     p2 = _make_conclusion(archetype="pricing_shock", confidence=0.74)
-    llm = MockLLM([p1, p2])
-    result = await multi_pass_reason(
-        llm=llm,
-        system_prompt="test",
-        evidence_payload={
-            "evidence": {
-                "pain_categories": [{"category": "ux", "count": 15}],
-                "total_reviews": 50,
-            }
-        },
-        json_schema={},
-        max_tokens=1024,
-        temperature=0.3,
-        ground_change_threshold=0.05,
-    )
-    assert result.passes_executed == 2
-    assert all(p.pass_type != "ground" for p in result.passes)
-    assert llm.call_count == 2
+    p3 = _make_conclusion(archetype="pricing_shock", confidence=0.74)
+    llm = MockLLM([p1, p2, p3])
+    async def _run():
+        return await multi_pass_reason(
+            llm=llm,
+            system_prompt="test",
+            evidence_payload={
+                "evidence": {
+                    "pain_categories": [{"category": "ux", "count": 15}],
+                    "total_reviews": 50,
+                }
+            },
+            json_schema={},
+            max_tokens=1024,
+            temperature=0.3,
+            ground_change_threshold=0.05,
+        )
+    result = asyncio.run(_run())
+    assert result.passes_executed == 3
+    assert result.passes[2].pass_type == "ground"
+    assert llm.call_count == 3
+
+
+def test_ground_can_be_disabled_when_challenge_skips():
+    """ground_always=False preserves the old skip behavior when challenge does not run."""
+    p1 = _make_conclusion(confidence=0.25)
+    llm = MockLLM([p1])
+
+    async def _run():
+        return await multi_pass_reason(
+            llm=llm,
+            system_prompt="test",
+            evidence_payload={"evidence": {"pain_categories": [{"category": "ux", "count": 15}]}},
+            json_schema={},
+            max_tokens=1024,
+            temperature=0.3,
+            challenge_confidence_floor=0.3,
+            ground_always=False,
+        )
+
+    result = asyncio.run(_run())
+    assert result.passes_executed == 1
+    assert llm.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -331,26 +404,27 @@ async def test_normalize_fn_applied():
     assert "pricing_shock" in calls
 
 
-@pytest.mark.asyncio
-async def test_ground_only_skips_challenge():
+def test_ground_only_skips_challenge():
     """ground_only=True runs classify -> ground, no challenge."""
     p1 = _make_conclusion(archetype="pricing_shock", confidence=0.75)
     p_ground = _make_conclusion(archetype="pricing_shock", confidence=0.72)
     llm = MockLLM([p1, p_ground])
-    result = await multi_pass_reason(
-        llm=llm,
-        system_prompt="test",
-        evidence_payload={
-            "evidence": {
-                "pain_categories": [{"category": "ux", "count": 15}],
-                "total_reviews": 50,
-            }
-        },
-        json_schema={},
-        max_tokens=1024,
-        temperature=0.3,
-        ground_only=True,
-    )
+    async def _run():
+        return await multi_pass_reason(
+            llm=llm,
+            system_prompt="test",
+            evidence_payload={
+                "evidence": {
+                    "pain_categories": [{"category": "ux", "count": 15}],
+                    "total_reviews": 50,
+                }
+            },
+            json_schema={},
+            max_tokens=1024,
+            temperature=0.3,
+            ground_only=True,
+        )
+    result = asyncio.run(_run())
     assert result.passes_executed == 2
     assert result.passes[0].pass_type == "classify"
     assert result.passes[1].pass_type == "ground"
@@ -359,20 +433,21 @@ async def test_ground_only_skips_challenge():
     assert llm.call_count == 2
 
 
-@pytest.mark.asyncio
-async def test_ground_only_when_disabled_is_single_pass():
+def test_ground_only_when_disabled_is_single_pass():
     """ground_only + enabled=False -> single classify pass only."""
     p1 = _make_conclusion(archetype="pricing_shock", confidence=0.75)
     llm = MockLLM([p1])
-    result = await multi_pass_reason(
-        llm=llm,
-        system_prompt="test",
-        evidence_payload={"evidence": {}},
-        json_schema={},
-        max_tokens=1024,
-        temperature=0.3,
-        enabled=False,
-        ground_only=True,
-    )
+    async def _run():
+        return await multi_pass_reason(
+            llm=llm,
+            system_prompt="test",
+            evidence_payload={"evidence": {}},
+            json_schema={},
+            max_tokens=1024,
+            temperature=0.3,
+            enabled=False,
+            ground_only=True,
+        )
+    result = asyncio.run(_run())
     assert result.passes_executed == 1
     assert llm.call_count == 1

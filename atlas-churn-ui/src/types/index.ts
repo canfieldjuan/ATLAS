@@ -8,6 +8,10 @@ export interface ChurnSignal {
   nps_proxy: number | null
   price_complaint_rate: number | null
   decision_maker_churn_rate: number | null
+  support_sentiment: number | null
+  legacy_support_score: number | null
+  new_feature_velocity: number | null
+  employee_growth_rate: number | null
   archetype: string | null
   archetype_confidence: number | null
   reasoning_mode: string | null
@@ -86,6 +90,39 @@ export interface VendorProfile {
     pain_category: string
     count: number
   }[]
+}
+
+export interface VendorHistorySnapshot {
+  snapshot_date: string
+  total_reviews: number
+  churn_intent: number
+  churn_density: number
+  avg_urgency: number
+  positive_review_pct: number | null
+  recommend_ratio: number | null
+  support_sentiment: number | null
+  legacy_support_score: number | null
+  new_feature_velocity: number | null
+  employee_growth_rate: number | null
+  top_pain: string | null
+  top_competitor: string | null
+  pain_count: number | null
+  competitor_count: number | null
+  displacement_edge_count: number | null
+  high_intent_company_count: number | null
+}
+
+export interface VendorHistoryResponse {
+  vendor_name: string
+  snapshots: VendorHistorySnapshot[]
+  count: number
+}
+
+export interface VendorPeriodComparisonResponse {
+  vendor_name: string
+  period_a: VendorHistorySnapshot | null
+  period_b: VendorHistorySnapshot | null
+  deltas: Record<string, number>
 }
 
 export interface Report {

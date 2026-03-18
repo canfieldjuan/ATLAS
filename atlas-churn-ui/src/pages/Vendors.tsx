@@ -10,6 +10,16 @@ import useApiData from '../hooks/useApiData'
 import { fetchSignals, downloadCsv } from '../api/client'
 import type { ChurnSignal } from '../types'
 
+function formatSignalValue(value: number | null, suffix = '') {
+  if (value === null || Number.isNaN(value)) return '--'
+  return `${value.toFixed(1)}${suffix}`
+}
+
+function formatGrowthRate(value: number | null) {
+  if (value === null || Number.isNaN(value)) return '--'
+  return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`
+}
+
 export default function Vendors() {
   const navigate = useNavigate()
   const [search, setSearch] = useState('')
@@ -111,6 +121,30 @@ export default function Vendors() {
       ),
       sortable: true,
       sortValue: (r) => r.archetype ?? '',
+    },
+    {
+      key: 'slow_burn',
+      header: 'Slow Burn',
+      render: (r) => (
+        <div className="min-w-[148px] space-y-1 text-xs">
+          <div className="flex items-center justify-between gap-3 text-slate-300">
+            <span className="text-slate-500">Support</span>
+            <span>{formatSignalValue(r.support_sentiment)}</span>
+          </div>
+          <div className="flex items-center justify-between gap-3 text-slate-300">
+            <span className="text-slate-500">Legacy</span>
+            <span>{formatSignalValue(r.legacy_support_score)}</span>
+          </div>
+          <div className="flex items-center justify-between gap-3 text-slate-300">
+            <span className="text-slate-500">Feature</span>
+            <span>{formatSignalValue(r.new_feature_velocity)}</span>
+          </div>
+          <div className="flex items-center justify-between gap-3 text-slate-300">
+            <span className="text-slate-500">Growth</span>
+            <span>{formatGrowthRate(r.employee_growth_rate)}</span>
+          </div>
+        </div>
+      ),
     },
     {
       key: 'reviews',

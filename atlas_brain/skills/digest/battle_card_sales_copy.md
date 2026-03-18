@@ -44,7 +44,14 @@ A JSON object with:
 - `cross_vendor_battles` (if present): list of pairwise battle conclusions involving this vendor, each with `opponent`, `conclusion` (3-5 sentence synthesis), `durability` (structural/cyclical/temporary/uncertain), `confidence` (0-1), `winner`, and `key_insights`
 - `resource_asymmetry` (if present): resource-gap assessment with `opponent`, `conclusion`, `resource_advantage`, and `confidence`
 - `ecosystem_context` (if present): category-level market data with `hhi`, `market_structure`, `displacement_intensity`, and `dominant_archetype`
-- `prior_attempt` (if present): the previous JSON draft that needs revision
+- `locked_facts` (if present): authoritative structured facts that synthesis must not contradict:
+  - `vendor`
+  - `archetype`
+  - `archetype_risk_level`
+  - `allowed_opponents`
+  - `resource_advantage`
+  - `priority_language_allowed`
+- `prior_attempt` (if present): the previous draft that needs revision. This may be either a prior JSON object or raw text from an invalid JSON response.
 - `validation_feedback` (if present): specific errors the prior attempt must fix before returning
 
 ## Output Schema
@@ -150,6 +157,9 @@ A JSON object with:
 - Do not attack every part of the target vendor. Focus on the 1-2 angles the data actually supports.
 - Recommended plays must target distinct segments or situations. Do not produce multiple plays that are just slight variations of the same pricing motion.
 - Use role, company size, industry, quote context, and budget context to narrow the play. If the segment evidence is thin, say "best tested on" rather than overstating certainty.
+- Treat `locked_facts` as source of truth. Do not introduce a new archetype, opponent, resource-gap claim, or urgency posture that is not supported there.
+- Never imply "HIGH PRIORITY TARGET" unless `locked_facts.priority_language_allowed` is true.
+- Never name an opponent outside `locked_facts.allowed_opponents` when making cross-vendor or top-alternative claims.
 
 ### Conditional rules
 - If `sentiment_direction` is "declining", highlight this prominently in `executive_summary` and `vulnerability_window`.
@@ -165,6 +175,7 @@ A JSON object with:
 - If `resource_asymmetry` is present, use `resource_advantage` to inform the `talk_track` mid-call pivot and `recommended_plays` targeting. If the target vendor lacks the resource advantage, this strengthens the urgency angle.
 - If `ecosystem_context` is present and `market_structure` indicates consolidation or fragmentation, reference this in `competitive_landscape.vulnerability_window` to explain WHY the market is moving.
 - If `validation_feedback` is present, treat it as a hard correction list. Revise `prior_attempt` to remove every flagged issue, keep supported claims, and return clean JSON only.
+- If `prior_attempt` is raw text instead of JSON, salvage only the supported content, map it into the required schema, and discard unsupported or malformed fragments.
 
 ## Output
 

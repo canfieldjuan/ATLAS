@@ -15,6 +15,8 @@ from datetime import date
 from typing import Any
 
 from ...config import settings
+from ...services.apollo_company_overrides import fetch_company_override_map
+from ...services.company_normalization import normalize_company_name
 from ...services.scraping.sources import (
     parse_source_allowlist,
     display_name as _source_display_name,
@@ -77,6 +79,24 @@ def _battle_card_leaving_patterns() -> tuple[str, ...]:
     return tuple(str(item).strip().lower() for item in patterns if str(item).strip())
 
 
+def _synthesis_reference_confidence_min() -> float:
+    """Return the configured confidence floor for synthesis references."""
+    return float(settings.b2b_churn.synthesis_reference_confidence_min)
+
+
+def _synthesis_expert_take_max_words() -> int:
+    """Return the configured max word count for scorecard expert_take."""
+    return int(settings.b2b_churn.synthesis_expert_take_max_words)
+
+
+def _trim_words(text: str, limit: int) -> str:
+    """Trim text to a max word count while preserving sentence punctuation."""
+    words = str(text or "").split()
+    if len(words) <= limit:
+        return str(text or "").strip()
+    return " ".join(words[:limit]).rstrip(" ,;") + "."
+
+
 # Default scoring weights for churn pressure score.
 _DEFAULT_WEIGHTS = {
     "churn_density": 0.30,
@@ -115,6 +135,117 @@ def _canonicalize_competitor(raw: str) -> str:
 def _canonicalize_vendor(raw: str) -> str:
     """Normalize vendor labels using the same alias handling as competitors."""
     return resolve_vendor_name_cached(raw)
+
+
+async def _sync_vendor_firmographics(pool, *, as_of: date) -> int:
+    """Best-effort vendor -> org-cache sync for firmographic reasoning inputs."""
+    override_map = await fetch_company_override_map(pool)
+    rows = await pool.fetch(
+        """
+        SELECT DISTINCT vendor_name
+        FROM b2b_reviews
+        WHERE vendor_name IS NOT NULL AND vendor_name <> ''
+        ORDER BY vendor_name
+        """
+    )
+    synced = 0
+    for row in rows:
+        vendor_name = _canonicalize_vendor(row["vendor_name"] or "")
+        vendor_name_norm = normalize_company_name(vendor_name)
+        if not vendor_name or not vendor_name_norm:
+            continue
+        override = override_map.get(vendor_name_norm) or {}
+        candidate_names = [vendor_name_norm]
+        for alias in override.get("search_names", []) or []:
+            alias_norm = normalize_company_name(str(alias))
+            if alias_norm and alias_norm not in candidate_names:
+                candidate_names.append(alias_norm)
+        candidate_domains = []
+        for domain in override.get("domains", []) or []:
+            cleaned = str(domain).strip().lower().removeprefix("www.")
+            if cleaned and cleaned not in candidate_domains:
+                candidate_domains.append(cleaned)
+        org = await pool.fetchrow(
+            """
+            SELECT id, company_name_raw, company_name_norm, domain,
+                   industry, employee_count, annual_revenue_range
+            FROM prospect_org_cache
+            WHERE status = 'enriched'
+              AND (
+                company_name_norm = ANY($1::text[])
+                OR (
+                  domain IS NOT NULL
+                  AND domain <> ''
+                  AND LOWER(domain) = ANY($2::text[])
+                )
+              )
+            ORDER BY
+                CASE
+                    WHEN company_name_norm = $3 THEN 0
+                    WHEN company_name_norm = ANY($1::text[]) THEN 1
+                    ELSE 2
+                END,
+                employee_count DESC NULLS LAST,
+                updated_at DESC
+            LIMIT 1
+            """,
+            candidate_names,
+            candidate_domains,
+            vendor_name_norm,
+        )
+        if not org:
+            continue
+        await pool.execute(
+            """
+            INSERT INTO b2b_vendor_firmographics (
+                vendor_name, vendor_name_norm, company_name_raw, company_name_norm,
+                org_cache_id, domain, industry, employee_count,
+                annual_revenue_range, source, match_confidence, last_synced_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'prospect_org_cache', 1.0, NOW(), NOW())
+            ON CONFLICT (vendor_name_norm) DO UPDATE SET
+                vendor_name = EXCLUDED.vendor_name,
+                company_name_raw = EXCLUDED.company_name_raw,
+                company_name_norm = EXCLUDED.company_name_norm,
+                org_cache_id = EXCLUDED.org_cache_id,
+                domain = EXCLUDED.domain,
+                industry = EXCLUDED.industry,
+                employee_count = EXCLUDED.employee_count,
+                annual_revenue_range = EXCLUDED.annual_revenue_range,
+                last_synced_at = NOW(),
+                updated_at = NOW()
+            """,
+            vendor_name,
+            vendor_name_norm,
+            org["company_name_raw"],
+            org["company_name_norm"],
+            org["id"],
+            org["domain"],
+            org["industry"],
+            org["employee_count"],
+            org["annual_revenue_range"],
+        )
+        if org["employee_count"] is not None:
+            await pool.execute(
+                """
+                INSERT INTO b2b_vendor_firmographic_snapshots (
+                    vendor_name, vendor_name_norm, snapshot_date,
+                    employee_count, annual_revenue_range, industry, source
+                ) VALUES ($1, $2, $3, $4, $5, $6, 'prospect_org_cache')
+                ON CONFLICT (vendor_name_norm, snapshot_date) DO UPDATE SET
+                    vendor_name = EXCLUDED.vendor_name,
+                    employee_count = EXCLUDED.employee_count,
+                    annual_revenue_range = EXCLUDED.annual_revenue_range,
+                    industry = EXCLUDED.industry
+                """,
+                vendor_name,
+                vendor_name_norm,
+                as_of,
+                org["employee_count"],
+                org["annual_revenue_range"],
+                org["industry"],
+            )
+        synced += 1
+    return synced
 
 
 def _battle_card_quote_sort_key(raw_quote: Any) -> tuple[float, int, int]:
@@ -463,6 +594,144 @@ def _sanitize_battle_card_sales_copy(card: dict[str, Any], generated: dict[str, 
         return value
 
     return _walk(generated)
+
+
+def _best_cross_vendor_comparison(scorecard: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the highest-confidence cross-vendor comparison above the ref floor."""
+    floor = _synthesis_reference_confidence_min()
+    comparisons = [
+        comp for comp in (scorecard.get("cross_vendor_comparisons") or [])
+        if float(comp.get("confidence") or 0) >= floor
+    ]
+    if not comparisons:
+        return None
+    return max(comparisons, key=lambda comp: float(comp.get("confidence") or 0))
+
+
+def _build_scorecard_locked_facts(scorecard: dict[str, Any]) -> dict[str, Any]:
+    """Build source-of-truth synthesis constraints for scorecard narratives."""
+    locked: dict[str, Any] = {
+        "vendor": str(scorecard.get("vendor") or ""),
+        "risk_level": str(scorecard.get("risk_level") or ""),
+    }
+    if float(scorecard.get("archetype_confidence") or 0) >= _synthesis_reference_confidence_min():
+        if scorecard.get("archetype"):
+            locked["archetype"] = scorecard["archetype"]
+    allowed_opponents = [
+        str(comp.get("opponent") or "")
+        for comp in (scorecard.get("cross_vendor_comparisons") or [])
+        if str(comp.get("opponent") or "")
+        and float(comp.get("confidence") or 0) >= _synthesis_reference_confidence_min()
+    ]
+    if allowed_opponents:
+        locked["allowed_opponents"] = allowed_opponents
+    best = _best_cross_vendor_comparison(scorecard)
+    if best:
+        locked["comparison"] = {
+            "opponent": best.get("opponent", ""),
+            "resource_advantage": best.get("resource_advantage", ""),
+        }
+    return {k: v for k, v in locked.items() if v not in ("", [], None)}
+
+
+def _build_battle_card_locked_facts(card: dict[str, Any]) -> dict[str, Any]:
+    """Build source-of-truth synthesis constraints for battle-card copy."""
+    objection_data = card.get("objection_data") or {}
+    allowed_opponents: list[str] = []
+    for comp in card.get("competitor_differentiators") or []:
+        name = str(comp.get("competitor") or "").strip()
+        if name and name not in allowed_opponents:
+            allowed_opponents.append(name)
+    for battle in card.get("cross_vendor_battles") or []:
+        name = str(battle.get("opponent") or "").strip()
+        if name and name not in allowed_opponents:
+            allowed_opponents.append(name)
+    asymmetry = card.get("resource_asymmetry") or {}
+    asym_opponent = str(asymmetry.get("opponent") or "").strip()
+    if asym_opponent and asym_opponent not in allowed_opponents:
+        allowed_opponents.append(asym_opponent)
+    locked: dict[str, Any] = {
+        "vendor": str(card.get("vendor") or ""),
+        "priority_language_allowed": (
+            float(card.get("churn_pressure_score") or 0) >= _battle_card_high_priority_score_min()
+            and float(objection_data.get("avg_urgency") or 0) >= _battle_card_high_priority_urgency_min()
+        ),
+    }
+    if card.get("archetype"):
+        locked["archetype"] = card["archetype"]
+    if card.get("archetype_risk_level"):
+        locked["archetype_risk_level"] = card["archetype_risk_level"]
+    if allowed_opponents:
+        locked["allowed_opponents"] = allowed_opponents
+    if asymmetry.get("resource_advantage"):
+        locked["resource_advantage"] = asymmetry.get("resource_advantage")
+    return locked
+
+
+def _fallback_scorecard_expert_take(scorecard: dict[str, Any]) -> str:
+    """Build a deterministic, buyer-facing scorecard narrative fallback."""
+    vendor = str(scorecard.get("vendor") or "this vendor").strip() or "this vendor"
+    reasoning = str(scorecard.get("reasoning_summary") or "").strip()
+    if reasoning:
+        base = reasoning
+    else:
+        top_pain = str(scorecard.get("top_pain") or "customer fit").strip().lower()
+        trend = str(scorecard.get("trend") or "stable").strip().lower() or "stable"
+        competitor_overlap = scorecard.get("competitor_overlap") or []
+        top_comp = ""
+        if competitor_overlap and isinstance(competitor_overlap[0], dict):
+            top_comp = str(competitor_overlap[0].get("competitor") or "").strip()
+        if top_comp:
+            base = (
+                f"Buyers considering {vendor} should pressure-test {top_pain} because "
+                f"recent feedback is {trend} and evaluation pressure is clustering around {top_comp}."
+            )
+        else:
+            base = (
+                f"Buyers considering {vendor} should pressure-test {top_pain} because "
+                f"recent buyer feedback shows a {trend} churn pattern."
+            )
+    best = _best_cross_vendor_comparison(scorecard)
+    if best and best.get("opponent"):
+        opponent = str(best.get("opponent") or "").strip()
+        advantage = str(best.get("resource_advantage") or "").strip()
+        if advantage:
+            base += f" Relative to {opponent}, the market comparison points to {advantage}."
+        else:
+            base += f" Relative to {opponent}, buyers appear to be weighing competitive differences more directly."
+    return _trim_words(base, _synthesis_expert_take_max_words())
+
+
+def _validate_scorecard_expert_take(scorecard: dict[str, Any], expert_take: str) -> list[str]:
+    """Reject synthesized scorecard narratives that contradict locked facts."""
+    text = str(expert_take or "").strip()
+    if not text:
+        return ["expert_take is empty"]
+    warnings: list[str] = []
+    lower = text.lower()
+    if len(text.split()) > _synthesis_expert_take_max_words():
+        warnings.append("expert_take exceeds max word count")
+    locked = _build_scorecard_locked_facts(scorecard)
+    allowed_archetype = str(locked.get("archetype") or "").lower()
+    from ...reasoning.archetypes import ARCHETYPES
+    for archetype_name in ARCHETYPES:
+        if archetype_name in lower:
+            if not allowed_archetype:
+                warnings.append("expert_take references an archetype without sufficient reasoning confidence")
+            elif archetype_name != allowed_archetype:
+                warnings.append(f"expert_take references archetype '{archetype_name}' instead of '{allowed_archetype}'")
+            break
+    all_opponents = [
+        str(comp.get("opponent") or "").strip()
+        for comp in (scorecard.get("cross_vendor_comparisons") or [])
+        if str(comp.get("opponent") or "").strip()
+    ]
+    allowed_opponents = {str(name).lower() for name in (locked.get("allowed_opponents") or [])}
+    for opponent in all_opponents:
+        if opponent.lower() in lower and opponent.lower() not in allowed_opponents:
+            warnings.append(f"expert_take references opponent '{opponent}' without high-confidence comparison support")
+            break
+    return warnings
 
 
 def _build_buyer_action(vendor: str, pain: str | None, alternatives: list[str], archetype: str | None = None) -> str:
@@ -1308,47 +1577,77 @@ async def _fetch_vendor_churn_scores(pool, window_days: int, min_reviews: int) -
     filters = _eligible_review_filters(window_param=1, source_param=3)
     rows = await pool.fetch(
         f"""
-        SELECT vendor_name, product_category,
-            count(*) AS total_reviews,
-            count(*) FILTER (
-                WHERE (enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
-            ) AS churn_intent,
-            -- Source-weighted + relevance-quality urgency: weighted avg preserving 0-10 scale
-            -- source_weight: falls back to 0.7 for pre-backfill rows
-            -- relevance multiplier: 0.7 + 0.3 * relevance_score (floor 0.7, ceiling 1.0)
-            avg(
-                (enrichment->>'urgency_score')::numeric
-                * COALESCE(source_weight, 0.7)
-                * (0.7 + 0.3 * COALESCE(relevance_score, 0.5))
-            ) / NULLIF(avg(
-                COALESCE(source_weight, 0.7)
-                * (0.7 + 0.3 * COALESCE(relevance_score, 0.5))
-            ), 0)
-            AS avg_urgency,
-            avg(author_churn_score) FILTER (WHERE author_churn_score IS NOT NULL)
-            AS avg_author_churn_score,
-            avg(rating / NULLIF(rating_max, 0)) AS avg_rating_normalized,
-            count(*) FILTER (
-                WHERE (enrichment->>'would_recommend')::boolean = true
-            ) AS recommend_yes,
-            count(*) FILTER (
-                WHERE (enrichment->>'would_recommend')::boolean = false
-            ) AS recommend_no,
-            -- Positive review percentage (rating >= 70% of max)
-            ROUND(
+        WITH review_scores AS (
+            SELECT vendor_name, product_category,
+                count(*) AS total_reviews,
                 count(*) FILTER (
-                    WHERE rating IS NOT NULL AND rating_max > 0
-                      AND (rating / rating_max) >= 0.7
-                ) * 100.0 / NULLIF(count(*) FILTER (
-                    WHERE rating IS NOT NULL AND rating_max > 0
-                ), 0),
-                1
-            ) AS positive_review_pct
-        FROM b2b_reviews
-        WHERE {filters}
-        GROUP BY vendor_name, product_category
-        HAVING count(*) >= $2
-        ORDER BY avg_urgency DESC
+                    WHERE (enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
+                ) AS churn_intent,
+                avg(
+                    (enrichment->>'urgency_score')::numeric
+                    * COALESCE(source_weight, 0.7)
+                    * (0.7 + 0.3 * COALESCE(relevance_score, 0.5))
+                ) / NULLIF(avg(
+                    COALESCE(source_weight, 0.7)
+                    * (0.7 + 0.3 * COALESCE(relevance_score, 0.5))
+                ), 0)
+                AS avg_urgency,
+                avg(author_churn_score) FILTER (WHERE author_churn_score IS NOT NULL)
+                AS avg_author_churn_score,
+                avg(rating / NULLIF(rating_max, 0)) AS avg_rating_normalized,
+                count(*) FILTER (
+                    WHERE (enrichment->>'would_recommend')::boolean = true
+                ) AS recommend_yes,
+                count(*) FILTER (
+                    WHERE (enrichment->>'would_recommend')::boolean = false
+                ) AS recommend_no,
+                ROUND(
+                    count(*) FILTER (
+                        WHERE rating IS NOT NULL AND rating_max > 0
+                          AND (rating / rating_max) >= 0.7
+                    ) * 100.0 / NULLIF(count(*) FILTER (
+                        WHERE rating IS NOT NULL AND rating_max > 0
+                    ), 0),
+                    1
+                ) AS positive_review_pct,
+                AVG(rating / NULLIF(rating_max, 0)) FILTER (
+                    WHERE review_text ILIKE '%support%' OR review_text ILIKE '%service%'
+                ) AS support_sentiment,
+                AVG(rating / NULLIF(rating_max, 0)) FILTER (
+                    WHERE review_text ILIKE '%legacy%' OR review_text ILIKE '%old version%' OR review_text ILIKE '%deprecated%'
+                ) AS legacy_support_score,
+                COUNT(*) FILTER (
+                    WHERE review_text ILIKE '%new feature%' OR review_text ILIKE '%update%' OR review_text ILIKE '%release%'
+                ) * 1.0 / NULLIF(count(*), 0) AS new_feature_velocity
+            FROM b2b_reviews
+            WHERE {filters}
+            GROUP BY vendor_name, product_category
+            HAVING count(*) >= $2
+        )
+        SELECT rs.*,
+               vf.employee_count,
+               vf.industry AS vendor_industry,
+               vf.annual_revenue_range,
+               CASE
+                   WHEN prev.employee_count IS NOT NULL
+                        AND prev.employee_count > 0
+                        AND vf.employee_count IS NOT NULL
+                   THEN (vf.employee_count - prev.employee_count)::numeric / prev.employee_count
+                   ELSE NULL
+               END AS employee_growth_rate
+        FROM review_scores rs
+        LEFT JOIN b2b_vendor_firmographics vf
+          ON LOWER(vf.vendor_name) = LOWER(rs.vendor_name)
+        LEFT JOIN LATERAL (
+            SELECT employee_count
+            FROM b2b_vendor_firmographic_snapshots snap
+            WHERE snap.vendor_name_norm = vf.vendor_name_norm
+              AND snap.snapshot_date < CURRENT_DATE
+              AND snap.employee_count IS NOT NULL
+            ORDER BY snap.snapshot_date DESC
+            LIMIT 1
+        ) prev ON TRUE
+        ORDER BY rs.avg_urgency DESC
         """,
         window_days,
         min_reviews,
@@ -1366,6 +1665,13 @@ async def _fetch_vendor_churn_scores(pool, window_days: int, min_reviews: int) -
             "recommend_no": r["recommend_no"],
             "positive_review_pct": float(r["positive_review_pct"]) if r["positive_review_pct"] is not None else None,
             "avg_author_churn_score": float(r["avg_author_churn_score"]) if r["avg_author_churn_score"] is not None else None,
+            "support_sentiment": float(r["support_sentiment"]) if r["support_sentiment"] is not None else None,
+            "legacy_support_score": float(r["legacy_support_score"]) if r["legacy_support_score"] is not None else None,
+            "new_feature_velocity": float(r["new_feature_velocity"]) if r["new_feature_velocity"] is not None else None,
+            "employee_growth_rate": float(r["employee_growth_rate"]) if r["employee_growth_rate"] is not None else None,
+            "employee_count": r["employee_count"],
+            "vendor_industry": r["vendor_industry"],
+            "annual_revenue_range": r["annual_revenue_range"],
         }
         for r in rows
     ]
@@ -3116,6 +3422,7 @@ def _build_vendor_evidence(
     buyer_auth_lookup: dict[str, dict] | None = None,
     use_case_lookup: dict[str, list[dict]] | None = None,
     velocity_lookup: dict[str, dict] | None = None,
+    market_regime_lookup: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Merge vendor score row + all available lookups into a single evidence
     dict for the stratified reasoner.
@@ -3140,6 +3447,17 @@ def _build_vendor_evidence(
         "recommend_yes": int(vs.get("recommend_yes") or 0),
         "recommend_no": int(vs.get("recommend_no") or 0),
     }
+    for raw_key in (
+        "support_sentiment",
+        "legacy_support_score",
+        "new_feature_velocity",
+        "employee_growth_rate",
+        "positive_review_pct",
+        "avg_rating_normalized",
+    ):
+        raw_val = vs.get(raw_key)
+        if raw_val is not None:
+            evidence[raw_key] = raw_val
 
     pains = pain_lookup.get(vendor, [])
     if pains:
@@ -3182,6 +3500,10 @@ def _build_vendor_evidence(
         arch = archetype_lookup.get(vendor, [])
         if arch:
             evidence["archetype_scores"] = arch
+    if market_regime_lookup:
+        regime = market_regime_lookup.get(vendor)
+        if regime:
+            evidence["market_regime"] = regime
 
     # Additional context (when available)
     if dm_lookup:
@@ -3222,6 +3544,46 @@ def _build_vendor_evidence(
             )
 
     return evidence
+
+
+async def _fetch_latest_category_overview_entry(
+    pool,
+    category: str,
+) -> dict[str, Any] | None:
+    """Fetch the latest persisted category overview entry for a category."""
+    if not category:
+        return None
+
+    row = await pool.fetchrow(
+        """
+        SELECT intelligence_data
+        FROM b2b_intelligence
+        WHERE report_type = 'category_overview'
+        ORDER BY report_date DESC, created_at DESC
+        LIMIT 1
+        """,
+    )
+    if not row:
+        return None
+
+    data = row["intelligence_data"]
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+    entries = data if isinstance(data, list) else data.get("category_overview", data)
+    if not isinstance(entries, list):
+        return None
+
+    wanted = str(category).strip().lower()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("category", "")).strip().lower() == wanted:
+            return entry
+    return None
 
 
 async def fetch_vendor_evidence(
@@ -3284,6 +3646,7 @@ async def fetch_vendor_evidence(
     # Temporal analysis (non-fatal)
     temporal_lookup: dict[str, dict] = {}
     archetype_lookup: dict[str, list[dict]] = {}
+    market_regime_lookup: dict[str, dict[str, Any]] = {}
     try:
         from ...reasoning.temporal import TemporalEngine
         from ...reasoning.archetypes import enrich_evidence_with_archetypes
@@ -3291,14 +3654,30 @@ async def fetch_vendor_evidence(
         td_result = await te.analyze_vendor(canonical)
         td = TemporalEngine.to_evidence_dict(td_result)
         temporal_lookup[canonical] = td
-        enriched = enrich_evidence_with_archetypes(
-            {"vendor_name": canonical, **td}, td,
-        )
+        evidence_seed = {
+            "vendor_name": canonical,
+            "support_sentiment": vs.get("support_sentiment"),
+            "legacy_support_score": vs.get("legacy_support_score"),
+            "new_feature_velocity": vs.get("new_feature_velocity"),
+            "employee_growth_rate": vs.get("employee_growth_rate"),
+            **td,
+        }
+        enriched = enrich_evidence_with_archetypes(evidence_seed, td)
         arch_scores = enriched.get("archetype_scores", [])
         if arch_scores:
             archetype_lookup[canonical] = arch_scores
     except Exception:
         logger.debug("Temporal analysis unavailable for %s", canonical)
+
+    try:
+        cat_entry = await _fetch_latest_category_overview_entry(
+            pool, str(vs.get("product_category") or ""),
+        )
+        regime = (cat_entry or {}).get("cross_vendor_analysis", {}).get("market_regime")
+        if regime:
+            market_regime_lookup[canonical] = regime
+    except Exception:
+        logger.debug("Market regime unavailable for %s", canonical, exc_info=True)
 
     return _build_vendor_evidence(
         vs,
@@ -3315,6 +3694,7 @@ async def fetch_vendor_evidence(
         budget_lookup=budget_lookup,
         buyer_auth_lookup=ba_lookup,
         use_case_lookup=uc_lookup,
+        market_regime_lookup=market_regime_lookup or None,
     )
 
 

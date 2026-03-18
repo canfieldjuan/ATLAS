@@ -32,13 +32,19 @@ class ReasoningConfig(BaseSettings):
     temperature: float = Field(default=0.3, description="Temperature for reasoning calls (ignored by reasoning models like o4-mini)")
 
     # Stratified reasoning LLM backend (B2B churn pipeline)
+    # Heavy model: archetype classification (Pass 1), pairwise battles
+    # Light model: challenge/ground passes, reconstitute, category councils, asymmetry
     stratified_llm_workload: str = Field(
         default="openrouter",
         description="Pipeline LLM workload for stratified reasoning: 'openrouter', 'vllm', 'anthropic', or 'auto'",
     )
     stratified_openrouter_model: str = Field(
+        default="openai/gpt-5.1",
+        description="OpenRouter model for Tier 1 (heavy) reasoning: archetype classify, pairwise battles",
+    )
+    stratified_openrouter_model_light: str = Field(
         default="openai/o4-mini",
-        description="OpenRouter model ID for stratified reasoning (used when workload=openrouter)",
+        description="OpenRouter model for Tier 2 (light) reasoning: challenge/ground passes, reconstitute, category councils, asymmetry",
     )
 
     triage_model: str = Field(
@@ -91,7 +97,67 @@ class ReasoningConfig(BaseSettings):
         default=0.3,
         description="Skip challenge pass if Pass 1 confidence is at or below this",
     )
+    multi_pass_challenge_min_reviews: int = Field(
+        default=8,
+        description="Minimum review volume before low-confidence challenge escalation is considered evidence-backed",
+    )
+    multi_pass_challenge_mixed_polarity_min_share: float = Field(
+        default=0.2,
+        description="Minimum minority recommendation share that qualifies as mixed polarity for challenge escalation",
+    )
+    multi_pass_challenge_high_impact_churn_density: float = Field(
+        default=20.0,
+        description="Challenge low-confidence conclusions when churn density is at or above this threshold",
+    )
+    multi_pass_challenge_high_impact_avg_urgency: float = Field(
+        default=6.0,
+        description="Challenge low-confidence conclusions when avg urgency is at or above this threshold",
+    )
+    multi_pass_challenge_high_impact_displacement_mentions: int = Field(
+        default=5,
+        description="Challenge low-confidence conclusions when displacement mentions are at or above this threshold",
+    )
+    multi_pass_ground_always: bool = Field(
+        default=True,
+        description="Run the lightweight grounding pass even when challenge is skipped",
+    )
     multi_pass_ground_change_threshold: float = Field(
         default=0.05,
-        description="Skip grounding pass if challenge changed conclusion by less than this delta",
+        description="Minimum challenge confidence delta that counts as a materially changed conclusion",
+    )
+    reconstitute_threshold: float = Field(
+        default=0.3,
+        description="Maximum weighted evidence drift ratio that still permits reconstitution instead of full reasoning",
+    )
+    reconstitute_core_weight: float = Field(
+        default=4.0,
+        description="Weight for core churn metrics in evidence drift scoring",
+    )
+    reconstitute_thematic_weight: float = Field(
+        default=3.0,
+        description="Weight for pain, competitor, and feature-theme shifts in evidence drift scoring",
+    )
+    reconstitute_segment_weight: float = Field(
+        default=3.0,
+        description="Weight for buyer-role, use-case, and budget-context shifts in evidence drift scoring",
+    )
+    reconstitute_temporal_weight: float = Field(
+        default=3.0,
+        description="Weight for temporal and velocity shifts in evidence drift scoring",
+    )
+    reconstitute_quote_weight: float = Field(
+        default=1.5,
+        description="Weight for quote-level evidence changes in evidence drift scoring",
+    )
+    reconstitute_minor_weight: float = Field(
+        default=1.0,
+        description="Fallback weight for low-priority evidence drift signals",
+    )
+    reconstitute_strategic_component_threshold: float = Field(
+        default=3.0,
+        description="Minimum component drift score that forces full reasoning for strategic shifts like pain, role, competitive, or temporal changes",
+    )
+    reconstitute_contradiction_emergence_threshold: float = Field(
+        default=4.0,
+        description="Minimum contradiction-emergence score that forces full reasoning even when weighted drift stays below the reconstitute threshold",
     )

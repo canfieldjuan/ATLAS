@@ -5,6 +5,9 @@ import { clsx } from 'clsx'
 import {
   BarChart,
   Bar,
+  LineChart,
+  Line,
+  CartesianGrid,
   XAxis,
   YAxis,
   Tooltip,
@@ -15,12 +18,24 @@ import ArchetypeBadge from '../components/ArchetypeBadge'
 import DataTable, { type Column } from '../components/DataTable'
 import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
-import { fetchVendorProfile, fetchReviews } from '../api/client'
-import type { VendorProfile, ReviewSummary } from '../types'
+import {
+  compareVendorPeriods,
+  fetchVendorHistory,
+  fetchVendorProfile,
+  fetchReviews,
+} from '../api/client'
+import type {
+  VendorHistoryResponse,
+  VendorPeriodComparisonResponse,
+  VendorProfile,
+  ReviewSummary,
+} from '../types'
 
 interface VendorData {
   profile: VendorProfile
   reviews: ReviewSummary[]
+  history: VendorHistoryResponse
+  comparison: VendorPeriodComparisonResponse
 }
 
 function DetailSkeleton() {
@@ -47,15 +62,20 @@ export default function VendorDetail() {
   const { name } = useParams<{ name: string }>()
   const navigate = useNavigate()
   const [tab, setTab] = useState<'overview' | 'reviews' | 'companies'>('overview')
+  const [selectedSlowBurnMetric, setSelectedSlowBurnMetric] = useState<
+    'support_sentiment' | 'legacy_support_score' | 'new_feature_velocity' | 'employee_growth_rate'
+  >('support_sentiment')
 
   const { data, loading, error, refresh, refreshing } = useApiData<VendorData>(
     async () => {
       if (!name) throw new Error('Missing vendor name')
-      const [profile, revRes] = await Promise.all([
+      const [profile, revRes, history, comparison] = await Promise.all([
         fetchVendorProfile(name),
         fetchReviews({ vendor_name: name, limit: 50, window_days: 365 }),
+        fetchVendorHistory(name, { days: 90, limit: 24 }),
+        compareVendorPeriods(name, { period_a_days_ago: 30, period_b_days_ago: 0 }),
       ])
-      return { profile, reviews: revRes.reviews }
+      return { profile, reviews: revRes.reviews, history, comparison }
     },
     [name],
   )
@@ -71,6 +91,61 @@ export default function VendorDetail() {
     name: p.pain_category,
     count: p.count,
   }))
+  const latestSnapshot = data?.history.snapshots?.[0] ?? null
+  const periodDeltas = data?.comparison.deltas ?? {}
+  const slowBurnConfig = {
+    support_sentiment: {
+      label: 'Support Sentiment',
+      color: '#22d3ee',
+      positiveIsGood: true,
+      suffix: '',
+      multiplier: 1,
+    },
+    legacy_support_score: {
+      label: 'Legacy Support',
+      color: '#a78bfa',
+      positiveIsGood: true,
+      suffix: '',
+      multiplier: 1,
+    },
+    new_feature_velocity: {
+      label: 'Feature Velocity',
+      color: '#f59e0b',
+      positiveIsGood: false,
+      suffix: '',
+      multiplier: 1,
+    },
+    employee_growth_rate: {
+      label: 'Employee Growth',
+      color: '#34d399',
+      positiveIsGood: false,
+      suffix: '%',
+      multiplier: 100,
+    },
+  } as const
+
+  function formatDelta(value?: number | null, suffix = '') {
+    if (value === undefined || value === null || Number.isNaN(value)) return '--'
+    const sign = value > 0 ? '+' : ''
+    return `${sign}${value.toFixed(2)}${suffix}`
+  }
+
+  const slowBurnMetrics = Object.entries(slowBurnConfig).map(([key, config]) => ({
+    key,
+    ...config,
+    current: latestSnapshot?.[key as keyof typeof latestSnapshot] as number | null | undefined,
+    delta: periodDeltas[key],
+  }))
+  const selectedConfig = slowBurnConfig[selectedSlowBurnMetric]
+  const slowBurnHistory = (data?.history.snapshots ?? [])
+    .slice(0, 12)
+    .reverse()
+    .map((snapshot) => ({
+      date: snapshot.snapshot_date.slice(5),
+      value: snapshot[selectedSlowBurnMetric] == null
+        ? null
+        : Number(snapshot[selectedSlowBurnMetric]) * selectedConfig.multiplier,
+    }))
 
   const reviewColumns: Column<ReviewSummary>[] = [
     {
@@ -323,6 +398,93 @@ export default function VendorDetail() {
                   )}
                 </div>
               )}
+              <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
+                <h3 className="text-sm font-medium text-slate-300 mb-3">Slow-Burn Signals</h3>
+                <div className="space-y-3">
+                  {slowBurnMetrics.map((metric) => {
+                    const multiplier = metric.multiplier ?? 1
+                    const current = metric.current == null ? null : metric.current * multiplier
+                    const delta = metric.delta == null ? null : metric.delta * multiplier
+                    const improving = delta == null
+                      ? null
+                      : metric.positiveIsGood ? delta > 0 : delta < 0
+                    return (
+                      <div key={metric.label} className="flex items-center justify-between gap-4">
+                        <div>
+                          <p className="text-sm text-slate-300">{metric.label}</p>
+                          <p className="text-[11px] text-slate-500">Current / 30d change</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm text-white">
+                            {current == null ? '--' : `${current.toFixed(2)}${metric.suffix ?? ''}`}
+                          </p>
+                          <p className={clsx(
+                            'text-xs',
+                            improving === null
+                              ? 'text-slate-500'
+                              : improving
+                                ? 'text-green-400'
+                                : 'text-red-400',
+                          )}>
+                            {formatDelta(delta, metric.suffix ?? '')}
+                          </p>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+                <div className="mt-4 pt-4 border-t border-slate-700/50">
+                  <div className="flex flex-wrap gap-1.5 mb-3">
+                    {Object.entries(slowBurnConfig).map(([key, config]) => (
+                      <button
+                        key={key}
+                        onClick={() => setSelectedSlowBurnMetric(key as typeof selectedSlowBurnMetric)}
+                        className={clsx(
+                          'px-2 py-1 rounded text-xs transition-colors',
+                          selectedSlowBurnMetric === key
+                            ? 'bg-slate-700 text-white'
+                            : 'bg-slate-800 text-slate-400 hover:text-white',
+                        )}
+                      >
+                        {config.label}
+                      </button>
+                    ))}
+                  </div>
+                  {slowBurnHistory.some((point) => point.value !== null) ? (
+                    <ResponsiveContainer width="100%" height={180}>
+                      <LineChart data={slowBurnHistory}>
+                        <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
+                        <XAxis dataKey="date" tick={{ fill: '#94a3b8', fontSize: 11 }} />
+                        <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} />
+                        <Tooltip
+                          contentStyle={{
+                            backgroundColor: '#1e293b',
+                            border: '1px solid #334155',
+                            borderRadius: 8,
+                            color: '#e2e8f0',
+                            fontSize: 13,
+                          }}
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey="value"
+                          stroke={selectedConfig.color}
+                          strokeWidth={2}
+                          dot={{ r: 2 }}
+                          connectNulls={false}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <p className="text-xs text-slate-500">Not enough snapshot history yet for a trend line.</p>
+                  )}
+                </div>
+                {latestSnapshot?.snapshot_date && (
+                  <p className="mt-3 pt-3 border-t border-slate-700/50 text-[11px] text-slate-500">
+                    Latest snapshot: {latestSnapshot.snapshot_date}
+                  </p>
+                )}
+              </div>
               {signal.top_competitors && signal.top_competitors.length > 0 && (
                 <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
                   <h3 className="text-sm font-medium text-slate-300 mb-3">Top Competitors</h3>

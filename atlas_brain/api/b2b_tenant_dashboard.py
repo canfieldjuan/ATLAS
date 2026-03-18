@@ -354,11 +354,23 @@ async def list_tenant_signals(
 
     rows = await pool.fetch(
         f"""
-        SELECT vendor_name, product_category, total_reviews,
-               churn_intent_count, avg_urgency_score, avg_rating_normalized,
-               nps_proxy, price_complaint_rate, decision_maker_churn_rate,
-               last_computed_at
-        FROM b2b_churn_signals
+        SELECT sig.vendor_name, sig.product_category, sig.total_reviews,
+               sig.churn_intent_count, sig.avg_urgency_score, sig.avg_rating_normalized,
+               sig.nps_proxy, sig.price_complaint_rate, sig.decision_maker_churn_rate,
+               snap.support_sentiment AS support_sentiment,
+               snap.legacy_support_score AS legacy_support_score,
+               snap.new_feature_velocity AS new_feature_velocity,
+               snap.employee_growth_rate AS employee_growth_rate,
+               sig.last_computed_at
+        FROM b2b_churn_signals sig
+        LEFT JOIN LATERAL (
+            SELECT support_sentiment, legacy_support_score,
+                   new_feature_velocity, employee_growth_rate
+            FROM b2b_vendor_snapshots snap
+            WHERE snap.vendor_name = sig.vendor_name
+            ORDER BY snap.snapshot_date DESC
+            LIMIT 1
+        ) snap ON TRUE
         {where}
         ORDER BY avg_urgency_score DESC
         LIMIT ${idx}
@@ -377,6 +389,10 @@ async def list_tenant_signals(
             "nps_proxy": _safe_float(r["nps_proxy"]),
             "price_complaint_rate": _safe_float(r["price_complaint_rate"]),
             "decision_maker_churn_rate": _safe_float(r["decision_maker_churn_rate"]),
+            "support_sentiment": _safe_float(r["support_sentiment"]),
+            "legacy_support_score": _safe_float(r["legacy_support_score"]),
+            "new_feature_velocity": _safe_float(r["new_feature_velocity"]),
+            "employee_growth_rate": _safe_float(r["employee_growth_rate"]),
             "last_computed_at": str(r["last_computed_at"]) if r["last_computed_at"] else None,
         }
         for r in rows
@@ -405,8 +421,20 @@ async def get_vendor_detail(vendor_name: str, user: AuthUser = Depends(require_a
 
     signal_row = await pool.fetchrow(
         """
-        SELECT * FROM b2b_churn_signals
-        WHERE vendor_name ILIKE '%' || $1 || '%'
+        SELECT sig.*, snap.support_sentiment AS support_sentiment,
+               snap.legacy_support_score AS legacy_support_score,
+               snap.new_feature_velocity AS new_feature_velocity,
+               snap.employee_growth_rate AS employee_growth_rate
+        FROM b2b_churn_signals sig
+        LEFT JOIN LATERAL (
+            SELECT support_sentiment, legacy_support_score,
+                   new_feature_velocity, employee_growth_rate
+            FROM b2b_vendor_snapshots snap
+            WHERE snap.vendor_name = sig.vendor_name
+            ORDER BY snap.snapshot_date DESC
+            LIMIT 1
+        ) snap ON TRUE
+        WHERE sig.vendor_name ILIKE '%' || $1 || '%'
         ORDER BY avg_urgency_score DESC LIMIT 1
         """,
         vname,
@@ -462,6 +490,10 @@ async def get_vendor_detail(vendor_name: str, user: AuthUser = Depends(require_a
             "nps_proxy": _safe_float(signal_row["nps_proxy"]),
             "price_complaint_rate": _safe_float(signal_row["price_complaint_rate"]),
             "decision_maker_churn_rate": _safe_float(signal_row["decision_maker_churn_rate"]),
+            "support_sentiment": _safe_float(signal_row["support_sentiment"]),
+            "legacy_support_score": _safe_float(signal_row["legacy_support_score"]),
+            "new_feature_velocity": _safe_float(signal_row["new_feature_velocity"]),
+            "employee_growth_rate": _safe_float(signal_row["employee_growth_rate"]),
             "top_pain_categories": _safe_json(signal_row["top_pain_categories"]),
             "top_competitors": _safe_json(signal_row["top_competitors"]),
             "top_feature_gaps": _safe_json(signal_row["top_feature_gaps"]),

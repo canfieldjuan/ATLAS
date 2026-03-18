@@ -1,5 +1,6 @@
 """Direct tests for cross-vendor contradiction finders and multi-pass wiring."""
 
+import asyncio
 import json
 
 import pytest
@@ -10,6 +11,12 @@ from atlas_brain.reasoning.cross_vendor import (
     _find_battle_contradictions,
     _find_category_contradictions,
 )
+from atlas_brain.reasoning.multi_pass import MultiPassResult, PassResult
+
+
+@pytest.fixture(autouse=True)
+def _stub_trace_llm_call(monkeypatch):
+    monkeypatch.setattr("atlas_brain.pipelines.llm.trace_llm_call", lambda *args, **kwargs: None)
 
 
 class _FakeCache:
@@ -91,48 +98,75 @@ def test_asymmetry_contradictions_match_suffix_variation_and_insider_gap():
     assert any("more insider signals" in c for c in contradictions)
 
 
-@pytest.mark.asyncio
-async def test_cross_vendor_reasoner_runs_classify_challenge_ground(monkeypatch):
+def test_cross_vendor_reasoner_runs_classify_challenge_ground(monkeypatch):
     cache = _FakeCache()
-    llm = _MockLLM([
-        _make_xv_conclusion(winner="Acme", loser="Bravo", confidence=0.8),
-        _make_xv_conclusion(winner="Bravo", loser="Acme", confidence=0.7),
-        _make_xv_conclusion(winner="Bravo", loser="Acme", confidence=0.72),
-    ])
+    llm = _MockLLM([_make_xv_conclusion()])
+    seen = {}
+
+    async def _fake_multi_pass_reason(**kwargs):
+        seen["finder"] = kwargs.get("contradiction_finder")
+        return MultiPassResult(
+            final_conclusion=_make_xv_conclusion(winner="Bravo", loser="Acme", confidence=0.72),
+            passes=[
+                PassResult(1, "classify", _make_xv_conclusion(winner="Acme", loser="Bravo", confidence=0.8), 150, 1.0, False),
+                PassResult(2, "challenge", _make_xv_conclusion(winner="Bravo", loser="Acme", confidence=0.7), 150, 1.0, True),
+                PassResult(3, "ground", _make_xv_conclusion(winner="Bravo", loser="Acme", confidence=0.72), 150, 1.0, False),
+            ],
+            total_tokens=450,
+            total_duration_ms=3.0,
+            passes_executed=3,
+        )
+
     monkeypatch.setattr("atlas_brain.reasoning.cross_vendor.resolve_stratified_llm", lambda cfg: llm)
+    monkeypatch.setattr("atlas_brain.reasoning.cross_vendor.multi_pass_reason", _fake_multi_pass_reason)
 
-    reasoner = CrossVendorReasoner(cache)
-    result = await reasoner.analyze_battle(
-        "Acme",
-        "Bravo",
-        evidence_a={"velocity_churn_density": 0.3, "recommend_ratio": 10, "total_reviews": 50},
-        evidence_b={"velocity_churn_density": -0.2, "recommend_ratio": 35, "total_reviews": 55},
-        displacement_edge={"mention_count": 12},
-    )
+    async def _run():
+        reasoner = CrossVendorReasoner(cache)
+        return await reasoner.analyze_battle(
+            "Acme",
+            "Bravo",
+            evidence_a={"velocity_churn_density": 0.3, "recommend_ratio": 10, "total_reviews": 50},
+            evidence_b={"velocity_churn_density": -0.2, "recommend_ratio": 35, "total_reviews": 55},
+            displacement_edge={"mention_count": 12},
+        )
 
-    assert llm.call_count == 3
+    result = asyncio.run(_run())
+
+    assert seen["finder"] is not None
     assert result.conclusion["winner"] == "Bravo"
     assert len(cache.stored) == 1
 
 
-@pytest.mark.asyncio
-async def test_cross_vendor_reasoner_skips_ground_when_challenge_unchanged(monkeypatch):
+def test_cross_vendor_reasoner_skips_ground_when_challenge_unchanged(monkeypatch):
     cache = _FakeCache()
-    llm = _MockLLM([
-        _make_xv_conclusion(winner="Acme", loser="Bravo", confidence=0.8),
-        _make_xv_conclusion(winner="Acme", loser="Bravo", confidence=0.79),
-    ])
+    llm = _MockLLM([_make_xv_conclusion()])
+
+    async def _fake_multi_pass_reason(**kwargs):
+        return MultiPassResult(
+            final_conclusion=_make_xv_conclusion(winner="Acme", loser="Bravo", confidence=0.79),
+            passes=[
+                PassResult(1, "classify", _make_xv_conclusion(winner="Acme", loser="Bravo", confidence=0.8), 150, 1.0, False),
+                PassResult(2, "challenge", _make_xv_conclusion(winner="Acme", loser="Bravo", confidence=0.79), 150, 1.0, False),
+            ],
+            total_tokens=300,
+            total_duration_ms=2.0,
+            passes_executed=2,
+        )
+
     monkeypatch.setattr("atlas_brain.reasoning.cross_vendor.resolve_stratified_llm", lambda cfg: llm)
+    monkeypatch.setattr("atlas_brain.reasoning.cross_vendor.multi_pass_reason", _fake_multi_pass_reason)
 
-    reasoner = CrossVendorReasoner(cache)
-    result = await reasoner.analyze_battle(
-        "Acme",
-        "Bravo",
-        evidence_a={"velocity_churn_density": 0.3, "recommend_ratio": 10, "total_reviews": 50},
-        evidence_b={"velocity_churn_density": -0.2, "recommend_ratio": 35, "total_reviews": 55},
-        displacement_edge={"mention_count": 12},
-    )
+    async def _run():
+        reasoner = CrossVendorReasoner(cache)
+        return await reasoner.analyze_battle(
+            "Acme",
+            "Bravo",
+            evidence_a={"velocity_churn_density": 0.3, "recommend_ratio": 10, "total_reviews": 50},
+            evidence_b={"velocity_churn_density": -0.2, "recommend_ratio": 35, "total_reviews": 55},
+            displacement_edge={"mention_count": 12},
+        )
 
-    assert llm.call_count == 2
+    result = asyncio.run(_run())
+
     assert result.conclusion["winner"] == "Acme"
     assert len(cache.stored) == 1

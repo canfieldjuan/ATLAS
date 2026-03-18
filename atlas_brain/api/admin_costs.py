@@ -53,6 +53,8 @@ def _describe_recent_call(span_name: str, metadata: dict) -> tuple[str, str | No
         return "Stratified Reasoning", f"Ground{f' for {vendor_name}' if vendor_name else ''}"
     if span_name == "reasoning.stratified.reconstitute":
         return "Stratified Reasoning", f"Reconstitute{f' for {vendor_name}' if vendor_name else ''}"
+    if span_name == "reasoning.stratified.reconstitute.reason":
+        return "Stratified Reasoning", f"Reconstitute classify{f' for {vendor_name}' if vendor_name else ''}"
     if span_name == "reasoning.stratified.reconstitute.reason.ground":
         return "Stratified Reasoning", f"Reconstitute ground{f' for {vendor_name}' if vendor_name else ''}"
     if span_name == "b2b.churn_intelligence.exploratory_overview":

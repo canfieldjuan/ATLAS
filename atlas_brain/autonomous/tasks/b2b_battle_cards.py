@@ -18,6 +18,149 @@ from ...storage.models import ScheduledTask
 
 logger = logging.getLogger("atlas.tasks.b2b_battle_cards")
 
+_BATTLE_CARD_LLM_FIELDS = (
+    "executive_summary",
+    "weakness_analysis",
+    "discovery_questions",
+    "landmine_questions",
+    "objection_handlers",
+    "competitive_landscape",
+    "talk_track",
+    "recommended_plays",
+)
+
+_BATTLE_CARD_SALES_COPY_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "executive_summary": {"type": "string"},
+        "weakness_analysis": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "weakness": {"type": "string"},
+                    "evidence": {"type": "string"},
+                    "customer_quote": {"type": "string"},
+                    "winning_position": {"type": "string"},
+                },
+                "required": ["weakness", "evidence", "customer_quote", "winning_position"],
+            },
+        },
+        "discovery_questions": {"type": "array", "items": {"type": "string"}},
+        "landmine_questions": {"type": "array", "items": {"type": "string"}},
+        "objection_handlers": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "objection": {"type": "string"},
+                    "acknowledge": {"type": "string"},
+                    "pivot": {"type": "string"},
+                    "proof_point": {"type": "string"},
+                },
+                "required": ["objection", "acknowledge", "pivot", "proof_point"],
+            },
+        },
+        "competitive_landscape": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "vulnerability_window": {"type": "string"},
+                "top_alternatives": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": {"type": "string"}},
+                    ]
+                },
+                "displacement_triggers": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["vulnerability_window", "top_alternatives", "displacement_triggers"],
+        },
+        "talk_track": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "opening": {"type": "string"},
+                "mid_call_pivot": {"type": "string"},
+                "closing": {"type": "string"},
+            },
+            "required": ["opening", "mid_call_pivot", "closing"],
+        },
+        "recommended_plays": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "play": {"type": "string"},
+                    "target_segment": {"type": "string"},
+                    "key_message": {"type": "string"},
+                    "timing": {"type": "string"},
+                },
+                "required": ["play", "target_segment", "key_message", "timing"],
+            },
+        },
+    },
+    "required": [
+        "executive_summary",
+        "weakness_analysis",
+        "discovery_questions",
+        "landmine_questions",
+        "objection_handlers",
+        "competitive_landscape",
+        "talk_track",
+        "recommended_plays",
+    ],
+}
+
+
+def _parse_battle_card_sales_copy(text: str | None) -> dict[str, Any]:
+    """Parse battle-card LLM output with truncation recovery enabled."""
+    from ...pipelines.llm import parse_json_response
+
+    parsed = parse_json_response(text or "", recover_truncated=True)
+    if parsed.get("_parse_fallback"):
+        return parsed
+    if any(field in parsed for field in _BATTLE_CARD_LLM_FIELDS):
+        return parsed
+    return {"analysis_text": text or "", "_parse_fallback": True}
+
+
+def _battle_card_prior_attempt(parsed_copy: dict[str, Any]) -> Any:
+    """Convert invalid parse fallbacks into a raw draft for retry prompts."""
+    if not isinstance(parsed_copy, dict):
+        return parsed_copy
+    if not parsed_copy.get("_parse_fallback"):
+        return parsed_copy
+    raw_text = str(parsed_copy.get("analysis_text") or "").strip()
+    return raw_text or {}
+
+
+def _battle_card_llm_options(cfg: Any) -> dict[str, Any]:
+    """Resolve backend-specific call_llm_with_skill options for battle cards."""
+    backend = str(getattr(cfg, "battle_card_llm_backend", "auto") or "auto").strip().lower()
+    if backend == "anthropic":
+        return {
+            "workload": "anthropic",
+            "try_openrouter": False,
+            "openrouter_model": None,
+        }
+    if backend == "openrouter":
+        model = str(getattr(cfg, "battle_card_openrouter_model", "") or "").strip() or None
+        return {
+            "workload": "synthesis",
+            "try_openrouter": True,
+            "openrouter_model": model,
+        }
+    return {
+        "workload": "synthesis",
+        "try_openrouter": True,
+        "openrouter_model": None,
+    }
+
 
 async def _check_freshness(pool) -> date | None:
     """Return today's date if core task wrote a completion marker, else None."""
@@ -61,6 +204,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _build_department_lookup,
         _build_usage_duration_lookup,
         _build_timeline_lookup,
+        _build_battle_card_locked_facts,
         _canonicalize_vendor,
         _sanitize_battle_card_sales_copy,
         _validate_battle_card_sales_copy,
@@ -244,17 +388,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     logger.info("Built %d deterministic battle cards", len(deterministic_battle_cards))
 
     # --- Phase 5: LLM sales copy (parallel with semantic cache) ---
-    from ...pipelines.llm import call_llm_with_skill, parse_json_response
+    from ...pipelines.llm import call_llm_with_skill
     from ...reasoning.semantic_cache import SemanticCache, CacheEntry, compute_evidence_hash
 
     _bc_cache = SemanticCache(pool)
     bc_llm_failures = 0
     bc_cache_hits = 0
-    _bc_llm_fields = (
-        "executive_summary", "weakness_analysis", "discovery_questions",
-        "landmine_questions", "objection_handlers", "competitive_landscape",
-        "talk_track", "recommended_plays",
-    )
     bc_sem = asyncio.Semaphore(cfg.battle_card_llm_concurrency)
     max_attempts = cfg.battle_card_llm_attempts
     retry_delay = cfg.battle_card_llm_retry_delay_seconds
@@ -263,6 +402,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     llm_temperature = cfg.battle_card_llm_temperature
     llm_timeout = cfg.battle_card_llm_timeout_seconds
     cache_confidence = cfg.battle_card_cache_confidence
+    llm_options = _battle_card_llm_options(cfg)
 
     async def _request_sales_copy(payload: dict[str, Any]) -> dict[str, Any]:
         sales_copy = await asyncio.wait_for(
@@ -272,12 +412,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 json.dumps(payload, default=str),
                 max_tokens=llm_max_tokens,
                 temperature=llm_temperature,
+                guided_json=_BATTLE_CARD_SALES_COPY_JSON_SCHEMA,
                 response_format={"type": "json_object"},
-                workload="synthesis",
+                workload=llm_options["workload"],
+                try_openrouter=llm_options["try_openrouter"],
+                openrouter_model=llm_options["openrouter_model"],
             ),
             timeout=llm_timeout,
         )
-        return parse_json_response(sales_copy)
+        return _parse_battle_card_sales_copy(sales_copy)
 
     async def _enrich_one(card: dict[str, Any]) -> None:
         nonlocal bc_llm_failures, bc_cache_hits
@@ -309,6 +452,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
         async with bc_sem:
             payload = dict(card)
+            payload["locked_facts"] = _build_battle_card_locked_facts(card)
             failure_reasons: list[str] = []
             for attempt in range(max_attempts):
                 try:
@@ -328,7 +472,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                                 parsed_copy = sanitized_copy
                                 copy_errors = []
                         if not copy_errors:
-                            for _f in _bc_llm_fields:
+                            for _f in _BATTLE_CARD_LLM_FIELDS:
                                 if _f in parsed_copy:
                                     card[_f] = parsed_copy[_f]
                             break
@@ -339,7 +483,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                                    card.get("vendor"), "; ".join(failure_reasons[:3]))
                     return
                 payload = dict(card)
-                payload["prior_attempt"] = parsed_copy
+                payload["locked_facts"] = _build_battle_card_locked_facts(card)
+                payload["prior_attempt"] = _battle_card_prior_attempt(parsed_copy)
                 payload["validation_feedback"] = failure_reasons[:feedback_limit]
                 if retry_delay > 0:
                     await asyncio.sleep(retry_delay)
@@ -348,7 +493,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 await _bc_cache.store(CacheEntry(
                     pattern_sig=pattern_sig,
                     pattern_class="battle_card_sales_copy",
-                    conclusion={_f: card[_f] for _f in _bc_llm_fields if _f in card},
+                    conclusion={_f: card[_f] for _f in _BATTLE_CARD_LLM_FIELDS if _f in card},
                     confidence=cache_confidence,
                     evidence_hash=card_hash,
                     vendor_name=card.get("vendor"),

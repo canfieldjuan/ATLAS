@@ -93,7 +93,7 @@ def _compute_account_opportunity_score(account: dict[str, Any]) -> tuple[int, di
     return total, components
 
 
-def _normalize_company_key(company: str) -> str:
+def _normalize_company_key(company: str | None) -> str:
     """Normalize a company name for dedup key purposes."""
     return (company or "").strip().lower()
 
@@ -102,7 +102,7 @@ def _normalize_company_key(company: str) -> str:
 # New lightweight query: company signal metadata
 # ---------------------------------------------------------------------------
 
-async def _fetch_company_signal_metadata(pool) -> list[dict[str, Any]]:
+async def _fetch_company_signal_metadata(pool, window_days: int = 90) -> list[dict[str, Any]]:
     """Read first_seen_at, last_seen_at, confidence from b2b_company_signals."""
     rows = await pool.fetch(
         """
@@ -110,7 +110,9 @@ async def _fetch_company_signal_metadata(pool) -> list[dict[str, Any]]:
                first_seen_at, last_seen_at,
                urgency_score AS confidence
         FROM b2b_company_signals
-        """
+        WHERE last_seen_at > NOW() - make_interval(days => $1)
+        """,
+        window_days,
     )
     return [
         {
@@ -145,7 +147,7 @@ def _merge_company_profiles(
     """
     from ._b2b_shared import _canonicalize_vendor
 
-    profiles: dict[str, dict[str, Any]] = {}
+    profiles: dict[tuple[str, str], dict[str, Any]] = {}
 
     # 1. Base from high_intent -- group by key, take highest-urgency
     for row in high_intent:
@@ -222,10 +224,9 @@ def _merge_company_profiles(
                 existing["contract_end"] = row["contract_end"]
 
     # 2. Fill from timeline signals
-    from ._b2b_shared import _canonicalize_vendor as _cv
     for row in timeline_signals:
         company = row.get("company") or ""
-        vendor = _cv(row.get("vendor") or "")
+        vendor = _canonicalize_vendor(row.get("vendor") or "")
         key = (_normalize_company_key(company), vendor)
         prof = profiles.get(key)
         if prof is None:
@@ -245,7 +246,7 @@ def _merge_company_profiles(
 
     # 3. Fill from churning companies (vendor -> [{company, title, company_size, industry, ...}])
     for vendor_row in churning_companies:
-        vendor = _cv(vendor_row.get("vendor") or "")
+        vendor = _canonicalize_vendor(vendor_row.get("vendor") or "")
         for c in (vendor_row.get("companies") or []):
             company = c.get("company") or ""
             key = (_normalize_company_key(company), vendor)
@@ -262,7 +263,7 @@ def _merge_company_profiles(
     # 4. Attach quote (highest-urgency per vendor, match by company)
     quote_by_vendor: dict[str, list[dict]] = {}
     for qr in quotable_evidence:
-        vendor = _cv(qr.get("vendor") or "")
+        vendor = _canonicalize_vendor(qr.get("vendor") or "")
         for q in (qr.get("quotes") or []):
             quote_by_vendor.setdefault(vendor, []).append(q)
 
@@ -286,7 +287,7 @@ def _merge_company_profiles(
     # 5. Attach metadata from b2b_company_signals
     meta_lookup: dict[tuple[str, str], dict] = {}
     for m in signal_metadata:
-        mk = (_normalize_company_key(m.get("company") or ""), _cv(m.get("vendor") or ""))
+        mk = (_normalize_company_key(m.get("company") or ""), _canonicalize_vendor(m.get("vendor") or ""))
         meta_lookup[mk] = m
 
     for key, prof in profiles.items():
@@ -325,7 +326,7 @@ def _build_vendor_aggregate(
     # Feature gaps (top 10)
     vendor_gaps = feature_gap_lookup.get(vendor, [])[:10]
     feature_gaps = [
-        {"feature": g.get("feature") or g.get("feature_gap", ""), "mentions": g.get("mentions", 0)}
+        {"feature": g.get("feature", ""), "mentions": g.get("mentions", 0)}
         for g in vendor_gaps
     ]
 
@@ -457,7 +458,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             _fetch_price_complaint_rates(pool, window_days),
             _fetch_budget_signals(pool, window_days),
             _fetch_competitive_displacement(pool, window_days),
-            _fetch_company_signal_metadata(pool),
+            _fetch_company_signal_metadata(pool, window_days),
         )
     except Exception:
         logger.exception("Accounts in motion data fetch failed")
@@ -504,10 +505,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         vendor_accounts[vendor].sort(key=lambda a: a.get("opportunity_score", 0), reverse=True)
         vendor_accounts[vendor] = vendor_accounts[vendor][:max_per_vendor]
 
-    # Build lookups
+    # Build lookups (canonicalize vendor keys to match merged profiles)
     feature_gap_lookup = _build_feature_gap_lookup(feature_gaps)
-    price_lookup = {r["vendor"]: r["price_complaint_rate"] for r in price_rates}
-    budget_lookup = {r["vendor"]: {k: v for k, v in r.items() if k != "vendor"} for r in budget_signals}
+    price_lookup = {_canonicalize_vendor(r["vendor"]): r["price_complaint_rate"] for r in price_rates}
+    budget_lookup = {
+        _canonicalize_vendor(r["vendor"]): {k: v for k, v in r.items() if k != "vendor"}
+        for r in budget_signals
+    }
     competitor_lookup = _build_competitor_lookup(competitive_disp)
 
     aggregates: list[dict[str, Any]] = []

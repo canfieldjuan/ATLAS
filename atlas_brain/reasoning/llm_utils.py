@@ -71,11 +71,20 @@ REASONING_CONCLUSION_JSON_SCHEMA = {
 }
 
 
+_SLOT_HEAVY = "reasoning_heavy"
+_SLOT_LIGHT = "reasoning_light"
+
+
 def resolve_stratified_llm(cfg: Any) -> Any:
-    """Resolve the configured LLM for stratified reasoning.
+    """Resolve the Tier 1 (heavy) LLM for stratified reasoning.
+
+    Used for: archetype classification (Pass 1), pairwise battles.
+
+    Uses a named registry slot so it does not evict the primary LLM
+    used by voice, chat, and other subsystems.
 
     Workload options:
-    - ``openrouter``: OpenRouter with configured model (default: openai/o4-mini)
+    - ``openrouter``: OpenRouter with ``stratified_openrouter_model``
     - ``vllm``: local vLLM server
     - ``anthropic``: configured Anthropic model
     - ``auto``: try Anthropic, then reasoning router, then pipeline fallback
@@ -85,7 +94,7 @@ def resolve_stratified_llm(cfg: Any) -> Any:
     workload = (cfg.stratified_llm_workload or "openrouter").strip().lower()
 
     if workload == "openrouter":
-        return _activate_openrouter(cfg, llm_registry)
+        return _activate_openrouter_slot(cfg, llm_registry, _SLOT_HEAVY)
 
     if workload == "vllm":
         return get_pipeline_llm(workload="vllm", auto_activate_ollama=False)
@@ -109,31 +118,66 @@ def resolve_stratified_llm(cfg: Any) -> Any:
     return get_pipeline_llm(workload="reasoning", auto_activate_ollama=False)
 
 
-def _activate_openrouter(cfg: Any, llm_registry: Any) -> Any:
-    """Activate OpenRouter with the configured stratified reasoning model."""
+def resolve_stratified_llm_light(cfg: Any) -> Any:
+    """Resolve the Tier 2 (light) LLM for secondary reasoning tasks.
+
+    Used for: challenge/ground passes, reconstitute, category councils,
+    resource asymmetry.  Falls back to the heavy model if not configured.
+
+    Uses a separate named registry slot so heavy and light models
+    coexist without evicting each other or the primary system LLM.
+    """
+    from ..services import llm_registry
+
+    workload = (cfg.stratified_llm_workload or "openrouter").strip().lower()
+    if workload != "openrouter":
+        return resolve_stratified_llm(cfg)
+
+    light_model = getattr(cfg, "stratified_openrouter_model_light", "") or ""
+    if not light_model:
+        return resolve_stratified_llm(cfg)
+
+    # If heavy and light are the same model, share one slot
+    heavy_model = cfg.stratified_openrouter_model or ""
+    if light_model == heavy_model:
+        return resolve_stratified_llm(cfg)
+
+    api_key = _openrouter_api_key()
+    if not api_key:
+        return resolve_stratified_llm(cfg)
+
+    return _activate_openrouter_slot(cfg, llm_registry, _SLOT_LIGHT, model_override=light_model)
+
+
+def _activate_openrouter_slot(
+    cfg: Any, llm_registry: Any, slot_name: str, *, model_override: str = "",
+) -> Any:
+    """Ensure an OpenRouter model is loaded in a named registry slot.
+
+    Reuses the existing slot instance when the model already matches.
+    """
     api_key = _openrouter_api_key()
     if not api_key:
         logger.warning("No OpenRouter API key found, falling back to pipeline LLM")
         return get_pipeline_llm(workload="reasoning", auto_activate_ollama=False)
 
-    model = cfg.stratified_openrouter_model or "openai/o4-mini"
+    model = model_override or cfg.stratified_openrouter_model or "openai/o4-mini"
 
-    # Check if already active with the right model
-    active = llm_registry.get_active()
-    if (
-        active is not None
-        and getattr(active, "name", "") == "openrouter"
-        and _matches_model(active, model)
-    ):
-        return active
+    existing = llm_registry.get_slot(slot_name)
+    if existing is not None and _matches_model(existing, model):
+        return existing
 
     try:
-        llm_registry.activate("openrouter", model=model, api_key=api_key)
-        llm = llm_registry.get_active()
-        logger.info("Activated OpenRouter for stratified reasoning: %s", model)
-        return llm
+        instance = llm_registry.activate_slot(
+            slot_name, "openrouter", model=model, api_key=api_key,
+        )
+        logger.info("Reasoning slot '%s' -> %s", slot_name, model)
+        return instance
     except Exception:
-        logger.warning("Failed to activate OpenRouter (%s), falling back", model, exc_info=True)
+        logger.warning(
+            "Failed to activate OpenRouter slot '%s' (%s), falling back",
+            slot_name, model, exc_info=True,
+        )
         return get_pipeline_llm(workload="reasoning", auto_activate_ollama=False)
 
 

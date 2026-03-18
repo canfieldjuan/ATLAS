@@ -2,18 +2,18 @@
 
 Classifies evidence deltas between a cached reasoning trace and new data,
 then decides whether to Reconstitute (LLM patches the conclusion with the
-delta only, ~30% token cost) or escalate to full Reason (~100% cost).
+delta only) or escalate to full Reason.
 
 Evidence classification:
-    CONFIRMED   - New data supports old evidence (skip)
-    CONTRADICTED - New data conflicts with old evidence (must reason)
-    MISSING     - Old evidence no longer present in new data (must reason)
-    NOVEL       - New evidence not in original trace (must reason)
+    CONFIRMED    - New data supports old evidence
+    CONTRADICTED - New data conflicts with old evidence
+    MISSING      - Old evidence no longer present in new data
+    NOVEL        - New evidence not in original trace
 
 Decision:
-    diff_ratio = (contradicted + novel) / total
-    if diff_ratio < RECONSTITUTE_THRESHOLD (0.3): Reconstitute
-    else: full Reason
+    weighted drift scores changes by business value, not just raw field count.
+    Pain/theme shifts, buyer-role mix changes, and temporal changes weigh more
+    than low-signal cosmetic fields. Missing evidence counts as change.
 """
 
 from __future__ import annotations
@@ -30,14 +30,27 @@ from .llm_utils import REASONING_CONCLUSION_JSON_SCHEMA, resolve_stratified_llm
 
 logger = logging.getLogger("atlas.reasoning.differential")
 
-RECONSTITUTE_THRESHOLD = 0.3
-
 
 class EvidenceStatus(str, Enum):
     CONFIRMED = "confirmed"
     CONTRADICTED = "contradicted"
     MISSING = "missing"
     NOVEL = "novel"
+
+
+@dataclass(frozen=True)
+class DiffTuning:
+    """Operational tuning for evidence drift scoring."""
+
+    reconstitute_threshold: float = 0.3
+    core_weight: float = 4.0
+    thematic_weight: float = 3.0
+    segment_weight: float = 3.0
+    temporal_weight: float = 3.0
+    quote_weight: float = 1.5
+    minor_weight: float = 1.0
+    strategic_component_threshold: float = 3.0
+    contradiction_emergence_threshold: float = 4.0
 
 
 @dataclass
@@ -48,6 +61,7 @@ class EvidenceDiff:
     contradicted: list[tuple[str, str, str]] = field(default_factory=list)  # (key, old, new)
     missing: list[str] = field(default_factory=list)
     novel: list[tuple[str, str]] = field(default_factory=list)  # (key, value)
+    tuning: DiffTuning = field(default_factory=DiffTuning)
 
     @property
     def total(self) -> int:
@@ -55,15 +69,80 @@ class EvidenceDiff:
 
     @property
     def change_count(self) -> int:
-        return len(self.contradicted) + len(self.novel)
+        return len(self.contradicted) + len(self.novel) + len(self.missing)
 
     # Core signal fields where changes matter more
     _CORE_FIELDS = frozenset({
         "churn_density", "avg_urgency", "churn_intent", "total_reviews",
         "dm_churn_rate", "price_complaint_rate", "displacement_mention_count",
     })
-    _CORE_WEIGHT = 3.0
-    _MINOR_WEIGHT = 1.0
+    _THEMATIC_FIELDS = frozenset({
+        "pain_categories", "competitors", "feature_gaps", "market_regime",
+        "support_sentiment", "legacy_support_score", "new_feature_velocity",
+        "employee_growth_rate", "keyword_spike_count", "keyword_spike_keywords",
+        "insider_signal_count", "insider_talent_drain_rate",
+    })
+    _SEGMENT_FIELDS = frozenset({
+        "buyer_authority", "budget_context", "top_use_cases",
+    })
+    _QUOTE_FIELDS = frozenset({
+        "quote_count", "top_quote",
+    })
+    _TEMPORAL_FIELDS = frozenset({
+        "anomalies", "velocity_trend", "snapshot_days",
+        "displacement_velocity_7d", "displacement_velocity_30d",
+    })
+    _TEMPORAL_PREFIXES = ("velocity_", "accel_", "trend_30d_", "trend_90d_")
+    _PAIN_COMPONENT_FIELDS = frozenset({
+        "pain_categories", "feature_gaps", "support_sentiment",
+        "legacy_support_score", "new_feature_velocity",
+    })
+    _ROLE_COMPONENT_FIELDS = frozenset({
+        "buyer_authority", "top_use_cases", "budget_context",
+    })
+    _COMPETITIVE_COMPONENT_FIELDS = frozenset({
+        "competitors", "displacement_mention_count", "market_regime",
+        "displacement_velocity_7d", "displacement_velocity_30d", "velocity_trend",
+    })
+    _QUOTE_COMPONENT_FIELDS = frozenset({
+        "quote_count", "top_quote",
+    })
+
+    @property
+    def component_scores(self) -> dict[str, float]:
+        """Explainable weighted drift by strategic component."""
+        scores = {
+            "pain_distribution": 0.0,
+            "role_mix": 0.0,
+            "competitive_shift": 0.0,
+            "temporal_shift": 0.0,
+            "quote_novelty": 0.0,
+            "contradiction_emergence": 0.0,
+        }
+        for key, _, _ in self.contradicted:
+            self._apply_component_weight(scores, key, contradiction=True)
+        for key in self.missing:
+            self._apply_component_weight(scores, key, contradiction=True)
+        for key, _ in self.novel:
+            self._apply_component_weight(scores, key, contradiction=False)
+        return {name: round(score, 4) for name, score in scores.items() if score > 0}
+
+    @property
+    def has_strategic_shift(self) -> bool:
+        """True when a single strategic component has materially shifted."""
+        scores = self.component_scores
+        for name in ("pain_distribution", "role_mix", "competitive_shift", "temporal_shift"):
+            if scores.get(name, 0.0) >= self.tuning.strategic_component_threshold:
+                return True
+        return False
+
+    @property
+    def has_contradiction_emergence(self) -> bool:
+        """True when contradictory or missing evidence has accumulated materially."""
+        return (
+            self.component_scores.get("contradiction_emergence", 0.0)
+            >= self.tuning.contradiction_emergence_threshold
+        )
 
     @property
     def diff_ratio(self) -> float:
@@ -73,24 +152,25 @@ class EvidenceDiff:
 
     @property
     def weighted_diff_ratio(self) -> float:
-        """Importance-weighted diff ratio. Core signal changes count 3x."""
+        """Importance-weighted diff ratio."""
         if self.total == 0:
             return 1.0
         weighted_changes = 0.0
         weighted_total = 0.0
         for key, _, _ in self.contradicted:
-            w = self._CORE_WEIGHT if key in self._CORE_FIELDS else self._MINOR_WEIGHT
+            w = self._weight_for_key(key)
             weighted_changes += w
             weighted_total += w
         for key, _ in self.novel:
-            w = self._CORE_WEIGHT if key in self._CORE_FIELDS else self._MINOR_WEIGHT
+            w = self._weight_for_key(key)
+            weighted_changes += w
+            weighted_total += w
+        for key in self.missing:
+            w = self._weight_for_key(key)
             weighted_changes += w
             weighted_total += w
         for key in self.confirmed:
-            w = self._CORE_WEIGHT if key in self._CORE_FIELDS else self._MINOR_WEIGHT
-            weighted_total += w
-        for key in self.missing:
-            w = self._CORE_WEIGHT if key in self._CORE_FIELDS else self._MINOR_WEIGHT
+            w = self._weight_for_key(key)
             weighted_total += w
         return weighted_changes / weighted_total if weighted_total > 0 else 1.0
 
@@ -106,7 +186,45 @@ class EvidenceDiff:
             return False
         if self.has_core_contradiction:
             return False  # core signal changed -> full reason always
-        return self.weighted_diff_ratio < RECONSTITUTE_THRESHOLD
+        if self.has_strategic_shift:
+            return False
+        if self.has_contradiction_emergence:
+            return False
+        return self.weighted_diff_ratio < self.tuning.reconstitute_threshold
+
+    def _weight_for_key(self, key: str) -> float:
+        if key in self._CORE_FIELDS:
+            return self.tuning.core_weight
+        if key in self._THEMATIC_FIELDS:
+            return self.tuning.thematic_weight
+        if key in self._SEGMENT_FIELDS:
+            return self.tuning.segment_weight
+        if key in self._QUOTE_FIELDS:
+            return self.tuning.quote_weight
+        if key in self._TEMPORAL_FIELDS or key.startswith(self._TEMPORAL_PREFIXES):
+            return self.tuning.temporal_weight
+        return self.tuning.minor_weight
+
+    def _apply_component_weight(
+        self,
+        scores: dict[str, float],
+        key: str,
+        *,
+        contradiction: bool,
+    ) -> None:
+        weight = self._weight_for_key(key)
+        if key in self._PAIN_COMPONENT_FIELDS:
+            scores["pain_distribution"] += weight
+        if key in self._ROLE_COMPONENT_FIELDS:
+            scores["role_mix"] += weight
+        if key in self._COMPETITIVE_COMPONENT_FIELDS:
+            scores["competitive_shift"] += weight
+        if key in self._QUOTE_COMPONENT_FIELDS:
+            scores["quote_novelty"] += weight
+        if key in self._TEMPORAL_FIELDS or key.startswith(self._TEMPORAL_PREFIXES):
+            scores["temporal_shift"] += weight
+        if contradiction:
+            scores["contradiction_emergence"] += weight
 
     def summary(self) -> str:
         parts = []
@@ -121,7 +239,32 @@ class EvidenceDiff:
         ratio_pct = self.weighted_diff_ratio * 100
         mode = "reconstitute" if self.should_reconstitute else "full_reason"
         core = " [core contradiction]" if self.has_core_contradiction else ""
-        return f"weighted_diff={ratio_pct:.0f}% ({', '.join(parts)}){core} -> {mode}"
+        top_components = sorted(
+            self.component_scores.items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )[:2]
+        comp_text = ""
+        if top_components:
+            comp_text = " [" + ", ".join(f"{name}={score:.1f}" for name, score in top_components) + "]"
+        return f"weighted_diff={ratio_pct:.0f}% ({', '.join(parts)}){core}{comp_text} -> {mode}"
+
+
+def build_diff_tuning(cfg: Any | None = None) -> DiffTuning:
+    """Build differential tuning from ReasoningConfig-like settings."""
+    if cfg is None:
+        return DiffTuning()
+    return DiffTuning(
+        reconstitute_threshold=float(getattr(cfg, "reconstitute_threshold", 0.3)),
+        core_weight=float(getattr(cfg, "reconstitute_core_weight", 4.0)),
+        thematic_weight=float(getattr(cfg, "reconstitute_thematic_weight", 3.0)),
+        segment_weight=float(getattr(cfg, "reconstitute_segment_weight", 3.0)),
+        temporal_weight=float(getattr(cfg, "reconstitute_temporal_weight", 3.0)),
+        quote_weight=float(getattr(cfg, "reconstitute_quote_weight", 1.5)),
+        minor_weight=float(getattr(cfg, "reconstitute_minor_weight", 1.0)),
+        strategic_component_threshold=float(getattr(cfg, "reconstitute_strategic_component_threshold", 3.0)),
+        contradiction_emergence_threshold=float(getattr(cfg, "reconstitute_contradiction_emergence_threshold", 4.0)),
+    )
 
 
 def classify_evidence(
@@ -129,6 +272,7 @@ def classify_evidence(
     new_evidence: dict[str, Any],
     *,
     numeric_tolerance: float = 0.05,
+    tuning: DiffTuning | None = None,
 ) -> EvidenceDiff:
     """Classify each evidence field as confirmed/contradicted/missing/novel.
 
@@ -136,7 +280,7 @@ def classify_evidence(
     treated as confirmed.  For lists, element-level comparison (order-insensitive).
     For strings, exact match.
     """
-    diff = EvidenceDiff()
+    diff = EvidenceDiff(tuning=tuning or DiffTuning())
     old_keys = set(old_evidence.keys())
     new_keys = set(new_evidence.keys())
 
@@ -321,8 +465,9 @@ async def reconstitute(
     }
 
     from .config import ReasoningConfig
+    from .llm_utils import resolve_stratified_llm_light
     _rcfg = ReasoningConfig()
-    llm = resolve_stratified_llm(_rcfg)
+    llm = resolve_stratified_llm_light(_rcfg)  # reconstitute uses light model
     if llm is None:
         logger.error(
             "No LLM available for reconstitution (workload=%s)",

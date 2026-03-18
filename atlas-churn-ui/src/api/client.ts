@@ -4,6 +4,8 @@ import type {
   ChurnSignalDetail,
   HighIntentCompany,
   VendorProfile,
+  VendorHistoryResponse,
+  VendorPeriodComparisonResponse,
   Report,
   ReportDetail,
   ReviewSummary,
@@ -148,7 +150,21 @@ export async function fetchSignals(params?: {
   category?: string
   limit?: number
 }) {
-  return get<{ signals: ChurnSignal[]; count: number }>(BASE, '/signals', params)
+  return get<{
+    signals: ChurnSignal[]
+    count: number
+    total_vendors?: number
+    high_urgency_count?: number
+    total_signal_reviews?: number
+  }>(BASE, '/signals', params)
+}
+
+export async function fetchSlowBurnWatchlist(params?: {
+  vendor_name?: string
+  category?: string
+  limit?: number
+}) {
+  return get<{ signals: ChurnSignal[]; count: number }>(BASE, '/slow-burn-watchlist', params)
 }
 
 export async function fetchSignal(vendorName: string, productCategory?: string) {
@@ -168,6 +184,26 @@ export async function fetchHighIntent(params?: {
 
 export async function fetchVendorProfile(vendorName: string) {
   return get<VendorProfile>(BASE, `/vendors/${encodeURIComponent(vendorName)}`)
+}
+
+export async function fetchVendorHistory(vendorName: string, params?: {
+  days?: number
+  limit?: number
+}) {
+  return get<VendorHistoryResponse>(BASE, '/vendor-history', {
+    vendor_name: vendorName,
+    ...params,
+  })
+}
+
+export async function compareVendorPeriods(vendorName: string, params?: {
+  period_a_days_ago?: number
+  period_b_days_ago?: number
+}) {
+  return get<VendorPeriodComparisonResponse>(BASE, '/compare-vendor-periods', {
+    vendor_name: vendorName,
+    ...params,
+  })
 }
 
 export async function fetchReports(params?: {

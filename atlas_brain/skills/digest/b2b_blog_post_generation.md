@@ -88,7 +88,8 @@ If `source_name` is not provided in the quotable phrase data, use `> "quote text
     "data_source_label": "Public B2B software review platforms",
     "data_disclaimer": "Analysis based on self-selected reviewer feedback...",
     "data_quality": {"sample_size": 127, "confidence": "high", "note": "Based on 127 enriched reviews"},
-    "source_distribution": {"sources": [...], "verified_count": 52, "community_count": 31}
+    "source_distribution": {"sources": [...], "verified_count": 52, "community_count": 31},
+    "market_regime": "high_churn"
   },
   "sections": [...],
   "available_charts": [...],
@@ -157,6 +158,7 @@ Return valid JSON with exactly these keys:
 13. **Epistemic humility**: Frame findings appropriately. Use "reviewers report..." or "complaint patterns suggest..." rather than stating them as universal facts. When discussing vendor capabilities, distinguish between the platform's technical capability and reviewer experiences with it.
 14. **Support and policy claims**: When discussing vendor support, policies, or enforcement practices, attribute claims to reviewer experiences rather than presenting them as vendor policy.
 15. **Sample size context**: When `data_context.data_quality` is present, incorporate the confidence level naturally. For "low" confidence, explicitly note the small sample size as a limitation.
+16. **Market regime**: When `data_context.market_regime` is present, use it as category context for category and churn-focused posts. Frame it as intelligence context, not causal proof.
 
 ## Linking Rules
 

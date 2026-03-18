@@ -32,6 +32,7 @@ class ServiceRegistry(Generic[T]):
         self._factories: dict[str, Callable[..., T]] = {}
         self._active: Optional[T] = None
         self._active_name: Optional[str] = None
+        self._slots: dict[str, T] = {}
         self._lock = Lock()
 
     def register(self, name: str, implementation: Type[T]) -> None:
@@ -125,6 +126,77 @@ class ServiceRegistry(Generic[T]):
     def is_active(self, name: str) -> bool:
         """Check if a specific implementation is currently active."""
         return self._active_name == name
+
+    # ------------------------------------------------------------------
+    # Named slots -- concurrent auxiliary instances that do not evict
+    # the primary active service.  Used by reasoning tiering to hold
+    # heavy + light models simultaneously.
+    # ------------------------------------------------------------------
+
+    def activate_slot(self, slot_name: str, impl_name: str, **kwargs: Any) -> T:
+        """Create or replace a named auxiliary instance.
+
+        Unlike ``activate()``, this does NOT touch the primary slot.
+        Multiple named slots can coexist with each other and with the
+        primary active service.
+
+        Args:
+            slot_name:  Logical name for the slot (e.g. ``"reasoning_heavy"``).
+            impl_name:  Registered implementation to instantiate.
+            **kwargs:   Passed to the constructor / factory.
+
+        Returns:
+            The loaded service instance held in the slot.
+        """
+        if impl_name not in self._implementations and impl_name not in self._factories:
+            available = self.list_available()
+            raise ValueError(
+                f"Unknown {self._service_type}: '{impl_name}'. Available: {available}"
+            )
+
+        with self._lock:
+            old = self._slots.get(slot_name)
+            if old is not None:
+                logger.info("Replacing %s slot '%s'", self._service_type, slot_name)
+                old.unload()
+
+            if impl_name in self._factories:
+                instance = self._factories[impl_name](**kwargs)
+            else:
+                impl_class = self._implementations[impl_name]
+                instance = impl_class(**kwargs)
+
+            instance.load()
+            self._slots[slot_name] = instance
+            logger.info(
+                "%s slot '%s' activated: %s (model=%s)",
+                self._service_type, slot_name, impl_name,
+                getattr(instance, "model", getattr(instance, "model_id", "?")),
+            )
+            return instance
+
+    def get_slot(self, slot_name: str) -> Optional[T]:
+        """Return the instance in a named slot, or None."""
+        return self._slots.get(slot_name)
+
+    def release_slot(self, slot_name: str) -> None:
+        """Unload and remove a named slot."""
+        with self._lock:
+            instance = self._slots.pop(slot_name, None)
+            if instance is not None:
+                logger.info("Releasing %s slot '%s'", self._service_type, slot_name)
+                instance.unload()
+
+    def release_all_slots(self) -> None:
+        """Unload and remove all named slots."""
+        with self._lock:
+            for name, instance in self._slots.items():
+                logger.info("Releasing %s slot '%s'", self._service_type, name)
+                try:
+                    instance.unload()
+                except Exception:
+                    pass
+            self._slots.clear()
 
 
 # Global registry for LLM services

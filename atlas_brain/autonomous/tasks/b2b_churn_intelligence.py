@@ -1160,6 +1160,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # Enrich payload with temporal analysis + archetype pre-scores per vendor
     _temporal_lookup: dict[str, dict] = {}
     _archetype_lookup: dict[str, list[dict]] = {}
+    _market_regime_lookup: dict[str, dict[str, Any]] = {}
     try:
         from atlas_brain.reasoning.temporal import TemporalEngine
         from atlas_brain.reasoning.archetypes import enrich_evidence_with_archetypes
@@ -1172,9 +1173,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             try:
                 te = await temporal_engine.analyze_vendor(vname)
                 td = TemporalEngine.to_evidence_dict(te)
-                enriched = enrich_evidence_with_archetypes(
-                    {"vendor_name": vname, **td}, td,
-                )
+                evidence_seed = {
+                    "vendor_name": vname,
+                    "support_sentiment": vs.get("support_sentiment"),
+                    "legacy_support_score": vs.get("legacy_support_score"),
+                    "new_feature_velocity": vs.get("new_feature_velocity"),
+                    "employee_growth_rate": vs.get("employee_growth_rate"),
+                    **td,
+                }
+                enriched = enrich_evidence_with_archetypes(evidence_seed, td)
                 # Extract per-metric velocities and accelerations
                 velocities = {k: v for k, v in td.items() if k.startswith("velocity_")}
                 accelerations = {k: v for k, v in td.items() if k.startswith("accel_")}
@@ -1198,6 +1205,55 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             payload_size = len(json.dumps(payload, default=str))
     except Exception:
         logger.debug("Temporal/archetype enrichment unavailable", exc_info=True)
+
+    market_regimes: dict[str, Any] = {}
+    if cfg.stratified_reasoning_enabled and _temporal_lookup:
+        try:
+            from atlas_brain.reasoning.market_pulse import MarketPulseReasoner
+            from atlas_brain.reasoning.temporal import TemporalEvidence, VendorVelocity
+
+            mp_reasoner = MarketPulseReasoner()
+            vendors_by_cat: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+            for vs in vendor_scores:
+                vname = _canonicalize_vendor(vs.get("vendor_name") or "")
+                td = _temporal_lookup.get(vname)
+                if not td:
+                    continue
+                category = str(vs.get("product_category") or "")
+                if category:
+                    vendors_by_cat.setdefault(category, []).append((vname, td))
+
+            for category, vendor_tds in vendors_by_cat.items():
+                te_list = []
+                for vname, td in vendor_tds:
+                    velocities = []
+                    for key, value in td.items():
+                        if not key.startswith("velocity_"):
+                            continue
+                        velocities.append(VendorVelocity(
+                            vendor_name=vname,
+                            metric=key.replace("velocity_", ""),
+                            current_value=0,
+                            previous_value=0,
+                            velocity=float(value),
+                            days_between=1,
+                        ))
+                    te_list.append(TemporalEvidence(
+                        vendor_name=vname,
+                        snapshot_days=td.get("snapshot_days", 0),
+                        velocities=velocities,
+                    ))
+                regime = mp_reasoner.analyze_category(category, te_list)
+                market_regimes[category] = regime
+
+            for vs in vendor_scores:
+                vname = _canonicalize_vendor(vs.get("vendor_name") or "")
+                category = str(vs.get("product_category") or "")
+                regime = market_regimes.get(category)
+                if vname and regime is not None:
+                    _market_regime_lookup[vname] = asdict(regime)
+        except Exception:
+            logger.debug("Market pulse analysis skipped", exc_info=True)
 
     # --- Stratified reasoning: recall/reconstitute/reason per vendor ---
     # Runs BEFORE reports so conclusions feed into all builders + LLM prompts.
@@ -1253,6 +1309,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     buyer_auth_lookup=_pre_ba,
                     use_case_lookup=_pre_uc,
                     velocity_lookup=_pre_velocity or None,
+                    market_regime_lookup=_market_regime_lookup or None,
                 )
 
     try:
@@ -1354,11 +1411,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     # --- Cross-vendor ecosystem analysis (category-level intelligence) ---
     ecosystem_evidence: dict[str, Any] = {}
-    market_regimes: dict[str, Any] = {}
     if cfg.stratified_reasoning_enabled and reasoning_lookup:
         try:
             from atlas_brain.reasoning.ecosystem import EcosystemAnalyzer
-            from atlas_brain.reasoning.market_pulse import MarketPulseReasoner, TemporalEvidence
 
             # Run Ecosystem Analyzer (Neo4j based)
             eco = EcosystemAnalyzer(pool)
@@ -1373,46 +1428,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     "dominant_archetype": getattr(ev.health, "dominant_archetype", None),
                     "archetype_distribution": ev.archetype_distribution or {},
                 }
-            
-            # Run Market Pulse Reasoner (Temporal based)
-            mp_reasoner = MarketPulseReasoner()
-            # We need TemporalEvidence objects. 
-            # We have _temporal_lookup which stores dicts. We need to reconstruct TemporalEvidence objects or pass dicts if modified.
-            # MarketPulseReasoner expects list[TemporalEvidence]. 
-            # Ideally, we should have kept the TemporalEvidence objects, but we serialized them.
-            # Let's quickly reconstruct minimal TemporalEvidence for the reasoner from _temporal_lookup dicts.
-            
-            # Group temporal evidence by category
-            vendors_by_cat: dict[str, list[tuple[str, dict[str, Any]]]] = {}
-            for vname, td in _temporal_lookup.items():
-                cat = next((vs.get("product_category") for vs in vendor_scores if vs["vendor_name"] == vname), None)
-                if cat:
-                    vendors_by_cat.setdefault(cat, []).append((vname, td))
-
-            for cat, vendor_tds in vendors_by_cat.items():
-                te_list = []
-                for vname, td in vendor_tds:
-                    from atlas_brain.reasoning.temporal import TemporalEvidence, VendorVelocity
-                    velocities = []
-                    for k, v in td.items():
-                        if k.startswith("velocity_"):
-                            metric = k.replace("velocity_", "")
-                            velocities.append(VendorVelocity(
-                                vendor_name=vname,
-                                metric=metric,
-                                current_value=0,
-                                previous_value=0,
-                                velocity=float(v),
-                                days_between=1,
-                            ))
-                    te_list.append(TemporalEvidence(
-                        vendor_name=vname,
-                        snapshot_days=td.get("snapshot_days", 0),
-                        velocities=velocities,
-                    ))
-
-                regime = mp_reasoner.analyze_category(cat, te_list)
-                market_regimes[cat] = regime
 
             if ecosystem_evidence:
                 logger.info("Ecosystem analysis: %d categories", len(ecosystem_evidence))
@@ -1458,15 +1473,27 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 # Select targets
                 battles = await select_battles(
                     pool, _xv_disp_map, evidence_for_reasoning,
+                    product_profiles=_xv_pp_lookup,
                     max_battles=cfg.cross_vendor_max_battles,
+                    min_context_score=cfg.cross_vendor_battle_min_context_score,
                 )
                 categories = select_categories(
-                    ecosystem_evidence, reasoning_lookup,
+                    ecosystem_evidence,
+                    reasoning_lookup,
+                    evidence_for_reasoning,
+                    min_vendors=cfg.cross_vendor_category_min_vendors,
+                    min_context_vendors=cfg.cross_vendor_category_min_context_vendors,
+                    min_displacement_intensity=cfg.cross_vendor_category_min_displacement_intensity,
                     max_categories=cfg.cross_vendor_max_categories,
                 )
                 asymmetry_pairs = await select_asymmetry_pairs(
                     vendor_scores, evidence_for_reasoning, _xv_pp_lookup,
                     max_pairs=cfg.cross_vendor_max_asymmetry,
+                    pressure_delta_max=cfg.cross_vendor_asymmetry_pressure_delta_max,
+                    review_ratio_min=cfg.cross_vendor_asymmetry_review_ratio_min,
+                    segment_divergence_bonus=cfg.cross_vendor_asymmetry_segment_divergence_bonus,
+                    min_divergence_score=cfg.cross_vendor_asymmetry_min_divergence_score,
+                    min_context_score=cfg.cross_vendor_asymmetry_min_context_score,
                 )
 
                 # Run all cross-vendor reasoning concurrently

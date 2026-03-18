@@ -88,7 +88,7 @@ Output ONLY valid JSON:
   "secondary_archetype": "<another archetype or null if gap > 0.15>",
   "confidence": <number 0.0-1.0>,
   "risk_level": "<low|medium|high|critical>",
-  "executive_summary": "<3 sentences: (1) what pattern, (2) why now citing specific metrics, (3) what to watch>",
+  "executive_summary": "<1-2 short sentences: sentence 1 names the pattern and primary driver; sentence 2, if used, states what to watch with concrete metrics>",
   "key_signals": ["<metric: value>", ...],
   "falsification_conditions": ["<what would prove this wrong>"],
   "uncertainty_sources": ["<what data is missing or weak>"]
@@ -96,7 +96,8 @@ Output ONLY valid JSON:
 
 GROUNDING RULES:
 - Every key_signal MUST cite a specific metric and value from the evidence (e.g., "churn_density: 38.6%").
-- executive_summary sentence 2 MUST reference at least 2 specific numbers from the evidence.
+- Keep executive_summary concise and analytical, not narrative.
+- If executive_summary uses a second sentence, include at least 2 specific numbers from the evidence across the summary.
 - If confidence < 0.6, include at least 2 uncertainty_sources.
 - Do not invent data not present in the evidence.\
 """
@@ -349,7 +350,10 @@ class StratifiedReasoner:
             "vendor_name", "churn_density", "avg_urgency", "total_reviews",
             "churn_intent", "dm_churn_rate", "price_complaint_rate",
             "displacement_mention_count", "insider_signal_count",
-            "keyword_spike_count",
+            "keyword_spike_count", "support_sentiment",
+            "legacy_support_score", "new_feature_velocity",
+            "employee_growth_rate", "positive_review_pct",
+            "avg_rating_normalized",
         ):
             if key in evidence:
                 val = evidence[key]
@@ -384,13 +388,18 @@ class StratifiedReasoner:
         if anomalies and isinstance(anomalies, list):
             ev["anomalies"] = [a for a in anomalies if isinstance(a, dict) and a.get("is_anomaly")]
         for key in evidence:
-            if key.startswith("velocity_") or key.startswith("accel_"):
+            if (
+                key.startswith("velocity_")
+                or key.startswith("accel_")
+                or key.startswith("trend_30d_")
+                or key.startswith("trend_90d_")
+            ):
                 val = evidence[key]
                 if val is not None and val != 0:
                     ev[key] = round(val, 4) if isinstance(val, float) else val
 
         # 5. Compact context (budget, buyer authority -- single-value summaries)
-        for ctx_key in ("budget_context", "buyer_authority"):
+        for ctx_key in ("budget_context", "buyer_authority", "market_regime"):
             val = evidence.get(ctx_key)
             if val and isinstance(val, dict):
                 ev[ctx_key] = val
@@ -423,7 +432,7 @@ class StratifiedReasoner:
         Flow:
             1. Check metacognition for forced exploration/surprise
             2. Try recall (semantic cache, same evidence hash)
-            3. If evidence changed, try reconstitute (diff < 30%)
+            3. If evidence changed, try reconstitute (weighted drift below threshold)
             4. Fall back to full reason
         """
         ev_hash = compute_evidence_hash(evidence)
@@ -577,7 +586,15 @@ class StratifiedReasoner:
             return None, False
 
         # Classify the diff
-        diff = classify_evidence(old_evidence, new_evidence)
+        from .config import ReasoningConfig
+        from .differential import build_diff_tuning
+
+        _rcfg = ReasoningConfig()
+        diff = classify_evidence(
+            old_evidence,
+            new_evidence,
+            tuning=build_diff_tuning(_rcfg),
+        )
         logger.info("Diff for %s: %s", vendor_name, diff.summary())
 
         # Persist the diff for evidence volatility tracking
@@ -763,6 +780,7 @@ class StratifiedReasoner:
             ]
 
         from .config import ReasoningConfig
+        from .llm_utils import resolve_stratified_llm_light
         _rcfg = ReasoningConfig()
         llm = resolve_stratified_llm(_rcfg)
         if llm is None:
@@ -779,6 +797,7 @@ class StratifiedReasoner:
                 tokens_used=0,
                 cached=False,
             )
+        llm_light = resolve_stratified_llm_light(_rcfg)
 
         messages = [
             Message(role="system", content=_REASON_SYSTEM_PROMPT),
@@ -809,13 +828,20 @@ class StratifiedReasoner:
             try:
                 mp_result = await multi_pass_reason(
                     llm=llm,
+                    llm_light=llm_light,
                     system_prompt=_REASON_SYSTEM_PROMPT,
                     evidence_payload=payload,
                     json_schema=REASONING_CONCLUSION_JSON_SCHEMA,
                     max_tokens=_rcfg.max_tokens,
                     temperature=_rcfg.temperature,
                     challenge_confidence_floor=_rcfg.multi_pass_challenge_confidence_floor,
+                    challenge_min_reviews=_rcfg.multi_pass_challenge_min_reviews,
+                    challenge_mixed_polarity_min_share=_rcfg.multi_pass_challenge_mixed_polarity_min_share,
+                    challenge_high_impact_churn_density=_rcfg.multi_pass_challenge_high_impact_churn_density,
+                    challenge_high_impact_avg_urgency=_rcfg.multi_pass_challenge_high_impact_avg_urgency,
+                    challenge_high_impact_displacement_mentions=_rcfg.multi_pass_challenge_high_impact_displacement_mentions,
                     ground_change_threshold=_rcfg.multi_pass_ground_change_threshold,
+                    ground_always=_rcfg.multi_pass_ground_always,
                     span_prefix="reasoning.stratified",
                     trace_metadata=trace_metadata,
                     normalize_fn=self._normalize_conclusion,

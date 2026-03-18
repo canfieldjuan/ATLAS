@@ -9,22 +9,30 @@ import DataTable, { type Column } from '../components/DataTable'
 import UrgencyBadge from '../components/UrgencyBadge'
 import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
-import { fetchSignals, fetchHighIntent, fetchPipeline } from '../api/client'
+import {
+  fetchSignals,
+  fetchSlowBurnWatchlist,
+  fetchHighIntent,
+  fetchPipeline,
+} from '../api/client'
 import type { ChurnSignal, HighIntentCompany, PipelineStatus } from '../types'
-
-interface SignalsResponse {
-  signals: ChurnSignal[]
-  count: number
-  total_vendors?: number
-  high_urgency_count?: number
-  total_signal_reviews?: number
-}
 
 interface DashboardData {
   signals: ChurnSignal[]
+  slowBurnSignals: ChurnSignal[]
   companies: HighIntentCompany[]
   pipeline: PipelineStatus
   signalSummary: { totalVendors: number; highUrgency: number; totalReviews: number }
+}
+
+function formatSignalValue(value: number | null, suffix = '') {
+  if (value === null || Number.isNaN(value)) return '--'
+  return `${value.toFixed(1)}${suffix}`
+}
+
+function formatGrowthRate(value: number | null) {
+  if (value === null || Number.isNaN(value)) return '--'
+  return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`
 }
 
 export default function Dashboard() {
@@ -32,13 +40,15 @@ export default function Dashboard() {
 
   const { data, loading, error, refresh, refreshing } = useApiData<DashboardData>(
     async () => {
-      const [sigRes, hiRes, pipe] = await Promise.all([
-        fetchSignals({ limit: 20 }) as Promise<SignalsResponse>,
+      const [sigRes, slowBurnRes, hiRes, pipe] = await Promise.all([
+        fetchSignals({ limit: 20 }),
+        fetchSlowBurnWatchlist(),
         fetchHighIntent({ limit: 10 }),
         fetchPipeline(),
       ])
       return {
         signals: sigRes.signals,
+        slowBurnSignals: slowBurnRes.signals,
         companies: hiRes.companies,
         pipeline: pipe,
         signalSummary: {
@@ -52,6 +62,7 @@ export default function Dashboard() {
   )
 
   const signals = data?.signals ?? []
+  const slowBurnSignals = data?.slowBurnSignals ?? []
   const companies = data?.companies ?? []
   const pipeline = data?.pipeline ?? null
   const summary = data?.signalSummary ?? { totalVendors: 0, highUrgency: 0, totalReviews: 0 }
@@ -233,6 +244,47 @@ export default function Dashboard() {
           </div>
         )
       })()}
+
+      <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-5">
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <h3 className="text-sm font-medium text-slate-300">Slow-Burn Watchlist</h3>
+          <span className="text-xs text-slate-500">Growth plus support and legacy stress</span>
+        </div>
+        {loading ? (
+          <div className="space-y-3 animate-pulse">
+            {Array.from({ length: 4 }, (_, i) => (
+              <div key={i} className="h-24 rounded-xl bg-slate-800/50" />
+            ))}
+          </div>
+        ) : slowBurnSignals.length === 0 ? (
+          <div className="text-sm text-slate-500">No slow-burn signal data available yet.</div>
+        ) : (
+          <div className="space-y-3">
+            {slowBurnSignals.map((signal) => (
+              <button
+                key={signal.vendor_name}
+                type="button"
+                onClick={() => navigate(`/vendors/${encodeURIComponent(signal.vendor_name)}`)}
+                className="w-full rounded-xl border border-slate-700/50 bg-slate-950/40 px-4 py-3 text-left transition-colors hover:border-cyan-500/40 hover:bg-slate-900/70"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="space-y-1">
+                    <div className="text-sm font-medium text-white">{signal.vendor_name}</div>
+                    <div className="text-xs text-slate-500">{signal.product_category ?? 'Uncategorized'}</div>
+                  </div>
+                  <ArchetypeBadge archetype={signal.archetype} confidence={signal.archetype_confidence} />
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+                  <div><div className="text-slate-500">Support</div><div className="text-slate-200">{formatSignalValue(signal.support_sentiment)}</div></div>
+                  <div><div className="text-slate-500">Legacy</div><div className="text-slate-200">{formatSignalValue(signal.legacy_support_score)}</div></div>
+                  <div><div className="text-slate-500">Feature</div><div className="text-slate-200">{formatSignalValue(signal.new_feature_velocity)}</div></div>
+                  <div><div className="text-slate-500">Growth</div><div className="text-slate-200">{formatGrowthRate(signal.employee_growth_rate)}</div></div>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
 
       <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-5">
         <h3 className="text-sm font-medium text-slate-300 mb-4">

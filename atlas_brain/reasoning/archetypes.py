@@ -265,6 +265,50 @@ ARCHETYPES: dict[str, ArchetypeProfile] = {
             "Enterprise churn intent stabilizes",
         ],
     ),
+    "scale_up_stumble": ArchetypeProfile(
+        name="scale_up_stumble",
+        description="High growth (hiring/reviews) -> support quality/culture degrades",
+        typical_risk="medium",
+        signals=[
+            SignalRule("employee_growth_rate", "high", weight=2.0, threshold=0.20),  # >20% growth
+            SignalRule("support_sentiment", "decreasing_30d", weight=1.5),
+            SignalRule("recommend_ratio", "decreasing_30d", weight=1.0),
+            SignalRule("pain_count", "high", weight=1.0, threshold=3),
+            SignalRule("top_pain", "present", weight=1.0,
+                        pain_keywords=["growing pains", "used to be better", "new reps", 
+                                       "training", "knowledge gap", "slow response"]),
+        ],
+        velocity_hints={
+            "pain_count": "increasing",
+            "recommend_ratio": "decreasing",
+        },
+        falsification_templates=[
+            "Support sentiment stabilizes for 30+ days",
+            "Hiring pace normalizes (<5% quarterly)",
+            "Training investment announced",
+        ],
+    ),
+    "pivot_abandonment": ArchetypeProfile(
+        name="pivot_abandonment",
+        description="Focus shifts to new segment/product -> legacy customer neglect",
+        typical_risk="high",
+        signals=[
+            SignalRule("new_feature_velocity", "high", weight=1.5, threshold=0.5),
+            SignalRule("legacy_support_score", "low", weight=1.5, threshold=0.4),
+            SignalRule("churn_density", "increasing_30d", weight=2.0),
+            SignalRule("top_pain", "present", weight=1.5,
+                        pain_keywords=["legacy", "ignored", "forgotten", "deprecated", 
+                                       "forced migration", "sunset", "old version"]),
+        ],
+        velocity_hints={
+            "churn_density": "increasing",
+        },
+        falsification_templates=[
+            "Vendor recommits to legacy product roadmap",
+            "Migration tools provided free of charge",
+            "Churn density stabilizes",
+        ],
+    ),
 }
 
 
@@ -404,22 +448,25 @@ def _evaluate_rule(rule: SignalRule, evidence: dict[str, Any]) -> bool:
                 return True
         return False
 
-    val = evidence.get(rule.metric)
-    if val is None:
-        return False
+    if rule.direction == "present":
+        return rule.metric in evidence
 
-    try:
-        val_f = float(val)
-    except (ValueError, TypeError):
-        return False
+    # Value-based checks require the metric to be present and numeric
+    if rule.direction in ("high", "low"):
+        val = evidence.get(rule.metric)
+        if val is None:
+            return False
+        try:
+            val_f = float(val)
+        except (ValueError, TypeError):
+            return False
 
-    if rule.threshold is None:
-        return True  # just checking presence
+        if rule.direction == "high":
+            return val_f >= (rule.threshold if rule.threshold is not None else 0)
+        elif rule.direction == "low":
+            return val_f <= (rule.threshold if rule.threshold is not None else float("inf"))
 
-    if rule.direction == "high":
-        return val_f >= rule.threshold
-    elif rule.direction == "low":
-        return val_f <= rule.threshold
+    # Velocity/Trend checks look for derived fields
     elif rule.direction == "increasing":
         vel = evidence.get(f"velocity_{rule.metric}")
         if vel is not None:
@@ -430,8 +477,16 @@ def _evaluate_rule(rule: SignalRule, evidence: dict[str, Any]) -> bool:
         if vel is not None:
             return float(vel) < 0
         return False
-    elif rule.direction == "present":
-        return True
+    elif rule.direction == "increasing_30d":
+        slope = evidence.get(f"trend_30d_{rule.metric}")
+        if slope is not None:
+            return float(slope) > 0
+        return False
+    elif rule.direction == "decreasing_30d":
+        slope = evidence.get(f"trend_30d_{rule.metric}")
+        if slope is not None:
+            return float(slope) < 0
+        return False
 
     return False
 

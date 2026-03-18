@@ -36,15 +36,24 @@ for _mod in (
     sys.modules.setdefault(_mod, MagicMock())
 
 from atlas_brain.autonomous.tasks._b2b_shared import (
+    _build_battle_card_locked_facts,
+    _build_scorecard_locked_facts,
     _build_deterministic_vendor_feed,
     _build_validated_executive_summary,
     _canonicalize_competitor,
     _compute_churn_pressure_score,
     _compute_evidence_confidence,
     _executive_source_list,
+    _fallback_scorecard_expert_take,
     _sanitize_battle_card_sales_copy,
     _validate_battle_card_sales_copy,
+    _validate_scorecard_expert_take,
     _validate_report,
+)
+from atlas_brain.autonomous.tasks.b2b_battle_cards import (
+    _battle_card_llm_options,
+    _battle_card_prior_attempt,
+    _parse_battle_card_sales_copy,
 )
 
 
@@ -442,6 +451,129 @@ class TestBattleCardSalesCopySanitization:
         warnings = _validate_battle_card_sales_copy(card, sanitized)
         assert not warnings
         assert "a Emerging vulnerability" not in sanitized["executive_summary"]
+
+
+class TestBattleCardSalesCopyParsing:
+    def test_recovers_truncated_json(self):
+        parsed = _parse_battle_card_sales_copy(
+            '{"executive_summary":"Pressure is rising.","discovery_questions":["How are renewals going?"]'
+        )
+        assert parsed["executive_summary"] == "Pressure is rising."
+        assert parsed["discovery_questions"] == ["How are renewals going?"]
+        assert not parsed.get("_parse_fallback")
+
+    def test_retry_payload_uses_raw_text_for_invalid_json(self):
+        prior_attempt = _battle_card_prior_attempt(
+            {"analysis_text": "Executive summary: support is slipping", "_parse_fallback": True}
+        )
+        assert prior_attempt == "Executive summary: support is slipping"
+
+
+class TestBattleCardLlmRouting:
+    def test_auto_backend_uses_default_synthesis_route(self):
+        cfg = type("Cfg", (), {
+            "battle_card_llm_backend": "auto",
+            "battle_card_openrouter_model": "",
+        })()
+        opts = _battle_card_llm_options(cfg)
+        assert opts == {
+            "workload": "synthesis",
+            "try_openrouter": True,
+            "openrouter_model": None,
+        }
+
+    def test_anthropic_backend_disables_openrouter(self):
+        cfg = type("Cfg", (), {
+            "battle_card_llm_backend": "anthropic",
+            "battle_card_openrouter_model": "openai/o4-mini",
+        })()
+        opts = _battle_card_llm_options(cfg)
+        assert opts == {
+            "workload": "anthropic",
+            "try_openrouter": False,
+            "openrouter_model": None,
+        }
+
+    def test_openrouter_backend_uses_override_when_present(self):
+        cfg = type("Cfg", (), {
+            "battle_card_llm_backend": "openrouter",
+            "battle_card_openrouter_model": "openai/o4-mini-high",
+        })()
+        opts = _battle_card_llm_options(cfg)
+        assert opts == {
+            "workload": "synthesis",
+            "try_openrouter": True,
+            "openrouter_model": "openai/o4-mini-high",
+        }
+
+
+def _sample_scorecard() -> dict[str, Any]:
+    return {
+        "vendor": "Zendesk",
+        "risk_level": "high",
+        "churn_pressure_score": 72.0,
+        "avg_urgency": 6.4,
+        "trend": "worsening",
+        "top_pain": "support",
+        "reasoning_summary": "Buyers considering Zendesk should scrutinize support reliability as the pressure pattern continues to worsen.",
+        "archetype": "support_collapse",
+        "archetype_confidence": 0.82,
+        "cross_vendor_comparisons": [
+            {
+                "opponent": "Freshdesk",
+                "conclusion": "Freshdesk is gaining on support responsiveness.",
+                "confidence": 0.84,
+                "resource_advantage": "Freshdesk holds the relative service-speed edge in recent comparisons.",
+            },
+            {
+                "opponent": "Intercom",
+                "conclusion": "Intercom mention is weak.",
+                "confidence": 0.42,
+                "resource_advantage": "Intercom has broader AI branding.",
+            },
+        ],
+        "competitor_overlap": [{"competitor": "Freshdesk", "mentions": 18}],
+    }
+
+
+class TestScorecardNarrativeGuardrails:
+    def test_build_scorecard_locked_facts_filters_low_confidence_refs(self):
+        locked = _build_scorecard_locked_facts(_sample_scorecard())
+        assert locked["vendor"] == "Zendesk"
+        assert locked["archetype"] == "support_collapse"
+        assert locked["allowed_opponents"] == ["Freshdesk"]
+        assert locked["comparison"]["opponent"] == "Freshdesk"
+
+    def test_validate_scorecard_expert_take_rejects_wrong_archetype(self):
+        warnings = _validate_scorecard_expert_take(
+            _sample_scorecard(),
+            "Buyers considering Zendesk should treat this as a pricing_shock pattern right now.",
+        )
+        assert any("pricing_shock" in warning for warning in warnings)
+
+    def test_validate_scorecard_expert_take_rejects_low_confidence_opponent(self):
+        warnings = _validate_scorecard_expert_take(
+            _sample_scorecard(),
+            "Buyers considering Zendesk should assume Intercom now has the stronger position.",
+        )
+        assert any("Intercom" in warning for warning in warnings)
+
+    def test_fallback_scorecard_expert_take_stays_short_and_buyer_facing(self):
+        text = _fallback_scorecard_expert_take(_sample_scorecard())
+        assert len(text.split()) <= 80
+        assert "buyers considering zendesk" in text.lower()
+
+    def test_build_battle_card_locked_facts_captures_allowed_opponents(self):
+        locked = _build_battle_card_locked_facts(_sample_battle_card() | {
+            "archetype": "pricing_shock",
+            "archetype_risk_level": "high",
+            "cross_vendor_battles": [{"opponent": "BigCommerce"}],
+            "resource_asymmetry": {"opponent": "WooCommerce", "resource_advantage": "WooCommerce has the broader plugin ecosystem."},
+        })
+        assert locked["archetype"] == "pricing_shock"
+        assert locked["priority_language_allowed"] is False
+        assert "WooCommerce" in locked["allowed_opponents"]
+        assert "BigCommerce" in locked["allowed_opponents"]
 
 
 # ---------------------------------------------------------------------------

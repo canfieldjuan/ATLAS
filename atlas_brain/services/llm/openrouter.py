@@ -94,6 +94,42 @@ class OpenRouterLLM(BaseModelService):
             result.append(m)
         return result
 
+    def _structured_response_format(self, **kwargs: Any) -> dict[str, Any] | None:
+        """Prefer json_schema when guided_json is supplied."""
+        guided_json = kwargs.get("guided_json")
+        if isinstance(guided_json, dict) and guided_json:
+            return {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": str(guided_json.get("title") or "atlas_response"),
+                    "strict": True,
+                    "schema": guided_json,
+                },
+            }
+        response_format = kwargs.get("response_format")
+        return response_format if isinstance(response_format, dict) else None
+
+    @staticmethod
+    def _looks_like_json(text: str) -> bool:
+        stripped = text.lstrip()
+        return stripped.startswith("{") or stripped.startswith("[")
+
+    @staticmethod
+    def _structured_plugins(
+        structured_response_format: dict[str, Any] | None,
+        **kwargs: Any,
+    ) -> list[dict[str, Any]] | None:
+        """Add response-healing for structured non-streaming requests."""
+        plugins = kwargs.get("plugins")
+        normalized: list[dict[str, Any]] = []
+        if isinstance(plugins, list):
+            for plugin in plugins:
+                if isinstance(plugin, dict) and plugin.get("id"):
+                    normalized.append(plugin)
+        if structured_response_format and not any(p.get("id") == "response-healing" for p in normalized):
+            normalized.append({"id": "response-healing"})
+        return normalized or None
+
     # Models that use reasoning tokens and require max_completion_tokens
     # instead of max_tokens, and ignore temperature.
     _REASONING_MODELS = frozenset({
@@ -121,6 +157,10 @@ class OpenRouterLLM(BaseModelService):
             "messages": self._convert_messages(messages),
         }
 
+        response_format = self._structured_response_format(**kwargs)
+        plugins = self._structured_plugins(response_format, **kwargs)
+        reasoning = kwargs.get("reasoning")
+
         # Reasoning models (o1/o3/o4) use max_completion_tokens, no temperature
         if is_reasoning:
             payload["max_completion_tokens"] = max_tokens
@@ -128,10 +168,14 @@ class OpenRouterLLM(BaseModelService):
             payload["max_tokens"] = max_tokens
             payload["temperature"] = temperature
 
-        # Forward response_format when requested (JSON mode)
-        response_format = kwargs.get("response_format")
         if response_format:
             payload["response_format"] = response_format
+        if plugins:
+            payload["plugins"] = plugins
+        if isinstance(reasoning, dict) and reasoning:
+            payload["reasoning"] = reasoning
+        elif response_format:
+            payload["reasoning"] = {"exclude": True}
 
         try:
             response = self._sync_client.post(
@@ -144,6 +188,7 @@ class OpenRouterLLM(BaseModelService):
             choice = data.get("choices", [{}])[0]
             message = choice.get("message", {})
             content = (message.get("content") or "").strip()
+            structured_request = bool(response_format)
 
             # Some models (e.g. Kimi K2.5) return output in reasoning/reasoning_content
             # when content is empty -- fall back to those fields
@@ -151,6 +196,8 @@ class OpenRouterLLM(BaseModelService):
                 for _rc_field in ("reasoning_content", "reasoning"):
                     _rc_val = message.get(_rc_field)
                     if isinstance(_rc_val, str) and _rc_val.strip():
+                        if structured_request and not self._looks_like_json(_rc_val):
+                            continue
                         content = _rc_val.strip()
                         logger.info(
                             "OpenRouter: content was null, using %s (%d chars)",
@@ -280,9 +327,24 @@ class OpenRouterLLM(BaseModelService):
         payload = {
             "model": self.model,
             "messages": self._convert_messages(messages),
-            "max_tokens": max_tokens,
-            "temperature": temperature,
         }
+        is_reasoning = self._is_reasoning_model()
+        response_format = self._structured_response_format(**kwargs)
+        plugins = self._structured_plugins(response_format, **kwargs)
+        reasoning = kwargs.get("reasoning")
+        if is_reasoning:
+            payload["max_completion_tokens"] = max_tokens
+        else:
+            payload["max_tokens"] = max_tokens
+            payload["temperature"] = temperature
+        if response_format:
+            payload["response_format"] = response_format
+        if plugins:
+            payload["plugins"] = plugins
+        if isinstance(reasoning, dict) and reasoning:
+            payload["reasoning"] = reasoning
+        elif response_format:
+            payload["reasoning"] = {"exclude": True}
 
         try:
             response = await self._client.post(
@@ -294,7 +356,16 @@ class OpenRouterLLM(BaseModelService):
 
             choice = data.get("choices", [{}])[0]
             message = choice.get("message", {})
-            return (message.get("content") or "").strip()
+            content = (message.get("content") or "").strip()
+            if not content:
+                for _rc_field in ("reasoning_content", "reasoning"):
+                    _rc_val = message.get(_rc_field)
+                    if isinstance(_rc_val, str) and _rc_val.strip():
+                        if response_format and not self._looks_like_json(_rc_val):
+                            continue
+                        content = _rc_val.strip()
+                        break
+            return content
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500] if e.response else ""
             logger.error(

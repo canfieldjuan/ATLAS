@@ -24,6 +24,7 @@ logger = logging.getLogger("atlas.reasoning.temporal")
 MIN_DAYS_FOR_VELOCITY = 2
 MIN_DAYS_FOR_ACCELERATION = 3
 MIN_DAYS_FOR_PERCENTILES = 7
+MIN_DAYS_FOR_TREND = 14  # Relaxed from 30 to allow shorter history
 RECENCY_HALF_LIFE_DAYS = 14
 
 
@@ -38,6 +39,17 @@ class VendorVelocity:
     velocity: float          # change per day
     days_between: int
     acceleration: float | None = None  # change in velocity (needs 3+ points)
+
+
+@dataclass
+class LongTermTrend:
+    """Long-term trend analysis (30-90 days)."""
+
+    metric: str
+    slope_30d: float | None = None
+    slope_90d: float | None = None
+    volatility: float | None = None  # standard deviation of changes
+    data_points: int = 0
 
 
 @dataclass
@@ -71,6 +83,7 @@ class TemporalEvidence:
     vendor_name: str
     snapshot_days: int
     velocities: list[VendorVelocity] = field(default_factory=list)
+    trends: list[LongTermTrend] = field(default_factory=list)
     anomalies: list[AnomalyScore] = field(default_factory=list)
     category_baselines: list[CategoryPercentile] = field(default_factory=list)
     insufficient_data: bool = False
@@ -81,6 +94,8 @@ _VELOCITY_METRICS = [
     "churn_density", "avg_urgency", "positive_review_pct",
     "recommend_ratio", "pain_count", "competitor_count",
     "displacement_edge_count", "high_intent_company_count",
+    "support_sentiment", "employee_growth_rate",
+    "new_feature_velocity", "legacy_support_score",
 ]
 
 
@@ -108,6 +123,10 @@ class TemporalEngine:
 
         # Compute velocities
         evidence.velocities = self._compute_velocities(vendor_name, snapshots)
+
+        # Compute long-term trends
+        if len(snapshots) >= MIN_DAYS_FOR_TREND:
+            evidence.trends = self._compute_long_term_trends(vendor_name, snapshots)
 
         # Compute category baselines + anomalies
         if len(snapshots) >= 2:
@@ -185,6 +204,86 @@ class TemporalEngine:
             ))
 
         return velocities
+
+    def _compute_long_term_trends(
+        self, vendor_name: str, snapshots: list[dict],
+    ) -> list[LongTermTrend]:
+        """Compute 30-day and 90-day linear trends for key metrics."""
+        trends = []
+        if len(snapshots) < MIN_DAYS_FOR_TREND:
+            return []
+
+        latest_date = snapshots[-1]["snapshot_date"]
+        
+        # Helper to get subset of snapshots within last N days
+        def _get_window(days: int) -> list[dict]:
+            cutoff = latest_date - timedelta(days=days)
+            return [s for s in snapshots if s["snapshot_date"] >= cutoff]
+
+        window_30 = _get_window(30)
+        window_90 = _get_window(90)
+
+        for metric in _VELOCITY_METRICS:
+            # Only compute trend if metric exists in latest snapshot
+            if snapshots[-1].get(metric) is None:
+                continue
+
+            trend = LongTermTrend(metric=metric)
+            
+            # 30-day slope
+            slope_30 = self._calculate_slope(window_30, metric)
+            if slope_30 is not None:
+                trend.slope_30d = slope_30
+                trend.data_points = len(window_30)
+
+            # 90-day slope (only if we have more history than 30 days)
+            if len(window_90) > len(window_30):
+                slope_90 = self._calculate_slope(window_90, metric)
+                if slope_90 is not None:
+                    trend.slope_90d = slope_90
+
+            if trend.slope_30d is not None:
+                trends.append(trend)
+
+        return trends
+
+    def _calculate_slope(self, window: list[dict], metric: str) -> float | None:
+        """Calculate linear regression slope (change per day)."""
+        if len(window) < 2:
+            return None
+            
+        x_vals = [] # Days from start of window
+        y_vals = []
+        
+        start_date = window[0]["snapshot_date"]
+        
+        for s in window:
+            val = s.get(metric)
+            if val is not None:
+                try:
+                    y = float(val)
+                    days = (s["snapshot_date"] - start_date).days
+                    x_vals.append(days)
+                    y_vals.append(y)
+                except (ValueError, TypeError):
+                    continue
+                    
+        if len(x_vals) < 2:
+            return None
+            
+        # Simple linear regression: slope = cov(x,y) / var(x)
+        n = len(x_vals)
+        sum_x = sum(x_vals)
+        sum_y = sum(y_vals)
+        sum_xy = sum(x*y for x, y in zip(x_vals, y_vals))
+        sum_xx = sum(x*x for x in x_vals)
+        
+        denom = (n * sum_xx - sum_x * sum_x)
+        if denom == 0:
+            return None
+            
+        slope = (n * sum_xy - sum_x * sum_y) / denom
+        return slope
 
     # ------------------------------------------------------------------
     # Category Percentiles
@@ -316,6 +415,13 @@ class TemporalEngine:
             evidence[f"velocity_{v.metric}"] = round(v.velocity, 4)
             if v.acceleration is not None:
                 evidence[f"accel_{v.metric}"] = round(v.acceleration, 4)
+
+        # Long-term trends
+        for t in te.trends:
+            if t.slope_30d is not None:
+                evidence[f"trend_30d_{t.metric}"] = round(t.slope_30d, 4)
+            if t.slope_90d is not None:
+                evidence[f"trend_90d_{t.metric}"] = round(t.slope_90d, 4)
 
         # Anomalies
         anomaly_list = []

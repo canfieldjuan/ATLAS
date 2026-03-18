@@ -289,6 +289,16 @@ register_pipeline(PipelineConfig(
             cron_config_key="b2b_churn.article_correlation_cron",
         ),
         TaskDef(
+            name="b2b_challenger_brief",
+            module="b2b_challenger_brief",
+            schedule_type="cron",
+            cron_expression="40 21 * * *",
+            timeout_seconds=600,
+            description="Build per-(incumbent, challenger) pair challenger briefs from persisted artifacts",
+            metadata={"builtin_handler": "b2b_challenger_brief"},
+            cron_config_key="b2b_churn.challenger_brief_cron",
+        ),
+        TaskDef(
             name="b2b_keyword_signal",
             module="b2b_keyword_signal",
             schedule_type="cron",

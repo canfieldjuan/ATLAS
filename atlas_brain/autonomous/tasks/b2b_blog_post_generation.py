@@ -1377,6 +1377,19 @@ async def _gather_data(
         ),
     }
 
+    category = (
+        topic_ctx.get("category")
+        or topic_ctx.get("product_category")
+        or data.get("profile", {}).get("product_category")
+    )
+    if category:
+        overview = await _fetch_category_overview_entry(pool, str(category))
+        if overview:
+            data["category_overview"] = overview
+            regime = (overview.get("cross_vendor_analysis") or {}).get("market_regime")
+            if regime:
+                data["data_context"]["market_regime"] = regime
+
     # Attach affiliate info to data_context if available.
     # For topic types that don't explicitly fetch a partner (everything except
     # vendor_alternative), look up a matching partner by product category so
@@ -1700,6 +1713,41 @@ async def _fetch_affiliate_partner_by_category(pool, category: str) -> dict[str,
         return None
     return dict(row)
 
+
+
+async def _fetch_category_overview_entry(pool, category: str) -> dict[str, Any] | None:
+    """Fetch the latest persisted category overview entry for a category."""
+    if not category:
+        return None
+
+    row = await pool.fetchrow(
+        """
+        SELECT intelligence_data
+        FROM b2b_intelligence
+        WHERE report_type = 'category_overview'
+        ORDER BY report_date DESC, created_at DESC
+        LIMIT 1
+        """,
+    )
+    if not row:
+        return None
+
+    data = row["intelligence_data"]
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+    entries = data if isinstance(data, list) else data.get("category_overview", data)
+    if not isinstance(entries, list):
+        return None
+
+    wanted = category.strip().lower()
+    for entry in entries:
+        if isinstance(entry, dict) and str(entry.get("category", "")).strip().lower() == wanted:
+            return entry
+    return None
 
 
 async def _fetch_source_distribution(pool, vendor_names: list[str]) -> dict[str, Any]:
@@ -2043,6 +2091,7 @@ def _blueprint_churn_report(ctx: dict, data: dict) -> PostBlueprint:
     category = ctx.get("category", "software")
     signals = data.get("signals", [])
     profile = data.get("profile", {})
+    market_regime = (data.get("category_overview", {}).get("cross_vendor_analysis") or {}).get("market_regime")
 
     # Pain distribution chart
     pain_data = [
@@ -2084,6 +2133,7 @@ def _blueprint_churn_report(ctx: dict, data: dict) -> PostBlueprint:
                 "negative_reviews": ctx["negative_reviews"],
                 "avg_urgency": ctx["avg_urgency"],
                 "total_reviews": ctx["total_reviews"],
+                "market_regime": market_regime,
             },
             data_summary=(
                 f"{vendor} has {ctx['negative_reviews']} negative reviews out of "
@@ -2098,6 +2148,14 @@ def _blueprint_churn_report(ctx: dict, data: dict) -> PostBlueprint:
             data_summary=f"Top pain categories: {', '.join(s['pain_category'] for s in signals[:3] if s['pain_category'])}.",
         ),
     ]
+    if market_regime:
+        sections.append(SectionSpec(
+            id="market_context",
+            heading=f"Market Context for {category}",
+            goal="Explain how the broader category regime changes the interpretation of this vendor's churn signals",
+            key_stats={"market_regime": market_regime},
+            data_summary=f"Current market regime: {market_regime}.",
+        ))
 
     if gap_data:
         gap_chart = ChartSpec(
@@ -2416,6 +2474,7 @@ def _blueprint_market_landscape(ctx: dict, data: dict) -> PostBlueprint:
     vendor_count = ctx["vendor_count"]
     vendor_profiles = data.get("vendor_profiles", [])
     vendor_signals = data.get("vendor_signals", [])
+    market_regime = (data.get("category_overview", {}).get("cross_vendor_analysis") or {}).get("market_regime")
 
     charts = []
     sections = [
@@ -2428,6 +2487,7 @@ def _blueprint_market_landscape(ctx: dict, data: dict) -> PostBlueprint:
                 "vendor_count": vendor_count,
                 "total_reviews": ctx["total_reviews"],
                 "avg_urgency": ctx["avg_urgency"],
+                "market_regime": market_regime,
             },
             data_summary=(
                 f"The {category} landscape has {vendor_count} major vendors "
@@ -2435,6 +2495,14 @@ def _blueprint_market_landscape(ctx: dict, data: dict) -> PostBlueprint:
             ),
         ),
     ]
+    if market_regime:
+        sections.append(SectionSpec(
+            id="market_regime",
+            heading="What Market Regime Are We In?",
+            goal="Anchor the landscape analysis in the current category regime before comparing vendors",
+            key_stats={"market_regime": market_regime},
+            data_summary=f"Current market regime: {market_regime}.",
+        ))
 
     # Urgency comparison chart across vendors
     urgency_data = []

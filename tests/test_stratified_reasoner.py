@@ -322,6 +322,63 @@ class TestDifferentialEngine:
         diff = classify_evidence(old, new)
         assert len(diff.confirmed) == 1
 
+    def test_missing_core_metric_triggers_full_reason(self):
+        from atlas_brain.reasoning.differential import classify_evidence
+
+        old = {
+            "churn_density": 32.0,
+            "avg_urgency": 6.8,
+            "pain_categories": [{"category": "pricing", "count": 12}],
+        }
+        new = {
+            "avg_urgency": 6.8,
+            "pain_categories": [{"category": "pricing", "count": 12}],
+        }
+        diff = classify_evidence(old, new)
+        assert "churn_density" in diff.missing
+        assert diff.change_count == 1
+        assert not diff.should_reconstitute
+
+    def test_pain_and_buyer_mix_shift_trigger_full_reason(self):
+        from atlas_brain.reasoning.differential import classify_evidence
+
+        old = {
+            "churn_density": 28.0,
+            "avg_urgency": 6.2,
+            "pain_categories": [{"category": "pricing", "count": 14}],
+            "buyer_authority": {"decision_maker_rate": 0.45},
+        }
+        new = {
+            "churn_density": 28.0,
+            "avg_urgency": 6.2,
+            "pain_categories": [{"category": "support", "count": 14}],
+            "buyer_authority": {"decision_maker_rate": 0.1},
+        }
+        diff = classify_evidence(old, new)
+        assert len(diff.contradicted) == 2
+        assert diff.weighted_diff_ratio > 0.3
+        assert not diff.should_reconstitute
+
+    def test_quote_only_shift_stays_reconstitutable(self):
+        from atlas_brain.reasoning.differential import classify_evidence
+
+        old = {
+            "churn_density": 19.0,
+            "avg_urgency": 5.4,
+            "quote_count": 4,
+            "top_quote": "billing was painful",
+        }
+        new = {
+            "churn_density": 19.0,
+            "avg_urgency": 5.4,
+            "quote_count": 4,
+            "top_quote": "support was slow",
+        }
+        diff = classify_evidence(old, new)
+        assert len(diff.contradicted) == 1
+        assert diff.weighted_diff_ratio < 0.3
+        assert diff.should_reconstitute
+
 
 class TestTiers:
     def test_tier_ordering(self):
@@ -482,7 +539,8 @@ class TestArchetypes:
         expected = {
             "pricing_shock", "feature_gap", "acquisition_decay",
             "leadership_redesign", "integration_break", "support_collapse",
-            "category_disruption", "compliance_gap",
+            "category_disruption", "compliance_gap", "scale_up_stumble",
+            "pivot_abandonment",
         }
         assert set(ARCHETYPES.keys()) == expected
 

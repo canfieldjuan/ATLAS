@@ -56,6 +56,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _build_deterministic_displacement_map,
         _build_deterministic_vendor_feed,
         _build_deterministic_vendor_scorecards,
+        _build_scorecard_locked_facts,
         _build_pain_lookup,
         _build_competitor_lookup,
         _build_feature_gap_lookup,
@@ -75,6 +76,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _canonicalize_vendor,
         _compute_evidence_confidence,
         _executive_source_list,
+        _fallback_scorecard_expert_take,
         _fetch_competitive_displacement,
         _fetch_competitor_reasons,
         _fetch_data_context,
@@ -100,6 +102,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _fetch_contract_context_distribution,
         _fetch_turning_points,
         _fetch_displacement_provenance,
+        _validate_scorecard_expert_take,
     )
     from .b2b_churn_intelligence import (
         reconstruct_reasoning_lookup,
@@ -341,6 +344,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     _llm_workload = "synthesis"
     scorecard_llm_failures = 0
     scorecard_reasoning_reused = 0
+    scorecard_guardrail_fallbacks = 0
     for sc in deterministic_vendor_scorecards:
         reasoning_summary = sc.get("reasoning_summary", "")
         if reasoning_summary and cfg.stratified_reasoning_enabled and not sc.get("cross_vendor_comparisons"):
@@ -353,6 +357,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 "avg_urgency", "feature_analysis", "churn_predictors", "competitor_overlap",
                 "trend", "sentiment_direction", "cross_vendor_comparisons",
             ) if k in sc}
+            llm_input["locked_facts"] = _build_scorecard_locked_facts(sc)
             if sc.get("archetype"):
                 llm_input["reasoning_conclusion"] = {
                     "archetype": sc["archetype"],
@@ -372,14 +377,20 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 timeout=45,
             )
             parsed_narrative = parse_json_response(narrative)
-            sc["expert_take"] = parsed_narrative.get("expert_take", "")
+            expert_take = parsed_narrative.get("expert_take", "")
+            narrative_errors = _validate_scorecard_expert_take(sc, expert_take)
+            if narrative_errors:
+                scorecard_guardrail_fallbacks += 1
+                sc["expert_take"] = _fallback_scorecard_expert_take(sc)
+            else:
+                sc["expert_take"] = expert_take
         except Exception:
             scorecard_llm_failures += 1
-            sc["expert_take"] = reasoning_summary or ""
-    if scorecard_llm_failures or scorecard_reasoning_reused:
+            sc["expert_take"] = _fallback_scorecard_expert_take(sc)
+    if scorecard_llm_failures or scorecard_reasoning_reused or scorecard_guardrail_fallbacks:
         logger.info(
-            "Scorecard LLM: %d failed, %d reused reasoning",
-            scorecard_llm_failures, scorecard_reasoning_reused,
+            "Scorecard LLM: %d failed, %d reused reasoning, %d guardrail fallbacks",
+            scorecard_llm_failures, scorecard_reasoning_reused, scorecard_guardrail_fallbacks,
         )
 
     # --- Phase 6: Build executive summaries ---

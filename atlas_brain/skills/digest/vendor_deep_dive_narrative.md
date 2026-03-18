@@ -40,6 +40,12 @@ You will receive a JSON object with:
   - `conclusion`: 3-5 sentence synthesis of the asymmetry analysis
   - `confidence`: confidence (0-1)
   - `resource_advantage`: which vendor holds the resource edge and why
+- `locked_facts` (if present): authoritative structured facts that synthesis must not contradict:
+  - `vendor`
+  - `risk_level`
+  - `archetype` (only when reasoning confidence is high enough to reference it)
+  - `allowed_opponents`
+  - `comparison` with the highest-confidence opponent/resource context
 
 ## Output Schema
 
@@ -61,6 +67,8 @@ You will receive a JSON object with:
 - Do not repeat raw metrics without context — interpret what they mean for a buyer.
 - If `reasoning_conclusion` is present and its `confidence` >= 0.6, reference the archetype in the narrative (e.g., "fits a pricing_shock pattern"). If confidence < 0.6, do not mention the archetype.
 - If `cross_vendor_comparisons` is present and any entry has `confidence` >= 0.6, weave the relative positioning into the narrative (e.g., "positioned weaker than [opponent] due to [resource_advantage]"). Do not enumerate all comparisons -- pick the single most relevant one. If all comparisons have confidence < 0.6, ignore them.
+- Treat `locked_facts` as source of truth. Do not introduce a new archetype, opponent, or relative-position claim that is not allowed there.
+- Never contradict `risk_level`, `reasoning_conclusion`, or the selected high-confidence comparison. This is a rendering pass, not a second analytical pass.
 - Be direct and specific, not generic. Avoid vague hedging.
 
 ## Output

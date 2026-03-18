@@ -83,3 +83,55 @@ async def test_reasoning_agent_emits_trace_with_reasoning_summary():
     assert payload["metadata"]["business"]["workflow"] == "reasoning_agent"
     assert payload["metadata"]["reasoning"]["triage"] == "High-signal churn event"
     assert payload["metadata"]["reasoning"]["summary"] == "Pricing pressure and negative sentiment are increasing"
+
+
+@pytest.mark.asyncio
+async def test_store_local_uses_standalone_connection_when_shared_pool_disabled():
+    raw_conn = AsyncMock()
+    pool = AsyncMock()
+    pool.is_initialized = True
+    pool.acquire_raw = AsyncMock(return_value=raw_conn)
+    pool.execute = AsyncMock()
+    payload = {
+        "span_name": "pipeline.digest/battle_card_sales_copy",
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "metadata": {"vendor": "WooCommerce"},
+    }
+
+    with patch("atlas_brain.storage.database.get_db_pool", return_value=pool):
+        await tracer._store_local(payload, use_shared_pool=False)
+
+    pool.execute.assert_not_awaited()
+    pool.acquire_raw.assert_awaited_once()
+    raw_conn.execute.assert_awaited_once()
+    raw_conn.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_send_uses_ephemeral_client_when_shared_resources_disabled():
+    client = AsyncMock()
+    client.post = AsyncMock(return_value=type("Resp", (), {"status_code": 200})())
+    client_cm = AsyncMock()
+    client_cm.__aenter__.return_value = client
+    client_cm.__aexit__.return_value = None
+    payload = {
+        "span_id": "span_123",
+        "span_name": "pipeline.digest/battle_card_sales_copy",
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "status": "completed",
+    }
+
+    with (
+        patch.object(tracer, "_enabled", True),
+        patch.object(tracer, "_base_url", "https://example.com"),
+        patch.object(tracer, "_api_key", "test-key"),
+        patch.object(tracer, "_store_local", new=AsyncMock()),
+        patch.object(tracer, "_ensure_client", new=AsyncMock()) as ensure_client,
+        patch("atlas_brain.services.tracing.httpx.AsyncClient", return_value=client_cm),
+    ):
+        await tracer._send(payload, use_shared_resources=False)
+
+    ensure_client.assert_not_called()
+    client.post.assert_awaited_once()

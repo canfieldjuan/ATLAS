@@ -384,7 +384,7 @@ def _recover_truncated_json(raw_text: str) -> dict[str, Any] | None:
         suffix = "]" * max(open_brackets, 0) + "}" * max(opens, 0)
         try:
             result = json.loads(candidate + suffix)
-            if isinstance(result, dict) and result.get("analysis_text"):
+            if isinstance(result, dict) and result:
                 logger.info(
                     "Recovered truncated JSON (trimmed %d chars, closed %d braces)",
                     trim, opens + open_brackets,
@@ -413,6 +413,7 @@ def call_llm_with_skill(
     auto_activate_ollama: bool = True,
     response_format: dict[str, Any] | None = None,
     guided_json: dict[str, Any] | None = None,
+    openrouter_model: str | None = None,
     usage_out: dict[str, Any] | None = None,
     span_name: str | None = None,
     trace_metadata: dict[str, Any] | None = None,
@@ -438,6 +439,7 @@ def call_llm_with_skill(
         prefer_cloud=prefer_cloud,
         try_openrouter=try_openrouter,
         auto_activate_ollama=auto_activate_ollama,
+        openrouter_model=openrouter_model,
     )
     if llm is None:
         logger.warning("No LLM available for skill '%s'", skill_name)

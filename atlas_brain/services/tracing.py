@@ -333,40 +333,42 @@ class FTLTracingClient:
         """Fire-and-forget send; never block caller."""
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(self._send(payload))
+            loop.create_task(self._send(payload, use_shared_resources=True))
         except RuntimeError:
             # No running event loop (sync context) -- send in a thread
             import threading
 
             def _bg_send() -> None:
                 try:
-                    asyncio.run(self._send(payload))
+                    asyncio.run(self._send(payload, use_shared_resources=False))
                 except Exception:
                     pass
 
             threading.Thread(target=_bg_send, daemon=True).start()
 
-    async def _send(self, payload: dict[str, Any]) -> None:
+    async def _send(
+        self,
+        payload: dict[str, Any],
+        *,
+        use_shared_resources: bool,
+    ) -> None:
         """POST trace to FTL API + store locally. Errors are logged, never raised."""
         span_id = payload.get("span_id", "?")
 
         # Store locally for cost dashboard queries (always, even without FTL)
-        await self._store_local(payload)
+        await self._store_local(payload, use_shared_pool=use_shared_resources)
 
         # Send to FTL remote API only when enabled
         if not self._enabled:
             return
 
         try:
-            client = await self._ensure_client()
-            resp = await client.post(
-                f"{self._base_url}/api/analytics/traces",
-                json=payload,
-                headers={
-                    "X-API-Key": self._api_key,
-                    "Content-Type": "application/json",
-                },
-            )
+            if use_shared_resources:
+                client = await self._ensure_client()
+                resp = await self._post_remote(client, payload)
+            else:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await self._post_remote(client, payload)
             if resp.status_code >= 400:
                 logger.warning(
                     "FTL trace rejected (%d) span=%s",
@@ -386,7 +388,27 @@ class FTLTracingClient:
         except Exception as e:
             logger.warning("FTL trace send failed span=%s: %s", span_id, type(e).__name__)
 
-    async def _store_local(self, payload: dict[str, Any]) -> None:
+    async def _post_remote(
+        self,
+        client: httpx.AsyncClient,
+        payload: dict[str, Any],
+    ) -> httpx.Response:
+        """Send a trace payload to the remote tracing API."""
+        return await client.post(
+            f"{self._base_url}/api/analytics/traces",
+            json=payload,
+            headers={
+                "X-API-Key": self._api_key,
+                "Content-Type": "application/json",
+            },
+        )
+
+    async def _store_local(
+        self,
+        payload: dict[str, Any],
+        *,
+        use_shared_pool: bool = True,
+    ) -> None:
         """Insert usage row into local llm_usage table (best-effort)."""
         if not payload.get("input_tokens") and not payload.get("output_tokens"):
             return
@@ -396,13 +418,13 @@ class FTLTracingClient:
             pool = get_db_pool()
             if not pool.is_initialized:
                 return
-            await pool.execute(
-                """INSERT INTO llm_usage
-                   (span_name, operation_type, model_name, model_provider,
-                    input_tokens, output_tokens, total_tokens, cost_usd,
-                    duration_ms, ttft_ms, inference_time_ms, tokens_per_second,
-                    status, metadata)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)""",
+            query = """INSERT INTO llm_usage
+                       (span_name, operation_type, model_name, model_provider,
+                        input_tokens, output_tokens, total_tokens, cost_usd,
+                        duration_ms, ttft_ms, inference_time_ms, tokens_per_second,
+                        status, metadata)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)"""
+            args = (
                 payload.get("span_name", ""),
                 payload.get("operation_type", "llm_call"),
                 payload.get("model_name"),
@@ -418,6 +440,14 @@ class FTLTracingClient:
                 payload.get("status", "completed"),
                 json.dumps(payload.get("metadata", {})),
             )
+            if use_shared_pool:
+                await pool.execute(query, *args)
+                return
+            conn = await pool.acquire_raw()
+            try:
+                await conn.execute(query, *args)
+            finally:
+                await conn.close()
         except Exception as exc:
             logger.warning("_store_local failed for span=%s: %s", payload.get("span_name"), exc)
 

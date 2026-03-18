@@ -1556,8 +1556,12 @@ class TestScorecardNarrativeLLMInput:
     )
 
     def _build_llm_input(self, sc: dict) -> dict:
-        """Replicate the exact filter from b2b_churn_reports.py:347."""
-        return {k: sc[k] for k in self._LLM_INPUT_KEYS if k in sc}
+        """Replicate the report LLM input filter plus locked-facts injection."""
+        from atlas_brain.autonomous.tasks._b2b_shared import _build_scorecard_locked_facts
+
+        llm_input = {k: sc[k] for k in self._LLM_INPUT_KEYS if k in sc}
+        llm_input["locked_facts"] = _build_scorecard_locked_facts(sc)
+        return llm_input
 
     def test_cross_vendor_comparisons_included_when_present(self):
         sc = {
@@ -1572,6 +1576,7 @@ class TestScorecardNarrativeLLMInput:
         llm_input = self._build_llm_input(sc)
         assert "cross_vendor_comparisons" in llm_input
         assert llm_input["cross_vendor_comparisons"][0]["opponent"] == "Freshdesk"
+        assert llm_input["locked_facts"]["allowed_opponents"] == ["Freshdesk"]
 
     def test_cross_vendor_comparisons_absent_when_not_enriched(self):
         sc = {
@@ -1581,6 +1586,7 @@ class TestScorecardNarrativeLLMInput:
         }
         llm_input = self._build_llm_input(sc)
         assert "cross_vendor_comparisons" not in llm_input
+        assert llm_input["locked_facts"]["vendor"] == "Monday.com"
 
     def test_short_circuit_fires_without_comparisons(self):
         """When no cross_vendor_comparisons, reasoning_summary is reused."""
@@ -1625,13 +1631,14 @@ class TestScorecardNarrativeLLMInput:
             "reasoning_summary": "should not appear in llm_input",
             "archetype": "pricing_shock",
             "archetype_confidence": 0.9,
-            "cross_vendor_comparisons": [{"opponent": "Freshdesk"}],
+            "cross_vendor_comparisons": [{"opponent": "Freshdesk", "confidence": 0.8}],
         }
         llm_input = self._build_llm_input(sc)
         assert "reasoning_summary" not in llm_input
         assert "archetype" not in llm_input
         assert "archetype_confidence" not in llm_input
         assert "cross_vendor_comparisons" in llm_input
+        assert llm_input["locked_facts"]["allowed_opponents"] == ["Freshdesk"]
 
     def test_resource_advantage_absent_tolerant(self):
         """cross_vendor_comparisons entry missing resource_advantage still works."""
@@ -1766,3 +1773,128 @@ class TestReconstructEvidenceVolatility:
         pool.fetch.return_value = []
         result = await reconstruct_evidence_volatility(pool)
         assert result == {}
+
+
+class TestSlowBurnEvidenceFlow:
+    """Verify slow-burn metrics reach reasoning and downstream payload builders."""
+
+    def test_build_vendor_evidence_keeps_slow_burn_fields(self):
+        from atlas_brain.autonomous.tasks._b2b_shared import _build_vendor_evidence
+
+        vs = {
+            "vendor_name": "Acme",
+            "product_category": "CRM",
+            "total_reviews": 100,
+            "churn_intent": 40,
+            "avg_urgency": 6.2,
+            "recommend_yes": 15,
+            "recommend_no": 25,
+            "support_sentiment": 0.41,
+            "legacy_support_score": 0.22,
+            "new_feature_velocity": 0.71,
+            "employee_growth_rate": 0.34,
+        }
+        temporal_lookup = {
+            "Acme": {
+                "trend_30d_churn_density": 0.12,
+                "trend_30d_support_sentiment": -0.08,
+            }
+        }
+        evidence = _build_vendor_evidence(
+            vs,
+            pain_lookup={"Acme": [{"category": "legacy platform ignored", "count": 8}]},
+            competitor_lookup={},
+            feature_gap_lookup={},
+            insider_lookup={},
+            keyword_spike_lookup={},
+            temporal_lookup=temporal_lookup,
+            market_regime_lookup={"Acme": {"regime_type": "high_churn"}},
+        )
+
+        assert evidence["support_sentiment"] == 0.41
+        assert evidence["legacy_support_score"] == 0.22
+        assert evidence["new_feature_velocity"] == 0.71
+        assert evidence["employee_growth_rate"] == 0.34
+        assert evidence["market_regime"]["regime_type"] == "high_churn"
+        assert evidence["trend_30d_churn_density"] == 0.12
+
+    def test_archetype_scoring_uses_slow_burn_fields(self):
+        from atlas_brain.autonomous.tasks._b2b_shared import _build_vendor_evidence
+        from atlas_brain.reasoning.archetypes import enrich_evidence_with_archetypes
+
+        temporal = {"Acme": {"trend_30d_churn_density": 0.11}}
+        evidence = _build_vendor_evidence(
+            {
+                "vendor_name": "Acme",
+                "product_category": "CRM",
+                "total_reviews": 100,
+                "churn_intent": 38,
+                "avg_urgency": 5.8,
+                "recommend_yes": 20,
+                "recommend_no": 15,
+                "legacy_support_score": 0.2,
+                "new_feature_velocity": 0.8,
+            },
+            pain_lookup={"Acme": [{"category": "legacy workflow deprecated", "count": 6}]},
+            competitor_lookup={},
+            feature_gap_lookup={},
+            insider_lookup={},
+            keyword_spike_lookup={},
+            temporal_lookup=temporal,
+        )
+
+        enriched = enrich_evidence_with_archetypes(evidence, temporal["Acme"])
+        archetypes = [x["archetype"] for x in enriched.get("archetype_scores", [])]
+
+        assert "pivot_abandonment" in archetypes
+
+    def test_prepare_evidence_keeps_market_regime_and_trends(self):
+        from atlas_brain.reasoning.stratified_reasoner import StratifiedReasoner
+
+        prepared = StratifiedReasoner._prepare_evidence({
+            "vendor_name": "Acme",
+            "support_sentiment": 0.44,
+            "legacy_support_score": 0.31,
+            "new_feature_velocity": 0.63,
+            "employee_growth_rate": 0.28,
+            "trend_30d_support_sentiment": -0.07,
+            "trend_90d_churn_density": 0.09,
+            "market_regime": {"regime_type": "disruption"},
+        })
+
+        assert prepared["support_sentiment"] == 0.44
+        assert prepared["trend_30d_support_sentiment"] == -0.07
+        assert prepared["trend_90d_churn_density"] == 0.09
+        assert prepared["market_regime"]["regime_type"] == "disruption"
+
+
+class TestBlogMarketRegimeBlueprint:
+    """Verify blog blueprints can carry persisted market regime context."""
+
+    def test_market_landscape_blueprint_includes_market_regime(self):
+        from atlas_brain.autonomous.tasks.b2b_blog_post_generation import _blueprint_market_landscape
+
+        blueprint = _blueprint_market_landscape(
+            {
+                "category": "CRM",
+                "vendor_count": 4,
+                "total_reviews": 240,
+                "avg_urgency": 5.6,
+                "slug": "crm-market-landscape",
+            },
+            {
+                "vendor_profiles": [],
+                "vendor_signals": [],
+                "quotes": [],
+                "data_context": {"review_period": "2026-01-01 to 2026-03-01"},
+                "category_overview": {
+                    "cross_vendor_analysis": {"market_regime": "high_churn"},
+                },
+            },
+        )
+
+        assert blueprint.data_context["category"] == "CRM"
+        assert any(
+            section.key_stats.get("market_regime") == "high_churn"
+            for section in blueprint.sections
+        )

@@ -271,6 +271,7 @@ def _build_category_payload(
     vendor_evidence: dict[str, dict[str, Any]],
     ecosystem: dict[str, Any],
     displacement_flows: list[dict[str, Any]],
+    market_regime: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the user payload for a category council LLM call."""
     vendors = []
@@ -279,12 +280,15 @@ def _build_category_payload(
     flows = []
     for f in displacement_flows[:15]:
         flows.append(_compact_evidence(f))
-    return {
+    payload = {
         "category": category,
         "ecosystem": _compact_evidence(ecosystem),
         "vendors": vendors,
         "displacement_flows": flows,
     }
+    if market_regime:
+        payload["market_pulse"] = market_regime
+    return payload
 
 
 def _build_asymmetry_payload(
@@ -493,9 +497,16 @@ class CrossVendorReasoner:
         from ..services.protocols import Message
         from ..services.tracing import build_business_trace_context
         from .config import ReasoningConfig
+        from .llm_utils import resolve_stratified_llm_light
 
         _rcfg = ReasoningConfig()
-        llm = resolve_stratified_llm(_rcfg)
+        # Pairwise battles are Tier 1 (heavy); councils + asymmetry are Tier 2 (light)
+        if analysis_type == "pairwise_battle":
+            llm = resolve_stratified_llm(_rcfg)
+            llm_light = resolve_stratified_llm_light(_rcfg)
+        else:
+            llm = resolve_stratified_llm_light(_rcfg)
+            llm_light = None  # same model for all passes
         if llm is None:
             logger.error("No LLM available for cross-vendor reasoning")
             return CrossVendorResult(
@@ -545,12 +556,21 @@ class CrossVendorReasoner:
             if _rcfg.multi_pass_enabled and finder:
                 mp_result = await multi_pass_reason(
                     llm=llm,
+                    llm_light=llm_light,
                     system_prompt=system_prompt,
                     evidence_payload=payload,
                     json_schema=CROSS_VENDOR_JSON_SCHEMA,
                     max_tokens=_rcfg.max_tokens,
                     temperature=_rcfg.temperature,
                     enabled=True,
+                    challenge_confidence_floor=_rcfg.multi_pass_challenge_confidence_floor,
+                    challenge_min_reviews=_rcfg.multi_pass_challenge_min_reviews,
+                    challenge_mixed_polarity_min_share=_rcfg.multi_pass_challenge_mixed_polarity_min_share,
+                    challenge_high_impact_churn_density=_rcfg.multi_pass_challenge_high_impact_churn_density,
+                    challenge_high_impact_avg_urgency=_rcfg.multi_pass_challenge_high_impact_avg_urgency,
+                    challenge_high_impact_displacement_mentions=_rcfg.multi_pass_challenge_high_impact_displacement_mentions,
+                    ground_change_threshold=_rcfg.multi_pass_ground_change_threshold,
+                    ground_always=_rcfg.multi_pass_ground_always,
                     span_prefix=f"reasoning.cross_vendor.{analysis_type}",
                     trace_metadata=trace_metadata,
                     contradiction_finder=finder,
@@ -674,16 +694,18 @@ class CrossVendorReasoner:
         vendor_evidence: dict[str, dict[str, Any]],
         ecosystem: dict[str, Any],
         displacement_flows: list[dict[str, Any]],
+        market_regime: dict[str, Any] | None = None,
     ) -> CrossVendorResult:
         """Category council reasoning: market regime and structural dynamics."""
         eh = _combined_evidence_hash(
             vendor_evidence, ecosystem, {"flows": displacement_flows},
+            market_regime or {},
         )
         cat_safe = category.lower().replace(" ", "_")
         pattern_sig = f"xv:category:{cat_safe}:{eh}"
 
         payload = _build_category_payload(
-            category, vendor_evidence, ecosystem, displacement_flows,
+            category, vendor_evidence, ecosystem, displacement_flows, market_regime,
         )
         vendors = sorted(vendor_evidence.keys())
         return await self._call_llm(
