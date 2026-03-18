@@ -31,6 +31,7 @@ import migrationFromMondaycom202603 from './migration-from-mondaycom-2026-03'
 import migrationFromRingcentral202603 from './migration-from-ringcentral-2026-03'
 import migrationFromPipedrive202603 from './migration-from-pipedrive-2026-03'
 import helpScoutChurnReport202603 from './help-scout-churn-report-2026-03'
+import insightlyChurnReport202603 from './insightly-churn-report-2026-03'
 type ChartValue = string | number | null | undefined
 type ChartDatum = Record<string, ChartValue>
 
@@ -131,4 +132,5 @@ export const POSTS: BlogPost[] = [
   migrationFromRingcentral202603,
   migrationFromPipedrive202603,
   helpScoutChurnReport202603,
+  insightlyChurnReport202603,
 ]
