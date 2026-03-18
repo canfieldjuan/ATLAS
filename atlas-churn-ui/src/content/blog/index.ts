@@ -29,6 +29,7 @@ import intercomAlternatives202603 from './intercom-alternatives-2026-03'
 import migrationFromFortinet202603 from './migration-from-fortinet-2026-03'
 import migrationFromMondaycom202603 from './migration-from-mondaycom-2026-03'
 import migrationFromRingcentral202603 from './migration-from-ringcentral-2026-03'
+import migrationFromPipedrive202603 from './migration-from-pipedrive-2026-03'
 type ChartValue = string | number | null | undefined
 type ChartDatum = Record<string, ChartValue>
 
@@ -127,4 +128,5 @@ export const POSTS: BlogPost[] = [
   migrationFromFortinet202603,
   migrationFromMondaycom202603,
   migrationFromRingcentral202603,
+  migrationFromPipedrive202603,
 ]
