@@ -2507,9 +2507,9 @@ class B2BScrapeConfig(BaseSettings):
 
     # Schedule
     intake_interval_seconds: int = Field(default=3600, description="Scrape polling interval (1 hour)")
-    max_targets_per_run: int = Field(default=200, description="Max targets to scrape per run (0 = unlimited)")
+    max_targets_per_run: int = Field(default=0, description="Max targets to scrape per run (0 = unlimited)")
     source_allowlist: str = Field(
-        default="g2,capterra,trustradius,gartner,peerspot,getapp,software_advice,trustpilot,reddit,hackernews,sourceforge",
+        default="g2,capterra,trustradius,gartner,peerspot,getapp,software_advice,trustpilot,reddit,hackernews,sourceforge,twitter",
         description="Sources allowed for automated scrape intake (comma-separated)",
     )
 
