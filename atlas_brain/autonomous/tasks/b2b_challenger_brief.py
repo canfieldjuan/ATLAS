@@ -387,15 +387,16 @@ async def _fetch_cross_vendor_battle(
 
     key_insights = conclusion.get("key_insights") or []
     if isinstance(key_insights, list):
-        # Normalize: items can be strings or dicts with "insight"/"text" key
-        normalized: list[str] = []
+        # Normalize: items can be strings or dicts with "insight"+"evidence"
+        normalized: list[dict[str, str]] = []
         for item in key_insights:
             if isinstance(item, str) and item:
-                normalized.append(item)
+                normalized.append({"insight": item, "evidence": ""})
             elif isinstance(item, dict):
-                text = item.get("insight") or item.get("text")
-                if isinstance(text, str) and text:
-                    normalized.append(text)
+                text = item.get("insight") or item.get("text") or ""
+                evidence = item.get("evidence") or ""
+                if text:
+                    normalized.append({"insight": text, "evidence": evidence})
         key_insights = normalized
 
     return {
@@ -617,13 +618,25 @@ def _build_challenger_brief(
         bc_price_complaint_rate = obj_data.get("price_complaint_rate")
         bc_dm_churn_rate = obj_data.get("dm_churn_rate")
 
-    # Fallback: pull weaknesses from incumbent product profile when no battle card
+    # Fallback: pull weaknesses from incumbent product profile when no battle card.
+    # Product profile weaknesses have shape {"area": str, "score": float, "evidence_count": int}
+    # from _build_strengths_weaknesses() (satisfaction score < 3.5).
+    # Normalize to battle-card-compatible shape for downstream consumers.
     if not inc_weaknesses and incumbent_profile:
         for w in (incumbent_profile.get("weaknesses") or []):
             if isinstance(w, dict):
-                inc_weaknesses.append(w)
+                area = w.get("area") or w.get("weakness") or w.get("name") or ""
+                score = w.get("score") or w.get("avg_score") or 0
+                count = w.get("evidence_count") or w.get("mentions") or w.get("count") or 0
+                if area:
+                    inc_weaknesses.append({
+                        "area": area,
+                        "count": count,
+                        "source": "product_profile",
+                        "evidence": "Satisfaction score %.1f/5.0 across %d reviews" % (float(score), int(count)) if score else "",
+                    })
             elif isinstance(w, str) and w:
-                inc_weaknesses.append({"area": w, "count": 0, "source": "product_profile"})
+                inc_weaknesses.append({"area": w, "count": 0, "source": "product_profile", "evidence": ""})
 
     # Fallback chain for pain quotes:
     # 1. Battle card quotes (already handled above)
@@ -692,21 +705,22 @@ def _build_challenger_brief(
         mentions = displacement_detail.get("total_mentions", 0)
         signal = displacement_detail.get("signal_strength", "none")
         confidence = displacement_detail.get("confidence_score", 0)
-        insights = []
+        insights: list[dict[str, str]] = []
         if driver and driver != "unknown":
-            insights.append("Primary displacement driver: %s" % driver)
+            insights.append({"insight": "Primary displacement driver: %s" % driver, "evidence": "displacement_detail.primary_driver"})
         if mentions:
-            insights.append("%d displacement mentions across sources" % mentions)
+            insights.append({"insight": "%d displacement mentions across sources" % mentions, "evidence": "total_mentions: %d" % mentions})
         # Add archetype context if available
         archetype = (churn_signal or {}).get("archetype")
         if archetype:
-            insights.append("%s classified as %s archetype" % (incumbent, archetype))
+            insights.append({"insight": "%s classified as %s archetype" % (incumbent, archetype), "evidence": "stratified_reasoning.archetype"})
         # Add top weakness from incumbent profile
         if inc_weaknesses:
             top_w = inc_weaknesses[0]
             area = top_w.get("area") or top_w.get("weakness") or ""
+            count = top_w.get("count") or top_w.get("evidence_count") or 0
             if area:
-                insights.append("Top incumbent weakness: %s" % area)
+                insights.append({"insight": "Top incumbent weakness: %s" % area, "evidence": "%d mentions" % count if count else "product_profile"})
         head_to_head = {
             "winner": challenger if mentions >= 5 and signal in ("strong", "moderate") else "",
             "conclusion": "%s displacing %s driven by %s (%d mentions, %s signal)." % (

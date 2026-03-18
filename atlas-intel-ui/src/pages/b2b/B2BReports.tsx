@@ -224,8 +224,17 @@ function ChallengerBriefView({ d }: { d: AnyData }) {
           </div>
           {h2h.conclusion && <p className="text-xs text-slate-300 mt-1">{h2h.conclusion}</p>}
           {Array.isArray(h2h.key_insights) && h2h.key_insights.length > 0 && (
-            <ul className="list-disc list-inside text-xs text-slate-400 space-y-0.5 mt-1">
-              {h2h.key_insights.slice(0, 5).map((ins: string, i: number) => <li key={i}>{ins}</li>)}
+            <ul className="list-disc list-inside text-xs text-slate-400 space-y-1 mt-1">
+              {h2h.key_insights.slice(0, 5).map((ins: any, i: number) => {
+                const text = typeof ins === 'string' ? ins : ins?.insight || ''
+                const evidence = typeof ins === 'object' ? ins?.evidence : ''
+                return (
+                  <li key={i}>
+                    {text}
+                    {evidence && <span className="text-slate-600 ml-1">({evidence})</span>}
+                  </li>
+                )
+              })}
             </ul>
           )}
         </Section>

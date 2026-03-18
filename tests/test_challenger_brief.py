@@ -548,7 +548,7 @@ class TestFetchCrossVendorBattle:
         assert result["winner"] == "Freshdesk"
         assert result["conclusion"] == "Freshdesk wins on SMB pricing"
         assert result["durability"] == "Durable: structural pricing gap"
-        assert result["key_insights"] == ["Wins deals under 50k ARR"]
+        assert result["key_insights"] == [{"insight": "Wins deals under 50k ARR", "evidence": ""}]
         assert result["confidence"] == 0.75
 
     @pytest.mark.asyncio
@@ -581,7 +581,11 @@ class TestFetchCrossVendorBattle:
         result = await _fetch_cross_vendor_battle(
             pool, "A", "B", date(2026, 3, 17),
         )
-        assert result["key_insights"] == ["Point one", "Point two", "Point three"]
+        assert result["key_insights"] == [
+            {"insight": "Point one", "evidence": ""},
+            {"insight": "Point two", "evidence": ""},
+            {"insight": "Point three", "evidence": ""},
+        ]
 
     @pytest.mark.asyncio
     async def test_durability_fallback_to_displacement_flows_nature(self):

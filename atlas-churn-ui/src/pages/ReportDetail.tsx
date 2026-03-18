@@ -415,12 +415,16 @@ function ChallengerBriefDetail({ data }: { data: AnyObj }) {
           {h2h.conclusion && <p className="text-sm text-slate-300 mt-2">{h2h.conclusion}</p>}
           {Array.isArray(h2h.key_insights) && h2h.key_insights.length > 0 && (
             <ul className="space-y-1 mt-2">
-              {h2h.key_insights.slice(0, 5).map((ins: any, i: number) => (
-                <li key={i} className="text-xs text-slate-400 flex gap-2">
-                  <span className="text-cyan-400">-</span>
-                  {typeof ins === 'string' ? ins : ins?.insight ?? ''}
-                </li>
-              ))}
+              {h2h.key_insights.slice(0, 5).map((ins: any, i: number) => {
+                const text = typeof ins === 'string' ? ins : ins?.insight ?? ''
+                const evidence = typeof ins === 'object' ? ins?.evidence : ''
+                return (
+                  <li key={i} className="text-xs text-slate-400 flex gap-2">
+                    <span className="text-cyan-400">-</span>
+                    <span>{text}{evidence && <span className="text-slate-600 ml-1">({evidence})</span>}</span>
+                  </li>
+                )
+              })}
             </ul>
           )}
         </CBSection>

@@ -140,14 +140,15 @@ def _normalize_cross_vendor_conclusion(raw: Any) -> dict[str, Any]:
     normalized = dict(raw)
     key_insights = raw.get("key_insights") or []
     if isinstance(key_insights, list):
-        insights: list[str] = []
+        insights: list[dict[str, str]] = []
         for item in key_insights:
             if isinstance(item, str) and item:
-                insights.append(item)
+                insights.append({"insight": item, "evidence": ""})
             elif isinstance(item, dict):
-                text = item.get("insight") or item.get("text")
-                if isinstance(text, str) and text:
-                    insights.append(text)
+                text = item.get("insight") or item.get("text") or ""
+                evidence = item.get("evidence") or ""
+                if text:
+                    insights.append({"insight": text, "evidence": evidence})
         normalized["key_insights"] = insights
     durability = normalized.get("durability_assessment") or raw.get("displacement_flows_nature")
     if isinstance(durability, str) and durability:

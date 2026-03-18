@@ -536,7 +536,10 @@ def _build_report_findings(
         insights = []
         for j in journal[:2]:
             for ins in j.get("key_insights", [])[:2]:
-                insights.append(str(ins))
+                if isinstance(ins, dict):
+                    insights.append(ins.get("insight", ""))
+                else:
+                    insights.append(str(ins))
         if insights:
             parts.append(f"Prior analysis insights: {'; '.join(insights)}.")
 

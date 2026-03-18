@@ -67,8 +67,16 @@ CROSS_VENDOR_JSON_SCHEMA: dict[str, Any] = {
         },
         "key_insights": {
             "type": "array",
-            "items": {"type": "string"},
-            "description": "Up to 5 key insights as plain strings.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "insight": {"type": "string", "description": "The key insight from this analysis"},
+                    "evidence": {"type": "string", "description": "Specific metric or data point supporting this insight"},
+                },
+                "required": ["insight", "evidence"],
+                "additionalProperties": False,
+            },
+            "description": "Up to 5 key insights, each with supporting evidence.",
         },
         "durability_assessment": {
             "type": "string",
@@ -128,16 +136,29 @@ Key questions to answer:
 4. Does A have the resources (review share, integration depth, enterprise trust) to recover?
 5. Would fixing A's top pain category materially reduce churn, or is the underlying cause deeper?
 
+WINNER / LOSER ASSIGNMENT:
+After your analysis, you MUST set two fields:
+- winner: the vendor that is GAINING share in this pairwise matchup. This is the vendor
+  that customers are moving TO based on the displacement evidence.
+- loser: the vendor that is LOSING share. This is the vendor that customers are moving
+  AWAY FROM.
+Determine winner/loser from displacement direction, not from who has more reviews or
+higher ratings. If reviews show customers switching from A to B, then B is the winner
+and A is the loser. If the direction is ambiguous or bidirectional, set winner to the
+vendor with the stronger net inflow based on switch_count and mention volume, and note
+the ambiguity in your conclusion.
+
+KEY INSIGHTS FORMAT:
+Each key_insight must be an object with "insight" (the finding) and "evidence" (the
+specific metric or data point that supports it). Example:
+  {"insight": "Pricing is the top churn driver", "evidence": "price_complaint_rate: 0.34 (34% of reviews)"}
+
 GROUNDING RULES:
 - Every key_insight MUST cite a specific metric and value from the evidence.
 - conclusion MUST reference at least 3 specific numbers from the evidence.
 - durability_assessment: "structural" means market forces make reversal unlikely;
   "cyclical" means tied to product cycle; "temporary" means fixable in 1-2 quarters;
   "uncertain" means insufficient evidence.
-- winner: name the vendor that is GAINING share (the one customers are moving TO).
-- loser: name the vendor that is LOSING share (the one customers are leaving).
-  Set both to the actual vendor name from the evidence. Only use null if the
-  displacement is truly bidirectional with no clear net winner.
 - falsification_conditions: what specific evidence would prove this analysis wrong?
 - Do not invent data not present in the evidence.
 
