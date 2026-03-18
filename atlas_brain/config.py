@@ -2872,6 +2872,8 @@ class MCPConfig(BaseSettings):
     b2b_churn_port: int = Field(default=8062, description="Port for B2B Churn Intelligence MCP server (SSE transport)")
     scraper_enabled: bool = Field(default=True, description="Enable Universal Scraper MCP server")
     scraper_port: int = Field(default=8063, description="Port for Universal Scraper MCP server (SSE transport)")
+    memory_enabled: bool = Field(default=True, description="Enable Memory MCP server")
+    memory_port: int = Field(default=8064, description="Port for Memory MCP server (SSE transport)")
 
 
 class AlertMonitorConfig(BaseSettings):

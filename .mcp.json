@@ -4,6 +4,11 @@
       "command": "/home/juan-canfield/Desktop/Atlas/.venv/bin/python",
       "args": ["-m", "atlas_brain.mcp.b2b_churn_server"],
       "env": {}
+    },
+    "atlas-memory": {
+      "command": "/home/juan-canfield/Desktop/Atlas/.venv/bin/python",
+      "args": ["-m", "atlas_brain.mcp.memory_server"],
+      "env": {}
     }
   }
 }

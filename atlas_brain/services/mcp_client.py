@@ -31,6 +31,7 @@ _SERVER_CATEGORIES = {
     "twilio": "communication",
     "invoicing": "billing",
     "intelligence": "intelligence",
+    "memory": "memory",
 }
 
 # Internal tool names that MUST NOT be overwritten by MCP servers.
@@ -212,6 +213,7 @@ class MCPToolProvider:
             ("invoicing", settings.mcp.invoicing_enabled, "atlas_brain.mcp.invoicing_server"),
             ("intelligence", settings.mcp.intelligence_enabled, "atlas_brain.mcp.intelligence_server"),
             ("b2b_churn", settings.mcp.b2b_churn_enabled, "atlas_brain.mcp.b2b_churn_server"),
+            ("memory", settings.mcp.memory_enabled, "atlas_brain.mcp.memory_server"),
         ]
 
         configs = []

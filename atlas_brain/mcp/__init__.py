@@ -1,7 +1,7 @@
 """
 Atlas MCP servers package.
 
-Seven standalone MCP servers:
+Eight standalone MCP servers:
   - CRM server          (atlas_brain.mcp.crm_server)          -- customer/contact management
   - Email server        (atlas_brain.mcp.email_server)        -- send + read email
   - Twilio server       (atlas_brain.mcp.twilio_server)       -- calls, SMS, recordings
@@ -9,6 +9,7 @@ Seven standalone MCP servers:
   - Invoicing server    (atlas_brain.mcp.invoicing_server)    -- invoices, payments, services
   - Intelligence server (atlas_brain.mcp.intelligence_server) -- reports, risk, interventions
   - B2B Churn server    (atlas_brain.mcp.b2b_churn_server)    -- B2B churn signals, reviews, pipeline
+  - Memory server       (atlas_brain.mcp.memory_server)       -- knowledge graph + conversation history
 
 Each server can run in stdio mode (default, for Claude Desktop / Cursor)
 or SSE/HTTP mode (for network-accessible deployment).
@@ -19,9 +20,15 @@ or SSE/HTTP mode (for network-accessible deployment).
     # Email -- stdio
     python -m atlas_brain.mcp.email_server
 
+    # Memory -- stdio
+    python -m atlas_brain.mcp.memory_server
+
     # CRM -- SSE on port 8056
     python -m atlas_brain.mcp.crm_server --sse
 
     # Email -- SSE on port 8057
     python -m atlas_brain.mcp.email_server --sse
+
+    # Memory -- SSE on port 8064
+    python -m atlas_brain.mcp.memory_server --sse
 """
