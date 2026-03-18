@@ -2372,13 +2372,15 @@ class B2BChurnConfig(BaseSettings):
     battle_card_llm_attempts: int = Field(default=2, ge=1, le=5, description="Max generation attempts per battle card, including repair retries")
     battle_card_llm_retry_delay_seconds: float = Field(default=1.0, ge=0.0, le=30.0, description="Delay between battle card LLM attempts")
     battle_card_llm_feedback_limit: int = Field(default=5, ge=1, le=10, description="Max validator issues to feed back into battle card repair attempts")
-    battle_card_llm_max_tokens: int = Field(default=3000, ge=256, le=12000, description="Max output tokens for battle card sales copy generation")
+    battle_card_llm_max_tokens: int = Field(default=16384, ge=256, le=32768, description="Max output tokens for battle card sales copy (reasoning models need extra budget)")
     battle_card_llm_temperature: float = Field(default=0.5, ge=0.0, le=1.5, description="Sampling temperature for battle card sales copy generation")
     battle_card_llm_timeout_seconds: float = Field(default=90.0, ge=5.0, le=300.0, description="Timeout for a single battle card LLM generation attempt")
     battle_card_cache_confidence: float = Field(default=0.95, ge=0.0, le=1.0, description="Confidence assigned to validated battle card sales copy cache entries")
     battle_card_high_priority_score_min: float = Field(default=60.0, ge=0.0, le=100.0, description="Min churn pressure score required before battle-card copy can use high-priority language")
     battle_card_high_priority_urgency_min: float = Field(default=5.0, ge=0.0, le=10.0, description="Min average urgency required before battle-card copy can use high-priority language")
     battle_card_feature_gap_headline_min_mentions: int = Field(default=5, ge=1, le=100, description="Min feature-gap mention count before a battle-card headline can elevate that gap directly")
+    synthesis_reference_confidence_min: float = Field(default=0.6, ge=0.0, le=1.0, description="Min reasoning or cross-vendor confidence before synthesis may reference a structured conclusion directly")
+    synthesis_expert_take_max_words: int = Field(default=80, ge=20, le=200, description="Max word count for synthesized scorecard expert_take narratives")
     battle_card_leaving_patterns: list[str] = Field(
         default=[
             "customers are leaving",
