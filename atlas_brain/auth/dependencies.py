@@ -35,6 +35,7 @@ def _synthetic_admin() -> AuthUser:
         plan_status="active",
         role="owner",
         product="consumer",
+        is_admin=True,
     )
 
 
