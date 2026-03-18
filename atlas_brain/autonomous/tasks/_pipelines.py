@@ -354,7 +354,7 @@ register_pipeline(PipelineConfig(
             module="b2b_scrape_intake",
             schedule_type="interval",
             interval_seconds=None,
-            timeout_seconds=1800,
+            timeout_seconds=7200,
             description="Scrape B2B review sites per configured targets",
             metadata={"builtin_handler": "b2b_scrape_intake"},
             interval_config_key="b2b_scrape.intake_interval_seconds",
