@@ -2598,6 +2598,16 @@ class B2BScrapeConfig(BaseSettings):
         description="Domains to route through Web Unlocker (comma-separated)",
     )
 
+    # Bright Data Scraping Browser (cloud Chromium with CAPTCHA solving)
+    scraping_browser_ws_url: str = Field(
+        default="",
+        description="Bright Data Scraping Browser WebSocket URL (wss://...@brd.superproxy.io:9222)",
+    )
+    scraping_browser_domains: str = Field(
+        default="getapp.com",
+        description="Domains to route through Scraping Browser instead of Web Unlocker (comma-separated)",
+    )
+
 
 class B2BCampaignConfig(BaseSettings):
     """B2B ABM campaign generation configuration."""

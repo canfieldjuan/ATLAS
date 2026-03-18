@@ -68,6 +68,31 @@ class GetAppParser:
                         target.vendor_name, exc,
                     )
 
+        # Priority 1.5: Bright Data Scraping Browser (cloud Chromium with CAPTCHA solving)
+        sb_url = settings.b2b_scrape.scraping_browser_ws_url.strip()
+        if sb_url:
+            sb_domains = {
+                d.strip().lower()
+                for d in settings.b2b_scrape.scraping_browser_domains.split(",")
+                if d.strip()
+            }
+            if _DOMAIN in sb_domains:
+                try:
+                    result = await self._scrape_browser(target, sb_url)
+                    if result.reviews:
+                        return result
+                    unlocker_errors.extend(result.errors)
+                    logger.warning(
+                        "Scraping Browser for %s returned 0 reviews, falling back",
+                        target.vendor_name,
+                    )
+                except Exception as exc:
+                    unlocker_errors.append(f"Scraping Browser exception: {exc}")
+                    logger.warning(
+                        "Scraping Browser failed for %s: %s -- falling back",
+                        target.vendor_name, exc,
+                    )
+
         # Priority 2: curl_cffi HTTP client with residential proxy
         result = await self._scrape_http(target, client)
         if unlocker_errors:
@@ -181,6 +206,82 @@ class GetAppParser:
             target.vendor_name, len(reviews), pages_scraped,
         )
         return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors, page_logs=page_logs)
+
+    # ------------------------------------------------------------------
+    # Scraping Browser path (Bright Data cloud Chromium)
+    # ------------------------------------------------------------------
+
+    async def _scrape_browser(self, target: ScrapeTarget, ws_url: str) -> ScrapeResult:
+        """Scrape GetApp via Bright Data Scraping Browser (cloud Chromium)."""
+        from playwright.async_api import async_playwright
+
+        slug = target.product_slug or target.vendor_name.lower().replace(" ", "-")
+        category = (target.metadata or {}).get("category_slug", "project-management-software")
+        max_pages = target.max_pages or 15
+        reviews: list[dict] = []
+        errors: list[str] = []
+        pages_scraped = 0
+        page_logs: list[dict] = []
+
+        try:
+            async with async_playwright() as pw:
+                browser = await pw.chromium.connect_over_cdp(ws_url)
+                context = browser.contexts[0] if browser.contexts else await browser.new_context()
+                page = await context.new_page()
+
+                for page_num in range(1, max_pages + 1):
+                    url = f"{_BASE_URL}/{category}/a/{slug}/reviews/"
+                    if page_num > 1:
+                        url += f"?page={page_num}"
+
+                    try:
+                        resp = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                        status = resp.status if resp else 0
+                        pages_scraped += 1
+
+                        if status == 404 or status == 403:
+                            errors.append(f"Page {page_num}: HTTP {status}")
+                            log_page(page_logs, page_num, status, 0, errors=errors[-1:])
+                            break
+
+                        if status >= 400:
+                            errors.append(f"Page {page_num}: HTTP {status}")
+                            log_page(page_logs, page_num, status, 0, errors=errors[-1:])
+                            continue
+
+                        html = await page.content()
+                        page_reviews = self._parse_reviews_from_html(html, target)
+                        reviews.extend(page_reviews)
+                        log_page(page_logs, page_num, status, len(page_reviews))
+
+                        if not page_reviews:
+                            break
+
+                        await asyncio.sleep(random.uniform(1.5, 3.0))
+
+                    except Exception as exc:
+                        errors.append(f"Page {page_num}: {type(exc).__name__}: {str(exc)[:80]}")
+                        log_page(page_logs, page_num, 0, 0, errors=errors[-1:])
+                        if page_num == 1:
+                            break
+
+                await page.close()
+                await browser.close()
+
+        except Exception as exc:
+            errors.append(f"Browser connection failed: {exc}")
+
+        logger.info(
+            "Scraping Browser for %s: %d reviews from %d pages",
+            target.vendor_name, len(reviews), pages_scraped,
+        )
+        return ScrapeResult(
+            reviews=reviews,
+            pages_scraped=pages_scraped,
+            errors=errors,
+            page_logs=page_logs,
+            status="success" if reviews else "failed",
+        )
 
     # ------------------------------------------------------------------
     # HTTP client path (curl_cffi + residential proxy)
