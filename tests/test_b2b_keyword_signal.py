@@ -11,13 +11,19 @@ import pytest
 # ---------------------------------------------------------------------------
 # Pre-mock heavy deps before importing the task module
 # ---------------------------------------------------------------------------
+_asyncpg_mock = MagicMock()
+_asyncpg_exceptions = MagicMock()
+_asyncpg_exceptions.UndefinedTableError = type("UndefinedTableError", (Exception,), {})
+_asyncpg_mock.exceptions = _asyncpg_exceptions
+sys.modules.setdefault("asyncpg", _asyncpg_mock)
+sys.modules.setdefault("asyncpg.exceptions", _asyncpg_exceptions)
+
 for _mod in (
     "torch", "torchaudio", "transformers", "accelerate", "bitsandbytes",
     "PIL", "PIL.Image", "numpy", "cv2", "sounddevice", "soundfile",
     "nemo.collections", "nemo.collections.asr",
     "nemo.collections.asr.models",
     "starlette", "starlette.requests",
-    "asyncpg",
     "playwright", "playwright.async_api",
     "playwright_stealth",
     "curl_cffi", "curl_cffi.requests",
