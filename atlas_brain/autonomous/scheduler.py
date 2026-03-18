@@ -556,7 +556,7 @@ class TaskScheduler:
             "task_type": "builtin",
             "schedule_type": "cron",
             "cron_expression": "0 23 * * 1-5",
-            "timeout_seconds": 600,
+            "timeout_seconds": 1800,
             "enabled": False,  # opt-in via ATLAS_B2B_CHURN_BLOG_POST_ENABLED
             "metadata": {
                 "builtin_handler": "b2b_blog_post_generation",
@@ -642,7 +642,7 @@ class TaskScheduler:
             "task_type": "builtin",
             "schedule_type": "cron",
             "cron_expression": "0 9 * * 1",
-            "timeout_seconds": 300,
+            "timeout_seconds": 1800,
             "metadata": {"builtin_handler": "b2b_vendor_briefing"},
         },
         {
