@@ -27,7 +27,41 @@ from . import ScrapeResult, ScrapeTarget, log_page, register_parser
 logger = logging.getLogger("atlas.services.scraping.parsers.getapp")
 
 _DOMAIN = "getapp.com"
-_BASE_URL = "https://www.getapp.com/software"
+_BASE_URL = "https://www.getapp.com"
+
+
+def _review_key(review: dict) -> str:
+    """Return a stable key for merging reviews across transports."""
+    return (
+        str(review.get("dedup_key") or "")
+        or str(review.get("source_review_id") or "")
+        or hashlib.sha256(
+            f"{review.get('summary','')}|{review.get('review_text','')}".encode()
+        ).hexdigest()[:16]
+    )
+
+
+def _merge_results(primary: ScrapeResult, continuation: ScrapeResult) -> ScrapeResult:
+    """Merge two scrape results, preserving errors, logs, and unique reviews."""
+    merged_reviews: list[dict] = []
+    seen: set[str] = set()
+    for review in primary.reviews + continuation.reviews:
+        key = _review_key(review)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged_reviews.append(review)
+    return ScrapeResult(
+        reviews=merged_reviews,
+        pages_scraped=primary.pages_scraped + continuation.pages_scraped,
+        errors=primary.errors + continuation.errors,
+        captcha_attempts=primary.captcha_attempts + continuation.captcha_attempts,
+        captcha_types=(primary.captcha_types or []) + (continuation.captcha_types or []),
+        captcha_solve_ms=primary.captcha_solve_ms + continuation.captcha_solve_ms,
+        page_logs=primary.page_logs + continuation.page_logs,
+        stop_reason=continuation.stop_reason or primary.stop_reason,
+        resume_page=continuation.resume_page,
+    )
 
 
 class GetAppParser:
@@ -42,6 +76,14 @@ class GetAppParser:
         from atlas_brain.config import settings
 
         unlocker_errors: list[str] = []
+        result = ScrapeResult(reviews=[], pages_scraped=0, errors=[])
+        sb_url = settings.b2b_scrape.scraping_browser_ws_url.strip()
+        sb_domains = {
+            d.strip().lower()
+            for d in settings.b2b_scrape.scraping_browser_domains.split(",")
+            if d.strip()
+        }
+        browser_enabled = bool(sb_url and _DOMAIN in sb_domains)
 
         # Priority 1: Bright Data Web Unlocker (handles Cloudflare automatically)
         if settings.b2b_scrape.web_unlocker_url:
@@ -53,11 +95,11 @@ class GetAppParser:
             if _DOMAIN in unlocker_domains:
                 try:
                     result = await self._scrape_web_unlocker(target)
-                    if result.reviews:
+                    if result.reviews and result.resume_page is None:
                         return result
                     unlocker_errors.extend(result.errors)
                     logger.warning(
-                        "Web Unlocker for %s returned 0 reviews, falling back%s",
+                        "Web Unlocker for %s requires fallback%s",
                         target.vendor_name,
                         f" ({result.errors[0]})" if result.errors else "",
                     )
@@ -68,34 +110,44 @@ class GetAppParser:
                         target.vendor_name, exc,
                     )
 
-        # Priority 1.5: Bright Data Scraping Browser (cloud Chromium with CAPTCHA solving)
-        sb_url = settings.b2b_scrape.scraping_browser_ws_url.strip()
-        if sb_url:
-            sb_domains = {
-                d.strip().lower()
-                for d in settings.b2b_scrape.scraping_browser_domains.split(",")
-                if d.strip()
-            }
-            if _DOMAIN in sb_domains:
-                try:
-                    result = await self._scrape_browser(target, sb_url)
-                    if result.reviews:
-                        return result
-                    unlocker_errors.extend(result.errors)
-                    logger.warning(
-                        "Scraping Browser for %s returned 0 reviews, falling back",
-                        target.vendor_name,
-                    )
-                except Exception as exc:
-                    unlocker_errors.append(f"Scraping Browser exception: {exc}")
-                    logger.warning(
-                        "Scraping Browser failed for %s: %s -- falling back",
-                        target.vendor_name, exc,
-                    )
+        # Priority 1.5: continue or retry via Bright Data Scraping Browser
+        if browser_enabled and (result.resume_page is not None or not result.reviews):
+            browser_start = result.resume_page or 1
+            seed_ids = {_review_key(review) for review in result.reviews}
+            try:
+                browser_result = await self._scrape_browser(
+                    target,
+                    sb_url,
+                    start_page=browser_start,
+                    seed_seen_ids=seed_ids,
+                )
+                result = _merge_results(result, browser_result)
+                if result.reviews and result.resume_page is None:
+                    return result
+                unlocker_errors = result.errors.copy()
+                logger.warning(
+                    "Scraping Browser for %s requires HTTP fallback%s",
+                    target.vendor_name,
+                    f" ({browser_result.errors[0]})" if browser_result.errors else "",
+                )
+            except Exception as exc:
+                unlocker_errors.append(f"Scraping Browser exception: {exc}")
+                logger.warning(
+                    "Scraping Browser failed for %s: %s -- falling back",
+                    target.vendor_name, exc,
+                )
 
         # Priority 2: curl_cffi HTTP client with residential proxy
-        result = await self._scrape_http(target, client)
-        if unlocker_errors:
+        http_start = result.resume_page or 1
+        seed_ids = {_review_key(review) for review in result.reviews}
+        http_result = await self._scrape_http(
+            target,
+            client,
+            start_page=http_start,
+            seed_seen_ids=seed_ids,
+        )
+        result = _merge_results(result, http_result)
+        if unlocker_errors and not result.errors[: len(unlocker_errors)] == unlocker_errors:
             result.errors = unlocker_errors + result.errors
         return result
 
@@ -117,6 +169,7 @@ class GetAppParser:
         prior_hashes: set[str] = set()
         prior_review_ids: set[str] = set()
         import time as _time
+        resume_page: int | None = None
 
         for page in range(1, target.max_pages + 1):
             url = _build_url(target.product_slug, page)
@@ -152,6 +205,7 @@ class GetAppParser:
                         response_bytes=len(resp.content), raw_body=resp.content,
                         prior_hashes=prior_hashes, errors=["blocked (403) via Web Unlocker"],
                     ))
+                    resume_page = page
                     break
                 if resp.status_code != 200:
                     detail = _describe_getapp_response(resp.text, resp.status_code)
@@ -164,7 +218,8 @@ class GetAppParser:
                         response_bytes=len(resp.content), raw_body=resp.content,
                         prior_hashes=prior_hashes, errors=[f"HTTP {resp.status_code}"],
                     ))
-                    continue
+                    resume_page = page
+                    break
 
                 page_reviews = _parse_json_ld(resp.text, target, seen_ids)
                 if not page_reviews:
@@ -187,6 +242,8 @@ class GetAppParser:
                             "GetApp Web Unlocker page 1 returned 0 reviews for %s",
                             target.product_slug,
                         )
+                    if reviews:
+                        resume_page = page
                     break
 
                 reviews.extend(page_reviews)
@@ -197,6 +254,8 @@ class GetAppParser:
                     "GetApp Web Unlocker page %d failed for %s: %s",
                     page, target.product_slug, exc,
                 )
+                if reviews:
+                    resume_page = page
                 break
 
             await asyncio.sleep(random.uniform(2.0, 5.0))
@@ -205,54 +264,95 @@ class GetAppParser:
             "GetApp Web Unlocker scrape for %s: %d reviews from %d pages",
             target.vendor_name, len(reviews), pages_scraped,
         )
-        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors, page_logs=page_logs)
+        return ScrapeResult(
+            reviews=reviews,
+            pages_scraped=pages_scraped,
+            errors=errors,
+            page_logs=page_logs,
+            resume_page=resume_page,
+        )
 
     # ------------------------------------------------------------------
     # Scraping Browser path (Bright Data cloud Chromium)
     # ------------------------------------------------------------------
 
-    async def _scrape_browser(self, target: ScrapeTarget, ws_url: str) -> ScrapeResult:
+    async def _scrape_browser(
+        self,
+        target: ScrapeTarget,
+        ws_url: str,
+        *,
+        start_page: int = 1,
+        seed_seen_ids: set[str] | None = None,
+    ) -> ScrapeResult:
         """Scrape GetApp via Bright Data Scraping Browser (cloud Chromium)."""
+        from atlas_brain.config import settings
         from playwright.async_api import async_playwright
 
-        slug = target.product_slug or target.vendor_name.lower().replace(" ", "-")
-        category = (target.metadata or {}).get("category_slug", "project-management-software")
         max_pages = target.max_pages or 15
+        timeout_ms = settings.b2b_scrape.playwright_timeout_ms
         reviews: list[dict] = []
         errors: list[str] = []
         pages_scraped = 0
-        page_logs: list[dict] = []
+        seen_ids: set[str] = set(seed_seen_ids or ())
+        page_logs = []
+        prior_hashes: set[str] = set()
+        prior_review_ids: set[str] = set()
+        import time as _time
+        resume_page: int | None = None
 
         try:
             async with async_playwright() as pw:
-                browser = await pw.chromium.connect_over_cdp(ws_url)
+                browser = await pw.chromium.connect_over_cdp(ws_url, timeout=timeout_ms)
                 context = browser.contexts[0] if browser.contexts else await browser.new_context()
                 page = await context.new_page()
 
-                for page_num in range(1, max_pages + 1):
-                    url = f"{_BASE_URL}/{category}/a/{slug}/reviews/"
-                    if page_num > 1:
-                        url += f"?page={page_num}"
+                for page_num in range(start_page, max_pages + 1):
+                    url = _build_url(target.product_slug, page_num)
 
                     try:
-                        resp = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                        page_start = _time.monotonic()
+                        resp = await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
                         status = resp.status if resp else 0
                         pages_scraped += 1
+                        elapsed_ms = int((_time.monotonic() - page_start) * 1000)
 
                         if status == 404 or status == 403:
                             errors.append(f"Page {page_num}: HTTP {status}")
-                            log_page(page_logs, page_num, status, 0, errors=errors[-1:])
+                            html = await page.content()
+                            page_logs.append(log_page(
+                                page_num, url, status_code=status, duration_ms=elapsed_ms,
+                                response_bytes=len(html), raw_body=html,
+                                prior_hashes=prior_hashes, errors=errors[-1:],
+                            ))
+                            if status == 403 and reviews:
+                                resume_page = page_num
                             break
 
                         if status >= 400:
                             errors.append(f"Page {page_num}: HTTP {status}")
-                            log_page(page_logs, page_num, status, 0, errors=errors[-1:])
+                            html = await page.content()
+                            page_logs.append(log_page(
+                                page_num, url, status_code=status, duration_ms=elapsed_ms,
+                                response_bytes=len(html), raw_body=html,
+                                prior_hashes=prior_hashes, errors=errors[-1:],
+                            ))
+                            if reviews:
+                                resume_page = page_num
+                                break
                             continue
 
                         html = await page.content()
-                        page_reviews = self._parse_reviews_from_html(html, target)
+                        page_reviews = _parse_json_ld(html, target, seen_ids)
+                        if not page_reviews:
+                            page_reviews = _parse_html(html, target, seen_ids)
                         reviews.extend(page_reviews)
-                        log_page(page_logs, page_num, status, len(page_reviews))
+                        page_logs.append(log_page(
+                            page_num, url, status_code=status, duration_ms=elapsed_ms,
+                            response_bytes=len(html), reviews=page_reviews,
+                            raw_body=html, prior_hashes=prior_hashes,
+                            prior_review_ids=prior_review_ids,
+                            next_page_found=bool(page_reviews),
+                        ))
 
                         if not page_reviews:
                             break
@@ -261,9 +361,10 @@ class GetAppParser:
 
                     except Exception as exc:
                         errors.append(f"Page {page_num}: {type(exc).__name__}: {str(exc)[:80]}")
-                        log_page(page_logs, page_num, 0, 0, errors=errors[-1:])
-                        if page_num == 1:
-                            break
+                        page_logs.append(log_page(page_num, url, errors=errors[-1:]))
+                        if reviews:
+                            resume_page = page_num
+                        break
 
                 await page.close()
                 await browser.close()
@@ -280,26 +381,33 @@ class GetAppParser:
             pages_scraped=pages_scraped,
             errors=errors,
             page_logs=page_logs,
-            status="success" if reviews else "failed",
+            resume_page=resume_page,
         )
 
     # ------------------------------------------------------------------
     # HTTP client path (curl_cffi + residential proxy)
     # ------------------------------------------------------------------
 
-    async def _scrape_http(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
+    async def _scrape_http(
+        self,
+        target: ScrapeTarget,
+        client: AntiDetectionClient,
+        *,
+        start_page: int = 1,
+        seed_seen_ids: set[str] | None = None,
+    ) -> ScrapeResult:
         """Scrape GetApp via curl_cffi HTTP client."""
         reviews: list[dict] = []
         errors: list[str] = []
         pages_scraped = 0
-        seen_ids: set[str] = set()
+        seen_ids: set[str] = set(seed_seen_ids or ())
         page_logs = []
         prior_hashes: set[str] = set()
         prior_review_ids: set[str] = set()
         import time as _time
 
         consecutive_empty = 0
-        for page in range(1, target.max_pages + 1):
+        for page in range(start_page, target.max_pages + 1):
             url = _build_url(target.product_slug, page)
 
             referer = (
@@ -427,8 +535,8 @@ def _build_url(product_slug: str, page: int) -> str:
     """Build a GetApp reviews URL.
 
     product_slug in DB is ``{category-slug}/a/{product-slug}``
-    (e.g. ``project-management-software/a/monday-com``).
-    Final URL: https://www.getapp.com/software/{category-slug}/a/{product-slug}/reviews/
+    (e.g. ``marketing-software/a/mailchimp``).
+    Final URL: https://www.getapp.com/{category-slug}/a/{product-slug}/reviews/
     """
     base = f"{_BASE_URL}/{product_slug}/reviews/"
     if page > 1:
