@@ -1682,7 +1682,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             """
             SELECT from_vendor, to_vendor, computed_date, mention_count
             FROM b2b_displacement_edges
-            WHERE computed_date >= $1 - 30
+            WHERE computed_date >= ($1::date - 30)
               AND computed_date < $1
             """,
             today,

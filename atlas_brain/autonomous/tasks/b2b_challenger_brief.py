@@ -120,21 +120,27 @@ async def _select_displacement_pairs(
 
 async def _fetch_persisted_report(
     pool, report_type: str, vendor_filter: str, today: date,
+    *, fallback_days: int = 7,
 ) -> dict | None:
-    """Fetch the latest intelligence_data for a given report_type + vendor."""
+    """Fetch the latest intelligence_data for a given report_type + vendor.
+
+    First tries today's date; if nothing found, falls back to the most
+    recent row within ``fallback_days``.
+    """
     row = await pool.fetchrow(
         """
         SELECT intelligence_data
         FROM b2b_intelligence
         WHERE report_type = $1
           AND LOWER(COALESCE(vendor_filter, '')) = LOWER($2)
-          AND report_date = $3
-        ORDER BY created_at DESC
+          AND report_date >= $3::date - make_interval(days => $4::int)
+        ORDER BY report_date DESC, created_at DESC
         LIMIT 1
         """,
         report_type,
         vendor_filter,
         today,
+        float(fallback_days),
     )
     if not row:
         return None
@@ -241,6 +247,60 @@ async def _fetch_product_profile(pool, vendor: str) -> dict | None:
         "profile_summary": row["profile_summary"] or "",
         "category": row["product_category"] or "",
     }
+
+
+async def _fetch_review_pain_quotes(
+    pool, vendor: str, *, window_days: int = 90, limit: int = 5,
+) -> list[dict]:
+    """Fetch top pain quotes directly from enriched reviews for a vendor.
+
+    Reads ``enrichment->'quotable_phrases'`` from b2b_reviews.
+    Used as fallback when no battle card is available.
+    """
+    rows = await pool.fetch(
+        """
+        SELECT source, enrichment->'quotable_phrases' AS phrases,
+               (enrichment->>'urgency_score')::float AS urgency
+        FROM b2b_reviews
+        WHERE LOWER(vendor_name) = LOWER($1)
+          AND enrichment_status = 'enriched'
+          AND enrichment->'quotable_phrases' IS NOT NULL
+          AND jsonb_array_length(enrichment->'quotable_phrases') > 0
+          AND (enrichment->>'urgency_score')::float >= 4
+          AND imported_at > NOW() - make_interval(days => $2)
+        ORDER BY (enrichment->>'urgency_score')::float DESC
+        LIMIT $3
+        """,
+        vendor,
+        window_days,
+        limit,
+    )
+    result: list[dict] = []
+    for r in rows:
+        phrases = r["phrases"]
+        if isinstance(phrases, str):
+            try:
+                phrases = json.loads(phrases)
+            except (json.JSONDecodeError, TypeError):
+                continue
+        if not isinstance(phrases, list):
+            continue
+        for phrase in phrases:
+            if isinstance(phrase, str) and phrase:
+                result.append({
+                    "quote": phrase,
+                    "source_site": r["source"] or "",
+                    "urgency": r["urgency"],
+                })
+    # Deduplicate and limit
+    seen: set[str] = set()
+    deduped: list[dict] = []
+    for q in result:
+        key = q["quote"].lower().strip()
+        if key not in seen:
+            seen.add(key)
+            deduped.append(q)
+    return deduped[:limit]
 
 
 async def _fetch_churn_signal(pool, vendor: str, today: date) -> dict | None:
@@ -431,17 +491,27 @@ def _filter_target_accounts(
 
     total = len(accounts)
     challenger_lower = challenger.lower()
+    # Fuzzy tokens for substring matching (e.g. "BigCommerce" matches "big commerce")
+    challenger_tokens = challenger_lower.split()
 
     targets: list[dict] = []
     considering_count = 0
 
     for acct in accounts:
         alts = acct.get("alternatives_considering") or []
-        considers = any(
-            a.lower() == challenger_lower
-            for a in alts
-            if isinstance(a, str)
-        )
+        considers = False
+        for a in alts:
+            if not isinstance(a, str):
+                continue
+            al = a.lower()
+            # Exact match, substring in either direction, or token overlap
+            if al == challenger_lower or challenger_lower in al or al in challenger_lower:
+                considers = True
+                break
+            # Token overlap (e.g. "big commerce" matches "BigCommerce")
+            if any(t in al for t in challenger_tokens if len(t) > 2):
+                considers = True
+                break
         if considers:
             considering_count += 1
 
@@ -504,6 +574,7 @@ def _build_challenger_brief(
     challenger_profile: dict | None,
     churn_signal: dict | None,
     cross_vendor_battle: dict | None,
+    review_pain_quotes: list[dict] | None = None,
     max_target_accounts: int,
 ) -> dict:
     """Assemble the full challenger brief from pre-computed artifacts."""
@@ -545,6 +616,26 @@ def _build_challenger_brief(
         bc_sentiment_direction = obj_data.get("sentiment_direction")
         bc_price_complaint_rate = obj_data.get("price_complaint_rate")
         bc_dm_churn_rate = obj_data.get("dm_churn_rate")
+
+    # Fallback: pull weaknesses from incumbent product profile when no battle card
+    if not inc_weaknesses and incumbent_profile:
+        for w in (incumbent_profile.get("weaknesses") or []):
+            if isinstance(w, dict):
+                inc_weaknesses.append(w)
+            elif isinstance(w, str) and w:
+                inc_weaknesses.append({"area": w, "count": 0, "source": "product_profile"})
+
+    # Fallback chain for pain quotes:
+    # 1. Battle card quotes (already handled above)
+    # 2. Direct review quotes (from b2b_reviews)
+    # 3. Displacement key_quote (single quote, last resort)
+    if not inc_pain_quotes and review_pain_quotes:
+        inc_pain_quotes = review_pain_quotes
+    if not inc_pain_quotes and displacement_detail.get("key_quote"):
+        inc_pain_quotes = [{
+            "quote": displacement_detail["key_quote"],
+            "source_site": "displacement_evidence",
+        }]
 
     # Prefer churn_signal data, fall back to battle card objection_data.
     # Use explicit ``is not None`` checks so legitimate 0 / 0.0 values
@@ -595,6 +686,37 @@ def _build_challenger_brief(
             "confidence": cross_vendor_battle.get("confidence"),
             "key_insights": cross_vendor_battle.get("key_insights") or [],
         }
+    else:
+        # Synthesize from displacement data when no pairwise battle exists
+        driver = displacement_detail.get("primary_driver") or "unknown"
+        mentions = displacement_detail.get("total_mentions", 0)
+        signal = displacement_detail.get("signal_strength", "none")
+        confidence = displacement_detail.get("confidence_score", 0)
+        insights = []
+        if driver and driver != "unknown":
+            insights.append("Primary displacement driver: %s" % driver)
+        if mentions:
+            insights.append("%d displacement mentions across sources" % mentions)
+        # Add archetype context if available
+        archetype = (churn_signal or {}).get("archetype")
+        if archetype:
+            insights.append("%s classified as %s archetype" % (incumbent, archetype))
+        # Add top weakness from incumbent profile
+        if inc_weaknesses:
+            top_w = inc_weaknesses[0]
+            area = top_w.get("area") or top_w.get("weakness") or ""
+            if area:
+                insights.append("Top incumbent weakness: %s" % area)
+        head_to_head = {
+            "winner": challenger if mentions >= 5 and signal in ("strong", "moderate") else "",
+            "conclusion": "%s displacing %s driven by %s (%d mentions, %s signal)." % (
+                challenger, incumbent, driver, mentions, signal,
+            ),
+            "durability": "uncertain",
+            "confidence": confidence,
+            "key_insights": insights,
+            "synthesized": True,
+        }
 
     # --- target_accounts ---
     target_accounts, total_target, considering_count = _filter_target_accounts(
@@ -624,6 +746,7 @@ def _build_challenger_brief(
         "accounts_in_motion": accounts_in_motion is not None,
         "product_profiles": (incumbent_profile is not None or challenger_profile is not None),
         "cross_vendor_conclusion": cross_vendor_battle is not None,
+        "review_quotes": bool(review_pain_quotes),
     }
 
     # --- executive summary ---
@@ -705,6 +828,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 challenger_profile,
                 churn_signal,
                 cross_vendor_battle,
+                review_pain_quotes,
             ) = await asyncio.gather(
                 _fetch_persisted_report(pool, "battle_card", incumbent, today),
                 _fetch_persisted_report(pool, "accounts_in_motion", incumbent, today),
@@ -713,6 +837,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 _fetch_product_profile(pool, challenger),
                 _fetch_churn_signal(pool, incumbent, today),
                 _fetch_cross_vendor_battle(pool, incumbent, challenger, today),
+                _fetch_review_pain_quotes(pool, incumbent, window_days=window_days),
             )
 
             brief = _build_challenger_brief(
@@ -725,6 +850,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 challenger_profile=challenger_profile,
                 churn_signal=churn_signal,
                 cross_vendor_battle=cross_vendor_battle,
+                review_pain_quotes=review_pain_quotes,
                 max_target_accounts=max_target_accounts,
             )
 

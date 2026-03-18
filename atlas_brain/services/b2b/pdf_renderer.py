@@ -935,6 +935,401 @@ def _render_battle_card(
                 pdf.ln(2)
 
 
+# -- Challenger Brief renderer -------------------------------------------------
+
+def _render_challenger_brief(
+    pdf: IntelligenceReportPDF, data: Any, exec_summary: str | None,
+) -> None:
+    """Render a challenger brief for an (incumbent, challenger) pair."""
+    d = data if isinstance(data, dict) else {}
+
+    if exec_summary:
+        pdf.section_title("Executive Summary")
+        pdf.body_text(exec_summary)
+
+    incumbent = _safe_str(d.get("incumbent", "Unknown"))
+    challenger = _safe_str(d.get("challenger", "Unknown"))
+    category = _safe_str(d.get("category", ""))
+
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.set_text_color(*_CLR_PRIMARY)
+    pdf.cell(0, 8, _latin1_safe(f"{challenger} vs {incumbent}"),
+             new_x="LMARGIN", new_y="NEXT")
+    if category:
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(*_CLR_MUTED)
+        pdf.cell(0, 5, _latin1_safe(f"Category: {category}"),
+                 new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
+
+    # --- Displacement Summary ---
+    disp = d.get("displacement_summary") or {}
+    mentions = disp.get("total_mentions", 0)
+    signal = _safe_str(disp.get("signal_strength", ""))
+    conf = disp.get("confidence_score", 0)
+    driver = _safe_str(disp.get("primary_driver", ""))
+
+    pdf.section_title("Displacement Signal")
+    pdf.metric_row("Total Mentions", str(mentions),
+                   color=_CLR_RED if mentions >= 50 else _CLR_ORANGE if mentions >= 10 else _CLR_DARK)
+    pdf.metric_row("Signal Strength", signal)
+    pdf.metric_row("Confidence", f"{conf:.0%}" if isinstance(conf, (int, float)) else str(conf))
+    if driver:
+        pdf.metric_row("Primary Driver", driver)
+
+    src_dist = disp.get("source_distribution") or {}
+    if src_dist:
+        parts = [f"{src}: {cnt}" for src, cnt in sorted(src_dist.items(), key=lambda x: -x[1])[:5]]
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_text_color(*_CLR_MUTED)
+        pdf.cell(0, 4, _latin1_safe("Sources: " + ", ".join(parts)),
+                 new_x="LMARGIN", new_y="NEXT")
+
+    key_quote = disp.get("key_quote")
+    if key_quote:
+        pdf.quote_block(str(key_quote)[:300])
+
+    # --- Incumbent Profile ---
+    inc = d.get("incumbent_profile") or {}
+    if inc:
+        pdf.section_title(f"Incumbent: {incumbent}")
+        archetype = inc.get("archetype")
+        risk = inc.get("risk_level")
+        if archetype:
+            label = _safe_str(archetype).replace("_", " ").title()
+            conf_a = inc.get("archetype_confidence")
+            suffix = f" ({conf_a:.0%})" if isinstance(conf_a, (int, float)) else ""
+            pdf.metric_row("Archetype", f"{label}{suffix}")
+        if risk:
+            color = _CLR_RED if risk == "high" else _CLR_ORANGE if risk == "medium" else _CLR_GREEN
+            pdf.metric_row("Risk Level", _safe_str(risk).title(), color=color)
+
+        cps = inc.get("churn_pressure_score")
+        if cps is not None:
+            pdf.metric_row("Churn Pressure", f"{cps:.0f}/100",
+                           color=_score_color(float(cps)))
+
+        pcr = inc.get("price_complaint_rate")
+        dmr = inc.get("dm_churn_rate")
+        if pcr is not None:
+            pdf.metric_row("Price Complaint Rate", f"{pcr:.1%}")
+        if dmr is not None:
+            pdf.metric_row("Decision-Maker Churn", f"{dmr:.1%}")
+
+        sentiment = inc.get("sentiment_direction")
+        if sentiment:
+            pdf.metric_row("Sentiment Trend", _safe_str(sentiment).replace("_", " ").title())
+
+        # Weaknesses table
+        weaknesses = _safe_list(inc.get("top_weaknesses"))
+        if weaknesses:
+            rows = []
+            for w in weaknesses[:8]:
+                if isinstance(w, dict):
+                    rows.append([
+                        _safe_str(w.get("area", ""))[:30],
+                        str(w.get("count") or w.get("evidence_count", ""))[:10],
+                    ])
+            if rows:
+                pdf.simple_table(["Weakness Area", "Evidence"], rows, [80, 40])
+
+        # Pain quotes
+        pain_quotes = _safe_list(inc.get("top_pain_quotes"))
+        if pain_quotes:
+            for q in pain_quotes[:3]:
+                text = q.get("quote", q) if isinstance(q, dict) else _safe_str(q)
+                if text:
+                    pdf.quote_block(str(text)[:300])
+
+    # --- Challenger Advantage ---
+    adv = d.get("challenger_advantage") or {}
+    strengths = _safe_list(adv.get("strengths"))
+    coverage = _safe_list(adv.get("weakness_coverage"))
+    switched_from = _safe_list(adv.get("commonly_switched_from"))
+    profile_summary = _safe_str(adv.get("profile_summary", ""))
+
+    if strengths or coverage or switched_from or profile_summary:
+        pdf.section_title(f"Challenger: {challenger}")
+
+        if profile_summary:
+            pdf.body_text(profile_summary)
+
+        if strengths:
+            rows = []
+            for s in strengths[:8]:
+                if isinstance(s, dict):
+                    rows.append([
+                        _safe_str(s.get("area") or s.get("name", ""))[:30],
+                        str(s.get("evidence_count") or s.get("mentions", ""))[:10],
+                    ])
+            if rows:
+                pdf.simple_table(["Strength", "Evidence"], rows, [80, 40])
+
+        if coverage:
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_text_color(*_CLR_DARK)
+            pdf.cell(0, 6, "Weakness Coverage:", new_x="LMARGIN", new_y="NEXT")
+            rows = []
+            for c in coverage[:8]:
+                if isinstance(c, dict):
+                    rows.append([
+                        _safe_str(c.get("incumbent_weakness", ""))[:30],
+                        _safe_str(c.get("match_quality", ""))[:15],
+                    ])
+            if rows:
+                pdf.simple_table(["Incumbent Weakness", "Match Quality"], rows, [80, 40])
+
+        if switched_from:
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_text_color(*_CLR_DARK)
+            pdf.cell(0, 6, "Commonly Switched From:", new_x="LMARGIN", new_y="NEXT")
+            rows = []
+            for sf in switched_from[:6]:
+                if isinstance(sf, dict):
+                    rows.append([
+                        _safe_str(sf.get("vendor", ""))[:25],
+                        str(sf.get("count", ""))[:5],
+                        _safe_str(sf.get("top_reason", ""))[:60],
+                    ])
+                elif isinstance(sf, str):
+                    rows.append([sf[:25], "", ""])
+            if rows:
+                pdf.simple_table(["Vendor", "Count", "Reason"], rows, [40, 20, 90])
+
+    # --- Head to Head ---
+    h2h = d.get("head_to_head") or {}
+    if h2h:
+        pdf.section_title("Head to Head")
+        winner = h2h.get("winner")
+        if winner:
+            pdf.metric_row("Winner", _safe_str(winner))
+        conclusion = h2h.get("conclusion")
+        if conclusion:
+            pdf.body_text(str(conclusion))
+        durability = h2h.get("durability")
+        if durability:
+            pdf.metric_row("Durability", _safe_str(durability))
+        insights = _safe_list(h2h.get("key_insights"))
+        for insight in insights[:5]:
+            pdf.body_text(f"  - {_safe_str(insight)[:200]}")
+
+    # --- Target Accounts ---
+    targets = _safe_list(d.get("target_accounts"))
+    total = d.get("total_target_accounts", len(targets))
+    considering = d.get("accounts_considering_challenger", 0)
+    if targets:
+        pdf.section_title(f"Target Accounts ({total} total, {considering} considering {challenger})")
+        rows = []
+        for t in targets[:15]:
+            if isinstance(t, dict):
+                considers_flag = "Y" if t.get("considers_challenger") else ""
+                rows.append([
+                    _safe_str(t.get("company", ""))[:20],
+                    str(t.get("opportunity_score", ""))[:5],
+                    _safe_str(t.get("buying_stage", ""))[:15],
+                    str(t.get("urgency", ""))[:4],
+                    _safe_str(t.get("industry") or "")[:18],
+                    considers_flag,
+                ])
+        if rows:
+            pdf.simple_table(
+                ["Company", "Score", "Stage", "Urg", "Industry", "Chall?"],
+                rows, [35, 15, 28, 12, 35, 15],
+            )
+
+    # --- Sales Playbook ---
+    playbook = d.get("sales_playbook") or {}
+    if playbook:
+        pdf.section_title("Sales Playbook")
+
+        discovery = _safe_list(playbook.get("discovery_questions"))
+        if discovery:
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_text_color(*_CLR_DARK)
+            pdf.cell(0, 6, "Discovery Questions:", new_x="LMARGIN", new_y="NEXT")
+            for q in discovery[:5]:
+                pdf.body_text(f"  - {_safe_str(q)[:200]}")
+
+        landmines = _safe_list(playbook.get("landmine_questions"))
+        if landmines:
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_text_color(*_CLR_DARK)
+            pdf.cell(0, 6, "Landmine Questions:", new_x="LMARGIN", new_y="NEXT")
+            for q in landmines[:3]:
+                pdf.body_text(f"  - {_safe_str(q)[:200]}")
+
+        objections = _safe_list(playbook.get("objection_handlers"))
+        if objections:
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_text_color(*_CLR_DARK)
+            pdf.cell(0, 6, "Objection Handlers:", new_x="LMARGIN", new_y="NEXT")
+            for obj in objections[:3]:
+                if isinstance(obj, dict):
+                    pdf.set_font("Helvetica", "I", 8)
+                    pdf.set_text_color(*_CLR_DARK)
+                    pdf.multi_cell(0, 4, _latin1_safe(f'"{obj.get("objection", "")}"'))
+                    pivot = obj.get("pivot", "")
+                    if pivot:
+                        pdf.set_font("Helvetica", "", 8)
+                        pdf.multi_cell(0, 4, _latin1_safe(pivot[:200]))
+                    pdf.ln(2)
+
+        talk_track = playbook.get("talk_track")
+        if talk_track and isinstance(talk_track, dict):
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_text_color(*_CLR_DARK)
+            pdf.cell(0, 6, "Talk Track:", new_x="LMARGIN", new_y="NEXT")
+            for phase in ("opening", "mid_call_pivot", "closing"):
+                text = talk_track.get(phase)
+                if text:
+                    label = phase.replace("_", " ").title()
+                    pdf.set_font("Helvetica", "B", 8)
+                    pdf.set_text_color(*_CLR_MUTED)
+                    pdf.cell(0, 4, _latin1_safe(f"{label}:"),
+                             new_x="LMARGIN", new_y="NEXT")
+                    pdf.set_font("Helvetica", "", 8)
+                    pdf.set_text_color(*_CLR_DARK)
+                    pdf.multi_cell(0, 4, _latin1_safe(str(text)[:250]))
+                    pdf.ln(1)
+        elif talk_track and isinstance(talk_track, str):
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_text_color(*_CLR_DARK)
+            pdf.cell(0, 6, "Talk Track:", new_x="LMARGIN", new_y="NEXT")
+            pdf.body_text(str(talk_track)[:400])
+
+    # --- Integration Comparison ---
+    integ = d.get("integration_comparison") or {}
+    shared = _safe_list(integ.get("shared"))
+    chal_exc = _safe_list(integ.get("challenger_exclusive"))
+    inc_exc = _safe_list(integ.get("incumbent_exclusive"))
+    if shared or chal_exc or inc_exc:
+        pdf.section_title("Integration Comparison")
+        if shared:
+            pdf.key_value("Shared", ", ".join(str(s)[:20] for s in shared[:10]))
+        if chal_exc:
+            pdf.key_value(f"{challenger} Exclusive", ", ".join(str(s)[:20] for s in chal_exc[:10]))
+        if inc_exc:
+            pdf.key_value(f"{incumbent} Exclusive", ", ".join(str(s)[:20] for s in inc_exc[:10]))
+
+
+# -- Accounts In Motion renderer -----------------------------------------------
+
+def _render_accounts_in_motion(
+    pdf: IntelligenceReportPDF, data: Any, exec_summary: str | None,
+) -> None:
+    """Render a per-vendor accounts-in-motion prospecting list."""
+    d = data if isinstance(data, dict) else {}
+
+    if exec_summary:
+        pdf.section_title("Executive Summary")
+        pdf.body_text(exec_summary)
+
+    vendor = _safe_str(d.get("vendor", "Unknown"))
+    category = _safe_str(d.get("category", ""))
+    archetype = d.get("archetype")
+    total = d.get("total_accounts_in_motion", 0)
+
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.set_text_color(*_CLR_PRIMARY)
+    pdf.cell(0, 8, _latin1_safe(f"Accounts In Motion: {vendor}"),
+             new_x="LMARGIN", new_y="NEXT")
+
+    if category:
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(*_CLR_MUTED)
+        pdf.cell(0, 5, _latin1_safe(f"Category: {category}"),
+                 new_x="LMARGIN", new_y="NEXT")
+
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(*_CLR_DARK)
+    archetype_label = _safe_str(archetype).replace("_", " ").title() if archetype else "Unknown"
+    conf = d.get("archetype_confidence")
+    conf_str = f" ({conf:.0%})" if isinstance(conf, (int, float)) else ""
+    pdf.cell(0, 5, _latin1_safe(
+        f"Accounts: {total} | Archetype: {archetype_label}{conf_str}"
+    ), new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
+
+    # --- Pricing Pressure ---
+    pricing = d.get("pricing_pressure") or {}
+    pcr = pricing.get("price_complaint_rate")
+    pir = pricing.get("price_increase_rate")
+    avg_seats = pricing.get("avg_seat_count")
+    if pcr is not None or pir is not None:
+        pdf.section_title("Pricing Pressure")
+        if pcr is not None:
+            pdf.metric_row("Price Complaint Rate", f"{pcr:.1%}")
+        if pir is not None:
+            pdf.metric_row("Price Increase Rate", f"{pir:.1%}")
+        if avg_seats:
+            pdf.metric_row("Avg Seat Count", str(int(avg_seats)))
+
+    # --- Feature Gaps ---
+    gaps = _safe_list(d.get("feature_gaps"))
+    if gaps:
+        pdf.section_title("Top Feature Gaps")
+        rows = []
+        for g in gaps[:10]:
+            if isinstance(g, dict):
+                rows.append([
+                    _safe_str(g.get("feature", ""))[:35],
+                    str(g.get("mentions", ""))[:10],
+                ])
+        if rows:
+            pdf.simple_table(["Feature Gap", "Mentions"], rows, [90, 30])
+
+    # --- Cross-Vendor Context ---
+    xvc = d.get("cross_vendor_context") or {}
+    top_dest = xvc.get("top_destination")
+    battle = xvc.get("battle_conclusion")
+    regime = xvc.get("market_regime")
+    if top_dest or battle or regime:
+        pdf.section_title("Competitive Context")
+        if top_dest:
+            pdf.metric_row("Top Destination", _safe_str(top_dest))
+        if regime:
+            pdf.metric_row("Market Regime", _safe_str(regime).replace("_", " ").title())
+        if battle:
+            pdf.body_text(str(battle)[:300])
+
+    # --- Accounts Table ---
+    accounts = _safe_list(d.get("accounts"))
+    if accounts:
+        pdf.section_title(f"Prospecting List ({len(accounts)} accounts)")
+        rows = []
+        for a in accounts[:25]:
+            if isinstance(a, dict):
+                rows.append([
+                    _safe_str(a.get("company", ""))[:18],
+                    str(a.get("opportunity_score", ""))[:5],
+                    _safe_str(a.get("buying_stage", ""))[:14],
+                    str(int(float(a.get("urgency") or 0)))[:3],
+                    _safe_str(a.get("industry") or "")[:16],
+                    _safe_str(a.get("domain") or "")[:22],
+                ])
+        if rows:
+            pdf.simple_table(
+                ["Company", "Score", "Stage", "Urg", "Industry", "Domain"],
+                rows, [30, 14, 24, 10, 28, 34],
+            )
+
+        # Top quotes
+        quoted = [a for a in accounts[:10] if a.get("top_quote")]
+        if quoted:
+            pdf.section_title("Key Quotes")
+            for a in quoted[:4]:
+                label = _safe_str(a.get("company", ""))
+                if a.get("urgency"):
+                    label += f" (urgency: {a['urgency']})"
+                pdf.set_font("Helvetica", "", 7)
+                pdf.set_text_color(*_CLR_MUTED)
+                pdf.cell(0, 4, _latin1_safe(label),
+                         new_x="LMARGIN", new_y="NEXT")
+                pdf.quote_block(str(a["top_quote"])[:250])
+
+
 # -- Public API ----------------------------------------------------------------
 
 _RENDERERS: dict[str, Any] = {
@@ -947,8 +1342,10 @@ _RENDERERS: dict[str, Any] = {
     "account_comparison": _render_comparison,
     "account_deep_dive": _render_deep_dive,
     "vendor_retention": _render_vendor_scorecard,
-    "challenger_intel": _render_vendor_scorecard,
+    "challenger_intel": _render_challenger_brief,
+    "challenger_brief": _render_challenger_brief,
     "battle_card": _render_battle_card,
+    "accounts_in_motion": _render_accounts_in_motion,
 }
 
 

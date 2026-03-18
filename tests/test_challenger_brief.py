@@ -395,7 +395,9 @@ class TestBuildChallengerBrief:
         assert brief["sales_playbook"]["discovery_questions"] == ["What's your current cost per seat?"]
         assert "Marketo" in brief["integration_comparison"]["challenger_exclusive"]
         assert "Legacy CRM" in brief["integration_comparison"]["incumbent_exclusive"]
-        assert all(brief["data_sources"].values())
+        # All original sources present; review_quotes is False when battle card exists
+        for k in ("battle_card", "accounts_in_motion", "product_profiles", "cross_vendor_conclusion"):
+            assert brief["data_sources"][k] is True
         assert brief["category"] == "Helpdesk"
 
     def test_executive_summary_format(self):

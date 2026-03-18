@@ -32,9 +32,11 @@ for _mod in (
     sys.modules.setdefault(_mod, MagicMock())
 
 from atlas_brain.autonomous.tasks.b2b_accounts_in_motion import (
+    _apply_account_quality_adjustments,
     _compute_account_opportunity_score,
     _merge_company_profiles,
     _normalize_company_key,
+    _summarize_vendor_evidence,
     _build_vendor_aggregate,
 )
 
@@ -165,6 +167,8 @@ class TestMergeCompanyProfiles:
             "pain": "pricing",
             "alternatives": [{"name": "Freshdesk"}],
             "review_id": kw.pop("review_id", "uuid-1"),
+            "source": kw.pop("source", "g2"),
+            "quotes": kw.pop("quotes", ["We need to switch ASAP"]),
             "seat_count": kw.pop("seat_count", 100),
             "contract_end": kw.pop("contract_end", None),
             "buying_stage": kw.pop("buying_stage", "evaluation"),
@@ -285,6 +289,31 @@ class TestMergeCompanyProfiles:
         merged = _merge_company_profiles([r], [], [], quotes, [])
         prof = list(merged.values())[0]
         assert prof["top_quote"] == "We need to switch ASAP"
+
+    def test_vendor_level_quote_does_not_leak_to_other_company(self):
+        """Vendor-level fallback quotes should not be attached to the wrong company."""
+        r = self._make_intent(company="Acme Corp", quotes=[])
+        quotes = [{
+            "vendor": "Zendesk",
+            "quotes": [{"quote": "Pricing is bad", "urgency": 7, "company": "Other Inc"}],
+        }]
+        merged = _merge_company_profiles([r], [], [], quotes, [])
+        prof = list(merged.values())[0]
+        assert prof["top_quote"] is None
+
+    def test_alternative_cleanup_removes_self_and_invalid_terms(self):
+        """Self references and configured non-vendor terms are dropped from alternatives."""
+        r = self._make_intent(
+            company="Acme Corp",
+            vendor="Zendesk",
+            alternatives=[{"name": "Acme Corp"}, {"name": "Zendesk"}, {"name": "bare metal"}, {"name": "Freshdesk"}],
+        )
+        merged = _merge_company_profiles(
+            [r], [], [], [], [],
+            invalid_alternative_terms=["bare metal"],
+        )
+        prof = list(merged.values())[0]
+        assert prof["alternatives_considering"] == ["Freshdesk"]
 
     def test_signal_metadata_attachment(self):
         """Company signal metadata (first_seen, last_seen) is attached."""
@@ -508,3 +537,52 @@ class TestBuildVendorAggregate:
         )
         assert agg["total_accounts_in_motion"] == 0
         assert agg["accounts"] == []
+
+    def test_vendor_evidence_summary_uses_unique_review_ids_and_sources(self):
+        accounts = [
+            self._make_account(source_reviews=["uuid-1", "uuid-2"], source_distribution={"g2": 2}),
+            self._make_account(source_reviews=["uuid-2", "uuid-3"], source_distribution={"reddit": 1}),
+        ]
+        review_count, source_distribution = _summarize_vendor_evidence(accounts)
+        assert review_count == 3
+        assert source_distribution == {"g2": 2, "reddit": 1}
+
+    def test_aggregate_includes_vendor_specific_evidence_metadata(self):
+        agg = _build_vendor_aggregate(
+            "Zendesk",
+            [self._make_account(source_reviews=["uuid-1"], source_distribution={"g2": 1})],
+            category="Helpdesk",
+            reasoning_lookup={},
+            xv_lookup={"battles": {}, "councils": {}, "asymmetries": {}},
+            feature_gap_lookup={},
+            price_lookup={},
+            budget_lookup={},
+            competitor_lookup={},
+        )
+        assert agg["source_review_count"] == 1
+        assert agg["source_distribution"] == {"g2": 1}
+
+
+class TestAccountQualityAdjustments:
+    def test_quality_adjustments_penalize_missing_context_and_bonus_repeat_evidence(self):
+        cfg = MagicMock(
+            accounts_in_motion_repeat_evidence_bonus=3,
+            accounts_in_motion_repeat_evidence_bonus_max=6,
+            accounts_in_motion_low_confidence_threshold=6.0,
+            accounts_in_motion_low_confidence_penalty=6,
+            accounts_in_motion_missing_domain_penalty=8,
+            accounts_in_motion_missing_title_penalty=4,
+            accounts_in_motion_missing_quote_penalty=4,
+        )
+        account = {
+            "evidence_count": 3,
+            "confidence": 5.0,
+            "domain": None,
+            "title": None,
+            "top_quote": None,
+        }
+        delta, components, flags = _apply_account_quality_adjustments(account, cfg)
+        assert delta == -16
+        assert components["repeat_evidence"] == 6
+        assert components["low_confidence"] == -6
+        assert "missing_domain" in flags

@@ -9,6 +9,7 @@ with report_type='accounts_in_motion'.
 import asyncio
 import json
 import logging
+from collections import Counter
 from datetime import date
 from typing import Any
 
@@ -98,6 +99,82 @@ def _normalize_company_key(company: str | None) -> str:
     return (company or "").strip().lower()
 
 
+def _extract_account_quote(quotes: Any) -> str | None:
+    """Extract the first usable quote from account-scoped quote data."""
+    if not isinstance(quotes, list):
+        return None
+    for item in quotes:
+        if isinstance(item, str) and item.strip():
+            return item.strip()[:500]
+        if isinstance(item, dict):
+            quote = str(item.get("quote") or item.get("text") or "").strip()
+            if quote:
+                return quote[:500]
+    return None
+
+
+def _clean_alternatives(
+    alternatives: Any,
+    *,
+    company: str,
+    vendor: str,
+    invalid_terms: list[str],
+) -> list[str]:
+    """Remove duplicates, self-references, and configured non-vendor alternatives."""
+    blocked = {
+        _normalize_company_key(company),
+        _normalize_company_key(vendor),
+    }
+    invalid = {_normalize_company_key(term) for term in invalid_terms if term}
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    if not isinstance(alternatives, list):
+        return cleaned
+    for item in alternatives:
+        name = item.get("name") if isinstance(item, dict) else item
+        value = str(name or "").strip()
+        norm = _normalize_company_key(value)
+        if not value or norm in seen or norm in blocked or norm in invalid:
+            continue
+        seen.add(norm)
+        cleaned.append(value)
+    return cleaned
+
+
+def _apply_account_quality_adjustments(account: dict[str, Any], cfg) -> tuple[int, dict[str, int], list[str]]:
+    """Apply quality bonuses/penalties to the base account score."""
+    delta = 0
+    components: dict[str, int] = {}
+    flags: list[str] = []
+    evidence_count = int(account.get("evidence_count") or 0)
+    if evidence_count > 1:
+        bonus = min(
+            cfg.accounts_in_motion_repeat_evidence_bonus_max,
+            (evidence_count - 1) * cfg.accounts_in_motion_repeat_evidence_bonus,
+        )
+        delta += bonus
+        components["repeat_evidence"] = bonus
+    confidence = account.get("confidence")
+    if confidence is not None and float(confidence) < cfg.accounts_in_motion_low_confidence_threshold:
+        penalty = cfg.accounts_in_motion_low_confidence_penalty
+        delta -= penalty
+        components["low_confidence"] = -penalty
+        flags.append("low_confidence")
+    if not account.get("domain"):
+        delta -= cfg.accounts_in_motion_missing_domain_penalty
+        components["missing_domain"] = -cfg.accounts_in_motion_missing_domain_penalty
+        flags.append("missing_domain")
+    if not account.get("title"):
+        delta -= cfg.accounts_in_motion_missing_title_penalty
+        components["missing_title"] = -cfg.accounts_in_motion_missing_title_penalty
+        flags.append("missing_title")
+    if not account.get("top_quote"):
+        delta -= cfg.accounts_in_motion_missing_quote_penalty
+        components["missing_quote"] = -cfg.accounts_in_motion_missing_quote_penalty
+        flags.append("missing_quote")
+    return delta, components, flags
+
+
 # ---------------------------------------------------------------------------
 # New lightweight query: company signal metadata
 # ---------------------------------------------------------------------------
@@ -169,6 +246,7 @@ def _merge_company_profiles(
     *,
     min_urgency: float = 5.0,
     apollo_org_lookup: dict[str, dict[str, Any]] | None = None,
+    invalid_alternative_terms: list[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Merge company profiles from multiple data sources.
 
@@ -179,6 +257,7 @@ def _merge_company_profiles(
     from ._b2b_shared import _canonicalize_vendor
 
     profiles: dict[tuple[str, str], dict[str, Any]] = {}
+    invalid_alternative_terms = invalid_alternative_terms or []
 
     # 1. Base from high_intent -- group by key, take highest-urgency
     for row in high_intent:
@@ -195,14 +274,16 @@ def _merge_company_profiles(
             continue
 
         if existing is None:
-            alts = row.get("alternatives") or []
-            if isinstance(alts, list):
-                alts = [a.get("name") if isinstance(a, dict) else str(a) for a in alts if a]
-            else:
-                alts = []
+            alts = _clean_alternatives(
+                row.get("alternatives") or [],
+                company=company,
+                vendor=vendor,
+                invalid_terms=invalid_alternative_terms,
+            )
             review_ids = []
             if row.get("review_id"):
                 review_ids.append(row["review_id"])
+            account_quote = _extract_account_quote(row.get("quotes"))
             profiles[key] = {
                 "company": company,
                 "vendor": vendor,
@@ -222,12 +303,14 @@ def _merge_company_profiles(
                 "industry": None,
                 "evaluation_deadline": None,
                 "decision_timeline": None,
-                "top_quote": None,
+                "top_quote": account_quote,
+                "quote_match_type": "review" if account_quote else None,
                 "domain": None,
                 "annual_revenue_range": None,
                 "first_seen": None,
                 "last_seen": None,
                 "confidence": None,
+                "source_distribution": {row["source"]: 1} if row.get("source") else {},
             }
         else:
             # Merge: union alternatives, collect review_ids, max urgency
@@ -236,12 +319,18 @@ def _merge_company_profiles(
             if row.get("review_id") and row["review_id"] not in existing["source_reviews"]:
                 existing["source_reviews"].append(row["review_id"])
             # Merge alternatives
-            new_alts = row.get("alternatives") or []
-            if isinstance(new_alts, list):
-                for a in new_alts:
-                    name = a.get("name") if isinstance(a, dict) else str(a) if a else ""
-                    if name and name not in existing["alternatives_considering"]:
-                        existing["alternatives_considering"].append(name)
+            new_alts = _clean_alternatives(
+                row.get("alternatives") or [],
+                company=company,
+                vendor=vendor,
+                invalid_terms=invalid_alternative_terms,
+            )
+            for name in new_alts:
+                if name not in existing["alternatives_considering"]:
+                    existing["alternatives_considering"].append(name)
+            if row.get("source"):
+                dist = existing.setdefault("source_distribution", {})
+                dist[row["source"]] = dist.get(row["source"], 0) + 1
             # Fill nulls from higher-urgency row
             if row.get("pain") and not existing.get("pain_category"):
                 existing["pain_category"] = row["pain"]
@@ -255,6 +344,11 @@ def _merge_company_profiles(
                 existing["seat_count"] = row["seat_count"]
             if row.get("contract_end") and not existing.get("contract_end"):
                 existing["contract_end"] = row["contract_end"]
+            if not existing.get("top_quote"):
+                account_quote = _extract_account_quote(row.get("quotes"))
+                if account_quote:
+                    existing["top_quote"] = account_quote
+                    existing["quote_match_type"] = "review"
 
     # 2. Fill from timeline signals
     for row in timeline_signals:
@@ -316,6 +410,7 @@ def _merge_company_profiles(
                     best_quote = q.get("quote")
         if best_quote:
             prof["top_quote"] = best_quote
+            prof["quote_match_type"] = "company_match"
 
     # 5. Attach metadata from b2b_company_signals
     meta_lookup: dict[tuple[str, str], dict] = {}
@@ -361,6 +456,19 @@ def _merge_company_profiles(
 # Aggregate builder
 # ---------------------------------------------------------------------------
 
+
+def _summarize_vendor_evidence(accounts: list[dict[str, Any]]) -> tuple[int, dict[str, int]]:
+    """Summarize vendor-level supporting evidence from merged account rows."""
+    review_ids: set[str] = set()
+    source_distribution: dict[str, int] = {}
+    for account in accounts:
+        for review_id in account.get("source_reviews") or []:
+            if review_id:
+                review_ids.add(str(review_id))
+        for source, count in (account.get("source_distribution") or {}).items():
+            source_distribution[source] = source_distribution.get(source, 0) + int(count or 0)
+    return len(review_ids), source_distribution
+
 def _build_vendor_aggregate(
     vendor: str,
     accounts: list[dict[str, Any]],
@@ -374,6 +482,7 @@ def _build_vendor_aggregate(
     competitor_lookup: dict[str, list[dict]],
 ) -> dict[str, Any]:
     """Build the full accounts_in_motion aggregate for one vendor."""
+    source_review_count, source_distribution = _summarize_vendor_evidence(accounts)
     # Archetype from reasoning
     r_info = reasoning_lookup.get(vendor, {})
     archetype = r_info.get("archetype")
@@ -409,11 +518,27 @@ def _build_vendor_aggregate(
             bc = battle.get("conclusion", {})
             battle_conclusion = bc.get("conclusion", "")
             break
-    for cat_name, council in xv_lookup.get("councils", {}).items():
+    if category:
+        council = xv_lookup.get("councils", {}).get(category, {})
         cc = council.get("conclusion", {})
         if cc.get("market_regime"):
             market_regime = cc["market_regime"]
-            break
+
+    # Synthesize battle_conclusion from displacement data if missing
+    if not battle_conclusion and top_dest and competitors:
+        top_comp = competitors[0]
+        mentions = top_comp.get("mentions", 0)
+        driver = top_comp.get("primary_driver", "")
+        parts = ["%s displacing %s" % (top_dest, vendor)]
+        if mentions:
+            parts.append("%d mentions" % mentions)
+        if driver:
+            parts.append("driven by %s" % driver)
+        battle_conclusion = ", ".join(parts) + "."
+
+    # Synthesize market_regime from category if missing
+    if not market_regime and category:
+        market_regime = "active_displacement"
 
     cross_vendor_context = {
         "top_destination": top_dest,
@@ -431,6 +556,8 @@ def _build_vendor_aggregate(
         "pricing_pressure": pricing_pressure,
         "feature_gaps": feature_gaps,
         "cross_vendor_context": cross_vendor_context,
+        "source_review_count": source_review_count,
+        "source_distribution": source_distribution,
     }
 
 
@@ -541,23 +668,27 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         signal_metadata,
         min_urgency=min_urgency,
         apollo_org_lookup=apollo_org_lookup,
+        invalid_alternative_terms=cfg.accounts_in_motion_invalid_alternative_terms,
     )
 
     # --- Phase 4: Score each account ---
     for key, prof in merged.items():
-        score, components = _compute_account_opportunity_score(prof)
-        prof["opportunity_score"] = score
-        prof["score_components"] = components
+        base_score, components = _compute_account_opportunity_score(prof)
+        delta, quality_components, quality_flags = _apply_account_quality_adjustments(prof, cfg)
+        prof["opportunity_score"] = max(0, min(100, base_score + delta))
+        prof["score_components"] = {**components, **quality_components}
+        prof["quality_flags"] = quality_flags
 
     # --- Phase 5: Build per-vendor aggregates ---
     # Group accounts by vendor
     vendor_accounts: dict[str, list[dict[str, Any]]] = {}
-    vendor_categories: dict[str, str | None] = {}
+    vendor_category_counts: dict[str, Counter[str]] = {}
     for key, prof in merged.items():
         vendor = prof["vendor"]
         vendor_accounts.setdefault(vendor, []).append(prof)
-        if prof.get("category") and not vendor_categories.get(vendor):
-            vendor_categories[vendor] = prof["category"]
+        category = prof.get("category")
+        if category:
+            vendor_category_counts.setdefault(vendor, Counter())[category] += 1
 
     # Sort accounts per vendor by score DESC, limit to max_per_vendor
     for vendor in vendor_accounts:
@@ -578,7 +709,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         agg = _build_vendor_aggregate(
             vendor,
             accounts,
-            category=vendor_categories.get(vendor),
+            category=vendor_category_counts.get(vendor, Counter()).most_common(1)[0][0]
+            if vendor_category_counts.get(vendor)
+            else None,
             reasoning_lookup=reasoning_lookup,
             xv_lookup=xv_lookup,
             feature_gap_lookup=feature_gap_lookup,
@@ -629,8 +762,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 json.dumps({"vendors_analyzed": len(aggregates), "total_accounts": total_accounts}),
                 "published",
                 "pipeline_deterministic",
-                total_accounts,
-                json.dumps({}),
+                agg.get("source_review_count", 0),
+                json.dumps(agg.get("source_distribution", {})),
             )
             persisted += 1
         except Exception:

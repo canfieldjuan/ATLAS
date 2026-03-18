@@ -40,7 +40,13 @@ CROSS_VENDOR_JSON_SCHEMA: dict[str, Any] = {
         "confidence",
         "key_insights",
         "durability_assessment",
+        "winner",
+        "loser",
+        "segment_dynamics",
+        "market_regime",
         "falsification_conditions",
+        "uncertainty_sources",
+        "resource_advantage",
     ],
     "properties": {
         "analysis_type": {
@@ -57,34 +63,38 @@ CROSS_VENDOR_JSON_SCHEMA: dict[str, Any] = {
         },
         "confidence": {
             "type": "number",
-            "minimum": 0.0,
-            "maximum": 1.0,
+            "description": "Confidence score between 0.0 and 1.0.",
         },
         "key_insights": {
             "type": "array",
             "items": {"type": "string"},
-            "maxItems": 5,
+            "description": "Up to 5 key insights as plain strings.",
         },
         "durability_assessment": {
             "type": "string",
             "enum": ["structural", "cyclical", "temporary", "uncertain"],
         },
         "winner": {
-            "type": ["string", "null"],
+            "type": "string",
+            "description": "Winning vendor name, or empty string if no clear winner.",
         },
         "loser": {
-            "type": ["string", "null"],
+            "type": "string",
+            "description": "Losing vendor name, or empty string if unclear.",
         },
         "segment_dynamics": {
-            "type": ["object", "null"],
+            "type": "object",
             "properties": {
-                "enterprise_winner": {"type": ["string", "null"]},
-                "smb_winner": {"type": ["string", "null"]},
+                "enterprise_winner": {"type": "string"},
+                "smb_winner": {"type": "string"},
                 "segment_divergence": {"type": "boolean"},
             },
+            "required": ["enterprise_winner", "smb_winner", "segment_divergence"],
+            "additionalProperties": False,
         },
         "market_regime": {
-            "type": ["string", "null"],
+            "type": "string",
+            "description": "Market regime label (e.g. price_competition, consolidating, fragmented). Empty string if unknown.",
         },
         "falsification_conditions": {
             "type": "array",
@@ -95,8 +105,8 @@ CROSS_VENDOR_JSON_SCHEMA: dict[str, Any] = {
             "items": {"type": "string"},
         },
         "resource_advantage": {
-            "type": ["string", "null"],
-            "description": "Which vendor holds the resource advantage and why (1 sentence). Null if parity.",
+            "type": "string",
+            "description": "Which vendor holds the resource advantage and why (1 sentence). Empty string if parity.",
         },
     },
 }
@@ -124,6 +134,10 @@ GROUNDING RULES:
 - durability_assessment: "structural" means market forces make reversal unlikely;
   "cyclical" means tied to product cycle; "temporary" means fixable in 1-2 quarters;
   "uncertain" means insufficient evidence.
+- winner: name the vendor that is GAINING share (the one customers are moving TO).
+- loser: name the vendor that is LOSING share (the one customers are leaving).
+  Set both to the actual vendor name from the evidence. Only use null if the
+  displacement is truly bidirectional with no clear net winner.
 - falsification_conditions: what specific evidence would prove this analysis wrong?
 - Do not invent data not present in the evidence.
 
