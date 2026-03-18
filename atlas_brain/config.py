@@ -1934,7 +1934,10 @@ class AutonomousConfig(BaseSettings):
 
     # nightly_memory_sync
     nightly_sync_max_turns: int = Field(
-        default=200, description="Max conversation turns to sync per nightly run",
+        default=50, description="Max conversation turns to sync per nightly run",
+    )
+    nightly_sync_max_session_turns: int = Field(
+        default=30, description="Max turns per session batch sent to Graphiti (larger sessions are chunked)",
     )
     nightly_sync_container_name: str = Field(
         default="atlas-graphiti-wrapper",
@@ -2604,7 +2607,7 @@ class B2BScrapeConfig(BaseSettings):
         description="Bright Data Scraping Browser WebSocket URL (wss://...@brd.superproxy.io:9222)",
     )
     scraping_browser_domains: str = Field(
-        default="getapp.com",
+        default="getapp.com,x.com",
         description="Domains to route through Scraping Browser instead of Web Unlocker (comma-separated)",
     )
 
