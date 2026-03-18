@@ -46,6 +46,7 @@ class NightlyMemorySync:
 
         self.purge_days = purge_days if purge_days is not None else settings.memory.purge_days
         self.max_turns_per_run = max_turns_per_run if max_turns_per_run is not None else settings.autonomous.nightly_sync_max_turns
+        self.max_session_turns = settings.autonomous.nightly_sync_max_session_turns
         self._rag_client = None
 
     def _get_rag_client(self):
@@ -142,61 +143,70 @@ class NightlyMemorySync:
             for session_id, conversation_turns in sessions_turns.items():
                 if turns_budget <= 0:
                     break
-                try:
-                    # Collect turn IDs for marking as synced on success
-                    turn_ids = [turn["id"] for turn in conversation_turns]
 
-                    # Format turns as Graphiti message objects
-                    messages = []
-                    for turn in conversation_turns:
-                        role = turn.get("role", "user")
-                        role_type = "assistant" if role == "assistant" else "user"
-                        ts = turn.get("created_at")
-                        if ts is not None:
-                            timestamp = ts.isoformat() if ts.tzinfo else ts.isoformat() + "Z"
+                # Chunk large sessions to avoid Graphiti timeout
+                chunks = [
+                    conversation_turns[i:i + self.max_session_turns]
+                    for i in range(0, len(conversation_turns), self.max_session_turns)
+                ]
+
+                for chunk_idx, chunk in enumerate(chunks):
+                    if turns_budget <= 0:
+                        break
+                    try:
+                        turn_ids = [turn["id"] for turn in chunk]
+
+                        # Format turns as Graphiti message objects
+                        messages = []
+                        for turn in chunk:
+                            role = turn.get("role", "user")
+                            role_type = "assistant" if role == "assistant" else "user"
+                            ts = turn.get("created_at")
+                            if ts is not None:
+                                timestamp = ts.isoformat() if ts.tzinfo else ts.isoformat() + "Z"
+                            else:
+                                timestamp = datetime.now(timezone.utc).isoformat()
+
+                            msg = {
+                                "content": turn.get("content", ""),
+                                "role_type": role_type,
+                                "role": turn.get("speaker_id") or role,
+                                "timestamp": timestamp,
+                            }
+
+                            raw_meta = turn.get("metadata")
+                            if raw_meta:
+                                meta = json.loads(raw_meta) if isinstance(raw_meta, str) else raw_meta
+                                if isinstance(meta, dict) and "memory_quality" in meta:
+                                    msg["memory_quality"] = meta["memory_quality"]
+
+                            messages.append(msg)
+
+                        result = await rag_client.send_messages(
+                            messages=messages,
+                        )
+
+                        if result:
+                            await self._mark_turns_synced(turn_ids)
+                            summary["sessions_processed"] += 1
+                            summary["turns_sent"] += len(messages)
+                            turns_budget -= len(messages)
+                            chunk_label = f" chunk {chunk_idx + 1}/{len(chunks)}" if len(chunks) > 1 else ""
+                            logger.info(
+                                "Session %s%s: sent %d turns to Graphiti (%d budget left)",
+                                str(session_id)[:8],
+                                chunk_label,
+                                len(messages),
+                                max(turns_budget, 0),
+                            )
                         else:
-                            timestamp = datetime.now(timezone.utc).isoformat()
+                            summary["errors"].append(
+                                f"Session {str(session_id)[:8]}: empty response from Graphiti"
+                            )
 
-                        msg = {
-                            "content": turn.get("content", ""),
-                            "role_type": role_type,
-                            "role": turn.get("speaker_id") or role,
-                            "timestamp": timestamp,
-                        }
-
-                        # Include memory quality signals if present
-                        raw_meta = turn.get("metadata")
-                        if raw_meta:
-                            meta = json.loads(raw_meta) if isinstance(raw_meta, str) else raw_meta
-                            if isinstance(meta, dict) and "memory_quality" in meta:
-                                msg["memory_quality"] = meta["memory_quality"]
-
-                        messages.append(msg)
-
-                    # Send batch to Graphiti
-                    result = await rag_client.send_messages(
-                        messages=messages,
-                    )
-
-                    if result:
-                        await self._mark_turns_synced(turn_ids)
-                        summary["sessions_processed"] += 1
-                        summary["turns_sent"] += len(messages)
-                        turns_budget -= len(messages)
-                        logger.info(
-                            "Session %s: sent %d turns to Graphiti (%d budget left)",
-                            str(session_id)[:8],
-                            len(messages),
-                            max(turns_budget, 0),
-                        )
-                    else:
-                        summary["errors"].append(
-                            f"Session {str(session_id)[:8]}: empty response from Graphiti"
-                        )
-
-                except Exception as e:
-                    logger.warning("Failed to process session %s: %s", session_id, e)
-                    summary["errors"].append(f"Session {str(session_id)[:8]}: {e}")
+                    except Exception as e:
+                        logger.warning("Failed to process session %s: %s", session_id, e)
+                        summary["errors"].append(f"Session {str(session_id)[:8]}: {e}")
 
             summary["turns_remaining"] = max(total_turns - summary["turns_sent"], 0)
             if summary["turns_remaining"] > 0:

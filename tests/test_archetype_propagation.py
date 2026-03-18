@@ -762,6 +762,37 @@ class TestBattleCardPrimaryCategorySelection:
         assert cards[0]["total_reviews"] == 200
 
 
+class TestBattleCardWeaknessEvidenceNormalization:
+    """Verify battle-card weaknesses expose a consistent evidence_count field."""
+
+    def test_normalizes_evidence_count_across_weakness_sources(self):
+        from atlas_brain.autonomous.tasks._b2b_shared import (
+            _build_deterministic_battle_cards,
+        )
+
+        cards = _build_deterministic_battle_cards(
+            [{"vendor_name": "V", "product_category": "Cat", "total_reviews": 60,
+              "churn_intent": 20, "avg_urgency": 7.0}],
+            pain_lookup={"V": [{"category": "pricing", "count": 7}]},
+            competitor_lookup={},
+            feature_gap_lookup={"V": [{"feature": "reporting", "mentions": 4}]},
+            quote_lookup={},
+            price_lookup={"V": 0.1},
+            budget_lookup={},
+            sentiment_lookup={},
+            dm_lookup={"V": 0.3},
+            company_lookup={},
+            product_profile_lookup={"V": {"weaknesses": [{"area": "support", "evidence_count": 9}]}},
+            competitive_disp=[],
+            competitor_reasons=[],
+            limit=10,
+        )
+        assert len(cards) == 1
+        weaknesses = cards[0]["vendor_weaknesses"]
+        assert [w["area"] for w in weaknesses[:3]] == ["support", "pricing", "reporting"]
+        assert [w["evidence_count"] for w in weaknesses[:3]] == [9, 7, 4]
+
+
 class TestBattleCardQuoteDedupe:
     """Verify quotes are deduplicated by review_id AND reviewer identity."""
 

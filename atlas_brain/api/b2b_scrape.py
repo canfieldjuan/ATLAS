@@ -374,9 +374,12 @@ async def trigger_scrape(target_id: UUID) -> dict:
             result, parser, duration_ms,
         )
     else:
-        await _write_scrape_log(pool, target_id, target.source, result.status,
-                                len(result.reviews) + filtered_count, inserted, result.pages_scraped,
-                                result.errors, duration_ms, parser)
+        await _write_scrape_log(
+            pool, target_id, target.source, result.status,
+            len(result.reviews) + filtered_count, inserted, result.pages_scraped,
+            result.errors, duration_ms, parser,
+            page_logs=getattr(result, "page_logs", []) or [],
+        )
 
     # Update target status
     await pool.execute(
@@ -539,9 +542,12 @@ async def trigger_scrape_all(
             scrape_errors = list(result.errors)
             if filtered_count:
                 scrape_errors.append(f"relevance_filtered={filtered_count}")
-            await _write_scrape_log(pool, row["id"], target.source, result.status,
-                                    len(result.reviews) + filtered_count, inserted, result.pages_scraped,
-                                    scrape_errors, duration_ms, parser)
+            await _write_scrape_log(
+                pool, row["id"], target.source, result.status,
+                len(result.reviews) + filtered_count, inserted, result.pages_scraped,
+                scrape_errors, duration_ms, parser,
+                page_logs=getattr(result, "page_logs", []) or [],
+            )
 
         await pool.execute(
             "UPDATE b2b_scrape_targets SET last_scraped_at = NOW(), last_scrape_status = $2, last_scrape_reviews = $3, updated_at = NOW() WHERE id = $1",
@@ -578,7 +584,8 @@ async def _write_scrape_log(
     errors: list[str], duration_ms: int, parser,
     *, captcha_attempts: int = 0, captcha_types: list[str] | None = None,
     captcha_solve_ms: int = 0,
-) -> None:
+    page_logs: list | None = None,
+) -> UUID | None:
     """Write a record to b2b_scrape_log for observability."""
     proxy_type = "residential" if parser.prefer_residential else "none"
     pv = getattr(parser, 'version', None)
@@ -597,13 +604,14 @@ async def _write_scrape_log(
         elif status == "blocked":
             block_type = "unknown"
     try:
-        await pool.execute(
+        run_id = await pool.fetchval(
             """
             INSERT INTO b2b_scrape_log
                 (target_id, source, status, reviews_found, reviews_inserted,
                  pages_scraped, errors, duration_ms, proxy_type, parser_version,
                  captcha_attempts, captcha_types, captcha_solve_ms, block_type)
             VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14)
+            RETURNING id
             """,
             target_id, source, status, reviews_found, reviews_inserted,
             pages_scraped, json.dumps(errors), duration_ms, proxy_type, pv,
@@ -612,8 +620,14 @@ async def _write_scrape_log(
             captcha_solve_ms if captcha_solve_ms > 0 else None,
             block_type,
         )
+        if page_logs and run_id:
+            from ..autonomous.tasks.b2b_scrape_intake import _persist_page_logs
+
+            await _persist_page_logs(pool, run_id, page_logs)
+        return run_id
     except Exception:
         logger.warning("Failed to write scrape log", exc_info=True)
+        return None
 
 
 @router.get("/logs")

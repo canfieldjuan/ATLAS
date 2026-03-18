@@ -510,6 +510,7 @@ class TestG2HttpScrape:
         resp.status_code = 200
         resp.headers = {"content-type": "text/html"}
         resp.text = review_html
+        resp.content = review_html.encode()
         client.get = AsyncMock(return_value=resp)
 
         result = await parser._scrape_http(target, client)

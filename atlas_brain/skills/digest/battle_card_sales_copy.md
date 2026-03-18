@@ -28,7 +28,7 @@ A JSON object with:
 - `churn_pressure_score`: 0-100 composite vulnerability score
 - `total_reviews`: number of reviews analyzed
 - `confidence`: data confidence level (high/medium/low)
-- `vendor_weaknesses`: top weaknesses with evidence counts and source
+- `vendor_weaknesses`: top weaknesses with normalized `evidence_count` and source
 - `customer_pain_quotes`: verbatim customer quotes with urgency scores, titles, company sizes, industries
 - `competitor_differentiators`: top competitors with mention counts, primary drivers, switch counts
 - `archetype` (if present): reasoning archetype (e.g., "pricing_shock", "feature_gap")
@@ -134,12 +134,13 @@ A JSON object with:
 - If the evidence is mixed, say so indirectly by narrowing the scope of the recommendation rather than pretending the signal is universal.
 
 ### Section counts
-- `weakness_analysis`: Top 3 weaknesses (by evidence count). Fewer if data is sparse.
-- `discovery_questions`: 4-5 questions. Each should target a different weakness.
-- `landmine_questions`: 3 questions. These are subtle -- the prospect should not feel attacked.
-- `objection_handlers`: 3-5 handlers. Must include pricing if `price_complaint_rate >= 0.15`, features if `top_feature_gaps` has 2+ entries, and switching cost/lock-in if `dm_churn_rate >= 0.25`.
-- `displacement_triggers`: 3-4 triggers.
-- `recommended_plays`: 2-3 plays targeting different segments.
+- Prefer the minimum number of items that still covers distinct angles. Do not pad sections just to hit a quota.
+- `weakness_analysis`: 2-3 weaknesses (by `evidence_count`). Fewer if data is sparse.
+- `discovery_questions`: 3-4 questions. Each should target a different weakness.
+- `landmine_questions`: 2-3 questions. These are subtle -- the prospect should not feel attacked.
+- `objection_handlers`: 3-4 handlers. Must include pricing if `price_complaint_rate >= 0.15`, features if `top_feature_gaps` has 2+ entries, and switching cost/lock-in if `dm_churn_rate >= 0.25`.
+- `displacement_triggers`: 2-3 triggers.
+- `recommended_plays`: 2 plays targeting different segments. Add a third only when the evidence clearly supports a distinct motion.
 
 ### Tone and style
 - Write like a top-performing sales rep, not a data analyst. Be direct, confident, and specific.
@@ -164,8 +165,8 @@ A JSON object with:
 ### Conditional rules
 - If `sentiment_direction` is "declining", highlight this prominently in `executive_summary` and `vulnerability_window`.
 - If `budget_context.price_increase_rate > 0`, reference the price increase wave in a displacement trigger.
-- If `dm_churn_rate >= 0.4`, this is a high-priority target -- reflect urgency in the executive summary.
-- If `churn_pressure_score >= 60`, open with "HIGH PRIORITY TARGET" in the executive summary.
+- If `locked_facts.priority_language_allowed` is true, you may open with "HIGH PRIORITY TARGET" in the executive summary and keep the overall posture urgent.
+- If `dm_churn_rate >= 0.4` or `churn_pressure_score >= 60` but `locked_facts.priority_language_allowed` is false, keep urgency calibrated and do NOT use "HIGH PRIORITY TARGET".
 - If `archetype` is present, use it to sharpen the angle of attack in `executive_summary` and `talk_track` (e.g., a "pricing_shock" archetype means lead with cost-related pain). Reference `archetype_key_signals` in discovery questions when available.
 - If `churn_pressure_score < 60` or `avg_urgency < 5`, use calibrated language like "worth testing", "emerging vulnerability", or "likely receptive to a cost audit" instead of implying an urgent rip-and-replace cycle.
 - If pricing is the dominant signal, lead with spend visibility, app sprawl, and fee compounding. Do not force unrelated feature or support narratives unless the evidence is strong.

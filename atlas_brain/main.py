@@ -286,17 +286,11 @@ async def lifespan(app: FastAPI):
             api_key=settings.llm.anthropic_api_key,
         )
 
-    # Initialize reasoning agent LLM + event bus (cross-domain intelligence)
+    # Initialize reasoning event bus (cross-domain intelligence)
     event_bus = None
     event_consumer = None
     if settings.reasoning.enabled:
         try:
-            from .services.llm_router import init_reasoning_llm
-            init_reasoning_llm(
-                model=settings.reasoning.model,
-                api_key=settings.llm.anthropic_api_key,
-            )
-
             from .reasoning.event_bus import EventBus
             event_bus = EventBus()
             await event_bus.start()
@@ -692,10 +686,6 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Error closing database: %s", e)
 
-    # Unload reasoning LLM singleton (Anthropic Sonnet)
-    from .services.llm_router import shutdown_reasoning_llm
-    shutdown_reasoning_llm()
-
     # Unload triage LLM singleton (Anthropic Haiku)
     from .services.llm_router import shutdown_triage_llm
     shutdown_triage_llm()
@@ -745,7 +735,7 @@ app.include_router(openai_compat_router)
 from .api.ollama_compat import router as ollama_compat_router
 app.include_router(ollama_compat_router)
 
-# ── Rate-limiting (slowapi) ──────────────────────────────────────────
+# Rate-limiting (slowapi)
 from .auth.rate_limit import limiter
 
 app.state.limiter = limiter
@@ -811,4 +801,3 @@ if _ui_dist.is_dir():
         return PlainTextResponse("Ollama is running")
 
     app.mount("/", StaticFiles(directory=str(_ui_dist)), name="ui")
-

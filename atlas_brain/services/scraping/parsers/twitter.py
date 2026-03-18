@@ -1,7 +1,8 @@
 """
 Twitter/X parser for B2B review scraping.
 
-Uses Bright Data Web Unlocker to bypass X's anti-bot protections.
+Uses Bright Data Scraping Browser as the primary path for X's anti-bot protections,
+with curl_cffi HTML fetch as fallback.
 Scrapes X search results for vendor complaints, switching signals, and pain points.
 
 Configurable metadata fields (b2b_scrape_targets.metadata JSONB):
@@ -22,7 +23,7 @@ from datetime import datetime, timezone
 from urllib.parse import quote_plus
 
 from ..client import AntiDetectionClient
-from . import ScrapeResult, ScrapeTarget, register_parser
+from . import ScrapeResult, ScrapeTarget, log_page, register_parser
 
 logger = logging.getLogger("atlas.services.scraping.parsers.twitter")
 
@@ -52,6 +53,17 @@ _TWEET_TEXT_RE = re.compile(
     r'data-testid="tweetText"[^>]*>(.*?)</div>', re.DOTALL
 )
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+_BROWSER_TWEET_SELECTOR = '[data-testid="tweetText"], article[data-testid="tweet"]'
+_MAX_BROWSER_SCROLLS = 5
+
+
+def _response_body(resp) -> bytes | str:
+    """Normalize an HTTP response body to bytes or text for logging."""
+    body = getattr(resp, "content", None)
+    if isinstance(body, (bytes, bytearray)):
+        return bytes(body)
+    text = getattr(resp, "text", "")
+    return text if isinstance(text, str) else ""
 
 
 def _strip_html(text: str) -> str:
@@ -94,7 +106,7 @@ class TwitterParser:
 
     Strategy:
       1. Build vendor-specific search queries (vendor name + churn signal suffixes)
-      2. Fetch X search pages via Bright Data Web Unlocker
+      2. Fetch X search pages via Bright Data Scraping Browser
       3. Extract tweets from embedded JSON (__NEXT_DATA__) or HTML fallback
       4. Filter by engagement (min_likes) and text length
     """
@@ -106,6 +118,7 @@ class TwitterParser:
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
         from atlas_brain.config import settings
 
+        browser_errors: list[str] = []
         # Config from metadata
         try:
             min_likes = int(target.metadata.get("min_likes", 2))
@@ -137,11 +150,13 @@ class TwitterParser:
                     )
                     if result.reviews:
                         return result
+                    browser_errors.extend(result.errors)
                     logger.warning(
                         "Scraping Browser for X/%s returned 0 tweets, falling back",
                         target.vendor_name,
                     )
                 except Exception as exc:
+                    browser_errors.append(f"Scraping Browser exception: {exc}")
                     logger.warning(
                         "Scraping Browser failed for X/%s: %s -- falling back",
                         target.vendor_name, exc,
@@ -152,57 +167,77 @@ class TwitterParser:
         errors: list[str] = []
         pages_scraped = 0
         seen_ids: set[str] = set()
+        page_logs = []
+        prior_hashes: set[str] = set()
+        prior_review_ids: set[str] = set()
         queries = self._build_queries(target)
 
-        for query in queries:
-            query_count = 0
-            for page in range(target.max_pages):
-                if query_count >= max_per_query:
-                    break
+        for query_num, query in enumerate(queries, start=1):
+            url = self._build_search_url(query, include_replies, 0)
 
-                url = self._build_search_url(query, include_replies, page)
+            try:
+                resp = await client.get(
+                    url,
+                    domain=_DOMAIN,
+                    referer="https://x.com/",
+                    sticky_session=True,
+                    prefer_residential=True,
+                    extra_headers={
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        "Accept-Language": "en-US,en;q=0.9",
+                    },
+                )
+                pages_scraped += 1
 
-                try:
-                    resp = await client.get(
-                        url,
-                        domain=_DOMAIN,
-                        referer="https://x.com/",
-                        sticky_session=True,
-                        prefer_residential=True,
-                        extra_headers={
-                            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                            "Accept-Language": "en-US,en;q=0.9",
-                        },
-                    )
-                    pages_scraped += 1
+                if resp.status_code == 429:
+                    errors.append(f"X rate limited on query '{query}'")
+                    body = _response_body(resp)
+                    page_logs.append(log_page(
+                        query_num, url, status_code=429,
+                        response_bytes=len(body), raw_body=body,
+                        prior_hashes=prior_hashes, errors=errors[-1:],
+                    ))
+                    continue
+                if resp.status_code != 200:
+                    errors.append(f"X search '{query}': HTTP {resp.status_code}")
+                    body = _response_body(resp)
+                    page_logs.append(log_page(
+                        query_num, url, status_code=resp.status_code,
+                        response_bytes=len(body), raw_body=body,
+                        prior_hashes=prior_hashes, errors=errors[-1:],
+                    ))
+                    continue
 
-                    if resp.status_code == 429:
-                        errors.append(f"X rate limited on query '{query}' page {page}")
-                        break
-                    if resp.status_code != 200:
-                        errors.append(f"X search '{query}' page {page}: HTTP {resp.status_code}")
-                        break
+                body = _response_body(resp)
+                tweets = self._extract_tweets(
+                    resp.text, target, seen_ids, min_likes, min_retweets, "http_html",
+                )
+                page_logs.append(log_page(
+                    query_num, url, status_code=resp.status_code,
+                    response_bytes=len(body), reviews=tweets, raw_body=body,
+                    prior_hashes=prior_hashes, prior_review_ids=prior_review_ids,
+                ))
+                if not tweets:
+                    continue
 
-                    body = resp.text
-                    tweets = self._extract_tweets(body, target, seen_ids, min_likes, min_retweets)
+                reviews.extend(tweets[:max_per_query])
 
-                    if not tweets:
-                        break
-
-                    reviews.extend(tweets)
-                    query_count += len(tweets)
-
-                except Exception as exc:
-                    errors.append(f"X search '{query}' page {page}: {exc}")
-                    logger.warning("X scrape failed for '%s' page %d: %s", query, page, exc)
-                    break
+            except Exception as exc:
+                errors.append(f"X search '{query}': {exc}")
+                logger.warning("X scrape failed for '%s': %s", query, exc)
+                page_logs.append(log_page(query_num, url, errors=errors[-1:]))
 
         logger.info(
             "Twitter/X scrape for %s: %d tweets from %d pages (%d queries)",
             target.vendor_name, len(reviews), pages_scraped, len(queries),
         )
 
-        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors)
+        return ScrapeResult(
+            reviews=reviews,
+            pages_scraped=pages_scraped,
+            errors=browser_errors + errors,
+            page_logs=page_logs,
+        )
 
     # ------------------------------------------------------------------
     # Scraping Browser path (Bright Data cloud Chromium for X)
@@ -220,46 +255,73 @@ class TwitterParser:
         """Scrape X via Bright Data Scraping Browser (cloud Chromium)."""
         import asyncio as _aio
         import random as _rand
+        from atlas_brain.config import settings
         from playwright.async_api import async_playwright
 
         reviews: list[dict] = []
+        timeout_ms = settings.b2b_scrape.playwright_timeout_ms
         errors: list[str] = []
         pages_scraped = 0
         seen_ids: set[str] = set()
+        page_logs = []
+        prior_hashes: set[str] = set()
+        prior_review_ids: set[str] = set()
         queries = self._build_queries(target)
 
         try:
             async with async_playwright() as pw:
-                browser = await pw.chromium.connect_over_cdp(ws_url, timeout=30000)
+                browser = await pw.chromium.connect_over_cdp(ws_url, timeout=timeout_ms)
                 context = browser.contexts[0] if browser.contexts else await browser.new_context()
                 page = await context.new_page()
 
-                for query in queries:
+                for query_num, query in enumerate(queries, start=1):
+                    query_count = 0
                     url = self._build_search_url(query, include_replies, 0)
                     try:
-                        resp = await page.goto(url, wait_until="networkidle", timeout=30000)
+                        resp = await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
                         pages_scraped += 1
 
                         if not resp or resp.status != 200:
                             errors.append(f"Browser X search '{query}': HTTP {resp.status if resp else 0}")
+                            html = await page.content()
+                            page_logs.append(log_page(
+                                query_num, url, status_code=resp.status if resp else 0,
+                                response_bytes=len(html), raw_body=html,
+                                prior_hashes=prior_hashes, errors=errors[-1:],
+                            ))
                             continue
 
+                        try:
+                            await page.wait_for_selector(_BROWSER_TWEET_SELECTOR, timeout=10000)
+                        except Exception:
+                            pass
+
                         # Scroll to load more tweets
-                        for _ in range(min(target.max_pages, 5)):
+                        for _ in range(min(target.max_pages, _MAX_BROWSER_SCROLLS)):
                             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                             await _aio.sleep(_rand.uniform(1.5, 3.0))
 
                         html = await page.content()
-                        tweets = self._extract_tweets(html, target, seen_ids, min_likes, min_retweets)
-                        reviews.extend(tweets)
+                        tweets = self._extract_tweets(
+                            html, target, seen_ids, min_likes, min_retweets, "scraping_browser",
+                        )
+                        remaining = max_per_query - query_count
+                        reviews.extend(tweets[:remaining])
+                        query_count += len(tweets[:remaining])
+                        page_logs.append(log_page(
+                            query_num, url, status_code=resp.status,
+                            response_bytes=len(html), reviews=tweets[:remaining], raw_body=html,
+                            prior_hashes=prior_hashes, prior_review_ids=prior_review_ids,
+                        ))
 
-                        if len(reviews) >= max_per_query:
-                            break
+                        if query_count >= max_per_query:
+                            continue
 
                         await _aio.sleep(_rand.uniform(2.0, 4.0))
 
                     except Exception as exc:
                         errors.append(f"Browser X search '{query}': {type(exc).__name__}: {str(exc)[:80]}")
+                        page_logs.append(log_page(query_num, url, errors=errors[-1:]))
 
                 await page.close()
                 await browser.close()
@@ -275,7 +337,7 @@ class TwitterParser:
             reviews=reviews,
             pages_scraped=pages_scraped,
             errors=errors,
-            status="success" if reviews else "failed",
+            page_logs=page_logs,
         )
 
     def _build_queries(self, target: ScrapeTarget) -> list[str]:
@@ -315,6 +377,7 @@ class TwitterParser:
         seen_ids: set[str],
         min_likes: int,
         min_retweets: int,
+        extraction_method: str,
     ) -> list[dict]:
         """Extract tweets from X page HTML.
 
@@ -322,10 +385,15 @@ class TwitterParser:
         """
         tweets = self._extract_from_json(html, target, seen_ids, min_likes, min_retweets)
         if tweets:
+            for tweet in tweets:
+                tweet["raw_metadata"]["extraction_method"] = extraction_method
             return tweets
 
         # Fallback: HTML parsing (less reliable, but works if JSON unavailable)
-        return self._extract_from_html(html, target, seen_ids, min_likes)
+        tweets = self._extract_from_html(html, target, seen_ids, min_likes)
+        for tweet in tweets:
+            tweet["raw_metadata"]["extraction_method"] = extraction_method
+        return tweets
 
     def _extract_from_json(
         self,

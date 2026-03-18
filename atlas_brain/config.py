@@ -1822,6 +1822,7 @@ class AutonomousConfig(BaseSettings):
     hooks_enabled: bool = Field(default=True, description="Enable alert-driven hook processing")
     hook_cooldown_seconds: int = Field(default=30, ge=0, le=300, description="Min seconds between duplicate hook executions")
     default_timezone: str = Field(default="America/Chicago", description="Default timezone for scheduled tasks")
+    misfire_recovery_seconds: int = Field(default=600, ge=0, le=3600, description="On startup, recover cron tasks that missed their window within this many seconds")
 
     # Event queue (Phase 3)
     event_queue_enabled: bool = Field(default=True, description="Enable event queue for debounced hook dispatch")
@@ -2413,6 +2414,14 @@ class B2BChurnConfig(BaseSettings):
     accounts_in_motion_cron: str = Field(default="35 21 * * *", description="Cron for accounts-in-motion prospecting lists")
     accounts_in_motion_max_per_vendor: int = Field(default=25, ge=1, le=100, description="Max accounts per vendor in accounts_in_motion report")
     accounts_in_motion_min_urgency: float = Field(default=5.0, ge=0, le=10, description="Min urgency to include an account in motion")
+    accounts_in_motion_repeat_evidence_bonus: int = Field(default=3, ge=0, le=20, description="Bonus points added per extra supporting review for an account in motion")
+    accounts_in_motion_repeat_evidence_bonus_max: int = Field(default=6, ge=0, le=30, description="Max total repeat-evidence bonus for an account in motion")
+    accounts_in_motion_low_confidence_threshold: float = Field(default=6.0, ge=0, le=10, description="Confidence below this threshold incurs a quality penalty in accounts_in_motion scoring")
+    accounts_in_motion_low_confidence_penalty: int = Field(default=6, ge=0, le=30, description="Penalty applied when confidence is below the configured threshold")
+    accounts_in_motion_missing_domain_penalty: int = Field(default=8, ge=0, le=30, description="Penalty for accounts without a matched company domain")
+    accounts_in_motion_missing_title_penalty: int = Field(default=4, ge=0, le=30, description="Penalty for accounts without a matched buyer title")
+    accounts_in_motion_missing_quote_penalty: int = Field(default=4, ge=0, le=30, description="Penalty for accounts without a company-matched quote")
+    accounts_in_motion_invalid_alternative_terms: list[str] = Field(default=["bare metal"], description="Configured non-vendor alternative terms to drop from accounts_in_motion alternatives")
 
     # Challenger brief
     challenger_brief_cron: str = Field(default="40 21 * * *", description="Cron for challenger brief report (runs after all other follow-ups)")
@@ -2537,6 +2546,7 @@ class B2BScrapeConfig(BaseSettings):
     gartner_rpm: int = Field(default=4, description="Gartner Peer Insights requests per minute")
     trustpilot_rpm: int = Field(default=6, description="TrustPilot requests per minute")
     getapp_rpm: int = Field(default=8, description="GetApp requests per minute")
+    twitter_rpm: int = Field(default=10, description="Twitter/X requests per minute")
     producthunt_rpm: int = Field(default=20, description="ProductHunt requests per minute")
     producthunt_api_token: str = Field(default="", description="ProductHunt API bearer token")
     youtube_api_key: str = Field(default="", description="YouTube Data API v3 key")

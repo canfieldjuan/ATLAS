@@ -6,6 +6,7 @@ network. Mirrors ``atlas_brain.mcp.b2b_churn_server`` queries over HTTP
 for direct consumption by thin delivery surfaces.
 """
 
+import asyncio
 import csv
 import io
 import json
@@ -13,13 +14,14 @@ import logging
 import re
 import uuid as _uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
 from ..auth.dependencies import AuthUser, optional_auth
+from ..config import settings
 from ..services.tracing import (
     build_business_trace_context,
     build_reasoning_trace_context,
@@ -4813,23 +4815,230 @@ async def get_source_correction_impact(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/accounts-in-motion")
-async def list_accounts_in_motion(
-    vendor_name: str = Query(..., description="Target vendor (companies leaving this vendor)"),
-    min_urgency: float = Query(5, ge=0, le=10),
-    window_days: int = Query(90, ge=1, le=3650),
-    limit: int = Query(25, ge=1, le=100),
-    user: AuthUser | None = Depends(optional_auth),
+def _company_lookup_key(company: str | None) -> str:
+    return (company or "").strip().lower()
+
+
+async def _fetch_latest_accounts_in_motion_report(
+    pool,
+    vendor_name: str,
+    user: AuthUser | None,
 ):
-    """Ranked list of companies showing churn intent for a specific vendor.
+    params: list[Any] = [vendor_name.strip()]
+    conditions = [
+        "report_type = 'accounts_in_motion'",
+        "(LOWER(vendor_filter) = LOWER($1) OR vendor_filter ILIKE '%' || $1 || '%')",
+    ]
+    idx = 2
+    if _should_scope(user):
+        conditions.append(
+            f"LOWER(vendor_filter) IN (SELECT LOWER(vendor_name) FROM tracked_vendors WHERE account_id = ${idx}::uuid)"
+        )
+        params.append(user.account_id)
+        idx += 1
+    where = " AND ".join(conditions)
+    return await pool.fetchrow(
+        f"""
+        SELECT report_date, vendor_filter, intelligence_data
+        FROM b2b_intelligence
+        WHERE {where}
+        ORDER BY CASE WHEN LOWER(vendor_filter) = LOWER($1) THEN 0 ELSE 1 END,
+                 report_date DESC, created_at DESC
+        LIMIT 1
+        """,
+        *params,
+    )
 
-    Each account includes urgency, buyer context, pain evidence, firmographic
-    data (from Apollo), and decision-maker contacts with verified emails.
-    Designed for SDR prospecting lists.
-    """
-    pool = _pool_or_503()
-    import json as _json
 
+async def _fetch_accounts_in_motion_org_lookup(pool, company_keys: list[str]) -> dict[str, dict[str, Any]]:
+    if not company_keys:
+        return {}
+    rows = await pool.fetch(
+        """
+        SELECT company_name_norm, employee_count, industry, annual_revenue_range, domain
+        FROM prospect_org_cache
+        WHERE company_name_norm = ANY($1::text[])
+          AND (status = 'enriched' OR (status = 'pending' AND domain IS NOT NULL))
+        """,
+        company_keys,
+    )
+    return {
+        r["company_name_norm"]: {
+            "employee_count": r["employee_count"],
+            "industry": r["industry"],
+            "annual_revenue_range": r["annual_revenue_range"],
+            "domain": r["domain"],
+        }
+        for r in rows
+    }
+
+
+async def _fetch_accounts_in_motion_contacts_lookup(
+    pool,
+    company_keys: list[str],
+) -> dict[str, list[dict[str, Any]]]:
+    if not company_keys:
+        return {}
+    rows = await pool.fetch(
+        """
+        SELECT LOWER(company_name) AS company_key,
+               first_name || ' ' || last_name AS name,
+               title, seniority, email, linkedin_url
+        FROM prospects
+        WHERE LOWER(company_name) = ANY($1::text[])
+          AND seniority IN ('c_suite', 'owner', 'founder', 'vp', 'head', 'director')
+          AND email IS NOT NULL
+        ORDER BY LOWER(company_name),
+                 CASE seniority
+                     WHEN 'c_suite' THEN 1 WHEN 'founder' THEN 2
+                     WHEN 'owner' THEN 2 WHEN 'vp' THEN 3
+                     WHEN 'head' THEN 4 WHEN 'director' THEN 5
+                 END
+        """,
+        company_keys,
+    )
+    contacts_lookup: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        company_key = row["company_key"]
+        bucket = contacts_lookup.setdefault(company_key, [])
+        if len(bucket) >= 5:
+            continue
+        bucket.append(
+            {
+                "name": row["name"],
+                "title": row["title"],
+                "seniority": row["seniority"],
+                "email": row["email"],
+                "linkedin_url": row["linkedin_url"],
+            }
+        )
+    return contacts_lookup
+
+
+def _shape_persisted_accounts_in_motion_account(account: dict[str, Any], vendor_name: str) -> dict[str, Any]:
+    alternatives = [
+        {"name": name, "reason": ""}
+        for name in (account.get("alternatives_considering") or [])
+        if isinstance(name, str) and name.strip()
+    ][:5]
+    pain_categories = []
+    if account.get("pain_category"):
+        pain_categories.append({"category": account["pain_category"], "severity": ""})
+    evidence = [account["top_quote"]] if account.get("top_quote") else []
+    return {
+        "company": account.get("company"),
+        "vendor": account.get("vendor") or vendor_name,
+        "category": account.get("category"),
+        "urgency": _safe_float(account.get("urgency"), 0),
+        "role_type": account.get("role_level"),
+        "buying_stage": account.get("buying_stage"),
+        "budget_authority": bool(account.get("decision_maker")),
+        "pain_categories": pain_categories,
+        "evidence": evidence,
+        "alternatives_considering": alternatives,
+        "contract_signal": account.get("contract_end"),
+        "reviewer_title": account.get("title"),
+        "company_size_raw": account.get("company_size"),
+        "quality_flags": account.get("quality_flags") or [],
+        "opportunity_score": account.get("opportunity_score"),
+        "quote_match_type": account.get("quote_match_type"),
+        "confidence": account.get("confidence"),
+        "source_distribution": account.get("source_distribution") or {},
+        "enriched_at": account.get("last_seen"),
+    }
+
+
+async def _enrich_accounts_in_motion_accounts(
+    pool,
+    accounts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    company_keys = sorted(
+        {
+            _company_lookup_key(account.get("company"))
+            for account in accounts
+            if _company_lookup_key(account.get("company"))
+        }
+    )
+    org_lookup, contacts_lookup = await asyncio.gather(
+        _fetch_accounts_in_motion_org_lookup(pool, company_keys),
+        _fetch_accounts_in_motion_contacts_lookup(pool, company_keys),
+    )
+    enriched: list[dict[str, Any]] = []
+    for account in accounts:
+        company_key = _company_lookup_key(account.get("company"))
+        org = org_lookup.get(company_key) or {}
+        contacts = contacts_lookup.get(company_key) or []
+        enriched.append(
+            {
+                **account,
+                "employee_count": org.get("employee_count"),
+                "industry": org.get("industry") or account.get("industry"),
+                "annual_revenue": org.get("annual_revenue_range"),
+                "domain": org.get("domain") or account.get("domain"),
+                "contacts": contacts,
+                "contact_count": len(contacts),
+            }
+        )
+    return enriched
+
+
+async def _list_accounts_in_motion_from_report(
+    pool,
+    vendor_name: str,
+    min_urgency: float,
+    limit: int,
+    user: AuthUser | None,
+):
+    row = await _fetch_latest_accounts_in_motion_report(pool, vendor_name, user)
+    if not row:
+        return None
+    report = _safe_json(row["intelligence_data"])
+    if not isinstance(report, dict):
+        return None
+    vendor = report.get("vendor") or row["vendor_filter"] or vendor_name.strip()
+    shaped = [
+        _shape_persisted_accounts_in_motion_account(account, vendor)
+        for account in (report.get("accounts") or [])
+        if isinstance(account, dict) and _safe_float(account.get("urgency"), 0) >= min_urgency
+    ]
+    shaped.sort(
+        key=lambda account: (
+            -(account.get("opportunity_score") or 0),
+            -(account.get("urgency") or 0),
+        )
+    )
+    accounts = await _enrich_accounts_in_motion_accounts(pool, shaped[:limit])
+    return {
+        "vendor": vendor,
+        "accounts": accounts,
+        "count": len(accounts),
+        "window_days": settings.b2b_churn.intelligence_window_days,
+        "min_urgency": min_urgency,
+        "report_date": str(row["report_date"]) if row["report_date"] else None,
+        "data_source": "persisted_report",
+    }
+
+
+def _validate_accounts_in_motion_window(window_days: int) -> None:
+    configured = settings.b2b_churn.intelligence_window_days
+    if window_days != configured:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "accounts-in-motion uses the persisted daily report window. "
+                f"Use /accounts-in-motion/live for custom window_days values (configured={configured})."
+            ),
+        )
+
+
+async def _list_accounts_in_motion_from_reviews(
+    pool,
+    vendor_name: str,
+    min_urgency: float,
+    window_days: int,
+    limit: int,
+    user: AuthUser | None,
+):
     conditions = [
         "r.enrichment_status = 'enriched'",
         "(r.enrichment->'churn_signals'->>'intent_to_leave')::boolean = true",
@@ -4839,24 +5048,18 @@ async def list_accounts_in_motion(
         "r.enriched_at > NOW() - make_interval(days => $2)",
         "r.vendor_name ILIKE '%' || $3 || '%'",
     ]
-    params: list = [min_urgency, window_days, vendor_name.strip()]
+    params: list[Any] = [min_urgency, window_days, vendor_name.strip()]
     idx = 4
-
     if _should_scope(user):
         conditions.append(
             f"r.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)"
         )
         params.append(user.account_id)
         idx += 1
-
-    where = " AND ".join(conditions)
-
     rows = await pool.fetch(
         f"""
         SELECT DISTINCT ON (LOWER(r.reviewer_company))
-            r.reviewer_company,
-            r.vendor_name,
-            r.product_category,
+            r.reviewer_company, r.vendor_name, r.product_category,
             (r.enrichment->>'urgency_score')::numeric AS urgency,
             r.enrichment->'buyer_authority'->>'role_type' AS role_type,
             r.enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
@@ -4865,122 +5068,101 @@ async def list_accounts_in_motion(
             r.enrichment->>'quotable_phrases' AS quotable_phrases,
             r.enrichment->'competitors_mentioned' AS competitors,
             r.enrichment->'churn_signals'->>'contract_signal' AS contract_signal,
-            r.reviewer_title,
-            r.company_size_raw,
+            r.reviewer_title, r.company_size_raw,
             COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry,
             r.enriched_at
         FROM b2b_reviews r
-        WHERE {where}
+        WHERE {" AND ".join(conditions)}
         ORDER BY LOWER(r.reviewer_company), (r.enrichment->>'urgency_score')::numeric DESC
         """,
         *params,
     )
-
-    accounts = []
+    accounts: list[dict[str, Any]] = []
     for row in rows[:limit]:
-        company = row["reviewer_company"]
-        company_lower = company.lower()
-
-        org = await pool.fetchrow(
-            """
-            SELECT employee_count, industry, annual_revenue_range, domain
-            FROM prospect_org_cache
-            WHERE company_name_norm = $1 AND status = 'enriched'
-            """,
-            company_lower,
-        )
-
-        contacts = await pool.fetch(
-            """
-            SELECT first_name || ' ' || last_name AS name,
-                   title, seniority, email, linkedin_url
-            FROM prospects
-            WHERE LOWER(company_name) = $1
-              AND seniority IN ('c_suite', 'owner', 'founder', 'vp', 'head', 'director')
-              AND email IS NOT NULL
-            ORDER BY CASE seniority
-                WHEN 'c_suite' THEN 1 WHEN 'founder' THEN 2
-                WHEN 'owner' THEN 2 WHEN 'vp' THEN 3
-                WHEN 'head' THEN 4 WHEN 'director' THEN 5
-            END
-            LIMIT 5
-            """,
-            company_lower,
-        )
-
-        pain_cats = []
-        try:
-            raw = row["pain_categories"]
-            if raw:
-                parsed = _json.loads(raw) if isinstance(raw, str) else raw
-                pain_cats = [
+        pain_categories = _safe_json(row["pain_categories"])
+        quotes = _safe_json(row["quotable_phrases"])
+        competitors = _safe_json(row["competitors"])
+        accounts.append(
+            {
+                "company": row["reviewer_company"],
+                "vendor": row["vendor_name"],
+                "category": row["product_category"],
+                "urgency": _safe_float(row["urgency"], 0),
+                "role_type": row["role_type"],
+                "buying_stage": row["buying_stage"],
+                "budget_authority": row["budget_authority"],
+                "pain_categories": [
                     {"category": p.get("category", ""), "severity": p.get("severity", "")}
-                    for p in (parsed if isinstance(parsed, list) else [])
+                    for p in (pain_categories if isinstance(pain_categories, list) else [])
                     if isinstance(p, dict)
-                ]
-        except (ValueError, TypeError):
-            pass
-
-        quotes = []
-        try:
-            raw = row["quotable_phrases"]
-            if raw:
-                parsed = _json.loads(raw) if isinstance(raw, str) else raw
-                quotes = [q for q in (parsed if isinstance(parsed, list) else []) if isinstance(q, str)][:3]
-        except (ValueError, TypeError):
-            pass
-
-        alts = []
-        try:
-            raw = row["competitors"]
-            if raw:
-                parsed = _json.loads(raw) if isinstance(raw, str) else raw
-                alts = [
+                ],
+                "evidence": [q for q in (quotes if isinstance(quotes, list) else []) if isinstance(q, str)][:3],
+                "alternatives_considering": [
                     {"name": c.get("name", ""), "reason": c.get("reason", "")}
-                    for c in (parsed if isinstance(parsed, list) else [])
+                    for c in (competitors if isinstance(competitors, list) else [])
                     if isinstance(c, dict) and c.get("name")
-                ][:5]
-        except (ValueError, TypeError):
-            pass
-
-        accounts.append({
-            "company": company,
-            "vendor": row["vendor_name"],
-            "category": row["product_category"],
-            "urgency": _safe_float(row["urgency"], 0),
-            "role_type": row["role_type"],
-            "buying_stage": row["buying_stage"],
-            "budget_authority": row["budget_authority"],
-            "pain_categories": pain_cats,
-            "evidence": quotes,
-            "alternatives_considering": alts,
-            "contract_signal": row["contract_signal"],
-            "reviewer_title": row["reviewer_title"],
-            "employee_count": org["employee_count"] if org else None,
-            "industry": (org["industry"] if org else None) or row["industry"],
-            "annual_revenue": org["annual_revenue_range"] if org else None,
-            "domain": org["domain"] if org else None,
-            "company_size_raw": row["company_size_raw"],
-            "contacts": [
-                {
-                    "name": c["name"],
-                    "title": c["title"],
-                    "seniority": c["seniority"],
-                    "email": c["email"],
-                    "linkedin_url": c["linkedin_url"],
-                }
-                for c in contacts
-            ],
-            "contact_count": len(contacts),
-            "enriched_at": str(row["enriched_at"]) if row["enriched_at"] else None,
-        })
-
-    accounts.sort(key=lambda a: -(a.get("urgency") or 0))
-
+                ][:5],
+                "contract_signal": row["contract_signal"],
+                "reviewer_title": row["reviewer_title"],
+                "company_size_raw": row["company_size_raw"],
+                "industry": row["industry"],
+                "enriched_at": str(row["enriched_at"]) if row["enriched_at"] else None,
+            }
+        )
+    accounts = await _enrich_accounts_in_motion_accounts(pool, accounts)
+    accounts.sort(key=lambda account: -(account.get("urgency") or 0))
     return {
         "vendor": vendor_name.strip(),
         "accounts": accounts,
         "count": len(accounts),
         "window_days": window_days,
         "min_urgency": min_urgency,
+        "data_source": "live_reviews",
     }
+
+@router.get("/accounts-in-motion")
+async def list_accounts_in_motion(
+    vendor_name: str = Query(..., description="Target vendor (companies leaving this vendor)"),
+    min_urgency: float = Query(settings.b2b_churn.accounts_in_motion_min_urgency, ge=0, le=10),
+    window_days: int = Query(settings.b2b_churn.intelligence_window_days, ge=1, le=3650),
+    limit: int = Query(settings.b2b_churn.accounts_in_motion_max_per_vendor, ge=1, le=100),
+    user: AuthUser | None = Depends(optional_auth),
+):
+    """Ranked list of companies showing churn intent for a specific vendor.
+
+    Each account includes urgency, buyer context, pain evidence, firmographic
+    data (from Apollo), and decision-maker contacts with verified emails.
+    Designed for SDR prospecting lists.
+    """
+    pool = _pool_or_503()
+    _validate_accounts_in_motion_window(window_days)
+    persisted = await _list_accounts_in_motion_from_report(
+        pool,
+        vendor_name,
+        min_urgency=min_urgency,
+        limit=limit,
+        user=user,
+    )
+    if persisted is None:
+        raise HTTPException(status_code=404, detail="No persisted accounts-in-motion report found for that vendor")
+    return persisted
+
+
+@router.get("/accounts-in-motion/live")
+async def list_accounts_in_motion_live(
+    vendor_name: str = Query(..., description="Target vendor (companies leaving this vendor)"),
+    min_urgency: float = Query(settings.b2b_churn.accounts_in_motion_min_urgency, ge=0, le=10),
+    window_days: int = Query(settings.b2b_churn.intelligence_window_days, ge=1, le=3650),
+    limit: int = Query(settings.b2b_churn.accounts_in_motion_max_per_vendor, ge=1, le=100),
+    user: AuthUser | None = Depends(optional_auth),
+):
+    """Live exploratory accounts-in-motion view rebuilt directly from reviews."""
+    pool = _pool_or_503()
+    return await _list_accounts_in_motion_from_reviews(
+        pool,
+        vendor_name,
+        min_urgency=min_urgency,
+        window_days=window_days,
+        limit=limit,
+        user=user,
+    )

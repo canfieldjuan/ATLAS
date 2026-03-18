@@ -1,6 +1,6 @@
 """Per-workflow LLM routing.
 
-Holds a cloud LLM singleton alongside the local LLM in llm_registry.
+Holds cloud and Anthropic singleton fallbacks alongside the local llm_registry.
 Routes workflow types to the appropriate backend.
 
 Routing map:
@@ -8,13 +8,14 @@ Routing map:
     CLOUD     (Ollama cloud minimax-m2): booking, email, security escalation
     DRAFT     (Anthropic Sonnet): email_draft, campaign
     TRIAGE    (Anthropic Haiku): email_triage, email_query, call
-    REASONING (Anthropic Sonnet): reasoning agent deep analysis
+    REASONING (Anthropic Sonnet): legacy fallback for reasoning workloads
     NO LLM    (unchanged): security workflow, presence workflow
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -31,7 +32,7 @@ _draft_llm: Optional[LLMService] = None
 # Triage LLM singleton -- Anthropic Haiku for cheap email replyable classification
 _triage_llm: Optional[LLMService] = None
 
-# Reasoning LLM singleton -- Anthropic Sonnet for cross-domain reasoning agent
+# Reasoning LLM singleton -- legacy Anthropic fallback for reasoning workloads
 _reasoning_llm: Optional[LLMService] = None
 
 # Workflows that require cloud reasoning
@@ -43,7 +44,7 @@ DRAFT_WORKFLOWS = frozenset({"email_draft", "campaign"})
 # Workflows that use the triage LLM (Anthropic Haiku)
 TRIAGE_WORKFLOWS = frozenset({"email_triage", "email_query", "call"})
 
-# Workflows that use the reasoning LLM (Anthropic Sonnet)
+# Workflows that use the legacy reasoning LLM fallback
 REASONING_WORKFLOWS = frozenset({"reasoning"})
 
 
@@ -172,8 +173,33 @@ def shutdown_reasoning_llm() -> None:
 
 
 def get_reasoning_llm() -> Optional[LLMService]:
-    """Get the reasoning LLM instance (or None if not loaded)."""
-    return _reasoning_llm
+    """Get or lazily initialize the reasoning LLM fallback."""
+    global _reasoning_llm
+    if _reasoning_llm is not None:
+        return _reasoning_llm
+
+    api_key = _reasoning_api_key()
+    if not api_key:
+        return None
+
+    model = _reasoning_model()
+    return init_reasoning_llm(model=model, api_key=api_key)
+
+
+def _reasoning_api_key() -> str:
+    from ..config import settings
+
+    return (
+        settings.llm.anthropic_api_key
+        or os.environ.get("ANTHROPIC_API_KEY")
+        or os.environ.get("ATLAS_LLM_ANTHROPIC_API_KEY", "")
+    )
+
+
+def _reasoning_model() -> str:
+    from ..config import settings
+
+    return settings.reasoning.model
 
 
 def get_llm(workflow_type: Optional[str] = None) -> Optional[LLMService]:
@@ -185,8 +211,9 @@ def get_llm(workflow_type: Optional[str] = None) -> Optional[LLMService]:
     from . import llm_registry
 
     if workflow_type and workflow_type in REASONING_WORKFLOWS:
-        if _reasoning_llm:
-            return _reasoning_llm
+        llm = get_reasoning_llm()
+        if llm:
+            return llm
         logger.warning(
             "Reasoning LLM not initialized; falling back to local for workflow '%s'",
             workflow_type,

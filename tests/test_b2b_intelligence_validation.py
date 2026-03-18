@@ -333,6 +333,10 @@ def _sample_battle_card() -> dict[str, Any]:
         "churn_pressure_score": 43.1,
         "total_reviews": 1156,
         "vendor_weaknesses": [{"area": "pricing", "count": 246}],
+        "customer_pain_quotes": [
+            {"quote": "We need better control over rising platform costs.", "urgency": 8},
+            {"quote": "Support quality has become inconsistent during peak periods.", "urgency": 7},
+        ],
         "competitor_differentiators": [
             {"competitor": "WooCommerce", "mentions": 53, "switch_count": 0},
             {"competitor": "BigCommerce", "mentions": 45, "switch_count": 0},
@@ -406,6 +410,20 @@ class TestBattleCardSalesCopyValidation:
         warnings = _validate_battle_card_sales_copy(_sample_battle_card(), generated)
         assert any("low-evidence feature gap" in w for w in warnings)
 
+    def test_rejects_non_exact_customer_quote(self):
+        generated = {
+            "weakness_analysis": [
+                {
+                    "weakness": "Pricing pressure is rising.",
+                    "evidence": "246 pricing mentions",
+                    "customer_quote": "We need better cost control right now.",
+                    "winning_position": "Emphasize pricing clarity.",
+                }
+            ]
+        }
+        warnings = _validate_battle_card_sales_copy(_sample_battle_card(), generated)
+        assert any("customer_quote is not an exact source quote" in w for w in warnings)
+
 
 class TestBattleCardSalesCopySanitization:
     def test_sanitizes_unsupported_numeric_summary(self):
@@ -451,6 +469,26 @@ class TestBattleCardSalesCopySanitization:
         warnings = _validate_battle_card_sales_copy(card, sanitized)
         assert not warnings
         assert "a Emerging vulnerability" not in sanitized["executive_summary"]
+
+    def test_sanitizes_customer_quote_to_exact_source_text(self):
+        card = _sample_battle_card()
+        generated = {
+            "weakness_analysis": [
+                {
+                    "weakness": "Pricing pressure is rising.",
+                    "evidence": "246 pricing mentions",
+                    "customer_quote": "We need better cost control right now.",
+                    "winning_position": "Emphasize pricing clarity.",
+                }
+            ]
+        }
+        sanitized = _sanitize_battle_card_sales_copy(card, generated)
+        warnings = _validate_battle_card_sales_copy(card, sanitized)
+        assert not warnings
+        assert sanitized["weakness_analysis"][0]["customer_quote"] in {
+            "We need better control over rising platform costs.",
+            "Support quality has become inconsistent during peak periods.",
+        }
 
 
 class TestBattleCardSalesCopyParsing:

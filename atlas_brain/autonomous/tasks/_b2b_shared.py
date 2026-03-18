@@ -553,6 +553,39 @@ def _sanitize_battle_card_text(
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
+def _battle_card_allowed_quotes(card: dict[str, Any]) -> list[str]:
+    """Return exact customer pain quotes that synthesis may reuse."""
+    quotes: list[str] = []
+    for item in card.get("customer_pain_quotes") or []:
+        if isinstance(item, dict):
+            quote = str(item.get("quote") or "").strip()
+        else:
+            quote = str(item or "").strip()
+        if quote and quote not in quotes:
+            quotes.append(quote)
+    return quotes
+
+
+def _battle_card_best_supported_quote(card: dict[str, Any], context: str = "") -> str:
+    """Pick the most relevant exact quote from source data for sanitizer fallback."""
+    quotes = _battle_card_allowed_quotes(card)
+    if not quotes:
+        return ""
+    context_tokens = {
+        token for token in re.findall(r"[a-z0-9]+", context.lower())
+        if len(token) >= 4
+    }
+    if not context_tokens:
+        return quotes[0]
+    return max(
+        quotes,
+        key=lambda quote: (
+            len(context_tokens & set(re.findall(r"[a-z0-9]+", quote.lower()))),
+            len(quote),
+        ),
+    )
+
+
 def _sanitize_battle_card_sales_copy(card: dict[str, Any], generated: dict[str, Any]) -> dict[str, Any]:
     """Deterministically rewrite near-miss sales copy before final rejection."""
     if not isinstance(generated, dict):
@@ -593,7 +626,18 @@ def _sanitize_battle_card_sales_copy(card: dict[str, Any], generated: dict[str, 
             }
         return value
 
-    return _walk(generated)
+    sanitized = _walk(generated)
+    allowed_quotes = _battle_card_allowed_quotes(card)
+    weaknesses = sanitized.get("weakness_analysis") if isinstance(sanitized, dict) else None
+    if allowed_quotes and isinstance(weaknesses, list):
+        for item in weaknesses:
+            if not isinstance(item, dict):
+                continue
+            customer_quote = str(item.get("customer_quote") or "").strip()
+            if customer_quote and customer_quote not in allowed_quotes:
+                context = "%s %s" % (item.get("weakness") or "", item.get("evidence") or "")
+                item["customer_quote"] = _battle_card_best_supported_quote(card, context)
+    return sanitized
 
 
 def _best_cross_vendor_comparison(scorecard: dict[str, Any]) -> dict[str, Any] | None:
@@ -994,6 +1038,7 @@ def _validate_battle_card_sales_copy(
         for g in ((card.get("objection_data") or {}).get("top_feature_gaps") or [])
         if int(g.get("mentions") or 0) < _battle_card_feature_gap_headline_min_mentions()
     ]
+    allowed_quotes = set(_battle_card_allowed_quotes(card))
     for path, text in _battle_card_iter_text(generated):
         lowered = text.lower()
         if _battle_card_numeric_paths(path):
@@ -1012,6 +1057,16 @@ def _validate_battle_card_sales_copy(
             for term in low_gap_terms:
                 if term and term in lowered:
                     warnings.append(f"{path} elevates low-evidence feature gap '{term}' to a headline")
+    weaknesses = generated.get("weakness_analysis")
+    if allowed_quotes and isinstance(weaknesses, list):
+        for idx, item in enumerate(weaknesses):
+            if not isinstance(item, dict):
+                continue
+            customer_quote = str(item.get("customer_quote") or "").strip()
+            if customer_quote and customer_quote not in allowed_quotes:
+                warnings.append(
+                    f"weakness_analysis[{idx}].customer_quote is not an exact source quote"
+                )
     return warnings
 
 
@@ -4680,10 +4735,11 @@ def _build_deterministic_battle_cards(
             area = w.get("area", "")
             if area and area not in seen_areas:
                 seen_areas.add(area)
+                evidence_count = int(w.get("evidence_count") or 0)
                 weaknesses.append({
                     "area": area,
                     "score": w.get("score"),
-                    "evidence_count": w.get("evidence_count", 0),
+                    "evidence_count": evidence_count,
                     "source": "product_profile",
                 })
 
@@ -4691,9 +4747,11 @@ def _build_deterministic_battle_cards(
             area = p.get("category", "")
             if area and area not in seen_areas:
                 seen_areas.add(area)
+                evidence_count = int(p.get("count") or 0)
                 weaknesses.append({
                     "area": area,
-                    "count": p.get("count", 0),
+                    "count": evidence_count,
+                    "evidence_count": evidence_count,
                     "source": "pain_category",
                 })
 
@@ -4701,15 +4759,17 @@ def _build_deterministic_battle_cards(
             feature = g.get("feature", "")
             if feature and feature not in seen_areas:
                 seen_areas.add(feature)
+                evidence_count = int(g.get("mentions") or 0)
                 weaknesses.append({
                     "area": feature,
-                    "count": g.get("mentions", 0),
+                    "count": evidence_count,
+                    "evidence_count": evidence_count,
                     "source": "feature_gap",
                 })
 
         # Sort by evidence (higher = more actionable), take top 5
         weaknesses.sort(
-            key=lambda w: -(w.get("evidence_count") or w.get("count") or 0),
+            key=lambda w: -int(w.get("evidence_count") or 0),
         )
         weaknesses = weaknesses[:5]
 

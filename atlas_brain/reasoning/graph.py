@@ -32,7 +32,14 @@ _SUMMARY_META_CONTENT_RE = re.compile(
     r"\b(the user wants|this event is about|the event is about|push notification|summary of|reasoning agent)\b",
     re.IGNORECASE,
 )
+_SUMMARY_GENERIC_OPEN_RE = re.compile(
+    r"^\s*(assessing|reviewing|monitoring|evaluating|considering|tracking)\b",
+    re.IGNORECASE,
+)
 _MARKDOWN_RE = re.compile(r"[*_`#>]+")
+_COMMON_SHORT_FINAL_WORDS = frozenset({
+    "and", "for", "the", "you", "aws", "gcp", "crm", "b2b",
+})
 
 
 def _resolve_graph_llm(workload: str):
@@ -85,6 +92,17 @@ def _build_notification_fallback(state: ReasoningAgentState) -> str:
     return "Atlas completed reasoning and flagged this event for review."
 
 
+def _has_suspicious_trailing_fragment(text: str) -> bool:
+    """Detect likely truncated sentence endings like 'bef.'."""
+    match = re.search(r"\b([A-Za-z]{1,3})[.!?]?$", text.strip())
+    if not match:
+        return False
+    token = match.group(1)
+    if token.lower() in _COMMON_SHORT_FINAL_WORDS:
+        return False
+    return token.islower()
+
+
 def _sanitize_notification_summary(text: str, state: ReasoningAgentState) -> str:
     """Remove meta narration and keep a short owner-facing summary."""
     cleaned = _clean_summary_text(text)
@@ -106,6 +124,10 @@ def _sanitize_notification_summary(text: str, state: ReasoningAgentState) -> str
         if _SUMMARY_FIRST_PERSON_RE.search(candidate):
             continue
         if _SUMMARY_META_CONTENT_RE.search(candidate):
+            continue
+        if _SUMMARY_GENERIC_OPEN_RE.match(candidate):
+            continue
+        if _has_suspicious_trailing_fragment(candidate):
             continue
         kept.append(candidate)
         if len(kept) >= 2:

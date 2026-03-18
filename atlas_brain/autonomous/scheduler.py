@@ -78,6 +78,9 @@ class TaskScheduler:
         # Mark orphaned running executions from previous crashes
         await self._cleanup_orphaned_executions()
 
+        # Fire cron tasks that missed their window during a server restart
+        await self._recover_missed_cron_tasks()
+
         logger.info("TaskScheduler started with %d tasks", self.scheduled_count)
 
     async def stop(self) -> None:
@@ -142,6 +145,92 @@ class TaskScheduler:
         except Exception as e:
             logger.error("Failed to cleanup orphaned executions: %s", e)
 
+    async def _recover_missed_cron_tasks(self) -> None:
+        """Fire cron tasks that missed their window during a server restart.
+
+        APScheduler uses in-memory job storage, so after a restart it only
+        schedules future fire times.  If a cron task should have fired within
+        the last ``misfire_grace_time`` seconds but didn't (no execution
+        recorded in that window), dispatch it now.
+        """
+        try:
+            from ..storage.database import get_db_pool
+            from ..storage.repositories.scheduled_task import get_scheduled_task_repo
+
+            pool = get_db_pool()
+            if not pool.is_initialized:
+                return
+
+            grace = autonomous_config.misfire_recovery_seconds or 600
+            repo = get_scheduled_task_repo()
+            now = datetime.now(timezone.utc)
+
+            # Find cron tasks whose last_run_at is older than grace window
+            # (or NULL) and that have no successful execution in the window.
+            rows = await pool.fetch(
+                """
+                SELECT st.id, st.name, st.cron_expression
+                FROM scheduled_tasks st
+                WHERE st.enabled = TRUE
+                  AND st.schedule_type = 'cron'
+                  AND st.cron_expression IS NOT NULL
+                  AND (st.last_run_at IS NULL
+                       OR st.last_run_at < $1 - make_interval(secs => $2))
+                  AND NOT EXISTS (
+                      SELECT 1 FROM task_executions te
+                      WHERE te.task_id = st.id
+                        AND te.started_at >= $1 - make_interval(secs => $2)
+                        AND te.status IN ('completed', 'running')
+                  )
+                """,
+                now,
+                float(grace),
+            )
+
+            if not rows:
+                return
+
+            # For each candidate, check if its cron *should* have fired in
+            # the grace window using the trigger's own logic.
+            default_tz = autonomous_config.default_timezone
+            recovered = 0
+            for row in rows:
+                try:
+                    trigger = CronTrigger.from_crontab(
+                        row["cron_expression"], timezone=default_tz,
+                    )
+                    # get_next_fire_time with a reference time at the start of
+                    # the grace window tells us if there was a fire in range.
+                    window_start = now - timedelta(seconds=grace)
+                    next_fire = trigger.get_next_fire_time(None, window_start)
+                    if next_fire and next_fire <= now:
+                        task = await repo.get_by_id(row["id"])
+                        if task and task.enabled:
+                            logger.info(
+                                "Recovering missed cron task '%s' "
+                                "(expected ~%s, grace=%ds)",
+                                task.name, next_fire.isoformat(), grace,
+                            )
+                            bg = asyncio.create_task(
+                                self._execute_task(task.id)
+                            )
+                            self._background_tasks.add(bg)
+                            bg.add_done_callback(self._background_tasks.discard)
+                            recovered += 1
+                except Exception:
+                    logger.warning(
+                        "Skipping misfire check for '%s'",
+                        row["name"], exc_info=True,
+                    )
+
+            if recovered:
+                logger.info("Recovered %d missed cron task(s)", recovered)
+
+        except Exception:
+            logger.error(
+                "Failed to recover missed cron tasks", exc_info=True,
+            )
+
     # Default builtin task definitions seeded on first start.
     _DEFAULT_TASKS = [
         {
@@ -150,7 +239,7 @@ class TaskScheduler:
             "task_type": "builtin",
             "schedule_type": "cron",
             "cron_expression": "0 3 * * *",
-            "timeout_seconds": 1800,
+            "timeout_seconds": 3600,
             "metadata": {"builtin_handler": "nightly_memory_sync"},
         },
         {

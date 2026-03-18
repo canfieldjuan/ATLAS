@@ -270,7 +270,9 @@ class TestStealthBrowser:
             mock_browser_obj.new_context = AsyncMock(return_value=mock_context)
             browser._browser = mock_browser_obj
 
-            with patch("playwright_stealth.stealth_async", new_callable=AsyncMock):
+            mock_stealth = MagicMock()
+            mock_stealth.apply_stealth_async = AsyncMock()
+            with patch("playwright_stealth.Stealth", return_value=mock_stealth):
                 result = await browser._do_scrape(
                     "https://example.com",
                     proxy_url="http://user:pass@proxy.example.com:8080",

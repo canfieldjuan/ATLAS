@@ -173,7 +173,7 @@ _r(SourceCapabilityProfile(
 ))
 _r(SourceCapabilityProfile(
     source="getapp",
-    access_patterns=(AccessPattern.web_unlocker, AccessPattern.html_scrape),
+    access_patterns=(AccessPattern.web_unlocker, AccessPattern.js_rendered, AccessPattern.html_scrape),
     anti_bot=AntiBot.cloudflare,
     proxy_class=ProxyClass.residential,
     data_quality=DataQuality.verified,
@@ -182,7 +182,7 @@ _r(SourceCapabilityProfile(
     max_concurrency=4,
     retry_max=2,
     cooldown_minutes=1440,
-    fallback_chain=("web_unlocker", "html_scrape"),
+    fallback_chain=("web_unlocker", "js_rendered", "html_scrape"),
 ))
 _r(SourceCapabilityProfile(
     source="trustpilot",
@@ -228,7 +228,7 @@ _r(SourceCapabilityProfile(
 ))
 _r(SourceCapabilityProfile(
     source="twitter",
-    access_patterns=(AccessPattern.web_unlocker,),
+    access_patterns=(AccessPattern.js_rendered, AccessPattern.html_scrape),
     anti_bot=AntiBot.aggressive,
     proxy_class=ProxyClass.residential,
     data_quality=DataQuality.community,
@@ -237,7 +237,7 @@ _r(SourceCapabilityProfile(
     max_concurrency=2,
     retry_max=1,
     cooldown_minutes=4320,
-    fallback_chain=("web_unlocker",),
+    fallback_chain=("js_rendered", "html_scrape"),
 ))
 _r(SourceCapabilityProfile(
     source="reddit",

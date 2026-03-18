@@ -28,6 +28,7 @@ _DEFAULT_RPM: dict[str, int] = {
     "gartner.com": 4,
     "trustpilot.com": 6,
     "getapp.com": 8,
+    "x.com": 10,
     "producthunt.com": 20,
     "youtube.googleapis.com": 50,
     "quora.com": 4,
@@ -101,6 +102,7 @@ class DomainRateLimiter:
         rpm_map["gartner.com"] = _clamp_rpm(cfg.gartner_rpm)
         rpm_map["trustpilot.com"] = _clamp_rpm(cfg.trustpilot_rpm)
         rpm_map["getapp.com"] = _clamp_rpm(cfg.getapp_rpm)
+        rpm_map["x.com"] = _clamp_rpm(cfg.twitter_rpm)
         rpm_map["producthunt.com"] = _clamp_rpm(cfg.producthunt_rpm)
         rpm_map["youtube.googleapis.com"] = _clamp_rpm(cfg.youtube_rpm)
         rpm_map["quora.com"] = _clamp_rpm(cfg.quora_rpm)

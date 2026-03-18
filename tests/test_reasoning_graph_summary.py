@@ -106,3 +106,37 @@ def test_sanitize_notification_summary_rejects_task_talk():
     assert "The user wants" not in summary
     assert "push notification" not in summary
     assert "Repeated high-intent churn signals" in summary
+
+
+def test_sanitize_notification_summary_drops_truncated_tail_sentence():
+    text = (
+        "LARKI has repeatedly signaled high-urgency reliability pain with AWS and is actively evaluating GCP. "
+        "Immediate notification, CRM logging, and proactive outreach will help retain the account and address their concerns bef."
+    )
+    state = {
+        "connections_found": [],
+        "action_results": [{"tool": "send_notification", "success": True}],
+        "rationale": "Generic rationale",
+    }
+
+    summary = _sanitize_notification_summary(text, state)
+
+    assert summary == (
+        "LARKI has repeatedly signaled high-urgency reliability pain with AWS and is actively evaluating GCP."
+    )
+
+
+def test_sanitize_notification_summary_rejects_generic_filler():
+    text = "Assessing churn risk."
+    state = {
+        "connections_found": ["Repeated high-intent churn signals from LARKI indicate an escalating issue."],
+        "action_results": [{"tool": "send_notification", "success": True}],
+        "rationale": "Generic rationale",
+    }
+
+    summary = _sanitize_notification_summary(text, state)
+
+    assert summary == (
+        "Repeated high-intent churn signals from LARKI indicate an escalating issue. "
+        "Actions completed: send notification."
+    )

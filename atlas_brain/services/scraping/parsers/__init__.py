@@ -221,6 +221,8 @@ class ScrapeResult:
     page_logs: list[PageLog] = field(default_factory=list)
     # Why this scrape stopped (set by parser or post-hoc by script)
     stop_reason: str = ""
+    # Page number where the next transport should resume, if continuation is needed
+    resume_page: int | None = None
 
     @property
     def status(self) -> str:
