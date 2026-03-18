@@ -63,6 +63,10 @@ def _resolve_workload(workload: str):
         from ..services import llm_registry
         return llm_registry.get_active()
 
+    if workload == "openrouter":
+        from ..config import settings as _settings
+        return _try_openrouter(_settings.llm.openrouter_reasoning_model)
+
     if workload == "vllm":
         return _activate_vllm()
 
@@ -203,6 +207,7 @@ def get_pipeline_llm(
         draft      -> Sonnet (email drafts)
         synthesis  -> OpenRouter o4-mini primary, Sonnet fallback
         reasoning  -> OpenRouter o4-mini primary, Sonnet fallback
+        openrouter -> OpenRouter only
         local_fast -> local vLLM/Ollama only
         vllm       -> vLLM primary, Anthropic fallback (no Ollama)
         anthropic  -> Anthropic primary, vLLM fallback (no Ollama)
@@ -233,6 +238,8 @@ def get_pipeline_llm(
         if workload == "local_fast":
             if auto_activate_ollama:
                 return _activate_local_llm()
+            return None
+        if workload == "openrouter":
             return None
         # vllm: fall back to Anthropic (no Ollama, no OpenRouter)
         if workload == "vllm":

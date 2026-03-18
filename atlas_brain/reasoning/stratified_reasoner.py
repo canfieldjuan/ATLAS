@@ -17,7 +17,7 @@ import asyncio
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
@@ -115,6 +115,8 @@ class ReasoningResult:
     tokens_used: int
     cached: bool
     trace_id: str | None = None
+    reasoning_steps: list[dict[str, Any]] = field(default_factory=list)
+    boundary_conditions: dict[str, Any] = field(default_factory=dict)
 
 
 class StratifiedReasoner:
@@ -354,6 +356,7 @@ class StratifiedReasoner:
             "legacy_support_score", "new_feature_velocity",
             "employee_growth_rate", "positive_review_pct",
             "avg_rating_normalized",
+            "recommend_yes", "recommend_no",
         ):
             if key in evidence:
                 val = evidence[key]
@@ -414,7 +417,8 @@ class StratifiedReasoner:
         if evidence.get("snapshot_days"):
             ev["snapshot_days"] = evidence["snapshot_days"]
 
-        # Skip low-value fields entirely (recommend_yes/no, product_category already captured)
+        # Skip remaining low-value fields entirely. Keep recommend split above
+        # because challenge/verify gates use it for mixed-polarity checks.
 
         return ev
 
@@ -543,6 +547,8 @@ class StratifiedReasoner:
             evidence_hash=evidence_hash,
             tokens_used=0,
             cached=True,
+            reasoning_steps=entry.reasoning_steps,
+            boundary_conditions=entry.boundary_conditions,
         )
 
     # ------------------------------------------------------------------
@@ -626,6 +632,19 @@ class StratifiedReasoner:
 
         new_confidence = updated_conclusion.get("confidence", entry.confidence)
         archetype = updated_conclusion.get("archetype", entry.conclusion_type)
+        updated_steps = list((entry.reasoning_steps or [])[-7:])
+        updated_steps.append({
+            "pass_type": "reconstitute",
+            "decision": decision,
+            "weighted_diff_ratio": round(diff.weighted_diff_ratio, 4),
+            "summary": diff.summary(),
+        })
+        updated_boundaries = dict(entry.boundary_conditions or {})
+        updated_boundaries.update({
+            "reconstitute_decision": decision,
+            "reconstitute_component_scores": diff.component_scores,
+            "reconstitute_summary": diff.summary(),
+        })
 
         # Update semantic cache with new conclusion + evidence hash
         updated_entry = CacheEntry(
@@ -635,8 +654,8 @@ class StratifiedReasoner:
             product_category=product_category,
             conclusion=updated_conclusion,
             confidence=new_confidence,
-            reasoning_steps=entry.reasoning_steps,
-            boundary_conditions=entry.boundary_conditions,
+            reasoning_steps=updated_steps,
+            boundary_conditions=updated_boundaries,
             falsification_conditions=updated_conclusion.get("falsification_conditions", []),
             uncertainty_sources=updated_conclusion.get("uncertainty_sources", []),
             conclusion_type=archetype,
@@ -658,6 +677,8 @@ class StratifiedReasoner:
             evidence_hash=new_ev_hash,
             tokens_used=tokens,
             cached=False,
+            reasoning_steps=updated_steps,
+            boundary_conditions=updated_boundaries,
         ), True
 
     async def _load_old_evidence(self, pattern_sig: str) -> dict[str, Any] | None:
@@ -726,9 +747,15 @@ class StratifiedReasoner:
         if getattr(self._episodic, "_degraded", False):
             return []
         try:
+            from .config import ReasoningConfig
+
+            _rcfg = ReasoningConfig()
             summary = self._evidence_summary(evidence, vendor_name)
             embedding = self._episodic.embed_text(summary)
-            traces = await self._episodic.find_similar(embedding, limit=3)
+            traces = await self._episodic.find_similar(
+                embedding,
+                limit=max(1, int(_rcfg.similar_trace_limit)),
+            )
             if traces:
                 logger.info(
                     "Found %d similar traces (best=%.3f)",
@@ -834,6 +861,12 @@ class StratifiedReasoner:
                     json_schema=REASONING_CONCLUSION_JSON_SCHEMA,
                     max_tokens=_rcfg.max_tokens,
                     temperature=_rcfg.temperature,
+                    verify_enabled=_rcfg.multi_pass_verify_enabled,
+                    verify_min_reviews=_rcfg.multi_pass_verify_min_reviews,
+                    verify_min_snapshot_days=_rcfg.multi_pass_verify_min_snapshot_days,
+                    verify_min_grounded_signals=_rcfg.multi_pass_verify_min_grounded_signals,
+                    verify_confidence_cap=_rcfg.multi_pass_verify_confidence_cap,
+                    light_pass_max_tokens=_rcfg.multi_pass_light_max_tokens,
                     challenge_confidence_floor=_rcfg.multi_pass_challenge_confidence_floor,
                     challenge_min_reviews=_rcfg.multi_pass_challenge_min_reviews,
                     challenge_mixed_polarity_min_share=_rcfg.multi_pass_challenge_mixed_polarity_min_share,
@@ -849,6 +882,18 @@ class StratifiedReasoner:
                 conclusion = mp_result.final_conclusion
                 tokens = mp_result.total_tokens
                 duration_ms = mp_result.total_duration_ms
+                reasoning_steps = [
+                    {
+                        "pass_number": p.pass_number,
+                        "pass_type": p.pass_type,
+                        "tokens_used": p.tokens_used,
+                        "duration_ms": round(p.duration_ms, 2),
+                        "changed": p.changed,
+                        "metadata": dict(p.metadata or {}),
+                    }
+                    for p in mp_result.passes
+                ]
+                boundary_conditions = dict(mp_result.boundary_conditions or {})
             except Exception:
                 logger.exception("Multi-pass reasoning failed for %s", vendor_name)
                 return ReasoningResult(
@@ -900,6 +945,15 @@ class StratifiedReasoner:
 
                 conclusion = parse_json_response(text, recover_truncated=True)
                 conclusion = self._normalize_conclusion(conclusion)
+                reasoning_steps = [{
+                    "pass_number": 1,
+                    "pass_type": "classify",
+                    "tokens_used": tokens,
+                    "duration_ms": round(duration_ms, 2),
+                    "changed": False,
+                    "metadata": {},
+                }]
+                boundary_conditions = {}
             except Exception as exc:
                 trace_llm_call(
                     span_name="reasoning.stratified.reason",
@@ -971,8 +1025,8 @@ class StratifiedReasoner:
             product_category=product_category,
             conclusion=conclusion,
             confidence=confidence,
-            reasoning_steps=[],
-            boundary_conditions={},
+            reasoning_steps=reasoning_steps,
+            boundary_conditions=boundary_conditions,
             falsification_conditions=all_conds,
             uncertainty_sources=conclusion.get("uncertainty_sources", []),
             conclusion_type=archetype,
@@ -1002,6 +1056,8 @@ class StratifiedReasoner:
             tokens_used=tokens,
             cached=False,
             trace_id=trace_id,
+            reasoning_steps=reasoning_steps,
+            boundary_conditions=boundary_conditions,
         )
 
     async def _store_episodic_trace(

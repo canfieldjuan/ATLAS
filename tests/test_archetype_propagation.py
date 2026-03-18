@@ -1701,6 +1701,7 @@ class TestPersistEvidenceDiff:
         assert args[4] == 1   # novel_count
         assert args[5] == 1   # missing_count
         assert args[6] == 5   # total_fields
+        assert args[10] == '{"contradiction_emergence": 5.0}'  # component_scores
 
     @pytest.mark.asyncio
     async def test_persist_with_none_diff(self):
@@ -1716,8 +1717,8 @@ class TestPersistEvidenceDiff:
         assert args[1] == "Slack"
         assert args[2] == 0   # confirmed_count
         assert args[3] == 0   # contradicted_count
-        assert args[10] == "recall"  # decision
-        assert args[11] is False     # compared (recall = not compared)
+        assert args[11] == "recall"  # decision
+        assert args[12] is False     # compared (recall = not compared)
 
     @pytest.mark.asyncio
     async def test_persist_swallows_db_error(self):
@@ -1750,6 +1751,7 @@ class TestReconstructEvidenceVolatility:
                 "days_compared": 3,
                 "days_tracked": 5,
                 "latest_decision": "full_reason",
+                "latest_component_scores": {"competitive_shift": 3.0},
                 "latest_contradicted": [{"key": "churn_density"}],
             },
         ]
@@ -1762,6 +1764,7 @@ class TestReconstructEvidenceVolatility:
         assert entry["days_compared"] == 3
         assert entry["days_tracked"] == 5
         assert entry["latest_decision"] == "full_reason"
+        assert entry["latest_component_scores"] == {"competitive_shift": 3.0}
 
     @pytest.mark.asyncio
     async def test_empty_table_returns_empty(self):

@@ -32,10 +32,14 @@ async def run_reflection() -> dict[str, Any]:
 
     # 2. LLM analysis of findings
     from .prompts import REFLECTION_SYSTEM
-    from ..services.llm_router import get_llm
     from ..config import settings
+    from ..pipelines.llm import get_pipeline_llm
 
-    llm = get_llm("reasoning")
+    llm = get_pipeline_llm(
+        workload=settings.reasoning.graph_reasoning_workload,
+        auto_activate_ollama=False,
+        openrouter_model=settings.reasoning.graph_openrouter_model or None,
+    )
     if not llm:
         # No LLM available -- just notify on all findings
         await _notify_findings(findings)

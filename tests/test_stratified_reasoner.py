@@ -126,6 +126,46 @@ class TestPureLogic:
             "key_signals do not reference known evidence metrics" in errors
         )
 
+    def test_prepare_evidence_keeps_recommend_split_for_gating(self):
+        from atlas_brain.reasoning.stratified_reasoner import StratifiedReasoner
+
+        prepared = StratifiedReasoner._prepare_evidence({
+            "vendor_name": "Acme",
+            "total_reviews": 30,
+            "churn_density": 24.0,
+            "avg_urgency": 5.5,
+            "recommend_yes": 16,
+            "recommend_no": 9,
+        })
+        assert prepared["recommend_yes"] == 16
+        assert prepared["recommend_no"] == 9
+
+    @pytest.mark.asyncio
+    async def test_find_prior_context_uses_configured_limit(self, monkeypatch):
+        from atlas_brain.reasoning.stratified_reasoner import StratifiedReasoner
+
+        class FakeEpisodic:
+            _degraded = False
+
+            def __init__(self):
+                self.last_limit = None
+
+            def embed_text(self, summary: str):
+                return [0.1]
+
+            async def find_similar(self, embedding, threshold=0.8, limit=5):
+                self.last_limit = limit
+                return []
+
+        monkeypatch.setenv("ATLAS_REASONING__SIMILAR_TRACE_LIMIT", "4")
+        fake = FakeEpisodic()
+        reasoner = StratifiedReasoner(cache=None, episodic=fake)
+
+        traces = await reasoner._find_prior_context({"churn_density": 12.0}, "Acme")
+
+        assert traces == []
+        assert fake.last_limit == 4
+
 
 # ---------------------------------------------------------------------------
 # Integration tests (require Postgres + Neo4j)
@@ -378,6 +418,66 @@ class TestDifferentialEngine:
         assert len(diff.contradicted) == 1
         assert diff.weighted_diff_ratio < 0.3
         assert diff.should_reconstitute
+
+    def test_competitor_shift_triggers_full_reason(self):
+        from atlas_brain.reasoning.differential import classify_evidence
+
+        old = {
+            "churn_density": 24.0,
+            "avg_urgency": 5.9,
+            "competitors": [{"name": "Asana", "mentions": 12}],
+            "displacement_mention_count": 12,
+        }
+        new = {
+            "churn_density": 24.0,
+            "avg_urgency": 5.9,
+            "competitors": [{"name": "Monday.com", "mentions": 12}],
+            "displacement_mention_count": 12,
+        }
+        diff = classify_evidence(old, new)
+        assert diff.component_scores["competitive_shift"] >= 3.0
+        assert not diff.should_reconstitute
+
+    def test_temporal_shift_triggers_full_reason(self):
+        from atlas_brain.reasoning.differential import classify_evidence
+
+        old = {
+            "churn_density": 21.0,
+            "avg_urgency": 5.2,
+            "trend_30d_churn_density": 0.05,
+        }
+        new = {
+            "churn_density": 21.0,
+            "avg_urgency": 5.2,
+            "trend_30d_churn_density": 0.25,
+        }
+        diff = classify_evidence(old, new)
+        assert diff.component_scores["temporal_shift"] >= 3.0
+        assert not diff.should_reconstitute
+
+    def test_weighted_sequence_match_threshold_is_configurable(self):
+        from atlas_brain.reasoning.differential import DiffTuning, classify_evidence
+
+        old = {
+            "competitors": [
+                {"name": "Asana", "mentions": 10},
+                {"name": "Monday.com", "mentions": 5},
+            ],
+        }
+        new = {
+            "competitors": [
+                {"name": "Asana", "mentions": 10},
+                {"name": "ClickUp", "mentions": 5},
+            ],
+        }
+        default_diff = classify_evidence(old, new)
+        tuned_diff = classify_evidence(
+            old,
+            new,
+            tuning=DiffTuning(weighted_sequence_match_threshold=0.7),
+        )
+        assert len(default_diff.contradicted) == 1
+        assert len(tuned_diff.confirmed) == 1
 
 
 class TestTiers:

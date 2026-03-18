@@ -1,6 +1,7 @@
-"""Multi-pass reasoning engine (classify -> challenge -> ground).
+"""Multi-pass reasoning engine (classify -> verify -> challenge -> ground).
 
 Pass 1 (CLASSIFY): Standard LLM classification from evidence.
+Pass 1.5 (VERIFY): Deterministic sufficiency check that caps overconfident thin-evidence outputs.
 Pass 2 (CHALLENGE): Deterministic contradiction detection + LLM self-critique.
 Pass 3 (GROUND): Forces every key_signal to cite exact evidence field:value.
 
@@ -46,6 +47,7 @@ class PassResult:
     tokens_used: int
     duration_ms: float
     changed: bool           # did this pass change the archetype?
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -55,6 +57,7 @@ class MultiPassResult:
     total_tokens: int = 0
     total_duration_ms: float = 0.0
     passes_executed: int = 0
+    boundary_conditions: dict[str, Any] = field(default_factory=dict)
 
 
 _CHALLENGE_PROMPT = """\
@@ -176,6 +179,67 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
+def _is_grounded_signal(signal: Any, evidence_keys: set[str]) -> bool:
+    """Return True when a signal references a known evidence field."""
+    if not isinstance(signal, str) or ":" not in signal:
+        return False
+    metric, value = signal.split(":", 1)
+    metric = metric.strip().lower().replace(" ", "_")
+    if not metric or not value.strip():
+        return False
+    if metric in evidence_keys:
+        return True
+    return any(key.startswith(metric) or metric.startswith(key) for key in evidence_keys)
+
+
+def _verify_evidence_sufficiency(
+    conclusion: dict[str, Any],
+    evidence: dict[str, Any],
+    *,
+    min_reviews: int,
+    min_snapshot_days: int,
+    min_grounded_signals: int,
+    confidence_cap: float,
+) -> tuple[dict[str, Any], list[str], bool]:
+    """Deterministically cap overconfident thin-evidence classify outputs."""
+    updated = dict(conclusion)
+    issues: list[str] = []
+    changed = False
+    evidence_keys = set(evidence.keys())
+
+    raw_signals = list(updated.get("key_signals") or [])
+    grounded_signals = [s for s in raw_signals if _is_grounded_signal(s, evidence_keys)]
+    if grounded_signals != raw_signals:
+        updated["key_signals"] = grounded_signals
+        changed = True
+    if len(grounded_signals) < min_grounded_signals:
+        issues.append(
+            f"only {len(grounded_signals)} grounded key_signals (min {min_grounded_signals})"
+        )
+
+    total_reviews = _safe_float(evidence.get("total_reviews"))
+    if total_reviews is not None and total_reviews < min_reviews:
+        issues.append(f"review volume is thin ({int(total_reviews)} < {min_reviews})")
+
+    snapshot_days = _safe_float(evidence.get("snapshot_days"))
+    if snapshot_days is not None and snapshot_days < min_snapshot_days:
+        issues.append(f"temporal depth is thin ({int(snapshot_days)}d < {min_snapshot_days}d)")
+
+    if issues:
+        confidence = _safe_float(updated.get("confidence")) or 0.0
+        if confidence > confidence_cap:
+            updated["confidence"] = confidence_cap
+            changed = True
+        uncertainty_sources = [str(item) for item in updated.get("uncertainty_sources", []) if item]
+        for issue in issues:
+            if issue not in uncertainty_sources:
+                uncertainty_sources.append(issue)
+                changed = True
+        updated["uncertainty_sources"] = uncertainty_sources[:4]
+
+    return updated, issues, changed
+
+
 def _should_attempt_challenge(
     *,
     conclusion: dict[str, Any],
@@ -226,6 +290,12 @@ async def multi_pass_reason(
     max_tokens: int,
     temperature: float,
     enabled: bool = True,
+    verify_enabled: bool = True,
+    verify_min_reviews: int = 12,
+    verify_min_snapshot_days: int = 14,
+    verify_min_grounded_signals: int = 2,
+    verify_confidence_cap: float = 0.58,
+    light_pass_max_tokens: int = 4096,
     challenge_confidence_floor: float = 0.3,
     challenge_min_reviews: int = 8,
     challenge_mixed_polarity_min_share: float = 0.2,
@@ -258,6 +328,11 @@ async def multi_pass_reason(
     result = MultiPassResult(final_conclusion={})
     finder = contradiction_finder or _find_contradicting_evidence
     _llm_light = llm_light or llm  # fallback to heavy when no light model
+    result.boundary_conditions = {
+        "verify_enabled": bool(verify_enabled),
+        "ground_always": bool(ground_always),
+        "ground_only": bool(ground_only),
+    }
 
     def _normalize(c: dict) -> dict:
         return normalize_fn(c) if normalize_fn else c
@@ -274,6 +349,7 @@ async def multi_pass_reason(
         mt: int | None = None,
         pass_changed: bool | None = None,
         use_llm: Any = None,
+        extra_metadata: dict[str, Any] | None = None,
     ) -> tuple[dict, int, float]:
         """Single LLM call with tracing. Returns (conclusion, tokens, duration_ms).
 
@@ -296,6 +372,8 @@ async def multi_pass_reason(
         }
         if pass_changed is not None:
             pass_meta["pass_changed"] = pass_changed
+        if extra_metadata:
+            pass_meta.update(extra_metadata)
         span = f"{span_prefix}.reason" if pass_num == 1 else f"{span_prefix}.reason.{pass_type}"
 
         t0 = time.monotonic()
@@ -314,6 +392,27 @@ async def multi_pass_reason(
             trace_meta_resp = llm_result.get("_trace_meta", {})
             duration_ms = (time.monotonic() - t0) * 1000
 
+            if not text:
+                trace_llm_call(
+                    span_name=span,
+                    input_tokens=usage.get("input_tokens", 0),
+                    output_tokens=usage.get("output_tokens", 0),
+                    model=getattr(_active_llm, "model", getattr(_active_llm, "model_id", "")),
+                    provider=getattr(_active_llm, "name", ""),
+                    duration_ms=duration_ms,
+                    status="failed",
+                    metadata={**pass_meta, "pass_changed": False},
+                    error_message="llm returned empty structured response",
+                    error_type="EmptyStructuredResponse",
+                    input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in messages]},
+                    api_endpoint=trace_meta_resp.get("api_endpoint"),
+                    provider_request_id=trace_meta_resp.get("provider_request_id"),
+                    ttft_ms=trace_meta_resp.get("ttft_ms"),
+                    inference_time_ms=trace_meta_resp.get("inference_time_ms"),
+                    queue_time_ms=trace_meta_resp.get("queue_time_ms"),
+                )
+                raise ValueError("llm returned empty structured response")
+
             # Store trace data for deferred emission (pass_changed not yet known)
             nonlocal _pending_trace
             _pending_trace = {
@@ -329,6 +428,28 @@ async def multi_pass_reason(
 
             text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
             conclusion = parse_json_response(text, recover_truncated=True)
+            if isinstance(conclusion, dict) and conclusion.get("_parse_fallback"):
+                _pending_trace = None
+                trace_llm_call(
+                    span_name=span,
+                    input_tokens=usage.get("input_tokens", 0),
+                    output_tokens=usage.get("output_tokens", 0),
+                    model=getattr(_active_llm, "model", getattr(_active_llm, "model_id", "")),
+                    provider=getattr(_active_llm, "name", ""),
+                    duration_ms=duration_ms,
+                    status="failed",
+                    metadata={**pass_meta, "pass_changed": False},
+                    error_message="llm returned invalid structured json",
+                    error_type="InvalidStructuredJson",
+                    input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in messages]},
+                    output_data={"response": text[:2000]},
+                    api_endpoint=trace_meta_resp.get("api_endpoint"),
+                    provider_request_id=trace_meta_resp.get("provider_request_id"),
+                    ttft_ms=trace_meta_resp.get("ttft_ms"),
+                    inference_time_ms=trace_meta_resp.get("inference_time_ms"),
+                    queue_time_ms=trace_meta_resp.get("queue_time_ms"),
+                )
+                raise ValueError("llm returned invalid structured json")
             return conclusion, tokens, duration_ms
 
         except Exception as exc:
@@ -400,6 +521,33 @@ async def multi_pass_reason(
         return result
 
     raw_evidence = evidence_payload.get("evidence", evidence_payload)
+    if verify_enabled:
+        p1_conclusion, verifier_issues, verifier_changed = _verify_evidence_sufficiency(
+            p1_conclusion,
+            raw_evidence,
+            min_reviews=verify_min_reviews,
+            min_snapshot_days=verify_min_snapshot_days,
+            min_grounded_signals=verify_min_grounded_signals,
+            confidence_cap=verify_confidence_cap,
+        )
+        if verifier_changed:
+            p1_conclusion = _normalize(p1_conclusion)
+            result.passes[0].conclusion = p1_conclusion
+            result.final_conclusion = p1_conclusion
+        if verifier_issues:
+            logger.info(
+                "Verifier adjusted classify output: %s",
+                "; ".join(verifier_issues),
+            )
+        result.boundary_conditions["verifier_issues"] = verifier_issues
+        result.boundary_conditions["verifier_changed"] = verifier_changed
+        result.passes[0].metadata = {
+            "verifier_issues": verifier_issues,
+            "verifier_changed": verifier_changed,
+        }
+    else:
+        result.boundary_conditions["verifier_issues"] = []
+        result.boundary_conditions["verifier_changed"] = False
 
     # ------------------------------------------------------------------
     # ground_only mode: skip challenge, go straight to ground (used by
@@ -408,7 +556,8 @@ async def multi_pass_reason(
     if ground_only:
         return await _run_ground_pass(
             result, p1_conclusion, raw_evidence, system_prompt,
-            _call_llm, _flush_trace, _normalize, max_tokens, 2,
+            _call_llm, _flush_trace, _normalize, max_tokens, light_pass_max_tokens, 2,
+            ground_mode="ground_only",
             use_llm=_llm_light,
         )
 
@@ -429,10 +578,13 @@ async def multi_pass_reason(
         high_impact_avg_urgency=challenge_high_impact_avg_urgency,
         high_impact_displacement_mentions=challenge_high_impact_displacement_mentions,
     )
+    result.boundary_conditions["contradiction_count"] = len(contradictions)
+    result.boundary_conditions["challenge_gate_reason"] = challenge_reason
     if not should_challenge:
         logger.info("Skipping challenge pass: %s", challenge_reason)
     else:
         challenge_attempted = True
+        result.boundary_conditions["challenge_attempted"] = True
         challenge_prompt = _CHALLENGE_PROMPT.format(
             conclusion_json=json.dumps(p1_conclusion, indent=2, default=str),
             contradictions="\n".join(f"- {c}" for c in contradictions),
@@ -443,32 +595,53 @@ async def multi_pass_reason(
             Message(role="assistant", content=json.dumps(p1_conclusion, default=str)),
             Message(role="user", content=challenge_prompt),
         ]
-        p2_conclusion, p2_tokens, p2_duration = await _call_llm(p2_messages, 2, "challenge", mt=min(max_tokens, 2048), use_llm=_llm_light)
-        p2_conclusion = _normalize(p2_conclusion)
+        try:
+            p2_conclusion, p2_tokens, p2_duration = await _call_llm(
+                p2_messages,
+                2,
+                "challenge",
+                mt=min(max_tokens, light_pass_max_tokens),
+                use_llm=_llm_light,
+                extra_metadata={
+                    "challenge_gate_reason": challenge_reason,
+                    "contradiction_count": len(contradictions),
+                },
+            )
+        except Exception as exc:
+            logger.warning("Challenge pass failed; keeping classify conclusion: %s", exc)
+        else:
+            p2_conclusion = _normalize(p2_conclusion)
 
-        p2_archetype_changed = p2_conclusion.get("archetype") != p1_conclusion.get("archetype")
-        p2_confidence_delta = abs(
-            p2_conclusion.get("confidence", 0.5) - p1_conclusion.get("confidence", 0.5)
-        )
-        p2_changed = p2_archetype_changed or p2_confidence_delta > ground_change_threshold
-        _flush_trace(changed=p2_changed)
+            p2_archetype_changed = p2_conclusion.get("archetype") != p1_conclusion.get("archetype")
+            p2_confidence_delta = abs(
+                p2_conclusion.get("confidence", 0.5) - p1_conclusion.get("confidence", 0.5)
+            )
+            p2_changed = p2_archetype_changed or p2_confidence_delta > ground_change_threshold
+            _flush_trace(changed=p2_changed)
 
-        result.passes.append(PassResult(
-            pass_number=2, pass_type="challenge",
-            conclusion=p2_conclusion, tokens_used=p2_tokens,
-            duration_ms=p2_duration, changed=p2_changed,
-        ))
-        result.total_tokens += p2_tokens
-        result.total_duration_ms += p2_duration
-        result.passes_executed = 2
-        result.final_conclusion = p2_conclusion
+            result.passes.append(PassResult(
+                pass_number=2, pass_type="challenge",
+                conclusion=p2_conclusion, tokens_used=p2_tokens,
+                duration_ms=p2_duration, changed=p2_changed,
+                metadata={
+                    "gate_reason": challenge_reason,
+                    "contradiction_count": len(contradictions),
+                },
+            ))
+            result.total_tokens += p2_tokens
+            result.total_duration_ms += p2_duration
+            result.passes_executed = 2
+            result.final_conclusion = p2_conclusion
+            result.boundary_conditions["challenge_changed"] = p2_changed
 
-        logger.info(
-            "Challenge pass: archetype %s->%s, confidence %.2f->%.2f, changed=%s (%s)",
-            p1_conclusion.get("archetype"), p2_conclusion.get("archetype"),
-            p1_conclusion.get("confidence", 0), p2_conclusion.get("confidence", 0),
-            p2_changed, challenge_reason,
-        )
+            logger.info(
+                "Challenge pass: archetype %s->%s, confidence %.2f->%.2f, changed=%s (%s)",
+                p1_conclusion.get("archetype"), p2_conclusion.get("archetype"),
+                p1_conclusion.get("confidence", 0), p2_conclusion.get("confidence", 0),
+                p2_changed, challenge_reason,
+            )
+    if not challenge_attempted:
+        result.boundary_conditions["challenge_attempted"] = False
 
     # ------------------------------------------------------------------
     # Pass 3: GROUND -- runs after any attempted challenge pass so the
@@ -477,13 +650,18 @@ async def multi_pass_reason(
     # challenge is skipped and ground_always=True.
     # ------------------------------------------------------------------
     if not challenge_attempted and not ground_always:
+        result.boundary_conditions["ground_mode"] = "skipped"
         return result
 
     pre_ground = result.final_conclusion
     pass_num = result.passes_executed + 1
+    ground_mode = "ground_only" if ground_only else (
+        "after_challenge" if challenge_attempted else "always"
+    )
     return await _run_ground_pass(
         result, pre_ground, raw_evidence, system_prompt,
-        _call_llm, _flush_trace, _normalize, max_tokens, pass_num,
+        _call_llm, _flush_trace, _normalize, max_tokens, light_pass_max_tokens, pass_num,
+        ground_mode=ground_mode,
         use_llm=_llm_light,
     )
 
@@ -497,8 +675,10 @@ async def _run_ground_pass(
     _flush_trace: Any,
     _normalize: Any,
     max_tokens: int,
+    light_pass_max_tokens: int,
     pass_num: int,
     *,
+    ground_mode: str,
     use_llm: Any = None,
 ) -> MultiPassResult:
     """Execute the grounding pass and update the result."""
@@ -516,7 +696,19 @@ async def _run_ground_pass(
         Message(role="system", content=system_prompt),
         Message(role="user", content=ground_prompt),
     ]
-    pg_conclusion, pg_tokens, pg_duration = await _call_llm(pg_messages, pass_num, "ground", mt=min(max_tokens, 2048), use_llm=use_llm)
+    try:
+        pg_conclusion, pg_tokens, pg_duration = await _call_llm(
+            pg_messages,
+            pass_num,
+            "ground",
+            mt=min(max_tokens, light_pass_max_tokens),
+            use_llm=use_llm,
+            extra_metadata={"ground_mode": ground_mode},
+        )
+    except Exception as exc:
+        logger.warning("Ground pass failed; keeping prior conclusion: %s", exc)
+        result.boundary_conditions["ground_mode"] = f"{ground_mode}_failed"
+        return result
     pg_conclusion = _normalize(pg_conclusion)
 
     # Safety: if grounding removed all signals, force low confidence
@@ -532,11 +724,18 @@ async def _run_ground_pass(
         pass_number=pass_num, pass_type="ground",
         conclusion=pg_conclusion, tokens_used=pg_tokens,
         duration_ms=pg_duration, changed=pg_changed,
+        metadata={
+            "mode": ground_mode,
+            "grounded_signal_count": len(pg_conclusion.get("key_signals", [])),
+        },
     ))
     result.total_tokens += pg_tokens
     result.total_duration_ms += pg_duration
     result.passes_executed = pass_num
     result.final_conclusion = pg_conclusion
+    result.boundary_conditions["ground_mode"] = ground_mode
+    result.boundary_conditions["ground_changed"] = pg_changed
+    result.boundary_conditions["grounded_signal_count"] = len(pg_conclusion.get("key_signals", []))
 
     logger.info(
         "Ground pass: archetype %s, confidence %.2f, %d signals grounded",

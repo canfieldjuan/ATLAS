@@ -242,10 +242,21 @@ class OpenRouterLLM(BaseModelService):
                 "_trace_meta": {
                     "api_endpoint": f"{self.base_url}/chat/completions",
                     "provider_request_id": response.headers.get("x-request-id") or data.get("id", ""),
+                    "finish_reason": choice.get("finish_reason"),
+                    "native_finish_reason": choice.get("native_finish_reason"),
                 },
             }
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:1000] if e.response else ""
+            logger.error(
+                "OpenRouter chat error: %d %s | %s",
+                e.response.status_code if e.response else 0,
+                e,
+                body,
+            )
+            raise
         except httpx.HTTPError as e:
-            logger.error("OpenRouter chat error: %s", e)
+            logger.error("OpenRouter chat error: %s %s", type(e).__name__, e)
             raise
 
     def chat_with_tools(

@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import re
+from uuid import UUID
 from typing import Any
 
 from .state import ReasoningAgentState
@@ -18,6 +19,111 @@ logger = logging.getLogger("atlas.reasoning.graph")
 
 # Regex to strip markdown code fences from LLM output
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n?(.*?)\n?\s*```", re.DOTALL)
+_SUMMARY_SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
+_SUMMARY_META_LINE_RE = re.compile(
+    r"^\s*(summarizing|refining|drafting|thinking|updating|notifying)\b",
+    re.IGNORECASE,
+)
+_SUMMARY_FIRST_PERSON_RE = re.compile(
+    r"\b(i|i'm|i am|i need|i should|we should)\b",
+    re.IGNORECASE,
+)
+_SUMMARY_META_CONTENT_RE = re.compile(
+    r"\b(the user wants|this event is about|the event is about|push notification|summary of|reasoning agent)\b",
+    re.IGNORECASE,
+)
+_MARKDOWN_RE = re.compile(r"[*_`#>]+")
+
+
+def _resolve_graph_llm(workload: str):
+    """Resolve reasoning-graph LLMs through the pipeline router."""
+    from ..config import settings
+    from ..pipelines.llm import get_pipeline_llm
+
+    return get_pipeline_llm(
+        workload=workload,
+        auto_activate_ollama=False,
+        openrouter_model=settings.reasoning.graph_openrouter_model or None,
+    )
+
+
+def _clean_summary_text(text: str) -> str:
+    """Normalize graph synthesis output into plain notification text."""
+    cleaned = _JSON_FENCE_RE.sub(r"\1", text or "")
+    cleaned = _MARKDOWN_RE.sub("", cleaned)
+    cleaned = re.sub(r"\r\n?", "\n", cleaned)
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned
+
+
+def _build_notification_fallback(state: ReasoningAgentState) -> str:
+    """Build a deterministic fallback summary from actions and rationale."""
+    results = state.get("action_results", [])
+    successful = [
+        r.get("tool", "").replace("_", " ")
+        for r in results
+        if r.get("success") and r.get("tool")
+    ]
+    action_phrase = ""
+    if successful:
+        action_phrase = " Actions completed: " + ", ".join(successful[:3]) + "."
+    connections = state.get("connections_found", []) or []
+    connection_phrase = ""
+    if connections:
+        top_connection = re.sub(r"\s+", " ", str(connections[0])).strip()
+        if top_connection:
+            connection_phrase = top_connection[:220].rstrip(". ") + "."
+    rationale = (state.get("rationale", "") or "").strip()
+    rationale = re.sub(r"\s+", " ", rationale)
+    if connection_phrase:
+        return (connection_phrase + action_phrase).strip()
+    if rationale:
+        return (rationale[:220].rstrip(". ") + "." + action_phrase).strip()
+    if action_phrase:
+        return ("Atlas completed follow-up actions." + action_phrase).strip()
+    return "Atlas completed reasoning and flagged this event for review."
+
+
+def _sanitize_notification_summary(text: str, state: ReasoningAgentState) -> str:
+    """Remove meta narration and keep a short owner-facing summary."""
+    cleaned = _clean_summary_text(text)
+    pieces: list[str] = []
+    for line in cleaned.splitlines():
+        stripped = line.strip(' "\'')
+        if not stripped:
+            continue
+        for sentence in _SUMMARY_SENTENCE_RE.split(stripped):
+            if sentence.strip():
+                pieces.append(sentence.strip())
+    kept: list[str] = []
+    for piece in pieces:
+        candidate = piece.strip(' "\'')
+        if not candidate:
+            continue
+        if _SUMMARY_META_LINE_RE.match(candidate):
+            continue
+        if _SUMMARY_FIRST_PERSON_RE.search(candidate):
+            continue
+        if _SUMMARY_META_CONTENT_RE.search(candidate):
+            continue
+        kept.append(candidate)
+        if len(kept) >= 2:
+            break
+    if not kept:
+        return _build_notification_fallback(state)
+    summary = " ".join(s.rstrip(".!?") + "." for s in kept)
+    return summary[:320].rstrip()
+
+
+def _valid_uuid(value: Any) -> str | None:
+    """Return canonical UUID string when value is a valid UUID-like input."""
+    if not value:
+        return None
+    try:
+        return str(UUID(str(value)))
+    except (TypeError, ValueError, AttributeError):
+        return None
 
 
 async def _llm_generate(llm, prompt: str, system_prompt: str,
@@ -42,7 +148,11 @@ async def _llm_generate(llm, prompt: str, system_prompt: str,
     # losing the usage dict needed for token tracking.
     result = await asyncio.wait_for(
         asyncio.to_thread(
-            llm.chat, messages=messages, max_tokens=max_tokens, temperature=temperature,
+            llm.chat,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            timeout=timeout,
         ),
         timeout=timeout,
     )
@@ -127,7 +237,7 @@ async def run_reasoning_graph(state: ReasoningAgentState) -> ReasoningAgentState
 async def _node_triage(state: ReasoningAgentState) -> ReasoningAgentState:
     """Classify event priority and whether reasoning is needed."""
     from .prompts import TRIAGE_SYSTEM
-    from ..services.llm_router import get_llm
+    from ..config import settings
 
     event_desc = (
         f"Event: {state.get('event_type')}\n"
@@ -136,7 +246,7 @@ async def _node_triage(state: ReasoningAgentState) -> ReasoningAgentState:
         f"Payload: {json.dumps(state.get('payload', {}), default=str)[:2000]}"
     )
 
-    llm = get_llm("email_triage")  # reuse triage LLM (Haiku)
+    llm = _resolve_graph_llm(settings.reasoning.graph_triage_workload)
     if not llm:
         # No triage LLM -- default to reasoning everything
         state["triage_priority"] = "medium"
@@ -145,7 +255,6 @@ async def _node_triage(state: ReasoningAgentState) -> ReasoningAgentState:
         return state
 
     try:
-        from ..config import settings
         result = await _llm_generate(
             llm, event_desc, TRIAGE_SYSTEM,
             max_tokens=settings.reasoning.triage_max_tokens,
@@ -239,9 +348,8 @@ async def _node_check_lock(state: ReasoningAgentState) -> ReasoningAgentState:
 
 
 async def _node_reason(state: ReasoningAgentState) -> ReasoningAgentState:
-    """Deep reasoning with full context via Claude Sonnet."""
+    """Deep reasoning with full context via pipeline-configured LLM routing."""
     from .prompts import REASONING_SYSTEM
-    from ..services.llm_router import get_llm
     from ..config import settings
 
     # Build context prompt
@@ -298,7 +406,7 @@ async def _node_reason(state: ReasoningAgentState) -> ReasoningAgentState:
 
     prompt = "\n\n".join(sections)
 
-    llm = get_llm("reasoning")
+    llm = _resolve_graph_llm(settings.reasoning.graph_reasoning_workload)
     if not llm:
         state["reasoning_output"] = ""
         state["connections_found"] = []
@@ -404,8 +512,17 @@ async def _execute_single_action(
     if tool == "log_interaction":
         from ..services.crm_provider import get_crm_provider
         crm = get_crm_provider()
+        contact_id = _valid_uuid(params.get("contact_id"))
+        if not contact_id and state.get("entity_type") == "contact":
+            contact_id = _valid_uuid(state.get("entity_id", ""))
+        if not contact_id:
+            return {
+                "action": "log_interaction",
+                "status": "skipped",
+                "reason": "no valid contact UUID available",
+            }
         return await crm.log_interaction(
-            contact_id=params.get("contact_id", state.get("entity_id", "")),
+            contact_id=contact_id,
             interaction_type=params.get("interaction_type", "reasoning_agent"),
             summary=params.get("summary", "Reasoning agent action"),
         )
@@ -428,7 +545,7 @@ async def _node_synthesize(state: ReasoningAgentState) -> ReasoningAgentState:
         return state
 
     from .prompts import SYNTHESIS_SYSTEM
-    from ..services.llm_router import get_llm
+    from ..config import settings
 
     context = (
         f"Event: {state.get('event_type')}\n"
@@ -436,9 +553,9 @@ async def _node_synthesize(state: ReasoningAgentState) -> ReasoningAgentState:
         f"Rationale: {state.get('rationale', '')[:500]}"
     )
 
-    llm = get_llm("email_triage")  # Haiku for cheap synthesis
+    llm = _resolve_graph_llm(settings.reasoning.graph_synthesis_workload)
     if not llm:
-        state["summary"] = state.get("rationale", "Reasoning agent completed.")
+        state["summary"] = _build_notification_fallback(state)
         return state
 
     try:
@@ -451,9 +568,9 @@ async def _node_synthesize(state: ReasoningAgentState) -> ReasoningAgentState:
         state["total_input_tokens"] = state.get("total_input_tokens", 0) + usage.get("input_tokens", 0)
         state["total_output_tokens"] = state.get("total_output_tokens", 0) + usage.get("output_tokens", 0)
 
-        state["summary"] = text.strip()
+        state["summary"] = _sanitize_notification_summary(text, state)
     except Exception:
-        state["summary"] = state.get("rationale", "Reasoning agent completed.")
+        state["summary"] = _build_notification_fallback(state)
 
     return state
 

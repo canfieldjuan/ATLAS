@@ -139,8 +139,12 @@ class MockLLM:
     def chat(self, **kwargs):
         resp = self._responses[min(self._call_count, len(self._responses) - 1)]
         self._call_count += 1
+        if isinstance(resp, str):
+            response_text = resp
+        else:
+            response_text = json.dumps(resp)
         return {
-            "response": json.dumps(resp),
+            "response": response_text,
             "usage": {"input_tokens": 100, "output_tokens": 50},
             "_trace_meta": {},
         }
@@ -201,6 +205,9 @@ async def test_skip_challenge_low_confidence():
     )
     assert result.passes_executed == 2
     assert result.passes[1].pass_type == "ground"
+    assert result.boundary_conditions["challenge_gate_reason"] == "low-confidence and not high-impact enough to challenge"
+    assert result.boundary_conditions["ground_mode"] == "always"
+    assert result.passes[1].metadata["mode"] == "always"
     assert llm.call_count == 2
 
 
@@ -268,6 +275,42 @@ async def test_challenge_fires_for_low_confidence_high_impact_case():
                 "pain_categories": [{"category": "ux", "count": 15}],
                 "total_reviews": 40,
                 "churn_density": 28.0,
+            }
+        },
+        json_schema={},
+        max_tokens=1024,
+        temperature=0.3,
+        challenge_confidence_floor=0.3,
+        ground_always=True,
+    )
+    assert result.passes_executed == 3
+    assert result.passes[1].pass_type == "challenge"
+    assert result.boundary_conditions["challenge_attempted"] is True
+    assert result.boundary_conditions["challenge_gate_reason"] == "low-confidence but high impact"
+    assert result.boundary_conditions["ground_mode"] == "after_challenge"
+    assert result.passes[1].metadata["gate_reason"] == "low-confidence but high impact"
+    assert result.passes[2].metadata["mode"] == "after_challenge"
+    assert llm.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_challenge_fires_for_low_confidence_mixed_polarity_case():
+    """Mixed-polarity evidence can trigger challenge even when impact metrics are moderate."""
+    p1 = _make_conclusion(archetype="pricing_shock", confidence=0.25)
+    p2 = _make_conclusion(archetype="leadership_redesign", confidence=0.46)
+    p3 = _make_conclusion(archetype="leadership_redesign", confidence=0.47)
+    llm = MockLLM([p1, p2, p3])
+    result = await multi_pass_reason(
+        llm=llm,
+        system_prompt="test",
+        evidence_payload={
+            "evidence": {
+                "pain_categories": [{"category": "ux", "count": 15}],
+                "total_reviews": 40,
+                "recommend_yes": 18,
+                "recommend_no": 12,
+                "churn_density": 12.0,
+                "avg_urgency": 4.5,
             }
         },
         json_schema={},
@@ -355,6 +398,93 @@ def test_ground_can_be_disabled_when_challenge_skips():
     result = asyncio.run(_run())
     assert result.passes_executed == 1
     assert llm.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_verifier_caps_confidence_on_thin_evidence():
+    """Verifier lowers confidence and adds uncertainty before later passes."""
+    p1 = _make_conclusion(
+        confidence=0.84,
+        key_signals=["made_up_metric: 10", "churn_density: 25%"],
+        uncertainty_sources=[],
+    )
+    llm = MockLLM([p1])
+    result = await multi_pass_reason(
+        llm=llm,
+        system_prompt="test",
+        evidence_payload={
+            "evidence": {
+                "churn_density": 25.0,
+                "total_reviews": 6,
+                "snapshot_days": 5,
+            }
+        },
+        json_schema={},
+        max_tokens=1024,
+        temperature=0.3,
+        verify_enabled=True,
+        verify_min_reviews=12,
+        verify_min_snapshot_days=14,
+        verify_min_grounded_signals=2,
+        verify_confidence_cap=0.58,
+        ground_always=False,
+    )
+    assert result.passes_executed == 1
+    assert result.final_conclusion["confidence"] == 0.58
+    assert result.final_conclusion["key_signals"] == ["churn_density: 25%"]
+    assert any("review volume is thin" in item for item in result.final_conclusion["uncertainty_sources"])
+    assert any("temporal depth is thin" in item for item in result.final_conclusion["uncertainty_sources"])
+    assert any("grounded key_signals" in item for item in result.final_conclusion["uncertainty_sources"])
+
+
+@pytest.mark.asyncio
+async def test_empty_challenge_response_falls_back_to_classify_then_ground():
+    """An empty structured challenge response should not poison the final conclusion."""
+    p1 = _make_conclusion(archetype="pricing_shock", confidence=0.74)
+    p_ground = _make_conclusion(archetype="pricing_shock", confidence=0.72)
+    llm = MockLLM([p1, "", p_ground])
+    result = await multi_pass_reason(
+        llm=llm,
+        system_prompt="test",
+        evidence_payload={
+            "evidence": {
+                "pain_categories": [{"category": "ux", "count": 15}],
+                "total_reviews": 40,
+                "churn_density": 28.0,
+            }
+        },
+        json_schema={},
+        max_tokens=4096,
+        temperature=0.3,
+        ground_always=True,
+    )
+    assert result.passes_executed == 2
+    assert [p.pass_type for p in result.passes] == ["classify", "ground"]
+    assert result.final_conclusion["archetype"] == "pricing_shock"
+
+
+@pytest.mark.asyncio
+async def test_empty_ground_response_keeps_pre_ground_conclusion():
+    """An empty structured ground response should keep the prior conclusion intact."""
+    p1 = _make_conclusion(archetype="pricing_shock", confidence=0.76)
+    p2 = _make_conclusion(archetype="leadership_redesign", confidence=0.7)
+    llm = MockLLM([p1, p2, ""])
+    result = await multi_pass_reason(
+        llm=llm,
+        system_prompt="test",
+        evidence_payload={
+            "evidence": {
+                "pain_categories": [{"category": "ux", "count": 15}],
+                "total_reviews": 40,
+            }
+        },
+        json_schema={},
+        max_tokens=4096,
+        temperature=0.3,
+    )
+    assert result.passes_executed == 2
+    assert [p.pass_type for p in result.passes] == ["classify", "challenge"]
+    assert result.final_conclusion["archetype"] == "leadership_redesign"
 
 
 @pytest.mark.asyncio

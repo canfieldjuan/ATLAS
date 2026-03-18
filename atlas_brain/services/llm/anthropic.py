@@ -177,9 +177,11 @@ class AnthropicLLM(BaseModelService):
         }
         if system_prompt:
             create_kwargs["system"] = system_prompt
+        request_timeout = kwargs.get("timeout")
 
         try:
-            response = self._sync_client.messages.create(**create_kwargs)
+            client = self._sync_client.with_options(timeout=request_timeout) if request_timeout else self._sync_client
+            response = client.messages.create(**create_kwargs)
 
             # Extract text from content blocks
             text_parts = []
@@ -237,6 +239,7 @@ class AnthropicLLM(BaseModelService):
         }
         if system_prompt:
             create_kwargs["system"] = system_prompt
+        request_timeout = kwargs.get("timeout")
 
         # Convert OpenAI tool format to Anthropic format
         if tools:
@@ -251,7 +254,8 @@ class AnthropicLLM(BaseModelService):
             create_kwargs["tools"] = anthropic_tools
 
         try:
-            response = self._sync_client.messages.create(**create_kwargs)
+            client = self._sync_client.with_options(timeout=request_timeout) if request_timeout else self._sync_client
+            response = client.messages.create(**create_kwargs)
 
             text_parts = []
             normalized_calls = []
@@ -309,9 +313,11 @@ class AnthropicLLM(BaseModelService):
         }
         if system_prompt:
             create_kwargs["system"] = system_prompt
+        request_timeout = kwargs.get("timeout")
 
         try:
-            response = await self._async_client.messages.create(**create_kwargs)
+            client = self._async_client.with_options(timeout=request_timeout) if request_timeout else self._async_client
+            response = await client.messages.create(**create_kwargs)
 
             text_parts = []
             for block in response.content:

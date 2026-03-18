@@ -102,6 +102,36 @@ def _normalize_company_key(company: str | None) -> str:
 # New lightweight query: company signal metadata
 # ---------------------------------------------------------------------------
 
+async def _fetch_apollo_org_lookup(pool) -> dict[str, dict[str, Any]]:
+    """Load Apollo org data keyed by normalized company name.
+
+    Includes 'enriched' rows and 'pending' rows that already have a domain
+    (org data arrived via person reveal but person search is incomplete).
+    """
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT company_name_norm, domain, industry,
+                   employee_count, annual_revenue_range
+            FROM prospect_org_cache
+            WHERE status = 'enriched'
+               OR (status = 'pending' AND domain IS NOT NULL)
+            """
+        )
+    except Exception:
+        logger.debug("prospect_org_cache not available, skipping Apollo lookup")
+        return {}
+    return {
+        r["company_name_norm"]: {
+            "domain": r["domain"],
+            "industry": r["industry"],
+            "employee_count": r["employee_count"],
+            "annual_revenue_range": r["annual_revenue_range"],
+        }
+        for r in rows
+    }
+
+
 async def _fetch_company_signal_metadata(pool, window_days: int = 90) -> list[dict[str, Any]]:
     """Read first_seen_at, last_seen_at, confidence from b2b_company_signals."""
     rows = await pool.fetch(
@@ -138,6 +168,7 @@ def _merge_company_profiles(
     signal_metadata: list[dict[str, Any]],
     *,
     min_urgency: float = 5.0,
+    apollo_org_lookup: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Merge company profiles from multiple data sources.
 
@@ -192,6 +223,8 @@ def _merge_company_profiles(
                 "evaluation_deadline": None,
                 "decision_timeline": None,
                 "top_quote": None,
+                "domain": None,
+                "annual_revenue_range": None,
                 "first_seen": None,
                 "last_seen": None,
                 "confidence": None,
@@ -297,6 +330,29 @@ def _merge_company_profiles(
             prof["last_seen"] = meta.get("last_seen")
             if meta.get("confidence") is not None and prof.get("confidence") is None:
                 prof["confidence"] = meta["confidence"]
+
+    # 6. Fill from Apollo org cache (lowest priority -- review data wins)
+    #    Apollo keys use normalize_company_name (strips legal suffixes),
+    #    profile keys use _normalize_company_key (strip+lower only).
+    #    Try both to maximize matches.
+    if apollo_org_lookup:
+        from ...services.company_normalization import normalize_company_name
+
+        for key, prof in profiles.items():
+            company_key = key[0]  # _normalize_company_key output
+            apollo = apollo_org_lookup.get(company_key)
+            if not apollo:
+                apollo = apollo_org_lookup.get(normalize_company_name(prof.get("company") or ""))
+            if not apollo:
+                continue
+            if not prof.get("industry") and apollo.get("industry"):
+                prof["industry"] = apollo["industry"]
+            if not prof.get("company_size") and apollo.get("employee_count"):
+                prof["company_size"] = str(apollo["employee_count"])
+            if apollo.get("domain"):
+                prof["domain"] = apollo["domain"]
+            if apollo.get("annual_revenue_range"):
+                prof["annual_revenue_range"] = apollo["annual_revenue_range"]
 
     return profiles
 
@@ -449,6 +505,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             budget_signals,
             competitive_disp,
             signal_metadata,
+            apollo_org_lookup,
         ) = await asyncio.gather(
             _fetch_high_intent_companies(pool, int(min_urgency), window_days),
             _fetch_timeline_signals(pool, window_days),
@@ -459,6 +516,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             _fetch_budget_signals(pool, window_days),
             _fetch_competitive_displacement(pool, window_days),
             _fetch_company_signal_metadata(pool, window_days),
+            _fetch_apollo_org_lookup(pool),
         )
     except Exception:
         logger.exception("Accounts in motion data fetch failed")
@@ -482,6 +540,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         quotable_evidence,
         signal_metadata,
         min_urgency=min_urgency,
+        apollo_org_lookup=apollo_org_lookup,
     )
 
     # --- Phase 4: Score each account ---

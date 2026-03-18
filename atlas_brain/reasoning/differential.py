@@ -49,6 +49,7 @@ class DiffTuning:
     temporal_weight: float = 3.0
     quote_weight: float = 1.5
     minor_weight: float = 1.0
+    weighted_sequence_match_threshold: float = 0.2
     strategic_component_threshold: float = 3.0
     contradiction_emergence_threshold: float = 4.0
 
@@ -262,6 +263,9 @@ def build_diff_tuning(cfg: Any | None = None) -> DiffTuning:
         temporal_weight=float(getattr(cfg, "reconstitute_temporal_weight", 3.0)),
         quote_weight=float(getattr(cfg, "reconstitute_quote_weight", 1.5)),
         minor_weight=float(getattr(cfg, "reconstitute_minor_weight", 1.0)),
+        weighted_sequence_match_threshold=float(
+            getattr(cfg, "reconstitute_weighted_sequence_match_threshold", 0.2),
+        ),
         strategic_component_threshold=float(getattr(cfg, "reconstitute_strategic_component_threshold", 3.0)),
         contradiction_emergence_threshold=float(getattr(cfg, "reconstitute_contradiction_emergence_threshold", 4.0)),
     )
@@ -297,7 +301,12 @@ def classify_evidence(
         old_val = old_evidence[key]
         new_val = new_evidence[key]
 
-        if _values_match(old_val, new_val, numeric_tolerance):
+        if _values_match(
+            old_val,
+            new_val,
+            numeric_tolerance,
+            diff.tuning.weighted_sequence_match_threshold,
+        ):
             diff.confirmed.append(key)
         else:
             diff.contradicted.append((key, str(old_val)[:200], str(new_val)[:200]))
@@ -305,7 +314,12 @@ def classify_evidence(
     return diff
 
 
-def _values_match(old: Any, new: Any, tolerance: float) -> bool:
+def _values_match(
+    old: Any,
+    new: Any,
+    tolerance: float,
+    weighted_sequence_match_threshold: float,
+) -> bool:
     """Check if two evidence values are effectively the same."""
     # Both numeric
     if isinstance(old, (int, float)) and isinstance(new, (int, float)):
@@ -314,6 +328,19 @@ def _values_match(old: Any, new: Any, tolerance: float) -> bool:
         if old == 0:
             return abs(new) < tolerance
         return abs(new - old) / abs(old) <= tolerance
+
+    normalized_old = _normalize_weighted_sequence(old)
+    normalized_new = _normalize_weighted_sequence(new)
+    if normalized_old is not None and normalized_new is not None:
+        sub_diff = classify_evidence(
+            normalized_old,
+            normalized_new,
+            numeric_tolerance=tolerance,
+            tuning=DiffTuning(
+                weighted_sequence_match_threshold=weighted_sequence_match_threshold,
+            ),
+        )
+        return sub_diff.weighted_diff_ratio < weighted_sequence_match_threshold
 
     # Both lists (order-insensitive comparison)
     if isinstance(old, list) and isinstance(new, list):
@@ -328,11 +355,55 @@ def _values_match(old: Any, new: Any, tolerance: float) -> bool:
 
     # Both dicts
     if isinstance(old, dict) and isinstance(new, dict):
-        sub_diff = classify_evidence(old, new, numeric_tolerance=tolerance)
+        sub_diff = classify_evidence(
+            old,
+            new,
+            numeric_tolerance=tolerance,
+            tuning=DiffTuning(
+                weighted_sequence_match_threshold=weighted_sequence_match_threshold,
+            ),
+        )
         return sub_diff.diff_ratio < 0.1  # essentially unchanged
 
     # String or other: exact match
     return str(old) == str(new)
+
+
+def _normalize_weighted_sequence(value: Any) -> dict[str, float] | None:
+    """Normalize list-of-dict evidence into a weighted mapping for diffing."""
+    if not isinstance(value, list) or not value:
+        return None
+    if not all(isinstance(item, dict) for item in value):
+        return None
+
+    label_keys = ("category", "name", "feature", "use_case", "label")
+    count_keys = ("count", "mentions", "review_count")
+
+    result: dict[str, float] = {}
+    for item in value:
+        label = ""
+        for key in label_keys:
+            raw = item.get(key)
+            if raw:
+                label = str(raw).strip().lower()
+                break
+        if not label:
+            return None
+
+        weight = 1.0
+        for key in count_keys:
+            raw_weight = item.get(key)
+            if raw_weight is None:
+                continue
+            try:
+                weight = float(raw_weight)
+            except (TypeError, ValueError):
+                weight = 1.0
+            break
+
+        result[label] = weight
+
+    return result or None
 
 
 # ---------------------------------------------------------------------------
@@ -381,6 +452,7 @@ async def persist_evidence_diff(
         confirmed = contradicted = novel = missing = total = 0
         ratio = w_ratio = 0.0
         core = False
+        component_scores = "{}"
         c_fields = "[]"
         n_fields = "[]"
     else:
@@ -392,6 +464,7 @@ async def persist_evidence_diff(
         ratio = round(diff.diff_ratio, 4)
         w_ratio = round(diff.weighted_diff_ratio, 4)
         core = diff.has_core_contradiction
+        component_scores = json.dumps(diff.component_scores)
         c_fields = json.dumps([{"key": k, "old": o, "new": n} for k, o, n in diff.contradicted[:20]])
         n_fields = json.dumps([{"key": k, "value": v} for k, v in diff.novel[:20]])
 
@@ -402,10 +475,10 @@ async def persist_evidence_diff(
                 vendor_name, computed_date,
                 confirmed_count, contradicted_count, novel_count, missing_count,
                 total_fields, diff_ratio, weighted_diff_ratio,
-                has_core_contradiction, decision, compared,
+                has_core_contradiction, component_scores, decision, compared,
                 contradicted_fields, novel_fields
-            ) VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-                      $12::jsonb, $13::jsonb)
+            ) VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12,
+                      $13::jsonb, $14::jsonb)
             ON CONFLICT (vendor_name, computed_date) DO UPDATE SET
                 confirmed_count = EXCLUDED.confirmed_count,
                 contradicted_count = EXCLUDED.contradicted_count,
@@ -415,6 +488,7 @@ async def persist_evidence_diff(
                 diff_ratio = EXCLUDED.diff_ratio,
                 weighted_diff_ratio = EXCLUDED.weighted_diff_ratio,
                 has_core_contradiction = EXCLUDED.has_core_contradiction,
+                component_scores = EXCLUDED.component_scores,
                 decision = EXCLUDED.decision,
                 compared = EXCLUDED.compared,
                 contradicted_fields = EXCLUDED.contradicted_fields,
@@ -423,7 +497,7 @@ async def persist_evidence_diff(
             """,
             vendor_name,
             confirmed, contradicted, novel, missing, total,
-            ratio, w_ratio, core, decision, compared,
+            ratio, w_ratio, core, component_scores, decision, compared,
             c_fields, n_fields,
         )
     except Exception:
@@ -500,8 +574,14 @@ async def reconstitute(
                 system_prompt=_RECONSTITUTE_SYSTEM_PROMPT,
                 evidence_payload=delta,
                 json_schema=REASONING_CONCLUSION_JSON_SCHEMA,
-                max_tokens=min(_rcfg.max_tokens, 1024),
+                max_tokens=min(_rcfg.max_tokens, _rcfg.reconstitute_max_tokens),
                 temperature=_rcfg.temperature,
+                verify_enabled=_rcfg.multi_pass_verify_enabled,
+                verify_min_reviews=_rcfg.multi_pass_verify_min_reviews,
+                verify_min_snapshot_days=_rcfg.multi_pass_verify_min_snapshot_days,
+                verify_min_grounded_signals=_rcfg.multi_pass_verify_min_grounded_signals,
+                verify_confidence_cap=_rcfg.multi_pass_verify_confidence_cap,
+                light_pass_max_tokens=_rcfg.reconstitute_max_tokens,
                 ground_only=True,  # skip challenge, run classify -> ground
                 span_prefix="reasoning.stratified.reconstitute",
                 trace_metadata=trace_metadata,
@@ -529,7 +609,7 @@ async def reconstitute(
     try:
         result = llm.chat(
             messages=messages,
-            max_tokens=min(_rcfg.max_tokens, 1024),
+            max_tokens=min(_rcfg.max_tokens, _rcfg.reconstitute_max_tokens),
             temperature=_rcfg.temperature,
             guided_json=REASONING_CONCLUSION_JSON_SCHEMA,
             response_format={"type": "json_object"},

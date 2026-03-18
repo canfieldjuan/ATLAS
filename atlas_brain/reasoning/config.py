@@ -52,6 +52,37 @@ class ReasoningConfig(BaseSettings):
         description="Cheap model for event triage classification",
     )
     triage_max_tokens: int = Field(default=256, description="Max tokens for triage calls")
+    graph_triage_workload: str = Field(
+        default="triage",
+        description=(
+            "Pipeline LLM workload for reasoning-graph triage "
+            "(triage, draft, synthesis, reasoning, openrouter, "
+            "local_fast, vllm, anthropic)"
+        ),
+    )
+    graph_reasoning_workload: str = Field(
+        default="reasoning",
+        description=(
+            "Pipeline LLM workload for reasoning-graph deep analysis and reflection "
+            "(triage, draft, synthesis, reasoning, openrouter, "
+            "local_fast, vllm, anthropic)"
+        ),
+    )
+    graph_synthesis_workload: str = Field(
+        default="triage",
+        description=(
+            "Pipeline LLM workload for reasoning-graph notification synthesis "
+            "(triage, draft, synthesis, reasoning, openrouter, "
+            "local_fast, vllm, anthropic)"
+        ),
+    )
+    graph_openrouter_model: str = Field(
+        default="",
+        description=(
+            "Optional OpenRouter model override for reasoning-graph workloads "
+            "(empty = use global OpenRouter reasoning model)"
+        ),
+    )
 
     # Entity locks
     lock_heartbeat_interval_s: int = Field(
@@ -87,11 +118,39 @@ class ReasoningConfig(BaseSettings):
     )
     neo4j_user: str = Field(default="neo4j", description="Neo4j username")
     neo4j_password: str = Field(default="password123", description="Neo4j password")
+    similar_trace_limit: int = Field(
+        default=3,
+        description="Maximum number of similar episodic traces to include as prior context for stratified reasoning",
+    )
 
     # Multi-pass reasoning (classify -> challenge -> ground)
     multi_pass_enabled: bool = Field(
         default=True,
         description="Enable multi-pass reasoning (classify -> challenge -> ground)",
+    )
+    multi_pass_verify_enabled: bool = Field(
+        default=True,
+        description="Run a deterministic evidence sufficiency verifier after classify before challenge/ground",
+    )
+    multi_pass_verify_min_reviews: int = Field(
+        default=12,
+        description="Cap confidence and add uncertainty when classify evidence has fewer than this many reviews",
+    )
+    multi_pass_verify_min_snapshot_days: int = Field(
+        default=14,
+        description="Cap confidence and add uncertainty when temporal depth is below this many days",
+    )
+    multi_pass_verify_min_grounded_signals: int = Field(
+        default=2,
+        description="Minimum number of grounded key signals expected from classify output before verifier marks evidence as thin",
+    )
+    multi_pass_verify_confidence_cap: float = Field(
+        default=0.58,
+        description="Maximum confidence allowed when verifier finds thin evidence coverage",
+    )
+    multi_pass_light_max_tokens: int = Field(
+        default=4096,
+        description="Max completion tokens for light multi-pass calls like challenge and ground",
     )
     multi_pass_challenge_confidence_floor: float = Field(
         default=0.3,
@@ -129,6 +188,10 @@ class ReasoningConfig(BaseSettings):
         default=0.3,
         description="Maximum weighted evidence drift ratio that still permits reconstitution instead of full reasoning",
     )
+    reconstitute_max_tokens: int = Field(
+        default=4096,
+        description="Max completion tokens for reconstitute classify/ground calls",
+    )
     reconstitute_core_weight: float = Field(
         default=4.0,
         description="Weight for core churn metrics in evidence drift scoring",
@@ -152,6 +215,10 @@ class ReasoningConfig(BaseSettings):
     reconstitute_minor_weight: float = Field(
         default=1.0,
         description="Fallback weight for low-priority evidence drift signals",
+    )
+    reconstitute_weighted_sequence_match_threshold: float = Field(
+        default=0.2,
+        description="Maximum weighted diff ratio for normalized list-of-dict evidence to still count as unchanged",
     )
     reconstitute_strategic_component_threshold: float = Field(
         default=3.0,

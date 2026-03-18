@@ -213,7 +213,7 @@ async def _fetch_product_profile(pool, vendor: str) -> dict | None:
     row = await pool.fetchrow(
         """
         SELECT strengths, weaknesses, pain_addressed, commonly_switched_from,
-               top_integrations, profile_summary, category
+               top_integrations, profile_summary, product_category
         FROM b2b_product_profiles
         WHERE LOWER(vendor_name) = LOWER($1)
         ORDER BY last_computed_at DESC
@@ -239,7 +239,7 @@ async def _fetch_product_profile(pool, vendor: str) -> dict | None:
         "commonly_switched_from": _parse(row["commonly_switched_from"]) or [],
         "top_integrations": _parse(row["top_integrations"]) or [],
         "profile_summary": row["profile_summary"] or "",
-        "category": row["category"] or "",
+        "category": row["product_category"] or "",
     }
 
 
@@ -453,6 +453,8 @@ def _filter_target_accounts(
             "seat_count": acct.get("seat_count"),
             "contract_end": acct.get("contract_end"),
             "industry": acct.get("industry"),
+            "domain": acct.get("domain"),
+            "annual_revenue_range": acct.get("annual_revenue_range"),
             "top_quote": acct.get("top_quote"),
             "considers_challenger": considers,
         })

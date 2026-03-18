@@ -136,6 +136,8 @@ class TestFilterTargetAccounts:
             "seat_count": kw.get("seat_count", 100),
             "contract_end": kw.get("contract_end"),
             "industry": kw.get("industry"),
+            "domain": kw.get("domain"),
+            "annual_revenue_range": kw.get("annual_revenue_range"),
             "top_quote": kw.get("top_quote"),
             "alternatives_considering": kw.get("alternatives", []),
         }
@@ -187,6 +189,20 @@ class TestFilterTargetAccounts:
         assert targets == []
         assert total == 0
         assert considering == 0
+
+    def test_domain_and_revenue_passed_through(self):
+        """domain and annual_revenue_range are included in target output."""
+        data = self._make_accounts_data([
+            self._make_account(
+                "Kroger", 90,
+                domain="kroger.com",
+                annual_revenue_range="$100B+",
+                alternatives=["Freshdesk"],
+            ),
+        ])
+        targets, _, _ = _filter_target_accounts(data, "Freshdesk", max_accounts=10)
+        assert targets[0]["domain"] == "kroger.com"
+        assert targets[0]["annual_revenue_range"] == "$100B+"
 
     def test_empty_accounts(self):
         """Empty accounts list returns empty."""

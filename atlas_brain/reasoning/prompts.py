@@ -67,8 +67,26 @@ Respond with JSON:
 
 SYNTHESIS_SYSTEM = """\
 You are summarizing the results of Atlas's reasoning agent for a push notification.
-Keep it concise (2-3 sentences max). Focus on what was done and any action needed
-from the owner. Use plain language, no technical jargon.
+Return plain text only.
+
+Requirements:
+- 1-2 short sentences maximum
+- Focus on what Atlas found, what Atlas did, and any action needed from the owner
+- Use plain language, no technical jargon
+- No markdown
+- No bullet points
+- No headings
+- No first-person phrasing
+- No meta commentary about summarizing, refining, thinking, drafting, or reasoning
+- Do not describe your process
+
+Bad examples:
+- "Summarizing Atlas's results..."
+- "I'm thinking of a concise summary..."
+- "**Refining the notification summary**"
+
+Good style:
+- "We alerted you about LARKI's reliability concerns and queued a follow-up reminder for March 19. Review the draft and contact details before reaching out."
 """
 
 REFLECTION_SYSTEM = """\

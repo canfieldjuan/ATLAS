@@ -70,6 +70,10 @@ async def test_reasoning_agent_emits_trace_with_reasoning_summary():
         patch.object(tracer, "_enabled", True),
         patch.object(tracer, "_dispatch", side_effect=captured.append),
         patch("atlas_brain.reasoning.graph.run_reasoning_graph", new=AsyncMock(return_value=result_state)),
+        patch(
+            "atlas_brain.pipelines.llm.get_pipeline_llm",
+            return_value=type("LLM", (), {"name": "openrouter", "model": "openai/o4-mini"})(),
+        ),
     ):
         graph = ReasoningAgentGraph()
         result = await graph.process_event(event)
@@ -83,6 +87,8 @@ async def test_reasoning_agent_emits_trace_with_reasoning_summary():
     assert payload["metadata"]["business"]["workflow"] == "reasoning_agent"
     assert payload["metadata"]["reasoning"]["triage"] == "High-signal churn event"
     assert payload["metadata"]["reasoning"]["summary"] == "Pricing pressure and negative sentiment are increasing"
+    assert payload["model_provider"] == "openrouter"
+    assert payload["model_name"] == "openai/o4-mini"
 
 
 @pytest.mark.asyncio

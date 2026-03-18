@@ -40,8 +40,14 @@ class ReasoningAgentGraph:
             "entity_id": event.entity_id,
             "payload": event.payload,
         }
-        from ..services.llm_router import get_llm as _get_llm
-        _rlm = _get_llm("reasoning")
+        from ..config import settings
+        from ..pipelines.llm import get_pipeline_llm
+
+        _rlm = get_pipeline_llm(
+            workload=settings.reasoning.graph_reasoning_workload,
+            auto_activate_ollama=False,
+            openrouter_model=settings.reasoning.graph_openrouter_model or None,
+        )
         span = tracer.start_span(
             span_name="reasoning.process",
             operation_type="reasoning",

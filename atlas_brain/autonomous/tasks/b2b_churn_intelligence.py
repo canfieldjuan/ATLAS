@@ -383,7 +383,8 @@ async def reconstruct_evidence_volatility(
     """Read evidence volatility per vendor from persisted diffs.
 
     Returns vendor -> {avg_diff_ratio, max_diff_ratio, core_contradictions,
-    days_tracked, latest_decision, latest_contradicted_fields}.
+    days_tracked, latest_decision, latest_contradicted_fields,
+    latest_component_scores}.
     Used by vulnerability_report and accounts_in_motion for instability signals.
     """
     rows = await pool.fetch(
@@ -395,6 +396,8 @@ async def reconstruct_evidence_volatility(
                COUNT(*) FILTER (WHERE compared) AS days_compared,
                COUNT(*) AS days_tracked,
                (ARRAY_AGG(decision ORDER BY computed_date DESC))[1] AS latest_decision,
+               (ARRAY_AGG(component_scores ORDER BY computed_date DESC NULLS LAST)
+                FILTER (WHERE compared))[1] AS latest_component_scores,
                (ARRAY_AGG(contradicted_fields ORDER BY computed_date DESC NULLS LAST)
                 FILTER (WHERE compared))[1] AS latest_contradicted
         FROM reasoning_evidence_diffs
@@ -412,6 +415,7 @@ async def reconstruct_evidence_volatility(
             "days_compared": r["days_compared"] or 0,
             "days_tracked": r["days_tracked"] or 0,
             "latest_decision": r["latest_decision"] or "",
+            "latest_component_scores": r["latest_component_scores"] or {},
             "latest_contradicted_fields": r["latest_contradicted"] or [],
         }
         for r in rows
@@ -1356,6 +1360,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                             "uncertainty_sources": conclusion.get("uncertainty_sources", []),
                             "mode": sr.mode,
                             "tokens_used": sr.tokens_used,
+                            "reasoning_steps": sr.reasoning_steps,
+                            "boundary_conditions": sr.boundary_conditions,
                         }
                         total_tokens += sr.tokens_used
                         mode_counts[sr.mode] = mode_counts.get(sr.mode, 0) + 1

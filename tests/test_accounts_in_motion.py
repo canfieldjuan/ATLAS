@@ -303,6 +303,96 @@ class TestMergeCompanyProfiles:
         assert prof["last_seen"] == "2026-03-15T00:00:00+00:00"
         assert prof["confidence"] == 0.85
 
+    def test_apollo_fills_industry_when_none(self):
+        """Apollo industry fills when review data has no industry."""
+        r = self._make_intent()
+        apollo = {"acme corp": {
+            "domain": "acme.com",
+            "industry": "Retail",
+            "employee_count": 5000,
+            "annual_revenue_range": "$1B-$5B",
+        }}
+        merged = _merge_company_profiles([r], [], [], [], [], apollo_org_lookup=apollo)
+        prof = list(merged.values())[0]
+        assert prof["industry"] == "Retail"
+        assert prof["company_size"] == "5000"
+        assert prof["domain"] == "acme.com"
+        assert prof["annual_revenue_range"] == "$1B-$5B"
+
+    def test_apollo_does_not_overwrite_review_data(self):
+        """Review industry wins over Apollo industry."""
+        r = self._make_intent()
+        timeline = [{
+            "company": "Acme Corp",
+            "vendor": "Zendesk",
+            "contract_end": None,
+            "evaluation_deadline": None,
+            "decision_timeline": None,
+            "urgency": 8,
+            "title": None,
+            "company_size": "200-500",
+            "industry": "SaaS",
+        }]
+        apollo = {"acme corp": {
+            "domain": "acme.com",
+            "industry": "Retail",
+            "employee_count": 5000,
+            "annual_revenue_range": "$1B-$5B",
+        }}
+        merged = _merge_company_profiles([r], timeline, [], [], [], apollo_org_lookup=apollo)
+        prof = list(merged.values())[0]
+        assert prof["industry"] == "SaaS"  # review data wins
+        assert prof["company_size"] == "200-500"  # review data wins
+        assert prof["domain"] == "acme.com"  # only from Apollo
+        assert prof["annual_revenue_range"] == "$1B-$5B"  # only from Apollo
+
+    def test_apollo_adds_domain_and_revenue(self):
+        """New fields populated from Apollo even when other fields exist."""
+        r = self._make_intent()
+        apollo = {"acme corp": {
+            "domain": "acme.com",
+            "industry": None,
+            "employee_count": None,
+            "annual_revenue_range": "$500M-$1B",
+        }}
+        merged = _merge_company_profiles([r], [], [], [], [], apollo_org_lookup=apollo)
+        prof = list(merged.values())[0]
+        assert prof["domain"] == "acme.com"
+        assert prof["annual_revenue_range"] == "$500M-$1B"
+        assert prof["industry"] is None  # Apollo has None, stays None
+
+    def test_apollo_matches_via_normalized_company_name(self):
+        """Apollo keyed by normalize_company_name (legal suffix stripped) still matches."""
+        # normalize_company_name("Acme Corp") -> "acme" (strips "corp")
+        # _normalize_company_key("Acme Corp") -> "acme corp"
+        # The fallback path should find the match via normalize_company_name.
+        r = self._make_intent()
+        apollo = {"acme": {  # as normalize_company_name would produce
+            "domain": "acme.com",
+            "industry": "Retail",
+            "employee_count": 5000,
+            "annual_revenue_range": "$1B-$5B",
+        }}
+        merged = _merge_company_profiles([r], [], [], [], [], apollo_org_lookup=apollo)
+        prof = list(merged.values())[0]
+        assert prof["domain"] == "acme.com"
+        assert prof["industry"] == "Retail"
+
+    def test_no_apollo_match_no_change(self):
+        """Missing Apollo match leaves profile unchanged."""
+        r = self._make_intent()
+        apollo = {"other corp": {
+            "domain": "other.com",
+            "industry": "Finance",
+            "employee_count": 1000,
+            "annual_revenue_range": "$100M-$500M",
+        }}
+        merged = _merge_company_profiles([r], [], [], [], [], apollo_org_lookup=apollo)
+        prof = list(merged.values())[0]
+        assert prof["domain"] is None
+        assert prof["annual_revenue_range"] is None
+        assert prof["industry"] is None
+
 
 # ---------------------------------------------------------------------------
 # Aggregate builder tests

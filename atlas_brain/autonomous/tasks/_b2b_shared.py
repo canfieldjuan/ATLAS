@@ -1679,7 +1679,7 @@ async def _fetch_vendor_churn_scores(pool, window_days: int, min_reviews: int) -
 
 async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days: int) -> list[dict[str, Any]]:
     """Companies showing high churn intent -- the money feed."""
-    sources = _executive_source_list()
+    sources = _intelligence_source_allowlist()
     filters = _eligible_review_filters(window_param=2, source_param=3)
     rows = await pool.fetch(
         f"""
