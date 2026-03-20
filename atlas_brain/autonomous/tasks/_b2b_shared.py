@@ -11,7 +11,7 @@ import logging
 import math
 import re
 from collections import Counter
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from ...config import settings
@@ -26,6 +26,27 @@ from ...services.tracing import build_business_trace_context
 from ...services.vendor_registry import resolve_vendor_name_cached
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_shared")
+
+
+def filter_vendors_by_focus_categories(
+    vendor_scores: list[dict],
+    focus_categories_raw: str,
+) -> list[dict]:
+    """Filter vendor_scores to only include vendors in focus categories.
+
+    Returns the full list unchanged when focus is 'all' or empty.
+    Category matching is case-insensitive.
+    """
+    raw = (focus_categories_raw or "").strip().lower()
+    if not raw or raw == "all":
+        return vendor_scores
+    focus = {c.strip() for c in raw.split(",") if c.strip()}
+    if not focus:
+        return vendor_scores
+    return [
+        vs for vs in vendor_scores
+        if (vs.get("product_category") or "").strip().lower() in focus
+    ]
 
 
 _EXPLORATORY_OVERVIEW_SCHEMA: dict[str, Any] = {
@@ -87,6 +108,36 @@ def _synthesis_reference_confidence_min() -> float:
 def _synthesis_expert_take_max_words() -> int:
     """Return the configured max word count for scorecard expert_take."""
     return int(settings.b2b_churn.synthesis_expert_take_max_words)
+
+
+def _evidence_vault_supporting_review_limit() -> int:
+    """Return the max supporting-review IDs stored per evidence item."""
+    return int(settings.b2b_churn.intelligence_evidence_vault_supporting_review_limit)
+
+
+def _evidence_vault_segment_limit() -> int:
+    """Return the max affected segments stored per evidence item."""
+    return int(settings.b2b_churn.intelligence_evidence_vault_segment_limit)
+
+
+def _evidence_vault_role_limit() -> int:
+    """Return the max affected roles stored per evidence item."""
+    return int(settings.b2b_churn.intelligence_evidence_vault_role_limit)
+
+
+def _evidence_vault_trend_accelerating_ratio() -> float:
+    """Return the ratio needed to mark a trend as accelerating."""
+    return float(settings.b2b_churn.intelligence_evidence_vault_trend_accelerating_ratio)
+
+
+def _evidence_vault_trend_declining_ratio() -> float:
+    """Return the ratio at or below which a trend is declining."""
+    return float(settings.b2b_churn.intelligence_evidence_vault_trend_declining_ratio)
+
+
+def _evidence_vault_trend_new_min_recent() -> int:
+    """Return the minimum recent mentions needed to call a trend new."""
+    return int(settings.b2b_churn.intelligence_evidence_vault_trend_new_min_recent)
 
 
 def _trim_words(text: str, limit: int) -> str:
@@ -566,24 +617,142 @@ def _battle_card_allowed_quotes(card: dict[str, Any]) -> list[str]:
     return quotes
 
 
-def _battle_card_best_supported_quote(card: dict[str, Any], context: str = "") -> str:
-    """Pick the most relevant exact quote from source data for sanitizer fallback."""
-    quotes = _battle_card_allowed_quotes(card)
-    if not quotes:
+def _battle_card_quote_entries(card: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return unique quote entries with any attached metadata preserved."""
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in card.get("customer_pain_quotes") or []:
+        if isinstance(item, dict):
+            quote = str(item.get("quote") or "").strip()
+            urgency = float(item.get("urgency") or 0)
+        else:
+            quote = str(item or "").strip()
+            urgency = 0.0
+        if quote and quote not in seen:
+            seen.add(quote)
+            entries.append({"quote": quote, "urgency": urgency})
+    return entries
+
+
+def _battle_card_best_supported_quote(
+    card: dict[str, Any],
+    context: str = "",
+    *,
+    preferred_terms: list[str] | None = None,
+    excluded_quotes: set[str] | None = None,
+    require_preferred_match: bool = False,
+) -> str:
+    """Pick the most relevant exact quote from source data for a weakness context."""
+    entries = _battle_card_quote_entries(card)
+    if excluded_quotes:
+        entries = [entry for entry in entries if entry["quote"] not in excluded_quotes]
+    if not entries:
         return ""
     context_tokens = {
         token for token in re.findall(r"[a-z0-9]+", context.lower())
         if len(token) >= 4
     }
-    if not context_tokens:
-        return quotes[0]
-    return max(
-        quotes,
-        key=lambda quote: (
-            len(context_tokens & set(re.findall(r"[a-z0-9]+", quote.lower()))),
-            len(quote),
+    preferred = [term.lower() for term in (preferred_terms or []) if term]
+    ranked = sorted(
+        entries,
+        key=lambda entry: (
+            sum(1 for term in preferred if term in entry["quote"].lower()),
+            len(context_tokens & set(re.findall(r"[a-z0-9]+", entry["quote"].lower()))),
+            float(entry.get("urgency") or 0),
+            len(entry["quote"]),
         ),
+        reverse=True,
     )
+    if preferred and require_preferred_match:
+        best = ranked[0]
+        if not any(term in best["quote"].lower() for term in preferred):
+            return ""
+    return ranked[0]["quote"]
+
+
+def _battle_card_weakness_headline(area: str, *, source: str = "") -> str:
+    """Map a weakness area into a rep-facing battle-card wedge."""
+    lower = area.lower()
+    if any(token in lower for token in ("price", "pricing", "cost", "budget")):
+        return "Pricing pressure is creating renewal scrutiny"
+    if any(token in lower for token in ("support", "service", "response", "help")):
+        return "Support friction is undermining buyer confidence"
+    if any(token in lower for token in ("reliability", "uptime", "outage", "stability", "performance")):
+        return "Reliability issues are increasing switching risk"
+    if source == "feature_gap" or any(token in lower for token in ("feature", "workflow", "reporting", "automation")):
+        return "Feature gaps are pushing teams to evaluate alternatives"
+    if any(token in lower for token in ("integration", "plugin", "api", "stack")):
+        return "Integration complexity is adding operational drag"
+    return f"{area.title()} concerns keep resurfacing in buyer feedback"
+
+
+def _battle_card_winning_position(area: str, *, source: str = "") -> str:
+    """Return a vendor-agnostic capability emphasis for a weakness."""
+    lower = area.lower()
+    if any(token in lower for token in ("price", "pricing", "cost", "budget")):
+        return "Emphasize transparent pricing, packaging clarity, and spend controls."
+    if any(token in lower for token in ("support", "service", "response", "help")):
+        return "Emphasize responsive support operations and clearer accountability on escalations."
+    if any(token in lower for token in ("reliability", "uptime", "outage", "stability", "performance")):
+        return "Emphasize reliability, incident response discipline, and operational resilience."
+    if source == "feature_gap" or any(token in lower for token in ("feature", "workflow", "reporting", "automation")):
+        return "Emphasize broader native capability coverage and fewer workaround-heavy workflows."
+    if any(token in lower for token in ("integration", "plugin", "api", "stack")):
+        return "Emphasize native integrations, simpler administration, and less app sprawl."
+    return "Emphasize predictable operations, easier adoption, and lower day-to-day friction."
+
+
+def _battle_card_weakness_evidence(card: dict[str, Any], weakness: dict[str, Any]) -> str:
+    """Build a deterministic evidence line for a weakness entry."""
+    area = str(weakness.get("area") or weakness.get("weakness") or "").strip()
+    source = str(weakness.get("source") or "").strip()
+    count = int(weakness.get("evidence_count") or weakness.get("count") or 0)
+    data = card.get("objection_data") or {}
+    total_reviews = int(card.get("total_reviews") or data.get("total_reviews") or 0)
+    if any(token in area.lower() for token in ("price", "pricing", "cost", "budget")) and data.get("price_complaint_rate") is not None:
+        return f"{float(data['price_complaint_rate']):.1%} price complaint rate across {total_reviews:,} reviews"
+    for gap in data.get("top_feature_gaps") or []:
+        if str(gap.get("feature") or "").strip().lower() == area.lower():
+            mentions = int(gap.get("mentions") or 0)
+            return f"{mentions} feature-gap mentions tied to {area}"
+    if source == "product_profile" and weakness.get("score") is not None:
+        return f"Satisfaction score {float(weakness['score']):.1f} with {count} supporting reviews"
+    if count:
+        unit = "reviews" if source == "product_profile" else "mentions"
+        return f"{count} supporting {unit} tied to {area}"
+    return f"Recurring customer friction tied to {area}"
+
+
+def _battle_card_quote_terms(area: str, *, source: str = "") -> list[str]:
+    """Return quote-preference keywords for a weakness area."""
+    lower = area.lower()
+    if any(token in lower for token in ("price", "pricing", "cost", "budget")):
+        return ["cost", "costs", "price", "pricing", "budget", "spend"]
+    if any(token in lower for token in ("support", "service", "response", "help")):
+        return ["support", "service", "response", "escalation", "help"]
+    if any(token in lower for token in ("reliability", "uptime", "outage", "stability", "performance")):
+        return ["outage", "uptime", "reliability", "stability", "incident", "performance", "downtime", "down"]
+    if source == "feature_gap" or any(token in lower for token in ("feature", "workflow", "reporting", "automation")):
+        return ["feature", "workflow", "reporting", "automation", "capability"]
+    if any(token in lower for token in ("integration", "plugin", "api", "stack")):
+        return ["integration", "plugin", "api", "stack"]
+    return []
+
+
+def _battle_card_competitor_bucket_key(raw_label: str, buckets: dict[str, dict[str, Any]]) -> tuple[str, str]:
+    """Return a stable dedupe key and display label for a competitor mention."""
+    label = _canonicalize_competitor(raw_label) or raw_label
+    norm = normalize_company_name(label)
+    if not norm:
+        return label, label
+    for existing_norm, bucket in buckets.items():
+        if existing_norm == norm:
+            return existing_norm, str(bucket.get("competitor") or label)
+        if existing_norm.endswith(f" {norm}") or norm.endswith(f" {existing_norm}"):
+            existing_label = str(bucket.get("competitor") or label)
+            display_label = label if len(label) > len(existing_label) else existing_label
+            return existing_norm, display_label
+    return norm, label
 
 
 def _sanitize_battle_card_sales_copy(card: dict[str, Any], generated: dict[str, Any]) -> dict[str, Any]:
@@ -638,6 +807,126 @@ def _sanitize_battle_card_sales_copy(card: dict[str, Any], generated: dict[str, 
                 context = "%s %s" % (item.get("weakness") or "", item.get("evidence") or "")
                 item["customer_quote"] = _battle_card_best_supported_quote(card, context)
     return sanitized
+
+
+def _build_deterministic_battle_card_weakness_analysis(
+    card: dict[str, Any],
+    *,
+    limit: int = 3,
+) -> list[dict[str, str]]:
+    """Build battle-card weakness analysis from deterministic evidence only."""
+    items: list[dict[str, str]] = []
+    used_quotes: set[str] = set()
+    for weakness in (card.get("vendor_weaknesses") or [])[:limit]:
+        if not isinstance(weakness, dict):
+            continue
+        area = str(weakness.get("area") or weakness.get("weakness") or "").strip()
+        if not area:
+            continue
+        source = str(weakness.get("source") or "").strip()
+        evidence = _battle_card_weakness_evidence(card, weakness)
+        hint = area
+        lower = area.lower()
+        if any(token in lower for token in ("price", "pricing", "cost", "budget")):
+            hint += " pricing cost budget spend renewal"
+        elif any(token in lower for token in ("support", "service", "response", "help")):
+            hint += " support service response escalation"
+        elif any(token in lower for token in ("reliability", "uptime", "outage", "stability", "performance")):
+            hint += " outage uptime reliability stability incident"
+        elif source == "feature_gap" or any(token in lower for token in ("feature", "workflow", "reporting", "automation")):
+            hint += " feature workflow capability reporting automation"
+        elif any(token in lower for token in ("integration", "plugin", "api", "stack")):
+            hint += " integration plugin api stack"
+        quote_terms = _battle_card_quote_terms(area, source=source)
+        quote = _battle_card_best_supported_quote(
+            card,
+            f"{hint} {evidence}",
+            preferred_terms=quote_terms,
+            excluded_quotes=used_quotes,
+            require_preferred_match=bool(quote_terms),
+        )
+        if quote:
+            used_quotes.add(quote)
+        items.append({
+            "weakness": _battle_card_weakness_headline(area, source=source),
+            "evidence": evidence,
+            "customer_quote": quote,
+            "winning_position": _battle_card_winning_position(area, source=source),
+        })
+    return items
+
+
+def _build_deterministic_battle_card_competitive_landscape(
+    card: dict[str, Any],
+    *,
+    trigger_limit: int = 3,
+    alt_limit: int = 3,
+) -> dict[str, Any]:
+    """Build battle-card competitive landscape from deterministic inputs."""
+    data = card.get("objection_data") or {}
+    budget = data.get("budget_context") or {}
+    sentiment = str(data.get("sentiment_direction") or "").strip()
+    council = card.get("category_council") or {}
+    aggregated_competitors: dict[str, dict[str, Any]] = {}
+    for item in card.get("competitor_differentiators") or []:
+        if not isinstance(item, dict):
+            continue
+        raw_label = str(item.get("competitor") or "").strip()
+        bucket_key, label = _battle_card_competitor_bucket_key(raw_label, aggregated_competitors)
+        if not label or not bucket_key:
+            continue
+        bucket = aggregated_competitors.setdefault(
+            bucket_key,
+            {"competitor": label, "mentions": 0, "switch_count": 0, "driver_counts": Counter()},
+        )
+        if len(label) > len(str(bucket.get("competitor") or "")):
+            bucket["competitor"] = label
+        bucket["mentions"] += int(item.get("mentions") or 0)
+        bucket["switch_count"] += int(item.get("switch_count") or 0)
+        driver = str(item.get("primary_driver") or "buyer fit").strip()
+        if driver:
+            bucket["driver_counts"][driver] += max(int(item.get("mentions") or 0), 1)
+    alternatives: list[str] = []
+    ranked_competitors = sorted(
+        aggregated_competitors.values(),
+        key=lambda item: (int(item["switch_count"]), int(item["mentions"]), item["competitor"]),
+        reverse=True,
+    )
+    for item in ranked_competitors[:alt_limit]:
+        label = str(item["competitor"]).strip()
+        switches = int(item["switch_count"] or 0)
+        mentions = int(item["mentions"] or 0)
+        driver_counts = item.get("driver_counts") or Counter()
+        driver = driver_counts.most_common(1)[0][0] if driver_counts else "buyer fit"
+        if switches > 0:
+            alternatives.append(f"{label} ({switches} explicit switches; primary driver: {driver})")
+        else:
+            alternatives.append(f"{label} ({mentions} mentions in evaluation sets; primary driver: {driver})")
+    window_bits: list[str] = []
+    if sentiment == "declining":
+        window_bits.append("Buyer sentiment is declining")
+    if float(budget.get("price_increase_rate") or 0) > 0:
+        window_bits.append("recent price increases are creating renewal scrutiny")
+    if card.get("active_evaluation_deadlines"):
+        window_bits.append("near-term evaluation timing is visible in review signals")
+    if council.get("market_regime"):
+        window_bits.append(f"the category backdrop is {council['market_regime']}")
+    if not window_bits:
+        window_bits.append("buyers are actively re-evaluating fit and value")
+    triggers: list[str] = []
+    if float(budget.get("price_increase_rate") or 0) > 0:
+        triggers.append("Renewal cycles after recent price increases or packaging changes")
+    if card.get("active_evaluation_deadlines"):
+        triggers.append("Accounts showing explicit evaluation timelines or near-term decision windows")
+    if any("support" in str(item.get("area") or "").lower() for item in (card.get("vendor_weaknesses") or [])):
+        triggers.append("Support escalations or unresolved service issues")
+    if not triggers and alternatives:
+        triggers.append(f"Direct head-to-head evaluations against {alternatives[0].split(' (', 1)[0]}")
+    return {
+        "vulnerability_window": ". ".join(bit[:1].upper() + bit[1:] for bit in window_bits) + ".",
+        "top_alternatives": alternatives,
+        "displacement_triggers": triggers[:trigger_limit],
+    }
 
 
 def _best_cross_vendor_comparison(scorecard: dict[str, Any]) -> dict[str, Any] | None:
@@ -1799,6 +2088,49 @@ async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days
     return results
 
 
+async def _fetch_existing_company_signals(
+    pool,
+    *,
+    window_days: int,
+) -> dict[str, list[dict[str, Any]]]:
+    """Fetch canonical company-signal rows still active in the analysis window."""
+    rows = await pool.fetch(
+        """
+        SELECT company_name, vendor_name, urgency_score,
+               pain_category, buyer_role, decision_maker,
+               seat_count, contract_end, buying_stage,
+               review_id, source, confidence_score,
+               first_seen_at, last_seen_at
+        FROM b2b_company_signals
+        WHERE last_seen_at >= NOW() - make_interval(days => $1)
+        ORDER BY vendor_name, urgency_score DESC NULLS LAST, last_seen_at DESC
+        """,
+        window_days,
+    )
+    lookup: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        vendor = _canonicalize_vendor(row.get("vendor_name") or "")
+        if not vendor:
+            continue
+        lookup.setdefault(vendor, []).append({
+            "company_name": row.get("company_name"),
+            "vendor_name": vendor,
+            "urgency_score": float(row["urgency_score"]) if row.get("urgency_score") is not None else None,
+            "pain_category": row.get("pain_category"),
+            "buyer_role": row.get("buyer_role"),
+            "decision_maker": row.get("decision_maker"),
+            "seat_count": row.get("seat_count"),
+            "contract_end": str(row.get("contract_end") or "") or None,
+            "buying_stage": row.get("buying_stage"),
+            "review_id": str(row.get("review_id") or "") or None,
+            "source": row.get("source"),
+            "confidence_score": float(row["confidence_score"]) if row.get("confidence_score") is not None else None,
+            "first_seen_at": str(row.get("first_seen_at") or "") or None,
+            "last_seen_at": str(row.get("last_seen_at") or "") or None,
+        })
+    return lookup
+
+
 async def _fetch_competitive_displacement(pool, window_days: int) -> list[dict[str, Any]]:
     """Competitive displacement flows -- filtered to real displacement evidence only.
 
@@ -2485,6 +2817,7 @@ async def _fetch_quotable_evidence(pool, window_days: int, *, min_urgency: float
         WITH ranked_quotes AS (
             SELECT vendor_name, id AS review_id, phrase.value AS quote,
                 (enrichment->>'urgency_score')::numeric AS urgency,
+                source, reviewed_at, rating,
                 reviewer_company, reviewer_title, company_size_raw,
                 COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry,
                 ROW_NUMBER() OVER (
@@ -2504,6 +2837,9 @@ async def _fetch_quotable_evidence(pool, window_days: int, *, min_urgency: float
                     'quote', quote,
                     'urgency', urgency,
                     'review_id', review_id,
+                    'source', source,
+                    'reviewed_at', reviewed_at,
+                    'rating', rating,
                     'company', reviewer_company,
                     'title', reviewer_title,
                     'company_size', company_size_raw,
@@ -2521,6 +2857,58 @@ async def _fetch_quotable_evidence(pool, window_days: int, *, min_urgency: float
     for r in rows:
         quotes = _safe_json(r["quotes"])
         results.append({"vendor": r["vendor_name"], "quotes": quotes})
+    return results
+
+
+async def _fetch_evidence_vault_review_rows(
+    pool,
+    window_days: int,
+) -> list[dict[str, Any]]:
+    """Fetch review-level evidence rows used for pass-2 vault aggregation."""
+    sources = _intelligence_source_allowlist()
+    filters = _eligible_review_filters(window_param=1, source_param=2)
+    rows = await pool.fetch(
+        f"""
+        SELECT id AS review_id,
+            vendor_name,
+            source,
+            reviewed_at,
+            enriched_at,
+            rating,
+            rating_max,
+            reviewer_title,
+            company_size_raw,
+            COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry,
+            enrichment->'reviewer_context'->>'role_level' AS role_level,
+            enrichment->>'pain_category' AS pain_category,
+            COALESCE(enrichment->'feature_gaps', '[]'::jsonb) AS feature_gaps,
+            COALESCE(enrichment->'positive_aspects', '[]'::jsonb) AS positive_aspects,
+            (enrichment->>'urgency_score')::numeric AS urgency
+        FROM b2b_reviews
+        WHERE {filters}
+        """,
+        window_days,
+        sources,
+    )
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        results.append({
+            "review_id": str(row["review_id"]) if row.get("review_id") else None,
+            "vendor_name": row.get("vendor_name"),
+            "source": row.get("source"),
+            "reviewed_at": row.get("reviewed_at"),
+            "enriched_at": row.get("enriched_at"),
+            "rating": float(row["rating"]) if row.get("rating") is not None else None,
+            "rating_max": float(row["rating_max"]) if row.get("rating_max") is not None else None,
+            "reviewer_title": row.get("reviewer_title"),
+            "company_size_raw": row.get("company_size_raw"),
+            "industry": row.get("industry"),
+            "role_level": row.get("role_level"),
+            "pain_category": row.get("pain_category"),
+            "feature_gaps": _safe_json(row.get("feature_gaps"), default=[]),
+            "positive_aspects": _safe_json(row.get("positive_aspects"), default=[]),
+            "urgency": float(row["urgency"]) if row.get("urgency") is not None else 0.0,
+        })
     return results
 
 
@@ -2580,7 +2968,278 @@ async def _fetch_product_profiles(pool) -> list[dict[str, Any]]:
         FROM b2b_product_profiles
         ORDER BY total_reviews_analyzed DESC
     """)
-    return [dict(r) for r in rows]
+    normalized: list[dict[str, Any]] = []
+    for row in rows:
+        profile = dict(row)
+        profile["strengths"] = _safe_json(profile.get("strengths"), default=[])
+        profile["weaknesses"] = _safe_json(profile.get("weaknesses"), default=[])
+        profile["pain_addressed"] = _safe_json(profile.get("pain_addressed"), default={})
+        profile["commonly_compared_to"] = _safe_json(profile.get("commonly_compared_to"), default=[])
+        profile["commonly_switched_from"] = _safe_json(profile.get("commonly_switched_from"), default=[])
+        profile["primary_use_cases"] = _safe_json(profile.get("primary_use_cases"), default=[])
+        profile["typical_company_size"] = _safe_json(profile.get("typical_company_size"), default=[])
+        profile["typical_industries"] = _safe_json(profile.get("typical_industries"), default=[])
+        profile["top_integrations"] = _safe_json(profile.get("top_integrations"), default=[])
+        normalized.append(profile)
+    return normalized
+
+
+async def _fetch_latest_evidence_vault(
+    pool,
+    *,
+    as_of: date,
+    analysis_window_days: int,
+) -> dict[str, dict[str, Any]]:
+    """Fetch the newest evidence-vault row per vendor at or before *as_of*."""
+    rows = await pool.fetch(
+        """
+        SELECT DISTINCT ON (vendor_name)
+               vendor_name, vault
+        FROM b2b_evidence_vault
+        WHERE as_of_date <= $1
+          AND analysis_window_days = $2
+        ORDER BY vendor_name, as_of_date DESC, created_at DESC
+        """,
+        as_of,
+        analysis_window_days,
+    )
+    vault_lookup: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        vendor = _canonicalize_vendor(row.get("vendor_name") or "")
+        if not vendor:
+            continue
+        vault = _safe_json(row.get("vault"), default={})
+        if isinstance(vault, dict):
+            vault_lookup[vendor] = vault
+    return vault_lookup
+
+
+async def fetch_all_pool_layers(
+    pool,
+    *,
+    as_of: date,
+    analysis_window_days: int,
+) -> dict[str, dict[str, Any]]:
+    """Load all 6 pool layers and merge into one dict per vendor.
+
+    Returns: {vendor_name: {evidence_vault: {...}, segment: {...},
+    temporal: {...}, displacement: [...], category: {...}, accounts: {...}}}
+    """
+    _POOL_TABLES = [
+        ("b2b_evidence_vault", "vault", "evidence_vault"),
+        ("b2b_segment_intelligence", "segments", "segment"),
+        ("b2b_temporal_intelligence", "temporal", "temporal"),
+        ("b2b_account_intelligence", "accounts", "accounts"),
+    ]
+    result: dict[str, dict[str, Any]] = {}
+
+    for table, col, key in _POOL_TABLES:
+        try:
+            rows = await pool.fetch(
+                f"""
+                SELECT DISTINCT ON (vendor_name)
+                       vendor_name, {col}
+                FROM {table}
+                WHERE as_of_date <= $1
+                  AND analysis_window_days = $2
+                ORDER BY vendor_name, as_of_date DESC, created_at DESC
+                """,
+                as_of,
+                analysis_window_days,
+            )
+            for row in rows:
+                vn = _canonicalize_vendor(row.get("vendor_name") or "")
+                if not vn:
+                    continue
+                data = _safe_json(row.get(col), default={})
+                if isinstance(data, dict):
+                    result.setdefault(vn, {})[key] = data
+        except Exception:
+            logger.debug("Pool layer %s unavailable", table, exc_info=True)
+
+    # Displacement dynamics: keyed by (from_vendor, to_vendor)
+    try:
+        disp_rows = await pool.fetch(
+            """
+            SELECT DISTINCT ON (from_vendor, to_vendor)
+                   from_vendor, to_vendor, dynamics
+            FROM b2b_displacement_dynamics
+            WHERE as_of_date <= $1
+              AND analysis_window_days = $2
+            ORDER BY from_vendor, to_vendor, as_of_date DESC, created_at DESC
+            """,
+            as_of,
+            analysis_window_days,
+        )
+        for row in disp_rows:
+            fv = row.get("from_vendor") or ""
+            data = _safe_json(row.get("dynamics"), default={})
+            if fv and isinstance(data, dict):
+                result.setdefault(fv, {}).setdefault(
+                    "displacement", [],
+                ).append(data)
+    except Exception:
+        logger.debug("Displacement dynamics unavailable", exc_info=True)
+
+    # Category dynamics: keyed by category
+    try:
+        cat_rows = await pool.fetch(
+            """
+            SELECT DISTINCT ON (category)
+                   category, dynamics
+            FROM b2b_category_dynamics
+            WHERE as_of_date <= $1
+              AND analysis_window_days = $2
+            ORDER BY category, as_of_date DESC, created_at DESC
+            """,
+            as_of,
+            analysis_window_days,
+        )
+        cat_map: dict[str, dict] = {}
+        for row in cat_rows:
+            cat = row.get("category") or ""
+            data = _safe_json(row.get("dynamics"), default={})
+            if cat and isinstance(data, dict):
+                cat_map[cat] = data
+        # Attach category to each vendor based on evidence_vault
+        for vn, layers in result.items():
+            ev = layers.get("evidence_vault") or {}
+            cat = ev.get("product_category") or ""
+            if cat and cat in cat_map:
+                layers["category"] = cat_map[cat]
+    except Exception:
+        logger.debug("Category dynamics unavailable", exc_info=True)
+
+    return result
+
+
+def _merge_pain_lookup_with_evidence_vault(
+    raw_pain_lookup: dict[str, list[dict[str, Any]]],
+    evidence_vault_lookup: dict[str, dict[str, Any]] | None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Prefer canonical vault pain rows while preserving raw fallback entries."""
+    merged: dict[str, list[dict[str, Any]]] = {}
+    vendors = set(raw_pain_lookup) | set((evidence_vault_lookup or {}))
+    for vendor in vendors:
+        raw_entries = list(raw_pain_lookup.get(vendor, []))
+        vault_entries: list[dict[str, Any]] = []
+        for item in ((evidence_vault_lookup or {}).get(vendor, {}) or {}).get("weakness_evidence") or []:
+            if str(item.get("evidence_type") or "") != "pain_category":
+                continue
+            key = str(item.get("key") or "").strip().lower()
+            if not key:
+                continue
+            metrics = item.get("supporting_metrics") or {}
+            vault_entries.append({
+                "category": key,
+                "count": int(item.get("mention_count_total") or 0),
+                "avg_urgency": metrics.get("avg_urgency") or metrics.get("avg_urgency_when_mentioned"),
+            })
+        if not vault_entries:
+            if raw_entries:
+                merged[vendor] = raw_entries
+            continue
+        seen = {str(item.get("category") or "").strip().lower() for item in vault_entries}
+        for item in raw_entries:
+            category = str(item.get("category") or "").strip().lower()
+            if category and category not in seen:
+                vault_entries.append(item)
+        vault_entries.sort(key=lambda item: int(item.get("count") or 0), reverse=True)
+        merged[vendor] = vault_entries
+    return merged
+
+
+def _merge_feature_gap_lookup_with_evidence_vault(
+    raw_feature_gap_lookup: dict[str, list[dict[str, Any]]],
+    evidence_vault_lookup: dict[str, dict[str, Any]] | None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Prefer canonical vault feature-gap rows while preserving raw fallback entries."""
+    merged: dict[str, list[dict[str, Any]]] = {}
+    vendors = set(raw_feature_gap_lookup) | set((evidence_vault_lookup or {}))
+    for vendor in vendors:
+        raw_entries = list(raw_feature_gap_lookup.get(vendor, []))
+        vault_entries: list[dict[str, Any]] = []
+        for item in ((evidence_vault_lookup or {}).get(vendor, {}) or {}).get("weakness_evidence") or []:
+            if str(item.get("evidence_type") or "") != "feature_gap":
+                continue
+            label = str(item.get("label") or item.get("key") or "").strip()
+            if not label:
+                continue
+            vault_entries.append({
+                "feature": label,
+                "mentions": int(item.get("mention_count_total") or 0),
+            })
+        if not vault_entries:
+            if raw_entries:
+                merged[vendor] = raw_entries
+            continue
+        seen = {str(item.get("feature") or "").strip().lower() for item in vault_entries}
+        for item in raw_entries:
+            feature = str(item.get("feature") or "").strip().lower()
+            if feature and feature not in seen:
+                vault_entries.append(item)
+        vault_entries.sort(key=lambda item: int(item.get("mentions") or 0), reverse=True)
+        merged[vendor] = vault_entries
+    return merged
+
+
+def _merge_company_lookup_with_evidence_vault(
+    raw_company_lookup: dict[str, list[dict[str, Any]]],
+    evidence_vault_lookup: dict[str, dict[str, Any]] | None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Merge raw company context with canonical vault company signals."""
+    merged: dict[str, list[dict[str, Any]]] = {}
+    vendors = set(raw_company_lookup) | set((evidence_vault_lookup or {}))
+    for vendor in vendors:
+        bucket: dict[str, dict[str, Any]] = {}
+        for item in raw_company_lookup.get(vendor, []):
+            if not isinstance(item, dict):
+                continue
+            company = str(item.get("company") or item.get("company_name") or "").strip()
+            key = normalize_company_name(company)
+            if not key:
+                continue
+            bucket[key] = dict(item)
+            bucket[key]["company"] = company or key
+        for item in ((evidence_vault_lookup or {}).get(vendor, {}) or {}).get("company_signals") or []:
+            key = normalize_company_name(item.get("company_name") or item.get("company") or "")
+            if not key:
+                continue
+            current = bucket.get(key, {})
+            current_urgency = current.get("urgency")
+            signal_urgency = item.get("urgency_score")
+            if current_urgency is None:
+                urgency = signal_urgency
+            elif signal_urgency is None:
+                urgency = current_urgency
+            else:
+                urgency = max(float(current_urgency), float(signal_urgency))
+            bucket[key] = {
+                **current,
+                "company": current.get("company") or str(item.get("company_name") or key),
+                "urgency": urgency,
+                "title": current.get("title") or item.get("buyer_role"),
+                "company_size": current.get("company_size"),
+                "industry": current.get("industry"),
+                "source": item.get("source") or current.get("source"),
+                "buying_stage": item.get("buying_stage") or current.get("buying_stage"),
+                "confidence_score": item.get("confidence_score") if item.get("confidence_score") is not None else current.get("confidence_score"),
+                "decision_maker": item.get("decision_maker") if item.get("decision_maker") is not None else current.get("decision_maker"),
+                "first_seen_at": item.get("first_seen_at") or current.get("first_seen_at"),
+                "last_seen_at": item.get("last_seen_at") or current.get("last_seen_at"),
+                "review_id": item.get("review_id") or current.get("review_id"),
+            }
+        ordered = sorted(
+            bucket.values(),
+            key=lambda item: (
+                -(float(item.get("urgency") or 0)),
+                -(float(item.get("confidence_score") or 0)),
+                str(item.get("company") or ""),
+            ),
+        )
+        if ordered:
+            merged[vendor] = ordered
+    return merged
 
 
 async def _fetch_budget_signals(pool, window_days: int) -> list[dict[str, Any]]:
@@ -2985,6 +3644,7 @@ async def _fetch_timeline_signals(pool, window_days: int, *, limit: int = 50) ->
           AND (
               enrichment->'timeline'->>'contract_end' IS NOT NULL
               OR enrichment->'timeline'->>'evaluation_deadline' IS NOT NULL
+              OR NULLIF(enrichment->'timeline'->>'decision_timeline', '') IS NOT NULL
           )
         ORDER BY (enrichment->>'urgency_score')::numeric DESC
         LIMIT $2
@@ -3298,6 +3958,59 @@ def _build_timeline_lookup(timeline_signals: list[dict]) -> dict[str, list[dict]
     return lookup
 
 
+def _parse_timeline_date(raw: Any) -> date | None:
+    """Parse common timeline date formats from review enrichment."""
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d", "%B %d, %Y", "%b %d, %Y"):
+        try:
+            return datetime.strptime(text[:32], fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _build_active_evaluation_deadlines(
+    timeline_entries: list[dict[str, Any]],
+    *,
+    limit: int,
+    today: date | None = None,
+) -> list[dict[str, Any]]:
+    """Convert raw timeline entries into actionable deadline/timing signals."""
+    today = today or date.today()
+    entries: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for row in timeline_entries:
+        eval_date = _parse_timeline_date(row.get("evaluation_deadline"))
+        contract_date = _parse_timeline_date(row.get("contract_end"))
+        timeline = str(row.get("decision_timeline") or "").strip().lower()
+        if eval_date and eval_date < today:
+            eval_date = None
+        if contract_date and contract_date < today:
+            contract_date = None
+        trigger = "deadline" if eval_date else ("contract_end" if contract_date else "timeline_signal")
+        if trigger == "timeline_signal" and timeline in {"", "unknown", "none", "n/a"}:
+            continue
+        dedupe = (str(row.get("company") or ""), str(eval_date or contract_date or ""), timeline)
+        if dedupe in seen:
+            continue
+        seen.add(dedupe)
+        entries.append({
+            "company": row.get("company"),
+            "evaluation_deadline": eval_date.isoformat() if eval_date else None,
+            "contract_end": contract_date.isoformat() if contract_date else None,
+            "decision_timeline": row.get("decision_timeline"),
+            "urgency": row.get("urgency", 0),
+            "title": row.get("title"),
+            "company_size": row.get("company_size"),
+            "industry": row.get("industry"),
+            "trigger_type": trigger,
+        })
+    entries.sort(key=lambda item: (0 if item.get("evaluation_deadline") else 1, item.get("evaluation_deadline") or item.get("contract_end") or "9999-12-31", -float(item.get("urgency") or 0)))
+    return entries[:limit]
+
+
 def _build_complaint_lookup(rows: list[dict]) -> dict[str, list[dict]]:
     """vendor -> sorted list of {text, mentions}."""
     lookup: dict[str, list[dict]] = {}
@@ -3455,9 +4168,1429 @@ def _build_insider_lookup(rows: list[Any]) -> dict[str, dict]:
     return result
 
 
+def _normalize_vault_feature_key(raw: Any) -> str:
+    """Normalize a feature-gap label into the vault key format."""
+    return str(raw or "").strip().lower().replace(" ", "_")[:50]
+
+
+def _normalize_vault_aspect_key(raw: Any) -> str:
+    """Normalize a positive-aspect label into the vault key format."""
+    return str(raw or "").strip().lower()
+
+
+def _evidence_rollup_review_date(row: dict[str, Any]) -> date | None:
+    """Return the best available event date for review-level vault rollups."""
+    raw = row.get("reviewed_at") or row.get("enriched_at")
+    if isinstance(raw, datetime):
+        return raw.date()
+    if isinstance(raw, date):
+        return raw
+    parsed = _parse_timeline_date(raw)
+    return parsed if parsed else None
+
+
+def _quote_reviewed_at_text(raw: Any) -> str | None:
+    """Convert quote provenance timestamps into a stable ISO date string."""
+    if isinstance(raw, datetime):
+        return raw.date().isoformat()
+    if isinstance(raw, date):
+        return raw.isoformat()
+    text = str(raw or "").strip()
+    return text[:10] if text else None
+
+
+def _build_evidence_vault_trend(
+    recent_count: int,
+    prior_count: int,
+) -> dict[str, Any]:
+    """Classify evidence trend from recent and prior same-length windows."""
+    direction = "stable"
+    if prior_count <= 0 and recent_count >= _evidence_vault_trend_new_min_recent():
+        direction = "new"
+    elif prior_count > 0:
+        ratio = recent_count / prior_count
+        if recent_count > prior_count and ratio >= _evidence_vault_trend_accelerating_ratio():
+            direction = "accelerating"
+        elif recent_count < prior_count and ratio <= _evidence_vault_trend_declining_ratio():
+            direction = "declining"
+    return {
+        "direction": direction,
+        "prior_count": prior_count,
+        "recent_count": recent_count,
+        "delta_pct": round((recent_count - prior_count) / prior_count, 2) if prior_count > 0 else None,
+        "basis": "recent_vs_prior_window",
+    }
+
+
+def _build_evidence_quote_lookup(
+    quotes_by_vendor: dict[str, list[dict[str, Any]]],
+) -> dict[str, dict[str, list[dict[str, Any]]]]:
+    """Group vendor quotes by review ID for weakness/strength matching."""
+    lookup: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for raw_vendor, quotes in (quotes_by_vendor or {}).items():
+        vendor = _canonicalize_vendor(raw_vendor or "")
+        if not vendor:
+            continue
+        bucket: dict[str, list[dict[str, Any]]] = {}
+        for item in quotes or []:
+            if not isinstance(item, dict):
+                continue
+            review_id = str(item.get("review_id") or "").strip()
+            if not review_id:
+                continue
+            bucket.setdefault(review_id, []).append(item)
+        for review_id, items in bucket.items():
+            items.sort(key=_battle_card_quote_sort_key, reverse=True)
+            bucket[review_id] = items
+        lookup[vendor] = bucket
+    return lookup
+
+
+def _build_evidence_vault_pass2_rollups(
+    review_rows: list[dict[str, Any]],
+    quotes_by_vendor: dict[str, list[dict[str, Any]]],
+    *,
+    recent_window_days: int,
+    today: date | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Aggregate review-level pass-2 rollups for the evidence vault."""
+    today = today or date.today()
+    recent_cutoff = today - timedelta(days=max(int(recent_window_days), 1))
+    prior_cutoff = recent_cutoff - timedelta(days=max(int(recent_window_days), 1))
+    supporting_limit = _evidence_vault_supporting_review_limit()
+    segment_limit = _evidence_vault_segment_limit()
+    role_limit = _evidence_vault_role_limit()
+
+    quote_lookup = _build_evidence_quote_lookup(quotes_by_vendor)
+    vendor_rollups: dict[str, dict[str, Any]] = {}
+
+    def _vendor_bucket(vendor: str) -> dict[str, Any]:
+        return vendor_rollups.setdefault(vendor, {
+            "reviews_in_recent_window": 0,
+            "_recent_review_ids": set(),
+            "weaknesses": {},
+            "strengths": {},
+        })
+
+    def _entry(bucket: dict[str, Any], evidence_type: str, key: str) -> dict[str, Any]:
+        return bucket.setdefault((evidence_type, key), {
+            "mention_count_recent": 0,
+            "_prior_count": 0,
+            "_urgency_sum": 0.0,
+            "_urgency_count": 0,
+            "_rating_sum": 0.0,
+            "_rating_count": 0,
+            "_segment_counts": {},
+            "_role_counts": {},
+            "_supporting_reviews": [],
+            "_supporting_seen": set(),
+            "best_quote": None,
+            "quote_source": None,
+            "_best_quote_key": None,
+        })
+
+    def _update_entry(
+        item: dict[str, Any],
+        *,
+        is_recent: bool,
+        is_prior: bool,
+        review_id: str | None,
+        urgency: float,
+        rating_5: float | None,
+        segment: str | None,
+        role: str | None,
+        quote_item: dict[str, Any] | None,
+    ) -> None:
+        if is_recent:
+            item["mention_count_recent"] += 1
+        elif is_prior:
+            item["_prior_count"] += 1
+        item["_urgency_sum"] += urgency
+        item["_urgency_count"] += 1
+        if rating_5 is not None:
+            item["_rating_sum"] += rating_5
+            item["_rating_count"] += 1
+        if segment:
+            seg = item["_segment_counts"].setdefault(segment, {"count": 0, "recent_count": 0})
+            seg["count"] += 1
+            if is_recent:
+                seg["recent_count"] += 1
+        if role:
+            role_entry = item["_role_counts"].setdefault(role, {"count": 0, "recent_count": 0})
+            role_entry["count"] += 1
+            if is_recent:
+                role_entry["recent_count"] += 1
+        if review_id and review_id not in item["_supporting_seen"]:
+            item["_supporting_seen"].add(review_id)
+            item["_supporting_reviews"].append((urgency, review_id))
+        if quote_item:
+            quote_key = _battle_card_quote_sort_key(quote_item)
+            if item["_best_quote_key"] is None or quote_key > item["_best_quote_key"]:
+                item["_best_quote_key"] = quote_key
+                item["best_quote"] = quote_item.get("quote")
+                item["quote_source"] = {
+                    "review_id": str(quote_item.get("review_id") or "") or None,
+                    "source": quote_item.get("source"),
+                    "company": quote_item.get("company"),
+                    "reviewer_title": quote_item.get("title"),
+                    "company_size": quote_item.get("company_size"),
+                    "industry": quote_item.get("industry"),
+                    "reviewed_at": _quote_reviewed_at_text(quote_item.get("reviewed_at")),
+                    "rating": float(quote_item["rating"]) if quote_item.get("rating") is not None else None,
+                }
+
+    for row in review_rows or []:
+        vendor = _canonicalize_vendor(row.get("vendor_name") or row.get("vendor") or "")
+        if not vendor:
+            continue
+        vendor_bucket = _vendor_bucket(vendor)
+        review_id = str(row.get("review_id") or "").strip() or None
+        review_date = _evidence_rollup_review_date(row)
+        is_recent = bool(review_date and review_date >= recent_cutoff)
+        is_prior = bool(review_date and prior_cutoff <= review_date < recent_cutoff)
+        if review_id and is_recent and review_id not in vendor_bucket["_recent_review_ids"]:
+            vendor_bucket["_recent_review_ids"].add(review_id)
+            vendor_bucket["reviews_in_recent_window"] += 1
+
+        urgency = float(row.get("urgency") or 0.0)
+        rating = row.get("rating")
+        rating_max = row.get("rating_max")
+        rating_5 = None
+        if rating is not None and rating_max:
+            try:
+                rating_5 = round((float(rating) / float(rating_max)) * 5.0, 2)
+            except (TypeError, ValueError, ZeroDivisionError):
+                rating_5 = None
+
+        segment = str(row.get("company_size_raw") or "").strip() or None
+        role = str(row.get("reviewer_title") or row.get("role_level") or "").strip() or None
+        quote_item = None
+        if review_id:
+            quote_item = (quote_lookup.get(vendor, {}).get(review_id) or [None])[0]
+
+        pain_key = str(row.get("pain_category") or "").strip().lower()
+        if pain_key:
+            item = _entry(vendor_bucket["weaknesses"], "pain_category", pain_key)
+            _update_entry(
+                item,
+                is_recent=is_recent,
+                is_prior=is_prior,
+                review_id=review_id,
+                urgency=urgency,
+                rating_5=rating_5,
+                segment=segment,
+                role=role,
+                quote_item=quote_item,
+            )
+
+        feature_gaps = {
+            str(gap).strip() for gap in (_safe_json(row.get("feature_gaps"), default=[]) or [])
+            if str(gap).strip()
+        }
+        for raw_gap in feature_gaps:
+            key = _normalize_vault_feature_key(raw_gap)
+            if not key:
+                continue
+            item = _entry(vendor_bucket["weaknesses"], "feature_gap", key)
+            _update_entry(
+                item,
+                is_recent=is_recent,
+                is_prior=is_prior,
+                review_id=review_id,
+                urgency=urgency,
+                rating_5=rating_5,
+                segment=segment,
+                role=role,
+                quote_item=quote_item,
+            )
+
+        positive_aspects = {
+            str(aspect).strip() for aspect in (_safe_json(row.get("positive_aspects"), default=[]) or [])
+            if str(aspect).strip()
+        }
+        for raw_aspect in positive_aspects:
+            key = _normalize_vault_aspect_key(raw_aspect)
+            if not key:
+                continue
+            item = _entry(vendor_bucket["strengths"], "retention_signal", key)
+            _update_entry(
+                item,
+                is_recent=is_recent,
+                is_prior=is_prior,
+                review_id=review_id,
+                urgency=urgency,
+                rating_5=rating_5,
+                segment=segment,
+                role=role,
+                quote_item=quote_item,
+            )
+
+    for vendor, bucket in vendor_rollups.items():
+        bucket.pop("_recent_review_ids", None)
+        for section_name in ("weaknesses", "strengths"):
+            finalized: dict[tuple[str, str], dict[str, Any]] = {}
+            for section_key, item in bucket[section_name].items():
+                segments = sorted(
+                    item["_segment_counts"].items(),
+                    key=lambda entry: (-entry[1]["count"], -entry[1]["recent_count"], entry[0]),
+                )
+                roles = sorted(
+                    item["_role_counts"].items(),
+                    key=lambda entry: (-entry[1]["count"], -entry[1]["recent_count"], entry[0]),
+                )
+                supporting = sorted(
+                    item["_supporting_reviews"],
+                    key=lambda entry: (-entry[0], entry[1]),
+                )
+                metrics: dict[str, Any] = {}
+                if item["_urgency_count"]:
+                    metrics["avg_urgency_when_mentioned"] = round(
+                        item["_urgency_sum"] / item["_urgency_count"], 1,
+                    )
+                if item["_rating_count"]:
+                    metrics["avg_rating_when_mentioned"] = round(
+                        item["_rating_sum"] / item["_rating_count"], 2,
+                    )
+                finalized[section_key] = {
+                    "best_quote": item["best_quote"],
+                    "quote_source": item["quote_source"],
+                    "mention_count_recent": item["mention_count_recent"],
+                    "trend": _build_evidence_vault_trend(
+                        item["mention_count_recent"],
+                        item["_prior_count"],
+                    ),
+                    "affected_segments": [
+                        {
+                            "segment": segment,
+                            "count": counts["count"],
+                            "recent_count": counts["recent_count"],
+                        }
+                        for segment, counts in segments[:segment_limit]
+                    ] or None,
+                    "affected_roles": [
+                        {
+                            "role": role_name,
+                            "count": counts["count"],
+                            "recent_count": counts["recent_count"],
+                        }
+                        for role_name, counts in roles[:role_limit]
+                    ] or None,
+                    "supporting_metrics": metrics,
+                    "supporting_review_ids": [
+                        review_id for _, review_id in supporting[:supporting_limit]
+                    ],
+                }
+            bucket[section_name] = finalized
+    return vendor_rollups
+
+
+def _compute_company_signal_confidence(signal: dict[str, Any]) -> float:
+    """Compute the canonical confidence score for a company-signal row."""
+    source = str(signal.get("source") or "").strip()
+    source_dist = {source: 1} if source else {}
+    score = _compute_evidence_confidence(1, source_dist)
+    completeness = sum(
+        1
+        for field in (
+            signal.get("decision_maker"),
+            signal.get("buying_stage"),
+            signal.get("seat_count"),
+        )
+        if field is not None
+    )
+    return round(min(score + completeness * 0.05, 1.0), 2)
+
+
+def _merge_canonical_company_signals(
+    current_high_intent: list[dict[str, Any]],
+    persisted_lookup: dict[str, list[dict[str, Any]]] | None,
+    *,
+    as_of: datetime | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Merge current high-intent rows with canonical persisted company signals."""
+    as_of = as_of or datetime.now(timezone.utc)
+    merged: dict[str, dict[str, dict[str, Any]]] = {}
+
+    def _signal_rank(signal: dict[str, Any]) -> tuple[float, float, int, int, int]:
+        urgency = signal.get("urgency_score")
+        if urgency is None:
+            urgency = signal.get("urgency")
+        try:
+            urgency_value = float(urgency) if urgency is not None else 0.0
+        except (TypeError, ValueError):
+            urgency_value = 0.0
+        confidence = signal.get("confidence_score")
+        if confidence is None:
+            confidence_value = _compute_company_signal_confidence(signal)
+        else:
+            try:
+                confidence_value = float(confidence)
+            except (TypeError, ValueError):
+                confidence_value = 0.0
+        return (
+            urgency_value,
+            confidence_value,
+            1 if signal.get("decision_maker") else 0,
+            1 if signal.get("review_id") else 0,
+            1 if signal.get("buying_stage") else 0,
+        )
+
+    for vendor, items in (persisted_lookup or {}).items():
+        vendor_bucket = merged.setdefault(vendor, {})
+        for item in items or []:
+            company_name = normalize_company_name(item.get("company_name") or "")
+            if not company_name:
+                continue
+            current = dict(item)
+            current["company_name"] = company_name
+            current["_merge_rank"] = _signal_rank(current)
+            vendor_bucket[company_name] = current
+
+    for hi in current_high_intent or []:
+        vendor = _canonicalize_vendor(hi.get("vendor") or hi.get("vendor_name") or "")
+        company_name = normalize_company_name(hi.get("company") or hi.get("company_name") or "")
+        if not vendor or not company_name:
+            continue
+        vendor_bucket = merged.setdefault(vendor, {})
+        existing = vendor_bucket.get(company_name, {})
+        current_confidence = _compute_company_signal_confidence(hi)
+        current_rank = _signal_rank({
+            "urgency_score": hi.get("urgency_score"),
+            "urgency": hi.get("urgency"),
+            "confidence_score": current_confidence,
+            "decision_maker": hi.get("decision_maker"),
+            "review_id": hi.get("review_id"),
+            "buying_stage": hi.get("buying_stage"),
+        })
+        existing_rank = existing.get("_merge_rank") or (0.0, 0.0, 0, 0, 0)
+        field_source = hi if current_rank >= existing_rank else existing
+        fallback_source = existing if field_source is hi else hi
+        now_text = as_of.isoformat()
+        urgency_score = hi.get("urgency")
+        if urgency_score is None:
+            urgency_score = hi.get("urgency_score")
+        existing_urgency = existing.get("urgency_score")
+        if existing_urgency is None:
+            merged_urgency = urgency_score
+        elif urgency_score is None:
+            merged_urgency = existing_urgency
+        else:
+            merged_urgency = max(float(existing_urgency), float(urgency_score))
+        vendor_bucket[company_name] = {
+            "company_name": company_name,
+            "vendor_name": vendor,
+            "urgency_score": float(merged_urgency) if merged_urgency is not None else None,
+            "pain_category": (
+                field_source.get("pain")
+                or field_source.get("pain_category")
+                or fallback_source.get("pain")
+                or fallback_source.get("pain_category")
+            ),
+            "buyer_role": (
+                field_source.get("role_level")
+                or field_source.get("buyer_role")
+                or fallback_source.get("role_level")
+                or fallback_source.get("buyer_role")
+            ),
+            "decision_maker": (
+                field_source.get("decision_maker")
+                if field_source.get("decision_maker") is not None
+                else fallback_source.get("decision_maker")
+            ),
+            "seat_count": (
+                field_source.get("seat_count")
+                if field_source.get("seat_count") is not None
+                else fallback_source.get("seat_count")
+            ),
+            "contract_end": (
+                str(field_source.get("contract_end") or "")
+                or str(fallback_source.get("contract_end") or "")
+                or None
+            ),
+            "buying_stage": field_source.get("buying_stage") or fallback_source.get("buying_stage"),
+            "review_id": (
+                str(field_source.get("review_id") or "")
+                or str(fallback_source.get("review_id") or "")
+                or None
+            ),
+            "source": field_source.get("source") or fallback_source.get("source"),
+            "confidence_score": max(
+                float(existing.get("confidence_score") or 0),
+                current_confidence,
+            ),
+            "first_seen_at": existing.get("first_seen_at") or now_text,
+            "last_seen_at": now_text,
+            "_merge_rank": max(existing_rank, current_rank),
+        }
+
+    result: dict[str, list[dict[str, Any]]] = {}
+    for vendor, items in merged.items():
+        ordered = sorted(
+            items.values(),
+            key=lambda item: (
+                -(float(item.get("urgency_score") or 0)),
+                -(float(item.get("confidence_score") or 0)),
+                str(item.get("company_name") or ""),
+            ),
+        )
+        cleaned: list[dict[str, Any]] = []
+        for item in ordered:
+            current = dict(item)
+            current.pop("_merge_rank", None)
+            cleaned.append(current)
+        result[vendor] = cleaned
+    return result
+
+
 # ------------------------------------------------------------------
 # Layer 4: deterministic builders (depend on all above)
 # ------------------------------------------------------------------
+
+
+_EVIDENCE_VAULT_SCHEMA_VERSION = "v1"
+
+
+def build_evidence_vault(
+    vendor_name: str,
+    vs: dict[str, Any],
+    *,
+    pain_entries: list[dict],
+    feature_gap_entries: list[dict],
+    quotes: list[dict],
+    positive_entries: list[dict],
+    product_profile: dict | None = None,
+    keyword_spikes: dict | None = None,
+    company_signals: list[dict],
+    provenance: dict | None = None,
+    data_context: dict | None = None,
+    pass2_rollups: dict[str, Any] | None = None,
+    dm_rate: float | None = None,
+    price_rate: float | None = None,
+    product_category: str | None = None,
+    analysis_window_days: int = 90,
+    recent_window_days: int = 30,
+) -> dict[str, Any]:
+    """Build a canonical evidence vault object for a single vendor.
+
+    Pass 2 populates review-level recency, trend, per-weakness quote matching,
+    affected segments, affected roles, supporting review IDs, and recent-review
+    counts when direct review evidence is available.
+    """
+    from datetime import date
+
+    as_of = date.today().isoformat()
+    pass2 = pass2_rollups or {}
+    weakness_rollups = pass2.get("weaknesses") if isinstance(pass2.get("weaknesses"), dict) else {}
+    strength_rollups = pass2.get("strengths") if isinstance(pass2.get("strengths"), dict) else {}
+
+    # --- Weakness evidence ---
+    weakness_evidence: list[dict] = []
+    _seen_keys: set[str] = set()
+
+    # 1. Pain categories
+    for p in pain_entries:
+        key = str(p.get("category") or p.get("pain") or "").lower().strip()
+        if not key or key in _seen_keys:
+            continue
+        _seen_keys.add(key)
+        label = key.replace("_", " ").title()
+        rollup = weakness_rollups.get(("pain_category", key), {})
+        metrics = {"avg_urgency": p.get("avg_urgency")}
+        metrics.update(rollup.get("supporting_metrics") or {})
+        weakness_evidence.append({
+            "key": key,
+            "label": label,
+            "evidence_type": "pain_category",
+            "best_quote": rollup.get("best_quote"),
+            "quote_source": rollup.get("quote_source"),
+            "mention_count_total": p.get("complaint_count") or p.get("count") or 0,
+            "mention_count_recent": rollup.get("mention_count_recent"),
+            "trend": rollup.get("trend"),
+            "affected_segments": rollup.get("affected_segments"),
+            "affected_roles": rollup.get("affected_roles"),
+            "supporting_metrics": metrics,
+            "supporting_review_ids": rollup.get("supporting_review_ids") or [],
+            "confidence_score": None,
+        })
+
+    # 2. Feature gaps
+    for fg in feature_gap_entries:
+        raw = str(fg.get("feature_gap") or fg.get("feature") or "").strip()
+        if not raw:
+            continue
+        key = _normalize_vault_feature_key(raw)
+        if key in _seen_keys:
+            continue
+        _seen_keys.add(key)
+        rollup = weakness_rollups.get(("feature_gap", key), {})
+        weakness_evidence.append({
+            "key": key,
+            "label": raw,
+            "evidence_type": "feature_gap",
+            "best_quote": rollup.get("best_quote"),
+            "quote_source": rollup.get("quote_source"),
+            "mention_count_total": fg.get("mentions") or 0,
+            "mention_count_recent": rollup.get("mention_count_recent"),
+            "trend": rollup.get("trend"),
+            "affected_segments": rollup.get("affected_segments"),
+            "affected_roles": rollup.get("affected_roles"),
+            "supporting_metrics": rollup.get("supporting_metrics") or {},
+            "supporting_review_ids": rollup.get("supporting_review_ids") or [],
+            "confidence_score": None,
+        })
+
+    # 3. Product profile weaknesses
+    if product_profile:
+        pp_weaknesses = _safe_json(product_profile.get("weaknesses"), default=[])
+        for w in pp_weaknesses:
+            if isinstance(w, str):
+                area = w.lower().strip()
+                score = None
+                evidence_count = 0
+            elif isinstance(w, dict):
+                area = str(w.get("area") or "").lower().strip()
+                score = w.get("score")
+                evidence_count = w.get("evidence_count") or 0
+            else:
+                continue
+            if not area or area in _seen_keys:
+                continue
+            _seen_keys.add(area)
+            rollup = weakness_rollups.get(("satisfaction_area", area), {})
+            metrics = {"satisfaction_score": score}
+            metrics.update(rollup.get("supporting_metrics") or {})
+            weakness_evidence.append({
+                "key": area,
+                "label": area.replace("_", " ").title(),
+                "evidence_type": "satisfaction_area",
+                "best_quote": rollup.get("best_quote"),
+                "quote_source": rollup.get("quote_source"),
+                "mention_count_total": evidence_count,
+                "mention_count_recent": rollup.get("mention_count_recent"),
+                "trend": rollup.get("trend"),
+                "affected_segments": rollup.get("affected_segments"),
+                "affected_roles": rollup.get("affected_roles"),
+                "supporting_metrics": metrics,
+                "supporting_review_ids": rollup.get("supporting_review_ids") or [],
+                "confidence_score": None,
+            })
+
+    # Sort weaknesses by mention count descending
+    weakness_evidence.sort(key=lambda w: w["mention_count_total"] or 0, reverse=True)
+
+    # Derive pass-1 confidence: based on mention count + evidence type coverage
+    total_mentions = sum(w["mention_count_total"] or 0 for w in weakness_evidence) or 1
+    for w in weakness_evidence:
+        mc = w["mention_count_total"] or 0
+        share = mc / total_mentions
+        type_bonus = 0.1 if w["evidence_type"] == "pain_category" else 0.0
+        w["confidence_score"] = round(min(0.95, share + type_bonus + (0.1 if mc >= 10 else 0.0)), 2)
+
+    # Fallback: assign the top vendor quote to the top weakness if no direct
+    # weakness-level quote was matched from pass-2 review evidence.
+    if weakness_evidence and quotes and not any(item.get("best_quote") for item in weakness_evidence):
+        top_q = quotes[0] if quotes else None
+        if top_q:
+            weakness_evidence[0]["best_quote"] = top_q.get("quote")
+            weakness_evidence[0]["quote_source"] = {
+                "review_id": str(top_q.get("review_id") or ""),
+                "source": top_q.get("source"),
+                "company": top_q.get("company"),
+                "reviewer_title": top_q.get("title"),
+                "company_size": top_q.get("company_size"),
+                "industry": top_q.get("industry"),
+                "reviewed_at": _quote_reviewed_at_text(top_q.get("reviewed_at")),
+                "rating": float(top_q["rating"]) if top_q.get("rating") is not None else None,
+            }
+
+    # --- Strength evidence ---
+    strength_evidence: list[dict] = []
+    _seen_strengths: set[str] = set()
+
+    # 1. Positive aspects
+    for pa in positive_entries:
+        aspect = str(pa.get("aspect") or "").lower().strip()
+        if not aspect or aspect in _seen_strengths:
+            continue
+        _seen_strengths.add(aspect)
+        rollup = strength_rollups.get(("retention_signal", aspect), {})
+        strength_evidence.append({
+            "key": aspect,
+            "label": aspect.replace("_", " ").title(),
+            "evidence_type": "retention_signal",
+            "best_quote": rollup.get("best_quote"),
+            "quote_source": rollup.get("quote_source"),
+            "mention_count_total": pa.get("mentions") or 0,
+            "mention_count_recent": rollup.get("mention_count_recent"),
+            "trend": rollup.get("trend"),
+            "affected_segments": rollup.get("affected_segments"),
+            "affected_roles": rollup.get("affected_roles"),
+            "supporting_metrics": rollup.get("supporting_metrics") or {},
+            "supporting_review_ids": rollup.get("supporting_review_ids") or [],
+            "confidence_score": None,
+        })
+
+    # 2. Product profile strengths
+    if product_profile:
+        pp_strengths = _safe_json(product_profile.get("strengths"), default=[])
+        for s in pp_strengths:
+            if isinstance(s, str):
+                area = s.lower().strip()
+                score = None
+                evidence_count = 0
+            elif isinstance(s, dict):
+                area = str(s.get("area") or "").lower().strip()
+                score = s.get("score")
+                evidence_count = s.get("evidence_count") or 0
+            else:
+                continue
+            if not area or area in _seen_strengths:
+                continue
+            _seen_strengths.add(area)
+            rollup = strength_rollups.get(("satisfaction_area", area), {})
+            metrics = {"satisfaction_score": score}
+            metrics.update(rollup.get("supporting_metrics") or {})
+            strength_evidence.append({
+                "key": area,
+                "label": area.replace("_", " ").title(),
+                "evidence_type": "satisfaction_area",
+                "best_quote": rollup.get("best_quote"),
+                "quote_source": rollup.get("quote_source"),
+                "mention_count_total": evidence_count,
+                "mention_count_recent": rollup.get("mention_count_recent"),
+                "trend": rollup.get("trend"),
+                "affected_segments": rollup.get("affected_segments"),
+                "affected_roles": rollup.get("affected_roles"),
+                "supporting_metrics": metrics,
+                "supporting_review_ids": rollup.get("supporting_review_ids") or [],
+                "confidence_score": None,
+            })
+
+    strength_evidence.sort(key=lambda s: s["mention_count_total"] or 0, reverse=True)
+
+    # Derive pass-1 confidence for strengths
+    total_str_mentions = sum(s["mention_count_total"] or 0 for s in strength_evidence) or 1
+    for s in strength_evidence:
+        mc = s["mention_count_total"] or 0
+        share = mc / total_str_mentions
+        s["confidence_score"] = round(min(0.95, share + (0.1 if mc >= 10 else 0.0)), 2)
+
+    # --- Metric snapshot ---
+    def _sf(v: Any) -> float | None:
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    kw = keyword_spikes or {}
+    metric_snapshot = {
+        "snapshot_date": as_of,
+        "total_reviews": vs.get("total_reviews") or 0,
+        "reviews_in_analysis_window": vs.get("total_reviews") or 0,
+        "reviews_in_recent_window": int(pass2.get("reviews_in_recent_window") or 0),
+        "churn_density": _sf(vs.get("churn_density")),
+        "avg_urgency": _sf(vs.get("avg_urgency")),
+        "recommend_yes": vs.get("recommend_yes") or 0,
+        "recommend_no": vs.get("recommend_no") or 0,
+        "recommend_ratio": _sf(vs.get("recommend_ratio")) or (
+            round((vs.get("recommend_yes") or 0) / max((vs.get("recommend_yes") or 0) + (vs.get("recommend_no") or 0), 1), 2)
+        ),
+        "price_complaint_rate": _sf(price_rate),
+        "dm_churn_rate": _sf(dm_rate),
+        "positive_review_pct": _sf(vs.get("positive_review_pct")),
+        "displacement_mention_count": vs.get("displacement_mention_count") or 0,
+        "keyword_spike_count": kw.get("spike_count") or 0,
+    }
+
+    # --- Company signals (pre-filtered for this vendor) ---
+    cs_out: list[dict] = []
+    for cs in company_signals:
+        cs_out.append({
+            "company_name": cs.get("company") or cs.get("company_name") or "",
+            "signal_type": "churning",
+            "urgency_score": _sf(cs.get("urgency") or cs.get("urgency_score")),
+            "pain_category": cs.get("pain") or cs.get("pain_category"),
+            "buyer_role": cs.get("role_level") or cs.get("buyer_role"),
+            "decision_maker": cs.get("decision_maker"),
+            "seat_count": cs.get("seat_count"),
+            "contract_end": str(cs.get("contract_end") or "") or None,
+            "buying_stage": cs.get("buying_stage"),
+            "review_id": str(cs.get("review_id") or ""),
+            "source": cs.get("source"),
+            "confidence_score": _sf(cs.get("confidence_score")),
+            "first_seen_at": str(cs.get("first_seen_at") or "") or None,
+            "last_seen_at": str(cs.get("last_seen_at") or "") or None,
+        })
+
+    # --- Provenance ---
+    prov = provenance or {}
+    dc = data_context or {}
+    enrichment_period = dc.get("enrichment_period") or {}
+    provenance_out = {
+        "sources": list((prov.get("source_distribution") or {}).keys()),
+        "source_distribution": prov.get("source_distribution") or {},
+        "sample_review_ids": [str(rid) for rid in (prov.get("sample_review_ids") or [])[:5]],
+        "enrichment_window_start": str(prov.get("review_window_start") or enrichment_period.get("earliest") or ""),
+        "enrichment_window_end": str(prov.get("review_window_end") or enrichment_period.get("latest") or ""),
+    }
+
+    return {
+        "vendor_name": vendor_name,
+        "schema_version": _EVIDENCE_VAULT_SCHEMA_VERSION,
+        "as_of_date": as_of,
+        "analysis_window_days": analysis_window_days,
+        "recent_window_days": recent_window_days,
+        "product_category": product_category or "",
+        "weakness_evidence": weakness_evidence,
+        "strength_evidence": strength_evidence,
+        "company_signals": cs_out,
+        "metric_snapshot": metric_snapshot,
+        "provenance": provenance_out,
+    }
+
+
+_SEGMENT_INTELLIGENCE_SCHEMA_VERSION = "v1"
+
+
+def build_segment_intelligence(
+    vendor_name: str,
+    *,
+    buyer_auth: dict | None = None,
+    department_entries: list[dict] | None = None,
+    budget: dict | None = None,
+    dm_rate: float | None = None,
+    contract_value_entries: list[dict] | None = None,
+    usage_duration_entries: list[dict] | None = None,
+    use_case_entries: list[dict] | None = None,
+    analysis_window_days: int = 90,
+) -> dict[str, Any]:
+    """Build a canonical segment intelligence object for a single vendor.
+
+    Pass 1: populates affected_roles, departments, company sizes, budget
+    pressure, contract/duration segments, and top use cases under pressure.
+    Fields requiring cross-joins or LLM synthesis are set to null.
+    """
+    from datetime import date
+
+    as_of = date.today().isoformat()
+    ba = buyer_auth or {}
+    bg = budget or {}
+
+    def _sf(v: Any) -> float | None:
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    # --- Affected roles (from buyer_auth_lookup) ---
+    affected_roles: list[dict] = []
+    role_types = ba.get("role_types") or {}
+    buying_stages = ba.get("buying_stages") or {}
+    for rt, count in sorted(role_types.items(), key=lambda x: -x[1]):
+        affected_roles.append({
+            "role_type": rt,
+            "review_count": count,
+            "top_buying_stage": None,
+            "churn_rate": None,
+            "top_pain": None,
+        })
+    # Attach top buying stage to the top role if stages exist
+    if affected_roles and buying_stages:
+        top_stage = max(buying_stages, key=buying_stages.get)
+        affected_roles[0]["top_buying_stage"] = top_stage
+
+    # --- Affected departments ---
+    affected_departments: list[dict] = []
+    for d in (department_entries or []):
+        affected_departments.append({
+            "department": d.get("department", ""),
+            "review_count": d.get("review_count", 0),
+            "churn_rate": _sf(d.get("churn_rate")),
+            "avg_urgency": _sf(d.get("avg_urgency")),
+        })
+
+    # --- Company size signals ---
+    affected_company_sizes = {
+        "avg_seat_count": _sf(bg.get("avg_seat_count")),
+        "median_seat_count": _sf(bg.get("median_seat_count")),
+        "max_seat_count": _sf(bg.get("max_seat_count")),
+        "size_distribution": None,
+    }
+
+    # --- Budget pressure ---
+    budget_pressure = {
+        "price_increase_count": bg.get("price_increase_count") or 0,
+        "price_increase_rate": _sf(bg.get("price_increase_rate")),
+        "dm_churn_rate": _sf(dm_rate),
+        "annual_spend_signals": bg.get("annual_spend_signals") or [],
+        "price_per_seat_signals": bg.get("price_per_seat_signals") or [],
+    }
+
+    # --- Contract segments ---
+    contract_segments: list[dict] = []
+    for cv in (contract_value_entries or []):
+        contract_segments.append({
+            "segment": cv.get("segment", ""),
+            "count": cv.get("count", 0),
+            "churn_rate": _sf(cv.get("churn_rate")),
+        })
+
+    # --- Usage duration segments ---
+    usage_duration_segments: list[dict] = []
+    for ud in (usage_duration_entries or []):
+        usage_duration_segments.append({
+            "duration": ud.get("duration", ""),
+            "count": ud.get("count", 0),
+            "churn_rate": _sf(ud.get("churn_rate")),
+        })
+
+    # --- Top use cases under pressure ---
+    top_use_cases: list[dict] = []
+    for uc in (use_case_entries or [])[:10]:
+        top_use_cases.append({
+            "use_case": uc.get("module") or uc.get("use_case_name") or uc.get("use_case", ""),
+            "mention_count": uc.get("mentions") or uc.get("mention_count", 0),
+            "lock_in_level": None,
+            "confidence_score": _sf(uc.get("confidence_score")),
+        })
+
+    # --- Buying stage distribution ---
+    buying_stage_distribution: list[dict] = []
+    for stage, count in sorted(buying_stages.items(), key=lambda x: -x[1]):
+        buying_stage_distribution.append({
+            "stage": stage,
+            "count": count,
+        })
+
+    return {
+        "vendor_name": vendor_name,
+        "schema_version": _SEGMENT_INTELLIGENCE_SCHEMA_VERSION,
+        "as_of_date": as_of,
+        "analysis_window_days": analysis_window_days,
+        "affected_roles": affected_roles,
+        "affected_departments": affected_departments,
+        "affected_company_sizes": affected_company_sizes,
+        "budget_pressure": budget_pressure,
+        "contract_segments": contract_segments,
+        "usage_duration_segments": usage_duration_segments,
+        "top_use_cases_under_pressure": top_use_cases,
+        "buying_stage_distribution": buying_stage_distribution,
+        "best_fit_challenger_segments": None,
+    }
+
+
+_TEMPORAL_INTELLIGENCE_SCHEMA_VERSION = "v1"
+
+
+def build_temporal_intelligence(
+    vendor_name: str,
+    *,
+    timeline_entries: list[dict] | None = None,
+    keyword_spikes: dict | None = None,
+    sentiment: dict | None = None,
+    analysis_window_days: int = 90,
+) -> dict[str, Any]:
+    """Build a canonical temporal intelligence object for a single vendor.
+
+    Pass 1: populates evaluation deadlines, keyword spikes, sentiment
+    trajectory, and timeline signal counts.  Structured trend per-weakness
+    and acceleration metrics are deferred to pass 2.
+    """
+    from datetime import date
+
+    as_of = date.today().isoformat()
+    kw = keyword_spikes or {}
+    sent = sentiment or {}
+
+    # --- Active evaluation deadlines (processed from raw timeline) ---
+    eval_deadlines = _build_active_evaluation_deadlines(
+        timeline_entries or [],
+        limit=10,
+    )
+
+    # --- Immediate triggers (entries with concrete dates) ---
+    immediate_triggers: list[dict] = []
+    for ed in eval_deadlines:
+        if ed.get("evaluation_deadline") or ed.get("contract_end"):
+            immediate_triggers.append({
+                "company": ed.get("company"),
+                "trigger_type": ed.get("trigger_type", "unknown"),
+                "date": ed.get("evaluation_deadline") or ed.get("contract_end"),
+                "urgency": ed.get("urgency", 0),
+                "title": ed.get("title"),
+                "company_size": ed.get("company_size"),
+            })
+
+    # --- Keyword spike details ---
+    spike_keywords: list[dict] = []
+    trend_summary = kw.get("trend_summary") or {}
+    for keyword, detail in trend_summary.items():
+        if isinstance(detail, dict):
+            spike_keywords.append({
+                "keyword": keyword,
+                "volume": detail.get("volume", 0),
+                "change_pct": detail.get("change_pct", 0),
+                "is_spike": bool(detail.get("is_spike")),
+            })
+    spike_keywords.sort(
+        key=lambda x: abs(x.get("change_pct") or 0), reverse=True,
+    )
+
+    # --- Sentiment trajectory ---
+    total_sentiment = sum(sent.values()) or 1
+    sentiment_trajectory = {
+        "declining": sent.get("declining", 0),
+        "stable": sent.get("stable", 0),
+        "improving": sent.get("improving", 0),
+        "total": sum(sent.values()),
+        "declining_pct": round(
+            sent.get("declining", 0) / total_sentiment, 2,
+        ),
+        "improving_pct": round(
+            sent.get("improving", 0) / total_sentiment, 2,
+        ),
+    }
+
+    # --- Timeline signal summary ---
+    raw_entries = timeline_entries or []
+    contract_end_count = sum(
+        1 for e in raw_entries if e.get("contract_end")
+    )
+    eval_deadline_count = sum(
+        1 for e in raw_entries if e.get("evaluation_deadline")
+    )
+
+    return {
+        "vendor_name": vendor_name,
+        "schema_version": _TEMPORAL_INTELLIGENCE_SCHEMA_VERSION,
+        "as_of_date": as_of,
+        "analysis_window_days": analysis_window_days,
+        "immediate_triggers": immediate_triggers,
+        "evaluation_deadlines": eval_deadlines,
+        "keyword_spikes": {
+            "spike_count": kw.get("spike_count", 0),
+            "spike_keywords": kw.get("spike_keywords", []),
+            "keyword_details": spike_keywords,
+        },
+        "sentiment_trajectory": sentiment_trajectory,
+        "timeline_signal_summary": {
+            "total_signals": len(raw_entries),
+            "contract_end_signals": contract_end_count,
+            "evaluation_deadline_signals": eval_deadline_count,
+        },
+        "trend_per_weakness": None,
+        "acceleration_metrics": None,
+    }
+
+
+_DISPLACEMENT_DYNAMICS_SCHEMA_VERSION = "v1"
+
+
+def build_displacement_dynamics(
+    from_vendor: str,
+    to_vendor: str,
+    *,
+    edge: dict | None = None,
+    displacement_flows: list[dict] | None = None,
+    reasons: list[dict] | None = None,
+    battle_conclusion: dict | None = None,
+    analysis_window_days: int = 90,
+) -> dict[str, Any]:
+    """Build a canonical displacement dynamics object for a vendor pair.
+
+    Pass 1: populates edge metrics, switch reasons, evidence types,
+    and battle conclusion summary.  Segment-level displacement breakdowns
+    and trend acceleration are deferred to pass 2.
+
+    Args:
+        from_vendor: the vendor losing customers.
+        to_vendor: the vendor gaining customers.
+        edge: persisted displacement edge row (from b2b_displacement_edges).
+        displacement_flows: competitive_disp entries for this pair.
+        reasons: competitor_reasons entries for this pair.
+        battle_conclusion: cross-vendor pairwise battle conclusion (jsonb).
+    """
+    from datetime import date
+
+    as_of = date.today().isoformat()
+    eg = edge or {}
+
+    def _sf(v: Any) -> float | None:
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    # --- Edge metrics (from persisted displacement edges) ---
+    edge_metrics = {
+        "mention_count": eg.get("mention_count") or 0,
+        "primary_driver": eg.get("primary_driver"),
+        "signal_strength": eg.get("signal_strength"),
+        "key_quote": eg.get("key_quote"),
+        "confidence_score": _sf(eg.get("confidence_score")),
+        "velocity_7d": eg.get("velocity_7d") or 0,
+        "velocity_30d": eg.get("velocity_30d") or 0,
+    }
+
+    # --- Evidence type breakdown (from competitive_disp flows) ---
+    evidence_breakdown: list[dict] = []
+    flows = displacement_flows or []
+    for f in flows:
+        evidence_breakdown.append({
+            "evidence_type": f.get("evidence_type", "unknown"),
+            "mention_count": f.get("mention_count", 0),
+            "reason_categories": f.get("reason_categories") or {},
+            "industries": f.get("industries") or [],
+            "company_sizes": f.get("company_sizes") or [],
+        })
+    evidence_breakdown.sort(
+        key=lambda x: x["mention_count"], reverse=True,
+    )
+
+    # --- Switch reasons (from competitor_reasons) ---
+    switch_reasons: list[dict] = []
+    for r in (reasons or []):
+        switch_reasons.append({
+            "reason": r.get("reason") or r.get("reason_category", ""),
+            "reason_category": r.get("reason_category"),
+            "reason_detail": r.get("reason_detail"),
+            "direction": r.get("direction"),
+            "mention_count": r.get("mention_count", 0),
+        })
+    switch_reasons.sort(
+        key=lambda x: x["mention_count"], reverse=True,
+    )
+
+    # --- Battle conclusion summary (from cross-vendor reasoning) ---
+    bc = battle_conclusion or {}
+    battle_summary = None
+    if bc:
+        battle_summary = {
+            "winner": bc.get("winner"),
+            "loser": bc.get("loser"),
+            "conclusion": bc.get("conclusion"),
+            "confidence": _sf(bc.get("confidence")),
+            "durability_assessment": bc.get("durability_assessment"),
+            "key_insights": bc.get("key_insights") or [],
+            "resource_advantage": bc.get("resource_advantage"),
+        }
+
+    # --- Net flow direction ---
+    total_explicit = sum(
+        f["mention_count"] for f in evidence_breakdown
+        if f["evidence_type"] == "explicit_switch"
+    )
+    total_eval = sum(
+        f["mention_count"] for f in evidence_breakdown
+        if f["evidence_type"] == "active_evaluation"
+    )
+
+    return {
+        "from_vendor": from_vendor,
+        "to_vendor": to_vendor,
+        "schema_version": _DISPLACEMENT_DYNAMICS_SCHEMA_VERSION,
+        "as_of_date": as_of,
+        "analysis_window_days": analysis_window_days,
+        "edge_metrics": edge_metrics,
+        "evidence_breakdown": evidence_breakdown,
+        "switch_reasons": switch_reasons,
+        "battle_summary": battle_summary,
+        "flow_summary": {
+            "explicit_switch_count": total_explicit,
+            "active_evaluation_count": total_eval,
+            "total_flow_mentions": edge_metrics["mention_count"],
+        },
+        "segment_displacement": None,
+        "trend_acceleration": None,
+    }
+
+
+_CATEGORY_DYNAMICS_SCHEMA_VERSION = "v1"
+
+
+def build_category_dynamics(
+    category: str,
+    *,
+    market_regime: dict | None = None,
+    council_conclusion: dict | None = None,
+    vendor_count: int = 0,
+    displacement_flow_count: int = 0,
+    analysis_window_days: int = 90,
+) -> dict[str, Any]:
+    """Build a canonical category dynamics object.
+
+    Pass 1: populates market regime, council conclusion summary,
+    vendor/flow counts, and structural indicators.
+    Cross-category comparisons deferred to pass 2.
+
+    Args:
+        category: product category name.
+        market_regime: MarketRegime as dict (from asdict()).
+        council_conclusion: cross-vendor category_council conclusion (jsonb).
+    """
+    from datetime import date
+
+    as_of = date.today().isoformat()
+    mr = market_regime or {}
+    cc = council_conclusion or {}
+
+    def _sf(v: Any) -> float | None:
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    # --- Market regime (from MarketPulseReasoner) ---
+    regime = {
+        "regime_type": mr.get("regime_type", "unknown"),
+        "confidence": _sf(mr.get("confidence")),
+        "avg_churn_velocity": _sf(mr.get("avg_churn_velocity")),
+        "avg_price_pressure": _sf(mr.get("avg_price_pressure")),
+        "outlier_vendors": mr.get("outlier_vendors") or [],
+        "narrative": mr.get("narrative") or "",
+    }
+
+    # --- Council conclusion (from cross-vendor LLM reasoning) ---
+    council_summary = None
+    if cc:
+        council_summary = {
+            "market_regime": cc.get("market_regime"),
+            "winner": cc.get("winner"),
+            "loser": cc.get("loser"),
+            "conclusion": cc.get("conclusion"),
+            "confidence": _sf(cc.get("confidence")),
+            "key_insights": cc.get("key_insights") or [],
+            "durability_assessment": cc.get("durability_assessment"),
+            "segment_dynamics": cc.get("segment_dynamics")
+            or cc.get("segment_winners_losers"),
+            "category_default": cc.get("category_default"),
+        }
+
+    return {
+        "category": category,
+        "schema_version": _CATEGORY_DYNAMICS_SCHEMA_VERSION,
+        "as_of_date": as_of,
+        "analysis_window_days": analysis_window_days,
+        "market_regime": regime,
+        "council_summary": council_summary,
+        "vendor_count": vendor_count,
+        "displacement_flow_count": displacement_flow_count,
+        "cross_category_comparison": None,
+    }
+
+
+_ACCOUNT_INTELLIGENCE_SCHEMA_VERSION = "v1"
+
+
+def build_account_intelligence(
+    vendor_name: str,
+    *,
+    high_intent_entries: list[dict] | None = None,
+    persisted_signals: list[dict] | None = None,
+    analysis_window_days: int = 90,
+) -> dict[str, Any]:
+    """Build a canonical account intelligence object for a single vendor.
+
+    Aggregates company-level signals from high_intent (in-memory) and
+    b2b_company_signals (persisted).  Per-company scoring and enrichment
+    deferred to the accounts-in-motion task.
+    """
+    from datetime import date
+
+    as_of = date.today().isoformat()
+
+    def _sf(v: Any) -> float | None:
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    def _is_active_eval_stage(stage: Any) -> bool:
+        text = str(stage or "").strip().lower()
+        if not text:
+            return False
+        if text in {"evaluation", "active_purchase", "consideration", "trial", "poc"}:
+            return True
+        return "evaluat" in text or "consider" in text
+
+    # Merge: prefer persisted signals, supplement with high_intent
+    seen_companies: set[str] = set()
+    accounts: list[dict] = []
+
+    for ps in (persisted_signals or []):
+        cn = (ps.get("company_name") or "").strip()
+        if not cn:
+            continue
+        key = cn.lower()
+        if key in seen_companies:
+            continue
+        seen_companies.add(key)
+        accounts.append({
+            "company_name": cn,
+            "urgency_score": _sf(ps.get("urgency_score")),
+            "pain_category": ps.get("pain_category"),
+            "buyer_role": ps.get("buyer_role"),
+            "decision_maker": ps.get("decision_maker"),
+            "seat_count": ps.get("seat_count"),
+            "contract_end": (
+                str(ps.get("contract_end") or "") or None
+            ),
+            "buying_stage": ps.get("buying_stage"),
+            "source": ps.get("source"),
+            "confidence_score": _sf(ps.get("confidence_score")),
+            "first_seen_at": (
+                str(ps.get("first_seen_at") or "") or None
+            ),
+            "last_seen_at": (
+                str(ps.get("last_seen_at") or "") or None
+            ),
+        })
+
+    for hi in (high_intent_entries or []):
+        cn = (hi.get("company") or "").strip()
+        if not cn:
+            continue
+        key = cn.lower()
+        if key in seen_companies:
+            continue
+        seen_companies.add(key)
+        accounts.append({
+            "company_name": cn,
+            "urgency_score": _sf(hi.get("urgency")),
+            "pain_category": hi.get("pain"),
+            "buyer_role": hi.get("role_level"),
+            "decision_maker": hi.get("decision_maker"),
+            "seat_count": hi.get("seat_count"),
+            "contract_end": (
+                str(hi.get("contract_end") or "") or None
+            ),
+            "buying_stage": hi.get("buying_stage"),
+            "source": hi.get("source"),
+            "confidence_score": None,
+            "first_seen_at": None,
+            "last_seen_at": None,
+        })
+
+    accounts.sort(
+        key=lambda a: a.get("urgency_score") or 0, reverse=True,
+    )
+
+    # Summary stats
+    dm_count = sum(1 for a in accounts if a.get("decision_maker"))
+    high_intent_count = sum(
+        1 for a in accounts if float(a.get("urgency_score") or 0) >= settings.b2b_churn.high_churn_urgency_threshold
+    )
+    active_eval_signal_count = sum(
+        1 for a in accounts if _is_active_eval_stage(a.get("buying_stage"))
+    )
+    with_contract_end = sum(
+        1 for a in accounts if a.get("contract_end")
+    )
+    with_seat_count = sum(
+        1 for a in accounts if a.get("seat_count")
+    )
+
+    return {
+        "vendor_name": vendor_name,
+        "schema_version": _ACCOUNT_INTELLIGENCE_SCHEMA_VERSION,
+        "as_of_date": as_of,
+        "analysis_window_days": analysis_window_days,
+        "accounts": accounts,
+        "summary": {
+            "total_accounts": len(accounts),
+            "decision_maker_count": dm_count,
+            "high_intent_count": high_intent_count,
+            "active_eval_signal_count": active_eval_signal_count,
+            "with_contract_end": with_contract_end,
+            "with_seat_count": with_seat_count,
+        },
+    }
+
+
+def _battle_card_weaknesses_from_evidence_vault(
+    vault: dict[str, Any] | None,
+    *,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Normalize vault weakness evidence into the current battle-card shape."""
+    if not isinstance(vault, dict):
+        return []
+    weaknesses: list[dict[str, Any]] = []
+    for item in vault.get("weakness_evidence") or []:
+        if not isinstance(item, dict):
+            continue
+        area = str(item.get("label") or item.get("key") or "").strip()
+        if not area:
+            continue
+        entry = {
+            "area": area,
+            "evidence_count": int(item.get("mention_count_total") or 0),
+            "source": str(item.get("evidence_type") or "evidence_vault"),
+        }
+        if item.get("supporting_metrics", {}).get("satisfaction_score") is not None:
+            entry["score"] = item["supporting_metrics"]["satisfaction_score"]
+        weaknesses.append(entry)
+    weaknesses.sort(key=lambda item: -int(item.get("evidence_count") or 0))
+    return weaknesses[:limit]
+
+
+def _battle_card_companies_from_evidence_vault(
+    vault: dict[str, Any] | None,
+    *,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Normalize vault company signals into the current battle-card shape."""
+    if not isinstance(vault, dict):
+        return []
+    companies: list[dict[str, Any]] = []
+    for item in vault.get("company_signals") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("company_name") or "").strip()
+        if not name:
+            continue
+        companies.append({
+            "company": name,
+            "urgency": item.get("urgency_score"),
+            "role": item.get("buyer_role"),
+            "pain": item.get("pain_category"),
+            "company_size": item.get("seat_count"),
+            "source": item.get("source"),
+            "buying_stage": item.get("buying_stage"),
+        })
+    companies.sort(key=lambda item: float(item.get("urgency") or 0), reverse=True)
+    return companies[:limit]
+
+
+def _battle_card_provenance_from_evidence_vault(
+    vault: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Map vault provenance into the battle-card provenance attachment shape."""
+    if not isinstance(vault, dict):
+        return {}
+    provenance = vault.get("provenance") or {}
+    if not isinstance(provenance, dict):
+        return {}
+    mapped: dict[str, Any] = {}
+    if provenance.get("source_distribution"):
+        mapped["source_distribution"] = provenance["source_distribution"]
+    if provenance.get("sample_review_ids"):
+        mapped["sample_review_ids"] = provenance["sample_review_ids"]
+    if provenance.get("enrichment_window_start"):
+        mapped["review_window_start"] = provenance["enrichment_window_start"]
+    if provenance.get("enrichment_window_end"):
+        mapped["review_window_end"] = provenance["enrichment_window_end"]
+    return mapped
 
 
 def _build_vendor_evidence(
@@ -3946,7 +6079,13 @@ def _build_deterministic_vendor_feed(
              "urgency": c.get("urgency", 0) if isinstance(c, dict) else 0,
              "title": c.get("title") if isinstance(c, dict) else None,
              "company_size": c.get("company_size") if isinstance(c, dict) else None,
-             "industry": c.get("industry") if isinstance(c, dict) else None}
+             "industry": c.get("industry") if isinstance(c, dict) else None,
+             "source": c.get("source") if isinstance(c, dict) else None,
+             "buying_stage": c.get("buying_stage") if isinstance(c, dict) else None,
+             "confidence_score": c.get("confidence_score") if isinstance(c, dict) else None,
+             "decision_maker": c.get("decision_maker") if isinstance(c, dict) else None,
+             "first_seen_at": c.get("first_seen_at") if isinstance(c, dict) else None,
+             "last_seen_at": c.get("last_seen_at") if isinstance(c, dict) else None}
             for c in companies[:5]
         ]
 
@@ -4340,7 +6479,13 @@ def _build_deterministic_vendor_scorecards(
              "urgency": c.get("urgency", 0) if isinstance(c, dict) else 0,
              "title": c.get("title") if isinstance(c, dict) else None,
              "company_size": c.get("company_size") if isinstance(c, dict) else None,
-             "industry": c.get("industry") if isinstance(c, dict) else None}
+             "industry": c.get("industry") if isinstance(c, dict) else None,
+             "source": c.get("source") if isinstance(c, dict) else None,
+             "buying_stage": c.get("buying_stage") if isinstance(c, dict) else None,
+             "confidence_score": c.get("confidence_score") if isinstance(c, dict) else None,
+             "decision_maker": c.get("decision_maker") if isinstance(c, dict) else None,
+             "first_seen_at": c.get("first_seen_at") if isinstance(c, dict) else None,
+             "last_seen_at": c.get("last_seen_at") if isinstance(c, dict) else None}
             for c in companies[:5]
         ]
 
@@ -4646,6 +6791,9 @@ def _build_deterministic_battle_cards(
     department_lookup: dict[str, list[dict]] | None = None,
     usage_duration_lookup: dict[str, list[dict]] | None = None,
     buyer_auth_lookup: dict[str, dict] | None = None,
+    keyword_spike_lookup: dict[str, dict] | None = None,
+    evidence_vault_lookup: dict[str, dict[str, Any]] | None = None,
+    reasoning_synthesis_lookup: dict[str, dict[str, Any]] | None = None,
     limit: int = 15,
 ) -> list[dict[str, Any]]:
     """Build per-vendor battle cards from aggregated data.
@@ -4681,6 +6829,7 @@ def _build_deterministic_battle_cards(
 
     cards: list[dict[str, Any]] = []
     for vendor, m in merged.items():
+        vendor_vault = (evidence_vault_lookup or {}).get(vendor, {})
         total_reviews = m["total_reviews"]
         churn_intent = m["churn_intent"]
         churn_density = round(churn_intent * 100.0 / total_reviews, 1) if total_reviews else 0.0
@@ -4724,54 +6873,54 @@ def _build_deterministic_battle_cards(
         )
 
         # -- Section 1: Vendor Weaknesses --
-        # Merge product profile weaknesses with pain categories
-        weaknesses: list[dict[str, Any]] = []
-        seen_areas: set[str] = set()
+        weaknesses = _battle_card_weaknesses_from_evidence_vault(vendor_vault, limit=5)
+        if not weaknesses:
+            weaknesses = []
+            seen_areas: set[str] = set()
 
-        profile = product_profile_lookup.get(vendor, {})
-        for w in (profile.get("weaknesses") or []):
-            if not isinstance(w, dict):
-                continue
-            area = w.get("area", "")
-            if area and area not in seen_areas:
-                seen_areas.add(area)
-                evidence_count = int(w.get("evidence_count") or 0)
-                weaknesses.append({
-                    "area": area,
-                    "score": w.get("score"),
-                    "evidence_count": evidence_count,
-                    "source": "product_profile",
-                })
+            profile = product_profile_lookup.get(vendor, {})
+            for w in (profile.get("weaknesses") or []):
+                if not isinstance(w, dict):
+                    continue
+                area = w.get("area", "")
+                if area and area not in seen_areas:
+                    seen_areas.add(area)
+                    evidence_count = int(w.get("evidence_count") or 0)
+                    weaknesses.append({
+                        "area": area,
+                        "score": w.get("score"),
+                        "evidence_count": evidence_count,
+                        "source": "product_profile",
+                    })
 
-        for p in pain_lookup.get(vendor, []):
-            area = p.get("category", "")
-            if area and area not in seen_areas:
-                seen_areas.add(area)
-                evidence_count = int(p.get("count") or 0)
-                weaknesses.append({
-                    "area": area,
-                    "count": evidence_count,
-                    "evidence_count": evidence_count,
-                    "source": "pain_category",
-                })
+            for p in pain_lookup.get(vendor, []):
+                area = p.get("category", "")
+                if area and area not in seen_areas:
+                    seen_areas.add(area)
+                    evidence_count = int(p.get("count") or 0)
+                    weaknesses.append({
+                        "area": area,
+                        "count": evidence_count,
+                        "evidence_count": evidence_count,
+                        "source": "pain_category",
+                    })
 
-        for g in feature_gap_lookup.get(vendor, []):
-            feature = g.get("feature", "")
-            if feature and feature not in seen_areas:
-                seen_areas.add(feature)
-                evidence_count = int(g.get("mentions") or 0)
-                weaknesses.append({
-                    "area": feature,
-                    "count": evidence_count,
-                    "evidence_count": evidence_count,
-                    "source": "feature_gap",
-                })
+            for g in feature_gap_lookup.get(vendor, []):
+                feature = g.get("feature", "")
+                if feature and feature not in seen_areas:
+                    seen_areas.add(feature)
+                    evidence_count = int(g.get("mentions") or 0)
+                    weaknesses.append({
+                        "area": feature,
+                        "count": evidence_count,
+                        "evidence_count": evidence_count,
+                        "source": "feature_gap",
+                    })
 
-        # Sort by evidence (higher = more actionable), take top 5
-        weaknesses.sort(
-            key=lambda w: -int(w.get("evidence_count") or 0),
-        )
-        weaknesses = weaknesses[:5]
+            weaknesses.sort(
+                key=lambda w: -int(w.get("evidence_count") or 0),
+            )
+            weaknesses = weaknesses[:5]
 
         # -- Section 2: Customer Pain Quotes (deduplicated by review + reviewer) --
         quotes_raw = sorted(
@@ -4879,13 +7028,16 @@ def _build_deterministic_battle_cards(
         }
 
         # -- Section 5: High-intent companies --
-        hi_companies = company_lookup.get(vendor, [])[:5]
+        hi_companies = _battle_card_companies_from_evidence_vault(vendor_vault, limit=5)
+        if not hi_companies:
+            hi_companies = company_lookup.get(vendor, [])[:5]
 
         # -- Section 6: Integration stack --
         integrations = (product_profile_lookup.get(vendor, {}).get("top_integrations") or [])[:8]
 
         # -- Section 7: Buyer authority summary --
         buyer_authority = (buyer_auth_lookup or {}).get(vendor, {})
+        keyword_spikes = (keyword_spike_lookup or {}).get(vendor, {})
 
         # -- Budget: prefer median for "typical" size --
         budget_ctx = budget_lookup.get(vendor, {})
@@ -4911,8 +7063,17 @@ def _build_deterministic_battle_cards(
         positives = (positive_lookup or {}).get(vendor, [])
         if positives:
             card_entry["retention_signals"] = positives[:5]
+        if keyword_spikes.get("spike_count"):
+            card_entry["keyword_spikes"] = {
+                "spike_count": int(keyword_spikes.get("spike_count") or 0),
+                "keywords": list(keyword_spikes.get("spike_keywords") or [])[:10],
+                "trend_summary": keyword_spikes.get("trend_summary") or {},
+            }
         tl_entries = (timeline_lookup or {}).get(vendor, [])
-        eval_deadlines = [t for t in tl_entries if t.get("evaluation_deadline")]
+        eval_deadlines = _build_active_evaluation_deadlines(
+            tl_entries,
+            limit=5,
+        )
         if eval_deadlines:
             card_entry["active_evaluation_deadlines"] = eval_deadlines[:5]
         uc_entries = (use_case_lookup or {}).get(vendor, [])
@@ -4933,6 +7094,13 @@ def _build_deterministic_battle_cards(
             card_entry["archetype_key_signals"] = rc.get("key_signals", [])
             card_entry["falsification_conditions"] = rc.get("falsification_conditions", [])
             card_entry["uncertainty_sources"] = rc.get("uncertainty_sources", [])
+
+        # Inject reasoning synthesis via typed reader contract
+        synth = (reasoning_synthesis_lookup or {}).get(vendor, {})
+        if synth:
+            from ._b2b_synthesis_reader import load_synthesis_view, inject_synthesis_into_card
+            view = load_synthesis_view(synth, vendor)
+            inject_synthesis_into_card(card_entry, view)
         cards.append(card_entry)
 
     def _bc_sort_key(x: dict) -> tuple:

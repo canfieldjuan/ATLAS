@@ -37,8 +37,25 @@ from ...services.vendor_registry import (
     resolve_vendor_name_cached,
     _ensure_cache as _warm_vendor_cache,
 )
+from ._execution_progress import _update_execution_progress
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_churn_intelligence")
+
+_STAGE_LOADING_INPUTS = "loading_inputs"
+_STAGE_REASONING = "reasoning"
+_STAGE_PERSISTING_SIGNALS = "persisting_signals"
+_STAGE_FINALIZING = "finalizing"
+_PERSISTENCE_PHASES = (
+    "displacement_edges",
+    "churn_signals",
+    "company_signals",
+    "pain_points",
+    "use_cases",
+    "integrations",
+    "buyer_profiles",
+    "snapshots",
+    "core_marker",
+)
 
 # ---------------------------------------------------------------------------
 # Shared helpers (extracted to _b2b_shared.py)
@@ -72,6 +89,14 @@ from ._b2b_shared import (  # noqa: E402
     _build_tenure_lookup,
     _build_turning_point_lookup,
     _build_insider_lookup,
+    _build_evidence_vault_pass2_rollups,
+    _merge_canonical_company_signals,
+    build_evidence_vault,
+    build_segment_intelligence,
+    build_temporal_intelligence,
+    build_displacement_dynamics,
+    build_category_dynamics,
+    build_account_intelligence,
     _aggregate_competitive_disp,
     _filter_by_vendors,
     _fetch_data_context,
@@ -79,6 +104,7 @@ from ._b2b_shared import (  # noqa: E402
     _fetch_vendor_churn_scores,
     _sync_vendor_firmographics,
     _fetch_high_intent_companies,
+    _fetch_existing_company_signals,
     _fetch_competitive_displacement,
     _fetch_displacement_provenance,
     _fetch_pain_provenance,
@@ -92,6 +118,7 @@ from ._b2b_shared import (  # noqa: E402
     _fetch_dm_churn_rates,
     _fetch_churning_companies,
     _fetch_quotable_evidence,
+    _fetch_evidence_vault_review_rows,
     _fetch_insider_aggregates,
     _fetch_product_profiles,
     _fetch_budget_signals,
@@ -109,6 +136,7 @@ from ._b2b_shared import (  # noqa: E402
     _fetch_keyword_spikes,
     _build_validated_executive_summary,
     _executive_source_list,
+    filter_vendors_by_focus_categories,
 )
 
 
@@ -143,10 +171,10 @@ def _normalize_cross_vendor_conclusion(raw: Any) -> dict[str, Any]:
         insights: list[dict[str, str]] = []
         for item in key_insights:
             if isinstance(item, str) and item:
-                insights.append({"insight": item, "evidence": ""})
+                insights.append({"insight": item, "evidence": item})
             elif isinstance(item, dict):
                 text = item.get("insight") or item.get("text") or ""
-                evidence = item.get("evidence") or ""
+                evidence = item.get("evidence") or text
                 if text:
                     insights.append({"insight": text, "evidence": evidence})
         normalized["key_insights"] = insights
@@ -154,6 +182,21 @@ def _normalize_cross_vendor_conclusion(raw: Any) -> dict[str, Any]:
     if isinstance(durability, str) and durability:
         normalized["durability_assessment"] = durability
     return normalized
+
+
+def _json_list_or_default(raw: Any) -> list[Any]:
+    """Parse JSON-backed list columns while preserving already-decoded lists."""
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
 
 
 async def persist_single_vendor_reasoning(
@@ -370,9 +413,9 @@ async def reconstruct_reasoning_lookup(
             "mode": r["reasoning_mode"] or "",
             "risk_level": r["reasoning_risk_level"] or "",
             "executive_summary": r["reasoning_executive_summary"] or "",
-            "key_signals": r["reasoning_key_signals"] or [],
-            "falsification_conditions": r["falsification_conditions"] or [],
-            "uncertainty_sources": r["reasoning_uncertainty_sources"] or [],
+            "key_signals": _json_list_or_default(r["reasoning_key_signals"]),
+            "falsification_conditions": _json_list_or_default(r["falsification_conditions"]),
+            "uncertainty_sources": _json_list_or_default(r["reasoning_uncertainty_sources"]),
         }
     return lookup
 
@@ -449,8 +492,8 @@ async def reconstruct_cross_vendor_lookup(
         """
         SELECT analysis_type, vendors, category, conclusion, confidence
         FROM b2b_cross_vendor_conclusions
-        WHERE computed_date >= $1
-        ORDER BY confidence DESC
+        WHERE computed_date <= $1
+        ORDER BY computed_date DESC, confidence DESC
         """,
         as_of,
     )
@@ -954,6 +997,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         return {"_skip_synthesis": "DB not ready"}
 
     budget = _TaskTimer()
+    synced_firmographics = 0
+    await _update_execution_progress(
+        task,
+        stage=_STAGE_LOADING_INPUTS,
+        progress_message="Loading churn-intelligence source artifacts.",
+    )
 
     # Warm vendor registry cache so sync resolve_vendor_name_cached() calls
     # throughout this function hit the DB-backed cache rather than bootstrap.
@@ -992,10 +1041,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     # Gather all data sources + data_context + provenance in parallel
     (
-        vendor_scores, high_intent, competitive_disp,
+        vendor_scores, high_intent, existing_company_signals,
+        competitive_disp,
         pain_dist, feature_gaps,
         negative_counts, price_rates, dm_rates,
-        churning_companies, quotable_evidence,
+        churning_companies, quotable_evidence, evidence_vault_review_rows,
         budget_signals, use_case_dist, sentiment_traj,
         buyer_auth, timeline_signals, competitor_reasons,
         keyword_spikes, data_context, vendor_provenance,
@@ -1013,6 +1063,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     ) = await asyncio.gather(
         _fetch_vendor_churn_scores(pool, window_days, min_reviews),
         _fetch_high_intent_companies(pool, urgency_threshold, window_days),
+        _fetch_existing_company_signals(pool, window_days=window_days),
         _fetch_competitive_displacement(pool, window_days),
         _fetch_pain_distribution(pool, window_days),
         _fetch_feature_gaps(pool, window_days, min_mentions=fg_min_mentions),
@@ -1021,6 +1072,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _fetch_dm_churn_rates(pool, window_days),
         _fetch_churning_companies(pool, window_days),
         _fetch_quotable_evidence(pool, window_days, min_urgency=quote_min_urgency),
+        _fetch_evidence_vault_review_rows(pool, window_days),
         _fetch_budget_signals(pool, window_days),
         _fetch_use_case_distribution(pool, window_days),
         _fetch_sentiment_trajectory(pool, window_days),
@@ -1059,6 +1111,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     vendor_scores = _safe(vendor_scores, "vendor_scores")
     high_intent = _safe(high_intent, "high_intent")
+    if isinstance(existing_company_signals, Exception):
+        logger.warning("existing_company_signals fetch failed: %s", existing_company_signals)
+        existing_company_signals = {}
     competitive_disp = _aggregate_competitive_disp(_safe(competitive_disp, "competitive_disp"))
     pain_dist = _safe(pain_dist, "pain_dist")
     feature_gaps = _safe(feature_gaps, "feature_gaps")
@@ -1067,6 +1122,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     dm_rates = _safe(dm_rates, "dm_rates")
     churning_companies = _safe(churning_companies, "churning_companies")
     quotable_evidence = _safe(quotable_evidence, "quotable_evidence")
+    evidence_vault_review_rows = _safe(evidence_vault_review_rows, "evidence_vault_review_rows")
     budget_signals = _safe(budget_signals, "budget_signals")
     use_case_dist = _safe(use_case_dist, "use_case_dist")
     sentiment_traj = _safe(sentiment_traj, "sentiment_traj")
@@ -1134,6 +1190,31 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not vendor_scores and not high_intent:
         tracer.end_span(span, status="completed", output_data={"skipped": "no enriched reviews"})
         return {"_skip_synthesis": "No enriched B2B reviews to analyze"}
+
+    _focus_scores = filter_vendors_by_focus_categories(vendor_scores, cfg.intelligence_focus_categories)
+    _reasoning_cap = max(0, int(cfg.stratified_reasoning_vendor_cap or 0))
+    _reasoning_seen: set[str] = set()
+    reasoning_target = 0
+    for vs in _focus_scores:
+        vn = _canonicalize_vendor(vs.get("vendor_name") or "")
+        if not vn or vn in _reasoning_seen:
+            continue
+        _reasoning_seen.add(vn)
+        reasoning_target += 1
+        if reasoning_target >= _reasoning_cap:
+            break
+
+    await _update_execution_progress(
+        task,
+        stage=_STAGE_REASONING,
+        progress_current=0,
+        progress_total=reasoning_target,
+        progress_message="Running temporal and stratified reasoning over vendor evidence.",
+        vendors_analyzed=len(vendor_scores),
+        high_intent_companies=len(high_intent),
+        fetcher_failures=fetcher_failures,
+        synced_firmographics=synced_firmographics,
+    )
 
     # Fetch prior reports for trend comparison
     prior_reports = await _fetch_prior_reports(pool, limit=prior_limit)
@@ -1294,8 +1375,24 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         }
 
         evidence_for_reasoning = {}
-        _reasoning_cap = cfg.stratified_reasoning_vendor_cap
-        for vs in vendor_scores[:_reasoning_cap]:
+        # Filter by focus categories FIRST so dedup keeps the right row
+        # when a vendor spans multiple categories (GROUP BY vendor, category).
+        _focused_ev = filter_vendors_by_focus_categories(vendor_scores, cfg.intelligence_focus_categories)
+        _seen_ev: set[str] = set()
+        _deduped_ev: list[dict[str, Any]] = []
+        for vs in _focused_ev:
+            vn = _canonicalize_vendor(vs.get("vendor_name") or "")
+            if vn and vn not in _seen_ev:
+                _seen_ev.add(vn)
+                _deduped_ev.append(vs)
+        if cfg.intelligence_focus_categories.strip().lower() != "all":
+            # Count unique vendors in unfiltered set for the log ratio
+            _all_unique = len({_canonicalize_vendor(vs.get("vendor_name") or "") for vs in vendor_scores} - {""})
+            logger.info(
+                "Reasoning focus: %d/%d vendors after category filter (%s)",
+                len(_deduped_ev), _all_unique, cfg.intelligence_focus_categories,
+            )
+        for vs in _deduped_ev[:_reasoning_cap]:
             vname = _canonicalize_vendor(vs.get("vendor_name") or "")
             if vname:
                 evidence_for_reasoning[vname] = _build_vendor_evidence(
@@ -1330,9 +1427,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             sem = asyncio.Semaphore(cfg.stratified_reasoning_concurrency)
             total_tokens = 0
             mode_counts: dict[str, int] = {}
+            reasoning_completed = 0
+            reasoning_progress_lock = asyncio.Lock()
 
             async def _analyze_one(vs: dict[str, Any]) -> None:
                 nonlocal total_tokens
+                nonlocal reasoning_completed
                 vname = _canonicalize_vendor(vs.get("vendor_name") or "")
                 if not vname:
                     return
@@ -1368,11 +1468,25 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         mode_counts[sr.mode] = mode_counts.get(sr.mode, 0) + 1
                     except Exception:
                         logger.debug("Stratified reasoning failed for %s", vname, exc_info=True)
+                    finally:
+                        async with reasoning_progress_lock:
+                            reasoning_completed += 1
+                            completed = reasoning_completed
+                            successful = len(reasoning_lookup)
+                        await _update_execution_progress(
+                            task,
+                            stage=_STAGE_REASONING,
+                            progress_current=completed,
+                            progress_total=reasoning_target,
+                            progress_message="Running temporal and stratified reasoning over vendor evidence.",
+                            vendors_analyzed=len(vendor_scores),
+                            high_intent_companies=len(high_intent),
+                            fetcher_failures=fetcher_failures,
+                            synced_firmographics=synced_firmographics,
+                            reasoning_vendors=successful,
+                        )
 
-            # Reason over ALL vendors -- the exploratory_vendor_limit only
-            # Cap reasoning to top N vendors by urgency (vendor_scores is
-            # already ordered by avg urgency DESC from the SQL query).
-            reasoning_vendors = vendor_scores[:cfg.stratified_reasoning_vendor_cap]
+            reasoning_vendors = _deduped_ev[:cfg.stratified_reasoning_vendor_cap]
             logger.info(
                 "Reasoning over %d/%d vendors (cap=%d)",
                 len(reasoning_vendors), len(vendor_scores),
@@ -1621,6 +1735,19 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         except Exception:
             logger.debug("Cross-vendor reasoning phase skipped", exc_info=True)
 
+    await _update_execution_progress(
+        task,
+        stage=_STAGE_REASONING,
+        progress_current=len(reasoning_lookup),
+        progress_total=reasoning_target,
+        progress_message="Running temporal and stratified reasoning over vendor evidence.",
+        vendors_analyzed=len(vendor_scores),
+        high_intent_companies=len(high_intent),
+        fetcher_failures=fetcher_failures,
+        synced_firmographics=synced_firmographics,
+        reasoning_vendors=len(reasoning_lookup),
+    )
+
     # Exploratory overview LLM, post-processing, and report validation are
     # now handled by the b2b_churn_reports follow-up task.
     parsed: dict[str, Any] = {}
@@ -1645,6 +1772,497 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         vn = _canonicalize_vendor(pp.get("vendor_name", ""))
         if vn and vn not in product_profile_lookup:
             product_profile_lookup[vn] = pp
+    evidence_vault_pass2_lookup = _build_evidence_vault_pass2_rollups(
+        evidence_vault_review_rows,
+        quote_lookup,
+        recent_window_days=cfg.intelligence_recent_window_days,
+    )
+
+    # ---------------------------------------------------------------
+    # Evidence vault: canonical per-vendor intelligence objects
+    # consumed by all downstream products (battle cards, reports, briefs).
+    # ---------------------------------------------------------------
+    vault_persisted = 0
+    try:
+        from datetime import date as _date
+
+        _hi_by_vendor: dict[str, list[dict]] = {}
+        for hi in high_intent:
+            vn = _canonicalize_vendor(hi.get("vendor") or "")
+            if vn:
+                _hi_by_vendor.setdefault(vn, []).append(hi)
+        _canonical_company_signals = _merge_canonical_company_signals(
+            high_intent,
+            existing_company_signals if isinstance(existing_company_signals, dict) else {},
+        )
+
+        _vault_rows: list[tuple] = []
+        _vault_seen: set[str] = set()
+        for vs in vendor_scores:
+            vn = _canonicalize_vendor(vs.get("vendor_name") or "")
+            if not vn or vn in _vault_seen:
+                continue
+            _vault_seen.add(vn)
+            vault = build_evidence_vault(
+                vendor_name=vn,
+                vs=vs,
+                pain_entries=pain_lookup.get(vn, []),
+                feature_gap_entries=feature_gap_lookup.get(vn, []),
+                quotes=quote_lookup.get(vn, []),
+                positive_entries=positive_lookup.get(vn, []),
+                product_profile=product_profile_lookup.get(vn),
+                keyword_spikes=keyword_spike_lookup.get(vn),
+                company_signals=_canonical_company_signals.get(vn) or _hi_by_vendor.get(vn, []),
+                provenance=(vendor_provenance or {}).get(vn),
+                data_context=data_context if isinstance(data_context, dict) else None,
+                pass2_rollups=evidence_vault_pass2_lookup.get(vn),
+                dm_rate=dm_lookup.get(vn),
+                price_rate=price_lookup.get(vn),
+                product_category=vs.get("product_category"),
+                analysis_window_days=window_days,
+                recent_window_days=cfg.intelligence_recent_window_days,
+            )
+            _vault_rows.append((
+                vn,
+                _date.today(),
+                window_days,
+                vault["schema_version"],
+                json.dumps(vault, default=str),
+            ))
+
+        if _vault_rows:
+            await pool.executemany(
+                """
+                INSERT INTO b2b_evidence_vault
+                    (vendor_name, as_of_date, analysis_window_days, schema_version, vault)
+                VALUES ($1, $2, $3, $4, $5::jsonb)
+                ON CONFLICT (vendor_name, as_of_date, analysis_window_days, schema_version)
+                DO UPDATE SET vault = EXCLUDED.vault, created_at = NOW()
+                """,
+                _vault_rows,
+            )
+            vault_persisted = len(_vault_rows)
+            logger.info("Evidence vault: persisted %d vendor vaults", vault_persisted)
+    except Exception:
+        logger.warning("Evidence vault persistence failed (non-fatal)", exc_info=True)
+
+    # ---------------------------------------------------------------
+    # Segment intelligence: canonical per-vendor buyer segment objects.
+    # ---------------------------------------------------------------
+    segment_persisted = 0
+    try:
+        from datetime import date as _seg_date
+
+        _seg_rows: list[tuple] = []
+        _seg_seen: set[str] = set()
+        for vs in vendor_scores:
+            vn = _canonicalize_vendor(vs.get("vendor_name") or "")
+            if not vn or vn in _seg_seen:
+                continue
+            _seg_seen.add(vn)
+            seg = build_segment_intelligence(
+                vendor_name=vn,
+                buyer_auth=buyer_auth_lookup.get(vn),
+                department_entries=department_lookup.get(vn, []),
+                budget=budget_lookup.get(vn),
+                dm_rate=dm_lookup.get(vn),
+                contract_value_entries=contract_value_lookup.get(vn, []),
+                usage_duration_entries=usage_duration_lookup.get(vn, []),
+                use_case_entries=use_case_lookup.get(vn, []),
+                analysis_window_days=window_days,
+            )
+            _seg_rows.append((
+                vn,
+                _seg_date.today(),
+                window_days,
+                seg["schema_version"],
+                json.dumps(seg, default=str),
+            ))
+
+        if _seg_rows:
+            await pool.executemany(
+                """
+                INSERT INTO b2b_segment_intelligence
+                    (vendor_name, as_of_date, analysis_window_days, schema_version, segments)
+                VALUES ($1, $2, $3, $4, $5::jsonb)
+                ON CONFLICT (vendor_name, as_of_date, analysis_window_days, schema_version)
+                DO UPDATE SET segments = EXCLUDED.segments, created_at = NOW()
+                """,
+                _seg_rows,
+            )
+            segment_persisted = len(_seg_rows)
+            logger.info("Segment intelligence: persisted %d vendor segments", segment_persisted)
+    except Exception:
+        logger.warning("Segment intelligence persistence failed (non-fatal)", exc_info=True)
+
+    # ---------------------------------------------------------------
+    # Temporal intelligence: canonical per-vendor timing and trend objects.
+    # ---------------------------------------------------------------
+    temporal_persisted = 0
+    try:
+        from datetime import date as _temp_date
+
+        _temp_rows: list[tuple] = []
+        _temp_seen: set[str] = set()
+        for vs in vendor_scores:
+            vn = _canonicalize_vendor(vs.get("vendor_name") or "")
+            if not vn or vn in _temp_seen:
+                continue
+            _temp_seen.add(vn)
+            temp = build_temporal_intelligence(
+                vendor_name=vn,
+                timeline_entries=timeline_lookup.get(vn, []),
+                keyword_spikes=keyword_spike_lookup.get(vn),
+                sentiment=sentiment_lookup.get(vn),
+                analysis_window_days=window_days,
+            )
+            _temp_rows.append((
+                vn,
+                _temp_date.today(),
+                window_days,
+                temp["schema_version"],
+                json.dumps(temp, default=str),
+            ))
+
+        if _temp_rows:
+            await pool.executemany(
+                """
+                INSERT INTO b2b_temporal_intelligence
+                    (vendor_name, as_of_date, analysis_window_days,
+                     schema_version, temporal)
+                VALUES ($1, $2, $3, $4, $5::jsonb)
+                ON CONFLICT (vendor_name, as_of_date,
+                             analysis_window_days, schema_version)
+                DO UPDATE SET temporal = EXCLUDED.temporal,
+                              created_at = NOW()
+                """,
+                _temp_rows,
+            )
+            temporal_persisted = len(_temp_rows)
+            logger.info(
+                "Temporal intelligence: persisted %d vendor temporals",
+                temporal_persisted,
+            )
+    except Exception:
+        logger.warning(
+            "Temporal intelligence persistence failed (non-fatal)",
+            exc_info=True,
+        )
+
+    # ---------------------------------------------------------------
+    # Displacement dynamics: canonical per-pair competitive flow objects.
+    # ---------------------------------------------------------------
+    displacement_dynamics_persisted = 0
+    try:
+        from datetime import date as _disp_date
+
+        # Read persisted edges for velocity/quote data
+        _edge_rows = await pool.fetch(
+            """
+            SELECT from_vendor, to_vendor, mention_count,
+                   primary_driver, signal_strength, key_quote,
+                   confidence_score, velocity_7d, velocity_30d
+            FROM b2b_displacement_edges
+            WHERE computed_date = (
+                SELECT MAX(computed_date) FROM b2b_displacement_edges
+            )
+            """,
+        )
+        _edge_map: dict[tuple[str, str], dict] = {}
+        for er in _edge_rows:
+            _edge_map[(er["from_vendor"], er["to_vendor"])] = dict(er)
+
+        # Group competitive_disp flows by (vendor, competitor)
+        _flow_map: dict[tuple[str, str], list[dict]] = {}
+        for f in competitive_disp:
+            key = (f.get("vendor", ""), f.get("competitor", ""))
+            if key[0] and key[1]:
+                _flow_map.setdefault(key, []).append(f)
+
+        # Group competitor_reasons by (vendor, competitor)
+        _reason_map: dict[tuple[str, str], list[dict]] = {}
+        for r in competitor_reasons:
+            key = (r.get("vendor", ""), r.get("competitor", ""))
+            if key[0] and key[1]:
+                _reason_map.setdefault(key, []).append(r)
+
+        # Read recent battle conclusions
+        _battle_rows = await pool.fetch(
+            """
+            SELECT vendors, conclusion, confidence
+            FROM b2b_cross_vendor_conclusions
+            WHERE analysis_type = 'pairwise_battle'
+              AND computed_date = (
+                  SELECT MAX(computed_date)
+                  FROM b2b_cross_vendor_conclusions
+                  WHERE analysis_type = 'pairwise_battle'
+              )
+            """,
+        )
+        _battle_map: dict[tuple[str, str], dict] = {}
+        for br in _battle_rows:
+            vs = br["vendors"] or []
+            if len(vs) >= 2:
+                _battle_map[(vs[0], vs[1])] = (
+                    br["conclusion"]
+                    if isinstance(br["conclusion"], dict)
+                    else {}
+                )
+                _battle_map[(vs[1], vs[0])] = _battle_map[(vs[0], vs[1])]
+
+        # Build and persist per unique pair
+        _all_pairs: set[tuple[str, str]] = set()
+        _all_pairs.update(_edge_map.keys())
+        _all_pairs.update(_flow_map.keys())
+
+        _disp_rows: list[tuple] = []
+        for from_v, to_v in _all_pairs:
+            dyn = build_displacement_dynamics(
+                from_vendor=from_v,
+                to_vendor=to_v,
+                edge=_edge_map.get((from_v, to_v)),
+                displacement_flows=_flow_map.get((from_v, to_v), []),
+                reasons=_reason_map.get((from_v, to_v), []),
+                battle_conclusion=_battle_map.get((from_v, to_v)),
+                analysis_window_days=window_days,
+            )
+            _disp_rows.append((
+                from_v,
+                to_v,
+                _disp_date.today(),
+                window_days,
+                dyn["schema_version"],
+                json.dumps(dyn, default=str),
+            ))
+
+        if _disp_rows:
+            await pool.executemany(
+                """
+                INSERT INTO b2b_displacement_dynamics
+                    (from_vendor, to_vendor, as_of_date,
+                     analysis_window_days, schema_version, dynamics)
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+                ON CONFLICT (from_vendor, to_vendor, as_of_date,
+                             analysis_window_days, schema_version)
+                DO UPDATE SET dynamics = EXCLUDED.dynamics,
+                              created_at = NOW()
+                """,
+                _disp_rows,
+            )
+            displacement_dynamics_persisted = len(_disp_rows)
+            logger.info(
+                "Displacement dynamics: persisted %d pair dynamics",
+                displacement_dynamics_persisted,
+            )
+    except Exception:
+        logger.warning(
+            "Displacement dynamics persistence failed (non-fatal)",
+            exc_info=True,
+        )
+
+    # ---------------------------------------------------------------
+    # Category dynamics: canonical per-category market regime objects.
+    # ---------------------------------------------------------------
+    category_dynamics_persisted = 0
+    try:
+        from datetime import date as _cat_date
+        from dataclasses import asdict as _cat_asdict
+
+        # Read category council conclusions from DB
+        _council_rows = await pool.fetch(
+            """
+            SELECT category, conclusion, confidence
+            FROM b2b_cross_vendor_conclusions
+            WHERE analysis_type = 'category_council'
+              AND computed_date = (
+                  SELECT MAX(computed_date)
+                  FROM b2b_cross_vendor_conclusions
+                  WHERE analysis_type = 'category_council'
+              )
+            ORDER BY confidence DESC
+            """,
+        )
+        _council_map: dict[str, dict] = {}
+        for cr in _council_rows:
+            cat = cr["category"] or ""
+            if cat and cat not in _council_map:
+                _council_map[cat] = (
+                    cr["conclusion"]
+                    if isinstance(cr["conclusion"], dict)
+                    else {}
+                )
+
+        # Count vendors and displacement flows per category
+        _cat_vendor_counts: dict[str, int] = {}
+        _cat_flow_counts: dict[str, int] = {}
+        for vs in vendor_scores:
+            cat = str(vs.get("product_category") or "")
+            if cat:
+                _cat_vendor_counts[cat] = (
+                    _cat_vendor_counts.get(cat, 0) + 1
+                )
+        for f in competitive_disp:
+            # Use vendor lookup to find category
+            vn = f.get("vendor", "")
+            for vs in vendor_scores:
+                if _canonicalize_vendor(
+                    vs.get("vendor_name") or ""
+                ) == vn:
+                    cat = str(vs.get("product_category") or "")
+                    if cat:
+                        _cat_flow_counts[cat] = (
+                            _cat_flow_counts.get(cat, 0) + 1
+                        )
+                    break
+
+        # Collect all categories
+        _all_cats: set[str] = set()
+        _all_cats.update(market_regimes.keys())
+        _all_cats.update(_council_map.keys())
+        _all_cats.update(
+            cat for cat in _cat_vendor_counts if cat
+        )
+
+        _cat_rows: list[tuple] = []
+        for cat in sorted(_all_cats):
+            if not cat:
+                continue
+            mr_dict = None
+            regime_obj = market_regimes.get(cat)
+            if regime_obj is not None:
+                try:
+                    mr_dict = _cat_asdict(regime_obj)
+                except (TypeError, AttributeError):
+                    mr_dict = (
+                        regime_obj
+                        if isinstance(regime_obj, dict)
+                        else None
+                    )
+            dyn = build_category_dynamics(
+                category=cat,
+                market_regime=mr_dict,
+                council_conclusion=_council_map.get(cat),
+                vendor_count=_cat_vendor_counts.get(cat, 0),
+                displacement_flow_count=_cat_flow_counts.get(
+                    cat, 0
+                ),
+                analysis_window_days=window_days,
+            )
+            _cat_rows.append((
+                cat,
+                _cat_date.today(),
+                window_days,
+                dyn["schema_version"],
+                json.dumps(dyn, default=str),
+            ))
+
+        if _cat_rows:
+            await pool.executemany(
+                """
+                INSERT INTO b2b_category_dynamics
+                    (category, as_of_date, analysis_window_days,
+                     schema_version, dynamics)
+                VALUES ($1, $2, $3, $4, $5::jsonb)
+                ON CONFLICT (category, as_of_date,
+                             analysis_window_days, schema_version)
+                DO UPDATE SET dynamics = EXCLUDED.dynamics,
+                              created_at = NOW()
+                """,
+                _cat_rows,
+            )
+            category_dynamics_persisted = len(_cat_rows)
+            logger.info(
+                "Category dynamics: persisted %d categories",
+                category_dynamics_persisted,
+            )
+    except Exception:
+        logger.warning(
+            "Category dynamics persistence failed (non-fatal)",
+            exc_info=True,
+        )
+
+    # ---------------------------------------------------------------
+    # Account intelligence: canonical per-vendor account signal objects.
+    # ---------------------------------------------------------------
+    account_intelligence_persisted = 0
+    try:
+        from datetime import date as _acct_date
+
+        # Read persisted company signals per vendor
+        _cs_rows = await pool.fetch(
+            """
+            SELECT company_name, vendor_name, urgency_score,
+                   pain_category, buyer_role, decision_maker,
+                   seat_count, contract_end, buying_stage,
+                   source, confidence_score,
+                   first_seen_at, last_seen_at
+            FROM b2b_company_signals
+            """,
+        )
+        _cs_by_vendor: dict[str, list[dict]] = {}
+        for r in _cs_rows:
+            vn = r["vendor_name"] or ""
+            _cs_by_vendor.setdefault(vn, []).append(dict(r))
+
+        # Group high_intent by vendor (reuse from vault block)
+        _hi_by_vendor_acct: dict[str, list[dict]] = {}
+        for hi in high_intent:
+            vn = _canonicalize_vendor(hi.get("vendor") or "")
+            if vn:
+                _hi_by_vendor_acct.setdefault(vn, []).append(hi)
+
+        # Collect all vendors with signals
+        _acct_vendors: set[str] = set()
+        _acct_vendors.update(_cs_by_vendor.keys())
+        _acct_vendors.update(_hi_by_vendor_acct.keys())
+        # Include all vendors from vendor_scores so every vendor gets an
+        # account intelligence record (even if empty) for pool completeness.
+        _acct_vendors.update(
+            vs.get("vendor_name", "") for vs in vendor_scores
+        )
+
+        _acct_rows: list[tuple] = []
+        for vn in sorted(_acct_vendors):
+            if not vn:
+                continue
+            acct = build_account_intelligence(
+                vendor_name=vn,
+                high_intent_entries=_hi_by_vendor_acct.get(vn, []),
+                persisted_signals=_cs_by_vendor.get(vn, []),
+                analysis_window_days=window_days,
+            )
+            _acct_rows.append((
+                vn,
+                _acct_date.today(),
+                window_days,
+                acct["schema_version"],
+                json.dumps(acct, default=str),
+            ))
+
+        if _acct_rows:
+            await pool.executemany(
+                """
+                INSERT INTO b2b_account_intelligence
+                    (vendor_name, as_of_date, analysis_window_days,
+                     schema_version, accounts)
+                VALUES ($1, $2, $3, $4, $5::jsonb)
+                ON CONFLICT (vendor_name, as_of_date,
+                             analysis_window_days, schema_version)
+                DO UPDATE SET accounts = EXCLUDED.accounts,
+                              created_at = NOW()
+                """,
+                _acct_rows,
+            )
+            account_intelligence_persisted = len(_acct_rows)
+            logger.info(
+                "Account intelligence: persisted %d vendor accounts",
+                account_intelligence_persisted,
+            )
+    except Exception:
+        logger.warning(
+            "Account intelligence persistence failed (non-fatal)",
+            exc_info=True,
+        )
 
     # ---------------------------------------------------------------
     # Report building, battle cards, scorecards, executive summaries,
@@ -1653,6 +2271,46 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # Core task only persists signals, snapshots, displacement edges,
     # and change events.
     # ---------------------------------------------------------------
+
+    displacement_edges_persisted = 0
+    upsert_failures = 0
+    company_signals_persisted = 0
+    pain_points_persisted = 0
+    use_cases_persisted = 0
+    integrations_persisted = 0
+    buyer_profiles_persisted = 0
+    snapshots_persisted = 0
+    change_events_detected = 0
+    persistence_progress = 0
+
+    async def _update_persist_progress() -> None:
+        await _update_execution_progress(
+            task,
+            stage=_STAGE_PERSISTING_SIGNALS,
+            progress_current=persistence_progress,
+            progress_total=len(_PERSISTENCE_PHASES),
+            progress_message="Persisting churn intelligence outputs.",
+            vendors_analyzed=len(vendor_scores),
+            high_intent_companies=len(high_intent),
+            fetcher_failures=fetcher_failures,
+            upsert_failures=upsert_failures,
+            displacement_edges_persisted=displacement_edges_persisted,
+            company_signals_persisted=company_signals_persisted,
+            pain_points_persisted=pain_points_persisted,
+            use_cases_persisted=use_cases_persisted,
+            integrations_persisted=integrations_persisted,
+            buyer_profiles_persisted=buyer_profiles_persisted,
+            snapshots_persisted=snapshots_persisted,
+            vault_persisted=vault_persisted,
+            segment_persisted=segment_persisted,
+            temporal_persisted=temporal_persisted,
+            displacement_dynamics_persisted=displacement_dynamics_persisted,
+            category_dynamics_persisted=category_dynamics_persisted,
+            account_intelligence_persisted=account_intelligence_persisted,
+            change_events_detected=change_events_detected,
+        )
+
+    await _update_persist_progress()
 
     # Build displacement map (needed for edge persistence below)
     deterministic_displacement_map = _build_deterministic_displacement_map(
@@ -1676,7 +2334,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     displacement_report_id = None  # set by follow-up report task
 
     # Persist displacement edges to first-class table
-    displacement_edges_persisted = 0
     try:
         # Pre-fetch prior mention counts for velocity computation (single query)
         prior_rows = await pool.fetch(
@@ -1765,6 +2422,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     except Exception:
         displacement_edges_persisted = 0
         logger.exception("Failed to persist displacement edges")
+    persistence_progress += 1
+    await _update_persist_progress()
 
     # Upsert per-vendor churn signals
     upsert_failures = await _upsert_churn_signals(
@@ -1778,9 +2437,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         insider_lookup=insider_lookup,
         reasoning_lookup=reasoning_lookup,
     )
+    persistence_progress += 1
+    await _update_persist_progress()
 
     # Persist company signals to first-class table
-    company_signals_persisted = 0
     try:
         async with pool.transaction() as conn:
             for hi in high_intent:
@@ -1837,9 +2497,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     except Exception:
         company_signals_persisted = 0
         logger.exception("Failed to persist company signals")
+    persistence_progress += 1
+    await _update_persist_progress()
 
     # Persist vendor pain points to first-class table
-    pain_points_persisted = 0
     try:
         async with pool.transaction() as conn:
             for (vendor, pain_cat), prov in pain_provenance.items():
@@ -1888,9 +2549,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     except Exception:
         pain_points_persisted = 0
         logger.exception("Failed to persist vendor pain points")
+    persistence_progress += 1
+    await _update_persist_progress()
 
     # Persist vendor use cases to first-class table
-    use_cases_persisted = 0
     try:
         async with pool.transaction() as conn:
             for (vendor, use_case_name), prov in use_case_provenance.items():
@@ -1932,9 +2594,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     except Exception:
         use_cases_persisted = 0
         logger.exception("Failed to persist vendor use cases")
+    persistence_progress += 1
+    await _update_persist_progress()
 
     # Persist vendor integrations to first-class table
-    integrations_persisted = 0
     try:
         async with pool.transaction() as conn:
             for (vendor, integration_name), prov in integration_provenance.items():
@@ -1971,9 +2634,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     except Exception:
         integrations_persisted = 0
         logger.exception("Failed to persist vendor integrations")
+    persistence_progress += 1
+    await _update_persist_progress()
 
     # Persist buyer profiles to first-class table
-    buyer_profiles_persisted = 0
     try:
         async with pool.transaction() as conn:
             for (vendor, role_type, buying_stage), prov in buyer_profile_provenance.items():
@@ -2016,10 +2680,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     except Exception:
         buyer_profiles_persisted = 0
         logger.exception("Failed to persist buyer profiles")
+    persistence_progress += 1
+    await _update_persist_progress()
 
     # Persist vendor health snapshots + detect change events
-    snapshots_persisted = 0
-    change_events_detected = 0
     if cfg.snapshot_enabled:
         try:
             snapshots_persisted = await _persist_vendor_snapshots(
@@ -2037,6 +2701,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 )
         except Exception:
             logger.exception("Failed to persist vendor snapshots / change events")
+    persistence_progress += 1
+    await _update_persist_progress()
 
     # Article-archetype correlation is now handled by follow-up tasks.
 
@@ -2061,6 +2727,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         )
     except Exception:
         logger.warning("Failed to write core_run_complete marker")
+    persistence_progress += 1
+    await _update_persist_progress()
 
     notification_feed = _build_deterministic_vendor_feed(
         vendor_scores,
@@ -2087,6 +2755,27 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         report_type="weekly_churn_feed",
     )
 
+    await _update_execution_progress(
+        task,
+        stage=_STAGE_FINALIZING,
+        progress_current=len(_PERSISTENCE_PHASES),
+        progress_total=len(_PERSISTENCE_PHASES),
+        progress_message="Finalizing churn-intelligence execution status.",
+        vendors_analyzed=len(vendor_scores),
+        high_intent_companies=len(high_intent),
+        fetcher_failures=fetcher_failures,
+        upsert_failures=upsert_failures,
+        displacement_edges_persisted=displacement_edges_persisted,
+        company_signals_persisted=company_signals_persisted,
+        pain_points_persisted=pain_points_persisted,
+        use_cases_persisted=use_cases_persisted,
+        integrations_persisted=integrations_persisted,
+        buyer_profiles_persisted=buyer_profiles_persisted,
+        snapshots_persisted=snapshots_persisted,
+        change_events_detected=change_events_detected,
+        elapsed_seconds=round(budget.elapsed(), 1),
+    )
+
     # Send ntfy notification
     await _send_notification(task, notification_payload, high_intent)
 
@@ -2108,6 +2797,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "integrations_persisted": integrations_persisted,
         "buyer_profiles_persisted": buyer_profiles_persisted,
         "snapshots_persisted": snapshots_persisted,
+        "vault_persisted": vault_persisted,
+        "segment_persisted": segment_persisted,
+        "temporal_persisted": temporal_persisted,
+        "displacement_dynamics_persisted": displacement_dynamics_persisted,
+        "category_dynamics_persisted": category_dynamics_persisted,
+        "account_intelligence_persisted": account_intelligence_persisted,
         "change_events_detected": change_events_detected,
         "elapsed_seconds": round(budget.elapsed(), 1),
     }

@@ -5,10 +5,13 @@ verification, stale date detection, displacement pair validation,
 and executive source list config parsing.
 """
 
+import json
 import sys
 from datetime import date
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock, patch
+from uuid import uuid4
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -27,7 +30,6 @@ for _mod in (
     "PIL", "PIL.Image", "numpy", "cv2", "sounddevice", "soundfile",
     "nemo.collections", "nemo.collections.asr",
     "nemo.collections.asr.models",
-    "starlette", "starlette.requests",
     "playwright", "playwright.async_api",
     "playwright_stealth",
     "curl_cffi", "curl_cffi.requests",
@@ -35,8 +37,11 @@ for _mod in (
 ):
     sys.modules.setdefault(_mod, MagicMock())
 
+import atlas_brain.autonomous.tasks.b2b_churn_intelligence as churn_intel_mod
 from atlas_brain.autonomous.tasks._b2b_shared import (
     _build_battle_card_locked_facts,
+    _build_deterministic_battle_card_competitive_landscape,
+    _build_deterministic_battle_card_weakness_analysis,
     _build_scorecard_locked_facts,
     _build_deterministic_vendor_feed,
     _build_validated_executive_summary,
@@ -51,9 +56,12 @@ from atlas_brain.autonomous.tasks._b2b_shared import (
     _validate_report,
 )
 from atlas_brain.autonomous.tasks.b2b_battle_cards import (
+    _BATTLE_CARD_LLM_FIELDS,
     _battle_card_llm_options,
     _battle_card_prior_attempt,
+    _persist_battle_card,
     _parse_battle_card_sales_copy,
+    _update_execution_progress,
 )
 
 
@@ -507,18 +515,132 @@ class TestBattleCardSalesCopyParsing:
         assert prior_attempt == "Executive summary: support is slipping"
 
 
+class TestBattleCardDeterministicSections:
+    def test_builds_deterministic_weakness_analysis(self):
+        analysis = _build_deterministic_battle_card_weakness_analysis(_sample_battle_card())
+        assert len(analysis) == 1
+        assert analysis[0]["weakness"] == "Pricing pressure is creating renewal scrutiny"
+        assert "21.3% price complaint rate" in analysis[0]["evidence"]
+        assert analysis[0]["customer_quote"] == "We need better control over rising platform costs."
+
+    def test_skips_irrelevant_quote_for_unmatched_weakness(self):
+        card = {
+            **_sample_battle_card(),
+            "vendor_weaknesses": [{"area": "pricing", "count": 246}, {"area": "reliability", "count": 120}],
+            "customer_pain_quotes": [
+                {"quote": "Amazon Web Services went down for 24 hours. So our business had to shut down for 24 hours", "urgency": 9},
+            ],
+        }
+        analysis = _build_deterministic_battle_card_weakness_analysis(card)
+        assert analysis[0]["customer_quote"] == ""
+        assert analysis[1]["customer_quote"] == "Amazon Web Services went down for 24 hours. So our business had to shut down for 24 hours"
+
+    def test_builds_deterministic_competitive_landscape(self):
+        landscape = _build_deterministic_battle_card_competitive_landscape(_sample_battle_card())
+        assert "recent price increases are creating renewal scrutiny" in landscape["vulnerability_window"].lower()
+        assert landscape["top_alternatives"][0].startswith("WooCommerce (53 mentions in evaluation sets")
+        assert any("Renewal cycles after recent price increases" in item for item in landscape["displacement_triggers"])
+
+    def test_dedupes_competitor_aliases_in_top_alternatives(self):
+        card = {
+            **_sample_battle_card(),
+            "competitor_differentiators": [
+                {"competitor": "Azure", "mentions": 9, "switch_count": 0, "primary_driver": "pricing"},
+                {"competitor": "Microsoft Azure", "mentions": 7, "switch_count": 0, "primary_driver": "pricing"},
+                {"competitor": "Google Cloud Platform", "mentions": 16, "switch_count": 0, "primary_driver": "pricing"},
+            ],
+        }
+        landscape = _build_deterministic_battle_card_competitive_landscape(card)
+        azure_entries = [item for item in landscape["top_alternatives"] if "Azure (" in item]
+        assert len(azure_entries) == 1
+        assert "(16 mentions in evaluation sets; primary driver: pricing)" in azure_entries[0]
+
+
+class _FakePersistPool:
+    def __init__(self) -> None:
+        self.calls: list[tuple[Any, ...]] = []
+
+    async def execute(self, *args: Any) -> None:
+        self.calls.append(args)
+
+
+class TestBattleCardPersistence:
+    @pytest.mark.asyncio
+    async def test_persist_battle_card_writes_deterministic_sections(self):
+        pool = _FakePersistPool()
+        card = _sample_battle_card()
+        card["weakness_analysis"] = _build_deterministic_battle_card_weakness_analysis(card)
+        card["competitive_landscape"] = _build_deterministic_battle_card_competitive_landscape(card)
+        card["llm_render_status"] = "pending"
+
+        persisted = await _persist_battle_card(
+            pool,
+            today=date(2026, 3, 18),
+            card=card,
+            data_density=json.dumps({"vendors_analyzed": 1}),
+            report_source_review_count=42,
+            report_source_dist={"g2": 30, "reddit": 12},
+            llm_model="pipeline_deterministic",
+        )
+
+        assert persisted is True
+        payload = json.loads(pool.calls[0][4])
+        assert payload["llm_render_status"] == "pending"
+        assert payload["weakness_analysis"][0]["customer_quote"] == "We need better control over rising platform costs."
+        assert "top_alternatives" in payload["competitive_landscape"]
+
+    @pytest.mark.asyncio
+    async def test_overlay_persist_keeps_deterministic_sections_on_failure(self):
+        pool = _FakePersistPool()
+        card = _sample_battle_card()
+        card["weakness_analysis"] = _build_deterministic_battle_card_weakness_analysis(card)
+        card["competitive_landscape"] = _build_deterministic_battle_card_competitive_landscape(card)
+        card["llm_render_status"] = "failed"
+        card["llm_render_error"] = "LLM did not return valid JSON"
+
+        persisted = await _persist_battle_card(
+            pool,
+            today=date(2026, 3, 18),
+            card=card,
+            data_density=json.dumps({"vendors_analyzed": 1}),
+            report_source_review_count=42,
+            report_source_dist={"g2": 30, "reddit": 12},
+            llm_model="pipeline_deterministic",
+        )
+
+        assert persisted is True
+        payload = json.loads(pool.calls[0][4])
+        assert payload["llm_render_status"] == "failed"
+        assert payload["llm_render_error"] == "LLM did not return valid JSON"
+        assert payload["weakness_analysis"][0]["weakness"] == "Pricing pressure is creating renewal scrutiny"
+        assert pool.calls[0][8] == "pipeline_deterministic"
+
+
 class TestBattleCardLlmRouting:
-    def test_auto_backend_uses_default_synthesis_route(self):
+    def test_deterministic_sections_removed_from_llm_field_set(self):
+        assert "weakness_analysis" not in _BATTLE_CARD_LLM_FIELDS
+        assert "competitive_landscape" not in _BATTLE_CARD_LLM_FIELDS
+
+    def test_auto_backend_uses_battle_card_model_when_present(self):
         cfg = type("Cfg", (), {
             "battle_card_llm_backend": "auto",
-            "battle_card_openrouter_model": "",
+            "battle_card_openrouter_model": "openai/o4-mini",
         })()
         opts = _battle_card_llm_options(cfg)
         assert opts == {
             "workload": "synthesis",
             "try_openrouter": True,
-            "openrouter_model": None,
+            "openrouter_model": "openai/o4-mini",
         }
+
+    def test_auto_backend_falls_back_to_model_default_when_blank(self):
+        field = type("FieldInfo", (), {"default": "openai/o4-mini"})
+        cfg_type = type("Cfg", (), {"model_fields": {"battle_card_openrouter_model": field}})
+        cfg = cfg_type()
+        cfg.battle_card_llm_backend = "auto"
+        cfg.battle_card_openrouter_model = ""
+        opts = _battle_card_llm_options(cfg)
+        assert opts["openrouter_model"] == "openai/o4-mini"
 
     def test_anthropic_backend_disables_openrouter(self):
         cfg = type("Cfg", (), {
@@ -531,6 +653,159 @@ class TestBattleCardLlmRouting:
             "try_openrouter": False,
             "openrouter_model": None,
         }
+
+
+class TestBattleCardExecutionProgress:
+    @pytest.mark.asyncio
+    @patch("atlas_brain.storage.repositories.scheduled_task.get_scheduled_task_repo")
+    async def test_update_execution_progress_uses_injected_execution_id(self, mock_repo_fn):
+        repo = AsyncMock()
+        mock_repo_fn.return_value = repo
+        task = type("Task", (), {"name": "b2b_battle_cards", "metadata": {"_execution_id": str(uuid4())}})()
+
+        await _update_execution_progress(
+            task,
+            stage="llm_overlay",
+            progress_current=2,
+            progress_total=15,
+            cards_built=15,
+        )
+
+        repo.update_execution_metadata.assert_awaited_once()
+        called_exec_id = repo.update_execution_metadata.call_args[0][0]
+        payload = repo.update_execution_metadata.call_args[0][1]
+        assert str(called_exec_id) == task.metadata["_execution_id"]
+        assert payload["stage"] == "llm_overlay"
+        assert payload["progress_current"] == 2
+        assert payload["cards_built"] == 15
+
+
+class TestChurnIntelligenceExecutionProgress:
+    @pytest.mark.asyncio
+    async def test_run_emits_loading_progress_before_heavy_fetch(self, monkeypatch):
+        progress = AsyncMock()
+        pool = type("Pool", (), {"is_initialized": True})()
+
+        async def stop_after_progress():
+            raise RuntimeError("stop_after_progress")
+
+        monkeypatch.setattr(churn_intel_mod.settings.b2b_churn, "enabled", True, raising=False)
+        monkeypatch.setattr(churn_intel_mod.settings.b2b_churn, "intelligence_enabled", True, raising=False)
+        monkeypatch.setattr(churn_intel_mod, "_update_execution_progress", progress)
+        monkeypatch.setattr(churn_intel_mod, "get_db_pool", lambda: pool)
+        monkeypatch.setattr(churn_intel_mod, "_warm_vendor_cache", stop_after_progress)
+
+        task = type("Task", (), {"metadata": {"_execution_id": str(uuid4())}})()
+        with pytest.raises(RuntimeError, match="stop_after_progress"):
+            await churn_intel_mod.run(task)
+
+        progress.assert_awaited()
+        assert progress.await_args_list[0].kwargs["stage"] == churn_intel_mod._STAGE_LOADING_INPUTS
+
+    @pytest.mark.asyncio
+    async def test_run_updates_reasoning_progress_per_completed_vendor(self, monkeypatch):
+        progress = AsyncMock()
+        pool = type("Pool", (), {"is_initialized": True, "fetch": AsyncMock(return_value=[])})()
+        reasoning_pkg = __import__("atlas_brain.reasoning", fromlist=["dummy"])
+        tiers_mod = __import__("atlas_brain.reasoning.tiers", fromlist=["dummy"])
+
+        class StopAfterReasoning(RuntimeError):
+            pass
+
+        class FakeReasoner:
+            def __init__(self):
+                self._cache = object()
+
+            async def analyze(self, **kwargs):
+                vendor = kwargs["vendor_name"]
+                return SimpleNamespace(
+                    conclusion={"archetype": f"{vendor}_shape", "risk_level": "high", "executive_summary": vendor, "key_signals": []},
+                    confidence=0.8,
+                    mode="reason",
+                    tokens_used=11,
+                    reasoning_steps=[],
+                    boundary_conditions={},
+                )
+
+        async def fake_gather(*coros, **kwargs):
+            if len(coros) == 33:
+                for coro in coros:
+                    close = getattr(coro, "close", None)
+                    if close:
+                        close()
+                vendor_scores = [
+                    {"vendor_name": "Zendesk", "product_category": "Helpdesk", "avg_urgency": 7.0},
+                    {"vendor_name": "Intercom", "product_category": "Helpdesk", "avg_urgency": 6.0},
+                ]
+                return (
+                    vendor_scores,                    # vendor_scores
+                    [{"vendor_name": "Zendesk"}],    # high_intent
+                    {},                               # existing_company_signals
+                    [],                               # competitive_disp
+                    [],                               # pain_dist
+                    [],                               # feature_gaps
+                    [],                               # negative_counts
+                    [],                               # price_rates
+                    [],                               # dm_rates
+                    [],                               # churning_companies
+                    [],                               # quotable_evidence
+                    [],                               # evidence_vault_review_rows
+                    [],                               # budget_signals
+                    [],                               # use_case_dist
+                    [],                               # sentiment_traj
+                    [],                               # buyer_auth
+                    [],                               # timeline_signals
+                    [],                               # competitor_reasons
+                    [],                               # keyword_spikes
+                    {},                               # data_context
+                    {},                               # vendor_provenance
+                    {},                               # displacement_provenance
+                    {},                               # pain_provenance
+                    {},                               # use_case_provenance
+                    {},                               # integration_provenance
+                    {},                               # buyer_profile_provenance
+                    [],                               # insider_aggregates_raw
+                    [],                               # product_profiles_raw
+                    ([], []),                         # _review_text_aggs
+                    [],                               # _department_dist
+                    ([], []),                         # _contract_ctx_aggs
+                    [],                               # _sentiment_tenure_raw
+                    [],                               # _turning_points_raw
+                )
+            return [await coro for coro in coros]
+
+        monkeypatch.setattr(churn_intel_mod.settings.b2b_churn, "enabled", True, raising=False)
+        monkeypatch.setattr(churn_intel_mod.settings.b2b_churn, "intelligence_enabled", True, raising=False)
+        monkeypatch.setattr(churn_intel_mod.settings.b2b_churn, "stratified_reasoning_enabled", True, raising=False)
+        monkeypatch.setattr(churn_intel_mod.settings.b2b_churn, "cross_vendor_reasoning_enabled", False, raising=False)
+        monkeypatch.setattr(churn_intel_mod.settings.b2b_churn, "stratified_reasoning_vendor_cap", 2, raising=False)
+        monkeypatch.setattr(churn_intel_mod.settings.b2b_churn, "stratified_reasoning_vendor_limit", 0, raising=False)
+        monkeypatch.setattr(churn_intel_mod, "_update_execution_progress", progress)
+        monkeypatch.setattr(churn_intel_mod, "get_db_pool", lambda: pool)
+        monkeypatch.setattr(churn_intel_mod, "_warm_vendor_cache", AsyncMock())
+        monkeypatch.setattr(churn_intel_mod, "_sync_vendor_firmographics", AsyncMock(return_value=42))
+        monkeypatch.setattr(churn_intel_mod, "_fetch_prior_reports", AsyncMock(return_value=[]))
+        monkeypatch.setattr(churn_intel_mod, "_fetch_prior_archetypes", AsyncMock(return_value={}))
+        monkeypatch.setattr(churn_intel_mod, "_build_exploratory_payload", lambda *args, **kwargs: ({}, 0))
+        monkeypatch.setattr(churn_intel_mod, "_build_vendor_evidence", lambda vs, **kwargs: {"vendor_name": vs["vendor_name"], "product_category": vs.get("product_category", "")})
+        monkeypatch.setattr(churn_intel_mod, "_build_deterministic_displacement_map", lambda *args, **kwargs: (_ for _ in ()).throw(StopAfterReasoning()))
+        monkeypatch.setattr(churn_intel_mod.asyncio, "gather", fake_gather)
+        monkeypatch.setattr(reasoning_pkg, "get_stratified_reasoner", lambda: FakeReasoner())
+        monkeypatch.setattr(reasoning_pkg, "init_stratified_reasoner", AsyncMock())
+        monkeypatch.setattr(tiers_mod, "gather_tier_context", AsyncMock(return_value={}))
+
+        task = type("Task", (), {"metadata": {"_execution_id": str(uuid4())}})()
+        with pytest.raises(StopAfterReasoning):
+            await churn_intel_mod.run(task)
+
+        reasoning_calls = [
+            call.kwargs for call in progress.await_args_list
+            if call.kwargs.get("stage") == churn_intel_mod._STAGE_REASONING
+        ]
+        progress_values = [call["progress_current"] for call in reasoning_calls if "progress_current" in call]
+        assert progress_values[:3] == [0, 1, 2]
+        assert progress_values[-1] == 2
+        assert reasoning_calls[0]["progress_total"] == 2
 
     def test_openrouter_backend_uses_override_when_present(self):
         cfg = type("Cfg", (), {
@@ -763,7 +1038,16 @@ class TestVendorFeedNamedAccounts:
         """When company_lookup has data, named_accounts should be populated."""
         vendors = [_make_vendor_score("Zendesk", avg_urgency=7.0, churn_intent=25)]
         lookups = _empty_lookups(
-            company_lookup={"Zendesk": [{"company": "BrightPath", "urgency": 9}]},
+            company_lookup={"Zendesk": [{
+                "company": "BrightPath",
+                "urgency": 9,
+                "source": "reddit",
+                "buying_stage": "evaluation",
+                "confidence_score": 0.82,
+                "decision_maker": True,
+                "first_seen_at": "2026-03-01T00:00:00+00:00",
+                "last_seen_at": "2026-03-19T00:00:00+00:00",
+            }]},
             dm_lookup={"Zendesk": 0.5},
             price_lookup={"Zendesk": 0.4},
         )
@@ -773,6 +1057,10 @@ class TestVendorFeedNamedAccounts:
         assert len(accts) == 1
         assert accts[0]["company"] == "BrightPath"
         assert accts[0]["urgency"] == 9
+        assert accts[0]["source"] == "reddit"
+        assert accts[0]["buying_stage"] == "evaluation"
+        assert accts[0]["confidence_score"] == 0.82
+        assert accts[0]["decision_maker"] is True
 
 
 class TestVendorFeedNoCompanyRequired:
