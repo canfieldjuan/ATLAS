@@ -16,8 +16,14 @@ from typing import Any
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from ._execution_progress import _update_execution_progress
 
 logger = logging.getLogger("atlas.tasks.b2b_accounts_in_motion")
+
+_STAGE_LOADING_INPUTS = "loading_inputs"
+_STAGE_BUILDING_ACCOUNTS = "building_accounts"
+_STAGE_PERSISTING_REPORTS = "persisting_reports"
+_STAGE_FINALIZING = "finalizing"
 
 
 # ---------------------------------------------------------------------------
@@ -469,6 +475,27 @@ def _summarize_vendor_evidence(accounts: list[dict[str, Any]]) -> tuple[int, dic
             source_distribution[source] = source_distribution.get(source, 0) + int(count or 0)
     return len(review_ids), source_distribution
 
+
+def _accounts_in_motion_feature_gaps_from_evidence_vault(
+    vault: dict[str, Any] | None,
+    *,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Map canonical vault feature gaps into accounts-in-motion aggregate shape."""
+    gaps: list[dict[str, Any]] = []
+    for item in ((vault or {}).get("weakness_evidence") or []):
+        if str(item.get("evidence_type") or "") != "feature_gap":
+            continue
+        label = str(item.get("label") or item.get("key") or "").strip()
+        if not label:
+            continue
+        gaps.append({
+            "feature": label,
+            "mentions": int(item.get("mention_count_total") or 0),
+        })
+    gaps.sort(key=lambda row: int(row.get("mentions") or 0), reverse=True)
+    return gaps[:limit]
+
 def _build_vendor_aggregate(
     vendor: str,
     accounts: list[dict[str, Any]],
@@ -480,23 +507,35 @@ def _build_vendor_aggregate(
     price_lookup: dict[str, float],
     budget_lookup: dict[str, dict],
     competitor_lookup: dict[str, list[dict]],
+    evidence_vault_lookup: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the full accounts_in_motion aggregate for one vendor."""
     source_review_count, source_distribution = _summarize_vendor_evidence(accounts)
+    vendor_vault = (evidence_vault_lookup or {}).get(vendor, {}) or {}
+    evidence_vault_used = False
     # Archetype from reasoning
     r_info = reasoning_lookup.get(vendor, {})
     archetype = r_info.get("archetype")
     archetype_confidence = r_info.get("confidence", 0)
 
     # Feature gaps (top 10)
-    vendor_gaps = feature_gap_lookup.get(vendor, [])[:10]
-    feature_gaps = [
-        {"feature": g.get("feature", ""), "mentions": g.get("mentions", 0)}
-        for g in vendor_gaps
-    ]
+    feature_gaps = _accounts_in_motion_feature_gaps_from_evidence_vault(vendor_vault)
+    if feature_gaps:
+        evidence_vault_used = True
+    else:
+        vendor_gaps = feature_gap_lookup.get(vendor, [])[:10]
+        feature_gaps = [
+            {"feature": g.get("feature", ""), "mentions": g.get("mentions", 0)}
+            for g in vendor_gaps
+        ]
 
     # Pricing pressure
     price_rate = price_lookup.get(vendor, 0)
+    if not price_rate:
+        metric_snapshot = vendor_vault.get("metric_snapshot") or {}
+        if metric_snapshot.get("price_complaint_rate") is not None:
+            price_rate = float(metric_snapshot.get("price_complaint_rate") or 0)
+            evidence_vault_used = True
     budget = budget_lookup.get(vendor, {})
     pricing_pressure = {
         "price_complaint_rate": round(price_rate, 3),
@@ -558,6 +597,7 @@ def _build_vendor_aggregate(
         "cross_vendor_context": cross_vendor_context,
         "source_review_count": source_review_count,
         "source_distribution": source_distribution,
+        "data_sources": {"evidence_vault": evidence_vault_used},
     }
 
 
@@ -604,6 +644,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _fetch_budget_signals,
         _fetch_churning_companies,
         _fetch_competitive_displacement,
+        _fetch_latest_evidence_vault,
         _fetch_feature_gaps,
         _fetch_high_intent_companies,
         _fetch_price_complaint_rates,
@@ -621,6 +662,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     max_per_vendor = cfg.accounts_in_motion_max_per_vendor
 
     # --- Phase 1: Parallel data fetch ---
+    await _update_execution_progress(
+        task,
+        stage=_STAGE_LOADING_INPUTS,
+        progress_message="Loading accounts-in-motion source artifacts.",
+    )
     try:
         (
             high_intent,
@@ -654,12 +700,27 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         return {"_skip_synthesis": "No high-intent companies"}
 
     competitive_disp = _aggregate_competitive_disp(competitive_disp)
+    try:
+        evidence_vault_lookup = await _fetch_latest_evidence_vault(
+            pool,
+            as_of=today,
+            analysis_window_days=window_days,
+        )
+    except Exception:
+        logger.exception("Accounts in motion evidence-vault fetch failed")
+        evidence_vault_lookup = {}
 
     # --- Phase 2: Reconstruct reasoning + cross-vendor ---
     reasoning_lookup = await reconstruct_reasoning_lookup(pool, as_of=today)
     xv_lookup = await reconstruct_cross_vendor_lookup(pool, as_of=today)
 
     # --- Phase 3: Merge company profiles ---
+    await _update_execution_progress(
+        task,
+        stage=_STAGE_BUILDING_ACCOUNTS,
+        progress_message="Building merged account profiles and vendor aggregates.",
+        high_intent_companies=len(high_intent),
+    )
     merged = _merge_company_profiles(
         high_intent,
         timeline_signals,
@@ -718,12 +779,23 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             price_lookup=price_lookup,
             budget_lookup=budget_lookup,
             competitor_lookup=competitor_lookup,
+            evidence_vault_lookup=evidence_vault_lookup,
         )
         aggregates.append(agg)
 
     # --- Phase 6: Persist ---
     total_accounts = sum(a["total_accounts_in_motion"] for a in aggregates)
     persisted = 0
+    await _update_execution_progress(
+        task,
+        stage=_STAGE_PERSISTING_REPORTS,
+        progress_current=0,
+        progress_total=len(aggregates),
+        progress_message="Persisting accounts-in-motion vendor reports.",
+        vendors=len(aggregates),
+        total_accounts=total_accounts,
+        persisted=0,
+    )
     for agg in aggregates:
         vendor = agg["vendor"]
         if not vendor:
@@ -766,6 +838,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 json.dumps(agg.get("source_distribution", {})),
             )
             persisted += 1
+            await _update_execution_progress(
+                task,
+                stage=_STAGE_PERSISTING_REPORTS,
+                progress_current=persisted,
+                progress_total=len(aggregates),
+                progress_message="Persisting accounts-in-motion vendor reports.",
+                vendors=len(aggregates),
+                total_accounts=total_accounts,
+                persisted=persisted,
+            )
         except Exception:
             logger.exception("Failed to persist accounts_in_motion for %s", vendor)
 
@@ -773,6 +855,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "Accounts in motion: %d vendors, %d total accounts",
         len(aggregates),
         total_accounts,
+    )
+    await _update_execution_progress(
+        task,
+        stage=_STAGE_FINALIZING,
+        progress_current=len(aggregates),
+        progress_total=len(aggregates),
+        progress_message="Finalizing accounts-in-motion execution status.",
+        vendors=len(aggregates),
+        total_accounts=total_accounts,
+        persisted=persisted,
     )
 
     return {

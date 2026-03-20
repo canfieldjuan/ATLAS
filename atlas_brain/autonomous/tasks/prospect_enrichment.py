@@ -496,14 +496,41 @@ async def _enrich_company(pool, apollo, cfg, company: dict[str, str], credits_us
         # Upsert org cache from reveal response (free firmographic data)
         if not org_cache_id and person.company_domain:
             org = person.raw.get("organization") or {}
+            _annual_rev = None
+            if org.get("annual_revenue") is not None:
+                try:
+                    _annual_rev = float(org["annual_revenue"])
+                except (TypeError, ValueError):
+                    pass
+            def _safe_float(v: Any) -> float | None:
+                if v is None:
+                    return None
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return None
+            _hg6 = _safe_float(org.get("organization_headcount_six_month_growth"))
+            _hg12 = _safe_float(org.get("organization_headcount_twelve_month_growth"))
+            _hg24 = _safe_float(org.get("organization_headcount_twenty_four_month_growth"))
             org_cache_id = await pool.fetchval(
                 """
                 INSERT INTO prospect_org_cache
                     (company_name_raw, company_name_norm, domain,
                      apollo_org_id, industry, employee_count,
                      annual_revenue_range, tech_stack,
+                     phone, sanitized_phone, city, state, country,
+                     founded_year, total_funding, latest_funding_stage,
+                     annual_revenue, market_cap,
+                     publicly_traded_exchange, publicly_traded_symbol,
+                     headcount_growth_6m, headcount_growth_12m, headcount_growth_24m,
+                     linkedin_url, website_url, short_description,
+                     naics_codes, sic_codes,
                      status, enriched_at, updated_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb,
+                        $9, $10, $11, $12, $13,
+                        $14, $15, $16, $17, $18, $19, $20,
+                        $21, $22, $23, $24, $25, $26,
+                        $27::jsonb, $28::jsonb,
                         'enriched', NOW(), NOW())
                 ON CONFLICT (company_name_norm) DO UPDATE SET
                     domain = COALESCE(EXCLUDED.domain, prospect_org_cache.domain),
@@ -514,6 +541,24 @@ async def _enrich_company(pool, apollo, cfg, company: dict[str, str], credits_us
                     tech_stack = CASE WHEN EXCLUDED.tech_stack != '[]'::jsonb
                                       THEN EXCLUDED.tech_stack
                                       ELSE prospect_org_cache.tech_stack END,
+                    phone = COALESCE(EXCLUDED.phone, prospect_org_cache.phone),
+                    sanitized_phone = COALESCE(EXCLUDED.sanitized_phone, prospect_org_cache.sanitized_phone),
+                    city = COALESCE(EXCLUDED.city, prospect_org_cache.city),
+                    state = COALESCE(EXCLUDED.state, prospect_org_cache.state),
+                    country = COALESCE(EXCLUDED.country, prospect_org_cache.country),
+                    founded_year = COALESCE(EXCLUDED.founded_year, prospect_org_cache.founded_year),
+                    total_funding = COALESCE(EXCLUDED.total_funding, prospect_org_cache.total_funding),
+                    latest_funding_stage = COALESCE(EXCLUDED.latest_funding_stage, prospect_org_cache.latest_funding_stage),
+                    annual_revenue = COALESCE(EXCLUDED.annual_revenue, prospect_org_cache.annual_revenue),
+                    market_cap = COALESCE(EXCLUDED.market_cap, prospect_org_cache.market_cap),
+                    publicly_traded_exchange = COALESCE(EXCLUDED.publicly_traded_exchange, prospect_org_cache.publicly_traded_exchange),
+                    publicly_traded_symbol = COALESCE(EXCLUDED.publicly_traded_symbol, prospect_org_cache.publicly_traded_symbol),
+                    headcount_growth_6m = COALESCE(EXCLUDED.headcount_growth_6m, prospect_org_cache.headcount_growth_6m),
+                    headcount_growth_12m = COALESCE(EXCLUDED.headcount_growth_12m, prospect_org_cache.headcount_growth_12m),
+                    headcount_growth_24m = COALESCE(EXCLUDED.headcount_growth_24m, prospect_org_cache.headcount_growth_24m),
+                    linkedin_url = COALESCE(EXCLUDED.linkedin_url, prospect_org_cache.linkedin_url),
+                    website_url = COALESCE(EXCLUDED.website_url, prospect_org_cache.website_url),
+                    short_description = COALESCE(EXCLUDED.short_description, prospect_org_cache.short_description),
                     status = 'enriched',
                     enriched_at = NOW(),
                     updated_at = NOW()
@@ -530,6 +575,24 @@ async def _enrich_company(pool, apollo, cfg, company: dict[str, str], credits_us
                     t.get("name", t) if isinstance(t, dict) else str(t)
                     for t in (org.get("current_technologies") or [])
                 ]),
+                org.get("phone") or None,
+                org.get("sanitized_phone") or None,
+                org.get("city") or None,
+                org.get("state") or None,
+                org.get("country") or None,
+                org.get("founded_year"),
+                str(org.get("total_funding_printed") or org.get("total_funding") or "") or None,
+                org.get("latest_funding_stage") or None,
+                _annual_rev,
+                str(org.get("market_cap") or "") or None,
+                org.get("publicly_traded_exchange") or None,
+                org.get("publicly_traded_symbol") or None,
+                _hg6, _hg12, _hg24,
+                org.get("linkedin_url") or None,
+                org.get("website_url") or None,
+                org.get("short_description") or None,
+                json.dumps(org.get("naics_codes")) if org.get("naics_codes") else None,
+                json.dumps(org.get("sic_codes")) if org.get("sic_codes") else None,
             )
 
         await pool.execute(
@@ -539,14 +602,25 @@ async def _enrich_company(pool, apollo, cfg, company: dict[str, str], credits_us
                  title, seniority, department, linkedin_url,
                  city, state, country,
                  company_name, company_domain, company_name_norm,
-                 org_cache_id, status, raw_person_response, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'active', $17::jsonb, NOW())
+                 org_cache_id, status, raw_person_response,
+                 headline, departments, time_zone,
+                 twitter_url, photo_url, facebook_url,
+                 updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                    $13, $14, $15, $16, 'active', $17::jsonb,
+                    $18, $19::jsonb, $20, $21, $22, $23, NOW())
             ON CONFLICT (apollo_person_id) WHERE apollo_person_id IS NOT NULL
             DO UPDATE SET
                 email = COALESCE(EXCLUDED.email, prospects.email),
                 email_status = COALESCE(EXCLUDED.email_status, prospects.email_status),
                 title = COALESCE(EXCLUDED.title, prospects.title),
                 seniority = COALESCE(EXCLUDED.seniority, prospects.seniority),
+                headline = COALESCE(EXCLUDED.headline, prospects.headline),
+                departments = COALESCE(EXCLUDED.departments, prospects.departments),
+                time_zone = COALESCE(EXCLUDED.time_zone, prospects.time_zone),
+                twitter_url = COALESCE(EXCLUDED.twitter_url, prospects.twitter_url),
+                photo_url = COALESCE(EXCLUDED.photo_url, prospects.photo_url),
+                facebook_url = COALESCE(EXCLUDED.facebook_url, prospects.facebook_url),
                 raw_person_response = EXCLUDED.raw_person_response,
                 updated_at = NOW()
             """,
@@ -556,6 +630,10 @@ async def _enrich_company(pool, apollo, cfg, company: dict[str, str], credits_us
             person.city, person.state, person.country,
             person.company_name, person.company_domain, norm,
             org_cache_id, json.dumps(person.raw),
+            person.headline,
+            json.dumps(person.departments) if person.departments else None,
+            person.time_zone,
+            person.twitter_url, person.photo_url, person.facebook_url,
         )
         stats["prospects_created"] += 1
 

@@ -961,6 +961,14 @@ def _render_challenger_brief(
         pdf.set_text_color(*_CLR_MUTED)
         pdf.cell(0, 5, _latin1_safe(f"Category: {category}"),
                  new_x="LMARGIN", new_y="NEXT")
+    battle_card_date = _safe_str(d.get("battle_card_date", ""))
+    if battle_card_date:
+        label = f"Battle card source date: {battle_card_date}"
+        if d.get("battle_card_stale"):
+            label += " (fallback)"
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_text_color(*_CLR_MUTED)
+        pdf.cell(0, 4, _latin1_safe(label), new_x="LMARGIN", new_y="NEXT")
     pdf.ln(3)
 
     # --- Displacement Summary ---
@@ -1102,8 +1110,11 @@ def _render_challenger_brief(
     if h2h:
         pdf.section_title("Head to Head")
         winner = h2h.get("winner")
+        loser = h2h.get("loser")
         if winner:
             pdf.metric_row("Winner", _safe_str(winner))
+        if loser:
+            pdf.metric_row("Loser", _safe_str(loser))
         conclusion = h2h.get("conclusion")
         if conclusion:
             pdf.body_text(str(conclusion))
@@ -1112,7 +1123,15 @@ def _render_challenger_brief(
             pdf.metric_row("Durability", _safe_str(durability))
         insights = _safe_list(h2h.get("key_insights"))
         for insight in insights[:5]:
-            pdf.body_text(f"  - {_safe_str(insight)[:200]}")
+            if isinstance(insight, dict):
+                text = _safe_str(insight.get("insight", ""))[:160]
+                evidence = _safe_str(insight.get("evidence", ""))[:120]
+                line = f"  - {text}"
+                if evidence:
+                    line += f" ({evidence})"
+                pdf.body_text(line)
+            else:
+                pdf.body_text(f"  - {_safe_str(insight)[:200]}")
 
     # --- Target Accounts ---
     targets = _safe_list(d.get("target_accounts"))

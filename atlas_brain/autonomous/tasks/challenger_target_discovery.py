@@ -65,6 +65,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             WHERE LOWER(company_name) = LOWER($1)
               AND target_mode = 'challenger_intel'
               AND status = 'active'
+              AND account_id IS NULL
             """,
             to_vendor,
         )

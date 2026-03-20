@@ -10,7 +10,7 @@ Covers:
 
 import sys
 import json
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -30,7 +30,6 @@ for _mod in (
     "PIL", "PIL.Image", "numpy", "cv2", "sounddevice", "soundfile",
     "nemo.collections", "nemo.collections.asr",
     "nemo.collections.asr.models",
-    "starlette", "starlette.requests",
     "playwright", "playwright.async_api",
     "playwright_stealth",
     "curl_cffi", "curl_cffi.requests",
@@ -914,6 +913,37 @@ class TestBattleCardNewSections:
         assert len(cards) == 1
         assert cards[0]["high_intent_companies"] == [{"company": "Acme", "urgency": 9}]
 
+    def test_evidence_vault_overrides_weaknesses_and_company_signals(self):
+        from atlas_brain.autonomous.tasks._b2b_shared import (
+            _build_deterministic_battle_cards,
+        )
+
+        cards = _build_deterministic_battle_cards(
+            [{"vendor_name": "V", "product_category": "Cat", "total_reviews": 50,
+              "churn_intent": 20, "avg_urgency": 7.0}],
+            pain_lookup={"V": [{"category": "legacy pain", "count": 2}]},
+            competitor_lookup={}, feature_gap_lookup={},
+            quote_lookup={}, price_lookup={"V": 0.1}, budget_lookup={},
+            sentiment_lookup={}, dm_lookup={"V": 0.3},
+            company_lookup={"V": [{"company": "LegacyCo", "urgency": 4}]},
+            product_profile_lookup={}, competitive_disp=[], competitor_reasons=[],
+            evidence_vault_lookup={"V": {
+                "weakness_evidence": [
+                    {"label": "Pricing opacity", "mention_count_total": 11, "evidence_type": "pain_category"},
+                    {"key": "support", "mention_count_total": 7, "evidence_type": "satisfaction_area"},
+                ],
+                "company_signals": [
+                    {"company_name": "Acme", "urgency_score": 9.0, "buyer_role": "VP Ops", "pain_category": "pricing"},
+                ],
+            }},
+            limit=10,
+        )
+
+        assert len(cards) == 1
+        assert [w["area"] for w in cards[0]["vendor_weaknesses"][:2]] == ["Pricing opacity", "support"]
+        assert cards[0]["high_intent_companies"][0]["company"] == "Acme"
+        assert cards[0]["high_intent_companies"][0]["urgency"] == 9.0
+
     def test_integration_stack_from_profile(self):
         from atlas_brain.autonomous.tasks._b2b_shared import (
             _build_deterministic_battle_cards,
@@ -955,6 +985,29 @@ class TestBattleCardNewSections:
         )
         assert len(cards) == 1
         assert cards[0]["buyer_authority"]["role_types"]["economic_buyer"] == 5
+
+    def test_keyword_spikes_from_lookup(self):
+        from atlas_brain.autonomous.tasks._b2b_shared import (
+            _build_deterministic_battle_cards,
+        )
+
+        cards = _build_deterministic_battle_cards(
+            [{"vendor_name": "V", "product_category": "Cat", "total_reviews": 50,
+              "churn_intent": 20, "avg_urgency": 7.0}],
+            pain_lookup={}, competitor_lookup={}, feature_gap_lookup={},
+            quote_lookup={}, price_lookup={"V": 0.1}, budget_lookup={},
+            sentiment_lookup={}, dm_lookup={"V": 0.3}, company_lookup={},
+            product_profile_lookup={}, competitive_disp=[], competitor_reasons=[],
+            keyword_spike_lookup={"V": {
+                "spike_count": 3,
+                "spike_keywords": ["outage", "migration", "pricing"],
+                "trend_summary": {"outage": {"volume_change_pct": 42.0}},
+            }},
+            limit=10,
+        )
+        assert len(cards) == 1
+        assert cards[0]["keyword_spikes"]["spike_count"] == 3
+        assert cards[0]["keyword_spikes"]["keywords"] == ["outage", "migration", "pricing"]
 
 
 class TestReconstructReasoningLookup:
@@ -1006,6 +1059,34 @@ class TestReconstructReasoningLookup:
         assert isinstance(entry["key_signals"], list)
         assert isinstance(entry["falsification_conditions"], list)
         assert isinstance(entry["uncertainty_sources"], list)
+
+    @pytest.mark.asyncio
+    async def test_parses_json_backed_list_columns(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_reasoning_lookup,
+        )
+
+        pool = AsyncMock()
+        pool.fetchval.return_value = date(2026, 3, 16)
+        pool.fetch.return_value = [
+            {
+                "vendor_name": "Mailchimp",
+                "archetype": "pricing_shock",
+                "archetype_confidence": 0.9,
+                "reasoning_mode": "reason",
+                "falsification_conditions": '["price restored"]',
+                "reasoning_risk_level": "high",
+                "reasoning_executive_summary": "Pricing pressure intensifying",
+                "reasoning_key_signals": '["164 pricing mentions"]',
+                "reasoning_uncertainty_sources": '["no time-series breakdown"]',
+            },
+        ]
+
+        lookup = await reconstruct_reasoning_lookup(pool)
+        entry = lookup["Mailchimp"]
+        assert entry["key_signals"] == ["164 pricing mentions"]
+        assert entry["falsification_conditions"] == ["price restored"]
+        assert entry["uncertainty_sources"] == ["no time-series breakdown"]
 
     @pytest.mark.asyncio
     async def test_handles_null_columns_gracefully(self):
@@ -1177,8 +1258,8 @@ class TestReconstructCrossVendorLookup:
         for col in ("analysis_type", "vendors", "category", "conclusion", "confidence"):
             assert col in sql, f"Missing column {col} in SELECT"
         assert "b2b_cross_vendor_conclusions" in sql
-        assert "computed_date >= $1" in sql
-        assert "ORDER BY confidence DESC" in sql
+        assert "computed_date <= $1" in sql
+        assert "ORDER BY computed_date DESC, confidence DESC" in sql
 
     @pytest.mark.asyncio
     async def test_battles_keyed_by_sorted_tuple(self):
@@ -1298,8 +1379,8 @@ class TestReconstructCrossVendorLookup:
         assert entry["conclusion"] == "Price pressure is dominant"
         assert entry["market_regime"] == "price_competition"
         assert entry["key_insights"] == [
-            "Pricing drives displacement",
-            "SMB segment is most affected",
+            {"insight": "Pricing drives displacement", "evidence": "Pricing drives displacement"},
+            {"insight": "SMB segment is most affected", "evidence": "SMB segment is most affected"},
         ]
 
     @pytest.mark.asyncio
@@ -1432,16 +1513,19 @@ class TestCrossVendorSchemaContract:
             "vendors": ["Zendesk", "Freshdesk"],
             "conclusion": "Zendesk losing customers due to pricing pressure",
             "confidence": 0.85,
-            "key_insights": ["3x price gap", "SMB migration accelerating"],
+            "key_insights": [
+                {"insight": "3x price gap", "evidence": "pricing delta: 3x"},
+                {"insight": "SMB migration accelerating", "evidence": "switch_count: 43"},
+            ],
             "durability_assessment": "structural",
             "winner": "Freshdesk",
             "loser": "Zendesk",
-            "market_regime": None,
+            "market_regime": "",
             "segment_dynamics": {"enterprise_winner": "Zendesk", "smb_winner": "Freshdesk",
                                  "segment_divergence": True},
             "falsification_conditions": ["Zendesk restores pricing"],
             "uncertainty_sources": ["limited enterprise data"],
-            "resource_advantage": None,
+            "resource_advantage": "",
         }
         jsonschema.validate(output, CROSS_VENDOR_JSON_SCHEMA)
 
@@ -1453,12 +1537,15 @@ class TestCrossVendorSchemaContract:
             "vendors": ["Salesforce", "HubSpot"],
             "conclusion": "Salesforce holds deeper lock-in via integrations",
             "confidence": 0.72,
-            "key_insights": ["4x integration count", "enterprise tilt"],
+            "key_insights": [
+                {"insight": "4x integration count", "evidence": "integration_ratio: 4.0"},
+                {"insight": "enterprise tilt", "evidence": "enterprise_share: 0.62"},
+            ],
             "durability_assessment": "structural",
             "winner": "Salesforce",
-            "loser": None,
-            "market_regime": None,
-            "segment_dynamics": None,
+            "loser": "",
+            "market_regime": "",
+            "segment_dynamics": {"enterprise_winner": "Salesforce", "smb_winner": "", "segment_divergence": False},
             "falsification_conditions": ["HubSpot launches marketplace"],
             "uncertainty_sources": [],
             "resource_advantage": "Salesforce holds edge due to 4x integration count",
@@ -1473,10 +1560,15 @@ class TestCrossVendorSchemaContract:
             "vendors": ["A", "B"],
             "conclusion": "Approximate parity",
             "confidence": 0.5,
-            "key_insights": ["similar review share"],
+            "key_insights": [{"insight": "similar review share", "evidence": "review_ratio: 1.1"}],
             "durability_assessment": "uncertain",
+            "winner": "",
+            "loser": "",
+            "market_regime": "",
+            "segment_dynamics": {"enterprise_winner": "", "smb_winner": "", "segment_divergence": False},
             "falsification_conditions": [],
-            "resource_advantage": None,
+            "uncertainty_sources": [],
+            "resource_advantage": "",
         }
         jsonschema.validate(output, CROSS_VENDOR_JSON_SCHEMA)
 
@@ -1574,6 +1666,134 @@ class TestBattleCardCacheKeyIntegration:
             "ecosystem_context": {"hhi": 0.15},
         }
         assert compute_evidence_hash(data) == compute_evidence_hash(data.copy())
+
+    def test_additional_battle_card_inputs_change_hash(self):
+        from atlas_brain.reasoning.semantic_cache import compute_evidence_hash
+        base = {
+            "vendor": "Zendesk",
+            "category": "Helpdesk",
+            "churn_pressure_score": 72,
+            "confidence": "high",
+            "vendor_weaknesses": [],
+            "customer_pain_quotes": [],
+            "competitor_differentiators": [],
+            "objection_data": {},
+            "cross_vendor_battles": [{"opponent": "Freshdesk", "winner": "Freshdesk", "loser": "Zendesk"}],
+            "resource_asymmetry": None,
+            "ecosystem_context": None,
+            "category_council": None,
+            "high_intent_companies": [],
+            "integration_stack": [],
+            "buyer_authority": None,
+            "retention_signals": [],
+            "active_evaluation_deadlines": [],
+            "archetype": "pricing_shock",
+            "archetype_risk_level": "high",
+        }
+        changed = {
+            **base,
+            "high_intent_companies": [{"company": "Acme", "urgency": 9.0}],
+            "category_council": {"market_regime": "price_competition", "winner": "Freshdesk"},
+        }
+        assert compute_evidence_hash(base) != compute_evidence_hash(changed)
+
+
+class TestBattleCardDeterministicFallbacks:
+    def test_active_evaluation_deadlines_use_decision_timeline_when_needed(self):
+        from atlas_brain.autonomous.tasks._b2b_shared import _build_active_evaluation_deadlines
+
+        entries = [{
+            "company": "Acme",
+            "evaluation_deadline": None,
+            "contract_end": None,
+            "decision_timeline": "within_quarter",
+            "urgency": 9.0,
+            "title": "CTO",
+            "company_size": "51-200",
+            "industry": "SaaS",
+        }]
+
+        result = _build_active_evaluation_deadlines(entries, limit=5, today=date(2026, 3, 18))
+        assert result[0]["trigger_type"] == "timeline_signal"
+        assert result[0]["decision_timeline"] == "within_quarter"
+
+    def test_category_council_fallback_uses_ecosystem_context(self):
+        from atlas_brain.autonomous.tasks.b2b_battle_cards import _build_category_council_fallback
+
+        card = {
+            "category": "Cloud Infrastructure",
+            "ecosystem_context": {
+                "hhi": 0.18,
+                "market_structure": "fragmented",
+                "displacement_intensity": 0.42,
+                "dominant_archetype": "pricing_shock",
+            },
+        }
+
+        council = _build_category_council_fallback(card)
+        assert council is not None
+        assert council["market_regime"] == "fragmented"
+        assert council["key_insights"][0]["evidence"] == "market_structure: fragmented"
+        assert council["winner"] is None
+        assert council["loser"] is None
+
+    def test_ecosystem_context_from_analysis_handles_evidence_object(self):
+        from atlas_brain.autonomous.tasks.b2b_battle_cards import _ecosystem_context_from_analysis
+        from atlas_brain.reasoning.ecosystem import CategoryHealth, EcosystemEvidence
+
+        eco = EcosystemEvidence(
+            category="Cloud Infrastructure",
+            health=CategoryHealth(
+                category="Cloud Infrastructure",
+                hhi=1888.4,
+                market_structure="fragmenting",
+                displacement_intensity=3.1,
+                dominant_archetype="pricing_shock",
+            ),
+        )
+
+        result = _ecosystem_context_from_analysis(eco)
+        assert result == {
+            "hhi": 1888.4,
+            "market_structure": "fragmenting",
+            "displacement_intensity": 3.1,
+            "dominant_archetype": "pricing_shock",
+        }
+
+    def test_attach_battle_card_provenance_adds_vendor_metadata(self):
+        from atlas_brain.autonomous.tasks.b2b_battle_cards import _attach_battle_card_provenance
+
+        card = {"vendor": "AWS"}
+        provenance = {
+            "source_distribution": {"reddit": 6, "g2": 2},
+            "sample_review_ids": ["r1", "r2", "r3"],
+            "review_window_start": datetime(2026, 3, 1, 9, 0, 0),
+            "review_window_end": datetime(2026, 3, 18, 18, 30, 0),
+        }
+
+        _attach_battle_card_provenance(card, provenance)
+        assert card["source_distribution"] == {"reddit": 6, "g2": 2}
+        assert card["sample_review_ids"] == ["r1", "r2", "r3"]
+        assert card["review_window_start"] == "2026-03-01"
+        assert card["review_window_end"] == "2026-03-18"
+
+    def test_merge_battle_card_provenance_uses_vault_fallbacks(self):
+        from atlas_brain.autonomous.tasks.b2b_battle_cards import _merge_battle_card_provenance
+
+        merged = _merge_battle_card_provenance(
+            {"source_distribution": {"g2": 4}},
+            {
+                "source_distribution": {"reddit": 2},
+                "sample_review_ids": ["r1", "r2"],
+                "review_window_start": "2026-03-01",
+                "review_window_end": "2026-03-18",
+            },
+        )
+
+        assert merged["source_distribution"] == {"g2": 4}
+        assert merged["sample_review_ids"] == ["r1", "r2"]
+        assert merged["review_window_start"] == "2026-03-01"
+        assert merged["review_window_end"] == "2026-03-18"
 
 
 class TestScorecardNarrativeLLMInput:

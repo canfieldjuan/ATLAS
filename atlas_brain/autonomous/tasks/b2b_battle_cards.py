@@ -9,22 +9,27 @@ and persists to b2b_intelligence.
 import asyncio
 import json
 import logging
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from ._execution_progress import _update_execution_progress
 
 logger = logging.getLogger("atlas.tasks.b2b_battle_cards")
 
+_STAGE_LOADING_INPUTS = "loading_inputs"
+_STAGE_BUILDING = "building_deterministic_cards"
+_STAGE_PERSISTING_DETERMINISTIC = "persisting_deterministic"
+_STAGE_LLM_OVERLAY = "llm_overlay"
+_STAGE_FINALIZING = "finalizing"
+
 _BATTLE_CARD_LLM_FIELDS = (
     "executive_summary",
-    "weakness_analysis",
     "discovery_questions",
     "landmine_questions",
     "objection_handlers",
-    "competitive_landscape",
     "talk_track",
     "recommended_plays",
 )
@@ -34,20 +39,6 @@ _BATTLE_CARD_SALES_COPY_JSON_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
     "properties": {
         "executive_summary": {"type": "string"},
-        "weakness_analysis": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "weakness": {"type": "string"},
-                    "evidence": {"type": "string"},
-                    "customer_quote": {"type": "string"},
-                    "winning_position": {"type": "string"},
-                },
-                "required": ["weakness", "evidence", "customer_quote", "winning_position"],
-            },
-        },
         "discovery_questions": {"type": "array", "items": {"type": "string"}},
         "landmine_questions": {"type": "array", "items": {"type": "string"}},
         "objection_handlers": {
@@ -63,21 +54,6 @@ _BATTLE_CARD_SALES_COPY_JSON_SCHEMA: dict[str, Any] = {
                 },
                 "required": ["objection", "acknowledge", "pivot", "proof_point"],
             },
-        },
-        "competitive_landscape": {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "vulnerability_window": {"type": "string"},
-                "top_alternatives": {
-                    "anyOf": [
-                        {"type": "string"},
-                        {"type": "array", "items": {"type": "string"}},
-                    ]
-                },
-                "displacement_triggers": {"type": "array", "items": {"type": "string"}},
-            },
-            "required": ["vulnerability_window", "top_alternatives", "displacement_triggers"],
         },
         "talk_track": {
             "type": "object",
@@ -106,16 +82,13 @@ _BATTLE_CARD_SALES_COPY_JSON_SCHEMA: dict[str, Any] = {
     },
     "required": [
         "executive_summary",
-        "weakness_analysis",
         "discovery_questions",
         "landmine_questions",
         "objection_handlers",
-        "competitive_landscape",
         "talk_track",
         "recommended_plays",
     ],
 }
-
 
 def _parse_battle_card_sales_copy(text: str | None) -> dict[str, Any]:
     """Parse battle-card LLM output with truncation recovery enabled."""
@@ -142,6 +115,9 @@ def _battle_card_prior_attempt(parsed_copy: dict[str, Any]) -> Any:
 def _battle_card_llm_options(cfg: Any) -> dict[str, Any]:
     """Resolve backend-specific call_llm_with_skill options for battle cards."""
     backend = str(getattr(cfg, "battle_card_llm_backend", "auto") or "auto").strip().lower()
+    default_field = getattr(type(cfg), "model_fields", {}).get("battle_card_openrouter_model")
+    default_model = getattr(default_field, "default", "") if default_field is not None else ""
+    model = str(getattr(cfg, "battle_card_openrouter_model", "") or "").strip() or str(default_model or "").strip() or None
     if backend == "anthropic":
         return {
             "workload": "anthropic",
@@ -149,7 +125,6 @@ def _battle_card_llm_options(cfg: Any) -> dict[str, Any]:
             "openrouter_model": None,
         }
     if backend == "openrouter":
-        model = str(getattr(cfg, "battle_card_openrouter_model", "") or "").strip() or None
         return {
             "workload": "synthesis",
             "try_openrouter": True,
@@ -158,8 +133,191 @@ def _battle_card_llm_options(cfg: Any) -> dict[str, Any]:
     return {
         "workload": "synthesis",
         "try_openrouter": True,
-        "openrouter_model": None,
+        "openrouter_model": model,
     }
+
+
+def _build_category_council_fallback(card: dict[str, Any]) -> dict[str, Any] | None:
+    """Create deterministic category context when no council conclusion exists."""
+    eco = card.get("ecosystem_context") or {}
+    regime = str(eco.get("market_structure") or "").strip()
+    if not eco or not regime:
+        return None
+    insights: list[dict[str, str]] = [
+        {
+            "insight": f"Category market structure is {regime}.",
+            "evidence": f"market_structure: {regime}",
+        },
+    ]
+    if eco.get("hhi") is not None:
+        insights.append({"insight": "Category concentration is visible in the current HHI.", "evidence": f"hhi: {eco['hhi']}"})
+    if eco.get("displacement_intensity") is not None:
+        insights.append({"insight": "Competitive displacement is active in this category.", "evidence": f"displacement_intensity: {eco['displacement_intensity']}"})
+    if eco.get("dominant_archetype"):
+        insights.append({"insight": f"{eco['dominant_archetype']} is the dominant churn archetype in this category.", "evidence": f"dominant_archetype: {eco['dominant_archetype']}"})
+    return {
+        "conclusion": f"{card.get('category') or 'This category'} currently shows {regime} dynamics, so reps should anchor positioning to category-wide pressure instead of a single isolated complaint stream.",
+        "market_regime": regime,
+        "durability": "uncertain",
+        "confidence": 0.0,
+        "winner": None,
+        "loser": None,
+        "key_insights": insights[:5],
+    }
+
+
+def _ecosystem_context_from_analysis(eco_data: Any) -> dict[str, Any] | None:
+    """Normalize EcosystemEvidence or dict payloads into battle-card context."""
+    if not eco_data:
+        return None
+    health = eco_data.get("health") if isinstance(eco_data, dict) else getattr(eco_data, "health", eco_data)
+    hhi = health.get("hhi") if isinstance(health, dict) else getattr(health, "hhi", None)
+    market_structure = health.get("market_structure") if isinstance(health, dict) else getattr(health, "market_structure", None)
+    displacement = health.get("displacement_intensity") if isinstance(health, dict) else getattr(health, "displacement_intensity", None)
+    archetype = health.get("dominant_archetype") if isinstance(health, dict) else getattr(health, "dominant_archetype", None)
+    if hhi is None and displacement is None and not market_structure and not archetype:
+        return None
+    return {
+        "hhi": hhi,
+        "market_structure": market_structure,
+        "displacement_intensity": displacement,
+        "dominant_archetype": archetype,
+    }
+
+
+def _iso_dateish(value: Any) -> str | None:
+    """Serialize date/datetime values for persisted card metadata."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return str(value)
+
+
+def _attach_battle_card_provenance(card: dict[str, Any], provenance: dict[str, Any]) -> None:
+    """Attach vendor-specific source and review-window metadata to a card."""
+    source_dist = provenance.get("source_distribution") or {}
+    if source_dist:
+        card["source_distribution"] = source_dist
+    sample_ids = provenance.get("sample_review_ids") or []
+    if sample_ids:
+        card["sample_review_ids"] = [str(item) for item in sample_ids[:20]]
+    window_start = _iso_dateish(provenance.get("review_window_start"))
+    window_end = _iso_dateish(provenance.get("review_window_end"))
+    if window_start:
+        card["review_window_start"] = window_start
+    if window_end:
+        card["review_window_end"] = window_end
+
+
+def _merge_battle_card_provenance(
+    primary: dict[str, Any] | None,
+    fallback: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Merge vendor provenance with vault provenance fallback."""
+    merged: dict[str, Any] = {}
+    for source in (fallback or {}, primary or {}):
+        if not isinstance(source, dict):
+            continue
+        for key in ("source_distribution", "sample_review_ids", "review_window_start", "review_window_end"):
+            value = source.get(key)
+            if value in (None, "", [], {}):
+                continue
+            merged[key] = value
+    return merged
+
+
+def _battle_card_persist_summary(card: dict[str, Any]) -> str:
+    """Build the persisted summary for deterministic or LLM-enriched cards."""
+    vendor = str(card.get("vendor", "") or "")
+    return str(card.get("executive_summary") or (
+        f"Battle card for {vendor}: "
+        f"score {card.get('churn_pressure_score', 0):.0f}, "
+        f"{len(card.get('vendor_weaknesses', []))} weaknesses, "
+        f"{len(card.get('competitor_differentiators', []))} competitors."
+    ))
+
+
+def _battle_card_source_metadata(
+    card: dict[str, Any],
+    report_source_review_count: int | None,
+    report_source_dist: dict[str, int],
+) -> tuple[int | None, dict[str, int]]:
+    """Resolve row-level source metadata with vendor provenance fallback."""
+    card_source_dist = card.get("source_distribution") or report_source_dist
+    if not card_source_dist:
+        return report_source_review_count, {}
+    card_source_count = sum(int(v or 0) for v in card_source_dist.values())
+    return card_source_count, card_source_dist
+
+
+def _battle_card_llm_model_label(card: dict[str, Any], llm_options: dict[str, Any]) -> str:
+    """Choose the persisted llm_model label for the current render state."""
+    render_status = str(card.get("llm_render_status", "") or "").strip().lower()
+    if render_status == "cached":
+        return "pipeline_cached"
+    if render_status == "succeeded":
+        if llm_options.get("try_openrouter"):
+            return str(llm_options.get("openrouter_model") or "openrouter")
+        return str(llm_options.get("workload") or "anthropic")
+    return "pipeline_deterministic"
+
+
+async def _persist_battle_card(
+    pool: Any,
+    *,
+    today: date,
+    card: dict[str, Any],
+    data_density: str,
+    report_source_review_count: int | None,
+    report_source_dist: dict[str, int],
+    llm_model: str,
+    status: str = "published",
+) -> bool:
+    """Persist a battle card row without dropping deterministic sections."""
+    vendor = str(card.get("vendor", "") or "")
+    if not vendor:
+        return False
+    persisted_summary = _battle_card_persist_summary(card)
+    card["executive_summary"] = persisted_summary
+    card_source_count, card_source_dist = _battle_card_source_metadata(
+        card,
+        report_source_review_count,
+        report_source_dist,
+    )
+    await pool.execute(
+        """
+        INSERT INTO b2b_intelligence (
+            report_date, report_type, vendor_filter,
+            intelligence_data, executive_summary, data_density, status, llm_model,
+            source_review_count, source_distribution
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ON CONFLICT (report_date, report_type, LOWER(COALESCE(vendor_filter,'')),
+                     LOWER(COALESCE(category_filter,'')),
+                     COALESCE(account_id, '00000000-0000-0000-0000-000000000000'::uuid))
+        DO UPDATE SET intelligence_data = EXCLUDED.intelligence_data,
+                      executive_summary = EXCLUDED.executive_summary,
+                      data_density = EXCLUDED.data_density,
+                      status = EXCLUDED.status,
+                      llm_model = EXCLUDED.llm_model,
+                      source_review_count = EXCLUDED.source_review_count,
+                      source_distribution = EXCLUDED.source_distribution,
+                      created_at = now()
+        """,
+        today,
+        "battle_card",
+        vendor,
+        json.dumps(card, default=str),
+        persisted_summary,
+        data_density,
+        status,
+        llm_model,
+        card_source_count,
+        json.dumps(card_source_dist),
+    )
+    return True
 
 
 async def _check_freshness(pool) -> date | None:
@@ -200,6 +358,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _build_sentiment_lookup,
         _build_buyer_auth_lookup,
         _build_keyword_spike_lookup,
+        _battle_card_provenance_from_evidence_vault,
+        _build_deterministic_battle_card_competitive_landscape,
+        _build_deterministic_battle_card_weakness_analysis,
         _build_positive_lookup,
         _build_department_lookup,
         _build_usage_duration_lookup,
@@ -225,6 +386,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _fetch_product_profiles,
         _fetch_competitor_reasons,
         _fetch_data_context,
+        _fetch_vendor_provenance,
+        _fetch_latest_evidence_vault,
         _fetch_review_text_aggregates,
         _fetch_department_distribution,
         _fetch_contract_context_distribution,
@@ -238,6 +401,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     min_reviews = cfg.intelligence_min_reviews
 
     # --- Phase 1: Parallel data fetch ---
+    await _update_execution_progress(
+        task,
+        stage=_STAGE_LOADING_INPUTS,
+        progress_message="Loading battle-card source artifacts.",
+    )
     try:
         (
             vendor_scores,
@@ -247,7 +415,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             budget_signals, use_case_dist,
             sentiment_traj, buyer_auth, timeline_signals,
             competitor_reasons, keyword_spikes,
-            data_context, product_profiles_raw,
+            data_context, vendor_provenance,
+            evidence_vault_lookup,
+            product_profiles_raw,
             review_text_agg, department_dist, contract_ctx,
         ) = await asyncio.gather(
             _fetch_vendor_churn_scores(pool, window_days, min_reviews),
@@ -266,6 +436,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             _fetch_competitor_reasons(pool, window_days),
             _fetch_keyword_spikes(pool),
             _fetch_data_context(pool, window_days),
+            _fetch_vendor_provenance(pool, window_days),
+            _fetch_latest_evidence_vault(pool, as_of=today, analysis_window_days=window_days),
             _fetch_product_profiles(pool),
             _fetch_review_text_aggregates(pool, window_days),
             _fetch_department_distribution(pool, window_days),
@@ -278,6 +450,36 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not vendor_scores:
         return {"_skip_synthesis": "No vendor scores"}
     competitive_disp = _aggregate_competitive_disp(competitive_disp)
+
+    # --- Load reasoning synthesis from pool ---
+    reasoning_synthesis_lookup: dict[str, dict] = {}
+    try:
+        _synth_rows = await pool.fetch(
+            """
+            SELECT DISTINCT ON (vendor_name)
+                   vendor_name, synthesis
+            FROM b2b_reasoning_synthesis
+            WHERE as_of_date <= $1
+              AND analysis_window_days = $2
+            ORDER BY vendor_name, as_of_date DESC, created_at DESC
+            """,
+            today, window_days,
+        )
+        for sr in _synth_rows:
+            vn = _canonicalize_vendor(sr.get("vendor_name") or "")
+            if vn:
+                data = sr.get("synthesis")
+                if isinstance(data, str):
+                    import json as _json
+                    data = _json.loads(data)
+                if isinstance(data, dict):
+                    reasoning_synthesis_lookup[vn] = data
+        logger.info(
+            "Loaded reasoning synthesis for %d vendors",
+            len(reasoning_synthesis_lookup),
+        )
+    except Exception:
+        logger.debug("Reasoning synthesis unavailable", exc_info=True)
 
     # --- Phase 2: Reconstruct reasoning + cross-vendor from DB ---
     reasoning_lookup = await reconstruct_reasoning_lookup(pool, as_of=today)
@@ -315,6 +517,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             product_profile_lookup[vn] = pp
 
     # --- Phase 4: Build deterministic battle cards ---
+    await _update_execution_progress(
+        task,
+        stage=_STAGE_BUILDING,
+        progress_message="Building deterministic battle cards.",
+        vendors_total=len(vendor_scores),
+    )
     deterministic_battle_cards = _build_deterministic_battle_cards(
         vendor_scores,
         pain_lookup=pain_lookup,
@@ -336,29 +544,56 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         department_lookup=department_lookup,
         usage_duration_lookup=usage_duration_lookup,
         buyer_auth_lookup=buyer_auth_lookup,
+        keyword_spike_lookup=keyword_spike_lookup,
+        evidence_vault_lookup=evidence_vault_lookup,
+        reasoning_synthesis_lookup=reasoning_synthesis_lookup,
     )
+
+    for card in deterministic_battle_cards:
+        vendor = card.get("vendor", "")
+        if not vendor:
+            continue
+        _attach_battle_card_provenance(
+            card,
+            _merge_battle_card_provenance(
+                vendor_provenance.get(vendor, {}),
+                _battle_card_provenance_from_evidence_vault(evidence_vault_lookup.get(vendor)),
+            ),
+        )
 
     # Enrich with ecosystem context
     try:
         from atlas_brain.reasoning.ecosystem import EcosystemAnalyzer
         eco = EcosystemAnalyzer(pool)
-        ecosystem_evidence = await eco.analyze_all_categories(reasoning_lookup)
+        ecosystem_evidence = await eco.analyze_all_categories()
         for card in deterministic_battle_cards:
             cat = card.get("category", "")
-            eco_data = ecosystem_evidence.get(cat)
-            if eco_data:
-                card["ecosystem_context"] = {
-                    "hhi": eco_data.get("hhi"),
-                    "market_structure": eco_data.get("market_structure"),
-                    "displacement_intensity": eco_data.get("displacement_intensity"),
-                    "dominant_archetype": eco_data.get("dominant_archetype"),
-                }
+            eco_context = _ecosystem_context_from_analysis(ecosystem_evidence.get(cat))
+            if eco_context:
+                card["ecosystem_context"] = eco_context
     except Exception:
         logger.debug("Ecosystem enrichment skipped", exc_info=True)
 
     # Enrich with cross-vendor battle conclusions + resource asymmetry
     for card in deterministic_battle_cards:
         vendor = card.get("vendor", "")
+        category = card.get("category", "")
+        council = xv_lookup.get("councils", {}).get(category, {})
+        if council:
+            cc = council.get("conclusion", {})
+            card["category_council"] = {
+                "conclusion": cc.get("conclusion", ""),
+                "market_regime": cc.get("market_regime", ""),
+                "durability": cc.get("durability_assessment", ""),
+                "confidence": council.get("confidence", 0),
+                "winner": cc.get("winner", ""),
+                "loser": cc.get("loser", ""),
+                "key_insights": cc.get("key_insights", []),
+            }
+        elif card.get("ecosystem_context"):
+            fallback_council = _build_category_council_fallback(card)
+            if fallback_council:
+                card["category_council"] = fallback_council
         # Battle conclusions involving this vendor
         battles = []
         for pair_key, battle in xv_lookup.get("battles", {}).items():
@@ -370,6 +605,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     "durability": bc.get("durability_assessment", ""),
                     "confidence": battle.get("confidence", 0),
                     "winner": bc.get("winner", ""),
+                    "loser": bc.get("loser", ""),
                     "key_insights": bc.get("key_insights", []),
                 })
         if battles:
@@ -384,8 +620,72 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     "confidence": asym.get("confidence", 0),
                 }
                 break  # first match is highest confidence (query ordered by confidence DESC)
+        card["weakness_analysis"] = _build_deterministic_battle_card_weakness_analysis(card)
+        card["competitive_landscape"] = _build_deterministic_battle_card_competitive_landscape(card)
 
     logger.info("Built %d deterministic battle cards", len(deterministic_battle_cards))
+    total_cards = len(deterministic_battle_cards)
+    await _update_execution_progress(
+        task,
+        stage=_STAGE_PERSISTING_DETERMINISTIC,
+        progress_current=0,
+        progress_total=total_cards,
+        progress_message="Persisting deterministic battle cards.",
+        cards_built=total_cards,
+        cards_persisted=0,
+    )
+
+    data_density = json.dumps({"vendors_analyzed": len(vendor_scores)})
+    report_source_review_count = data_context.get("reviews_in_analysis_window")
+    report_source_dist = {
+        src: info["reviews"] for src, info in data_context.get("source_distribution", {}).items()
+    }
+
+    cards_persisted = 0
+    for card in deterministic_battle_cards:
+        card["llm_render_status"] = "pending"
+        card.pop("llm_render_error", None)
+        try:
+            persisted = await _persist_battle_card(
+                pool,
+                today=today,
+                card=card,
+                data_density=data_density,
+                report_source_review_count=report_source_review_count,
+                report_source_dist=report_source_dist,
+                llm_model="pipeline_deterministic",
+            )
+        except Exception:
+            logger.exception("Failed to persist deterministic battle card for %s", card.get("vendor"))
+        else:
+            cards_persisted += int(bool(persisted))
+            await _update_execution_progress(
+                task,
+                stage=_STAGE_PERSISTING_DETERMINISTIC,
+                progress_current=cards_persisted,
+                progress_total=total_cards,
+                progress_message="Persisting deterministic battle cards.",
+                cards_built=total_cards,
+                cards_persisted=cards_persisted,
+            )
+
+    logger.info(
+        "Persisted %d/%d deterministic battle cards before LLM rendering",
+        cards_persisted,
+        len(deterministic_battle_cards),
+    )
+    await _update_execution_progress(
+        task,
+        stage=_STAGE_LLM_OVERLAY,
+        progress_current=0,
+        progress_total=total_cards,
+        progress_message="Applying LLM overlay to battle cards.",
+        cards_built=total_cards,
+        cards_persisted=cards_persisted,
+        cards_llm_updated=0,
+        llm_failures=0,
+        cache_hits=0,
+    )
 
     # --- Phase 5: LLM sales copy (parallel with semantic cache) ---
     from ...pipelines.llm import call_llm_with_skill
@@ -394,6 +694,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     _bc_cache = SemanticCache(pool)
     bc_llm_failures = 0
     bc_cache_hits = 0
+    bc_llm_updates = 0
+    bc_overlay_completed = 0
+    progress_lock = asyncio.Lock()
     bc_sem = asyncio.Semaphore(cfg.battle_card_llm_concurrency)
     max_attempts = cfg.battle_card_llm_attempts
     retry_delay = cfg.battle_card_llm_retry_delay_seconds
@@ -423,18 +726,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         return _parse_battle_card_sales_copy(sales_copy)
 
     async def _enrich_one(card: dict[str, Any]) -> None:
-        nonlocal bc_llm_failures, bc_cache_hits
+        nonlocal bc_llm_failures, bc_cache_hits, bc_llm_updates, bc_overlay_completed
 
         card_hash = compute_evidence_hash({
-            "vendor": card.get("vendor"),
-            "churn_pressure_score": card.get("churn_pressure_score"),
-            "vendor_weaknesses": card.get("vendor_weaknesses"),
-            "customer_pain_quotes": card.get("customer_pain_quotes"),
-            "competitor_differentiators": card.get("competitor_differentiators"),
-            "objection_data": card.get("objection_data"),
-            "cross_vendor_battles": card.get("cross_vendor_battles"),
-            "resource_asymmetry": card.get("resource_asymmetry"),
-            "ecosystem_context": card.get("ecosystem_context"),
+            key: value
+            for key, value in card.items()
+            if key not in _BATTLE_CARD_LLM_FIELDS and not key.startswith("_")
         })
         pattern_sig = f"battle_card:{card.get('vendor')}:{card_hash}"
 
@@ -446,14 +743,47 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             else:
                 for _cf in cached.conclusion:
                     card[_cf] = cached.conclusion[_cf]
+                card["llm_render_status"] = "cached"
+                card.pop("llm_render_error", None)
                 await _bc_cache.validate(pattern_sig)
-                bc_cache_hits += 1
+                persisted_ok = False
+                try:
+                    persisted = await _persist_battle_card(
+                        pool,
+                        today=today,
+                        card=card,
+                        data_density=data_density,
+                        report_source_review_count=report_source_review_count,
+                        report_source_dist=report_source_dist,
+                        llm_model=_battle_card_llm_model_label(card, llm_options),
+                    )
+                except Exception:
+                    logger.exception("Failed to persist cached battle card for %s", card.get("vendor"))
+                else:
+                    persisted_ok = bool(persisted)
+                async with progress_lock:
+                    bc_cache_hits += 1
+                    bc_llm_updates += int(persisted_ok)
+                    bc_overlay_completed += 1
+                    await _update_execution_progress(
+                        task,
+                        stage=_STAGE_LLM_OVERLAY,
+                        progress_current=bc_overlay_completed,
+                        progress_total=total_cards,
+                        progress_message="Applying LLM overlay to battle cards.",
+                        cards_built=total_cards,
+                        cards_persisted=cards_persisted,
+                        cards_llm_updated=bc_llm_updates,
+                        llm_failures=bc_llm_failures,
+                        cache_hits=bc_cache_hits,
+                    )
                 return
 
         async with bc_sem:
             payload = dict(card)
             payload["locked_facts"] = _build_battle_card_locked_facts(card)
             failure_reasons: list[str] = []
+            render_succeeded = False
             for attempt in range(max_attempts):
                 try:
                     parsed_copy = await _request_sales_copy(payload)
@@ -475,12 +805,48 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                             for _f in _BATTLE_CARD_LLM_FIELDS:
                                 if _f in parsed_copy:
                                     card[_f] = parsed_copy[_f]
+                            card["llm_render_status"] = "succeeded"
+                            card.pop("llm_render_error", None)
+                            render_succeeded = True
                             break
                         failure_reasons = copy_errors
                 if attempt + 1 >= max_attempts:
-                    bc_llm_failures += 1
+                    card["llm_render_status"] = "failed"
+                    if failure_reasons:
+                        card["llm_render_error"] = "; ".join(failure_reasons[:3])
                     logger.warning("Battle card rejected for %s: %s",
                                    card.get("vendor"), "; ".join(failure_reasons[:3]))
+                    persisted_ok = False
+                    try:
+                        persisted = await _persist_battle_card(
+                            pool,
+                            today=today,
+                            card=card,
+                            data_density=data_density,
+                            report_source_review_count=report_source_review_count,
+                            report_source_dist=report_source_dist,
+                            llm_model=_battle_card_llm_model_label(card, llm_options),
+                        )
+                    except Exception:
+                        logger.exception("Failed to persist rejected battle card for %s", card.get("vendor"))
+                    else:
+                        persisted_ok = bool(persisted)
+                    async with progress_lock:
+                        bc_llm_failures += 1
+                        bc_llm_updates += int(persisted_ok)
+                        bc_overlay_completed += 1
+                        await _update_execution_progress(
+                            task,
+                            stage=_STAGE_LLM_OVERLAY,
+                            progress_current=bc_overlay_completed,
+                            progress_total=total_cards,
+                            progress_message="Applying LLM overlay to battle cards.",
+                            cards_built=total_cards,
+                            cards_persisted=cards_persisted,
+                            cards_llm_updated=bc_llm_updates,
+                            llm_failures=bc_llm_failures,
+                            cache_hits=bc_cache_hits,
+                        )
                     return
                 payload = dict(card)
                 payload["locked_facts"] = _build_battle_card_locked_facts(card)
@@ -488,6 +854,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 payload["validation_feedback"] = failure_reasons[:feedback_limit]
                 if retry_delay > 0:
                     await asyncio.sleep(retry_delay)
+
+            if not render_succeeded:
+                return
 
             try:
                 await _bc_cache.store(CacheEntry(
@@ -501,6 +870,36 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 ))
             except Exception:
                 logger.warning("Failed to cache battle card for %s", card.get("vendor"))
+            try:
+                persisted = await _persist_battle_card(
+                    pool,
+                    today=today,
+                    card=card,
+                    data_density=data_density,
+                    report_source_review_count=report_source_review_count,
+                    report_source_dist=report_source_dist,
+                    llm_model=_battle_card_llm_model_label(card, llm_options),
+                )
+            except Exception:
+                logger.exception("Failed to persist enriched battle card for %s", card.get("vendor"))
+                persisted_ok = False
+            else:
+                persisted_ok = bool(persisted)
+            async with progress_lock:
+                bc_llm_updates += int(persisted_ok)
+                bc_overlay_completed += 1
+                await _update_execution_progress(
+                    task,
+                    stage=_STAGE_LLM_OVERLAY,
+                    progress_current=bc_overlay_completed,
+                    progress_total=total_cards,
+                    progress_message="Applying LLM overlay to battle cards.",
+                    cards_built=total_cards,
+                    cards_persisted=cards_persisted,
+                    cards_llm_updated=bc_llm_updates,
+                    llm_failures=bc_llm_failures,
+                    cache_hits=bc_cache_hits,
+                )
 
     await asyncio.gather(*[_enrich_one(c) for c in deterministic_battle_cards])
 
@@ -511,65 +910,29 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         bc_llm_failures,
         len(deterministic_battle_cards),
     )
-
-    # --- Phase 6: Persist battle cards ---
-    data_density = json.dumps({"vendors_analyzed": len(vendor_scores)})
-    report_source_review_count = data_context.get("reviews_in_analysis_window")
-    report_source_dist = json.dumps(
-        {src: info["reviews"] for src, info in data_context.get("source_distribution", {}).items()}
+    logger.info(
+        "Battle card overlay writes: %d/%d cards updated after LLM phase",
+        bc_llm_updates,
+        len(deterministic_battle_cards),
     )
-
-    cards_persisted = 0
-    for card in deterministic_battle_cards:
-        vendor = card.get("vendor", "")
-        if not vendor:
-            continue
-        persisted_summary = str(card.get("executive_summary") or (
-            f"Battle card for {vendor}: "
-            f"score {card.get('churn_pressure_score', 0):.0f}, "
-            f"{len(card.get('vendor_weaknesses', []))} weaknesses, "
-            f"{len(card.get('competitor_differentiators', []))} competitors."
-        ))
-        card["executive_summary"] = persisted_summary
-        try:
-            await pool.execute(
-                """
-                INSERT INTO b2b_intelligence (
-                    report_date, report_type, vendor_filter,
-                    intelligence_data, executive_summary, data_density, status, llm_model,
-                    source_review_count, source_distribution
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                ON CONFLICT (report_date, report_type, LOWER(COALESCE(vendor_filter,'')),
-                             LOWER(COALESCE(category_filter,'')),
-                             COALESCE(account_id, '00000000-0000-0000-0000-000000000000'::uuid))
-                DO UPDATE SET intelligence_data = EXCLUDED.intelligence_data,
-                              executive_summary = EXCLUDED.executive_summary,
-                              data_density = EXCLUDED.data_density,
-                              source_review_count = EXCLUDED.source_review_count,
-                              source_distribution = EXCLUDED.source_distribution,
-                              created_at = now()
-                """,
-                today,
-                "battle_card",
-                vendor,
-                json.dumps(card, default=str),
-                persisted_summary,
-                data_density,
-                "published",
-                "pipeline_deterministic",
-                report_source_review_count,
-                report_source_dist,
-            )
-            cards_persisted += 1
-        except Exception:
-            logger.exception("Failed to persist battle card for %s", vendor)
-
-    logger.info("Persisted %d/%d battle cards", cards_persisted, len(deterministic_battle_cards))
+    await _update_execution_progress(
+        task,
+        stage=_STAGE_FINALIZING,
+        progress_current=total_cards,
+        progress_total=total_cards,
+        progress_message="Finalizing battle-card execution status.",
+        cards_built=total_cards,
+        cards_persisted=cards_persisted,
+        cards_llm_updated=bc_llm_updates,
+        llm_failures=bc_llm_failures,
+        cache_hits=bc_cache_hits,
+    )
 
     return {
         "_skip_synthesis": "B2B battle cards complete",
         "cards_built": len(deterministic_battle_cards),
         "cards_persisted": cards_persisted,
+        "cards_llm_updated": bc_llm_updates,
         "cache_hits": bc_cache_hits,
         "llm_failures": bc_llm_failures,
         "reasoning_vendors": len(reasoning_lookup),

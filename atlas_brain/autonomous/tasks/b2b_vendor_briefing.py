@@ -7,8 +7,9 @@ Assembles a deterministic vendor churn briefing from existing DB tables
 Data sources (in priority order):
 1. b2b_intelligence (weekly_churn_feed) -- richest, pre-aggregated
 2. b2b_churn_signals -- fallback aggregated metrics
-3. b2b_product_profiles -- enrichment (profile summary, competitive context)
-4. b2b_reviews -- high-urgency quotes if feed evidence is insufficient
+3. b2b_evidence_vault -- canonical weakness, quote, and company-signal evidence
+4. b2b_product_profiles -- enrichment (profile summary, competitive context)
+5. b2b_reviews -- high-urgency quotes if evidence is still insufficient
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ import jwt as pyjwt
 
 from ...config import settings
 from ...services.campaign_sender import get_campaign_sender
+from ...services.vendor_target_selection import dedupe_vendor_target_rows
 from ...services.vendor_registry import resolve_vendor_name
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
@@ -214,6 +216,183 @@ def _finalize_briefing_presentation(briefing: dict[str, Any]) -> None:
 
     if briefing.get("cta_hook") and not briefing.get("cta_description"):
         briefing["cta_description"] = ""
+
+
+def _briefing_pain_breakdown_from_evidence_vault(
+    vault: dict[str, Any],
+    *,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Map canonical vault pain rows to vendor-briefing pain breakdown."""
+    rows: list[dict[str, Any]] = []
+    for item in (vault.get("weakness_evidence") or []):
+        if str(item.get("evidence_type") or "") != "pain_category":
+            continue
+        key = str(item.get("key") or "").strip().lower()
+        if not key:
+            continue
+        metrics = item.get("supporting_metrics") or {}
+        rows.append({
+            "category": key,
+            "count": int(item.get("mention_count_total") or 0),
+            "avg_urgency": metrics.get("avg_urgency_when_mentioned") or metrics.get("avg_urgency"),
+        })
+    rows.sort(key=lambda r: int(r.get("count") or 0), reverse=True)
+    return rows[:limit]
+
+
+def _briefing_feature_gaps_from_evidence_vault(
+    vault: dict[str, Any],
+    *,
+    limit: int = 5,
+) -> list[str]:
+    """Map canonical vault feature-gap rows to briefing strings."""
+    gaps: list[tuple[int, str]] = []
+    for item in (vault.get("weakness_evidence") or []):
+        if str(item.get("evidence_type") or "") != "feature_gap":
+            continue
+        label = str(item.get("label") or item.get("key") or "").strip()
+        if not label:
+            continue
+        gaps.append((int(item.get("mention_count_total") or 0), label))
+    gaps.sort(key=lambda row: row[0], reverse=True)
+    return [label for _, label in gaps[:limit]]
+
+
+def _briefing_quotes_from_evidence_vault(
+    vault: dict[str, Any],
+    *,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Build quotable briefing evidence rows from canonical weakness evidence."""
+    quotes: list[dict[str, Any]] = []
+    for item in (vault.get("weakness_evidence") or []):
+        text = str(item.get("best_quote") or "").strip()
+        if not text:
+            continue
+        source = item.get("quote_source") or {}
+        metrics = item.get("supporting_metrics") or {}
+        quotes.append({
+            "quote": text,
+            "text": text,
+            "company": source.get("company"),
+            "title": source.get("reviewer_title") or source.get("title"),
+            "company_size": source.get("company_size"),
+            "industry": source.get("industry"),
+            "source": source.get("source"),
+            "review_id": source.get("review_id"),
+            "rating": source.get("rating"),
+            "reviewed_at": source.get("reviewed_at"),
+            "urgency": metrics.get("avg_urgency_when_mentioned") or metrics.get("avg_urgency"),
+            "pain_category": item.get("key"),
+            "mention_count": int(item.get("mention_count_total") or 0),
+        })
+    quotes.sort(
+        key=lambda q: (
+            float(q.get("urgency") or 0),
+            int(q.get("mention_count") or 0),
+        ),
+        reverse=True,
+    )
+    return quotes[:limit]
+
+
+def _briefing_named_accounts_from_evidence_vault(
+    vault: dict[str, Any],
+    *,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Map canonical company signals into briefing named-account rows."""
+    accounts: list[dict[str, Any]] = []
+    for item in (vault.get("company_signals") or []):
+        company = str(item.get("company_name") or "").strip()
+        if not company:
+            continue
+        pain = str(item.get("pain_category") or "").strip().lower()
+        accounts.append({
+            "company": company,
+            "title": item.get("buyer_role"),
+            "company_size": item.get("seat_count"),
+            "industry": item.get("industry"),
+            "urgency": item.get("urgency_score"),
+            "pain_breakdown": [{"category": pain, "count": 1}] if pain else [],
+            "evidence": [],
+            "buying_stage": item.get("buying_stage"),
+            "source": item.get("source"),
+            "contract_end": item.get("contract_end"),
+            "confidence_score": item.get("confidence_score"),
+        })
+    accounts.sort(
+        key=lambda a: (
+            float(a.get("urgency") or 0),
+            float(a.get("confidence_score") or 0),
+        ),
+        reverse=True,
+    )
+    return accounts[:limit]
+
+
+def _apply_evidence_vault_to_briefing(
+    briefing: dict[str, Any],
+    vault: dict[str, Any] | None,
+) -> bool:
+    """Overlay canonical evidence-vault fields without replacing richer sources."""
+    if not vault:
+        return False
+
+    used = False
+    snapshot = vault.get("metric_snapshot") or {}
+
+    if not briefing.get("review_count"):
+        review_count = snapshot.get("reviews_in_analysis_window") or snapshot.get("total_reviews")
+        if review_count is not None:
+            briefing["review_count"] = review_count
+            used = True
+    if not briefing.get("avg_urgency") and snapshot.get("avg_urgency") is not None:
+        briefing["avg_urgency"] = snapshot.get("avg_urgency")
+        used = True
+    if not briefing.get("churn_signal_density") and snapshot.get("churn_density") is not None:
+        briefing["churn_signal_density"] = snapshot.get("churn_density")
+        used = True
+    if not briefing.get("dm_churn_rate") and snapshot.get("dm_churn_rate") is not None:
+        briefing["dm_churn_rate"] = float(snapshot.get("dm_churn_rate") or 0) * 100.0
+        used = True
+
+    if not briefing.get("pain_breakdown"):
+        pain_breakdown = _briefing_pain_breakdown_from_evidence_vault(vault)
+        if pain_breakdown:
+            briefing["pain_breakdown"] = pain_breakdown
+            used = True
+    if not briefing.get("top_feature_gaps"):
+        feature_gaps = _briefing_feature_gaps_from_evidence_vault(vault)
+        if feature_gaps:
+            briefing["top_feature_gaps"] = feature_gaps
+            used = True
+    if not briefing.get("named_accounts"):
+        named_accounts = _briefing_named_accounts_from_evidence_vault(vault)
+        if named_accounts:
+            briefing["named_accounts"] = named_accounts
+            used = True
+
+    existing_evidence = list(briefing.get("evidence") or [])
+    if len(existing_evidence) < 2:
+        existing_text = {
+            str(e.get("quote") or e.get("text") or "").strip().lower()
+            for e in existing_evidence
+            if isinstance(e, dict)
+        }
+        for item in _briefing_quotes_from_evidence_vault(vault):
+            text = str(item.get("quote") or item.get("text") or "").strip().lower()
+            if not text or text in existing_text:
+                continue
+            existing_evidence.append(item)
+            existing_text.add(text)
+            used = True
+            if len(existing_evidence) >= 5:
+                break
+        briefing["evidence"] = existing_evidence
+
+    return used
 
 
 async def _enrich_with_analyst_summary(briefing: dict[str, Any]) -> None:
@@ -936,6 +1115,13 @@ async def build_vendor_briefing(
         "report_date": date.today().isoformat(),
         "booking_url": build_gate_url(vendor_name),
         "challenger_mode": challenger_mode,
+        "data_sources": {
+            "weekly_churn_feed": False,
+            "churn_signals": False,
+            "evidence_vault": False,
+            "product_profile": False,
+            "raw_review_quotes": False,
+        },
     }
 
     found = False
@@ -946,6 +1132,7 @@ async def build_vendor_briefing(
     feed_entry = await _extract_feed_entry(pool, vendor_name)
     if feed_entry:
         found = True
+        briefing["data_sources"]["weekly_churn_feed"] = True
         briefing.update({
             "churn_pressure_score": feed_entry.get("churn_pressure_score", 0),
             "churn_signal_density": feed_entry.get("churn_signal_density", 0),
@@ -971,6 +1158,7 @@ async def build_vendor_briefing(
         signals = await _fetch_churn_signals(pool, vendor_name)
         if signals:
             found = True
+            briefing["data_sources"]["churn_signals"] = True
             # top_feature_gaps from signals is [{feature, count}] -- extract names
             raw_gaps = _jsonb_list(signals.get("top_feature_gaps"))
             feature_gap_strings = [
@@ -998,10 +1186,18 @@ async def build_vendor_briefing(
         return None
 
     # ------------------------------------------------------------------
-    # Source 3: b2b_product_profiles (enrichment)
+    # Source 3: b2b_evidence_vault (canonical overlay for sparse fields)
+    # ------------------------------------------------------------------
+    vault = await _fetch_vendor_evidence_vault(pool, vendor_name)
+    if _apply_evidence_vault_to_briefing(briefing, vault):
+        briefing["data_sources"]["evidence_vault"] = True
+
+    # ------------------------------------------------------------------
+    # Source 4: b2b_product_profiles (enrichment)
     # ------------------------------------------------------------------
     profile = await _fetch_product_profile(pool, vendor_name)
     if profile:
+        briefing["data_sources"]["product_profile"] = True
         if not briefing.get("category") or briefing["category"] == "Software":
             briefing["category"] = profile.get("product_category") or "Software"
         if profile.get("profile_summary"):
@@ -1037,7 +1233,7 @@ async def build_vendor_briefing(
             ]
 
     # ------------------------------------------------------------------
-    # Source 4: b2b_reviews (high-urgency quotes if evidence thin)
+    # Source 5: b2b_reviews (high-urgency quotes if evidence thin)
     # ------------------------------------------------------------------
     evidence = briefing.get("evidence") or []
     if len(evidence) < 2:
@@ -1053,6 +1249,7 @@ async def build_vendor_briefing(
             if q_text and q_text not in existing:
                 evidence.append(q)
                 existing.add(q_text)
+                briefing["data_sources"]["raw_review_quotes"] = True
         briefing["evidence"] = evidence
 
     # ------------------------------------------------------------------
@@ -1169,6 +1366,49 @@ async def _extract_feed_entry(pool: Any, vendor_name: str) -> dict | None:
             return entry
 
     return None
+
+
+async def _fetch_vendor_evidence_vault(pool: Any, vendor_name: str) -> dict[str, Any] | None:
+    """Fetch the latest canonical evidence-vault row for one vendor."""
+    row = await pool.fetchrow(
+        """
+        SELECT vault
+        FROM b2b_evidence_vault
+        WHERE LOWER(vendor_name) = LOWER($1)
+          AND as_of_date <= $2
+          AND analysis_window_days = $3
+        ORDER BY as_of_date DESC, created_at DESC
+        LIMIT 1
+        """,
+        vendor_name,
+        date.today(),
+        settings.b2b_churn.intelligence_window_days,
+    )
+    if not row:
+        canonical_vendor = await resolve_vendor_name(vendor_name)
+        row = await pool.fetchrow(
+            """
+            SELECT vault
+            FROM b2b_evidence_vault
+            WHERE LOWER(vendor_name) = LOWER($1)
+              AND as_of_date <= $2
+              AND analysis_window_days = $3
+            ORDER BY as_of_date DESC, created_at DESC
+            LIMIT 1
+            """,
+            canonical_vendor,
+            date.today(),
+            settings.b2b_churn.intelligence_window_days,
+        )
+    if not row:
+        return None
+    vault = row.get("vault")
+    if isinstance(vault, str):
+        try:
+            vault = json.loads(vault)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    return vault if isinstance(vault, dict) else None
 
 
 async def _fetch_churn_signals(pool: Any, vendor_name: str) -> dict | None:
@@ -1560,6 +1800,9 @@ async def resolve_briefing_recipient(
           AND target_mode IN ('vendor_retention', 'challenger_intel')
           AND status = 'active'
           AND contact_email IS NOT NULL
+        ORDER BY CASE WHEN account_id IS NULL THEN 1 ELSE 0 END,
+                 updated_at DESC NULLS LAST,
+                 created_at DESC NULLS LAST
         LIMIT 1
         """,
         vendor_name,
@@ -1710,16 +1953,15 @@ async def send_batch_briefings() -> dict[str, Any]:
     rows = await pool.fetch(
         """
         SELECT company_name, contact_email, contact_name, contact_role,
-               target_mode
+               target_mode, account_id, created_at, updated_at
         FROM vendor_targets
         WHERE target_mode IN ('vendor_retention', 'challenger_intel')
           AND status = 'active'
           AND contact_email IS NOT NULL
         ORDER BY company_name
-        LIMIT $1
         """,
-        max_batch,
     )
+    rows = dedupe_vendor_target_rows(rows)[:max_batch]
 
     queued = 0
     skipped_cooldown = 0

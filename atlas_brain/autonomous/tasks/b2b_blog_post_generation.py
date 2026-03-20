@@ -28,6 +28,7 @@ from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from ...services.scraping.sources import VERIFIED_SOURCES, parse_source_allowlist
+from ._b2b_shared import _fetch_latest_evidence_vault
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_blog_post_generation")
 
@@ -1009,6 +1010,166 @@ def _slugify(text: str) -> str:
     return re.sub(r"-+", "-", text).strip("-")[:60]
 
 
+def _merge_blog_signals_with_evidence_vault(
+    raw_signals: list[dict[str, Any]],
+    vault: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Prefer canonical vault pain rows while preserving raw fallback rows."""
+    if not isinstance(vault, dict):
+        return raw_signals
+    weakness_rows = vault.get("weakness_evidence") or []
+    gap_labels = [
+        str(item.get("label") or item.get("key") or "").strip()
+        for item in weakness_rows
+        if isinstance(item, dict) and str(item.get("evidence_type") or "") == "feature_gap"
+    ]
+    vault_rows = [
+        item for item in weakness_rows
+        if isinstance(item, dict) and str(item.get("evidence_type") or "") == "pain_category"
+    ]
+    if not vault_rows:
+        vault_rows = [
+            item for item in weakness_rows
+            if isinstance(item, dict) and str(item.get("evidence_type") or "") != "feature_gap"
+        ]
+    raw_by_key = {
+        str(item.get("pain_category") or "").strip().lower(): item
+        for item in (raw_signals or [])
+        if isinstance(item, dict) and str(item.get("pain_category") or "").strip()
+    }
+    merged: list[dict[str, Any]] = []
+    for item in vault_rows:
+        match_key = str(item.get("key") or item.get("label") or "").strip().lower()
+        raw = raw_by_key.pop(match_key, {})
+        metrics = item.get("supporting_metrics") if isinstance(item.get("supporting_metrics"), dict) else {}
+        merged.append({
+            "pain_category": str(item.get("label") or item.get("key") or "").strip(),
+            "signal_count": int(item.get("mention_count_total") or raw.get("signal_count") or 0),
+            "avg_urgency": metrics.get("avg_urgency_when_mentioned") or raw.get("avg_urgency") or 0,
+            "feature_gaps": gap_labels[:5] or list(raw.get("feature_gaps") or []),
+        })
+    merged.extend(raw_by_key.values())
+    merged.sort(key=lambda item: (int(item.get("signal_count") or 0), float(item.get("avg_urgency") or 0)), reverse=True)
+    return merged
+
+
+def _merge_blog_quotes_with_evidence_vault(
+    raw_quotes: list[dict[str, Any]],
+    vault: dict[str, Any] | None,
+    *,
+    limit: int = 15,
+) -> list[dict[str, Any]]:
+    """Prefer canonical vault quotes while preserving raw quote fallback."""
+    if not isinstance(vault, dict):
+        return raw_quotes
+    candidates: list[dict[str, Any]] = []
+    for section, sentiment in (("weakness_evidence", "negative"), ("strength_evidence", "positive")):
+        for item in vault.get(section) or []:
+            if not isinstance(item, dict):
+                continue
+            phrase = str(item.get("best_quote") or "").strip()
+            if not phrase:
+                continue
+            source = item.get("quote_source") if isinstance(item.get("quote_source"), dict) else {}
+            metrics = item.get("supporting_metrics") if isinstance(item.get("supporting_metrics"), dict) else {}
+            candidates.append({
+                "phrase": phrase,
+                "vendor": vault.get("vendor_name") or "",
+                "urgency": metrics.get("avg_urgency_when_mentioned") or 0,
+                "role": source.get("reviewer_title") or "",
+                "company": source.get("company") or "",
+                "company_size": source.get("company_size") or "",
+                "industry": source.get("industry") or "",
+                "source_name": source.get("source") or "",
+                "sentiment": sentiment,
+                "_priority": int(item.get("mention_count_total") or 0),
+            })
+    ordered = sorted(candidates, key=lambda item: (item["_priority"], len(str(item.get("phrase") or ""))), reverse=True)
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in ordered + list(raw_quotes or []):
+        phrase = " ".join(str(item.get("phrase") or "").lower().split())
+        if not phrase or phrase in seen:
+            continue
+        seen.add(phrase)
+        merged.append({k: v for k, v in item.items() if k != "_priority"})
+        if len(merged) >= limit:
+            break
+    return merged
+
+
+def _merge_specialized_blog_review_rows(
+    raw_rows: list[dict[str, Any]],
+    vault_rows: list[dict[str, Any]],
+    *,
+    limit: int,
+    prefer_raw: bool,
+) -> list[dict[str, Any]]:
+    """Merge specialized review-row payloads with exact-text dedupe."""
+    ordered = (list(raw_rows or []) + list(vault_rows or [])) if prefer_raw else (list(vault_rows or []) + list(raw_rows or []))
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in ordered:
+        text = " ".join(str(item.get("text") or "").lower().split())
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        merged.append(item)
+        if len(merged) >= limit:
+            break
+    return merged
+
+
+def _build_specialized_blog_review_rows_from_evidence_vault(
+    vault: dict[str, Any] | None,
+    *,
+    mode: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Build pricing/positive/switching review rows from canonical vault quotes."""
+    if not isinstance(vault, dict):
+        return []
+
+    def _matches_pricing(item: dict[str, Any]) -> bool:
+        text = " ".join(
+            [
+                str(item.get("key") or "").lower(),
+                str(item.get("label") or "").lower(),
+                str(item.get("evidence_type") or "").lower(),
+            ]
+        )
+        return any(token in text for token in ("pricing", "price", "billing", "cost", "seat", "contract", "fee"))
+
+    section = "strength_evidence" if mode == "positive" else "weakness_evidence"
+    candidates: list[dict[str, Any]] = []
+    for item in vault.get(section) or []:
+        if not isinstance(item, dict):
+            continue
+        if mode == "pricing" and not _matches_pricing(item):
+            continue
+        quote = str(item.get("best_quote") or "").strip()
+        if not quote:
+            continue
+        source = item.get("quote_source") if isinstance(item.get("quote_source"), dict) else {}
+        metrics = item.get("supporting_metrics") if isinstance(item.get("supporting_metrics"), dict) else {}
+        candidates.append({
+            "text": quote[:400],
+            "vendor": vault.get("vendor_name") or "",
+            "role": source.get("reviewer_title") or "",
+            "rating": source.get("rating"),
+            "urgency": metrics.get("avg_urgency_when_mentioned") or 0,
+            "source_name": source.get("source") or "",
+            "company": source.get("company") or "",
+            "_priority": (
+                int(item.get("mention_count_total") or 0),
+                int(item.get("mention_count_recent") or 0),
+                str(source.get("reviewed_at") or ""),
+            ),
+        })
+    candidates.sort(key=lambda item: (item["_priority"], len(str(item.get("text") or ""))), reverse=True)
+    return [{k: v for k, v in item.items() if k != "_priority"} for item in candidates[:limit]]
+
+
 # -- Stage 2: Data Gathering --------------------------------------
 
 async def _gather_data(
@@ -1016,6 +1177,24 @@ async def _gather_data(
 ) -> dict[str, Any]:
     """Fetch data needed for the blueprint from B2B tables."""
     data: dict[str, Any] = {}
+    vendor_names = [
+        str(topic_ctx.get(key) or "").strip()
+        for key in ("vendor", "vendor_a", "vendor_b", "from_vendor")
+        if str(topic_ctx.get(key) or "").strip()
+    ]
+    try:
+        evidence_vault_lookup = (
+            await _fetch_latest_evidence_vault(
+                pool,
+                as_of=date.today(),
+                analysis_window_days=settings.b2b_churn.intelligence_window_days,
+            )
+            if vendor_names else
+            {}
+        )
+    except Exception:
+        logger.warning("Failed to load evidence vault for blog data gathering", exc_info=True)
+        evidence_vault_lookup = {}
 
     if topic_type == "vendor_alternative":
         vendor = topic_ctx["vendor"]
@@ -1028,8 +1207,14 @@ async def _gather_data(
             return_exceptions=True,
         )
         data["profile"] = profile if not isinstance(profile, Exception) else {}
-        data["signals"] = signals if not isinstance(signals, Exception) else []
-        data["quotes"] = reviews if not isinstance(reviews, Exception) else []
+        data["signals"] = _merge_blog_signals_with_evidence_vault(
+            signals if not isinstance(signals, Exception) else [],
+            evidence_vault_lookup.get(vendor),
+        )
+        data["quotes"] = _merge_blog_quotes_with_evidence_vault(
+            reviews if not isinstance(reviews, Exception) else [],
+            evidence_vault_lookup.get(vendor),
+        )
         data["partner"] = partner if not isinstance(partner, Exception) else None
 
     elif topic_type == "vendor_showdown":
@@ -1044,8 +1229,14 @@ async def _gather_data(
         )
         data["profile_a"] = prof_a if not isinstance(prof_a, Exception) else {}
         data["profile_b"] = prof_b if not isinstance(prof_b, Exception) else {}
-        data["signals_a"] = sigs_a if not isinstance(sigs_a, Exception) else []
-        data["signals_b"] = sigs_b if not isinstance(sigs_b, Exception) else []
+        data["signals_a"] = _merge_blog_signals_with_evidence_vault(
+            sigs_a if not isinstance(sigs_a, Exception) else [],
+            evidence_vault_lookup.get(vendor_a),
+        )
+        data["signals_b"] = _merge_blog_signals_with_evidence_vault(
+            sigs_b if not isinstance(sigs_b, Exception) else [],
+            evidence_vault_lookup.get(vendor_b),
+        )
         data["quotes"] = quotes if not isinstance(quotes, Exception) else []
 
     elif topic_type == "churn_report":
@@ -1057,8 +1248,14 @@ async def _gather_data(
             return_exceptions=True,
         )
         data["profile"] = profile if not isinstance(profile, Exception) else {}
-        data["signals"] = signals if not isinstance(signals, Exception) else []
-        data["quotes"] = quotes if not isinstance(quotes, Exception) else []
+        data["signals"] = _merge_blog_signals_with_evidence_vault(
+            signals if not isinstance(signals, Exception) else [],
+            evidence_vault_lookup.get(vendor),
+        )
+        data["quotes"] = _merge_blog_quotes_with_evidence_vault(
+            quotes if not isinstance(quotes, Exception) else [],
+            evidence_vault_lookup.get(vendor),
+        )
 
     elif topic_type == "migration_guide":
         vendor = topic_ctx["vendor"]
@@ -1069,8 +1266,14 @@ async def _gather_data(
             return_exceptions=True,
         )
         data["profile"] = profile if not isinstance(profile, Exception) else {}
-        data["signals"] = signals if not isinstance(signals, Exception) else []
-        data["quotes"] = quotes if not isinstance(quotes, Exception) else []
+        data["signals"] = _merge_blog_signals_with_evidence_vault(
+            signals if not isinstance(signals, Exception) else [],
+            evidence_vault_lookup.get(vendor),
+        )
+        data["quotes"] = _merge_blog_quotes_with_evidence_vault(
+            quotes if not isinstance(quotes, Exception) else [],
+            evidence_vault_lookup.get(vendor),
+        )
 
     elif topic_type == "pricing_reality_check":
         vendor = topic_ctx["vendor"]
@@ -1080,12 +1283,15 @@ async def _gather_data(
             return_exceptions=True,
         )
         data["profile"] = profile if not isinstance(profile, Exception) else {}
-        data["signals"] = signals if not isinstance(signals, Exception) else []
+        data["signals"] = _merge_blog_signals_with_evidence_vault(
+            signals if not isinstance(signals, Exception) else [],
+            evidence_vault_lookup.get(vendor),
+        )
         # Pull actual pricing complaint reviews directly
         sources = _blog_source_allowlist()
         pricing_reviews = await pool.fetch(
             """
-            SELECT review_text, vendor_name, reviewer_title, rating,
+            SELECT review_text, vendor_name, reviewer_title, rating, source,
                    enrichment->>'urgency_score' AS urgency,
                    enrichment->>'pain_categories' AS pains
             FROM b2b_reviews
@@ -1097,16 +1303,28 @@ async def _gather_data(
             """,
             vendor, sources,
         )
-        data["pricing_reviews"] = [
+        raw_pricing_reviews = [
             {
                 "text": r["review_text"][:300],
                 "vendor": r["vendor_name"],
                 "role": r["reviewer_title"],
                 "rating": float(r["rating"]) if r["rating"] else None,
                 "urgency": float(r["urgency"]) if r["urgency"] else 0,
+                "source_name": r["source"],
             }
             for r in pricing_reviews
         ]
+        vault_pricing_reviews = _build_specialized_blog_review_rows_from_evidence_vault(
+            evidence_vault_lookup.get(vendor),
+            mode="pricing",
+            limit=10,
+        )
+        data["pricing_reviews"] = _merge_specialized_blog_review_rows(
+            raw_pricing_reviews,
+            vault_pricing_reviews,
+            limit=10,
+            prefer_raw=False,
+        )
         # Also pull positive reviews for balance
         positive_reviews = await pool.fetch(
             """
@@ -1120,10 +1338,21 @@ async def _gather_data(
             """,
             vendor, sources,
         )
-        data["positive_reviews"] = [
+        raw_positive_reviews = [
             {"text": r["review_text"][:300], "role": r["reviewer_title"], "rating": float(r["rating"]) if r["rating"] else None}
             for r in positive_reviews
         ]
+        vault_positive_reviews = _build_specialized_blog_review_rows_from_evidence_vault(
+            evidence_vault_lookup.get(vendor),
+            mode="positive",
+            limit=5,
+        )
+        data["positive_reviews"] = _merge_specialized_blog_review_rows(
+            raw_positive_reviews,
+            vault_positive_reviews,
+            limit=5,
+            prefer_raw=False,
+        )
 
     elif topic_type == "switching_story":
         vendor = topic_ctx["from_vendor"]
@@ -1133,12 +1362,15 @@ async def _gather_data(
             return_exceptions=True,
         )
         data["profile"] = profile if not isinstance(profile, Exception) else {}
-        data["signals"] = signals if not isinstance(signals, Exception) else []
+        data["signals"] = _merge_blog_signals_with_evidence_vault(
+            signals if not isinstance(signals, Exception) else [],
+            evidence_vault_lookup.get(vendor),
+        )
         # Pull actual switching reviews
         sources = _blog_source_allowlist()
         switch_reviews = await pool.fetch(
             """
-            SELECT review_text, vendor_name, reviewer_title, rating,
+            SELECT review_text, vendor_name, reviewer_title, rating, source,
                    enrichment->>'urgency_score' AS urgency
             FROM b2b_reviews
             WHERE vendor_name = $1 AND enrichment_status = 'enriched'
@@ -1151,16 +1383,28 @@ async def _gather_data(
             """,
             vendor, sources,
         )
-        data["switch_reviews"] = [
+        raw_switch_reviews = [
             {
                 "text": r["review_text"][:400],
                 "vendor": r["vendor_name"],
                 "role": r["reviewer_title"],
                 "rating": float(r["rating"]) if r["rating"] else None,
                 "urgency": float(r["urgency"]) if r["urgency"] else 0,
+                "source_name": r["source"],
             }
             for r in switch_reviews
         ]
+        vault_switch_reviews = _build_specialized_blog_review_rows_from_evidence_vault(
+            evidence_vault_lookup.get(vendor),
+            mode="switching",
+            limit=10,
+        )
+        data["switch_reviews"] = _merge_specialized_blog_review_rows(
+            raw_switch_reviews,
+            vault_switch_reviews,
+            limit=10,
+            prefer_raw=True,
+        )
         data["quotes"] = data["switch_reviews"]
 
     elif topic_type == "pain_point_roundup":
@@ -1249,8 +1493,14 @@ async def _gather_data(
             return_exceptions=True,
         )
         data["profile"] = profile if not isinstance(profile, Exception) else {}
-        data["signals"] = signals if not isinstance(signals, Exception) else []
-        data["quotes"] = quotes if not isinstance(quotes, Exception) else []
+        data["signals"] = _merge_blog_signals_with_evidence_vault(
+            signals if not isinstance(signals, Exception) else [],
+            evidence_vault_lookup.get(vendor),
+        )
+        data["quotes"] = _merge_blog_quotes_with_evidence_vault(
+            quotes if not isinstance(quotes, Exception) else [],
+            evidence_vault_lookup.get(vendor),
+        )
         # Fetch competitors for context
         compared = (data["profile"].get("commonly_compared_to") or [])[:5]
         competitor_profiles = []
@@ -1279,7 +1529,13 @@ async def _gather_data(
                 p = await _fetch_product_profile(pool, vn)
                 s = await _fetch_churn_signals(pool, vn)
                 profiles.append({"vendor": vn, "profile": p})
-                signals_list.append({"vendor": vn, "signals": s})
+                signals_list.append({
+                    "vendor": vn,
+                    "signals": _merge_blog_signals_with_evidence_vault(
+                        s,
+                        evidence_vault_lookup.get(vn),
+                    ),
+                })
             except Exception:
                 pass
         data["vendor_profiles"] = profiles
@@ -1376,6 +1632,10 @@ async def _gather_data(
             " (small sample)" if review_count < 20 else ""
         ),
     }
+    vault_vendors = [vn for vn in vendor_names if evidence_vault_lookup.get(vn)]
+    data["data_context"]["evidence_vault_used"] = bool(vault_vendors)
+    if vault_vendors:
+        data["data_context"]["evidence_vault_vendors"] = vault_vendors
 
     category = (
         topic_ctx.get("category")

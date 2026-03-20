@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ...config import settings
+from ...services.vendor_target_selection import dedupe_vendor_target_rows
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from .b2b_vendor_briefing import build_gate_url
@@ -854,7 +855,8 @@ async def _fetch_vendor_targets(pool, vendor_name: str | None = None) -> list[di
         rows = await pool.fetch(
             """
             SELECT id, company_name, target_mode, contact_name, contact_email,
-                   contact_role, products_tracked, competitors_tracked, tier, status, notes
+                   contact_role, products_tracked, competitors_tracked, tier, status,
+                   notes, account_id, created_at, updated_at
             FROM vendor_targets
             WHERE status = 'active' AND target_mode = 'vendor_retention'
               AND company_name ILIKE '%' || $1 || '%'
@@ -865,12 +867,13 @@ async def _fetch_vendor_targets(pool, vendor_name: str | None = None) -> list[di
         rows = await pool.fetch(
             """
             SELECT id, company_name, target_mode, contact_name, contact_email,
-                   contact_role, products_tracked, competitors_tracked, tier, status, notes
+                   contact_role, products_tracked, competitors_tracked, tier, status,
+                   notes, account_id, created_at, updated_at
             FROM vendor_targets
             WHERE status = 'active' AND target_mode = 'vendor_retention'
             """
         )
-    return [dict(r) for r in rows]
+    return dedupe_vendor_target_rows(rows)
 
 
 def _build_vendor_context(vendor_name: str, signals: list[dict]) -> dict[str, Any]:
@@ -1289,7 +1292,8 @@ async def _fetch_challenger_targets(pool, vendor_filter: str | None = None) -> l
         rows = await pool.fetch(
             """
             SELECT id, company_name, target_mode, contact_name, contact_email,
-                   contact_role, products_tracked, competitors_tracked, tier, status, notes
+                   contact_role, products_tracked, competitors_tracked, tier, status,
+                   notes, account_id, created_at, updated_at
             FROM vendor_targets
             WHERE status = 'active' AND target_mode = 'challenger_intel'
               AND company_name ILIKE '%' || $1 || '%'
@@ -1300,12 +1304,13 @@ async def _fetch_challenger_targets(pool, vendor_filter: str | None = None) -> l
         rows = await pool.fetch(
             """
             SELECT id, company_name, target_mode, contact_name, contact_email,
-                   contact_role, products_tracked, competitors_tracked, tier, status, notes
+                   contact_role, products_tracked, competitors_tracked, tier, status,
+                   notes, account_id, created_at, updated_at
             FROM vendor_targets
             WHERE status = 'active' AND target_mode = 'challenger_intel'
             """
         )
-    return [dict(r) for r in rows]
+    return dedupe_vendor_target_rows(rows)
 
 
 def _build_challenger_context(challenger_name: str, signals: list[dict]) -> dict[str, Any]:

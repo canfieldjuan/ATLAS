@@ -23,7 +23,6 @@ for _mod in (
     "PIL", "PIL.Image", "numpy", "cv2", "sounddevice", "soundfile",
     "nemo.collections", "nemo.collections.asr",
     "nemo.collections.asr.models",
-    "starlette", "starlette.requests",
     "playwright", "playwright.async_api",
     "playwright_stealth",
     "curl_cffi", "curl_cffi.requests",

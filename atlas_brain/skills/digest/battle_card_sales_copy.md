@@ -18,6 +18,7 @@ Optimize for field usefulness over completeness:
 - A rep should be able to skim this in under 60 seconds and know exactly which angle to test.
 - It is better to be narrower and more credible than broader and more dramatic.
 - Do not turn thin evidence into a major storyline.
+- `weakness_analysis` and `competitive_landscape` may already be assembled deterministically upstream. Treat them as fixed source-of-truth inputs and do NOT regenerate them in your output.
 
 ## Input
 
@@ -31,9 +32,14 @@ A JSON object with:
 - `vendor_weaknesses`: top weaknesses with normalized `evidence_count` and source
 - `customer_pain_quotes`: verbatim customer quotes with urgency scores, titles, company sizes, industries
 - `competitor_differentiators`: top competitors with mention counts, primary drivers, switch counts
-- `archetype` (if present): reasoning archetype (e.g., "pricing_shock", "feature_gap")
+- `weakness_analysis` (if present): deterministic, authoritative weakness section already assembled from structured evidence. Reuse it as source of truth; do not contradict or replace its quotes, evidence, or winning positions.
+- `competitive_landscape` (if present): deterministic, authoritative market section already assembled from structured evidence. Reuse it as source of truth; do not contradict or replace its vulnerability window, top alternatives, or displacement triggers.
+- `archetype` (if present): the authoritative churn angle label. When `synthesis_wedge` is present, `archetype` has already been overridden to match -- use this as the single source of truth for the primary attack angle. Examples: "price_squeeze", "ux_regression", "support_erosion", "feature_parity", "stable".
+- `synthesis_wedge` / `synthesis_wedge_label` (if present): the wedge type and human label from reasoning synthesis. This IS the archetype when present.
 - `archetype_risk_level` (if present): "low", "medium", "high", or "critical"
 - `archetype_key_signals` (if present): list of key evidence signals from stratified reasoning
+- `causal_narrative` (if present): structured reasoning with `primary_wedge`, `trigger`, `who_most_affected`, `why_now`, `causal_chain`. The talk track opening MUST align with the `trigger` and `primary_wedge` -- do not lead with a different angle.
+- `evidence_depth_warning` (if present): short warning about thin evidence window. Surface this caveat early in the card.
 - `objection_data`: metrics including:
   - `price_complaint_rate` (0-1)
   - `dm_churn_rate` (0-1) -- fraction of decision-makers showing churn signals
@@ -41,9 +47,18 @@ A JSON object with:
   - `top_feature_gaps` (list of {feature, mentions})
   - `total_reviews`, `churn_signal_density`, `avg_urgency`
   - `budget_context` (seat counts, price increase data)
-- `cross_vendor_battles` (if present): list of pairwise battle conclusions involving this vendor, each with `opponent`, `conclusion` (3-5 sentence synthesis), `durability` (structural/cyclical/temporary/uncertain), `confidence` (0-1), `winner`, and `key_insights`
+  - optional enrichment such as `product_depth`, `department_context`, and `tenure_churn_pattern`
+- `cross_vendor_battles` (if present): list of pairwise battle conclusions involving this vendor, each with `opponent`, `conclusion` (3-5 sentence synthesis), `durability` (structural/cyclical/temporary/uncertain), `confidence` (0-1), `winner`, `loser`, and `key_insights` where each insight is an object like `{"insight": "...", "evidence": "..."}`
+- `category_council` (if present): category-level cross-vendor conclusion with `conclusion`, `market_regime`, `durability`, `confidence`, `winner`, `loser`, and object-shaped `key_insights`
 - `resource_asymmetry` (if present): resource-gap assessment with `opponent`, `conclusion`, `resource_advantage`, and `confidence`
 - `ecosystem_context` (if present): category-level market data with `hhi`, `market_structure`, `displacement_intensity`, and `dominant_archetype`
+- `high_intent_companies` (if present): companies already showing strong churn intent signals
+- `integration_stack` (if present): common incumbent integrations and ecosystem footprint
+- `buyer_authority` (if present): distribution of buyer roles and stages associated with churn
+- `keyword_spikes` (if present): recent spike keywords and trend context that may explain why urgency is increasing right now
+- `retention_signals` (if present): positive reasons customers stay -- use these to narrow the attack angle rather than overstating weakness
+- `active_evaluation_deadlines` (if present): active timing signals that may indicate near-term buying windows
+- `falsification_conditions` / `uncertainty_sources` (if present): conditions that would weaken the churn thesis -- use them to calibrate claim strength
 - `locked_facts` (if present): authoritative structured facts that synthesis must not contradict:
   - `vendor`
   - `archetype`
@@ -59,15 +74,6 @@ A JSON object with:
 ```json
 {
   "executive_summary": "2-3 sentence briefing on why this vendor is vulnerable right now. Sentence 1: the primary vulnerability. Sentence 2: the best-fit buyer or situation to target. Sentence 3: the trigger or proof point to watch. A rep should be able to read this in 15 seconds before a call and know the angle of attack.",
-
-  "weakness_analysis": [
-    {
-      "weakness": "Framed as a sales talking point, not a data label. E.g., 'Support response times are driving customers to competitors' not 'support'",
-      "evidence": "Specific metric from the data. E.g., '142 complaints across 231 reviews (61% of all negative feedback)'",
-      "customer_quote": "The single strongest verbatim quote for this weakness from the input data. Must be exact text from customer_pain_quotes. Prefer specific operational pain over vague frustration.",
-      "winning_position": "What capability to emphasize when this weakness surfaces. Keep it vendor-agnostic but concrete. Focus on a capability plus business outcome, not generic 'we are better' language."
-    }
-  ],
 
   "discovery_questions": [
     "Open-ended questions a rep asks early in a call to surface the vendor's known pain points. These should feel natural, not aggressive. E.g., 'How does your team handle support escalations with [Vendor] today?'"
@@ -85,14 +91,6 @@ A JSON object with:
       "proof_point": "Specific data from the input. E.g., '55% of decision-makers in our data are actively showing churn signals, and the top driver is [weakness].'"
     }
   ],
-
-  "competitive_landscape": {
-    "vulnerability_window": "Why NOW is the time to approach this vendor's customers. Reference sentiment trends, recent price changes, or churn velocity. E.g., 'Sentiment is declining with 20% churn signal density and a recent wave of price increases affecting 5.6% of customers.'",
-    "top_alternatives": "Who customers are leaving for (from competitor_differentiators), with the primary reason. E.g., 'Brevo (pricing, 32 mentions), Klaviyo (features, 30 mentions)'",
-    "displacement_triggers": [
-      "Specific events that trigger switching. E.g., 'Contract renewal (especially after price increase)', 'Support escalation that goes unresolved for 48+ hours', 'New leadership evaluating vendor stack'"
-    ]
-  },
 
   "talk_track": {
     "opening": "How to start a cold call or discovery conversation with this vendor's customer. Should reference a known pain point naturally. 2-3 sentences max. Do not claim ROI or savings percentages unless they are in the input.",
@@ -135,11 +133,9 @@ A JSON object with:
 
 ### Section counts
 - Prefer the minimum number of items that still covers distinct angles. Do not pad sections just to hit a quota.
-- `weakness_analysis`: 2-3 weaknesses (by `evidence_count`). Fewer if data is sparse.
 - `discovery_questions`: 3-4 questions. Each should target a different weakness.
 - `landmine_questions`: 2-3 questions. These are subtle -- the prospect should not feel attacked.
 - `objection_handlers`: 3-4 handlers. Must include pricing if `price_complaint_rate >= 0.15`, features if `top_feature_gaps` has 2+ entries, and switching cost/lock-in if `dm_churn_rate >= 0.25`.
-- `displacement_triggers`: 2-3 triggers.
 - `recommended_plays`: 2 plays targeting different segments. Add a third only when the evidence clearly supports a distinct motion.
 
 ### Tone and style
@@ -171,8 +167,14 @@ A JSON object with:
 - If `churn_pressure_score < 60` or `avg_urgency < 5`, use calibrated language like "worth testing", "emerging vulnerability", or "likely receptive to a cost audit" instead of implying an urgent rip-and-replace cycle.
 - If pricing is the dominant signal, lead with spend visibility, app sprawl, and fee compounding. Do not force unrelated feature or support narratives unless the evidence is strong.
 - If feature gaps are the dominant signal, emphasize native capability coverage and operational simplification rather than generic "more features."
+- If `integration_stack` is broad and the evidence points to app sprawl or plugin pain, use that to frame operational complexity and simplification angles.
+- If `buyer_authority` shows decision-maker-heavy churn, target finance, operations, or executive buyers directly in discovery questions and recommended plays.
+- If `keyword_spikes` align with the main weakness, use them to sharpen the `vulnerability_window`, discovery questions, or talk track without inventing unsupported trend claims.
+- If `active_evaluation_deadlines` or tenure patterns point to a near-term review cycle, use them to sharpen timing in `displacement_triggers`, `closing`, and `recommended_plays`.
+- If `retention_signals` or `uncertainty_sources` materially offset the negative evidence, narrow the play to the specific buyer segments or situations that are actually vulnerable.
 - Each objection handler must use a different primary angle. Good angle set: pricing predictability, app sprawl, switching risk, scale complexity, support/operations.
-- If `cross_vendor_battles` is present, use the battle `conclusion` and `key_insights` to sharpen the `competitive_landscape` section and inform `displacement_triggers`. If a battle has `durability` of "structural", reflect this as a long-term vulnerability in the executive summary. Cite the battle `winner` in `top_alternatives` when it names a specific competitor.
+- If `cross_vendor_battles` is present, use the battle `conclusion` and `key_insights` to sharpen the `competitive_landscape` section and inform `displacement_triggers`. If a battle has `durability` of "structural", reflect this as a long-term vulnerability in the executive summary. Cite the battle `winner` in `top_alternatives` when it names a specific competitor, and use `loser` to confirm whether the target vendor is the side actually losing share.
+- If `category_council` is present, use its `market_regime`, `conclusion`, and `key_insights` to explain the broader market backdrop in `competitive_landscape.vulnerability_window`. Use the council `winner` and `loser` only when they are consistent with `locked_facts.allowed_opponents`.
 - If `resource_asymmetry` is present, use `resource_advantage` to inform the `talk_track` mid-call pivot and `recommended_plays` targeting. If the target vendor lacks the resource advantage, this strengthens the urgency angle.
 - If `ecosystem_context` is present and `market_structure` indicates consolidation or fragmentation, reference this in `competitive_landscape.vulnerability_window` to explain WHY the market is moving.
 - If `validation_feedback` is present, treat it as a hard correction list. Revise `prior_attempt` to remove every flagged issue, keep supported claims, and return clean JSON only.

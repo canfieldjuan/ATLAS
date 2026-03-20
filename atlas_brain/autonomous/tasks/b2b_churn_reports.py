@@ -77,6 +77,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _compute_evidence_confidence,
         _executive_source_list,
         _fallback_scorecard_expert_take,
+        _fetch_latest_evidence_vault,
         _fetch_competitive_displacement,
         _fetch_competitor_reasons,
         _fetch_data_context,
@@ -102,6 +103,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _fetch_contract_context_distribution,
         _fetch_turning_points,
         _fetch_displacement_provenance,
+        _merge_company_lookup_with_evidence_vault,
+        _merge_feature_gap_lookup_with_evidence_vault,
+        _merge_pain_lookup_with_evidence_vault,
         _validate_scorecard_expert_take,
     )
     from .b2b_churn_intelligence import (
@@ -176,14 +180,24 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         len(xv_lookup.get("asymmetries", {})),
     )
 
+    try:
+        evidence_vault_lookup = await _fetch_latest_evidence_vault(
+            pool,
+            as_of=today,
+            analysis_window_days=window_days,
+        )
+    except Exception:
+        logger.warning("Evidence vault lookup failed for churn reports", exc_info=True)
+        evidence_vault_lookup = {}
+
     # --- Phase 3: Build lookups ---
-    pain_lookup = _build_pain_lookup(pain_dist)
+    raw_pain_lookup = _build_pain_lookup(pain_dist)
     competitor_lookup = _build_competitor_lookup(competitive_disp)
-    feature_gap_lookup = _build_feature_gap_lookup(feature_gaps)
+    raw_feature_gap_lookup = _build_feature_gap_lookup(feature_gaps)
     neg_lookup = {r["vendor"]: r["negative_count"] for r in negative_counts}
     price_lookup = {r["vendor"]: r["price_complaint_rate"] for r in price_rates}
     dm_lookup = {r["vendor"]: r["dm_churn_rate"] for r in dm_rates}
-    company_lookup = {r["vendor"]: r["companies"] for r in churning_companies}
+    raw_company_lookup = {r["vendor"]: r["companies"] for r in churning_companies}
     quote_lookup = {r["vendor"]: r["quotes"] for r in quotable_evidence}
     budget_lookup = {r["vendor"]: {k: v for k, v in r.items() if k != "vendor"} for r in budget_signals}
     use_case_lookup = _build_use_case_lookup(use_case_dist)
@@ -200,6 +214,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     contract_value_lookup = _build_contract_value_lookup(_contract_values_raw)
     turning_point_lookup = _build_turning_point_lookup(turning_points)
     tenure_lookup = _build_tenure_lookup(sentiment_tenure)
+    pain_lookup = _merge_pain_lookup_with_evidence_vault(
+        raw_pain_lookup,
+        evidence_vault_lookup,
+    )
+    feature_gap_lookup = _merge_feature_gap_lookup_with_evidence_vault(
+        raw_feature_gap_lookup,
+        evidence_vault_lookup,
+    )
+    company_lookup = _merge_company_lookup_with_evidence_vault(
+        raw_company_lookup,
+        evidence_vault_lookup,
+    )
 
     product_profile_lookup: dict[str, dict] = {}
     for pp in product_profiles_raw:

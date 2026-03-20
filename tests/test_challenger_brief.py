@@ -9,6 +9,7 @@ import sys
 from datetime import date
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import pytest
 
@@ -25,7 +26,6 @@ for _mod in (
     "PIL", "PIL.Image", "numpy", "cv2", "sounddevice", "soundfile",
     "nemo.collections", "nemo.collections.asr",
     "nemo.collections.asr.models",
-    "starlette", "starlette.requests",
     "playwright", "playwright.async_api",
     "playwright_stealth",
     "curl_cffi", "curl_cffi.requests",
@@ -33,12 +33,17 @@ for _mod in (
 ):
     sys.modules.setdefault(_mod, MagicMock())
 
+import atlas_brain.autonomous.tasks.b2b_challenger_brief as brief_mod
 from atlas_brain.autonomous.tasks.b2b_challenger_brief import (
+    _check_freshness,
     _compute_weakness_coverage,
+    _extract_pain_quotes_from_reviews,
     _fetch_cross_vendor_battle,
+    _fetch_persisted_report_record,
     _filter_target_accounts,
     _build_integration_comparison,
     _build_challenger_brief,
+    _normalize_product_profile_weaknesses,
 )
 
 
@@ -361,6 +366,7 @@ class TestBuildChallengerBrief:
         }
         cross_vendor = {
             "winner": "Freshdesk",
+            "loser": "Zendesk",
             "conclusion": "Freshdesk wins on SMB pricing",
             "durability": "Durable",
             "key_insights": ["Freshdesk wins deals < $50k ARR"],
@@ -377,6 +383,7 @@ class TestBuildChallengerBrief:
             challenger_profile=chal_profile,
             churn_signal=churn_signal,
             cross_vendor_battle=cross_vendor,
+            battle_card_metadata={"battle_card_date": "2026-03-16", "battle_card_stale": True},
             max_target_accounts=15,
         )
 
@@ -388,17 +395,107 @@ class TestBuildChallengerBrief:
         assert len(brief["challenger_advantage"]["strengths"]) == 1
         assert len(brief["challenger_advantage"]["weakness_coverage"]) >= 1
         assert brief["head_to_head"]["winner"] == "Freshdesk"
+        assert brief["head_to_head"]["loser"] == "Zendesk"
         assert brief["head_to_head"]["confidence"] == 0.78
         assert len(brief["target_accounts"]) == 1
         assert brief["target_accounts"][0]["considers_challenger"] is True
         assert brief["accounts_considering_challenger"] == 1
+        assert brief["battle_card_date"] == "2026-03-16"
+        assert brief["battle_card_stale"] is True
         assert brief["sales_playbook"]["discovery_questions"] == ["What's your current cost per seat?"]
         assert "Marketo" in brief["integration_comparison"]["challenger_exclusive"]
         assert "Legacy CRM" in brief["integration_comparison"]["incumbent_exclusive"]
         # All original sources present; review_quotes is False when battle card exists
         for k in ("battle_card", "accounts_in_motion", "product_profiles", "cross_vendor_conclusion"):
             assert brief["data_sources"][k] is True
+        assert brief["data_sources"]["evidence_vault"] is False
         assert brief["category"] == "Helpdesk"
+
+    def test_evidence_vault_fallback_populates_weaknesses_and_quotes(self):
+        """Vault fills incumbent evidence when battle card is absent."""
+        vault = {
+            "recent_window_days": 30,
+            "weakness_evidence": [
+                {
+                    "key": "pricing",
+                    "label": "Pricing opacity",
+                    "evidence_type": "pain_category",
+                    "best_quote": "Our actual bill was much higher than promised",
+                    "quote_source": {
+                        "company": "Acme",
+                        "reviewer_title": "VP Ops",
+                        "source": "g2",
+                        "reviewed_at": "2026-03-10",
+                        "rating": 2.0,
+                    },
+                    "mention_count_total": 18,
+                    "mention_count_recent": 7,
+                    "trend": {"direction": "accelerating"},
+                    "supporting_metrics": {"avg_urgency_when_mentioned": 7.2},
+                },
+            ],
+        }
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail=self._minimal_displacement(),
+            battle_card=None,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            incumbent_evidence_vault=vault,
+            churn_signal=None,
+            cross_vendor_battle=None,
+            max_target_accounts=15,
+        )
+        weakness = brief["incumbent_profile"]["top_weaknesses"][0]
+        quote = brief["incumbent_profile"]["top_pain_quotes"][0]
+        assert weakness["area"] == "Pricing opacity"
+        assert weakness["count"] == 18
+        assert "7 in last 30 days" in weakness["evidence"]
+        assert quote["quote"] == "Our actual bill was much higher than promised"
+        assert quote["company"] == "Acme"
+        assert quote["role"] == "VP Ops"
+        assert quote["source_site"] == "g2"
+        assert brief["data_sources"]["evidence_vault"] is True
+
+    def test_evidence_vault_quotes_fill_battle_card_quote_gap(self):
+        """Vault quotes can fill a quote gap even when battle-card weaknesses exist."""
+        battle_card = {
+            "vendor_weaknesses": [{"area": "pricing", "score": 3.1, "evidence_count": 30}],
+            "customer_pain_quotes": [],
+        }
+        vault = {
+            "weakness_evidence": [
+                {
+                    "key": "pricing",
+                    "label": "Pricing opacity",
+                    "evidence_type": "pain_category",
+                    "best_quote": "The add-ons made the contract much more expensive",
+                    "quote_source": {"company": "Beta", "reviewer_title": "Director", "source": "reddit"},
+                    "mention_count_total": 12,
+                    "mention_count_recent": 4,
+                    "supporting_metrics": {"avg_urgency_when_mentioned": 6.8},
+                },
+            ],
+        }
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail=self._minimal_displacement(),
+            battle_card=battle_card,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            incumbent_evidence_vault=vault,
+            churn_signal=None,
+            cross_vendor_battle=None,
+            max_target_accounts=15,
+        )
+        assert brief["incumbent_profile"]["top_weaknesses"][0]["area"] == "pricing"
+        assert brief["incumbent_profile"]["top_pain_quotes"][0]["company"] == "Beta"
+        assert brief["data_sources"]["battle_card"] is True
+        assert brief["data_sources"]["evidence_vault"] is True
 
     def test_executive_summary_format(self):
         """Executive summary includes incumbent, challenger, mentions, accounts."""
@@ -529,6 +626,7 @@ class TestFetchCrossVendorBattle:
         """If no row exists for today, the most recent prior row is returned."""
         stale_conclusion = {
             "winner": "Freshdesk",
+            "loser": "Zendesk",
             "conclusion": "Freshdesk wins on SMB pricing",
             "durability_assessment": "Durable: structural pricing gap",
             "key_insights": ["Wins deals under 50k ARR"],
@@ -546,9 +644,10 @@ class TestFetchCrossVendorBattle:
 
         assert result is not None
         assert result["winner"] == "Freshdesk"
+        assert result["loser"] == "Zendesk"
         assert result["conclusion"] == "Freshdesk wins on SMB pricing"
         assert result["durability"] == "Durable: structural pricing gap"
-        assert result["key_insights"] == [{"insight": "Wins deals under 50k ARR", "evidence": ""}]
+        assert result["key_insights"] == [{"insight": "Wins deals under 50k ARR", "evidence": "Wins deals under 50k ARR"}]
         assert result["confidence"] == 0.75
 
     @pytest.mark.asyncio
@@ -564,7 +663,7 @@ class TestFetchCrossVendorBattle:
 
     @pytest.mark.asyncio
     async def test_key_insights_dict_normalization(self):
-        """key_insights containing dicts with 'insight' key are normalized to strings."""
+        """key_insights containing dicts are normalized to insight/evidence objects."""
         conclusion = {
             "winner": "A",
             "conclusion": "A wins",
@@ -582,9 +681,9 @@ class TestFetchCrossVendorBattle:
             pool, "A", "B", date(2026, 3, 17),
         )
         assert result["key_insights"] == [
-            {"insight": "Point one", "evidence": ""},
-            {"insight": "Point two", "evidence": ""},
-            {"insight": "Point three", "evidence": ""},
+            {"insight": "Point one", "evidence": "Point one"},
+            {"insight": "Point two", "evidence": "Point two"},
+            {"insight": "Point three", "evidence": "Point three"},
         ]
 
     @pytest.mark.asyncio
@@ -623,3 +722,126 @@ class TestFetchCrossVendorBattle:
         )
         assert result["winner"] == "B"
         assert result["confidence"] == 0.65
+
+
+class TestChallengerBriefFallbacks:
+    @pytest.mark.asyncio
+    async def test_freshness_only_requires_core_run_marker(self):
+        pool = MagicMock()
+        pool.fetchval = AsyncMock(return_value=1)
+        assert await _check_freshness(pool) == date.today()
+
+    @pytest.mark.asyncio
+    async def test_fetch_persisted_report_record_marks_stale_rows(self):
+        pool = MagicMock()
+        pool.fetchrow = AsyncMock(return_value={
+            "intelligence_data": {"vendor": "Zendesk"},
+            "report_date": date(2026, 3, 16),
+        })
+        record = await _fetch_persisted_report_record(
+            pool, "battle_card", "Zendesk", date(2026, 3, 17), fallback_days=7,
+        )
+        assert record == {
+            "data": {"vendor": "Zendesk"},
+            "report_date": date(2026, 3, 16),
+            "stale": True,
+        }
+
+    def test_extract_pain_quotes_from_reviews_keeps_rich_fields_and_dedupes(self):
+        rows = [
+            {
+                "vendor_name": "Zendesk",
+                "source": "reddit",
+                "company": "Acme",
+                "role": "Director",
+                "pain_category": "support",
+                "phrases": ["Support disappeared during onboarding", "Support disappeared during onboarding"],
+                "urgency": 9.0,
+            },
+            {
+                "vendor_name": "Zendesk",
+                "source": "g2",
+                "company": "Beta",
+                "role": "VP Ops",
+                "pain_category": "support",
+                "phrases": ["Support disappeared during onboarding for our new team"],
+                "urgency": 8.5,
+            },
+        ]
+        quotes = _extract_pain_quotes_from_reviews(
+            rows,
+            vendor="Zendesk",
+            max_quotes=5,
+            min_urgency=6.0,
+            similarity_threshold=0.5,
+        )
+        assert len(quotes) == 1
+        assert quotes[0]["company"] == "Acme"
+        assert quotes[0]["role"] == "Director"
+        assert quotes[0]["pain_category"] == "support"
+
+    def test_normalize_product_profile_weaknesses_matches_brief_shape(self):
+        normalized = _normalize_product_profile_weaknesses([
+            {"aspect": "support", "score": 2.8, "review_count": 45},
+        ])
+        assert normalized == [{
+            "weakness": "support",
+            "area": "support",
+            "evidence": "Satisfaction score 2.8/5.0 across 45 reviews",
+            "mention_count": 45,
+            "count": 45,
+            "source": "product_profile",
+        }]
+
+
+class TestChallengerBriefRunProgress:
+    @pytest.mark.asyncio
+    async def test_run_emits_progress_metadata_across_stages(self, monkeypatch):
+        progress = AsyncMock()
+        pool = type("Pool", (), {"is_initialized": True, "execute": AsyncMock()})()
+
+        async def fake_gather(*_args, **_kwargs):
+            for coro in _args:
+                close = getattr(coro, "close", None)
+                if close:
+                    close()
+            return (None, None, {"total_mentions": 3, "source_distribution": {"reddit": 3}}, None, None, None, None, [])
+
+        monkeypatch.setattr(brief_mod.settings.b2b_churn, "enabled", True, raising=False)
+        monkeypatch.setattr(brief_mod.settings.b2b_churn, "intelligence_enabled", True, raising=False)
+        monkeypatch.setattr(brief_mod, "_update_execution_progress", progress)
+        monkeypatch.setattr(brief_mod, "get_db_pool", lambda: pool)
+        monkeypatch.setattr(brief_mod, "_check_freshness", AsyncMock(return_value=date(2026, 3, 18)))
+        monkeypatch.setattr(brief_mod, "_fetch_latest_evidence_vault", AsyncMock(return_value={}))
+        monkeypatch.setattr(
+            brief_mod,
+            "_select_displacement_pairs",
+            AsyncMock(return_value=[{"incumbent": "Zendesk", "challenger": "Freshdesk"}]),
+        )
+        monkeypatch.setattr(brief_mod.asyncio, "gather", fake_gather)
+        monkeypatch.setattr(
+            brief_mod,
+            "_build_challenger_brief",
+            lambda **kwargs: {
+                "_executive_summary": "summary",
+                "displacement_summary": {"total_mentions": 3, "source_distribution": {"reddit": 3}},
+                "data_sources": {"battle_card": False},
+                "total_target_accounts": 0,
+            },
+        )
+
+        task = type("Task", (), {"metadata": {"_execution_id": str(uuid4())}})()
+        result = await brief_mod.run(task)
+
+        assert result == {
+            "_skip_synthesis": "Challenger briefs complete",
+            "pairs": 1,
+            "persisted": 1,
+        }
+        stages = [call.kwargs["stage"] for call in progress.await_args_list]
+        assert stages == [
+            brief_mod._STAGE_SELECTING_PAIRS,
+            brief_mod._STAGE_BUILDING_BRIEFS,
+            brief_mod._STAGE_BUILDING_BRIEFS,
+            brief_mod._STAGE_FINALIZING,
+        ]

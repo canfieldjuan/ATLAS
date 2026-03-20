@@ -4,8 +4,10 @@ Covers scoring, merging, aggregate building, and short-circuit paths.
 """
 
 import sys
+from datetime import date
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import pytest
 
@@ -23,7 +25,6 @@ for _mod in (
     "PIL", "PIL.Image", "numpy", "cv2", "sounddevice", "soundfile",
     "nemo.collections", "nemo.collections.asr",
     "nemo.collections.asr.models",
-    "starlette", "starlette.requests",
     "playwright", "playwright.async_api",
     "playwright_stealth",
     "curl_cffi", "curl_cffi.requests",
@@ -31,6 +32,8 @@ for _mod in (
 ):
     sys.modules.setdefault(_mod, MagicMock())
 
+import atlas_brain.autonomous.tasks.b2b_accounts_in_motion as accounts_mod
+import atlas_brain.autonomous.tasks.b2b_churn_intelligence as churn_mod
 from atlas_brain.autonomous.tasks.b2b_accounts_in_motion import (
     _apply_account_quality_adjustments,
     _compute_account_opportunity_score,
@@ -507,6 +510,35 @@ class TestBuildVendorAggregate:
         assert pp["price_increase_rate"] == 0.067
         assert pp["avg_seat_count"] == 150  # rounded
 
+    def test_vendor_aggregate_prefers_evidence_vault_feature_gaps_and_price(self):
+        """Canonical vault feature gaps and price rate override sparse raw lookups."""
+        agg = _build_vendor_aggregate(
+            "Zendesk",
+            [self._make_account()],
+            category="Helpdesk",
+            reasoning_lookup={},
+            xv_lookup={"battles": {}, "councils": {}, "asymmetries": {}},
+            feature_gap_lookup={"Zendesk": [{"feature": "Legacy Gap", "mentions": 2}]},
+            price_lookup={},
+            budget_lookup={"Zendesk": {"avg_seat_count": 90, "price_increase_rate": 0.02}},
+            competitor_lookup={},
+            evidence_vault_lookup={
+                "Zendesk": {
+                    "weakness_evidence": [
+                        {
+                            "evidence_type": "feature_gap",
+                            "label": "Reporting",
+                            "mention_count_total": 14,
+                        }
+                    ],
+                    "metric_snapshot": {"price_complaint_rate": 0.19},
+                }
+            },
+        )
+        assert agg["feature_gaps"] == [{"feature": "Reporting", "mentions": 14}]
+        assert agg["pricing_pressure"]["price_complaint_rate"] == 0.19
+        assert agg["data_sources"]["evidence_vault"] is True
+
     def test_cross_vendor_context_top_destination(self):
         """top_destination comes from competitor_lookup."""
         agg = _build_vendor_aggregate(
@@ -586,3 +618,48 @@ class TestAccountQualityAdjustments:
         assert components["repeat_evidence"] == 6
         assert components["low_confidence"] == -6
         assert "missing_domain" in flags
+
+
+class TestAccountsInMotionRunProgress:
+    @pytest.mark.asyncio
+    async def test_run_emits_progress_metadata_across_stages(self, monkeypatch):
+        progress = AsyncMock()
+        pool = type("Pool", (), {"is_initialized": True, "execute": AsyncMock()})()
+
+        async def fake_gather(*_args, **_kwargs):
+            for coro in _args:
+                close = getattr(coro, "close", None)
+                if close:
+                    close()
+            return ([{"vendor": "Zendesk", "company": "Acme", "urgency": 8.0}], [], [], [], [], [], [], [], [], {})
+
+        monkeypatch.setattr(accounts_mod.settings.b2b_churn, "enabled", True, raising=False)
+        monkeypatch.setattr(accounts_mod.settings.b2b_churn, "intelligence_enabled", True, raising=False)
+        monkeypatch.setattr(accounts_mod, "_update_execution_progress", progress)
+        monkeypatch.setattr(accounts_mod, "get_db_pool", lambda: pool)
+        monkeypatch.setattr(accounts_mod, "_check_freshness", AsyncMock(return_value=date(2026, 3, 18)))
+        monkeypatch.setattr(accounts_mod.asyncio, "gather", fake_gather)
+        monkeypatch.setattr(accounts_mod, "_merge_company_profiles", lambda *args, **kwargs: {})
+        monkeypatch.setattr(churn_mod, "reconstruct_reasoning_lookup", AsyncMock(return_value={}))
+        monkeypatch.setattr(
+            churn_mod,
+            "reconstruct_cross_vendor_lookup",
+            AsyncMock(return_value={"battles": {}, "councils": {}, "asymmetries": {}}),
+        )
+
+        task = type("Task", (), {"metadata": {"_execution_id": str(uuid4())}})()
+        result = await accounts_mod.run(task)
+
+        assert result == {
+            "_skip_synthesis": "Accounts in motion complete",
+            "vendors": 0,
+            "total_accounts": 0,
+            "persisted": 0,
+        }
+        stages = [call.kwargs["stage"] for call in progress.await_args_list]
+        assert stages == [
+            accounts_mod._STAGE_LOADING_INPUTS,
+            accounts_mod._STAGE_BUILDING_ACCOUNTS,
+            accounts_mod._STAGE_PERSISTING_REPORTS,
+            accounts_mod._STAGE_FINALIZING,
+        ]
