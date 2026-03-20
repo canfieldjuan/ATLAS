@@ -18,7 +18,7 @@ import re
 from bs4 import BeautifulSoup
 
 from ..client import AntiDetectionClient
-from . import ScrapeResult, ScrapeTarget, register_parser
+from . import ScrapeResult, ScrapeTarget, apply_date_cutoff, register_parser
 
 logger = logging.getLogger("atlas.services.scraping.parsers.sourceforge")
 
@@ -40,6 +40,7 @@ class SourceForgeParser:
         errors: list[str] = []
         pages_scraped = 0
         seen_ids: set[str] = set()
+        stop_reason = ""
 
         consecutive_empty = 0
         for page in range(1, target.max_pages + 1):
@@ -75,7 +76,11 @@ class SourceForgeParser:
 
                 before = len(reviews)
                 page_reviews = _parse_page(resp.text, target, seen_ids)
+                page_reviews, cutoff_hit = apply_date_cutoff(page_reviews, target.date_cutoff)
                 reviews.extend(page_reviews)
+                if cutoff_hit:
+                    stop_reason = "date_cutoff"
+                    break
 
                 if len(reviews) == before:
                     consecutive_empty += 1
@@ -97,7 +102,12 @@ class SourceForgeParser:
             target.vendor_name, len(reviews), pages_scraped,
         )
 
-        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors)
+        return ScrapeResult(
+            reviews=reviews,
+            pages_scraped=pages_scraped,
+            errors=errors,
+            stop_reason=stop_reason,
+        )
 
 
 def _parse_page(

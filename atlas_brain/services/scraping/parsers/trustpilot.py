@@ -22,7 +22,7 @@ from urllib.parse import quote_plus
 from bs4 import BeautifulSoup
 
 from ..client import AntiDetectionClient
-from . import ScrapeResult, ScrapeTarget, log_page, register_parser
+from . import ScrapeResult, ScrapeTarget, apply_date_cutoff, log_page, register_parser
 
 logger = logging.getLogger("atlas.services.scraping.parsers.trustpilot")
 
@@ -84,6 +84,7 @@ class TrustpilotParser:
         prior_hashes: set[str] = set()
         prior_review_ids: set[str] = set()
         import time as _time
+        stop_reason = ""
 
         for page in range(1, target.max_pages + 1):
             url = f"{_BASE_URL}/{target.product_slug}"
@@ -118,6 +119,14 @@ class TrustpilotParser:
                         prior_hashes=prior_hashes, errors=["blocked (403)"],
                     ))
                     break
+                if resp.status_code == 404:
+                    errors.append(f"Page {page}: HTTP 404")
+                    page_logs.append(log_page(
+                        page, url, status_code=404, duration_ms=elapsed_ms,
+                        response_bytes=len(resp.content), raw_body=resp.content,
+                        prior_hashes=prior_hashes, errors=["HTTP 404"],
+                    ))
+                    break
                 if resp.status_code != 200:
                     errors.append(f"Page {page}: HTTP {resp.status_code}")
                     page_logs.append(log_page(
@@ -130,14 +139,19 @@ class TrustpilotParser:
                 page_reviews = _parse_json_ld(resp.text, target, seen_ids)
                 if not page_reviews:
                     page_reviews = _parse_html(resp.text, target, seen_ids)
+                page_reviews, cutoff_hit = apply_date_cutoff(page_reviews, target.date_cutoff)
 
-                page_logs.append(log_page(
+                pl = log_page(
                     page, url, status_code=200, duration_ms=elapsed_ms,
                     response_bytes=len(resp.content), reviews=page_reviews,
                     raw_body=resp.content, prior_hashes=prior_hashes,
                     prior_review_ids=prior_review_ids,
                     next_page_found=bool(page_reviews),
-                ))
+                )
+                if cutoff_hit:
+                    pl.stop_reason = "date_cutoff"
+                    stop_reason = "date_cutoff"
+                page_logs.append(pl)
 
                 if not page_reviews:
                     if page == 1:
@@ -163,7 +177,13 @@ class TrustpilotParser:
             "Trustpilot Web Unlocker scrape for %s: %d reviews from %d pages",
             target.vendor_name, len(reviews), pages_scraped,
         )
-        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors, page_logs=page_logs)
+        return ScrapeResult(
+            reviews=reviews,
+            pages_scraped=pages_scraped,
+            errors=errors,
+            page_logs=page_logs,
+            stop_reason=stop_reason,
+        )
 
     # ------------------------------------------------------------------
     # HTTP client path (curl_cffi + residential proxy)
@@ -179,6 +199,7 @@ class TrustpilotParser:
         prior_hashes: set[str] = set()
         prior_review_ids: set[str] = set()
         import time as _time
+        stop_reason = ""
 
         consecutive_empty = 0
         for page in range(1, target.max_pages + 1):
@@ -212,6 +233,14 @@ class TrustpilotParser:
                         page, url, status_code=403, duration_ms=elapsed_ms,
                         response_bytes=len(resp.content or b""), raw_body=resp.content,
                         prior_hashes=prior_hashes, errors=["blocked (403)"],
+                    ))
+                    break
+                if resp.status_code == 404:
+                    errors.append(f"Page {page}: HTTP 404")
+                    page_logs.append(log_page(
+                        page, url, status_code=404, duration_ms=elapsed_ms,
+                        response_bytes=len(resp.content or b""), raw_body=resp.content,
+                        prior_hashes=prior_hashes, errors=["HTTP 404"],
                     ))
                     break
                 if resp.status_code == 429:
@@ -248,13 +277,19 @@ class TrustpilotParser:
                 if not page_reviews:
                     page_reviews = _parse_html(html, target, seen_ids)
 
-                page_logs.append(log_page(
+                page_reviews, cutoff_hit = apply_date_cutoff(page_reviews, target.date_cutoff)
+
+                pl = log_page(
                     page, url, status_code=200, duration_ms=elapsed_ms,
                     response_bytes=len(resp.content or b""), reviews=page_reviews,
                     raw_body=resp.content, prior_hashes=prior_hashes,
                     prior_review_ids=prior_review_ids,
                     next_page_found=bool(page_reviews),
-                ))
+                )
+                if cutoff_hit:
+                    pl.stop_reason = "date_cutoff"
+                    stop_reason = "date_cutoff"
+                page_logs.append(pl)
 
                 if not page_reviews:
                     if page == 1:
@@ -286,7 +321,13 @@ class TrustpilotParser:
             target.vendor_name, len(reviews), pages_scraped,
         )
 
-        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors, page_logs=page_logs)
+        return ScrapeResult(
+            reviews=reviews,
+            pages_scraped=pages_scraped,
+            errors=errors,
+            page_logs=page_logs,
+            stop_reason=stop_reason,
+        )
 
 
 # ------------------------------------------------------------------

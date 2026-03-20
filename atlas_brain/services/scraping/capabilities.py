@@ -211,6 +211,19 @@ _r(SourceCapabilityProfile(
     cooldown_minutes=1440,
     fallback_chain=("web_unlocker", "html_scrape"),
 ))
+_r(SourceCapabilityProfile(
+    source="sourceforge",
+    access_patterns=(AccessPattern.html_scrape,),
+    anti_bot=AntiBot.none,
+    proxy_class=ProxyClass.datacenter,
+    data_quality=DataQuality.structured,
+    default_rpm=12,
+    concurrency_class=ConcurrencyClass.web,
+    max_concurrency=4,
+    retry_max=2,
+    cooldown_minutes=720,
+    fallback_chain=("html_scrape",),
+))
 
 # Community sources (open posts, no identity verification)
 _r(SourceCapabilityProfile(

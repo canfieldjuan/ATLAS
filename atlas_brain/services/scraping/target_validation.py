@@ -29,6 +29,12 @@ _SLUG_RULES: dict[str, tuple[re.Pattern[str], str]] = {
         re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*/a/[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*"),
         "project-management-planning-software/a/asana",
     ),
+    "software_advice": (
+        re.compile(
+            r"(?:product/\d+-[A-Za-z0-9][A-Za-z0-9-]*|[A-Za-z0-9-]+/[A-Za-z0-9][A-Za-z0-9-]*-profile)"
+        ),
+        "project-management/asana-profile",
+    ),
     "producthunt": (re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*"), "asana"),
     "trustpilot": (re.compile(r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}"), "asana.com"),
 }

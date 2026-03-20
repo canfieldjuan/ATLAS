@@ -15,7 +15,7 @@ import re
 from urllib.parse import quote_plus
 
 from ..client import AntiDetectionClient
-from . import ScrapeResult, ScrapeTarget, register_parser
+from . import ScrapeResult, ScrapeTarget, apply_date_cutoff, register_parser
 
 logger = logging.getLogger("atlas.services.scraping.parsers.hackernews")
 
@@ -46,6 +46,7 @@ class HackerNewsParser:
         errors: list[str] = []
         pages_scraped = 0
         seen_ids: set[str] = set()
+        stop_reason = ""
 
         include_comments = target.metadata.get("include_comments", True)
         try:
@@ -101,6 +102,7 @@ class HackerNewsParser:
                         if not hits:
                             break  # No more results
 
+                        page_reviews: list[dict] = []
                         for hit in hits:
                             object_id = hit.get("objectID", "")
                             if object_id in seen_ids:
@@ -127,7 +129,7 @@ class HackerNewsParser:
 
                             seen_ids.add(object_id)
 
-                            reviews.append({
+                            page_reviews.append({
                                 "source": "hackernews",
                                 "source_url": f"https://news.ycombinator.com/item?id={object_id}",
                                 "source_review_id": object_id,
@@ -157,6 +159,12 @@ class HackerNewsParser:
                                 },
                             })
 
+                        page_reviews, cutoff_hit = apply_date_cutoff(page_reviews, target.date_cutoff)
+                        reviews.extend(page_reviews)
+                        if cutoff_hit:
+                            stop_reason = "date_cutoff"
+                            break
+
                         if len(reviews) == before:
                             consecutive_empty += 1
                             if consecutive_empty >= 2:
@@ -174,7 +182,12 @@ class HackerNewsParser:
             target.vendor_name, len(reviews), pages_scraped,
         )
 
-        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors)
+        return ScrapeResult(
+            reviews=reviews,
+            pages_scraped=pages_scraped,
+            errors=errors,
+            stop_reason=stop_reason,
+        )
 
 
 # Auto-register

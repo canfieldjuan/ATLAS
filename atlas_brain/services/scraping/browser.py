@@ -15,6 +15,7 @@ import asyncio
 import logging
 import random
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 from ...config import settings
 
@@ -29,6 +30,47 @@ class BrowserScrapeResult:
     status_code: int
     url: str
     cookies: dict[str, str] = field(default_factory=dict)
+
+
+def _browser_cookie_domain(page_url: str, domain: str) -> str:
+    """Return a cookie domain suitable for injecting solved challenge cookies."""
+    host = (urlparse(page_url).hostname or domain or "").lstrip(".")
+    return f".{host}" if host else ""
+
+
+async def solve_browser_challenge(
+    page,
+    *,
+    domain: str,
+    html: str,
+    status_code: int,
+    proxy_url: str | None = None,
+) -> bool:
+    """Attempt to solve a browser-visible anti-bot challenge and inject cookies."""
+    from .captcha import CaptchaType, detect_captcha, get_captcha_proxy, get_captcha_solver
+
+    captcha_type = detect_captcha(html, status_code)
+    if captcha_type == CaptchaType.NONE:
+        return False
+    solver = get_captcha_solver(domain)
+    if not solver:
+        logger.warning("No captcha solver configured for %s", domain)
+        return False
+    ua = await page.evaluate("navigator.userAgent")
+    solve_proxy = proxy_url if captcha_type == CaptchaType.DATADOME else (get_captcha_proxy() or None)
+    solution = await solver.solve(captcha_type, page.url, html, user_agent=ua, proxy_url=solve_proxy)
+    cookie_domain = _browser_cookie_domain(page.url, domain)
+    cookie_list = [
+        {"name": name, "value": value, "domain": cookie_domain, "path": "/"}
+        for name, value in (solution.cookies or {}).items()
+        if cookie_domain and name != "cf_turnstile_response"
+    ]
+    if not cookie_list:
+        logger.warning("Browser captcha solve for %s returned no injectible cookies", domain)
+        return False
+    await page.context.add_cookies(cookie_list)
+    logger.info("Injected %d challenge cookies for %s", len(cookie_list), domain)
+    return True
 
 
 class StealthBrowser:
@@ -142,12 +184,16 @@ class StealthBrowser:
             resp = await page.goto(url, **goto_kwargs)
             status = resp.status if resp else 0
 
-            # Check for DataDome challenge and attempt solve
-            if status == 403:
-                html = await page.content()
-                if await self._handle_datadome_challenge(page, html):
-                    resp = await page.goto(url, **goto_kwargs)
-                    status = resp.status if resp else 0
+            html = await page.content()
+            if await solve_browser_challenge(
+                page,
+                domain=urlparse(url).hostname or "",
+                html=html,
+                status_code=status,
+                proxy_url=proxy_url,
+            ):
+                resp = await page.goto(url, **goto_kwargs)
+                status = resp.status if resp else 0
 
             # Wait for review content if selector provided
             if wait_for_selector and status == 200:
@@ -187,51 +233,6 @@ class StealthBrowser:
             await asyncio.sleep(random.uniform(0.3, 0.8))
         except Exception:
             pass  # Non-fatal
-
-    async def _handle_datadome_challenge(self, page, html: str) -> bool:
-        """Detect and attempt to solve DataDome challenge via captcha solver.
-
-        Returns True if challenge was solved and cookies injected.
-        """
-        if "captcha-delivery.com" not in html.lower():
-            return False
-
-        logger.info("DataDome challenge detected, attempting solver")
-
-        try:
-            from .captcha import CaptchaType, get_captcha_solver
-
-            solver = get_captcha_solver("g2.com")
-            if not solver:
-                logger.warning("No captcha solver configured for g2.com")
-                return False
-
-            # Get the UA from the page's browser context
-            ua = await page.evaluate("navigator.userAgent")
-            solution = await solver.solve(
-                CaptchaType.DATADOME, page.url, html, user_agent=ua
-            )
-            if not solution or not solution.cookies:
-                logger.warning("Captcha solver returned no cookies")
-                return False
-
-            # Inject solution cookies into browser context
-            cookie_list = []
-            for name, value in solution.cookies.items():
-                cookie_list.append({
-                    "name": name,
-                    "value": value,
-                    "domain": ".g2.com",
-                    "path": "/",
-                })
-            await page.context.add_cookies(cookie_list)
-            logger.info("DataDome cookies injected, reloading")
-            return True
-
-        except Exception:
-            logger.warning("DataDome challenge solve failed", exc_info=True)
-            return False
-
 
 def _parse_proxy_for_playwright(proxy_url: str) -> dict:
     """Parse a proxy URL into Playwright's proxy dict format.

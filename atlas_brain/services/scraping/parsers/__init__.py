@@ -8,10 +8,22 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Protocol
 
 from ..client import AntiDetectionClient
+
+_DATE_FORMATS = (
+    "%Y-%m-%dT%H:%M:%S%z",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%d",
+    "%b %d, %Y",
+    "%B %d, %Y",
+    "%d %b %Y",
+    "%d %B %Y",
+    "%m/%d/%Y",
+    "%d/%m/%Y",
+)
 
 
 @dataclass
@@ -204,6 +216,54 @@ def log_page(
         pl.stop_reason = "empty_response"
 
     return pl
+
+
+def _parse_review_date(raw: Any) -> date | None:
+    """Parse a review timestamp or date string to a date."""
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).date()
+    except (ValueError, TypeError):
+        pass
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(s[:30], fmt).date()
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def apply_date_cutoff(
+    reviews: list[dict[str, Any]],
+    date_cutoff: str | None,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Filter reviews older than the cutoff and signal when pagination can stop."""
+    cutoff = _parse_review_date(date_cutoff)
+    if cutoff is None or not reviews:
+        return reviews, False
+
+    kept: list[dict[str, Any]] = []
+    saw_dated = False
+    saw_undated = False
+    has_in_range = False
+
+    for review in reviews:
+        reviewed_at = _parse_review_date(review.get("reviewed_at"))
+        if reviewed_at is None:
+            kept.append(review)
+            saw_undated = True
+            continue
+        saw_dated = True
+        if reviewed_at >= cutoff:
+            kept.append(review)
+            has_in_range = True
+
+    should_stop = saw_dated and not saw_undated and not has_in_range
+    return kept, should_stop
 
 
 @dataclass

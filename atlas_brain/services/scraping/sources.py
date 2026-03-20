@@ -31,6 +31,7 @@ class ReviewSource(str, Enum):
     TWITTER = "twitter"
     RSS = "rss"
     SOFTWARE_ADVICE = "software_advice"
+    SOURCEFORGE = "sourceforge"
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +56,7 @@ _DISPLAY_NAMES: dict[ReviewSource, str] = {
     ReviewSource.TWITTER: "Twitter/X",
     ReviewSource.RSS: "RSS",
     ReviewSource.SOFTWARE_ADVICE: "Software Advice",
+    ReviewSource.SOURCEFORGE: "SourceForge",
 }
 
 
@@ -93,6 +95,7 @@ SLUG_SOURCES: frozenset[ReviewSource] = frozenset({
     ReviewSource.SOFTWARE_ADVICE,
     ReviewSource.PRODUCTHUNT,
     ReviewSource.TRUSTPILOT,
+    ReviewSource.SOURCEFORGE,
 })
 
 API_SOURCES: frozenset[ReviewSource] = frozenset({
@@ -113,13 +116,12 @@ VERIFIED_SOURCES: frozenset[ReviewSource] = frozenset({
     ReviewSource.GETAPP,
     ReviewSource.SOFTWARE_ADVICE,
     ReviewSource.TRUSTPILOT,
+    ReviewSource.SOURCEFORGE,
 })
 
-STRUCTURED_SOURCES: frozenset[ReviewSource] = frozenset({
-    ReviewSource.G2,
-    ReviewSource.CAPTERRA,
-    ReviewSource.TRUSTRADIUS,
-})
+# Structured review platforms should stay aligned with the verified-review set
+# so they bypass the social/content relevance filter.
+STRUCTURED_SOURCES: frozenset[ReviewSource] = VERIFIED_SOURCES
 
 EXECUTIVE_SOURCES: frozenset[ReviewSource] = frozenset({
     ReviewSource.G2,
@@ -138,6 +140,7 @@ DEFAULT_ALLOWLIST_SOURCES: frozenset[ReviewSource] = frozenset({
     ReviewSource.GETAPP,
     ReviewSource.SOFTWARE_ADVICE,
     ReviewSource.TRUSTPILOT,
+    ReviewSource.SOURCEFORGE,
     ReviewSource.REDDIT,
     ReviewSource.HACKERNEWS,
 })

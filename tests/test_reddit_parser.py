@@ -560,6 +560,98 @@ class TestParsePost:
         assert result["content_type"] == "community_discussion"
         assert result["raw_metadata"]["employment_claim"] is False
 
+    def test_rejects_off_target_subreddit_without_product_context(self):
+        target = _make_target(
+            "Shopify",
+            product_name="Shopify",
+            product_category="E-commerce",
+            metadata={"search_profile": "churn", "subreddits": "shopify,ecommerce"},
+        )
+        post = _make_post(
+            title="Shopify Rebellion vs Cloud9 White | Post-Match Thread",
+            selftext=(
+                "Shopify Rebellion looked sharp in the lower final and the roster adapted well on map 3. "
+                "This post-match thread covers the main event and the final bracket update. "
+            ) * 5,
+            subreddit="ValorantCompetitive",
+        )
+        result = self.parser._parse_post(post, target, set())
+        assert result is None
+
+    def test_accepts_off_target_subreddit_with_explicit_product_context(self):
+        target = _make_target(
+            "Shopify",
+            product_name="Shopify",
+            product_category="E-commerce",
+            metadata={"search_profile": "churn", "subreddits": "shopify,ecommerce"},
+        )
+        post = _make_post(
+            title="Shopify pricing is getting harder to justify for our storefront",
+            selftext=(
+                "We use Shopify for our ecommerce storefront, but the subscription pricing and app costs keep climbing. "
+                "The platform works, yet our team is evaluating whether the software still fits our margin goals. "
+            ) * 5,
+            subreddit="technology",
+        )
+        result = self.parser._parse_post(post, target, set())
+        assert result is not None
+        assert result["raw_metadata"]["subreddit_expected"] is False
+        assert result["raw_metadata"]["subreddit_context_reason"] == "explicit_product_context"
+
+    def test_rejects_user_profile_subreddit_even_with_product_context(self):
+        target = _make_target(
+            "Shopify",
+            product_name="Shopify",
+            product_category="E-commerce",
+            metadata={"search_profile": "churn", "subreddits": "shopify,ecommerce"},
+        )
+        post = _make_post(
+            title="How to make a migration from Shopify to WooCommerce",
+            selftext=(
+                "We use Shopify for our ecommerce storefront and are comparing migration paths. "
+                "This post walks through moving catalog, customers, and order history to another platform. "
+            ) * 4,
+            subreddit="u_Cart-to-Cart",
+        )
+        result = self.parser._parse_post(post, target, set())
+        assert result is None
+
+    def test_rejects_vendor_specific_career_subreddit(self):
+        target = _make_target(
+            "Salesforce",
+            product_name="Salesforce",
+            product_category="CRM",
+            metadata={"search_profile": "churn", "subreddits": "salesforce,crm"},
+        )
+        post = _make_post(
+            title="Looking for referral to a solution engineer role at Salesforce",
+            selftext=(
+                "I want to work at Salesforce and would appreciate career advice on interviewing, "
+                "compensation, and getting a referral into the company."
+            ) * 3,
+            subreddit="SalesforceCareers",
+        )
+        result = self.parser._parse_post(post, target, set())
+        assert result is None
+
+    def test_rejects_vendor_specific_certification_subreddit(self):
+        target = _make_target(
+            "Azure",
+            product_name="Azure",
+            product_category="Cloud Infrastructure",
+            metadata={"search_profile": "churn", "subreddits": "azure,devops"},
+        )
+        post = _make_post(
+            title="Is AZ-104 still worth it in 2026?",
+            selftext=(
+                "I want Azure certification advice and career guidance on whether AZ-104 "
+                "still matters for cloud roles."
+            ) * 3,
+            subreddit="AzureCertification",
+        )
+        result = self.parser._parse_post(post, target, set())
+        assert result is None
+
 
 # ---------------------------------------------------------------------------
 # Employment tense detection
@@ -784,6 +876,268 @@ class TestRelevanceRedditMetadata:
         _, reason = score_relevance(review, "HubSpot")
         # Should NOT apply job noise penalty when org signals present
         assert "reddit_job_noise" not in reason
+
+    def test_match_thread_noise_penalty(self):
+        review = self._make_review(
+            subreddit="ValorantCompetitive",
+            subreddit_weight=0.5,
+            candidate_score=7.5,
+            vendor_mention_count=1,
+        )
+        review["summary"] = "Shopify Rebellion vs Cloud9 White | Post-Match Thread"
+        review["review_text"] = (
+            "Shopify Rebellion won the lower final in the main event. "
+            "This post-match thread covers map 1, map 2, and the roster changes before playoffs. "
+        ) * 4
+        score, reason = score_relevance(review, "Shopify")
+        assert score < 0.55
+        assert "reddit_match_thread_noise" in reason
+
+    def test_match_discussion_noise_penalty(self):
+        review = self._make_review(
+            subreddit="leagueoflegends",
+            subreddit_weight=0.5,
+            candidate_score=7.5,
+            vendor_mention_count=2,
+        )
+        review["summary"] = "Shopify Rebellion vs 100 Thieves / LCS 2024 Spring - Week 6 / Post-Match Discussion"
+        review["review_text"] = (
+            "Official page links to lolesports, Leaguepedia, and Liquipedia for the LCS spring season. "
+            "This post-match discussion covers the lower bracket result and roster storylines. "
+        ) * 3
+        score, reason = score_relevance(review, "Shopify")
+        assert score < 0.55
+        assert "reddit_match_thread_noise" in reason
+
+    def test_reddit_aggregator_noise_penalty(self):
+        review = self._make_review(
+            subreddit="autotldr",
+            subreddit_weight=0.5,
+            candidate_score=7.0,
+            vendor_mention_count=4,
+        )
+        review["summary"] = "Massive internet outage is sweeping the East Coast"
+        review["review_text"] = (
+            "This is an automatic summary, [original](http://example.com/story) reduced by 37%.\n"
+            "Amazon Web Services outage explained in coverage includes multiple external articles."
+        )
+        score, reason = score_relevance(review, "Amazon Web Services")
+        assert score < 0.55
+        assert "reddit_aggregator_noise" in reason
+
+    def test_reddit_investor_news_penalty(self):
+        review = self._make_review(
+            subreddit="stocks",
+            subreddit_weight=0.5,
+            candidate_score=7.0,
+            vendor_mention_count=4,
+        )
+        review["summary"] = "Amazon Web Services CEO Adam Selipsky to step down"
+        review["review_text"] = (
+            "Amazon Web Services CEO Adam Selipsky will step down next month, the company announced. "
+            "The investment community expects the stock response to follow the leadership change."
+        )
+        score, reason = score_relevance(review, "Amazon Web Services")
+        assert score < 0.55
+        assert "reddit_investor_news" in reason
+
+    def test_reddit_low_signal_subreddit_penalty(self):
+        review = self._make_review(
+            subreddit="newworldgame",
+            subreddit_weight=0.5,
+            candidate_score=7.0,
+            vendor_mention_count=4,
+        )
+        review["summary"] = "New World Servers: A technical explanation"
+        review["review_text"] = (
+            "Amazon Web Services powers parts of the game infrastructure, "
+            "but this thread is really about regional game server behavior."
+        ) * 4
+        score, reason = score_relevance(review, "Amazon Web Services")
+        assert score < 0.55
+        assert "reddit_low_signal_subreddit" in reason
+
+    def test_reddit_investor_noise_penalty_applies_to_insider_tagged_rows(self):
+        review = self._make_review(
+            subreddit="wallstreetbets",
+            subreddit_weight=0.5,
+            candidate_score=6.1,
+            vendor_mention_count=3,
+            employment_claim=True,
+            employment_tense="past",
+        )
+        review["content_type"] = "insider_account"
+        review["summary"] = "Amazon Investing an Additional $4 Billion in AI Firm Anthropic"
+        review["review_text"] = (
+            "Amazon.com Inc. is boosting its stake in Anthropic. "
+            "The market is watching the investment and leadership posture closely."
+        ) * 3
+        score, reason = score_relevance(review, "Amazon Web Services")
+        assert score < 0.55
+        assert "reddit_investor_news" in reason
+
+    def test_reddit_user_profile_subreddit_penalty(self):
+        review = self._make_review(
+            subreddit="u_Cart-to-Cart",
+            subreddit_weight=0.5,
+            candidate_score=7.2,
+            vendor_mention_count=6,
+        )
+        review["summary"] = "How to make a migration from Shopify to WooCommerce"
+        review["review_text"] = (
+            "We use Shopify for our ecommerce storefront and are planning a migration path. "
+            "This post explains how to move products, customers, and order history."
+        ) * 4
+        score, reason = score_relevance(review, "Shopify")
+        assert score < 0.55
+        assert "reddit_user_profile_subreddit" in reason
+
+    def test_reddit_career_subreddit_penalty_for_employer_discussion(self):
+        review = self._make_review(
+            subreddit="cscareerquestions",
+            subreddit_weight=0.6,
+            candidate_score=7.2,
+            vendor_mention_count=4,
+        )
+        review["summary"] = "Would Workday or HomeAway be a better place to work as a Software Engineering Intern?"
+        review["review_text"] = (
+            "I am deciding between internship offers and want opinions on engineering reputation, "
+            "compensation, and long term career value."
+        ) * 3
+        score, reason = score_relevance(review, "Workday")
+        assert score < 0.55
+        assert "reddit_career_subreddit_noise" in reason
+
+    def test_reddit_career_subreddit_keeps_strong_product_evaluation(self):
+        review = self._make_review(
+            subreddit="ITCareerQuestions",
+            subreddit_weight=0.6,
+            candidate_score=7.1,
+            vendor_mention_count=3,
+        )
+        review["summary"] = "How I finally solved my project management chaos as a DevOps engineer"
+        review["review_text"] = (
+            "I switched from Todoist to ClickUp because I needed stronger ticketing, roadmap, and sprint management. "
+            "The product comparison is about actual day to day usage, not a career change."
+        ) * 3
+        score, reason = score_relevance(review, "ClickUp")
+        assert score >= 0.55
+        assert "reddit_career_subreddit_noise" not in reason
+
+    def test_reddit_builder_self_promo_penalty(self):
+        review = self._make_review(
+            subreddit="SideProject",
+            subreddit_weight=0.6,
+            candidate_score=7.2,
+            vendor_mention_count=4,
+        )
+        review["summary"] = "I built an open-source CRM after getting frustrated with HubSpot's pricing"
+        review["review_text"] = (
+            "After hitting HubSpot's paywall one too many times, I built an open-source CRM. "
+            "Looking for feedback from early users before I launch it more broadly."
+        ) * 3
+        score, reason = score_relevance(review, "HubSpot")
+        assert score < 0.55
+        assert "reddit_builder_self_promo" in reason
+
+    def test_reddit_builder_self_promo_penalty_for_created_feedback_pitch(self):
+        review = self._make_review(
+            subreddit="SideProject",
+            subreddit_weight=0.6,
+            candidate_score=7.0,
+            vendor_mention_count=3,
+        )
+        review["summary"] = "I just created a simple business platform as an alternative to HubSpot"
+        review["review_text"] = (
+            "I am developing an open-source alternative and would love feedback from founders. "
+            "Full disclosure: I am the builder and I am looking for honest outside opinions."
+        ) * 3
+        score, reason = score_relevance(review, "HubSpot")
+        assert score < 0.55
+        assert "reddit_builder_self_promo" in reason
+
+    def test_reddit_builder_self_promo_penalty_for_we_are_building_pitch(self):
+        review = self._make_review(
+            subreddit="SideProject",
+            subreddit_weight=0.6,
+            candidate_score=7.1,
+            vendor_mention_count=3,
+        )
+        review["summary"] = "Would you use a Slack-based AI agent that connects to your tools?"
+        review["review_text"] = (
+            "We are building a Slack agent for engineering teams and would love honest outside opinions. "
+            "The goal is to replace manual workflow steps across Jira, Slack, and Google Calendar."
+        ) * 3
+        score, reason = score_relevance(review, "Slack")
+        assert score < 0.55
+        assert "reddit_builder_self_promo" in reason
+
+    def test_reddit_builder_self_promo_penalty_applies_to_insider_tagged_row(self):
+        review = self._make_review(
+            subreddit="SideProject",
+            subreddit_weight=0.6,
+            candidate_score=6.8,
+            vendor_mention_count=3,
+            employment_claim=True,
+            employment_tense="current",
+        )
+        review["content_type"] = "insider_account"
+        review["summary"] = "I built a macOS app that rewrites your Slack messages before you send them"
+        review["review_text"] = (
+            "I built a Slack app for teams and I am the founder. "
+            "The product rewrites messages before send and I want feedback from early users."
+        ) * 3
+        score, reason = score_relevance(review, "Slack")
+        assert score < 0.55
+        assert "reddit_builder_self_promo" in reason
+
+    def test_reddit_builder_growth_marketing_penalty(self):
+        review = self._make_review(
+            subreddit="SideProject",
+            subreddit_weight=0.6,
+            candidate_score=6.5,
+            vendor_mention_count=3,
+        )
+        review["summary"] = "How I Got My First 200 Users by Gaming AI Recommendations"
+        review["review_text"] = (
+            "Launched my side project 6 months ago. SEO takes forever and paid ads burned through my budget. "
+            "I got my first 200 users by getting mentioned in recommendation flows."
+        ) * 2
+        score, reason = score_relevance(review, "Notion")
+        assert score < 0.55
+        assert "reddit_builder_self_promo" in reason
+
+    def test_reddit_builder_founder_research_penalty(self):
+        review = self._make_review(
+            subreddit="SideProject",
+            subreddit_weight=0.6,
+            candidate_score=6.2,
+            vendor_mention_count=4,
+        )
+        review["summary"] = "Shopify app developers: merchant comprehension gap"
+        review["review_text"] = (
+            "I am looking into a potential bottleneck in app support. "
+            "I have a hypothesis and I am trying to understand whether developers see the same issue."
+        ) * 3
+        score, reason = score_relevance(review, "Shopify")
+        assert score < 0.55
+        assert "reddit_builder_self_promo" in reason
+
+    def test_reddit_builder_subreddit_keeps_plain_comparison(self):
+        review = self._make_review(
+            subreddit="SideProject",
+            subreddit_weight=0.6,
+            candidate_score=7.1,
+            vendor_mention_count=3,
+        )
+        review["summary"] = "GetResponse and ActiveCampaign: which is better for beginners?"
+        review["review_text"] = (
+            "I am comparing GetResponse and ActiveCampaign for email marketing automation. "
+            "I want to understand pricing, templates, and ease of use before I choose."
+        ) * 3
+        score, reason = score_relevance(review, "ActiveCampaign")
+        assert score >= 0.55
+        assert "reddit_builder_self_promo" not in reason
 
 
 class TestRelevanceInsiderMetadata:

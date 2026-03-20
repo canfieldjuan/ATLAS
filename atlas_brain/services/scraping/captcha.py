@@ -478,7 +478,7 @@ class CaptchaSolver:
                     "Could not extract Turnstile sitekey from Cloudflare challenge"
                 )
             task = {
-                "type": "TurnstileTask",
+                "type": "TurnstileTask" if proxy_fields else "TurnstileTaskProxyless",
                 "websiteURL": page_url,
                 "websiteKey": cf["sitekey"],
                 "userAgent": user_agent,

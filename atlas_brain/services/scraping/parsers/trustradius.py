@@ -21,7 +21,7 @@ from urllib.parse import quote_plus
 from bs4 import BeautifulSoup
 
 from ..client import AntiDetectionClient
-from . import ScrapeResult, ScrapeTarget, log_page, register_parser
+from . import ScrapeResult, ScrapeTarget, apply_date_cutoff, log_page, register_parser
 
 logger = logging.getLogger("atlas.services.scraping.parsers.trustradius")
 
@@ -104,6 +104,7 @@ class TrustRadiusParser:
         prior_hashes: set[str] = set()
         prior_review_ids: set[str] = set()
         import time as _time
+        stop_reason = ""
 
         for page in range(1, target.max_pages + 1):
             url = f"{_PRODUCT_BASE}/{target.product_slug}/reviews"
@@ -179,13 +180,19 @@ class TrustRadiusParser:
                 if not page_reviews:
                     page_reviews = _parse_html_reviews(html, target, seen_ids)
 
-                page_logs.append(log_page(
+                page_reviews, cutoff_hit = apply_date_cutoff(page_reviews, target.date_cutoff)
+
+                pl = log_page(
                     page, url, status_code=200, duration_ms=elapsed_ms,
                     response_bytes=len(resp.content), reviews=page_reviews,
                     raw_body=resp.content, prior_hashes=prior_hashes,
                     prior_review_ids=prior_review_ids,
                     next_page_found=bool(page_reviews),
-                ))
+                )
+                if cutoff_hit:
+                    pl.stop_reason = "date_cutoff"
+                    stop_reason = "date_cutoff"
+                page_logs.append(pl)
 
                 if not page_reviews:
                     if page == 1:
@@ -216,10 +223,16 @@ class TrustRadiusParser:
             "TrustRadius Web Unlocker scrape for %s: %d reviews from %d pages",
             target.vendor_name, len(reviews), pages_scraped,
         )
-        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors, page_logs=page_logs)
+        return ScrapeResult(
+            reviews=reviews,
+            pages_scraped=pages_scraped,
+            errors=errors,
+            page_logs=page_logs,
+            stop_reason=stop_reason,
+        )
 
     async def _scrape_firecrawl(self, target: ScrapeTarget, api_key: str) -> ScrapeResult:
-        """Scrape via Firecrawl JS rendering — gets individual reviews."""
+        """Scrape via Firecrawl JS rendering - gets individual reviews."""
         import asyncio
         from firecrawl import FirecrawlApp
 
@@ -906,7 +919,7 @@ def _get_card_text(card, selector: str) -> str | None:
 
 
 # ------------------------------------------------------------------
-# Firecrawl markdown parsing (existing — for Priority 2 path)
+# Firecrawl markdown parsing (existing - for Priority 2 path)
 # ------------------------------------------------------------------
 
 
@@ -1021,7 +1034,7 @@ def _extract_section(md: str, start_pattern: str, end_pattern: str) -> str | Non
 
     text = match.group(1).strip()
     # Clean up markdown artifacts
-    text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)  # [text](url) → text
+    text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)  # [text](url) -> text
     text = re.sub(r'(?:^|\s)Edit\s*(?:Pros|Cons)?\s*$', '', text, flags=re.MULTILINE)  # Remove "Edit" buttons
     text = re.sub(r'^\s*-\s*', '- ', text, flags=re.MULTILINE)  # Normalize list items
     text = text.strip()
@@ -1038,7 +1051,7 @@ def _extract_date_from_slug(slug: str) -> str | None:
 
 
 # ------------------------------------------------------------------
-# JSON-LD fallback (legacy — kept for environments without Firecrawl)
+# JSON-LD fallback (legacy - kept for environments without Firecrawl)
 # ------------------------------------------------------------------
 
 def _extract_jsonld_product(html: str, target: ScrapeTarget) -> list[dict]:

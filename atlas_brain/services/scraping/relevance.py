@@ -91,6 +91,79 @@ _INSIDER_BOOST_PATTERNS: list[tuple[re.Pattern[str], float]] = [
     (re.compile(r"engineering\s+(?:culture|morale|quality)", re.I), 0.10),
 ]
 
+_REDDIT_MATCH_THREAD_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"post[- ]match\s+(?:thread|discussion)|match\s+(?:thread|discussion)", re.I),
+    re.compile(r"grand\s+final|lower\s+final|upper\s+final|lower\s+bracket|upper\s+bracket", re.I),
+    re.compile(r"main\s+event|group\s+stage|swiss\s+stage|playoffs?|best\s+of\s+[1357]|\bmap\s+[1-5]\b", re.I),
+    re.compile(r"esports|roster|valorant|league\s+of\s+legends|\bLCS\b|\bLTA\b|leaguepedia|liquipedia", re.I),
+    re.compile(r"lolesports|week\s+\d+|split\s+\d+|season\s+(?:spring|summer|winter)", re.I),
+]
+_REDDIT_MATCH_THREAD_MIN_HITS = 2
+_REDDIT_MATCH_THREAD_PENALTY = -0.25
+_REDDIT_AGGREGATOR_SUBREDDITS = frozenset({"autotldr", "buzzfeedbot", "pwnhub", "symbynews"})
+_REDDIT_INVESTOR_SUBREDDITS = frozenset({"amzn", "investing", "stocks", "wallstreetbets"})
+_REDDIT_LOW_SIGNAL_SUBREDDITS = frozenset({
+    "addons4kodi",
+    "amazonprime",
+    "anticonsumption",
+    "conspiracy",
+    "newworldgame",
+})
+_REDDIT_CAREER_SUBREDDITS = frozenset({
+    "careerguidance",
+    "cscareerquestions",
+    "csmajors",
+    "developersindia",
+    "experienceddevs",
+    "itcareerquestions",
+    "jobs",
+})
+_REDDIT_BUILDER_SUBREDDITS = frozenset({
+    "alphaandbetausers",
+    "buildinpublic",
+    "sideproject",
+})
+_REDDIT_USER_PROFILE_SUBREDDIT_RE = re.compile(r"^u[_/][a-z0-9][a-z0-9_-]{1,}$", re.I)
+_REDDIT_BUILDER_PROMO_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"\b(?:i|we|my\s+team)(?:\W{0,3}(?:have|ve))?\s+(?:built|made|created|launched|released)\b", re.I),
+    re.compile(r"\b(?:i|we)\W{0,3}(?:am|m|are|re)?\s*(?:working on|building|developing)\b", re.I),
+    re.compile(r"\bthinking\s+of\s+building\b", re.I),
+    re.compile(r"\blooking\s+for\s+(?:feedback|early\s+users?|testers?|honest\s+outside\s+opinions)\b", re.I),
+    re.compile(r"\b(?:got|get|getting)\s+\d+(?:,\d{3})*\s+(?:unique\s+)?(?:users?|visitors?|signups?|demo\s+requests?)\b", re.I),
+    re.compile(r"\bfirst\s+\d+(?:,\d{3})*\s+users?\b", re.I),
+    re.compile(r"\b(?:alpha|beta)\s+users?\b", re.I),
+    re.compile(r"\b(?:beta\s+testing|out\s+of\s+beta)\b", re.I),
+    re.compile(r"\broast\s+my\s+landing\s+page\b", re.I),
+    re.compile(r"\b(?:would|wouldn't|i'?d)\s+love\s+(?:honest\s+|some\s+|your\s+|outside\s+)?(?:feedback|opinions)\b", re.I),
+    re.compile(r"\b(?:i'?m|i am)\s+(?:looking\s+into|trying\s+to\s+understand)\b", re.I),
+    re.compile(r"\bi\s+have\s+a\s+hypothesis\b", re.I),
+    re.compile(r"\b(?:week|month)\s+of\s+building\s+in\s+public\b", re.I),
+    re.compile(r"\bbuilding\s+in\s+public\b", re.I),
+    re.compile(r"\bSEO\s+takes\s+forever\b", re.I),
+    re.compile(r"\bpaid\s+ads?\s+burned\s+through\s+my\s+budget\b", re.I),
+    re.compile(r"\bmessage\s+me\b", re.I),
+    re.compile(r"\bfeedback\s+welcome\b", re.I),
+    re.compile(r"\bfull\s+disclosure\b", re.I),
+    re.compile(r"\b(?:just\s+launched|launching|lifetime\s+access)\b", re.I),
+]
+_REDDIT_AGGREGATOR_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"this is an automatic summary|this is the best tl;dr i could make", re.I),
+    re.compile(r"coverage includes:|first of \d+ articles?|first of \d+ article", re.I),
+    re.compile(r"\[original\]\(|reduced by \d+%|\(i'?m a bot\)", re.I),
+]
+_REDDIT_INVESTOR_NEWS_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"will step down|the company announced|boosting its stake|signed a deal", re.I),
+    re.compile(r"earnings|stock|investing|investment|billion|quarterly|ceo|cfo|cto", re.I),
+    re.compile(r"works on issue|outage explained|transparency report|client message", re.I),
+]
+_REDDIT_AGGREGATOR_PENALTY = -0.35
+_REDDIT_INVESTOR_NEWS_PENALTY = -0.30
+_REDDIT_LOW_SIGNAL_SUBREDDIT_PENALTY = -0.30
+_REDDIT_CAREER_SUBREDDIT_PENALTY = -0.25
+_REDDIT_BUILDER_SELF_PROMO_PENALTY = -0.50
+_REDDIT_USER_PROFILE_SUBREDDIT_PENALTY = -0.40
+_REDDIT_CAREER_KEEP_CHURN_MIN = 0.15
+
 # Structured review sources that bypass the filter entirely
 from .sources import STRUCTURED_SOURCES
 
@@ -214,6 +287,7 @@ def score_relevance(
     source = (review.get("source") or "").lower()
 
     if source == "reddit":
+        subreddit_lower = str(meta.get("subreddit") or "").strip().lower()
         reddit_score = meta.get("score", meta.get("ups", 0))
         upvote_ratio = meta.get("upvote_ratio", 1.0)
         if (isinstance(reddit_score, (int, float)) and reddit_score < 5) or \
@@ -255,6 +329,72 @@ def score_relevance(
             if job_noise_hits >= 2:
                 score -= 0.10
                 reasons.append(f"reddit_job_noise({job_noise_hits})=-0.10")
+
+        match_thread_hits = sum(
+            1 for pat in _REDDIT_MATCH_THREAD_PATTERNS if pat.search(text[:1500])
+        )
+        if match_thread_hits >= _REDDIT_MATCH_THREAD_MIN_HITS:
+            score += _REDDIT_MATCH_THREAD_PENALTY
+            reasons.append(
+                f"reddit_match_thread_noise({match_thread_hits})={_REDDIT_MATCH_THREAD_PENALTY:.2f}"
+            )
+
+        aggregator_hits = sum(
+            1 for pat in _REDDIT_AGGREGATOR_PATTERNS if pat.search(text[:1500])
+        )
+        if churn_boost < 0.10 and (
+            subreddit_lower in _REDDIT_AGGREGATOR_SUBREDDITS or aggregator_hits > 0
+        ):
+            score += _REDDIT_AGGREGATOR_PENALTY
+            reasons.append(
+                f"reddit_aggregator_noise({aggregator_hits or 1})={_REDDIT_AGGREGATOR_PENALTY:.2f}"
+            )
+
+        investor_hits = sum(
+            1 for pat in _REDDIT_INVESTOR_NEWS_PATTERNS if pat.search(text[:1500])
+        )
+        if churn_boost < 0.10 and (
+            subreddit_lower in _REDDIT_INVESTOR_SUBREDDITS or investor_hits >= 2
+        ):
+            score += _REDDIT_INVESTOR_NEWS_PENALTY
+            reasons.append(
+                f"reddit_investor_news({investor_hits or 1})={_REDDIT_INVESTOR_NEWS_PENALTY:.2f}"
+            )
+
+        if subreddit_lower in _REDDIT_LOW_SIGNAL_SUBREDDITS:
+            score += _REDDIT_LOW_SIGNAL_SUBREDDIT_PENALTY
+            reasons.append(
+                f"reddit_low_signal_subreddit({subreddit_lower})={_REDDIT_LOW_SIGNAL_SUBREDDIT_PENALTY:.2f}"
+            )
+
+        if _REDDIT_USER_PROFILE_SUBREDDIT_RE.match(subreddit_lower):
+            score += _REDDIT_USER_PROFILE_SUBREDDIT_PENALTY
+            reasons.append(
+                f"reddit_user_profile_subreddit({subreddit_lower})={_REDDIT_USER_PROFILE_SUBREDDIT_PENALTY:.2f}"
+            )
+
+        if (
+            subreddit_lower in _REDDIT_CAREER_SUBREDDITS
+            and not org_signals
+            and not (churn_boost >= _REDDIT_CAREER_KEEP_CHURN_MIN and not meta.get("employment_claim"))
+        ):
+            score += _REDDIT_CAREER_SUBREDDIT_PENALTY
+            reasons.append(
+                f"reddit_career_subreddit_noise({subreddit_lower})={_REDDIT_CAREER_SUBREDDIT_PENALTY:.2f}"
+            )
+
+        builder_hits = sum(
+            1 for pat in _REDDIT_BUILDER_PROMO_PATTERNS if pat.search(text[:1500])
+        )
+        if (
+            not org_signals
+            and subreddit_lower in _REDDIT_BUILDER_SUBREDDITS
+            and builder_hits > 0
+        ):
+            score += _REDDIT_BUILDER_SELF_PROMO_PENALTY
+            reasons.append(
+                f"reddit_builder_self_promo({subreddit_lower},{builder_hits})={_REDDIT_BUILDER_SELF_PROMO_PENALTY:.2f}"
+            )
 
     elif source == "hackernews":
         points = meta.get("points", meta.get("score", 0))

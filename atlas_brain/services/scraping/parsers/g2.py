@@ -19,7 +19,7 @@ from bs4 import BeautifulSoup
 
 from ....config import settings
 from ..client import AntiDetectionClient
-from . import ScrapeResult, ScrapeTarget, log_page, register_parser
+from . import ScrapeResult, ScrapeTarget, apply_date_cutoff, log_page, register_parser
 
 logger = logging.getLogger("atlas.services.scraping.parsers.g2")
 
@@ -100,6 +100,7 @@ class G2Parser:
         prior_hashes: set[str] = set()
         prior_review_ids: set[str] = set()
         import time as _time
+        stop_reason = ""
 
         for page in range(1, target.max_pages + 1):
             url = f"{_BASE_URL}/{target.product_slug}/reviews"
@@ -158,6 +159,7 @@ class G2Parser:
                     continue
 
                 page_reviews = _parse_page(resp.text, target, seen_ids)
+                page_reviews, cutoff_hit = apply_date_cutoff(page_reviews, target.date_cutoff)
 
                 pl = log_page(
                     page, url, status_code=200, duration_ms=elapsed_ms,
@@ -167,6 +169,9 @@ class G2Parser:
                     next_page_found=page < target.max_pages,
                     next_page_url=f"{_BASE_URL}/{target.product_slug}/reviews?page={page + 1}" if page_reviews else "",
                 )
+                if cutoff_hit:
+                    pl.stop_reason = "date_cutoff"
+                    stop_reason = "date_cutoff"
                 page_logs.append(pl)
 
                 if not page_reviews:
@@ -194,7 +199,13 @@ class G2Parser:
             "G2 Web Unlocker scrape for %s: %d reviews from %d pages",
             target.vendor_name, len(reviews), pages_scraped,
         )
-        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors, page_logs=page_logs)
+        return ScrapeResult(
+            reviews=reviews,
+            pages_scraped=pages_scraped,
+            errors=errors,
+            page_logs=page_logs,
+            stop_reason=stop_reason,
+        )
 
     # ------------------------------------------------------------------
     # Browser path (Playwright stealth)
@@ -216,6 +227,7 @@ class G2Parser:
         prior_hashes: set[str] = set()
         prior_review_ids: set[str] = set()
         import time as _time
+        stop_reason = ""
 
         # Get a residential proxy URL if available
         proxy_config = proxy_mgr.get_proxy(domain=_DOMAIN, sticky=True, prefer_residential=True)
@@ -264,14 +276,19 @@ class G2Parser:
                     continue
 
                 page_reviews = _parse_page(result.html, target, seen_ids)
+                page_reviews, cutoff_hit = apply_date_cutoff(page_reviews, target.date_cutoff)
 
-                page_logs.append(log_page(
+                pl = log_page(
                     page, url, status_code=200, duration_ms=elapsed_ms,
                     response_bytes=len(html_body), reviews=page_reviews,
                     raw_body=html_body, prior_hashes=prior_hashes,
                     prior_review_ids=prior_review_ids,
                     next_page_found=bool(page_reviews),
-                ))
+                )
+                if cutoff_hit:
+                    pl.stop_reason = "date_cutoff"
+                    stop_reason = "date_cutoff"
+                page_logs.append(pl)
 
                 if not page_reviews:
                     if page == 1:
@@ -295,7 +312,13 @@ class G2Parser:
             "G2 browser scrape for %s: %d reviews from %d pages",
             target.vendor_name, len(reviews), pages_scraped,
         )
-        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors, page_logs=page_logs)
+        return ScrapeResult(
+            reviews=reviews,
+            pages_scraped=pages_scraped,
+            errors=errors,
+            page_logs=page_logs,
+            stop_reason=stop_reason,
+        )
 
     # ------------------------------------------------------------------
     # HTTP path (curl_cffi -- original)
@@ -311,6 +334,7 @@ class G2Parser:
         prior_hashes: set[str] = set()
         prior_review_ids: set[str] = set()
         import time as _time
+        stop_reason = ""
 
         consecutive_empty = 0
         for page in range(1, target.max_pages + 1):
@@ -368,14 +392,19 @@ class G2Parser:
 
                 before = len(reviews)
                 page_reviews = _parse_page(resp.text, target, seen_ids)
+                page_reviews, cutoff_hit = apply_date_cutoff(page_reviews, target.date_cutoff)
 
-                page_logs.append(log_page(
+                pl = log_page(
                     page, url, status_code=200, duration_ms=elapsed_ms,
                     response_bytes=len(resp.content or b""), reviews=page_reviews,
                     raw_body=resp.content, prior_hashes=prior_hashes,
                     prior_review_ids=prior_review_ids,
                     next_page_found=bool(page_reviews),
-                ))
+                )
+                if cutoff_hit:
+                    pl.stop_reason = "date_cutoff"
+                    stop_reason = "date_cutoff"
+                page_logs.append(pl)
 
                 if not page_reviews:
                     if page == 1:
@@ -405,7 +434,13 @@ class G2Parser:
             target.vendor_name, len(reviews), pages_scraped,
         )
 
-        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors, page_logs=page_logs)
+        return ScrapeResult(
+            reviews=reviews,
+            pages_scraped=pages_scraped,
+            errors=errors,
+            page_logs=page_logs,
+            stop_reason=stop_reason,
+        )
 
 
 def _parse_page(

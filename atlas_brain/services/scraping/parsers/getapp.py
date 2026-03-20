@@ -22,12 +22,14 @@ from bs4 import BeautifulSoup
 
 from ..captcha import CaptchaType, detect_captcha
 from ..client import AntiDetectionClient
-from . import ScrapeResult, ScrapeTarget, log_page, register_parser
+from . import ScrapeResult, ScrapeTarget, apply_date_cutoff, log_page, register_parser
 
 logger = logging.getLogger("atlas.services.scraping.parsers.getapp")
 
 _DOMAIN = "getapp.com"
 _BASE_URL = "https://www.getapp.com"
+_DEFAULT_PROTECTION_PAGE_STOP_THRESHOLD = 2
+_BLOCKED_STOP_REASON = "blocked_or_throttled"
 
 
 def _review_key(review: dict) -> str:
@@ -170,6 +172,7 @@ class GetAppParser:
         prior_review_ids: set[str] = set()
         import time as _time
         resume_page: int | None = None
+        stop_reason = ""
 
         for page in range(1, target.max_pages + 1):
             url = _build_url(target.product_slug, page)
@@ -205,6 +208,7 @@ class GetAppParser:
                         response_bytes=len(resp.content), raw_body=resp.content,
                         prior_hashes=prior_hashes, errors=["blocked (403) via Web Unlocker"],
                     ))
+                    stop_reason = _BLOCKED_STOP_REASON
                     resume_page = page
                     break
                 if resp.status_code != 200:
@@ -218,25 +222,33 @@ class GetAppParser:
                         response_bytes=len(resp.content), raw_body=resp.content,
                         prior_hashes=prior_hashes, errors=[f"HTTP {resp.status_code}"],
                     ))
+                    if _is_protection_like_response(resp.status_code, detail):
+                        stop_reason = _BLOCKED_STOP_REASON
                     resume_page = page
                     break
 
                 page_reviews = _parse_json_ld(resp.text, target, seen_ids)
                 if not page_reviews:
                     page_reviews = _parse_html(resp.text, target, seen_ids)
+                page_reviews, cutoff_hit = apply_date_cutoff(page_reviews, target.date_cutoff)
 
-                page_logs.append(log_page(
+                pl = log_page(
                     page, url, status_code=200, duration_ms=elapsed_ms,
                     response_bytes=len(resp.content), reviews=page_reviews,
                     raw_body=resp.content, prior_hashes=prior_hashes,
                     prior_review_ids=prior_review_ids,
                     next_page_found=bool(page_reviews),
-                ))
+                )
+                if cutoff_hit:
+                    pl.stop_reason = "date_cutoff"
+                    stop_reason = "date_cutoff"
+                page_logs.append(pl)
 
                 if not page_reviews:
                     detail = _describe_getapp_response(resp.text, resp.status_code)
                     if detail:
                         errors.append(f"Page {page}: 0 reviews after Web Unlocker ({detail})")
+                        stop_reason = _BLOCKED_STOP_REASON
                     if page == 1:
                         logger.warning(
                             "GetApp Web Unlocker page 1 returned 0 reviews for %s",
@@ -269,6 +281,7 @@ class GetAppParser:
             pages_scraped=pages_scraped,
             errors=errors,
             page_logs=page_logs,
+            stop_reason=stop_reason,
             resume_page=resume_page,
         )
 
@@ -287,18 +300,23 @@ class GetAppParser:
         """Scrape GetApp via Bright Data Scraping Browser (cloud Chromium)."""
         from atlas_brain.config import settings
         from playwright.async_api import async_playwright
+        from ..browser import solve_browser_challenge
 
         max_pages = target.max_pages or 15
         timeout_ms = settings.b2b_scrape.playwright_timeout_ms
+        protection_stop_threshold = _get_protection_page_stop_threshold()
         reviews: list[dict] = []
         errors: list[str] = []
         pages_scraped = 0
         seen_ids: set[str] = set(seed_seen_ids or ())
+        has_upstream_reviews = start_page > 1 or bool(seed_seen_ids)
         page_logs = []
         prior_hashes: set[str] = set()
         prior_review_ids: set[str] = set()
         import time as _time
         resume_page: int | None = None
+        stop_reason = ""
+        consecutive_protection_pages = 0
 
         try:
             async with async_playwright() as pw:
@@ -315,46 +333,89 @@ class GetAppParser:
                         status = resp.status if resp else 0
                         pages_scraped += 1
                         elapsed_ms = int((_time.monotonic() - page_start) * 1000)
+                        html = await page.content()
 
-                        if status == 404 or status == 403:
-                            errors.append(f"Page {page_num}: HTTP {status}")
+                        if await solve_browser_challenge(
+                            page,
+                            domain=_DOMAIN,
+                            html=html,
+                            status_code=status,
+                        ):
+                            retry_start = _time.monotonic()
+                            resp = await page.goto(
+                                url,
+                                wait_until="domcontentloaded",
+                                timeout=timeout_ms,
+                            )
+                            status = resp.status if resp else 0
+                            elapsed_ms += int((_time.monotonic() - retry_start) * 1000)
                             html = await page.content()
-                            page_logs.append(log_page(
+
+                        if status == 404:
+                            errors.append(f"Page {page_num}: HTTP {status}")
+                            pl = log_page(
                                 page_num, url, status_code=status, duration_ms=elapsed_ms,
                                 response_bytes=len(html), raw_body=html,
                                 prior_hashes=prior_hashes, errors=errors[-1:],
-                            ))
-                            if status == 403 and reviews:
-                                resume_page = page_num
+                            )
+                            page_logs.append(pl)
                             break
 
                         if status >= 400:
-                            errors.append(f"Page {page_num}: HTTP {status}")
-                            html = await page.content()
-                            page_logs.append(log_page(
+                            detail = _describe_getapp_response(html, status)
+                            if detail:
+                                errors.append(f"Page {page_num}: HTTP {status} ({detail})")
+                            else:
+                                errors.append(f"Page {page_num}: HTTP {status}")
+                            pl = log_page(
                                 page_num, url, status_code=status, duration_ms=elapsed_ms,
                                 response_bytes=len(html), raw_body=html,
                                 prior_hashes=prior_hashes, errors=errors[-1:],
-                            ))
-                            if reviews:
+                            )
+                            if _is_protection_like_response(status, detail):
+                                consecutive_protection_pages += 1
+                                if (
+                                    reviews
+                                    or has_upstream_reviews
+                                    or consecutive_protection_pages >= protection_stop_threshold
+                                ):
+                                    pl.stop_reason = _BLOCKED_STOP_REASON
+                                    stop_reason = _BLOCKED_STOP_REASON
+                                    if reviews or has_upstream_reviews:
+                                        resume_page = page_num
+                                    page_logs.append(pl)
+                                    break
+                            else:
+                                consecutive_protection_pages = 0
+                            page_logs.append(pl)
+                            if reviews or has_upstream_reviews:
                                 resume_page = page_num
                                 break
                             continue
 
-                        html = await page.content()
                         page_reviews = _parse_json_ld(html, target, seen_ids)
                         if not page_reviews:
                             page_reviews = _parse_html(html, target, seen_ids)
+                        page_reviews, cutoff_hit = apply_date_cutoff(page_reviews, target.date_cutoff)
                         reviews.extend(page_reviews)
-                        page_logs.append(log_page(
+                        consecutive_protection_pages = 0
+                        pl = log_page(
                             page_num, url, status_code=status, duration_ms=elapsed_ms,
                             response_bytes=len(html), reviews=page_reviews,
                             raw_body=html, prior_hashes=prior_hashes,
                             prior_review_ids=prior_review_ids,
                             next_page_found=bool(page_reviews),
-                        ))
+                        )
+                        if cutoff_hit:
+                            pl.stop_reason = "date_cutoff"
+                            stop_reason = "date_cutoff"
+                        page_logs.append(pl)
 
                         if not page_reviews:
+                            detail = _describe_getapp_response(html, status)
+                            if detail:
+                                pl.stop_reason = _BLOCKED_STOP_REASON
+                                stop_reason = _BLOCKED_STOP_REASON
                             break
 
                         await asyncio.sleep(random.uniform(1.5, 3.0))
@@ -381,6 +442,7 @@ class GetAppParser:
             pages_scraped=pages_scraped,
             errors=errors,
             page_logs=page_logs,
+            stop_reason=stop_reason,
             resume_page=resume_page,
         )
 
@@ -401,12 +463,16 @@ class GetAppParser:
         errors: list[str] = []
         pages_scraped = 0
         seen_ids: set[str] = set(seed_seen_ids or ())
+        protection_stop_threshold = _get_protection_page_stop_threshold()
+        has_upstream_reviews = start_page > 1 or bool(seed_seen_ids)
         page_logs = []
         prior_hashes: set[str] = set()
         prior_review_ids: set[str] = set()
         import time as _time
+        stop_reason = ""
 
         consecutive_empty = 0
+        consecutive_protection_pages = 0
         for page in range(start_page, target.max_pages + 1):
             url = _build_url(target.product_slug, page)
 
@@ -442,6 +508,7 @@ class GetAppParser:
                         response_bytes=len(resp.content or b""), raw_body=resp.content,
                         prior_hashes=prior_hashes, errors=["blocked (403)"],
                     ))
+                    stop_reason = _BLOCKED_STOP_REASON
                     break
                 if resp.status_code == 429:
                     errors.append(f"Page {page}: rate limited (429)")
@@ -450,6 +517,7 @@ class GetAppParser:
                         response_bytes=len(resp.content or b""), raw_body=resp.content,
                         prior_hashes=prior_hashes, errors=["rate limited (429)"],
                     ))
+                    stop_reason = _BLOCKED_STOP_REASON
                     break
                 if resp.status_code != 200:
                     detail = _describe_getapp_response(resp.text, resp.status_code)
@@ -457,11 +525,21 @@ class GetAppParser:
                         errors.append(f"Page {page}: HTTP {resp.status_code} ({detail})")
                     else:
                         errors.append(f"Page {page}: HTTP {resp.status_code}")
-                    page_logs.append(log_page(
+                    pl = log_page(
                         page, url, status_code=resp.status_code, duration_ms=elapsed_ms,
                         response_bytes=len(resp.content or b""), raw_body=resp.content,
                         prior_hashes=prior_hashes, errors=[f"HTTP {resp.status_code}"],
-                    ))
+                    )
+                    if _is_protection_like_response(resp.status_code, detail):
+                        consecutive_protection_pages += 1
+                        if has_upstream_reviews or consecutive_protection_pages >= protection_stop_threshold:
+                            pl.stop_reason = _BLOCKED_STOP_REASON
+                            stop_reason = _BLOCKED_STOP_REASON
+                            page_logs.append(pl)
+                            break
+                    else:
+                        consecutive_protection_pages = 0
+                    page_logs.append(pl)
                     continue
 
                 # Guard against non-HTML responses
@@ -482,19 +560,26 @@ class GetAppParser:
                 # Strategy 2: HTML fallback
                 if not page_reviews:
                     page_reviews = _parse_html(html, target, seen_ids)
+                page_reviews, cutoff_hit = apply_date_cutoff(page_reviews, target.date_cutoff)
 
-                page_logs.append(log_page(
+                pl = log_page(
                     page, url, status_code=200, duration_ms=elapsed_ms,
                     response_bytes=len(resp.content or b""), reviews=page_reviews,
                     raw_body=resp.content, prior_hashes=prior_hashes,
                     prior_review_ids=prior_review_ids,
                     next_page_found=bool(page_reviews),
-                ))
+                )
+                if cutoff_hit:
+                    pl.stop_reason = "date_cutoff"
+                    stop_reason = "date_cutoff"
+                page_logs.append(pl)
 
                 if not page_reviews:
                     detail = _describe_getapp_response(html, resp.status_code)
                     if detail:
                         errors.append(f"Page {page}: 0 reviews ({detail})")
+                        pl.stop_reason = _BLOCKED_STOP_REASON
+                        stop_reason = _BLOCKED_STOP_REASON
                     if page == 1:
                         logger.warning(
                             "GetApp page 1 returned 0 reviews for %s -- "
@@ -505,6 +590,7 @@ class GetAppParser:
 
                 before = len(reviews)
                 reviews.extend(page_reviews)
+                consecutive_protection_pages = 0
 
                 if len(reviews) == before:
                     consecutive_empty += 1
@@ -524,7 +610,13 @@ class GetAppParser:
             target.vendor_name, len(reviews), pages_scraped,
         )
 
-        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors, page_logs=page_logs)
+        return ScrapeResult(
+            reviews=reviews,
+            pages_scraped=pages_scraped,
+            errors=errors,
+            page_logs=page_logs,
+            stop_reason=stop_reason,
+        )
 
 
 # ------------------------------------------------------------------
@@ -536,12 +628,39 @@ def _build_url(product_slug: str, page: int) -> str:
 
     product_slug in DB is ``{category-slug}/a/{product-slug}``
     (e.g. ``marketing-software/a/mailchimp``).
-    Final URL: https://www.getapp.com/{category-slug}/a/{product-slug}/reviews/
+    Final URL: https://www.getapp.com/software/{category-slug}/a/{product-slug}/reviews/
     """
-    base = f"{_BASE_URL}/{product_slug}/reviews/"
+    base = f"{_BASE_URL}/software/{product_slug}/reviews/"
     if page > 1:
         return f"{base}?page={page}"
     return base
+
+
+def _get_protection_page_stop_threshold() -> int:
+    """Return the configured GetApp protection cutoff with a safe fallback."""
+    from atlas_brain.config import settings
+
+    raw = getattr(settings.b2b_scrape, "getapp_protection_page_stop_threshold", None)
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return _DEFAULT_PROTECTION_PAGE_STOP_THRESHOLD
+    return max(1, raw)
+
+
+def _is_protection_like_response(status_code: int, detail: str | None) -> bool:
+    """Return True when the response looks like a challenge or proxy block page."""
+    if status_code in (403, 429, 463):
+        return True
+    if not detail:
+        return False
+    return any(
+        token in detail
+        for token in (
+            "challenge",
+            "cloudflare",
+            "access denied",
+            "gateway/proxy error page",
+        )
+    )
 
 
 def _describe_getapp_response(html: str, status_code: int) -> str | None:

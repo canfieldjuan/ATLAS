@@ -9,7 +9,7 @@ for _mod in (
     "torch", "torchaudio", "transformers", "accelerate", "bitsandbytes",
     "PIL", "PIL.Image", "numpy", "cv2", "sounddevice", "soundfile",
     "nemo.collections", "nemo.collections.asr", "nemo.collections.asr.models",
-    "starlette", "starlette.requests", "asyncpg",
+    "asyncpg",
     "playwright", "playwright.async_api", "curl_cffi", "curl_cffi.requests",
 ):
     sys.modules.setdefault(_mod, MagicMock())
@@ -25,6 +25,7 @@ def _make_target(**overrides) -> MagicMock:
         "product_category": "Project Management",
         "max_pages": 2,
         "metadata": {},
+        "date_cutoff": None,
     }
     defaults.update(overrides)
     target = MagicMock()
@@ -105,6 +106,92 @@ class TestGetAppBrowser:
             wait_until="domcontentloaded",
             timeout=30000,
         )
+
+    @pytest.mark.asyncio
+    async def test_scrape_browser_stops_fast_on_protected_resume_page(self):
+        from atlas_brain.services.scraping.parsers.getapp import GetAppParser
+
+        parser = GetAppParser()
+        target = _make_target(max_pages=12)
+        blocked_html = "<html>captcha or protection page found</html>"
+
+        mock_page = AsyncMock()
+        mock_page.goto = AsyncMock(return_value=MagicMock(status=502))
+        mock_page.content = AsyncMock(return_value=blocked_html)
+        mock_page.close = AsyncMock()
+
+        mock_context = AsyncMock()
+        mock_context.new_page = AsyncMock(return_value=mock_page)
+
+        mock_browser = AsyncMock()
+        mock_browser.contexts = []
+        mock_browser.new_context = AsyncMock(return_value=mock_context)
+        mock_browser.close = AsyncMock()
+
+        mock_pw = MagicMock()
+        mock_pw.chromium.connect_over_cdp = AsyncMock(return_value=mock_browser)
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__.return_value = mock_pw
+        mock_cm.__aexit__.return_value = None
+
+        with patch("atlas_brain.config.settings") as mock_settings, \
+             patch("playwright.async_api.async_playwright", return_value=mock_cm):
+            mock_settings.b2b_scrape.playwright_timeout_ms = 30000
+            mock_settings.b2b_scrape.getapp_protection_page_stop_threshold = 2
+            result = await parser._scrape_browser(
+                target,
+                "wss://browser",
+                start_page=9,
+                seed_seen_ids={"ga-1"},
+            )
+
+        assert result.pages_scraped == 1
+        assert result.resume_page == 9
+        assert result.stop_reason == "blocked_or_throttled"
+        assert result.errors == ["Page 9: HTTP 502 (gateway/proxy error page)"]
+
+    @pytest.mark.asyncio
+    async def test_scrape_browser_retries_after_solved_cloudflare_challenge(self):
+        from atlas_brain.services.scraping.parsers.getapp import GetAppParser
+
+        parser = GetAppParser()
+        target = _make_target(max_pages=1)
+        challenge_html = "<html>cloudflare verify you are human</html>"
+        html = _make_browser_html()
+
+        mock_page = AsyncMock()
+        mock_page.goto = AsyncMock(
+            side_effect=[MagicMock(status=403), MagicMock(status=200)]
+        )
+        mock_page.content = AsyncMock(side_effect=[challenge_html, html])
+        mock_page.close = AsyncMock()
+
+        mock_context = AsyncMock()
+        mock_context.new_page = AsyncMock(return_value=mock_page)
+
+        mock_browser = AsyncMock()
+        mock_browser.contexts = []
+        mock_browser.new_context = AsyncMock(return_value=mock_context)
+        mock_browser.close = AsyncMock()
+
+        mock_pw = MagicMock()
+        mock_pw.chromium.connect_over_cdp = AsyncMock(return_value=mock_browser)
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__.return_value = mock_pw
+        mock_cm.__aexit__.return_value = None
+
+        with patch("atlas_brain.config.settings") as mock_settings, \
+             patch("playwright.async_api.async_playwright", return_value=mock_cm), \
+             patch("atlas_brain.services.scraping.browser.solve_browser_challenge", new=AsyncMock(return_value=True)) as solve:
+            mock_settings.b2b_scrape.playwright_timeout_ms = 30000
+            mock_settings.b2b_scrape.getapp_protection_page_stop_threshold = 2
+            result = await parser._scrape_browser(target, "wss://browser")
+
+        solve.assert_awaited_once()
+        assert mock_page.goto.await_count == 2
+        assert result.pages_scraped == 1
+        assert len(result.reviews) == 1
+        assert result.errors == []
 
 
 class TestGetAppRouting:
@@ -200,3 +287,29 @@ class TestGetAppRouting:
         assert len(result.reviews) == 1
         assert result.resume_page == 2
         assert "Page 2: HTTP 502" in result.errors[0]
+
+    @pytest.mark.asyncio
+    async def test_http_stops_after_repeated_protection_pages(self):
+        from atlas_brain.services.scraping.parsers.getapp import GetAppParser
+
+        parser = GetAppParser()
+        target = _make_target(max_pages=5)
+        blocked_page = MagicMock(
+            status_code=502,
+            text="<html>captcha or protection page found</html>",
+            content=b"blocked",
+            headers={"content-type": "text/html"},
+        )
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=[blocked_page, blocked_page, blocked_page])
+
+        with patch("atlas_brain.config.settings") as mock_settings:
+            mock_settings.b2b_scrape.getapp_protection_page_stop_threshold = 2
+            result = await parser._scrape_http(target, client)
+
+        assert result.pages_scraped == 2
+        assert result.stop_reason == "blocked_or_throttled"
+        assert result.errors == [
+            "Page 1: HTTP 502 (gateway/proxy error page)",
+            "Page 2: HTTP 502 (gateway/proxy error page)",
+        ]

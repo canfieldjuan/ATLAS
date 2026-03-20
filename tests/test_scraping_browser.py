@@ -13,7 +13,6 @@ for _mod in (
     "PIL", "PIL.Image", "numpy", "cv2", "sounddevice", "soundfile",
     "nemo.collections", "nemo.collections.asr",
     "nemo.collections.asr.models",
-    "starlette", "starlette.requests",
     "asyncpg",
     "curl_cffi", "curl_cffi.requests",
 ):

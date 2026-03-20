@@ -25,7 +25,7 @@ from bs4 import BeautifulSoup
 
 from ....config import settings
 from ..client import AntiDetectionClient
-from . import ScrapeResult, ScrapeTarget, log_page, register_parser
+from . import ScrapeResult, ScrapeTarget, apply_date_cutoff, log_page, register_parser
 
 logger = logging.getLogger("atlas.services.scraping.parsers.gartner")
 
@@ -91,6 +91,7 @@ class GartnerParser:
         prior_hashes: set[str] = set()
         prior_review_ids: set[str] = set()
         import time as _time
+        stop_reason = ""
 
         for page in range(target.max_pages):
             offset = page * _REVIEWS_PER_PAGE
@@ -143,11 +144,16 @@ class GartnerParser:
                     page_reviews = _parse_next_data(resp.text, target, seen_ids)
                 if not page_reviews:
                     page_reviews = _parse_html(resp.text, target, seen_ids)
+                page_reviews, cutoff_hit = apply_date_cutoff(page_reviews, target.date_cutoff)
 
-                page_logs.append(log_page(page + 1, url, status_code=200, duration_ms=elapsed_ms,
+                pl = log_page(page + 1, url, status_code=200, duration_ms=elapsed_ms,
                     response_bytes=len(resp.content), reviews=page_reviews, raw_body=resp.content,
                     prior_hashes=prior_hashes, prior_review_ids=prior_review_ids,
-                    next_page_found=bool(page_reviews)))
+                    next_page_found=bool(page_reviews))
+                if cutoff_hit:
+                    pl.stop_reason = "date_cutoff"
+                    stop_reason = "date_cutoff"
+                page_logs.append(pl)
 
                 if not page_reviews:
                     if page == 0:
@@ -164,7 +170,13 @@ class GartnerParser:
             await asyncio.sleep(random.uniform(3.0, 6.0))
 
         logger.info("Gartner Web Unlocker scrape for %s: %d reviews from %d pages", target.vendor_name, len(reviews), pages_scraped)
-        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors, page_logs=page_logs)
+        return ScrapeResult(
+            reviews=reviews,
+            pages_scraped=pages_scraped,
+            errors=errors,
+            page_logs=page_logs,
+            stop_reason=stop_reason,
+        )
 
     # ------------------------------------------------------------------
     # HTTP path (curl_cffi -- fallback)
@@ -180,6 +192,7 @@ class GartnerParser:
         prior_hashes: set[str] = set()
         prior_review_ids: set[str] = set()
         import time as _time
+        stop_reason = ""
 
         consecutive_empty = 0
         for page in range(target.max_pages):
@@ -229,11 +242,16 @@ class GartnerParser:
                     page_reviews = _parse_next_data(resp.text, target, seen_ids)
                 if not page_reviews:
                     page_reviews = _parse_html(resp.text, target, seen_ids)
+                page_reviews, cutoff_hit = apply_date_cutoff(page_reviews, target.date_cutoff)
 
-                page_logs.append(log_page(page + 1, url, status_code=200, duration_ms=elapsed_ms,
+                pl = log_page(page + 1, url, status_code=200, duration_ms=elapsed_ms,
                     response_bytes=len(resp.content or b""), reviews=page_reviews, raw_body=resp.content,
                     prior_hashes=prior_hashes, prior_review_ids=prior_review_ids,
-                    next_page_found=bool(page_reviews)))
+                    next_page_found=bool(page_reviews))
+                if cutoff_hit:
+                    pl.stop_reason = "date_cutoff"
+                    stop_reason = "date_cutoff"
+                page_logs.append(pl)
 
                 if not page_reviews:
                     if page == 0:
@@ -256,7 +274,13 @@ class GartnerParser:
                 break
 
         logger.info("Gartner scrape for %s: %d reviews from %d pages", target.vendor_name, len(reviews), pages_scraped)
-        return ScrapeResult(reviews=reviews, pages_scraped=pages_scraped, errors=errors, page_logs=page_logs)
+        return ScrapeResult(
+            reviews=reviews,
+            pages_scraped=pages_scraped,
+            errors=errors,
+            page_logs=page_logs,
+            stop_reason=stop_reason,
+        )
 
 
 # ------------------------------------------------------------------

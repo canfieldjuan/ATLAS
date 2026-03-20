@@ -38,7 +38,7 @@ from urllib.parse import quote_plus
 import httpx
 
 from ..client import AntiDetectionClient
-from . import ScrapeResult, ScrapeTarget, register_parser
+from . import ScrapeResult, ScrapeTarget, apply_date_cutoff, register_parser
 
 logger = logging.getLogger("atlas.services.scraping.parsers.reddit")
 
@@ -147,7 +147,7 @@ _INSIDER_QUERY_TEMPLATES = [
 # Weight constants
 # ---------------------------------------------------------------------------
 
-# Flair → source_weight boost
+# Flair -> source_weight boost
 _FLAIR_WEIGHT_BOOST: dict[str, float] = {
     "rant": 0.2,
     "help": 0.15,
@@ -286,6 +286,80 @@ _COREFERENCE_EMPLOYMENT_HINT = re.compile(
     r"\b(?:there|here|the\s+company|this\s+company|the\s+org|the\s+team)\b",
     re.I,
 )
+_USER_PROFILE_SUBREDDIT_RE = re.compile(r"^u[_/][A-Za-z0-9][A-Za-z0-9_-]{1,}$")
+_VENDOR_CAREER_SUFFIXES = frozenset({
+    "career",
+    "careers",
+    "cert",
+    "certs",
+    "certification",
+    "certifications",
+    "exam",
+    "exams",
+    "jobs",
+})
+
+
+def _coerce_subreddit_list(raw_subreddits: object) -> list[str]:
+    """Normalize configured subreddit metadata into a clean string list."""
+    if isinstance(raw_subreddits, str):
+        candidates = raw_subreddits.split(",")
+    elif isinstance(raw_subreddits, list):
+        candidates = raw_subreddits
+    else:
+        return []
+
+    normalized: list[str] = []
+    for candidate in candidates:
+        if not isinstance(candidate, str):
+            continue
+        cleaned = candidate.strip()
+        if cleaned:
+            normalized.append(cleaned)
+    return normalized
+
+
+def _is_user_profile_subreddit(subreddit: str) -> bool:
+    return bool(_USER_PROFILE_SUBREDDIT_RE.match(subreddit.strip()))
+
+
+def _is_vendor_career_subreddit(subreddit: str, vendor_name: str, product_name: str | None) -> bool:
+    normalized_sub = _normalize_entity_token(subreddit)
+    if not normalized_sub:
+        return False
+
+    candidates = {
+        _normalize_entity_token(vendor_name),
+        _normalize_entity_token(product_name or ""),
+    }
+    candidates.discard("")
+
+    for candidate in candidates:
+        if not normalized_sub.startswith(candidate):
+            continue
+        suffix = normalized_sub[len(candidate):]
+        if suffix in _VENDOR_CAREER_SUFFIXES:
+            return True
+    return False
+
+
+def _resolve_target_subreddits(target: ScrapeTarget, profile: str) -> list[str]:
+    """Resolve the configured or default subreddit list for a scrape target."""
+    defaults = _INSIDER_SUBREDDITS if profile == "insider" else _DEFAULT_SUBREDDITS
+    configured = _coerce_subreddit_list((target.metadata or {}).get("subreddits"))
+    return configured or list(defaults)
+
+
+def _build_expected_subreddit_set(target: ScrapeTarget, profile: str) -> set[str]:
+    """Return normalized subreddit names treated as expected business context."""
+    defaults = _INSIDER_SUBREDDITS if profile == "insider" else _DEFAULT_SUBREDDITS
+    expected = {
+        _normalize_entity_token(name)
+        for name in defaults + _resolve_target_subreddits(target, profile)
+        if name
+    }
+    expected.discard("")
+    return expected
 
 
 def _is_ambiguous_vendor_name(vendor_name: str) -> bool:
@@ -298,13 +372,22 @@ def _normalize_entity_token(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", text.lower())
 
 
-def _build_context_pattern(product_name: str | None, product_category: str | None) -> re.Pattern[str]:
+def _build_context_pattern(
+    product_name: str | None,
+    product_category: str | None,
+    excluded_terms: set[str] | None = None,
+) -> re.Pattern[str]:
     """Build a lightweight product/software context matcher for ambiguous vendors."""
     terms = set(_SOFTWARE_CONTEXT_WORDS)
+    blocked_terms = excluded_terms or set()
 
     for raw in (product_name or "", product_category or ""):
         for token in re.findall(r"[a-z0-9]+", raw.lower()):
-            if len(token) >= 3 and token not in _COMMON_WORD_BLOCKLIST:
+            if (
+                len(token) >= 3
+                and token not in _COMMON_WORD_BLOCKLIST
+                and token not in blocked_terms
+            ):
                 terms.add(token)
 
     escaped = sorted({re.escape(t) for t in terms}, key=len, reverse=True)
@@ -411,7 +494,9 @@ def _has_ambiguous_vendor_context(
     if _is_vendor_specific_subreddit(subreddit, vendor_name, product_name):
         return True
 
-    context_pattern = _build_context_pattern(product_name, product_category)
+    blocked_terms = set(re.findall(r"[a-z0-9]+", vendor_name.lower()))
+    blocked_terms.update(re.findall(r"[a-z0-9]+", (product_name or "").lower()))
+    context_pattern = _build_context_pattern(product_name, product_category, blocked_terms)
     for match in alias_pattern.finditer(combined):
         start = max(0, match.start() - 90)
         end = min(len(combined), match.end() + 90)
@@ -419,6 +504,71 @@ def _has_ambiguous_vendor_context(
             return True
 
     return False
+
+
+def _has_explicit_product_context(
+    *,
+    vendor_name: str,
+    product_name: str | None,
+    product_category: str | None,
+    title: str,
+    selftext: str,
+    alias_pattern: re.Pattern[str],
+    strong_alias_pattern: re.Pattern[str] | None,
+) -> bool:
+    """Require software/product context near the matched vendor alias."""
+    combined = f"{title}\n{selftext[:3000]}"
+    if strong_alias_pattern and strong_alias_pattern.search(combined):
+        return True
+
+    blocked_terms = set(re.findall(r"[a-z0-9]+", vendor_name.lower()))
+    blocked_terms.update(re.findall(r"[a-z0-9]+", (product_name or "").lower()))
+    context_pattern = _build_context_pattern(product_name, product_category, blocked_terms)
+    for match in alias_pattern.finditer(combined):
+        start = max(0, match.start() - 120)
+        end = min(len(combined), match.end() + 120)
+        if context_pattern.search(combined[start:end]):
+            return True
+    return False
+
+
+def _resolve_subreddit_context(
+    *,
+    target: ScrapeTarget,
+    profile: str,
+    subreddit: str,
+    title: str,
+    selftext: str,
+    alias_pattern: re.Pattern[str],
+    strong_alias_pattern: re.Pattern[str] | None,
+) -> tuple[bool, str, bool]:
+    """Determine whether a subreddit hit has enough business/product context."""
+    if _is_user_profile_subreddit(subreddit):
+        return False, "user_profile_subreddit", False
+
+    if _is_vendor_career_subreddit(subreddit, target.vendor_name, target.product_name):
+        return False, "vendor_specific_career_subreddit", False
+
+    if _is_vendor_specific_subreddit(subreddit, target.vendor_name, target.product_name):
+        return True, "vendor_specific_subreddit", True
+
+    normalized_subreddit = _normalize_entity_token(subreddit)
+    expected_subreddits = _build_expected_subreddit_set(target, profile)
+    if normalized_subreddit and normalized_subreddit in expected_subreddits:
+        return True, "expected_subreddit", True
+
+    if _has_explicit_product_context(
+        vendor_name=target.vendor_name,
+        product_name=target.product_name,
+        product_category=target.product_category,
+        title=title,
+        selftext=selftext,
+        alias_pattern=alias_pattern,
+        strong_alias_pattern=strong_alias_pattern,
+    ):
+        return True, "explicit_product_context", False
+
+    return False, "off_target_without_product_context", False
 
 
 # ---------------------------------------------------------------------------
@@ -611,7 +761,7 @@ def _compute_author_churn_score(author_posts: list[dict]) -> float:
             1 for p in author_posts
             if any(q in p.get("title", "").lower() for q in qualifier_keywords)
         ),
-        3,  # cap at 3 occurrences → max 6 points
+        3,  # cap at 3 occurrences -> max 6 points
     )
 
     raw = (
@@ -627,10 +777,10 @@ def _compute_batch_trending_score(vendor_posts: list[dict]) -> str:
     Classify trending level for the current scrape batch by comparing the
     7-day daily mention rate to the 30-day daily mention rate.
 
-    Spike ≥2× monthly daily rate → high; ≥1.25× → medium; else low.
+    Spike >=2x monthly daily rate -> high; >=1.25x -> medium; else low.
     vendor_posts: all posts collected for this vendor in the current batch.
 
-    Returns a single score applied uniformly to all posts in the batch —
+    Returns a single score applied uniformly to all posts in the batch -
     this is a batch-level signal, not a per-post metric.
     """
     if not vendor_posts:
@@ -736,19 +886,13 @@ class RedditParser:
     async def _scrape_authenticated(self, target: ScrapeTarget, token: str) -> ScrapeResult:
         """Scrape via Reddit OAuth2 API. Dispatches by search_profile."""
         profile = (target.metadata.get("search_profile") or "churn").lower()
-
-        if profile == "insider":
-            subreddits = target.metadata.get("subreddits") or _INSIDER_SUBREDDITS
-        else:
-            subreddits = target.metadata.get("subreddits") or _DEFAULT_SUBREDDITS
-
-        if isinstance(subreddits, str):
-            subreddits = [s.strip() for s in subreddits.split(",")]
+        subreddits = _resolve_target_subreddits(target, profile)
 
         # Build alias pattern once for the entire scrape
         aliases = _build_vendor_aliases(
             target.vendor_name,
             target.metadata.get("vendor_aliases"),
+            target.product_name,
         )
         alias_pattern = _build_alias_pattern(aliases)
 
@@ -1025,6 +1169,7 @@ class RedditParser:
         collected: list[dict] = []
         cursor: str | None = None
 
+        stop_for_cutoff = False
         for page in range(max_pages):
             if budget_ref[0] <= 0:
                 break
@@ -1044,6 +1189,7 @@ class RedditParser:
             data = resp.json()
             children = data.get("data", {}).get("children", [])
 
+            page_reviews: list[dict] = []
             for post_wrapper in children:
                 review = self._parse_post(
                     post_wrapper, target, seen_ids,
@@ -1063,11 +1209,20 @@ class RedditParser:
                             "score": meta.get("score", 0),
                             "reviewed_at": review.get("reviewed_at"),
                         })
+                    page_reviews.append(review)
+
+            page_reviews, stop_for_cutoff = apply_date_cutoff(
+                page_reviews,
+                target.date_cutoff,
+            )
+            collected.extend(page_reviews)
 
             await _maybe_pause()
             await asyncio.sleep(0.3)
 
             # Stop conditions
+            if stop_for_cutoff:
+                break
             next_cursor = data.get("data", {}).get("after")
             if not next_cursor:
                 break
@@ -1177,6 +1332,18 @@ class RedditParser:
         ):
             return None
 
+        subreddit_ok, subreddit_context_reason, subreddit_expected = _resolve_subreddit_context(
+            target=target,
+            profile=profile,
+            subreddit=subreddit,
+            title=title,
+            selftext=selftext,
+            alias_pattern=alias_pattern,
+            strong_alias_pattern=strong_alias_pattern,
+        )
+        if not subreddit_ok:
+            return None
+
         # Reject low-score candidates
         if candidate_score < _CANDIDATE_SCORE_MIN:
             return None
@@ -1284,6 +1451,8 @@ class RedditParser:
                 "search_profile": profile,
                 "subreddit": subreddit,
                 "subreddit_weight": sub_weight,
+                "subreddit_expected": subreddit_expected,
+                "subreddit_context_reason": subreddit_context_reason,
                 "score": post.get("score", 0),
                 "num_comments": post.get("num_comments", 0),
                 "upvote_ratio": post.get("upvote_ratio", 0),
@@ -1445,14 +1614,7 @@ class RedditParser:
     async def _scrape_public(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
         """Fallback: scrape via public JSON endpoints (no auth). Posts only."""
         profile = (target.metadata.get("search_profile") or "churn").lower()
-
-        if profile == "insider":
-            subreddits = target.metadata.get("subreddits") or _INSIDER_SUBREDDITS
-        else:
-            subreddits = target.metadata.get("subreddits") or _DEFAULT_SUBREDDITS
-
-        if isinstance(subreddits, str):
-            subreddits = [s.strip() for s in subreddits.split(",")]
+        subreddits = _resolve_target_subreddits(target, profile)
 
         reviews: list[dict] = []
         errors: list[str] = []
@@ -1509,16 +1671,19 @@ class RedditParser:
                     errors.append(f"r/{sub}: non-parseable JSON body")
                     continue
 
+                page_reviews: list[dict] = []
                 for post_wrapper in data.get("data", {}).get("children", []):
                     post_dict = self._parse_post(post_wrapper, target, seen_ids, profile=profile)
                     if post_dict:
-                        reviews.append(post_dict)
+                        page_reviews.append(post_dict)
+                page_reviews, _ = apply_date_cutoff(page_reviews, target.date_cutoff)
+                reviews.extend(page_reviews)
 
             except Exception as exc:
                 errors.append(f"r/{sub}: {exc}")
                 logger.warning("Reddit scrape failed for r/%s: %s", sub, exc)
 
-        # Global intent searches in public mode — top 2 only to stay under rate limit
+        # Global intent searches in public mode - top 2 only to stay under rate limit
         for query in self._build_global_queries(target.vendor_name, profile)[:2]:
             url = (
                 f"https://www.reddit.com/search.json"
