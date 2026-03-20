@@ -5544,9 +5544,44 @@ def _battle_card_weaknesses_from_evidence_vault(
     return weaknesses[:limit]
 
 
+def _looks_like_company_domain(raw_name: str) -> bool:
+    text = str(raw_name or "").strip().lower()
+    if not text or " " in text or "/" in text or "@" in text:
+        return False
+    return bool(re.fullmatch(r"[a-z0-9-]+(?:\.[a-z0-9-]+)+", text))
+
+
+def _battle_card_company_is_display_safe(
+    raw_name: Any,
+    *,
+    current_vendor: str = "",
+    blocked_names: set[str] | None = None,
+    role: Any = None,
+    company_size: Any = None,
+    buying_stage: Any = None,
+) -> bool:
+    name = str(raw_name or "").strip()
+    if not name:
+        return False
+    normalized = normalize_company_name(name)
+    if not normalized:
+        return False
+    if _looks_like_company_domain(name):
+        return False
+    if current_vendor and normalized == normalize_company_name(current_vendor):
+        return False
+    blocked = blocked_names or set()
+    if normalized in blocked:
+        return False
+    # Seller-facing rows need at least one qualifier beyond just a name.
+    return any(bool(val) for val in (role, company_size, buying_stage))
+
+
 def _battle_card_companies_from_evidence_vault(
     vault: dict[str, Any] | None,
     *,
+    current_vendor: str = "",
+    blocked_names: set[str] | None = None,
     limit: int = 5,
 ) -> list[dict[str, Any]]:
     """Normalize vault company signals into the current battle-card shape."""
@@ -5557,7 +5592,14 @@ def _battle_card_companies_from_evidence_vault(
         if not isinstance(item, dict):
             continue
         name = str(item.get("company_name") or "").strip()
-        if not name:
+        if not _battle_card_company_is_display_safe(
+            name,
+            current_vendor=current_vendor,
+            blocked_names=blocked_names,
+            role=item.get("buyer_role"),
+            company_size=item.get("seat_count"),
+            buying_stage=item.get("buying_stage"),
+        ):
             continue
         companies.append({
             "company": name,
@@ -7027,13 +7069,37 @@ def _build_deterministic_battle_cards(
             "budget_context": budget_lookup.get(vendor, {}),
         }
 
+        integrations = (product_profile_lookup.get(vendor, {}).get("top_integrations") or [])[:8]
+        blocked_company_names = {
+            normalize_company_name(vendor),
+            *(
+                normalize_company_name(str(item.get("competitor") or ""))
+                for item in differentiators
+            ),
+            *(normalize_company_name(str(name)) for name in integrations),
+        }
+
         # -- Section 5: High-intent companies --
-        hi_companies = _battle_card_companies_from_evidence_vault(vendor_vault, limit=5)
+        hi_companies = _battle_card_companies_from_evidence_vault(
+            vendor_vault,
+            current_vendor=vendor,
+            blocked_names=blocked_company_names,
+            limit=5,
+        )
         if not hi_companies:
-            hi_companies = company_lookup.get(vendor, [])[:5]
+            hi_companies = [
+                item for item in (company_lookup.get(vendor, [])[:10])
+                if _battle_card_company_is_display_safe(
+                    item.get("company"),
+                    current_vendor=vendor,
+                    blocked_names=blocked_company_names,
+                    role=item.get("role") or item.get("title"),
+                    company_size=item.get("company_size"),
+                    buying_stage=item.get("buying_stage"),
+                )
+            ][:5]
 
         # -- Section 6: Integration stack --
-        integrations = (product_profile_lookup.get(vendor, {}).get("top_integrations") or [])[:8]
 
         # -- Section 7: Buyer authority summary --
         buyer_authority = (buyer_auth_lookup or {}).get(vendor, {})
