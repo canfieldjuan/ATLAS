@@ -8,14 +8,22 @@ import asyncio
 import json
 import logging
 import time as _time
-from typing import Optional
+from datetime import date
+from typing import Any, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ..config import settings
+from ..services.scraping.source_fit import classify_source_fit
+from ..services.scraping.target_planning import build_scrape_coverage_plan
+from ..services.scraping.target_provisioning import (
+    apply_missing_core_targets,
+    fetch_coverage_inputs,
+)
 from ..services.scraping.target_validation import is_source_allowed, validate_target_input
+from ..services.scraping.sources import parse_source_allowlist
 from ..services.vendor_registry import resolve_vendor_name
 from ..storage.database import get_db_pool
 
@@ -51,9 +59,402 @@ class ScrapeTargetUpdate(BaseModel):
     metadata: Optional[dict] = None
 
 
+class SeedMissingCoreRequest(BaseModel):
+    dry_run: bool = True
+    limit: int = Field(default=200, ge=1, le=1000)
+    vendors: list[str] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)
+    verticals: list[str] = Field(default_factory=list)
+
+
+class DisablePoorFitRequest(BaseModel):
+    dry_run: bool = True
+    limit: int = Field(default=1000, ge=1, le=5000)
+    vendors: list[str] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)
+    verticals: list[str] = Field(default_factory=list)
+    include_overrides: bool = False
+
+
+class SeedConditionalProbationRequest(BaseModel):
+    dry_run: bool = True
+    limit: int = Field(default=100, ge=1, le=1000)
+    vendors: list[str] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)
+    verticals: list[str] = Field(default_factory=list)
+
+
+class RunProbationBatchRequest(BaseModel):
+    limit: int = Field(default=10, ge=1, le=200)
+    source: Optional[str] = None
+    due_only: bool = True
+
+
+class DisableLowYieldProbationRequest(BaseModel):
+    dry_run: bool = True
+    limit: int = Field(default=500, ge=1, le=5000)
+    lookback_days: Optional[int] = Field(default=None, ge=1, le=365)
+    min_runs: int = Field(default=1, ge=1, le=100)
+    max_reviews_inserted: int = Field(default=0, ge=0, le=10000)
+    max_tracked_reviews: int = Field(default=0, ge=0, le=10000)
+    statuses: list[str] = Field(default_factory=lambda: ["failed", "blocked"])
+    vendors: list[str] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)
+    verticals: list[str] = Field(default_factory=list)
+
+
+class PromoteProbationTargetsRequest(BaseModel):
+    dry_run: bool = True
+    limit: int = Field(default=500, ge=1, le=5000)
+    lookback_days: Optional[int] = Field(default=None, ge=1, le=365)
+    min_runs: int = Field(default=1, ge=1, le=100)
+    min_reviews_inserted: int = Field(default=1, ge=0, le=10000)
+    min_tracked_reviews: int = Field(default=1, ge=0, le=10000)
+    min_actionable_reviews: int = Field(default=0, ge=0, le=10000)
+    min_company_signal_reviews: int = Field(default=0, ge=0, le=10000)
+    statuses: list[str] = Field(default_factory=lambda: ["success", "partial"])
+    vendors: list[str] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)
+    verticals: list[str] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+
+def _normalize_filters(values: list[str]) -> set[str]:
+    return {value.strip().lower() for value in values if value and value.strip()}
+
+
+def _matches_filters(
+    item: dict[str, Any],
+    vendors: set[str],
+    sources: set[str],
+    verticals: set[str],
+) -> bool:
+    vendor = str(item.get("vendor_name") or "").strip().lower()
+    source = str(item.get("source") or "").strip().lower()
+    vertical = str(item.get("vertical") or "").strip().lower()
+    if vendors and vendor not in vendors:
+        return False
+    if sources and source not in sources:
+        return False
+    if verticals and vertical not in verticals:
+        return False
+    return True
+
+
+async def _fetch_coverage_inputs(pool) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    return await fetch_coverage_inputs(pool)
+
+
+async def _fetch_existing_targets(pool) -> list[dict[str, Any]]:
+    rows = await pool.fetch(
+        """
+        SELECT id, source, vendor_name, product_name, product_category, product_slug,
+               enabled, scrape_mode, priority, max_pages, scrape_interval_hours, metadata
+        FROM b2b_scrape_targets
+        """
+    )
+    targets: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["metadata"] = _safe_target_metadata(item.get("metadata"))
+        targets.append(item)
+    return targets
+
+
+def _derive_seed_defaults(
+    existing_targets: list[dict[str, Any]],
+    source: str,
+    product_category: str | None,
+) -> dict[str, Any]:
+    from ..services.scraping.target_provisioning import derive_seed_defaults
+
+    return derive_seed_defaults(existing_targets, source, product_category)
+
+
+def _derive_promotion_defaults(
+    existing_targets: list[dict[str, Any]],
+    source: str,
+    product_category: str | None,
+) -> dict[str, Any]:
+    baseline_targets = [
+        row
+        for row in existing_targets
+        if not bool(_safe_target_metadata(row.get("metadata")).get("source_fit_probation"))
+    ]
+    return _derive_seed_defaults(baseline_targets, source, product_category)
+
+
+def _make_probation_metadata(reason: str) -> dict[str, Any]:
+    from datetime import datetime, timezone
+
+    return {
+        "source_fit_probation": True,
+        "source_fit_probation_reason": reason,
+        "source_fit_probation_seeded_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _apply_probation_defaults(defaults: dict[str, Any], probation_cfg) -> dict[str, Any]:
+    priority_value = int(defaults.get("priority") or 0)
+    max_pages_value = int(defaults.get("max_pages") or 0)
+    interval_value = int(defaults.get("scrape_interval_hours") or 0)
+
+    if priority_value <= 0:
+        priority_value = int(probation_cfg.source_fit_probation_priority)
+    else:
+        priority_value = min(priority_value, int(probation_cfg.source_fit_probation_priority))
+
+    if max_pages_value <= 0:
+        max_pages_value = int(probation_cfg.source_fit_probation_max_pages)
+    else:
+        max_pages_value = min(max_pages_value, int(probation_cfg.source_fit_probation_max_pages))
+
+    if interval_value <= 0:
+        interval_value = int(probation_cfg.source_fit_probation_scrape_interval_hours)
+    else:
+        interval_value = max(interval_value, int(probation_cfg.source_fit_probation_scrape_interval_hours))
+
+    return {
+        "priority": priority_value,
+        "max_pages": max_pages_value,
+        "scrape_interval_hours": interval_value,
+        "scrape_mode": str(defaults.get("scrape_mode") or "incremental"),
+    }
+
+
+def _safe_target_metadata(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _api_iso_value(value: Any) -> Any:
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value
+
+
+def _normalized_target_scrape_state(row: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any] | None:
+    explicit = {
+        "mode": row.get("scrape_mode"),
+        "runtime_mode": row.get("last_scrape_runtime_mode"),
+        "status": row.get("last_scrape_status"),
+        "oldest_review": _api_iso_value(row.get("last_scrape_oldest_review")),
+        "newest_review": _api_iso_value(row.get("last_scrape_newest_review")),
+        "date_cutoff_used": _api_iso_value(row.get("last_scrape_date_cutoff")),
+        "pages_scraped": row.get("last_scrape_pages_scraped"),
+        "reviews_found": row.get("last_scrape_reviews_found"),
+        "reviews_inserted": row.get("last_scrape_reviews"),
+        "reviews_filtered": row.get("last_scrape_reviews_filtered"),
+        "date_dropped": row.get("last_scrape_date_dropped"),
+        "duration_ms": row.get("last_scrape_duration_ms"),
+        "stop_reason": row.get("last_scrape_stop_reason"),
+        "resume_page": row.get("last_scrape_resume_page"),
+    }
+    _ = metadata
+    merged = {key: value for key, value in explicit.items() if value not in (None, "")}
+    return merged or None
+
+
+def _serialize_target_row(row: Any) -> dict[str, Any]:
+    data = dict(row)
+    metadata = _safe_target_metadata(data.get("metadata"))
+    metadata.pop("scrape_state", None)
+    metadata.pop("scrape_mode", None)
+    data["metadata"] = metadata
+    data["scrape_state"] = _normalized_target_scrape_state(data, metadata)
+    for key in (
+        "last_scraped_at",
+        "created_at",
+        "updated_at",
+        "last_scrape_oldest_review",
+        "last_scrape_newest_review",
+        "last_scrape_date_cutoff",
+    ):
+        if key in data:
+            data[key] = _api_iso_value(data.get(key))
+    return data
+
+
+def _rate(numerator: int, denominator: int) -> float | None:
+    if denominator <= 0:
+        return None
+    return round(float(numerator) / float(denominator), 4)
+
+
+def _average(values: list[float | None]) -> float | None:
+    usable = [value for value in values if value is not None]
+    if not usable:
+        return None
+    return round(sum(usable) / len(usable), 4)
+
+
+async def _build_probation_telemetry(
+    pool,
+    *,
+    limit: int,
+    lookback_days: int,
+    actionable_urgency_min: float,
+) -> dict[str, Any]:
+    target_rows = await pool.fetch(
+        """
+        SELECT t.id::text AS target_id, t.vendor_name, t.source, t.product_name,
+               t.product_slug, t.product_category, t.priority, t.max_pages,
+               t.scrape_interval_hours, t.last_scraped_at, t.last_scrape_status,
+               t.last_scrape_reviews, t.metadata,
+               COUNT(l.id) FILTER (
+                   WHERE l.started_at >= NOW() - make_interval(days => $1)
+               )::int AS runs_total,
+               COALESCE(SUM(l.reviews_found) FILTER (
+                   WHERE l.started_at >= NOW() - make_interval(days => $1)
+               ), 0)::int AS reviews_found_total,
+               COALESCE(SUM(l.reviews_inserted) FILTER (
+                   WHERE l.started_at >= NOW() - make_interval(days => $1)
+               ), 0)::int AS reviews_inserted_total,
+               MAX(l.started_at) FILTER (
+                   WHERE l.started_at >= NOW() - make_interval(days => $1)
+               ) AS last_run_at
+        FROM b2b_scrape_targets t
+        LEFT JOIN b2b_scrape_log l ON l.target_id = t.id
+        WHERE t.enabled = true
+          AND COALESCE((t.metadata->>'source_fit_probation')::boolean, false) = true
+        GROUP BY t.id
+        ORDER BY COALESCE(MAX(l.started_at), t.last_scraped_at) DESC NULLS LAST,
+                 t.priority DESC, t.vendor_name
+        LIMIT $2
+        """,
+        lookback_days,
+        limit,
+    )
+
+    target_ids = [str(row["target_id"]) for row in target_rows]
+    review_rows = []
+    company_signal_rows = []
+    if target_ids:
+        review_rows = await pool.fetch(
+            """
+            SELECT raw_metadata->>'scrape_target_id' AS target_id,
+                   COUNT(*)::int AS tracked_reviews,
+                   COUNT(*) FILTER (
+                       WHERE reviewer_company_norm IS NOT NULL
+                   )::int AS named_company_reviews,
+                   COUNT(*) FILTER (
+                       WHERE enrichment_status = 'enriched'
+                         AND (
+                             COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+                             OR COALESCE((enrichment->>'urgency_score')::numeric, 0) >= $1
+                             OR CASE
+                                    WHEN jsonb_typeof(enrichment->'competitors_mentioned') = 'array'
+                                    THEN jsonb_array_length(enrichment->'competitors_mentioned') > 0
+                                    ELSE false
+                                END
+                         )
+                   )::int AS actionable_reviews
+            FROM b2b_reviews
+            WHERE imported_at >= NOW() - make_interval(days => $2)
+              AND raw_metadata ? 'scrape_target_id'
+              AND (raw_metadata->>'scrape_target_id') = ANY($3::text[])
+            GROUP BY 1
+            """,
+            actionable_urgency_min,
+            lookback_days,
+            target_ids,
+        )
+        company_signal_rows = await pool.fetch(
+            """
+            SELECT r.raw_metadata->>'scrape_target_id' AS target_id,
+                   COUNT(DISTINCT cs.review_id)::int AS company_signal_reviews
+            FROM b2b_company_signals cs
+            JOIN b2b_reviews r ON r.id = cs.review_id
+            WHERE r.imported_at >= NOW() - make_interval(days => $1)
+              AND r.raw_metadata ? 'scrape_target_id'
+              AND (r.raw_metadata->>'scrape_target_id') = ANY($2::text[])
+            GROUP BY 1
+            """,
+            lookback_days,
+            target_ids,
+        )
+
+    review_map = {str(row["target_id"]): dict(row) for row in review_rows}
+    company_signal_map = {
+        str(row["target_id"]): int(row["company_signal_reviews"] or 0)
+        for row in company_signal_rows
+    }
+
+    targets: list[dict[str, Any]] = []
+    for raw_row in target_rows:
+        row = dict(raw_row)
+        metadata = _safe_target_metadata(row.get("metadata"))
+        target_id = str(row["target_id"])
+        review_stats = review_map.get(target_id, {})
+        tracked_reviews = int(review_stats.get("tracked_reviews") or 0)
+        named_company_reviews = int(review_stats.get("named_company_reviews") or 0)
+        actionable_reviews = int(review_stats.get("actionable_reviews") or 0)
+        company_signal_reviews = int(company_signal_map.get(target_id) or 0)
+        reviews_found_total = int(row.get("reviews_found_total") or 0)
+        reviews_inserted_total = int(row.get("reviews_inserted_total") or 0)
+        duplicate_noise_reviews = max(reviews_found_total - reviews_inserted_total, 0)
+        fit = classify_source_fit(row.get("source"), row.get("product_category"))
+
+        targets.append(
+            {
+                "target_id": target_id,
+                "vendor_name": row.get("vendor_name"),
+                "source": row.get("source"),
+                "vertical": fit.vertical,
+                "product_name": row.get("product_name"),
+                "product_slug": row.get("product_slug"),
+                "product_category": row.get("product_category"),
+                "priority": row.get("priority"),
+                "max_pages": row.get("max_pages"),
+                "scrape_interval_hours": row.get("scrape_interval_hours"),
+                "last_scraped_at": row.get("last_scraped_at"),
+                "last_scrape_status": row.get("last_scrape_status"),
+                "last_scrape_reviews": row.get("last_scrape_reviews"),
+                "last_run_at": row.get("last_run_at"),
+                "runs_total": int(row.get("runs_total") or 0),
+                "reviews_found_total": reviews_found_total,
+                "reviews_inserted_total": reviews_inserted_total,
+                "scrape_yield_rate": _rate(reviews_inserted_total, reviews_found_total),
+                "duplicate_noise_rate": _rate(duplicate_noise_reviews, reviews_found_total),
+                "tracked_reviews": tracked_reviews,
+                "named_company_reviews": named_company_reviews,
+                "named_company_hit_rate": _rate(named_company_reviews, tracked_reviews),
+                "actionable_reviews": actionable_reviews,
+                "actionable_review_rate": _rate(actionable_reviews, tracked_reviews),
+                "company_signal_reviews": company_signal_reviews,
+                "company_signal_hit_rate": _rate(company_signal_reviews, tracked_reviews),
+                "tracking_ready": tracked_reviews > 0,
+                "probation_reason": metadata.get("source_fit_probation_reason"),
+                "probation_seeded_at": metadata.get("source_fit_probation_seeded_at"),
+            }
+        )
+
+    return {
+        "lookback_days": lookback_days,
+        "actionable_urgency_min": actionable_urgency_min,
+        "probation_targets": len(targets),
+        "summary": {
+            "targets_with_runs": sum(1 for item in targets if item["runs_total"] > 0),
+            "targets_with_tracking": sum(1 for item in targets if item["tracking_ready"]),
+            "avg_scrape_yield_rate": _average([item["scrape_yield_rate"] for item in targets]),
+            "avg_duplicate_noise_rate": _average([item["duplicate_noise_rate"] for item in targets]),
+            "avg_named_company_hit_rate": _average([item["named_company_hit_rate"] for item in targets]),
+            "avg_actionable_review_rate": _average([item["actionable_review_rate"] for item in targets]),
+            "avg_company_signal_hit_rate": _average([item["company_signal_hit_rate"] for item in targets]),
+        },
+        "targets": targets,
+    }
 
 @router.get("/targets")
 async def list_targets(
@@ -82,7 +483,13 @@ async def list_targets(
         SELECT id, source, vendor_name, product_name, product_slug,
                product_category, max_pages, enabled, priority, scrape_mode,
                last_scraped_at, last_scrape_status, last_scrape_reviews,
-               scrape_interval_hours, metadata, created_at
+               last_scrape_runtime_mode, last_scrape_stop_reason,
+               last_scrape_oldest_review, last_scrape_newest_review,
+               last_scrape_date_cutoff, last_scrape_pages_scraped,
+               last_scrape_reviews_found, last_scrape_reviews_filtered,
+               last_scrape_date_dropped, last_scrape_duration_ms,
+               last_scrape_resume_page,
+               scrape_interval_hours, metadata, created_at, updated_at
         FROM b2b_scrape_targets
         {where}
         ORDER BY priority DESC, vendor_name
@@ -91,7 +498,433 @@ async def list_targets(
         *args,
     )
 
-    return [dict(r) for r in rows]
+    return [_serialize_target_row(r) for r in rows]
+
+
+@router.get("/targets/probation-telemetry")
+async def probation_telemetry(
+    limit: int = Query(default=100, ge=1, le=500),
+    lookback_days: Optional[int] = Query(default=None, ge=1, le=365),
+) -> dict:
+    """Summarize usefulness metrics for enabled probation targets."""
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(status_code=503, detail="Database not ready")
+
+    telemetry_window = int(
+        lookback_days or settings.b2b_scrape.source_fit_probation_telemetry_lookback_days
+    )
+    actionable_urgency_min = float(settings.b2b_scrape.source_fit_probation_actionable_urgency_min)
+    return await _build_probation_telemetry(
+        pool,
+        limit=limit,
+        lookback_days=telemetry_window,
+        actionable_urgency_min=actionable_urgency_min,
+    )
+
+
+@router.post("/targets/probation-telemetry/disable-low-yield")
+async def disable_low_yield_probation_targets(body: DisableLowYieldProbationRequest) -> dict:
+    """Disable enabled probation targets that have already shown no useful yield."""
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(status_code=503, detail="Database not ready")
+
+    telemetry_window = int(
+        body.lookback_days or settings.b2b_scrape.source_fit_probation_telemetry_lookback_days
+    )
+    actionable_urgency_min = float(settings.b2b_scrape.source_fit_probation_actionable_urgency_min)
+    telemetry = await _build_probation_telemetry(
+        pool,
+        limit=body.limit,
+        lookback_days=telemetry_window,
+        actionable_urgency_min=actionable_urgency_min,
+    )
+
+    vendors = _normalize_filters(body.vendors)
+    sources = _normalize_filters(body.sources)
+    verticals = _normalize_filters(body.verticals)
+    statuses = {status.strip().lower() for status in body.statuses if status and status.strip()}
+
+    candidates: list[dict[str, Any]] = []
+    for item in telemetry["targets"]:
+        status = str(item.get("last_scrape_status") or "").strip().lower()
+        if item.get("runs_total", 0) < body.min_runs:
+            continue
+        if statuses and status not in statuses:
+            continue
+        if int(item.get("reviews_inserted_total") or 0) > body.max_reviews_inserted:
+            continue
+        if int(item.get("tracked_reviews") or 0) > body.max_tracked_reviews:
+            continue
+        if not _matches_filters(item, vendors, sources, verticals):
+            continue
+        candidates.append(item)
+        if len(candidates) >= body.limit:
+            break
+
+    if not body.dry_run:
+        for item in candidates:
+            await pool.execute(
+                """
+                UPDATE b2b_scrape_targets
+                SET enabled = false,
+                    metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+                        'source_fit_probation_disabled', true,
+                        'source_fit_probation_disabled_reason', 'low_yield_probation',
+                        'source_fit_probation_disabled_at', NOW()::text
+                    ),
+                    updated_at = NOW()
+                WHERE id = $1
+                """,
+                item["target_id"],
+            )
+
+    return {
+        "dry_run": body.dry_run,
+        "lookback_days": telemetry_window,
+        "requested": len(candidates),
+        "disabled": len(candidates),
+        "criteria": {
+            "min_runs": body.min_runs,
+            "max_reviews_inserted": body.max_reviews_inserted,
+            "max_tracked_reviews": body.max_tracked_reviews,
+            "statuses": sorted(statuses),
+        },
+        "targets": candidates,
+    }
+
+
+@router.post("/targets/probation-telemetry/promote")
+async def promote_probation_targets(body: PromoteProbationTargetsRequest) -> dict:
+    """Promote useful probation targets onto normal scrape defaults."""
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(status_code=503, detail="Database not ready")
+
+    telemetry_window = int(
+        body.lookback_days or settings.b2b_scrape.source_fit_probation_telemetry_lookback_days
+    )
+    actionable_urgency_min = float(settings.b2b_scrape.source_fit_probation_actionable_urgency_min)
+    telemetry = await _build_probation_telemetry(
+        pool,
+        limit=body.limit,
+        lookback_days=telemetry_window,
+        actionable_urgency_min=actionable_urgency_min,
+    )
+    existing_targets = await _fetch_existing_targets(pool)
+
+    vendors = _normalize_filters(body.vendors)
+    sources = _normalize_filters(body.sources)
+    verticals = _normalize_filters(body.verticals)
+    statuses = {status.strip().lower() for status in body.statuses if status and status.strip()}
+
+    candidates: list[dict[str, Any]] = []
+    for item in telemetry["targets"]:
+        status = str(item.get("last_scrape_status") or "").strip().lower()
+        if item.get("runs_total", 0) < body.min_runs:
+            continue
+        if statuses and status not in statuses:
+            continue
+        if int(item.get("reviews_inserted_total") or 0) < body.min_reviews_inserted:
+            continue
+        if int(item.get("tracked_reviews") or 0) < body.min_tracked_reviews:
+            continue
+        if int(item.get("actionable_reviews") or 0) < body.min_actionable_reviews:
+            continue
+        if int(item.get("company_signal_reviews") or 0) < body.min_company_signal_reviews:
+            continue
+        if not _matches_filters(item, vendors, sources, verticals):
+            continue
+        defaults = _derive_promotion_defaults(
+            existing_targets,
+            str(item.get("source") or ""),
+            item.get("product_category"),
+        )
+        candidate = dict(item)
+        candidate["promotion_defaults"] = defaults
+        candidates.append(candidate)
+        if len(candidates) >= body.limit:
+            break
+
+    if not body.dry_run:
+        for item in candidates:
+            defaults = item["promotion_defaults"]
+            await pool.execute(
+                """
+                UPDATE b2b_scrape_targets
+                SET priority = $2,
+                    max_pages = $3,
+                    scrape_interval_hours = $4,
+                    scrape_mode = $5,
+                    metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+                        'source_fit_probation', false,
+                        'source_fit_promoted', true,
+                        'source_fit_promoted_reason', 'probation_useful',
+                        'source_fit_promoted_at', NOW()::text
+                    ),
+                    updated_at = NOW()
+                WHERE id = $1
+                """,
+                item["target_id"],
+                defaults["priority"],
+                defaults["max_pages"],
+                defaults["scrape_interval_hours"],
+                defaults["scrape_mode"],
+            )
+
+    return {
+        "dry_run": body.dry_run,
+        "lookback_days": telemetry_window,
+        "requested": len(candidates),
+        "promoted": len(candidates),
+        "criteria": {
+            "min_runs": body.min_runs,
+            "min_reviews_inserted": body.min_reviews_inserted,
+            "min_tracked_reviews": body.min_tracked_reviews,
+            "min_actionable_reviews": body.min_actionable_reviews,
+            "min_company_signal_reviews": body.min_company_signal_reviews,
+            "statuses": sorted(statuses),
+        },
+        "targets": candidates,
+    }
+
+
+@router.get("/targets/coverage-plan")
+async def coverage_plan(
+    limit: int = Query(default=200, ge=1, le=1000),
+) -> dict:
+    """Audit scrape coverage gaps and poor-fit enabled targets."""
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(status_code=503, detail="Database not ready")
+
+    inventory_rows, existing_targets = await _fetch_coverage_inputs(pool)
+
+    plan = build_scrape_coverage_plan(
+        inventory_rows,
+        existing_targets,
+        allowed_sources=parse_source_allowlist(settings.b2b_scrape.source_allowlist),
+    )
+    plan["missing_core_targets"] = plan["missing_core_targets"][:limit]
+    plan["conditional_opportunities"] = plan["conditional_opportunities"][:limit]
+    plan["poor_fit_enabled_targets"] = plan["poor_fit_enabled_targets"][:limit]
+    return plan
+
+
+@router.post("/targets/coverage-plan/seed-missing-core")
+async def seed_missing_core_targets(body: SeedMissingCoreRequest) -> dict:
+    """Seed or re-enable verified missing core scrape targets."""
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(status_code=503, detail="Database not ready")
+
+    inventory_rows, existing_targets = await _fetch_coverage_inputs(pool)
+    plan = build_scrape_coverage_plan(
+        inventory_rows,
+        existing_targets,
+        allowed_sources=parse_source_allowlist(settings.b2b_scrape.source_allowlist),
+    )
+    vendors = _normalize_filters(body.vendors)
+    sources = _normalize_filters(body.sources)
+    verticals = _normalize_filters(body.verticals)
+    candidates = [
+        item
+        for item in plan["missing_core_targets"]
+        if (
+            item.get("existing_disabled_target_id")
+            or item.get("verified_product_slug")
+            or item.get("suggested_product_slug")
+        ) and _matches_filters(item, vendors, sources, verticals)
+    ][:body.limit]
+    applied = await apply_missing_core_targets(
+        pool,
+        existing_targets,
+        candidates,
+        dry_run=body.dry_run,
+    )
+
+    return {
+        "dry_run": body.dry_run,
+        "requested": len(candidates),
+        "applied": len(applied),
+        "actions": applied,
+    }
+
+
+@router.post("/targets/coverage-plan/disable-poor-fit")
+async def disable_poor_fit_targets(body: DisablePoorFitRequest) -> dict:
+    """Disable currently enabled targets that violate source-fit policy."""
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(status_code=503, detail="Database not ready")
+
+    inventory_rows, existing_targets = await _fetch_coverage_inputs(pool)
+    plan = build_scrape_coverage_plan(
+        inventory_rows,
+        existing_targets,
+        allowed_sources=parse_source_allowlist(settings.b2b_scrape.source_allowlist),
+    )
+    vendors = _normalize_filters(body.vendors)
+    sources = _normalize_filters(body.sources)
+    verticals = _normalize_filters(body.verticals)
+    candidates = []
+    skipped_overrides = []
+    for item in plan["poor_fit_enabled_targets"]:
+        if not _matches_filters(item, vendors, sources, verticals):
+            continue
+        if item.get("source_fit_override") == "allow" and not body.include_overrides:
+            skipped_overrides.append(item)
+            continue
+        candidates.append(item)
+        if len(candidates) >= body.limit:
+            break
+
+    if not body.dry_run:
+        for item in candidates:
+            await pool.execute(
+                "UPDATE b2b_scrape_targets SET enabled = false, updated_at = NOW() WHERE id = $1",
+                item["id"],
+            )
+
+    return {
+        "dry_run": body.dry_run,
+        "requested": len(candidates),
+        "skipped_overrides": len(skipped_overrides),
+        "disabled": len(candidates),
+        "targets": candidates,
+    }
+
+
+@router.post("/targets/coverage-plan/seed-conditional-probation")
+async def seed_conditional_probation_targets(body: SeedConditionalProbationRequest) -> dict:
+    """Seed or re-enable conditional targets in probation mode."""
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(status_code=503, detail="Database not ready")
+
+    inventory_rows, existing_targets = await _fetch_coverage_inputs(pool)
+    plan = build_scrape_coverage_plan(
+        inventory_rows,
+        existing_targets,
+        allowed_sources=parse_source_allowlist(settings.b2b_scrape.source_allowlist),
+    )
+    vendors = _normalize_filters(body.vendors)
+    sources = _normalize_filters(body.sources)
+    verticals = _normalize_filters(body.verticals)
+    candidates = [
+        item
+        for item in plan["conditional_opportunities"]
+        if item.get("can_probation_now") and _matches_filters(item, vendors, sources, verticals)
+    ][:body.limit]
+
+    applied: list[dict[str, Any]] = []
+    probation_cfg = settings.b2b_scrape
+    for item in candidates:
+        metadata = _make_probation_metadata(item["reason"])
+        if item.get("existing_disabled_target_id"):
+            existing_row = next(
+                (
+                    row for row in existing_targets
+                    if str(row.get("id") or "") == str(item["existing_disabled_target_id"])
+                ),
+                {},
+            )
+            defaults = _apply_probation_defaults(
+                {
+                    "priority": existing_row.get("priority"),
+                    "max_pages": existing_row.get("max_pages"),
+                    "scrape_interval_hours": existing_row.get("scrape_interval_hours"),
+                    "scrape_mode": existing_row.get("scrape_mode"),
+                },
+                probation_cfg,
+            )
+            action = {
+                "action": "enable_existing_probation",
+                "target_id": item["existing_disabled_target_id"],
+                "vendor_name": item["vendor_name"],
+                "source": item["source"],
+                "product_slug": item.get("existing_disabled_product_slug"),
+                "priority": defaults["priority"],
+                "max_pages": defaults["max_pages"],
+                "scrape_interval_hours": defaults["scrape_interval_hours"],
+                "scrape_mode": defaults["scrape_mode"],
+                "metadata": metadata,
+            }
+            if not body.dry_run:
+                await pool.execute(
+                    """
+                    UPDATE b2b_scrape_targets
+                    SET enabled = true,
+                        priority = $2,
+                        max_pages = $3,
+                        scrape_interval_hours = $4,
+                        scrape_mode = $5,
+                        metadata = COALESCE(metadata, '{}'::jsonb) || $6::jsonb,
+                        updated_at = NOW()
+                    WHERE id = $1
+                    """,
+                    item["existing_disabled_target_id"],
+                    defaults["priority"],
+                    defaults["max_pages"],
+                    defaults["scrape_interval_hours"],
+                    defaults["scrape_mode"],
+                    json.dumps(metadata),
+                )
+            applied.append(action)
+            continue
+
+        product_slug = item.get("verified_product_slug") or item.get("suggested_product_slug")
+        if not product_slug:
+            continue
+        source, product_slug = validate_target_input(item["source"], product_slug)
+        defaults = _apply_probation_defaults(
+            _derive_seed_defaults(existing_targets, source, item.get("product_category")),
+            probation_cfg,
+        )
+        action = {
+            "action": "insert_probation_target",
+            "vendor_name": item["vendor_name"],
+            "source": source,
+            "product_slug": product_slug,
+            "product_name": item.get("verified_product_name") or item["vendor_name"],
+            "product_category": item.get("product_category"),
+            "priority": defaults["priority"],
+            "max_pages": defaults["max_pages"],
+            "scrape_interval_hours": defaults["scrape_interval_hours"],
+            "scrape_mode": defaults["scrape_mode"],
+            "metadata": metadata,
+        }
+        if not body.dry_run:
+            vendor_name = await resolve_vendor_name(item["vendor_name"])
+            row = await pool.fetchrow(
+                """
+                INSERT INTO b2b_scrape_targets
+                    (source, vendor_name, product_name, product_slug, product_category,
+                     max_pages, enabled, priority, scrape_interval_hours, scrape_mode, metadata)
+                VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8, $9, $10::jsonb)
+                RETURNING id
+                """,
+                source,
+                vendor_name,
+                action["product_name"],
+                product_slug,
+                item.get("product_category"),
+                action["max_pages"],
+                action["priority"],
+                action["scrape_interval_hours"],
+                action["scrape_mode"],
+                json.dumps(metadata),
+            )
+            action["target_id"] = str(row["id"]) if row else None
+        applied.append(action)
+
+    return {
+        "dry_run": body.dry_run,
+        "requested": len(candidates),
+        "applied": len(applied),
+        "targets": applied,
+    }
 
 
 @router.post("/targets")
@@ -238,7 +1071,14 @@ async def trigger_scrape(target_id: UUID) -> dict:
     row = await pool.fetchrow(
         """
         SELECT id, source, vendor_name, product_name, product_slug,
-               product_category, max_pages, metadata, scrape_mode
+               product_category, max_pages, metadata, scrape_mode,
+               last_scrape_reviews, last_scrape_status,
+               last_scrape_runtime_mode, last_scrape_stop_reason,
+               last_scrape_oldest_review, last_scrape_newest_review,
+               last_scrape_date_cutoff, last_scrape_pages_scraped,
+               last_scrape_reviews_found, last_scrape_reviews_filtered,
+               last_scrape_date_dropped, last_scrape_duration_ms,
+               last_scrape_resume_page, last_scraped_at
         FROM b2b_scrape_targets
         WHERE id = $1
         """,
@@ -256,35 +1096,19 @@ async def trigger_scrape(target_id: UUID) -> dict:
         )
 
     # Import and run inline
-    from ..services.scraping.client import get_scrape_client
-    from ..services.scraping.parsers import ScrapeTarget, get_parser
-
-    raw_meta = row["metadata"] or "{}"
-    if isinstance(raw_meta, str):
-        try:
-            raw_meta = json.loads(raw_meta)
-        except (json.JSONDecodeError, TypeError):
-            raw_meta = {}
-    target = ScrapeTarget(
-        id=str(row["id"]),
-        source=row["source"],
-        vendor_name=row["vendor_name"],
-        product_name=row["product_name"],
-        product_slug=row["product_slug"],
-        product_category=row["product_category"],
-        max_pages=row["max_pages"],
-        metadata=raw_meta if isinstance(raw_meta, dict) else {},
+    from ..autonomous.tasks.b2b_scrape_intake import (
+        _build_scrape_state,
+        _determine_stop_reason,
+        _prepare_scrape_target,
+        _review_date_stats,
+        _scrape_state_from_row,
+        _update_target_after_scrape,
     )
+    from ..services.scraping.client import get_scrape_client
+    from ..services.scraping.parsers import get_parser
 
-    # Apply exhaustive mode config (date cutoff + raised max_pages cap)
-    scrape_mode = row.get("scrape_mode", "incremental")
-    if scrape_mode == "exhaustive":
-        from datetime import date, timedelta
-        cfg = settings.b2b_scrape
-        lookback_days = raw_meta.get("lookback_days", cfg.exhaustive_lookback_days)
-        target.date_cutoff = str(date.today() - timedelta(days=lookback_days))
-        if target.max_pages <= 5:
-            target.max_pages = raw_meta.get("exhaustive_max_pages", cfg.exhaustive_max_pages_default)
+    target, scrape_mode, metadata = _prepare_scrape_target(row, settings.b2b_scrape)
+    previous_state = _scrape_state_from_row(dict(row), metadata)
 
     parser = get_parser(target.source)
     if not parser:
@@ -299,30 +1123,14 @@ async def trigger_scrape(target_id: UUID) -> dict:
         duration_ms = int((_time.monotonic() - started_at) * 1000)
         await _write_scrape_log(pool, target_id, target.source, "failed", 0, 0, 0,
                                 ["scrape timed out after 300s"], duration_ms, parser)
-        await pool.execute(
-            """
-            UPDATE b2b_scrape_targets
-            SET last_scraped_at = NOW(), last_scrape_status = 'failed',
-                last_scrape_reviews = 0, updated_at = NOW()
-            WHERE id = $1
-            """,
-            target_id,
-        )
+        await _update_target_after_scrape(pool, target_id, "failed", 0)
         raise HTTPException(status_code=504, detail="Scrape timed out after 300s")
     except Exception as exc:
         duration_ms = int((_time.monotonic() - started_at) * 1000)
         # Log failure
         await _write_scrape_log(pool, target_id, target.source, "failed", 0, 0, 0,
                                 [str(exc)], duration_ms, parser)
-        await pool.execute(
-            """
-            UPDATE b2b_scrape_targets
-            SET last_scraped_at = NOW(), last_scrape_status = 'failed',
-                last_scrape_reviews = 0, updated_at = NOW()
-            WHERE id = $1
-            """,
-            target_id,
-        )
+        await _update_target_after_scrape(pool, target_id, "failed", 0)
         logger.error("Scrape failed for target %s: %s", target_id, exc)
         raise HTTPException(status_code=502, detail="Scrape failed")
 
@@ -345,19 +1153,31 @@ async def trigger_scrape(target_id: UUID) -> dict:
 
     # Insert reviews
     inserted = 0
+    insert_stats = {
+        "inserted": 0,
+        "skipped_short": 0,
+        "duplicate_or_existing": 0,
+        "named_company_reviews": 0,
+        "eligible_rows": 0,
+    }
     pv = getattr(parser, 'version', None)
     if result.reviews:
         from ..autonomous.tasks.b2b_scrape_intake import _insert_reviews
         batch_id = f"manual_{target.source}_{target.product_slug}_{int(_time.time())}"
-        inserted = await _insert_reviews(pool, result.reviews, batch_id, parser_version=pv)
+        insert_stats = await _insert_reviews(
+            pool,
+            result.reviews,
+            batch_id,
+            parser_version=pv,
+            target_context={"scrape_target_id": str(target_id)},
+        )
+        inserted = insert_stats["inserted"]
 
     duration_ms = int((_time.monotonic() - started_at) * 1000)
 
     # Log to scrape log
     if scrape_mode == "exhaustive":
-        from ..autonomous.tasks.b2b_scrape_intake import (
-            _determine_stop_reason, _log_scrape_exhaustive, _review_date_stats,
-        )
+        from ..autonomous.tasks.b2b_scrape_intake import _log_scrape_exhaustive
         date_info = _review_date_stats(result.reviews) if result.reviews else {"oldest": None, "newest": None}
         stop_reason = _determine_stop_reason(result, target, date_dropped)
         await _log_scrape_exhaustive(
@@ -374,22 +1194,37 @@ async def trigger_scrape(target_id: UUID) -> dict:
             result, parser, duration_ms,
         )
     else:
+        date_info = _review_date_stats(result.reviews) if result.reviews else {"oldest": None, "newest": None}
+        stop_reason = _determine_stop_reason(result, target, date_dropped)
         await _write_scrape_log(
             pool, target_id, target.source, result.status,
             len(result.reviews) + filtered_count, inserted, result.pages_scraped,
             result.errors, duration_ms, parser,
             page_logs=getattr(result, "page_logs", []) or [],
+            stop_reason=stop_reason,
+            oldest_review=date_info["oldest"],
+            newest_review=date_info["newest"],
+            date_dropped=date_dropped,
         )
 
-    # Update target status
-    await pool.execute(
-        """
-        UPDATE b2b_scrape_targets
-        SET last_scraped_at = NOW(), last_scrape_status = $2,
-            last_scrape_reviews = $3, updated_at = NOW()
-        WHERE id = $1
-        """,
-        target_id, result.status, inserted,
+    scrape_state = _build_scrape_state(
+        metadata,
+        target,
+        scrape_mode,
+        result,
+        inserted=inserted,
+        filtered_count=filtered_count,
+        date_dropped=date_dropped,
+        duration_ms=duration_ms,
+        previous_state=previous_state,
+    )
+    await _update_target_after_scrape(
+        pool,
+        target_id,
+        result.status,
+        inserted,
+        metadata=metadata,
+        scrape_state=scrape_state,
     )
 
     return {
@@ -402,9 +1237,77 @@ async def trigger_scrape(target_id: UUID) -> dict:
         "reviews_inserted": inserted,
         "reviews_filtered": filtered_count,
         "date_dropped": date_dropped,
+        "duplicate_or_existing": insert_stats["duplicate_or_existing"],
+        "named_company_reviews": insert_stats["named_company_reviews"],
+        "skipped_short": insert_stats["skipped_short"],
         "pages_scraped": result.pages_scraped,
         "duration_ms": duration_ms,
         "errors": result.errors,
+    }
+
+
+@router.post("/targets/run-probation-batch")
+async def run_probation_batch(body: RunProbationBatchRequest) -> dict:
+    """Manually run a small batch of enabled probation targets."""
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(status_code=503, detail="Database not ready")
+
+    params: list[Any] = []
+    where_clauses = [
+        "enabled = true",
+        "COALESCE((metadata->>'source_fit_probation')::boolean, false) = true",
+    ]
+    if body.source:
+        params.append(body.source)
+        where_clauses.append(f"source = ${len(params)}")
+    if body.due_only:
+        where_clauses.append(
+            " (last_scraped_at IS NULL OR last_scraped_at < NOW() - make_interval(hours => scrape_interval_hours)) "
+        )
+    params.append(body.limit)
+    rows = await pool.fetch(
+        f"""
+        SELECT id, source, vendor_name, last_scraped_at, priority
+        FROM b2b_scrape_targets
+        WHERE {' AND '.join(where_clauses)}
+        ORDER BY CASE WHEN last_scraped_at IS NULL THEN 0 ELSE 1 END,
+                 priority DESC,
+                 last_scraped_at ASC NULLS FIRST,
+                 source,
+                 vendor_name
+        LIMIT ${len(params)}
+        """,
+        *params,
+    )
+
+    results: list[dict[str, Any]] = []
+    succeeded = 0
+    failed = 0
+    for row in rows:
+        try:
+            result = await trigger_scrape(row["id"])
+            succeeded += 1
+            results.append(result)
+        except HTTPException as exc:
+            failed += 1
+            results.append(
+                {
+                    "target_id": str(row["id"]),
+                    "source": row["source"],
+                    "vendor": row["vendor_name"],
+                    "status": "failed",
+                    "error": exc.detail,
+                }
+            )
+
+    return {
+        "selected": len(rows),
+        "attempted": len(results),
+        "succeeded": succeeded,
+        "failed": failed,
+        "due_only": body.due_only,
+        "results": results,
     }
 
 
@@ -422,7 +1325,14 @@ async def trigger_scrape_all(
 
     query = """
         SELECT id, source, vendor_name, product_name, product_slug,
-               product_category, max_pages, metadata, scrape_mode
+               product_category, max_pages, metadata, scrape_mode,
+               last_scrape_reviews, last_scrape_status,
+               last_scrape_runtime_mode, last_scrape_stop_reason,
+               last_scrape_oldest_review, last_scrape_newest_review,
+               last_scrape_date_cutoff, last_scrape_pages_scraped,
+               last_scrape_reviews_found, last_scrape_reviews_filtered,
+               last_scrape_date_dropped, last_scrape_duration_ms,
+               last_scrape_resume_page, last_scraped_at
         FROM b2b_scrape_targets
         WHERE enabled = true
     """
@@ -436,14 +1346,15 @@ async def trigger_scrape_all(
     if not rows:
         return {"targets": 0, "message": "No enabled targets found"}
 
-    from datetime import date, timedelta
-
     from ..autonomous.tasks.b2b_scrape_intake import (
+        _build_scrape_state,
         _filter_by_date, _determine_stop_reason, _insert_reviews,
-        _log_scrape_exhaustive, _review_date_stats,
+        _log_scrape_exhaustive, _prepare_scrape_target, _review_date_stats,
+        _scrape_state_from_row,
+        _update_target_after_scrape,
     )
     from ..services.scraping.client import get_scrape_client
-    from ..services.scraping.parsers import ScrapeTarget, get_parser
+    from ..services.scraping.parsers import get_parser
     from ..services.scraping.relevance import STRUCTURED_SOURCES, filter_reviews
 
     import asyncio
@@ -454,31 +1365,8 @@ async def trigger_scrape_all(
     total_filtered = 0
 
     for row in rows:
-        raw_meta = row["metadata"] or "{}"
-        if isinstance(raw_meta, str):
-            try:
-                raw_meta = json.loads(raw_meta)
-            except (json.JSONDecodeError, TypeError):
-                raw_meta = {}
-        target = ScrapeTarget(
-            id=str(row["id"]),
-            source=row["source"],
-            vendor_name=row["vendor_name"],
-            product_name=row["product_name"],
-            product_slug=row["product_slug"],
-            product_category=row["product_category"],
-            max_pages=row["max_pages"],
-            metadata=raw_meta if isinstance(raw_meta, dict) else {},
-        )
-
-        # Apply exhaustive mode config
-        row_mode = row.get("scrape_mode", "incremental")
-        if row_mode == "exhaustive":
-            cfg = settings.b2b_scrape
-            lookback_days = raw_meta.get("lookback_days", cfg.exhaustive_lookback_days)
-            target.date_cutoff = str(date.today() - timedelta(days=lookback_days))
-            if target.max_pages <= 5:
-                target.max_pages = raw_meta.get("exhaustive_max_pages", cfg.exhaustive_max_pages_default)
+        target, row_mode, metadata = _prepare_scrape_target(row, settings.b2b_scrape)
+        previous_state = _scrape_state_from_row(dict(row), metadata)
 
         parser = get_parser(target.source)
         if not parser:
@@ -492,10 +1380,7 @@ async def trigger_scrape_all(
             duration_ms = int((_time.monotonic() - started_at) * 1000)
             await _write_scrape_log(pool, row["id"], target.source, "failed", 0, 0, 0,
                                     [str(exc)], duration_ms, parser)
-            await pool.execute(
-                "UPDATE b2b_scrape_targets SET last_scraped_at = NOW(), last_scrape_status = 'failed', last_scrape_reviews = 0, updated_at = NOW() WHERE id = $1",
-                row["id"],
-            )
+            await _update_target_after_scrape(pool, row["id"], "failed", 0)
             results.append({"source": target.source, "vendor": target.vendor_name, "status": "failed", "error": str(exc)[:200]})
             logger.warning("Scrape failed for %s/%s: %s", target.source, target.vendor_name, exc)
             await asyncio.sleep(1)
@@ -514,10 +1399,24 @@ async def trigger_scrape_all(
             result.reviews, date_dropped = _filter_by_date(result.reviews, cutoff)
 
         inserted = 0
+        insert_stats = {
+            "inserted": 0,
+            "skipped_short": 0,
+            "duplicate_or_existing": 0,
+            "named_company_reviews": 0,
+            "eligible_rows": 0,
+        }
         pv = getattr(parser, 'version', None)
         if result.reviews:
             batch_id = f"bulk_{target.source}_{target.product_slug}_{int(_time.time())}"
-            inserted = await _insert_reviews(pool, result.reviews, batch_id, parser_version=pv)
+            insert_stats = await _insert_reviews(
+                pool,
+                result.reviews,
+                batch_id,
+                parser_version=pv,
+                target_context={"scrape_target_id": str(row["id"])},
+            )
+            inserted = insert_stats["inserted"]
             total_inserted += inserted
 
         duration_ms = int((_time.monotonic() - started_at) * 1000)
@@ -539,6 +1438,8 @@ async def trigger_scrape_all(
                 result, parser, duration_ms,
             )
         else:
+            date_info = _review_date_stats(result.reviews) if result.reviews else {"oldest": None, "newest": None}
+            stop_reason = _determine_stop_reason(result, target, date_dropped)
             scrape_errors = list(result.errors)
             if filtered_count:
                 scrape_errors.append(f"relevance_filtered={filtered_count}")
@@ -547,11 +1448,30 @@ async def trigger_scrape_all(
                 len(result.reviews) + filtered_count, inserted, result.pages_scraped,
                 scrape_errors, duration_ms, parser,
                 page_logs=getattr(result, "page_logs", []) or [],
+                stop_reason=stop_reason,
+                oldest_review=date_info["oldest"],
+                newest_review=date_info["newest"],
+                date_dropped=date_dropped,
             )
 
-        await pool.execute(
-            "UPDATE b2b_scrape_targets SET last_scraped_at = NOW(), last_scrape_status = $2, last_scrape_reviews = $3, updated_at = NOW() WHERE id = $1",
-            row["id"], result.status, inserted,
+        scrape_state = _build_scrape_state(
+            metadata,
+            target,
+            row_mode,
+            result,
+            inserted=inserted,
+            filtered_count=filtered_count,
+            date_dropped=date_dropped,
+            duration_ms=duration_ms,
+            previous_state=previous_state,
+        )
+        await _update_target_after_scrape(
+            pool,
+            row["id"],
+            result.status,
+            inserted,
+            metadata=metadata,
+            scrape_state=scrape_state,
         )
 
         results.append({
@@ -561,6 +1481,9 @@ async def trigger_scrape_all(
             "mode": row_mode,
             "found": len(result.reviews) + filtered_count + date_dropped,
             "inserted": inserted,
+            "duplicate_or_existing": insert_stats["duplicate_or_existing"],
+            "named_company_reviews": insert_stats["named_company_reviews"],
+            "skipped_short": insert_stats["skipped_short"],
             "filtered": filtered_count,
             "date_dropped": date_dropped,
         })
@@ -585,10 +1508,27 @@ async def _write_scrape_log(
     *, captcha_attempts: int = 0, captcha_types: list[str] | None = None,
     captcha_solve_ms: int = 0,
     page_logs: list | None = None,
+    stop_reason: str | None = None,
+    oldest_review: str | None = None,
+    newest_review: str | None = None,
+    date_dropped: int = 0,
 ) -> UUID | None:
     """Write a record to b2b_scrape_log for observability."""
     proxy_type = "residential" if parser.prefer_residential else "none"
     pv = getattr(parser, 'version', None)
+    page_logs = page_logs or []
+    duplicate_pages = sum(1 for pl in page_logs if pl.stop_reason == "duplicate_page")
+    has_page_logs = bool(page_logs)
+    oldest_d = None
+    newest_d = None
+    try:
+        oldest_d = date.fromisoformat(oldest_review) if oldest_review else None
+    except (TypeError, ValueError):
+        pass
+    try:
+        newest_d = date.fromisoformat(newest_review) if newest_review else None
+    except (TypeError, ValueError):
+        pass
     # Classify block type from errors
     block_type = None
     if status in ("blocked", "failed"):
@@ -609,8 +1549,11 @@ async def _write_scrape_log(
             INSERT INTO b2b_scrape_log
                 (target_id, source, status, reviews_found, reviews_inserted,
                  pages_scraped, errors, duration_ms, proxy_type, parser_version,
-                 captcha_attempts, captcha_types, captcha_solve_ms, block_type)
-            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14)
+                 captcha_attempts, captcha_types, captcha_solve_ms, block_type,
+                 stop_reason, oldest_review, newest_review,
+                 date_dropped, duplicate_pages, has_page_logs)
+            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10,
+                    $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
             RETURNING id
             """,
             target_id, source, status, reviews_found, reviews_inserted,
@@ -619,6 +1562,12 @@ async def _write_scrape_log(
             captcha_types or [],
             captcha_solve_ms if captcha_solve_ms > 0 else None,
             block_type,
+            stop_reason,
+            oldest_d,
+            newest_d,
+            date_dropped,
+            duplicate_pages,
+            has_page_logs,
         )
         if page_logs and run_id:
             from ..autonomous.tasks.b2b_scrape_intake import _persist_page_logs

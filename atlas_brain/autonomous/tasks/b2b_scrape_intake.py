@@ -23,6 +23,7 @@ from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from ...services.scraping.sources import parse_source_allowlist
 from ...services.vendor_registry import resolve_vendor_name
+from ...services.scraping.source_fit import classify_source_fit, is_source_fit_allowed
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_scrape_intake")
 
@@ -350,7 +351,13 @@ WHERE c.import_batch_id = $1
 _TARGET_QUERY = """
 SELECT id, source, vendor_name, product_name, product_slug,
        product_category, max_pages, metadata, scrape_mode,
-       last_scraped_at, last_scrape_status
+       last_scraped_at, last_scrape_status, last_scrape_reviews,
+       last_scrape_runtime_mode, last_scrape_stop_reason,
+       last_scrape_oldest_review, last_scrape_newest_review,
+       last_scrape_date_cutoff, last_scrape_pages_scraped,
+       last_scrape_reviews_found, last_scrape_reviews_filtered,
+       last_scrape_date_dropped, last_scrape_duration_ms,
+       last_scrape_resume_page
 FROM b2b_scrape_targets
 WHERE enabled = true
     AND source = ANY($3::text[])
@@ -359,9 +366,299 @@ WHERE enabled = true
   AND (last_scrape_status IS NULL
        OR last_scrape_status != 'blocked'
        OR last_scraped_at < NOW() - make_interval(hours => $1))
-ORDER BY priority DESC, last_scraped_at ASC NULLS FIRST
+ORDER BY CASE WHEN last_scraped_at IS NULL THEN 0 ELSE 1 END,
+         priority DESC,
+         last_scraped_at ASC NULLS FIRST
 LIMIT $2
 """
+
+
+def _filter_targets_by_source_fit(rows: list[dict[str, Any]], cfg) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Filter scheduled targets by source/category fit, with metadata override."""
+    kept: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for raw_row in rows:
+        row = dict(raw_row)
+        metadata = row.get("metadata") or {}
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except (json.JSONDecodeError, TypeError):
+                metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        if metadata.get("source_fit_override") == "allow":
+            row["_source_fit"] = "override"
+            row["_scrape_vertical"] = None
+            kept.append(row)
+            continue
+        decision = classify_source_fit(row.get("source", ""), row.get("product_category"))
+        row["_source_fit"] = decision.fit
+        row["_scrape_vertical"] = decision.vertical
+        row["_source_fit_reason"] = decision.reason
+        if (
+            metadata.get("source_fit_probation") is True
+            and decision.fit == "conditional"
+            and cfg.source_fit_allow_probation
+        ):
+            row["_source_fit"] = "probation"
+            kept.append(row)
+            continue
+        if cfg.source_fit_filter_enabled and not is_source_fit_allowed(
+            row.get("source", ""),
+            row.get("product_category"),
+            allow_conditional=cfg.source_fit_allow_conditional,
+        ):
+            skipped.append({
+                "source": row.get("source"),
+                "vendor": row.get("vendor_name"),
+                "product_category": row.get("product_category"),
+                "vertical": decision.vertical,
+                "fit": decision.fit,
+                "reason": decision.reason,
+            })
+            continue
+        kept.append(row)
+    return kept, skipped
+
+
+def _coerce_target_metadata(raw_meta: Any) -> dict[str, Any]:
+    """Normalize target metadata to a mutable dict."""
+    if isinstance(raw_meta, dict):
+        return dict(raw_meta)
+    if isinstance(raw_meta, str):
+        try:
+            decoded = json.loads(raw_meta)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+    return {}
+
+
+def _merge_scrape_raw_metadata(raw_meta: Any, target_context: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Attach scrape-target provenance to review raw_metadata."""
+    merged = _coerce_target_metadata(raw_meta)
+    if not target_context:
+        return merged
+    for key, value in target_context.items():
+        if value is not None:
+            merged[key] = value
+    return merged
+
+
+def _derive_runtime_scrape_mode(scrape_mode: str, metadata: dict[str, Any]) -> str:
+    """Map top-level target mode to the parser runtime mode."""
+    _ = metadata
+    return "initial" if scrape_mode == "exhaustive" else "incremental"
+
+
+def _date_to_iso(raw: Any) -> str | None:
+    """Convert a date-like value to a canonical YYYY-MM-DD string."""
+    if raw is None:
+        return None
+    if isinstance(raw, datetime):
+        return raw.date().isoformat()
+    if isinstance(raw, date):
+        return raw.isoformat()
+    parsed = _parse_review_date(str(raw))
+    return parsed.isoformat() if parsed else None
+
+
+def _scrape_state_from_row(row: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
+    """Load checkpoint state from explicit target columns."""
+    _ = metadata
+    explicit = {
+        "mode": str(row.get("scrape_mode") or "") or None,
+        "runtime_mode": row.get("last_scrape_runtime_mode"),
+        "status": row.get("last_scrape_status"),
+        "oldest_review": _date_to_iso(row.get("last_scrape_oldest_review")),
+        "newest_review": _date_to_iso(row.get("last_scrape_newest_review")),
+        "date_cutoff_used": _date_to_iso(row.get("last_scrape_date_cutoff")),
+        "pages_scraped": row.get("last_scrape_pages_scraped"),
+        "reviews_found": row.get("last_scrape_reviews_found"),
+        "reviews_inserted": row.get("last_scrape_reviews"),
+        "reviews_filtered": row.get("last_scrape_reviews_filtered"),
+        "date_dropped": row.get("last_scrape_date_dropped"),
+        "duration_ms": row.get("last_scrape_duration_ms"),
+        "stop_reason": row.get("last_scrape_stop_reason"),
+        "resume_page": row.get("last_scrape_resume_page"),
+    }
+    return {key: value for key, value in explicit.items() if value not in (None, "")}
+
+
+def _incremental_cutoff_from_row(row: dict[str, Any], metadata: dict[str, Any]) -> str | None:
+    """Load the stored newest-review checkpoint for incremental reruns."""
+    if metadata.get("use_incremental_checkpoint", True) is False:
+        return None
+    state = _scrape_state_from_row(row, metadata)
+    newest_review = state.get("newest_review")
+    if newest_review:
+        return _date_to_iso(newest_review)
+    legacy_state = metadata.get("scrape_state")
+    if isinstance(legacy_state, dict):
+        return _date_to_iso(legacy_state.get("newest_review"))
+    return None
+
+
+def _prepare_scrape_target(row: dict[str, Any], cfg) -> tuple[Any, str, dict[str, Any]]:
+    """Build a parser target with effective mode and cutoff settings applied."""
+    from ...services.scraping.parsers import ScrapeTarget
+
+    raw_meta = _coerce_target_metadata(row.get("metadata"))
+    scrape_mode = str(row.get("scrape_mode", "incremental") or "incremental")
+    runtime_mode = _derive_runtime_scrape_mode(scrape_mode, raw_meta)
+    metadata = dict(raw_meta)
+    metadata.pop("scrape_mode", None)
+    target_metadata = dict(raw_meta)
+    target_metadata.pop("scrape_mode", None)
+    target_metadata["scrape_mode"] = runtime_mode
+
+    target = ScrapeTarget(
+        id=str(row["id"]),
+        source=row["source"],
+        vendor_name=row["vendor_name"],
+        product_name=row["product_name"],
+        product_slug=row["product_slug"],
+        product_category=row["product_category"],
+        max_pages=row["max_pages"],
+        metadata=target_metadata,
+    )
+
+    if scrape_mode == "exhaustive":
+        lookback_days = metadata.get("lookback_days", cfg.exhaustive_lookback_days)
+        target.date_cutoff = str(date.today() - timedelta(days=lookback_days))
+        if target.max_pages <= 5:
+            target.max_pages = metadata.get(
+                "exhaustive_max_pages",
+                cfg.exhaustive_max_pages_default,
+            )
+    else:
+        target.date_cutoff = _incremental_cutoff_from_row(row, metadata)
+
+    return target, scrape_mode, metadata
+
+
+def _build_scrape_state(
+    metadata: dict[str, Any],
+    target,
+    scrape_mode: str,
+    result,
+    *,
+    inserted: int,
+    filtered_count: int,
+    date_dropped: int,
+    duration_ms: int,
+    previous_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build persisted scrape checkpoint state for the target metadata."""
+    previous = previous_state if isinstance(previous_state, dict) else {}
+    if not previous:
+        fallback = metadata.get("scrape_state")
+        previous = fallback if isinstance(fallback, dict) else {}
+    date_info = _review_date_stats(result.reviews) if result.reviews else {"oldest": None, "newest": None}
+    stop_reason = _determine_stop_reason(result, target, date_dropped)
+
+    state = {
+        "source": target.source,
+        "mode": scrape_mode,
+        "runtime_mode": target.metadata.get("scrape_mode"),
+        "status": result.status,
+        "last_run_at": datetime.now(timezone.utc).isoformat(),
+        "oldest_review": date_info["oldest"] or previous.get("oldest_review"),
+        "newest_review": date_info["newest"] or previous.get("newest_review"),
+        "date_cutoff_used": target.date_cutoff,
+        "pages_scraped": result.pages_scraped,
+        "reviews_found": len(result.reviews) + filtered_count + date_dropped,
+        "reviews_inserted": inserted,
+        "reviews_filtered": filtered_count,
+        "date_dropped": date_dropped,
+        "duration_ms": duration_ms,
+        "stop_reason": stop_reason,
+    }
+    if result.resume_page is not None:
+        state["resume_page"] = result.resume_page
+    return state
+
+
+def _scrape_state_db_values(scrape_state: dict[str, Any]) -> dict[str, Any]:
+    """Coerce checkpoint state into DB-ready scalar values."""
+    return {
+        "runtime_mode": str(scrape_state.get("runtime_mode") or "") or None,
+        "stop_reason": str(scrape_state.get("stop_reason") or "") or None,
+        "oldest_review": _parse_review_date(str(scrape_state.get("oldest_review") or "")),
+        "newest_review": _parse_review_date(str(scrape_state.get("newest_review") or "")),
+        "date_cutoff": _parse_review_date(str(scrape_state.get("date_cutoff_used") or "")),
+        "pages_scraped": scrape_state.get("pages_scraped"),
+        "reviews_found": scrape_state.get("reviews_found"),
+        "reviews_filtered": scrape_state.get("reviews_filtered"),
+        "date_dropped": scrape_state.get("date_dropped"),
+        "duration_ms": scrape_state.get("duration_ms"),
+        "resume_page": scrape_state.get("resume_page"),
+    }
+
+
+async def _update_target_after_scrape(
+    pool,
+    target_id: Any,
+    status: str,
+    inserted: int,
+    *,
+    metadata: dict[str, Any] | None = None,
+    scrape_state: dict[str, Any] | None = None,
+) -> None:
+    """Persist target status and optional checkpoint metadata."""
+    if metadata is None or scrape_state is None:
+        await pool.execute(
+            """
+            UPDATE b2b_scrape_targets
+            SET last_scraped_at = NOW(), last_scrape_status = $2,
+                last_scrape_reviews = $3, updated_at = NOW()
+            WHERE id = $1
+            """,
+            target_id,
+            status,
+            inserted,
+        )
+        return
+
+    updated_metadata = dict(metadata)
+    updated_metadata.pop("scrape_state", None)
+    state_values = _scrape_state_db_values(scrape_state)
+    await pool.execute(
+        """
+        UPDATE b2b_scrape_targets
+        SET last_scraped_at = NOW(), last_scrape_status = $2,
+            last_scrape_reviews = $3, metadata = $4::jsonb,
+            last_scrape_runtime_mode = $5,
+            last_scrape_stop_reason = $6,
+            last_scrape_oldest_review = $7,
+            last_scrape_newest_review = $8,
+            last_scrape_date_cutoff = $9,
+            last_scrape_pages_scraped = $10,
+            last_scrape_reviews_found = $11,
+            last_scrape_reviews_filtered = $12,
+            last_scrape_date_dropped = $13,
+            last_scrape_duration_ms = $14,
+            last_scrape_resume_page = $15,
+            updated_at = NOW()
+        WHERE id = $1
+        """,
+        target_id,
+        status,
+        inserted,
+        json.dumps(updated_metadata),
+        state_values["runtime_mode"],
+        state_values["stop_reason"],
+        state_values["oldest_review"],
+        state_values["newest_review"],
+        state_values["date_cutoff"],
+        state_values["pages_scraped"],
+        state_values["reviews_found"],
+        state_values["reviews_filtered"],
+        state_values["date_dropped"],
+        state_values["duration_ms"],
+        state_values["resume_page"],
+    )
 
 
 async def run(task: ScheduledTask) -> dict[str, Any]:
@@ -408,6 +705,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     targets = []
     now = datetime.now(timezone.utc)
     for row in raw_targets:
+        row = dict(row)
         if row.get("last_scrape_status") == "blocked" and row.get("last_scraped_at"):
             cap = get_capability(row["source"])
             cooldown_min = cap.cooldown_minutes if cap else cfg.blocked_cooldown_hours * 60
@@ -415,8 +713,20 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 continue
         targets.append(row)
 
+    targets, source_fit_skipped = _filter_targets_by_source_fit(targets, cfg)
+    if source_fit_skipped:
+        logger.info(
+            "Scrape intake source-fit policy skipped %d targets",
+            len(source_fit_skipped),
+        )
+
     if not targets:
-        return {"_skip_synthesis": True, "targets_due": 0}
+        return {
+            "_skip_synthesis": True,
+            "targets_due": 0,
+            "targets_skipped_source_fit": len(source_fit_skipped),
+            "skipped_targets": source_fit_skipped[:20],
+        }
 
     total_reviews = 0
     total_inserted = 0
@@ -439,31 +749,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         """Scrape a single target with per-source concurrency control."""
         nonlocal total_reviews, total_inserted
 
-        raw_meta = row["metadata"] or "{}"
-        if isinstance(raw_meta, str):
-            try:
-                raw_meta = json.loads(raw_meta)
-            except (json.JSONDecodeError, TypeError):
-                logger.warning("Malformed metadata JSON for target %s, defaulting to empty", row["id"])
-                raw_meta = {}
-        scrape_mode = row.get("scrape_mode", "incremental")
-        target = ScrapeTarget(
-            id=str(row["id"]),
-            source=row["source"],
-            vendor_name=row["vendor_name"],
-            product_name=row["product_name"],
-            product_slug=row["product_slug"],
-            product_category=row["product_category"],
-            max_pages=row["max_pages"],
-            metadata=raw_meta if isinstance(raw_meta, dict) else {},
-        )
-
-        # Exhaustive mode: set date cutoff + raise max_pages safety cap
-        if scrape_mode == "exhaustive":
-            lookback_days = raw_meta.get("lookback_days", cfg.exhaustive_lookback_days)
-            target.date_cutoff = str(date.today() - timedelta(days=lookback_days))
-            if target.max_pages <= 5:
-                target.max_pages = raw_meta.get("exhaustive_max_pages", cfg.exhaustive_max_pages_default)
+        target, scrape_mode, metadata = _prepare_scrape_target(row, cfg)
 
         parser = get_parser(target.source)
         if not parser:
@@ -475,6 +761,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             started_at = time.monotonic()
             batch_id = f"scrape_{target.source}_{target.product_slug}_{int(time.time())}"
             client.reset_captcha_stats()
+            previous_state = _scrape_state_from_row(row, metadata)
 
             try:
                 result = await parser.scrape(target, client)
@@ -487,15 +774,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     captcha_types=sorted(client.captcha_types_seen) if client.captcha_types_seen else None,
                     captcha_solve_ms=client.captcha_solve_ms_total,
                 )
-                await pool.execute(
-                    """
-                    UPDATE b2b_scrape_targets
-                    SET last_scraped_at = NOW(), last_scrape_status = 'failed',
-                        last_scrape_reviews = 0, updated_at = NOW()
-                    WHERE id = $1
-                    """,
-                    row["id"],
-                )
+                await _update_target_after_scrape(pool, row["id"], "failed", 0)
                 async with results_lock:
                     results_summary.append({
                         "source": target.source,
@@ -529,9 +808,28 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
             # Insert reviews + fire enrichment immediately (background task)
             inserted = 0
+            insert_stats = {
+                "inserted": 0,
+                "skipped_short": 0,
+                "duplicate_or_existing": 0,
+                "named_company_reviews": 0,
+                "eligible_rows": 0,
+            }
             pv = getattr(parser, 'version', None)
             if result.reviews:
-                inserted = await _insert_reviews(pool, result.reviews, batch_id, parser_version=pv)
+                insert_stats = await _insert_reviews(
+                    pool,
+                    result.reviews,
+                    batch_id,
+                    parser_version=pv,
+                    target_context={
+                        "scrape_target_id": str(row["id"]),
+                        "scrape_target_source_fit": row.get("_source_fit"),
+                        "scrape_target_vertical": row.get("_scrape_vertical"),
+                        "scrape_target_probation": row.get("_source_fit") == "probation",
+                    },
+                )
+                inserted = insert_stats["inserted"]
 
                 # Fire enrichment NOW -- don't wait for it, let vLLM chew
                 if inserted > 0:
@@ -582,6 +880,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     result, parser, duration_ms,
                 )
             else:
+                date_info = _review_date_stats(result.reviews) if result.reviews else {"oldest": None, "newest": None}
+                stop_reason = _determine_stop_reason(result, target, date_dropped)
                 scrape_errors = list(result.errors)
                 if filtered_count:
                     scrape_errors.append(f"relevance_filtered={filtered_count}")
@@ -592,15 +892,30 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     captcha_attempts=client.captcha_attempts,
                     captcha_types=sorted(client.captcha_types_seen) if client.captcha_types_seen else None,
                     captcha_solve_ms=client.captcha_solve_ms_total,
+                    page_logs=getattr(result, "page_logs", []) or [],
+                    stop_reason=stop_reason,
+                    oldest_review=date_info["oldest"],
+                    newest_review=date_info["newest"],
+                    date_dropped=date_dropped,
                 )
-            await pool.execute(
-                """
-                UPDATE b2b_scrape_targets
-                SET last_scraped_at = NOW(), last_scrape_status = $2,
-                    last_scrape_reviews = $3, updated_at = NOW()
-                WHERE id = $1
-                """,
-                row["id"], result.status, inserted,
+            scrape_state = _build_scrape_state(
+                metadata,
+                target,
+                scrape_mode,
+                result,
+                inserted=inserted,
+                filtered_count=filtered_count,
+                date_dropped=date_dropped,
+                duration_ms=duration_ms,
+                previous_state=previous_state,
+            )
+            await _update_target_after_scrape(
+                pool,
+                row["id"],
+                result.status,
+                inserted,
+                metadata=metadata,
+                scrape_state=scrape_state,
             )
 
             async with results_lock:
@@ -615,6 +930,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     "filtered": filtered_count,
                     "pages": result.pages_scraped,
                     "mode": scrape_mode,
+                    "source_fit": row.get("_source_fit"),
+                    "vertical": row.get("_scrape_vertical"),
+                    "duplicate_or_existing": insert_stats["duplicate_or_existing"],
+                    "named_company_reviews": insert_stats["named_company_reviews"],
+                    "skipped_short": insert_stats["skipped_short"],
                 }
                 if date_dropped:
                     entry["date_dropped"] = date_dropped
@@ -669,8 +989,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     return {
         "_skip_synthesis": True,
         "targets_scraped": len(results_summary),
+        "targets_skipped_source_fit": len(source_fit_skipped),
         "total_reviews_found": total_reviews,
         "total_reviews_inserted": total_inserted,
+        "skipped_targets": source_fit_skipped[:20],
         "results": results_summary,
     }
 
@@ -698,8 +1020,15 @@ async def _fire_enrichment(batch_id: str, source: str, vendor: str) -> None:
 _MIN_ENRICHABLE_TEXT_LEN = 80  # Reviews shorter than this can't produce useful enrichment
 
 
-async def _insert_reviews(pool, reviews: list[dict], batch_id: str, parser_version: str | None = None) -> int:
-    """Insert reviews into b2b_reviews with dedup. Returns count of new inserts."""
+async def _insert_reviews(
+    pool,
+    reviews: list[dict],
+    batch_id: str,
+    parser_version: str | None = None,
+    *,
+    target_context: dict[str, Any] | None = None,
+) -> dict[str, int]:
+    """Insert reviews into b2b_reviews with dedup and return batch stats."""
     rows = []
     skipped_short = 0
     for r in reviews:
@@ -729,6 +1058,8 @@ async def _insert_reviews(pool, reviews: list[dict], batch_id: str, parser_versi
         reviewer_company = r.get("reviewer_company")
         reviewer_company_norm = normalize_company_name(reviewer_company or "") or None
 
+        raw_metadata = _merge_scrape_raw_metadata(r.get("raw_metadata", {}), target_context)
+
         rows.append((
             dedup_key,
             r["source"],
@@ -751,29 +1082,29 @@ async def _insert_reviews(pool, reviews: list[dict], batch_id: str, parser_versi
             r.get("reviewer_industry"),
             reviewed_at_ts,
             batch_id,
-            json.dumps(r.get("raw_metadata", {})),
+            json.dumps(raw_metadata),
             parser_version,
             # Threading / content-type columns (migration 133)
             r.get("content_type") or "review",
             r.get("thread_id"),
             r.get("comment_depth") or 0,
             # Relevance score (migration 145) -- set by filter_reviews() in raw_metadata
-            (r.get("raw_metadata") or {}).get("relevance_score"),
+            raw_metadata.get("relevance_score"),
             # Author churn score (migration 148) -- set by Reddit parser
-            (r.get("raw_metadata") or {}).get("author_churn_score"),
+            raw_metadata.get("author_churn_score"),
             # Source weight (migration 152) -- set by all parsers
-            (r.get("raw_metadata") or {}).get("source_weight"),
+            raw_metadata.get("source_weight"),
             # Reddit analytics (migration 156) -- only Reddit reviews have these
-            (r.get("raw_metadata") or {}).get("subreddit"),
-            (r.get("raw_metadata") or {}).get("trending_score"),
-            (r.get("raw_metadata") or {}).get("post_flair"),
-            (r.get("raw_metadata") or {}).get("is_edited"),
-            (r.get("raw_metadata") or {}).get("is_crosspost"),
-            (r.get("raw_metadata") or {}).get("num_comments"),
-            (r.get("raw_metadata") or {}).get("score"),
-            len((r.get("raw_metadata") or {}).get("comment_threads") or []),
-            json.dumps((r.get("raw_metadata") or {}).get("crosspost_subreddits"))
-            if (r.get("raw_metadata") or {}).get("crosspost_subreddits") is not None
+            raw_metadata.get("subreddit"),
+            raw_metadata.get("trending_score"),
+            raw_metadata.get("post_flair"),
+            raw_metadata.get("is_edited"),
+            raw_metadata.get("is_crosspost"),
+            raw_metadata.get("num_comments"),
+            raw_metadata.get("score"),
+            len(raw_metadata.get("comment_threads") or []),
+            json.dumps(raw_metadata.get("crosspost_subreddits"))
+            if raw_metadata.get("crosspost_subreddits") is not None
             else None,
         ))
 
@@ -781,14 +1112,26 @@ async def _insert_reviews(pool, reviews: list[dict], batch_id: str, parser_versi
         logger.info("Skipped %d reviews with text < %d chars", skipped_short, _MIN_ENRICHABLE_TEXT_LEN)
 
     if not rows:
-        return 0
+        return {
+            "inserted": 0,
+            "skipped_short": skipped_short,
+            "duplicate_or_existing": 0,
+            "named_company_reviews": 0,
+            "eligible_rows": 0,
+        }
 
     try:
         async with pool.transaction() as conn:
             await conn.executemany(_INSERT_SQL, rows)
     except Exception:
         logger.exception("Failed to insert scraped reviews (batch %s)", batch_id)
-        return 0
+        return {
+            "inserted": 0,
+            "skipped_short": skipped_short,
+            "duplicate_or_existing": len(rows),
+            "named_company_reviews": 0,
+            "eligible_rows": len(rows),
+        }
 
     # Resolve parent_review_id for Reddit comments (looks up parent post by
     # source_review_id stored in raw_metadata.parent_source_review_id)
@@ -802,10 +1145,23 @@ async def _insert_reviews(pool, reviews: list[dict], batch_id: str, parser_versi
 
     # Count actual inserts
     count_row = await pool.fetchrow(
-        "SELECT count(*) as cnt FROM b2b_reviews WHERE import_batch_id = $1",
+        """
+        SELECT count(*) AS cnt,
+               count(*) FILTER (WHERE reviewer_company_norm IS NOT NULL) AS named_company_reviews
+        FROM b2b_reviews
+        WHERE import_batch_id = $1
+        """,
         batch_id,
     )
-    return count_row["cnt"] if count_row else 0
+    inserted = int(count_row["cnt"] or 0) if count_row else 0
+    named_company_reviews = int(count_row["named_company_reviews"] or 0) if count_row else 0
+    return {
+        "inserted": inserted,
+        "skipped_short": skipped_short,
+        "duplicate_or_existing": max(len(rows) - inserted, 0),
+        "named_company_reviews": named_company_reviews,
+        "eligible_rows": len(rows),
+    }
 
 
 async def _log_scrape(
@@ -813,20 +1169,42 @@ async def _log_scrape(
     pages_scraped: int, errors: list[str], duration_ms: int, parser,
     *, captcha_attempts: int = 0, captcha_types: list[str] | None = None,
     captcha_solve_ms: int = 0,
+    page_logs: list | None = None,
+    stop_reason: str | None = None,
+    oldest_review: str | None = None,
+    newest_review: str | None = None,
+    date_dropped: int = 0,
 ) -> None:
     """Insert a record into b2b_scrape_log."""
     proxy_type = "residential" if parser.prefer_residential else "none"
     pv = getattr(parser, 'version', None)
+    page_logs = page_logs or []
+    duplicate_pages = sum(1 for pl in page_logs if pl.stop_reason == "duplicate_page")
+    has_page_logs = bool(page_logs)
+    oldest_d = None
+    newest_d = None
+    try:
+        oldest_d = date.fromisoformat(oldest_review) if oldest_review else None
+    except (TypeError, ValueError):
+        pass
+    try:
+        newest_d = date.fromisoformat(newest_review) if newest_review else None
+    except (TypeError, ValueError):
+        pass
     # Classify block type from errors
     block_type = _classify_block_type(status, errors)
     try:
-        await pool.execute(
+        run_id = await pool.fetchval(
             """
             INSERT INTO b2b_scrape_log
                 (target_id, source, status, reviews_found, reviews_inserted,
                  pages_scraped, errors, duration_ms, proxy_type, parser_version,
-                 captcha_attempts, captcha_types, captcha_solve_ms, block_type)
-            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14)
+                 captcha_attempts, captcha_types, captcha_solve_ms, block_type,
+                 stop_reason, oldest_review, newest_review,
+                 date_dropped, duplicate_pages, has_page_logs)
+            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10,
+                    $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+            RETURNING id
             """,
             _uuid.UUID(target.id),
             target.source,
@@ -842,7 +1220,15 @@ async def _log_scrape(
             captcha_types or [],
             captcha_solve_ms if captcha_solve_ms > 0 else None,
             block_type,
+            stop_reason,
+            oldest_d,
+            newest_d,
+            date_dropped,
+            duplicate_pages,
+            has_page_logs,
         )
+        if page_logs and run_id:
+            await _persist_page_logs(pool, run_id, page_logs)
     except Exception:
         logger.warning("Failed to log scrape result", exc_info=True)
 
