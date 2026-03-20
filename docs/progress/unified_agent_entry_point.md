@@ -571,7 +571,7 @@ All 6 phases have been completed successfully. The Atlas system now has a **unif
 8. `atlas_brain/api/devices/control.py` - Routes through Agent
 
 ### Next Steps (Testing)
-1. Start server: `uvicorn atlas_brain.main:app --host 0.0.0.0 --port 8000 --reload`
+1. Start server: `uvicorn atlas_brain.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir atlas_brain --reload-exclude data/postgres --reload-exclude data/postgres/**`
 2. Test voice: "Atlas, what time is it" - should execute get_time tool
 3. Test REST: `curl -X POST localhost:8000/api/v1/query/text -H "Content-Type: application/json" -d '{"query_text":"what time is it"}'`
 4. Verify `voice_client.py` still works with `/llm/chat`

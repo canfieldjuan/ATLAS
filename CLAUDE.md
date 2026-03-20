@@ -103,8 +103,9 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # Run with hot reload on port 8001
+# Scope reload to atlas_brain so watchfiles does not scan data/postgres
 # Note: WebSocket ping settings prevent timeout during voice streaming
-uvicorn atlas_brain.main:app --host 0.0.0.0 --port 8001 --reload --ws-ping-interval 60 --ws-ping-timeout 120
+uvicorn atlas_brain.main:app --host 0.0.0.0 --port 8001 --reload --reload-dir atlas_brain --reload-exclude data/postgres --reload-exclude data/postgres/** --ws-ping-interval 60 --ws-ping-timeout 120
 ```
 
 ### ASR Server (Required for Voice Pipeline)
