@@ -277,25 +277,43 @@ async def list_slow_burn_watchlist(
 
     rows = await pool.fetch(
         f"""
-        SELECT sig.vendor_name, sig.product_category, sig.total_reviews,
-               sig.churn_intent_count, sig.avg_urgency_score, sig.avg_rating_normalized,
-               sig.nps_proxy, sig.price_complaint_rate, sig.decision_maker_churn_rate,
-               snap.support_sentiment AS support_sentiment,
-               snap.legacy_support_score AS legacy_support_score,
-               snap.new_feature_velocity AS new_feature_velocity,
-               snap.employee_growth_rate AS employee_growth_rate,
-               sig.archetype, sig.archetype_confidence, sig.reasoning_mode,
-               sig.last_computed_at
-        FROM b2b_churn_signals sig
-        LEFT JOIN LATERAL (
-            SELECT support_sentiment, legacy_support_score,
-                   new_feature_velocity, employee_growth_rate
-            FROM b2b_vendor_snapshots snap
-            WHERE snap.vendor_name = sig.vendor_name
-            ORDER BY snap.snapshot_date DESC
-            LIMIT 1
-        ) snap ON TRUE
-        {where}
+        WITH ranked_signals AS (
+            SELECT sig.vendor_name, sig.product_category, sig.total_reviews,
+                   sig.churn_intent_count, sig.avg_urgency_score, sig.avg_rating_normalized,
+                   sig.nps_proxy, sig.price_complaint_rate, sig.decision_maker_churn_rate,
+                   snap.support_sentiment AS support_sentiment,
+                   snap.legacy_support_score AS legacy_support_score,
+                   snap.new_feature_velocity AS new_feature_velocity,
+                   snap.employee_growth_rate AS employee_growth_rate,
+                   sig.archetype, sig.archetype_confidence, sig.reasoning_mode,
+                   sig.last_computed_at,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY sig.vendor_name
+                       ORDER BY sig.avg_urgency_score DESC,
+                                sig.total_reviews DESC,
+                                sig.last_computed_at DESC NULLS LAST,
+                                sig.product_category ASC NULLS LAST
+                   ) AS vendor_row_rank
+            FROM b2b_churn_signals sig
+            LEFT JOIN LATERAL (
+                SELECT support_sentiment, legacy_support_score,
+                       new_feature_velocity, employee_growth_rate
+                FROM b2b_vendor_snapshots snap
+                WHERE snap.vendor_name = sig.vendor_name
+                ORDER BY snap.snapshot_date DESC
+                LIMIT 1
+            ) snap ON TRUE
+            {where}
+        )
+        SELECT vendor_name, product_category, total_reviews,
+               churn_intent_count, avg_urgency_score, avg_rating_normalized,
+               nps_proxy, price_complaint_rate, decision_maker_churn_rate,
+               support_sentiment, legacy_support_score,
+               new_feature_velocity, employee_growth_rate,
+               archetype, archetype_confidence, reasoning_mode,
+               last_computed_at
+        FROM ranked_signals
+        WHERE vendor_row_rank = 1
         ORDER BY employee_growth_rate DESC NULLS LAST,
                  support_sentiment ASC NULLS LAST,
                  legacy_support_score ASC NULLS LAST,
