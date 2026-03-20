@@ -249,6 +249,16 @@ register_pipeline(PipelineConfig(
             cron_config_key="b2b_churn.intelligence_cron",
         ),
         TaskDef(
+            name="b2b_reasoning_synthesis",
+            module="b2b_reasoning_synthesis",
+            schedule_type="cron",
+            cron_expression="15 21 * * *",
+            timeout_seconds=900,
+            description="Per-vendor reasoning synthesis from 6 pool layers for battle cards and reports",
+            metadata={"builtin_handler": "b2b_reasoning_synthesis"},
+            cron_config_key="b2b_churn.reasoning_synthesis_cron",
+        ),
+        TaskDef(
             name="b2b_churn_reports",
             module="b2b_churn_reports",
             schedule_type="cron",
