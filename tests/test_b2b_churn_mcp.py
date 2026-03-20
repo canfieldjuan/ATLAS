@@ -20,8 +20,6 @@ for _heavy_mod in [
     "asyncpg",
     "llama_cpp",
     "dateparser",
-    "starlette", "starlette.applications", "starlette.middleware",
-    "starlette.requests", "starlette.responses", "starlette.routing",
     "sse_starlette", "sse_starlette.sse",
     "uvicorn", "anyio",
     "httpx", "httpx_sse",

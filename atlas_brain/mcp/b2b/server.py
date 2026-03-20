@@ -55,6 +55,49 @@ from . import webhooks  # noqa: E402, F401
 from . import crm_events  # noqa: E402, F401
 from . import content  # noqa: E402, F401
 from . import cross_vendor  # noqa: E402, F401
+from . import evidence  # noqa: E402, F401
+from . import write_intelligence  # noqa: E402, F401
+
+
+def _apply_tool_gating(server):
+    """Remove tools from groups not listed in config.
+
+    Reads ATLAS_B2B_CHURN_MCP_TOOL_GROUPS (comma-separated group names or 'all').
+    After all domain modules register their tools at import time, this function
+    removes tools belonging to disabled groups.  Zero changes to tool functions.
+    """
+    from ._shared import TOOL_GROUPS
+
+    try:
+        from atlas_brain.config import settings
+        raw = settings.b2b_churn.mcp_tool_groups
+    except Exception:
+        raw = "all"
+
+    raw = raw.strip().lower()
+    if raw == "all" or not raw:
+        return
+
+    enabled_groups = {g.strip() for g in raw.split(",") if g.strip()}
+
+    tools_to_remove: list[str] = []
+    for group_name, tool_names in TOOL_GROUPS.items():
+        if group_name not in enabled_groups:
+            tools_to_remove.extend(tool_names)
+
+    removed = 0
+    for name in tools_to_remove:
+        try:
+            server.remove_tool(name)
+            removed += 1
+        except Exception:
+            pass  # tool may not exist (e.g. write_intelligence tools not yet registered)
+
+    if removed:
+        logger.info("B2B MCP tool gating: removed %d tools, enabled groups: %s", removed, enabled_groups)
+
+
+_apply_tool_gating(mcp)
 
 
 def main():
