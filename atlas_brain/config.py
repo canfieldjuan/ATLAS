@@ -2147,6 +2147,17 @@ class B2BChurnConfig(BaseSettings):
 
     enabled: bool = Field(default=False, description="Enable B2B churn prediction pipeline")
 
+    # MCP tool gating
+    mcp_tool_groups: str = Field(
+        default="all",
+        description=(
+            "Comma-separated tool groups to expose via MCP. "
+            "'all' = register every group (default, backward compatible). "
+            "Groups: read_signals, read_reports, read_pools, reasoning, admin, "
+            "calibration, webhooks, crm_events, content, write_intelligence, campaigns"
+        ),
+    )
+
     # Enrichment
     enrichment_interval_seconds: int = Field(default=300, description="Enrichment polling interval")
     enrichment_max_per_batch: int = Field(default=10, description="Max reviews to enrich per batch")
@@ -2185,6 +2196,31 @@ class B2BChurnConfig(BaseSettings):
     intelligence_cron: str = Field(default="0 21 * * *", description="Daily churn intelligence (9 PM)")
     intelligence_max_tokens: int = Field(default=4096, description="Max output tokens for churn intelligence LLM call")
     intelligence_window_days: int = Field(default=30, description="Days of enriched reviews to analyze")
+    intelligence_recent_window_days: int = Field(default=30, description="Recent window for evidence vault trend/recency calculations")
+    intelligence_evidence_vault_supporting_review_limit: int = Field(
+        default=5,
+        description="Max supporting review IDs stored per evidence-vault evidence row",
+    )
+    intelligence_evidence_vault_segment_limit: int = Field(
+        default=3,
+        description="Max affected company-size segments stored per evidence-vault evidence row",
+    )
+    intelligence_evidence_vault_role_limit: int = Field(
+        default=3,
+        description="Max affected roles stored per evidence-vault evidence row",
+    )
+    intelligence_evidence_vault_trend_accelerating_ratio: float = Field(
+        default=1.25,
+        description="Recent/prior ratio needed to mark evidence-vault trend direction as accelerating",
+    )
+    intelligence_evidence_vault_trend_declining_ratio: float = Field(
+        default=0.75,
+        description="Recent/prior ratio at or below which evidence-vault trend is marked declining",
+    )
+    intelligence_evidence_vault_trend_new_min_recent: int = Field(
+        default=2,
+        description="Minimum recent mentions required to classify evidence-vault trend direction as new",
+    )
     intelligence_min_reviews: int = Field(default=3, description="Min reviews per vendor to include")
     intelligence_source_allowlist: str = Field(
         default="g2,capterra,trustradius,gartner,peerspot,getapp,software_advice,trustpilot,reddit,hackernews",
@@ -2353,7 +2389,16 @@ class B2BChurnConfig(BaseSettings):
     # Stratified reasoning integration (global intelligence run)
     stratified_reasoning_enabled: bool = Field(default=False, description="Route vendors through stratified reasoner during global intelligence run")
     stratified_reasoning_concurrency: int = Field(default=5, description="Max concurrent vendor reasoning tasks")
-    stratified_reasoning_vendor_cap: int = Field(default=50, description="Max vendors to send through stratified reasoning (top N by urgency)")
+    stratified_reasoning_vendor_cap: int = Field(default=60, description="Max vendors to send through stratified reasoning (top N by urgency)")
+    intelligence_focus_categories: str = Field(
+        default="all",
+        description=(
+            "Comma-separated product categories to include in reasoning phase. "
+            "'all' = no filter (default). Only affects stratified reasoning and "
+            "cross-vendor analysis. Signals, vaults, and segments still build "
+            "for all vendors."
+        ),
+    )
     executive_summary_llm_enabled: bool = Field(default=False, description="Use LLM-synthesized executive summaries instead of deterministic templates")
 
     # Cross-vendor reasoning (battles, category councils, asymmetry)
@@ -2386,8 +2431,8 @@ class B2BChurnConfig(BaseSettings):
         ),
     )
     battle_card_openrouter_model: str = Field(
-        default="",
-        description="Optional OpenRouter model override for battle-card sales copy (empty = use global reasoning model)",
+        default="anthropic/claude-haiku-4-5-20251001",
+        description="OpenRouter model override for battle-card sales copy",
     )
     battle_card_llm_max_tokens: int = Field(default=16384, ge=256, le=32768, description="Max output tokens for battle card sales copy (reasoning models need extra budget)")
     battle_card_llm_temperature: float = Field(default=0.5, ge=0.0, le=1.5, description="Sampling temperature for battle card sales copy generation")
@@ -2428,6 +2473,10 @@ class B2BChurnConfig(BaseSettings):
     challenger_brief_min_displacement_mentions: int = Field(default=3, ge=1, le=100, description="Min displacement mentions to generate a challenger brief")
     challenger_brief_max_pairs_per_incumbent: int = Field(default=5, ge=1, le=20, description="Top N challengers per incumbent to generate briefs for")
     challenger_brief_max_target_accounts: int = Field(default=15, ge=1, le=100, description="Max accounts in target_accounts section of challenger brief")
+    challenger_brief_report_fallback_days: int = Field(default=7, ge=1, le=30, description="Max age of persisted battle-card or accounts-in-motion artifacts that challenger briefs may reuse")
+    challenger_brief_quote_fallback_limit: int = Field(default=5, ge=1, le=20, description="Max review-sourced pain quotes to include when a battle card has no quotes")
+    challenger_brief_quote_candidate_limit: int = Field(default=25, ge=5, le=100, description="Max enriched review rows to inspect when assembling challenger-brief quote fallbacks")
+    challenger_brief_quote_similarity_threshold: float = Field(default=0.7, ge=0.0, le=1.0, description="Jaccard similarity threshold used to deduplicate review-sourced quote fallbacks")
 
     # Follow-up task scheduling (staggered after core)
     reports_cron: str = Field(default="30 21 * * *", description="Cron for churn reports follow-up task")
@@ -2521,8 +2570,40 @@ class B2BScrapeConfig(BaseSettings):
     intake_interval_seconds: int = Field(default=3600, description="Scrape polling interval (1 hour)")
     max_targets_per_run: int = Field(default=0, description="Max targets to scrape per run (0 = unlimited)")
     source_allowlist: str = Field(
-        default="g2,capterra,trustradius,gartner,peerspot,getapp,software_advice,trustpilot,reddit,hackernews,sourceforge,twitter",
+        default="g2,capterra,trustradius,gartner,peerspot,software_advice,trustpilot,reddit,hackernews,sourceforge",
         description="Sources allowed for automated scrape intake (comma-separated)",
+    )
+    source_fit_filter_enabled: bool = Field(
+        default=True,
+        description="Skip scrape targets whose source is a poor fit for the target product category",
+    )
+    source_fit_allow_conditional: bool = Field(
+        default=True,
+        description="Allow conditionally useful source/category pairs while blocking poor-fit pairs",
+    )
+    source_fit_allow_probation: bool = Field(
+        default=True,
+        description="Allow targets marked as source-fit probation when the fit is conditional",
+    )
+    source_fit_probation_priority: int = Field(
+        default=3,
+        description="Priority cap for conditionally seeded probation targets",
+    )
+    source_fit_probation_max_pages: int = Field(
+        default=3,
+        description="Max pages cap for conditionally seeded probation targets",
+    )
+    source_fit_probation_scrape_interval_hours: int = Field(
+        default=72,
+        description="Minimum scrape interval for conditionally seeded probation targets",
+    )
+    source_fit_probation_telemetry_lookback_days: int = Field(
+        default=30,
+        description="Lookback window for probation-target telemetry summaries",
+    )
+    source_fit_probation_actionable_urgency_min: float = Field(
+        default=7.0,
+        description="Urgency threshold used when counting actionable enriched reviews for probation telemetry",
     )
 
     # Proxies (comma-separated URLs)
@@ -2546,6 +2627,12 @@ class B2BScrapeConfig(BaseSettings):
     gartner_rpm: int = Field(default=4, description="Gartner Peer Insights requests per minute")
     trustpilot_rpm: int = Field(default=6, description="TrustPilot requests per minute")
     getapp_rpm: int = Field(default=8, description="GetApp requests per minute")
+    getapp_protection_page_stop_threshold: int = Field(
+        default=2,
+        ge=1,
+        le=5,
+        description="Consecutive protection-like GetApp fallback pages before aborting the transport",
+    )
     twitter_rpm: int = Field(default=10, description="Twitter/X requests per minute")
     producthunt_rpm: int = Field(default=20, description="ProductHunt requests per minute")
     producthunt_api_token: str = Field(default="", description="ProductHunt API bearer token")
@@ -2556,6 +2643,7 @@ class B2BScrapeConfig(BaseSettings):
     stackoverflow_api_key: str = Field(default="", description="Stack Exchange API key (10k req/day vs 300)")
     peerspot_rpm: int = Field(default=4, description="PeerSpot requests per minute")
     software_advice_rpm: int = Field(default=8, description="Software Advice requests per minute")
+    sourceforge_rpm: int = Field(default=12, description="SourceForge requests per minute")
 
     # Behavioral delays
     min_delay_seconds: float = Field(default=2.0, description="Min delay between requests")
@@ -2584,7 +2672,10 @@ class B2BScrapeConfig(BaseSettings):
     captcha_domains: str = Field(default="g2.com,capterra.com,gartner.com,getapp.com", description="Domains with CAPTCHA solving enabled (comma-separated)")
     captcha_proxy_url: str = Field(default="", description="Sticky/static proxy URL for CAPTCHA solving (same IP for solve + retry)")
     captcha_2captcha_api_key: str = Field(default="", description="2Captcha API key (used as fallback or per-domain override)")
-    captcha_2captcha_domains: str = Field(default="", description="Domains that should use 2Captcha instead of primary provider (comma-separated)")
+    captcha_2captcha_domains: str = Field(
+        default="getapp.com,gartner.com",
+        description="Domains that should use 2Captcha instead of primary provider (comma-separated)",
+    )
 
     # Relevance filtering (social media noise reduction)
     relevance_filter_enabled: bool = Field(default=True, description="Enable relevance filtering for social media sources")
