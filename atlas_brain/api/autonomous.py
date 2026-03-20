@@ -214,8 +214,12 @@ async def delete_task(task_id: UUID):
 # -- Action endpoints -------------------------------------------------
 
 @router.post("/{task_id}/run", status_code=202)
-async def run_task_now(task_id: UUID):
+async def run_task_now(task_id: UUID, body: dict | None = None):
     """Execute a task immediately (manual trigger). Returns 202 with execution ID.
+
+    Optional JSON body to pass runtime overrides merged into task.metadata:
+    - test_vendors: list or comma-separated string of vendor names
+    - force: true to skip evidence hash check
 
     Poll GET /{task_id}/executions to check completion status.
     """
@@ -227,8 +231,21 @@ async def run_task_now(task_id: UUID):
     if not task:
         raise HTTPException(404, "Task not found")
 
+    # Merge runtime overrides into metadata (in-memory only, not persisted)
+    if body:
+        task.metadata = {**(task.metadata or {}), **body}
+
     scheduler = get_task_scheduler()
     result = await scheduler.run_now(task)
+    if result.get("already_running"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": result["message"],
+                "execution_id": result.get("execution_id"),
+                "status": result.get("status"),
+            },
+        )
     return result
 
 

@@ -135,6 +135,12 @@ class DatabasePool:
             raise RuntimeError("Database pool not initialized")
         return await self._pool.fetchval(query, *args)
 
+    async def executemany(self, query: str, args_iterable) -> None:
+        """Execute the same query for multiple argument tuples."""
+        if not self.is_initialized:
+            raise RuntimeError("Database pool not initialized")
+        await self._pool.executemany(query, args_iterable)
+
     @asynccontextmanager
     async def transaction(self) -> AsyncIterator[asyncpg.Connection]:
         """

@@ -13,9 +13,12 @@ import pytest
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
+from fastapi import HTTPException
 
+from atlas_brain.api.autonomous import run_task_now
 from atlas_brain.autonomous.scheduler import TaskScheduler
-from atlas_brain.storage.models import ScheduledTask
+from atlas_brain.storage.models import ScheduledTask, TaskExecution
+from atlas_brain.storage.repositories.scheduled_task import ScheduledTaskRepository
 
 
 # ---------------------------------------------------------------------------
@@ -35,7 +38,7 @@ def _task(
     retry_delay: int = 60,
     timeout: int = 120,
     enabled: bool = True,
-) -> ScheduledTask:
+    ) -> ScheduledTask:
     return ScheduledTask(
         id=uuid4(),
         name="test_task",
@@ -50,6 +53,15 @@ def _task(
         enabled=enabled,
         prompt="Do something",
     )
+
+
+class _FakeExecPool:
+    def __init__(self) -> None:
+        self.is_initialized = True
+        self.calls: list[tuple] = []
+
+    async def execute(self, *args):
+        self.calls.append(args)
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +113,24 @@ class TestBuildTrigger:
         task = _task(schedule_type="once", cron=None, run_at=None)
         trigger = s._build_trigger(task)
         assert trigger is None
+
+
+class TestExecutionMetadataRepository:
+    @pytest.mark.asyncio
+    @patch("atlas_brain.storage.repositories.scheduled_task.get_db_pool")
+    async def test_update_execution_metadata_uses_jsonb_merge(self, mock_pool_fn):
+        repo = ScheduledTaskRepository()
+        pool = _FakeExecPool()
+        mock_pool_fn.return_value = pool
+        exec_id = uuid4()
+
+        await repo.update_execution_metadata(exec_id, {"stage": "llm_overlay", "cards_built": 15})
+
+        assert len(pool.calls) == 1
+        query, called_exec_id, metadata_json = pool.calls[0]
+        assert "metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb" in query
+        assert called_exec_id == exec_id
+        assert '"stage": "llm_overlay"' in metadata_json
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +268,111 @@ class TestExecuteTask:
         mock_repo.complete_execution.assert_awaited_once()
         status_arg = mock_repo.complete_execution.call_args[0][1]
         assert status_arg == "completed"
+        assert task.metadata["_execution_id"] == str(exec_id)
+
+
+class TestRunNow:
+    @pytest.mark.asyncio
+    @patch("atlas_brain.storage.repositories.scheduled_task.get_scheduled_task_repo")
+    async def test_returns_existing_running_execution_without_spawning(self, mock_repo_fn):
+        s = _scheduler()
+        task = _task(enabled=True)
+        running_exec = TaskExecution(id=uuid4(), task_id=task.id, status="running")
+
+        mock_repo = AsyncMock()
+        mock_repo.get_running_execution.return_value = running_exec
+        mock_repo_fn.return_value = mock_repo
+
+        with patch("asyncio.create_task") as mock_create_task:
+            result = await s.run_now(task)
+
+        assert result["already_running"] is True
+        assert result["execution_id"] == str(running_exec.id)
+        mock_repo.record_execution.assert_not_awaited()
+        mock_create_task.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("atlas_brain.storage.repositories.scheduled_task.get_scheduled_task_repo")
+    async def test_records_execution_when_not_running(self, mock_repo_fn):
+        s = _scheduler()
+        task = _task(enabled=True)
+        exec_id = uuid4()
+
+        mock_repo = AsyncMock()
+        mock_repo.get_running_execution.return_value = None
+        mock_repo.record_execution.return_value = exec_id
+        mock_repo_fn.return_value = mock_repo
+
+        dummy_task = MagicMock()
+        def _fake_create_task(coro, **_kwargs):
+            coro.close()
+            return dummy_task
+
+        with patch("asyncio.create_task", side_effect=_fake_create_task) as mock_create_task:
+            result = await s.run_now(task)
+
+        assert result["execution_id"] == str(exec_id)
+        assert result["status"] == "running"
+        assert str(task.id) in s._manual_running_task_ids
+        mock_repo.record_execution.assert_awaited_once()
+        mock_create_task.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch.object(TaskScheduler, "_check_consecutive_failures", new_callable=AsyncMock)
+    @patch.object(TaskScheduler, "_get_next_run_time", return_value=None)
+    @patch("atlas_brain.autonomous.runner.get_headless_runner")
+    @patch("atlas_brain.storage.repositories.scheduled_task.get_scheduled_task_repo")
+    async def test_manual_background_run_injects_execution_id(
+        self, mock_repo_fn, mock_runner_fn, _next_run, _check_fail
+    ):
+        s = _scheduler()
+        s._semaphore = __import__("asyncio").Semaphore(2)
+        task = _task(enabled=True)
+        exec_id = uuid4()
+
+        mock_repo = AsyncMock()
+        mock_repo_fn.return_value = mock_repo
+
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.response_text = "done"
+        mock_result.error = None
+        mock_runner = AsyncMock()
+        mock_runner.run.return_value = mock_result
+        mock_runner_fn.return_value = mock_runner
+
+        await s._run_task_background(task, exec_id)
+
+        mock_runner.run.assert_awaited_once_with(task)
+        assert task.metadata["_execution_id"] == str(exec_id)
+        mock_repo.complete_execution.assert_awaited_once()
+
+
+class TestAutonomousApiRunNow:
+    @pytest.mark.asyncio
+    @patch("atlas_brain.autonomous.scheduler.get_task_scheduler")
+    @patch("atlas_brain.storage.repositories.scheduled_task.get_scheduled_task_repo")
+    async def test_api_returns_409_when_task_already_running(self, mock_repo_fn, mock_sched_fn):
+        task = _task(enabled=True)
+
+        mock_repo = AsyncMock()
+        mock_repo.get_by_id.return_value = task
+        mock_repo_fn.return_value = mock_repo
+
+        mock_scheduler = AsyncMock()
+        mock_scheduler.run_now.return_value = {
+            "execution_id": str(uuid4()),
+            "status": "running",
+            "message": f"Task '{task.name}' is already running.",
+            "already_running": True,
+        }
+        mock_sched_fn.return_value = mock_scheduler
+
+        with pytest.raises(HTTPException) as exc:
+            await run_task_now(task.id)
+
+        assert exc.value.status_code == 409
+        assert "already running" in exc.value.detail["message"]
 
     @pytest.mark.asyncio
     @patch.object(TaskScheduler, "_check_consecutive_failures", new_callable=AsyncMock)

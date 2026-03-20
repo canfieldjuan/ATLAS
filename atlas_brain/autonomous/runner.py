@@ -102,7 +102,11 @@ class HeadlessRunner:
 
     async def _run_builtin(self, task: ScheduledTask) -> AgentResult:
         """Run a builtin task handler."""
-        handler_name = (task.metadata or {}).get("builtin_handler")
+        meta = task.metadata
+        if isinstance(meta, str):
+            import json as _json
+            meta = _json.loads(meta)
+        handler_name = (meta or {}).get("builtin_handler")
         if not handler_name:
             return AgentResult(
                 success=False,
@@ -157,7 +161,7 @@ class HeadlessRunner:
                 response_text=str(result) if result else "Builtin task completed.",
             )
         except Exception as e:
-            logger.error("Builtin handler '%s' failed: %s", handler_name, e)
+            logger.error("Builtin handler '%s' failed: %s", handler_name, e, exc_info=True)
             return AgentResult(
                 success=False,
                 error=str(e),

@@ -35,6 +35,8 @@ class TaskScheduler:
         self._scheduler: Optional[AsyncIOScheduler] = None
         self._semaphore: Optional[asyncio.Semaphore] = None
         self._background_tasks: set[asyncio.Task] = set()
+        self._manual_running_task_ids: set[str] = set()
+        self._manual_run_lock = asyncio.Lock()
         self._running = False
 
     @property
@@ -47,6 +49,13 @@ class TaskScheduler:
         if self._scheduler and self._running:
             return len(self._scheduler.get_jobs())
         return 0
+
+    @staticmethod
+    def _attach_execution_metadata(task: ScheduledTask, exec_id) -> ScheduledTask:
+        """Attach the current execution id to the in-memory task object."""
+        task.metadata = dict(task.metadata or {})
+        task.metadata["_execution_id"] = str(exec_id)
+        return task
 
     async def start(self) -> None:
         """Create the scheduler, start it, and load tasks from DB."""
@@ -1060,6 +1069,7 @@ class TaskScheduler:
             try:
                 timeout = task.timeout_seconds or autonomous_config.task_timeout_seconds
                 runner = get_headless_runner()
+                task = self._attach_execution_metadata(task, exec_id)
                 result = await asyncio.wait_for(
                     runner.run(task),
                     timeout=timeout,
@@ -1208,7 +1218,18 @@ class TaskScheduler:
         from ..storage.repositories.scheduled_task import get_scheduled_task_repo
 
         repo = get_scheduled_task_repo()
-        exec_id = await repo.record_execution(task.id, metadata={"trigger": "manual"})
+        task_key = str(task.id)
+        async with self._manual_run_lock:
+            running_exec = await repo.get_running_execution(task.id)
+            if running_exec or task_key in self._manual_running_task_ids:
+                return {
+                    "execution_id": str(running_exec.id) if running_exec else None,
+                    "status": "running",
+                    "message": f"Task '{task.name}' is already running.",
+                    "already_running": True,
+                }
+            exec_id = await repo.record_execution(task.id, metadata={"trigger": "manual"})
+            self._manual_running_task_ids.add(task_key)
 
         bg_task = asyncio.create_task(
             self._run_task_background(task, exec_id),
@@ -1231,11 +1252,13 @@ class TaskScheduler:
         repo = get_scheduled_task_repo()
         start_time = time.monotonic()
         now = datetime.now(timezone.utc)
+        duration_ms = 0
 
         try:
             async with self._semaphore:
                 timeout = task.timeout_seconds or autonomous_config.task_timeout_seconds
                 runner = get_headless_runner()
+                task = self._attach_execution_metadata(task, exec_id)
                 result = await asyncio.wait_for(
                     runner.run(task),
                     timeout=timeout,
@@ -1253,7 +1276,6 @@ class TaskScheduler:
                 await repo.update_last_run(task.id, now, self._get_next_run_time(task))
 
                 logger.info("Manual task '%s' %s in %dms", task.name, status, duration_ms)
-
                 try:
                     from ..events.broadcaster import broadcast_system_event
                     evt_level = "error" if status == "failed" else "info"
@@ -1269,6 +1291,7 @@ class TaskScheduler:
                     await self._check_consecutive_failures(task.id)
 
         except asyncio.TimeoutError:
+            status = "timeout"
             duration_ms = int((time.monotonic() - start_time) * 1000)
             await repo.complete_execution(
                 exec_id, "timeout",
@@ -1280,6 +1303,7 @@ class TaskScheduler:
             await self._check_consecutive_failures(task.id)
 
         except Exception as e:
+            status = "failed"
             duration_ms = int((time.monotonic() - start_time) * 1000)
             await repo.complete_execution(
                 exec_id, "failed",
@@ -1290,6 +1314,9 @@ class TaskScheduler:
             logger.error("Manual task '%s' failed", task.name, exc_info=True)
             self._maybe_schedule_retry(task, 0)
             await self._check_consecutive_failures(task.id)
+        finally:
+            async with self._manual_run_lock:
+                self._manual_running_task_ids.discard(str(task.id))
 
 
 _task_scheduler: Optional[TaskScheduler] = None

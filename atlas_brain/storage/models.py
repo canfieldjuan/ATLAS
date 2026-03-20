@@ -537,6 +537,13 @@ class ScheduledTask:
     last_run_at: Optional[datetime] = None
     next_run_at: Optional[datetime] = None
 
+    def __post_init__(self) -> None:
+        if isinstance(self.metadata, str):
+            import json as _json
+            self.metadata = _json.loads(self.metadata)
+        elif self.metadata is None:
+            self.metadata = {}
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": str(self.id),

@@ -407,6 +407,34 @@ class ScheduledTaskRepository:
             logger.error("Failed to complete task execution: %s", e)
             raise DatabaseOperationError("complete task execution", e)
 
+    async def update_execution_metadata(
+        self,
+        exec_id: UUID,
+        metadata: dict[str, Any],
+    ) -> None:
+        """Merge progress or diagnostic metadata into a task execution row."""
+        pool = get_db_pool()
+
+        if not pool.is_initialized:
+            raise DatabaseUnavailableError("update task execution metadata")
+
+        metadata_json = json.dumps(metadata or {})
+
+        try:
+            await pool.execute(
+                """
+                UPDATE task_executions
+                SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb
+                WHERE id = $1
+                """,
+                exec_id, metadata_json,
+            )
+        except DatabaseUnavailableError:
+            raise
+        except Exception as e:
+            logger.error("Failed to update task execution metadata: %s", e)
+            raise DatabaseOperationError("update task execution metadata", e)
+
     async def get_executions(
         self,
         task_id: UUID,
@@ -438,6 +466,32 @@ class ScheduledTaskRepository:
             raise
         except Exception as e:
             raise DatabaseOperationError("get task executions", e)
+
+    async def get_running_execution(self, task_id: UUID) -> Optional[TaskExecution]:
+        """Get the latest running execution for a task, if any."""
+        pool = get_db_pool()
+
+        if not pool.is_initialized:
+            raise DatabaseUnavailableError("get running task execution")
+
+        try:
+            row = await pool.fetchrow(
+                """
+                SELECT id, task_id, status, started_at, completed_at,
+                       duration_ms, result_text, error, retry_count, metadata
+                FROM task_executions
+                WHERE task_id = $1 AND status = 'running'
+                ORDER BY started_at DESC
+                LIMIT 1
+                """,
+                task_id,
+            )
+            return self._row_to_execution(row) if row else None
+
+        except DatabaseUnavailableError:
+            raise
+        except Exception as e:
+            raise DatabaseOperationError("get running task execution", e)
 
     async def cleanup_old_executions(self, older_than_days: int = 30) -> int:
         """Delete execution records older than N days."""
