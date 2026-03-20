@@ -500,3 +500,143 @@ class TestEnrichedNotificationSkipsAutoExecuted:
             await _send_enriched_notifications([email])
 
             mock_client.post.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Campaign reply vendor_target ownership
+# ---------------------------------------------------------------------------
+
+
+class TestCampaignReplyVendorTargetOwnership:
+    @pytest.mark.asyncio
+    async def test_reply_created_vendor_target_inherits_unique_owner_account(self):
+        from atlas_brain.autonomous.tasks.email_intake import _detect_campaign_replies
+
+        email = _make_email()
+        email["in_reply_to"] = "<msg-1>"
+        pool = AsyncMock()
+        pool.fetchrow = AsyncMock(
+            side_effect=[
+                {
+                    "id": "camp-1",
+                    "sequence_id": "seq-1",
+                    "subject": "Hello",
+                    "body": "World",
+                    "step_number": 1,
+                    "vendor_name": "HubSpot",
+                    "company_name": "Acme",
+                    "seq_status": "active",
+                },
+                None,
+            ]
+        )
+        crm = MagicMock()
+        crm.create_contact = AsyncMock(return_value={"id": "contact-1"})
+        crm.log_interaction = AsyncMock(return_value=None)
+
+        with patch("atlas_brain.services.crm_provider.get_crm_provider", return_value=crm):
+            with patch("atlas_brain.autonomous.tasks.campaign_audit.log_campaign_event", new=AsyncMock()):
+                with patch("atlas_brain.autonomous.tasks.email_intake._send_campaign_reply_notification", new=AsyncMock()):
+                    with patch(
+                        "atlas_brain.autonomous.tasks.email_intake._resolve_vendor_target_account_id",
+                        new=AsyncMock(return_value="acct-1"),
+                    ):
+                        count = await _detect_campaign_replies(pool, [email])
+
+        assert count == 1
+        insert_call = next(
+            call for call in pool.execute.await_args_list
+            if "INSERT INTO vendor_targets" in call.args[0]
+        )
+        assert insert_call.args[1] == "acct-1"
+        assert insert_call.args[2] == "Acme"
+
+    @pytest.mark.asyncio
+    async def test_reply_created_vendor_target_stays_global_when_owner_is_ambiguous(self):
+        from atlas_brain.autonomous.tasks.email_intake import _detect_campaign_replies
+
+        email = _make_email()
+        email["in_reply_to"] = "<msg-2>"
+        pool = AsyncMock()
+        pool.fetchrow = AsyncMock(
+            side_effect=[
+                {
+                    "id": "camp-2",
+                    "sequence_id": "seq-2",
+                    "subject": "Hello",
+                    "body": "World",
+                    "step_number": 1,
+                    "vendor_name": "HubSpot",
+                    "company_name": "Acme",
+                    "seq_status": "active",
+                },
+                None,
+            ]
+        )
+        crm = MagicMock()
+        crm.create_contact = AsyncMock(return_value={"id": "contact-2"})
+        crm.log_interaction = AsyncMock(return_value=None)
+
+        with patch("atlas_brain.services.crm_provider.get_crm_provider", return_value=crm):
+            with patch("atlas_brain.autonomous.tasks.campaign_audit.log_campaign_event", new=AsyncMock()):
+                with patch("atlas_brain.autonomous.tasks.email_intake._send_campaign_reply_notification", new=AsyncMock()):
+                    with patch(
+                        "atlas_brain.autonomous.tasks.email_intake._resolve_vendor_target_account_id",
+                        new=AsyncMock(return_value=None),
+                    ):
+                        count = await _detect_campaign_replies(pool, [email])
+
+        assert count == 1
+        insert_call = next(
+            call for call in pool.execute.await_args_list
+            if "INSERT INTO vendor_targets" in call.args[0]
+        )
+        assert insert_call.args[1] == "Acme"
+        assert insert_call.args[2] == "alice@example.com"
+
+    @pytest.mark.asyncio
+    async def test_reply_reactivation_claims_legacy_global_target_for_unique_owner(self):
+        from atlas_brain.autonomous.tasks.email_intake import _detect_campaign_replies
+
+        email = _make_email()
+        email["in_reply_to"] = "<msg-3>"
+        pool = AsyncMock()
+        pool.fetchrow = AsyncMock(
+            side_effect=[
+                {
+                    "id": "camp-3",
+                    "sequence_id": "seq-3",
+                    "subject": "Hello",
+                    "body": "World",
+                    "step_number": 1,
+                    "vendor_name": "HubSpot",
+                    "company_name": "Acme",
+                    "seq_status": "active",
+                },
+                {
+                    "id": "target-1",
+                    "status": "paused",
+                    "account_id": None,
+                },
+            ]
+        )
+        crm = MagicMock()
+        crm.create_contact = AsyncMock(return_value={"id": "contact-3"})
+        crm.log_interaction = AsyncMock(return_value=None)
+
+        with patch("atlas_brain.services.crm_provider.get_crm_provider", return_value=crm):
+            with patch("atlas_brain.autonomous.tasks.campaign_audit.log_campaign_event", new=AsyncMock()):
+                with patch("atlas_brain.autonomous.tasks.email_intake._send_campaign_reply_notification", new=AsyncMock()):
+                    with patch(
+                        "atlas_brain.autonomous.tasks.email_intake._resolve_vendor_target_account_id",
+                        new=AsyncMock(return_value="acct-2"),
+                    ):
+                        count = await _detect_campaign_replies(pool, [email])
+
+        assert count == 1
+        update_call = next(
+            call for call in pool.execute.await_args_list
+            if "UPDATE vendor_targets" in call.args[0]
+        )
+        assert update_call.args[1] == "target-1"
+        assert update_call.args[2] == "acct-2"

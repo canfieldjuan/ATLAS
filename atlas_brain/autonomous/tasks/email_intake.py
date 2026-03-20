@@ -486,6 +486,28 @@ async def _classify_and_plan(emails: list[dict[str, Any]]) -> int:
 _NEGATIVE_REPLY_KW = {"unsubscribe", "stop", "remove", "opt out"}
 
 
+async def _resolve_vendor_target_account_id(pool, vendor_name: str) -> str | None:
+    """Return the sole owning account for a vendor, or None if ambiguous."""
+    if not str(vendor_name or "").strip():
+        return None
+    row = await pool.fetchrow(
+        """
+        SELECT COUNT(DISTINCT account_id) AS account_count,
+               MIN(account_id::text) AS account_id
+        FROM tracked_vendors
+        WHERE LOWER(vendor_name) = LOWER($1)
+          AND track_mode = 'own'
+        """,
+        vendor_name,
+    )
+    if not row:
+        return None
+    if int(row.get("account_count") or 0) != 1:
+        return None
+    account_id = str(row.get("account_id") or "").strip()
+    return account_id or None
+
+
 async def _detect_campaign_replies(pool, emails: list[dict[str, Any]]) -> int:
     """Detect replies to campaign emails by matching message headers.
 
@@ -518,6 +540,7 @@ async def _detect_campaign_replies(pool, emails: list[dict[str, Any]]) -> int:
             campaign_row = await pool.fetchrow(
                 """
                 SELECT bc.id, bc.sequence_id, bc.subject, bc.body, bc.step_number,
+                       bc.vendor_name,
                        cs.company_name, cs.status AS seq_status
                 FROM b2b_campaigns bc
                 LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id
@@ -604,41 +627,93 @@ async def _detect_campaign_replies(pool, emails: list[dict[str, Any]]) -> int:
                     body_lower = (e.get("body_text") or "").lower()
                     is_negative = any(kw in body_lower for kw in _NEGATIVE_REPLY_KW)
                     company_name = row.get("company_name", "")
+                    target_account_id = await _resolve_vendor_target_account_id(
+                        pool,
+                        str(row.get("vendor_name") or ""),
+                    )
 
                     if not is_negative and company_name:
-                        existing_target = await pool.fetchrow(
-                            """
-                            SELECT id, status FROM vendor_targets
-                            WHERE LOWER(company_name) = LOWER($1)
-                            LIMIT 1
-                            """,
-                            company_name,
-                        )
+                        if target_account_id:
+                            existing_target = await pool.fetchrow(
+                                """
+                                SELECT id, status, account_id
+                                FROM vendor_targets
+                                WHERE LOWER(company_name) = LOWER($1)
+                                  AND (account_id = $2 OR account_id IS NULL)
+                                ORDER BY CASE WHEN account_id = $2 THEN 0 ELSE 1 END
+                                LIMIT 1
+                                """,
+                                company_name,
+                                target_account_id,
+                            )
+                        else:
+                            existing_target = await pool.fetchrow(
+                                """
+                                SELECT id, status, account_id
+                                FROM vendor_targets
+                                WHERE LOWER(company_name) = LOWER($1)
+                                  AND account_id IS NULL
+                                ORDER BY updated_at DESC NULLS LAST,
+                                         created_at DESC NULLS LAST
+                                LIMIT 1
+                                """,
+                                company_name,
+                            )
                         if existing_target:
                             if existing_target["status"] != "active":
-                                await pool.execute(
-                                    """
-                                    UPDATE vendor_targets
-                                    SET status = 'active', updated_at = NOW()
-                                    WHERE id = $1
-                                    """,
-                                    existing_target["id"],
-                                )
+                                if target_account_id:
+                                    await pool.execute(
+                                        """
+                                        UPDATE vendor_targets
+                                        SET status = 'active',
+                                            account_id = COALESCE(account_id, $2),
+                                            updated_at = NOW()
+                                        WHERE id = $1
+                                        """,
+                                        existing_target["id"],
+                                        target_account_id,
+                                    )
+                                else:
+                                    await pool.execute(
+                                        """
+                                        UPDATE vendor_targets
+                                        SET status = 'active', updated_at = NOW()
+                                        WHERE id = $1
+                                        """,
+                                        existing_target["id"],
+                                    )
                                 logger.info(
                                     "Reactivated vendor_target %s for %s",
                                     existing_target["id"], company_name,
                                 )
                         else:
-                            await pool.execute(
-                                """
-                                INSERT INTO vendor_targets
-                                    (company_name, target_mode, status,
-                                     contact_email, contact_name, created_at, updated_at)
-                                VALUES ($1, 'vendor_retention', 'active',
-                                        $2, $3, NOW(), NOW())
-                                """,
-                                company_name, sender_email, _name or None,
-                            )
+                            if target_account_id:
+                                await pool.execute(
+                                    """
+                                    INSERT INTO vendor_targets
+                                        (account_id, company_name, target_mode, status,
+                                         contact_email, contact_name, created_at, updated_at)
+                                    VALUES ($1, $2, 'vendor_retention', 'active',
+                                            $3, $4, NOW(), NOW())
+                                    """,
+                                    target_account_id,
+                                    company_name,
+                                    sender_email,
+                                    _name or None,
+                                )
+                            else:
+                                await pool.execute(
+                                    """
+                                    INSERT INTO vendor_targets
+                                        (company_name, target_mode, status,
+                                         contact_email, contact_name, created_at, updated_at)
+                                    VALUES ($1, 'vendor_retention', 'active',
+                                            $2, $3, NOW(), NOW())
+                                    """,
+                                    company_name,
+                                    sender_email,
+                                    _name or None,
+                                )
                             logger.info(
                                 "Created vendor_target for %s from campaign reply",
                                 company_name,
