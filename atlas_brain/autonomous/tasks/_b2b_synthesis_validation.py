@@ -7,6 +7,7 @@ persistence (v1 fallback stays); warnings are attached to the row.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -29,6 +30,30 @@ _REQUIRED_SECTIONS = (
     "causal_narrative", "segment_playbook", "timing_intelligence",
     "competitive_reframes", "migration_proof",
 )
+_UNCLASSIFIED_VAULT_PREFIXES = (
+    "vault:weakness:unknown",
+    "vault:strength:unknown",
+)
+_FIELD_SOURCE_RULES = {
+    "migration_proof.switch_volume": {
+        "displacement:aggregate:total_explicit_switches",
+    },
+    "migration_proof.active_evaluation_volume": {
+        "displacement:aggregate:total_active_evaluations",
+    },
+    "migration_proof.displacement_mention_volume": {
+        "vault:metric:displacement_mention_count",
+        "category:aggregate:displacement_flow_count",
+    },
+    "timing_intelligence.active_eval_signals": {
+        "accounts:summary:active_eval_signal_count",
+        "temporal:signal:evaluation_deadline_signals",
+    },
+    "segment_playbook.priority_segments[*].estimated_reach": {
+        "accounts:summary:total_accounts",
+        "accounts:summary:high_intent_count",
+    },
+}
 
 
 @dataclass(slots=True)
@@ -78,6 +103,14 @@ def _add(
         result.errors.append(finding)
     else:
         result.warnings.append(finding)
+
+
+def _normalized_path(path: str) -> str:
+    return re.sub(r"\[\d+\]", "[*]", path)
+
+
+def _is_unclassified_vault_source_id(source_id: str) -> bool:
+    return any(source_id.startswith(prefix) for prefix in _UNCLASSIFIED_VAULT_PREFIXES)
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +211,13 @@ def _check_citations(
                         "hallucinated_source_id",
                         f"citation '{sid}' does not exist in the input packet",
                     )
+                elif isinstance(sid, str) and _is_unclassified_vault_source_id(sid):
+                    _add(
+                        result,
+                        f"{section}.citations",
+                        "unclassified_source_id",
+                        f"citation '{sid}' is not specific enough for synthesis output",
+                    )
 
     # Per-segment citations
     sp = synthesis.get("segment_playbook")
@@ -229,6 +269,11 @@ def _check_source_ids(
                     _add(
                         result, path, "hallucinated_source_id",
                         f"source_id '{sid}' does not exist in the input packet",
+                    )
+                elif _is_unclassified_vault_source_id(sid):
+                    _add(
+                        result, path, "unclassified_source_id",
+                        f"source_id '{sid}' is not specific enough for synthesis output",
                     )
             for k, v in obj.items():
                 _walk(v, f"{path}.{k}")
