@@ -73,6 +73,8 @@ class PersonFull:
         "apollo_person_id", "first_name", "last_name", "email", "email_status",
         "title", "seniority", "department", "linkedin_url",
         "city", "state", "country", "company_name", "company_domain",
+        "headline", "departments", "time_zone",
+        "twitter_url", "photo_url", "facebook_url",
         "raw",
     )
 
@@ -89,6 +91,12 @@ class PersonFull:
         self.city: str = data.get("city") or ""
         self.state: str = data.get("state") or ""
         self.country: str = data.get("country") or ""
+        self.headline: str = data.get("headline") or ""
+        self.departments: list = data.get("departments") or []
+        self.time_zone: str = data.get("time_zone") or ""
+        self.twitter_url: str = data.get("twitter_url") or ""
+        self.photo_url: str = data.get("photo_url") or ""
+        self.facebook_url: str = data.get("facebook_url") or ""
         org = data.get("organization") or {}
         self.company_name: str = org.get("name") or data.get("organization_name") or ""
         self.company_domain: str = org.get("primary_domain") or org.get("website_url") or ""

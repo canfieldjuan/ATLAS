@@ -834,6 +834,7 @@ async def scraping_top_posts(
             COALESCE(reddit_comment_thread_count, 0)          AS comment_count
         FROM b2b_reviews
         WHERE source = $1
+          AND COALESCE(enrichment_status, '') != 'filtered'
           AND COALESCE(source_weight, 0.7) >= $2
         ORDER BY COALESCE(source_weight, 0.7) DESC NULLS LAST,
                  imported_at DESC
@@ -932,6 +933,7 @@ async def reddit_overview(days: int = Query(default=7, ge=1, le=30)):
             COUNT(*) AS cnt
         FROM b2b_reviews
         WHERE source = 'reddit'
+          AND COALESCE(enrichment_status, '') != 'filtered'
           AND imported_at >= $1
         GROUP BY enrichment_status
         """,
@@ -961,6 +963,7 @@ async def reddit_overview(days: int = Query(default=7, ge=1, le=30)):
             )                                                                AS actionable
         FROM b2b_reviews
         WHERE source = 'reddit'
+          AND COALESCE(enrichment_status, '') != 'filtered'
           AND imported_at >= $1
           AND enrichment_status = 'enriched'
         """,
@@ -1053,6 +1056,7 @@ async def reddit_by_subreddit(days: int = Query(default=30, ge=1, le=90)):
             )                                                                             AS comment_harvested_count
         FROM b2b_reviews
         WHERE source = 'reddit'
+          AND COALESCE(enrichment_status, '') != 'filtered'
           AND imported_at >= $1
           AND reddit_subreddit IS NOT NULL
           AND reddit_subreddit != ''
@@ -1112,6 +1116,7 @@ async def reddit_signal_breakdown(days: int = Query(default=30, ge=1, le=90)):
             ROUND(AVG(COALESCE(source_weight, 0.7))::numeric, 3) AS avg_weight
         FROM b2b_reviews
         WHERE source = 'reddit'
+          AND COALESCE(enrichment_status, '') != 'filtered'
           AND imported_at >= $1
         GROUP BY reddit_flair
         ORDER BY count DESC
@@ -1134,6 +1139,7 @@ async def reddit_signal_breakdown(days: int = Query(default=30, ge=1, le=90)):
                                AND enrichment_status = 'enriched')           AS unedited_enriched
         FROM b2b_reviews
         WHERE source = 'reddit'
+          AND COALESCE(enrichment_status, '') != 'filtered'
           AND imported_at >= $1
         """,
         since,
@@ -1152,11 +1158,13 @@ async def reddit_signal_breakdown(days: int = Query(default=30, ge=1, le=90)):
                 FROM b2b_reviews r2,
                      jsonb_array_elements_text(r2.reddit_crosspost_subreddits) AS sub
                 WHERE r2.source = 'reddit'
+                  AND COALESCE(r2.enrichment_status, '') != 'filtered'
                   AND r2.imported_at >= $1
                   AND r2.reddit_is_crosspost
             ), 0)                                                              AS crosspost_subreddits_reached
         FROM b2b_reviews
         WHERE source = 'reddit'
+          AND COALESCE(enrichment_status, '') != 'filtered'
           AND imported_at >= $1
         """,
         since,
@@ -1175,6 +1183,7 @@ async def reddit_signal_breakdown(days: int = Query(default=30, ge=1, le=90)):
             COUNT(*)                                                            AS total_posts
         FROM b2b_reviews
         WHERE source = 'reddit'
+          AND COALESCE(enrichment_status, '') != 'filtered'
           AND imported_at >= $1
         """,
         since,
@@ -1205,6 +1214,7 @@ async def reddit_signal_breakdown(days: int = Query(default=30, ge=1, le=90)):
             )                                                                  AS score_7_10
         FROM b2b_reviews
         WHERE source = 'reddit'
+          AND COALESCE(enrichment_status, '') != 'filtered'
           AND imported_at >= $1
         """,
         since,
@@ -1223,6 +1233,7 @@ async def reddit_signal_breakdown(days: int = Query(default=30, ge=1, le=90)):
                                OR reviewed_at IS NULL)                          AS older
         FROM b2b_reviews
         WHERE source = 'reddit'
+          AND COALESCE(enrichment_status, '') != 'filtered'
           AND imported_at >= $1
         """,
         since,
@@ -1238,6 +1249,7 @@ async def reddit_signal_breakdown(days: int = Query(default=30, ge=1, le=90)):
                                OR reddit_trending IS NULL)     AS trending_low
         FROM b2b_reviews
         WHERE source = 'reddit'
+          AND COALESCE(enrichment_status, '') != 'filtered'
           AND imported_at >= $1
         """,
         since,
@@ -1347,6 +1359,7 @@ async def reddit_per_vendor(
             )                                                                            AS trending_high_count
         FROM b2b_reviews
         WHERE source = 'reddit'
+          AND COALESCE(enrichment_status, '') != 'filtered'
           AND imported_at >= $1
         GROUP BY vendor_name
         ORDER BY enriched DESC, inserted DESC
@@ -1370,6 +1383,7 @@ async def reddit_per_vendor(
             COUNT(*)                      AS cnt
         FROM b2b_reviews
         WHERE source = 'reddit'
+          AND COALESCE(enrichment_status, '') != 'filtered'
           AND imported_at >= $1
           AND vendor_name = ANY($2)
           AND reddit_subreddit IS NOT NULL
@@ -1399,6 +1413,7 @@ async def reddit_per_vendor(
             COUNT(*)                       AS cnt
         FROM b2b_reviews
         WHERE source = 'reddit'
+          AND COALESCE(enrichment_status, '') != 'filtered'
           AND imported_at >= $1
           AND vendor_name = ANY($2)
           AND enrichment_status = 'enriched'

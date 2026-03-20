@@ -85,10 +85,28 @@ class OpenRouterLLM(BaseModelService):
     def is_loaded(self) -> bool:
         return self._loaded
 
+    def _is_anthropic_model(self) -> bool:
+        return self.model.startswith("anthropic/")
+
     def _convert_messages(self, messages: list[Message]) -> list[dict]:
         result = []
+        use_cache = self._is_anthropic_model()
         for msg in messages:
-            m = {"role": msg.role, "content": msg.content}
+            # For Anthropic models on OpenRouter: add cache_control to system
+            # messages >1024 chars so the prompt prefix is cached across calls.
+            if use_cache and msg.role == "system" and len(msg.content) > 1024:
+                m = {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": msg.content,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                }
+            else:
+                m = {"role": msg.role, "content": msg.content}
             if msg.tool_calls:
                 m["tool_calls"] = msg.tool_calls
             result.append(m)
