@@ -5,6 +5,25 @@ import {
 import type { ProviderEntry } from '../types'
 import { fmtCost, fmtTokens, provColor } from '../utils'
 
+type ProviderTooltipProps = {
+  active?: boolean
+  payload?: Array<{ payload?: ProviderEntry }>
+}
+
+function ProviderTooltip({ active, payload }: ProviderTooltipProps) {
+  const entry = payload?.[0]?.payload
+  if (!active || !entry) return null
+
+  return (
+    <div className="rounded-lg border border-slate-700 bg-slate-800/95 px-3 py-2 text-xs shadow-xl backdrop-blur">
+      <p className="mb-1 font-semibold text-slate-200">{entry.provider}</p>
+      <p className="text-cyan-400">{fmtTokens(entry.total_tokens)} tokens</p>
+      <p className="text-violet-400">{entry.calls.toLocaleString()} calls</p>
+      {entry.cost_usd > 0 && <p className="text-emerald-400">{fmtCost(entry.cost_usd)}</p>}
+    </div>
+  )
+}
+
 export default function ProviderChart({ data }: { data: ProviderEntry[] }) {
   return (
     <div className="animate-enter rounded-xl border border-slate-800/80 bg-slate-900/40 p-5" style={{ animationDelay: '320ms' }}>
@@ -36,20 +55,7 @@ export default function ProviderChart({ data }: { data: ProviderEntry[] }) {
                 tickLine={false}
                 axisLine={false}
               />
-              <Tooltip
-                content={({ active, payload }) => {
-                  if (!active || !payload?.length) return null;
-                  const d = payload[0].payload as ProviderEntry;
-                  return (
-                    <div className="rounded-lg border border-slate-700 bg-slate-800/95 px-3 py-2 text-xs shadow-xl backdrop-blur">
-                      <p className="mb-1 font-semibold text-slate-200">{d.provider}</p>
-                      <p className="text-cyan-400">{fmtTokens(d.total_tokens)} tokens</p>
-                      <p className="text-violet-400">{d.calls.toLocaleString()} calls</p>
-                      {d.cost_usd > 0 && <p className="text-emerald-400">{fmtCost(d.cost_usd)}</p>}
-                    </div>
-                  );
-                }}
-              />
+              <Tooltip content={<ProviderTooltip />} />
               <Bar dataKey="total_tokens" name="tokens" radius={[0, 4, 4, 0]} barSize={22}>
                 {data.map((entry, i) => (
                   <Cell key={i} fill={provColor(entry.provider)} />

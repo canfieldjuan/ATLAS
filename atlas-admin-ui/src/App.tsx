@@ -1,33 +1,44 @@
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { Suspense, lazy, useEffect, useState, useCallback, useMemo } from 'react'
 import { DollarSign, Activity, Cpu, Zap, TrendingUp, RefreshCw, AlertCircle } from 'lucide-react'
 import type {
   Summary, ProviderEntry, WorkflowEntry, DailyEntry, MergedDailyEntry,
   RecentCall, TaskHealth, ErrorTimelineEntry, SystemResources,
-  ScrapeSummaryData, ScrapeDetail, ScrapeTopPost,
+  ScrapeSummaryData, ScrapeDetail, ScrapeTopPost, ModelEntry,
+  ReasoningActivityData, RedditOverview, RedditBySubredditData,
+  RedditSignalBreakdownData, RedditPerVendorData,
 } from './types'
 import { fmtCost, fmtTokens, fmtDuration } from './utils'
+import { fetchAdminDashboardData, fetchSystemResources } from './api/client'
 import StatCard from './components/StatCard'
 import SystemResourcesBar from './components/SystemResourcesBar'
 import DailyChart from './components/DailyChart'
 import ProviderChart from './components/ProviderChart'
-import TaskHealthPanel from './components/TaskHealthPanel'
-import ScrapingPipeline from './components/ScrapingPipeline'
-import WorkflowTable from './components/WorkflowTable'
-import RecentCalls from './components/RecentCalls'
-import ReasoningPanel from './components/ReasoningPanel'
+
+const ModelTable = lazy(() => import('./components/ModelTable'))
+const TaskHealthPanel = lazy(() => import('./components/TaskHealthPanel'))
+const ScrapingPipeline = lazy(() => import('./components/ScrapingPipeline'))
+const WorkflowTable = lazy(() => import('./components/WorkflowTable'))
+const RecentCalls = lazy(() => import('./components/RecentCalls'))
+const ReasoningPanel = lazy(() => import('./components/ReasoningPanel'))
 
 export default function App() {
   const [summary, setSummary] = useState<Summary | null>(null)
   const [providers, setProviders] = useState<ProviderEntry[]>([])
+  const [models, setModels] = useState<ModelEntry[]>([])
   const [workflows, setWorkflows] = useState<WorkflowEntry[]>([])
   const [daily, setDaily] = useState<DailyEntry[]>([])
   const [recent, setRecent] = useState<RecentCall[]>([])
+  const [reasoningActivity, setReasoningActivity] = useState<ReasoningActivityData | null>(null)
   const [tasks, setTasks] = useState<TaskHealth[]>([])
   const [errorTimeline, setErrorTimeline] = useState<ErrorTimelineEntry[]>([])
   const [sysResources, setSysResources] = useState<SystemResources | null>(null)
   const [scrapeSummary, setScrapeSummary] = useState<ScrapeSummaryData | null>(null)
   const [scrapeDetails, setScrapeDetails] = useState<ScrapeDetail[]>([])
   const [scrapeTopPosts, setScrapeTopPosts] = useState<ScrapeTopPost[]>([])
+  const [redditOverview, setRedditOverview] = useState<RedditOverview | null>(null)
+  const [redditBySubreddit, setRedditBySubreddit] = useState<RedditBySubredditData | null>(null)
+  const [redditSignalBreakdown, setRedditSignalBreakdown] = useState<RedditSignalBreakdownData | null>(null)
+  const [redditPerVendor, setRedditPerVendor] = useState<RedditPerVendorData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date())
@@ -37,35 +48,24 @@ export default function App() {
     setLoading(true)
     setError(null)
     try {
-      const [sumR, provR, wfR, dailyR, recentR, taskR, errR, sysR, scSumR, scDetR, scTopR] = await Promise.all([
-        fetch(`/api/v1/admin/costs/summary?days=${days}`),
-        fetch(`/api/v1/admin/costs/by-provider?days=${days}`),
-        fetch(`/api/v1/admin/costs/by-workflow?days=${days}`),
-        fetch(`/api/v1/admin/costs/daily?days=${days}`),
-        fetch('/api/v1/admin/costs/recent?limit=50'),
-        fetch(`/api/v1/admin/costs/task-health?days=${days}`),
-        fetch(`/api/v1/admin/costs/error-timeline?days=${days}`),
-        fetch('/api/v1/admin/costs/system-resources'),
-        fetch(`/api/v1/admin/costs/scraping/summary?days=${days}`),
-        fetch('/api/v1/admin/costs/scraping/details?limit=50'),
-        fetch('/api/v1/admin/costs/scraping/top-posts?source=reddit&limit=25'),
-      ])
-      const failed = [sumR, provR, wfR, dailyR, recentR].find(r => !r.ok)
-      if (failed) throw new Error(`API ${failed.status}: ${failed.statusText}`)
-      const [sumD, provD, wfD, dailyD, recentD] = await Promise.all([
-        sumR.json(), provR.json(), wfR.json(), dailyR.json(), recentR.json(),
-      ])
-      setSummary(sumD)
-      setProviders((provD.providers || []).map((p: ProviderEntry) => ({ ...p, total_tokens: p.input_tokens + p.output_tokens })))
-      setWorkflows(wfD.workflows || [])
-      setDaily(dailyD.daily || [])
-      setRecent(recentD.calls || [])
-      if (taskR.ok) setTasks((await taskR.json()).tasks || [])
-      if (errR.ok) setErrorTimeline((await errR.json()).daily || [])
-      if (sysR.ok) setSysResources(await sysR.json())
-      if (scSumR.ok) setScrapeSummary(await scSumR.json())
-      if (scDetR.ok) setScrapeDetails((await scDetR.json()).scrapes || [])
-      if (scTopR.ok) setScrapeTopPosts((await scTopR.json()).posts || [])
+      const data = await fetchAdminDashboardData(days)
+      setSummary(data.summary)
+      setProviders(data.providers)
+      setModels(data.models)
+      setWorkflows(data.workflows)
+      setDaily(data.daily)
+      setRecent(data.recent)
+      setReasoningActivity(data.reasoningActivity)
+      setTasks(data.tasks)
+      setErrorTimeline(data.errorTimeline)
+      setSysResources(data.sysResources)
+      setScrapeSummary(data.scrapeSummary)
+      setScrapeDetails(data.scrapeDetails)
+      setScrapeTopPosts(data.scrapeTopPosts)
+      setRedditOverview(data.redditOverview)
+      setRedditBySubreddit(data.redditBySubreddit)
+      setRedditSignalBreakdown(data.redditSignalBreakdown)
+      setRedditPerVendor(data.redditPerVendor)
       setLastRefresh(new Date())
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to fetch data')
@@ -74,11 +74,11 @@ export default function App() {
     }
   }, [days])
 
-  useEffect(() => { fetchAll() }, [fetchAll])
+  useEffect(() => { void fetchAll() }, [fetchAll])
 
   // Auto-refresh every 60s
   useEffect(() => {
-    const id = setInterval(fetchAll, 60_000)
+    const id = setInterval(() => { void fetchAll() }, 60_000)
     return () => clearInterval(id)
   }, [fetchAll])
 
@@ -86,8 +86,8 @@ export default function App() {
   useEffect(() => {
     const id = setInterval(async () => {
       try {
-        const r = await fetch('/api/v1/admin/costs/system-resources')
-        if (r.ok) setSysResources(await r.json())
+        const resources = await fetchSystemResources()
+        if (resources) setSysResources(resources)
       } catch { /* ignore */ }
     }, 10_000)
     return () => clearInterval(id)
@@ -101,6 +101,12 @@ export default function App() {
       error_rate: errMap.get(d.date)?.error_rate ?? 0,
     }))
   }, [daily, errorTimeline])
+
+  const sectionFallback = (
+    <div className="rounded-xl border border-slate-800/80 bg-slate-900/40 p-5 text-sm text-slate-600">
+      Loading panel...
+    </div>
+  )
 
   return (
     <div className="min-h-screen bg-slate-950 font-sans text-slate-200">
@@ -196,24 +202,49 @@ export default function App() {
         {/* ── Charts ─────────────────────────────── */}
         <div className="mb-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
           <DailyChart data={mergedDaily} />
-          <ProviderChart data={providers} />
+          <div className="space-y-6">
+            <ProviderChart data={providers} />
+            <Suspense fallback={sectionFallback}>
+              <ModelTable data={models} />
+            </Suspense>
+          </div>
         </div>
 
         {/* ── Task Health ─────────────────────────── */}
-        {tasks.length > 0 && <TaskHealthPanel tasks={tasks} />}
+        {tasks.length > 0 && (
+          <Suspense fallback={sectionFallback}>
+            <TaskHealthPanel tasks={tasks} />
+          </Suspense>
+        )}
 
         {/* ── Scraping Pipeline ───────────────────── */}
-        <ScrapingPipeline summary={scrapeSummary} details={scrapeDetails} topPosts={scrapeTopPosts} />
+        <Suspense fallback={sectionFallback}>
+          <ScrapingPipeline
+            summary={scrapeSummary}
+            details={scrapeDetails}
+            topPosts={scrapeTopPosts}
+            redditOverview={redditOverview}
+            redditBySubreddit={redditBySubreddit}
+            redditSignalBreakdown={redditSignalBreakdown}
+            redditPerVendor={redditPerVendor}
+          />
+        </Suspense>
 
         {/* ── Reasoning Activity ─────────────────── */}
         <div className="mb-8">
-          <ReasoningPanel workflows={workflows} recent={recent} />
+          <Suspense fallback={sectionFallback}>
+            <ReasoningPanel reasoning={reasoningActivity} workflows={workflows} recent={recent} />
+          </Suspense>
         </div>
 
         {/* ── Bottom: Workflows + Recent ─────────── */}
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <WorkflowTable data={workflows} />
-          <RecentCalls data={recent} />
+          <Suspense fallback={sectionFallback}>
+            <WorkflowTable data={workflows} />
+          </Suspense>
+          <Suspense fallback={sectionFallback}>
+            <RecentCalls data={recent} />
+          </Suspense>
         </div>
 
         {/* Footer */}

@@ -1,5 +1,5 @@
 import { Brain, RefreshCcw, FileText, Swords, ArrowRight, ShieldAlert, Anchor } from 'lucide-react'
-import type { RecentCall, WorkflowEntry } from '../types'
+import type { ReasoningActivityData, ReasoningPhase, RecentCall, WorkflowEntry } from '../types'
 import { fmtCost, fmtTokens } from '../utils'
 
 type ReasoningBucket = 'reason' | 'challenge' | 'ground' | 'reconstitute' | 'report' | 'battle_card_copy' | 'other'
@@ -97,22 +97,50 @@ function bucketSummary(workflows: WorkflowEntry[], bucket: ReasoningBucket) {
   )
 }
 
+function phaseBucketSummary(phases: ReasoningPhase[], bucket: ReasoningBucket) {
+  return phases.reduce(
+    (acc, phase) => {
+      if (classifySpan(phase.span_name).bucket !== bucket) return acc
+      acc.calls += phase.calls
+      acc.cost += phase.cost_usd
+      acc.tokens += phase.total_tokens
+      acc.changed += phase.changed_count
+      return acc
+    },
+    { calls: 0, cost: 0, tokens: 0, changed: 0 }
+  )
+}
+
 export default function ReasoningPanel({
+  reasoning,
   workflows,
   recent,
 }: {
+  reasoning: ReasoningActivityData | null
   workflows: WorkflowEntry[]
   recent: RecentCall[]
 }) {
-  const fullReason = bucketSummary(workflows, 'reason')
-  const challenge = bucketSummary(workflows, 'challenge')
-  const ground = bucketSummary(workflows, 'ground')
-  const reconstitute = bucketSummary(workflows, 'reconstitute')
+  const reasoningPhases = reasoning?.phases ?? []
+  const fullReason = reasoningPhases.length > 0
+    ? phaseBucketSummary(reasoningPhases, 'reason')
+    : bucketSummary(workflows, 'reason')
+  const challenge = reasoningPhases.length > 0
+    ? phaseBucketSummary(reasoningPhases, 'challenge')
+    : bucketSummary(workflows, 'challenge')
+  const ground = reasoningPhases.length > 0
+    ? phaseBucketSummary(reasoningPhases, 'ground')
+    : bucketSummary(workflows, 'ground')
+  const reconstitute = reasoningPhases.length > 0
+    ? phaseBucketSummary(reasoningPhases, 'reconstitute')
+    : bucketSummary(workflows, 'reconstitute')
   const report = bucketSummary(workflows, 'report')
   const battleCardCopy = bucketSummary(workflows, 'battle_card_copy')
-  const totalVisibleCost = fullReason.cost + challenge.cost + ground.cost + reconstitute.cost + report.cost + battleCardCopy.cost
-  const reasoningCost = fullReason.cost + challenge.cost + ground.cost + reconstitute.cost
+  const reasoningCost = reasoning?.summary.total_cost_usd ?? (
+    fullReason.cost + challenge.cost + ground.cost + reconstitute.cost
+  )
+  const totalVisibleCost = reasoningCost + report.cost + battleCardCopy.cost
   const reasoningShare = totalVisibleCost > 0 ? (reasoningCost / totalVisibleCost) * 100 : 0
+  const changedCount = reasoningPhases.reduce((sum, phase) => sum + phase.changed_count, 0)
 
   const relevantWorkflows = workflows
     .filter((workflow) => classifySpan(workflow.workflow).bucket !== 'other')
@@ -148,6 +176,11 @@ export default function ReasoningPanel({
           <div className="text-xs text-slate-500">
             {fmtCost(reasoningCost)} of {fmtCost(totalVisibleCost)}
           </div>
+          {reasoning && reasoningPhases.length > 0 && (
+            <div className="mt-1 text-[11px] text-slate-600">
+              {reasoning.summary.total_calls} phase calls, {changedCount} changed
+            </div>
+          )}
         </div>
       </div>
 
