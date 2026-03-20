@@ -18,6 +18,7 @@ from typing import Any
 
 from ...config import settings
 from ...services.company_normalization import normalize_company_name as _normalize_company
+from ...services.vendor_target_selection import dedupe_vendor_target_rows
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 
@@ -81,7 +82,8 @@ async def _discover_targets(pool, cfg) -> list[dict]:
     """
     rows = await pool.fetch(
         """
-        SELECT id, company_name, target_mode, prospect_id, contact_enriched_at
+        SELECT id, company_name, target_mode, prospect_id, contact_email,
+               contact_enriched_at, account_id, created_at, updated_at
         FROM vendor_targets
         WHERE status = 'active'
           AND (
@@ -97,12 +99,11 @@ async def _discover_targets(pool, cfg) -> list[dict]:
             )
           )
         ORDER BY CASE WHEN contact_email IS NULL THEN 0 ELSE 1 END, created_at ASC
-        LIMIT $2
         """,
         cfg.org_cache_days,
-        cfg.max_vendor_credits_per_run,
     )
-    return [dict(r) for r in rows]
+    deduped = dedupe_vendor_target_rows(rows)
+    return deduped[: cfg.max_vendor_credits_per_run]
 
 
 # ---------------------------------------------------------------------------

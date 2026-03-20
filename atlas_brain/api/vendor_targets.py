@@ -12,8 +12,18 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from ..auth.dependencies import AuthUser, optional_auth
-from ..services.vendor_registry import resolve_vendor_name
+from ..auth.dependencies import AuthUser, optional_auth, require_auth
+from ..services.scraping.target_provisioning import (
+    provision_vendor_onboarding_targets,
+)
+from ..services.tracked_vendor_sources import (
+    delete_vendor_target_sources_for_all_accounts,
+    replace_vendor_target_sources,
+)
+from ..services.vendor_registry import (
+    resolve_known_vendor_name,
+    resolve_vendor_name,
+)
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.vendor_targets")
@@ -28,6 +38,94 @@ def _pool_or_503():
     return pool
 
 
+def _normalize_account_id(value) -> str | None:
+    return str(value) if value else None
+
+
+def _shape_vendor_target(row, user: AuthUser | None = None) -> dict[str, object]:
+    target = dict(row)
+    account_id = _normalize_account_id(target.get("account_id"))
+    target["account_id"] = account_id
+    if user:
+        target["ownership_scope"] = (
+            "owned" if account_id == user.account_id else "legacy_global"
+        )
+    else:
+        target["ownership_scope"] = "account_owned" if account_id else "legacy_global"
+    return target
+
+
+def _append_list_scope(
+    conditions: list[str],
+    params: list,
+    idx: int,
+    user: AuthUser | None,
+    *,
+    include_legacy_global: bool,
+) -> tuple[int, int | None]:
+    if not user:
+        return idx, None
+    scope_idx = idx
+    if include_legacy_global:
+        conditions.append(f"(account_id = ${idx} OR account_id IS NULL)")
+    else:
+        conditions.append(f"account_id = ${idx}")
+    params.append(user.account_id)
+    return idx + 1, scope_idx
+
+
+async def _sync_vendor_target_tracking(
+    pool,
+    user: AuthUser | None,
+    target_id: str,
+    company_name: str,
+    competitors_tracked: list[str] | None,
+) -> dict[str, object] | None:
+    if not user:
+        return None
+
+    canonical_company = await resolve_vendor_name(company_name)
+    vendors_to_track: list[dict[str, str]] = [
+        {
+            "vendor_name": canonical_company,
+            "track_mode": "own",
+        }
+    ]
+    skipped_competitors: list[str] = []
+    seen_vendor_names: set[str] = {canonical_company.lower()}
+    for raw_competitor in competitors_tracked or []:
+        canonical_competitor = await resolve_known_vendor_name(raw_competitor)
+        if not canonical_competitor:
+            skipped_competitors.append(raw_competitor)
+            continue
+        lowered = canonical_competitor.lower()
+        if lowered in seen_vendor_names:
+            continue
+        seen_vendor_names.add(lowered)
+        vendors_to_track.append(
+            {
+                "vendor_name": canonical_competitor,
+                "track_mode": "competitor",
+            }
+        )
+
+    sync_result = await replace_vendor_target_sources(
+        pool,
+        user.account_id,
+        target_id,
+        vendors_to_track,
+    )
+
+    logger.info(
+        "Synced %d vendors to tracked_vendors for account %s (skipped_competitors=%d)",
+        len(sync_result["synced_vendors"]),
+        user.account_id,
+        len(skipped_competitors),
+    )
+    sync_result["skipped_competitors"] = skipped_competitors
+    return sync_result
+
+
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
@@ -36,6 +134,8 @@ def _pool_or_503():
 class VendorTargetCreate(BaseModel):
     company_name: str = Field(..., max_length=200)
     target_mode: str = Field(..., max_length=30)
+    product_category: str | None = Field(None, max_length=200)
+    scrape_target_slugs: dict[str, str] = Field(default_factory=dict)
     contact_name: str | None = Field(None, max_length=200)
     contact_email: str | None = Field(None, max_length=254)
     contact_role: str | None = Field(None, max_length=100)
@@ -69,8 +169,13 @@ async def list_vendor_targets(
     target_mode: Optional[str] = Query(None, description="Filter by target mode"),
     status: Optional[str] = Query(None, description="Filter by status"),
     search: Optional[str] = Query(None, description="Search company name"),
+    include_legacy_global: bool = Query(
+        True,
+        description="Include legacy global targets when authenticated",
+    ),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    user: AuthUser | None = Depends(optional_auth),
 ):
     """List all vendor/challenger targets."""
     pool = _pool_or_503()
@@ -94,16 +199,30 @@ async def list_vendor_targets(
         params.append(search)
         idx += 1
 
+    idx, scope_idx = _append_list_scope(
+        conditions,
+        params,
+        idx,
+        user,
+        include_legacy_global=include_legacy_global,
+    )
+
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    order_by = "ORDER BY created_at DESC"
+    if scope_idx is not None:
+        order_by = (
+            f"ORDER BY CASE WHEN account_id = ${scope_idx} THEN 0 ELSE 1 END, "
+            "created_at DESC"
+        )
 
     rows = await pool.fetch(
         f"""
         SELECT id, company_name, target_mode, contact_name, contact_email,
                contact_role, products_tracked, competitors_tracked, tier,
-               status, notes, created_at, updated_at
+               status, notes, account_id, created_at, updated_at
         FROM vendor_targets
         {where}
-        ORDER BY created_at DESC
+        {order_by}
         LIMIT ${idx} OFFSET ${idx + 1}
         """,
         *params, limit, offset,
@@ -115,7 +234,7 @@ async def list_vendor_targets(
     )
 
     return {
-        "targets": [dict(r) for r in rows],
+        "targets": [_shape_vendor_target(r, user) for r in rows],
         "count": count,
     }
 
@@ -134,14 +253,15 @@ async def create_vendor_target(
     row = await pool.fetchrow(
         """
         INSERT INTO vendor_targets (
-            company_name, target_mode, contact_name, contact_email,
+            account_id, company_name, target_mode, contact_name, contact_email,
             contact_role, products_tracked, competitors_tracked,
             tier, status, notes
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING id, company_name, target_mode, contact_name, contact_email,
                   contact_role, products_tracked, competitors_tracked, tier,
-                  status, notes, created_at, updated_at
+                  status, notes, account_id, created_at, updated_at
         """,
+        user.account_id if user else None,
         body.company_name,
         body.target_mode,
         body.contact_name,
@@ -154,47 +274,81 @@ async def create_vendor_target(
         body.notes,
     )
 
-    # Auto-sync to tracked_vendors so dashboard scoping works
-    if user:
-        vendors_to_track = [body.company_name]
-        if body.competitors_tracked:
-            vendors_to_track.extend(body.competitors_tracked)
-        for vname in vendors_to_track:
-            canonical_vname = await resolve_vendor_name(vname)
-            await pool.execute(
-                """
-                INSERT INTO tracked_vendors (account_id, vendor_name, track_mode)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (account_id, vendor_name) DO NOTHING
-                """,
-                user.account_id,
-                canonical_vname,
-                "competitor" if vname != body.company_name else "own",
-            )
-        logger.info("Synced %d vendors to tracked_vendors for account %s", len(vendors_to_track), user.account_id)
+    canonical_company = await resolve_vendor_name(body.company_name)
+    tracked_vendor_sync = await _sync_vendor_target_tracking(
+        pool,
+        user,
+        str(row.get("id") or ""),
+        canonical_company,
+        body.competitors_tracked,
+    )
 
-    return dict(row)
+    try:
+        scrape_provisioning = await provision_vendor_onboarding_targets(
+            pool,
+            canonical_company,
+            product_category=body.product_category,
+            source_slug_overrides=body.scrape_target_slugs,
+            dry_run=False,
+        )
+    except Exception as exc:  # pragma: no cover - defensive operational guard
+        logger.warning(
+            "Auto scrape provisioning failed for vendor target %s: %s",
+            canonical_company,
+            exc,
+        )
+        scrape_provisioning = {
+            "status": "error",
+            "requested": 0,
+            "applied": 0,
+            "matched_vendors": [],
+            "unmatched_vendors": [canonical_company.lower()],
+            "actions": [],
+        }
+
+    result = _shape_vendor_target(row, user)
+    if tracked_vendor_sync is not None:
+        result["tracked_vendor_sync"] = tracked_vendor_sync
+    result["scrape_provisioning"] = scrape_provisioning
+    return result
 
 
 @router.get("/{target_id}")
-async def get_vendor_target(target_id: UUID):
+async def get_vendor_target(
+    target_id: UUID,
+    user: AuthUser | None = Depends(optional_auth),
+):
     """Get a single vendor/challenger target with intelligence summary."""
     pool = _pool_or_503()
 
-    row = await pool.fetchrow(
-        """
-        SELECT id, company_name, target_mode, contact_name, contact_email,
-               contact_role, products_tracked, competitors_tracked, tier,
-               status, notes, created_at, updated_at
-        FROM vendor_targets
-        WHERE id = $1
-        """,
-        target_id,
-    )
+    if user:
+        row = await pool.fetchrow(
+            """
+            SELECT id, company_name, target_mode, contact_name, contact_email,
+                   contact_role, products_tracked, competitors_tracked, tier,
+                   status, notes, account_id, created_at, updated_at
+            FROM vendor_targets
+            WHERE id = $1
+              AND (account_id = $2 OR account_id IS NULL)
+            """,
+            target_id,
+            user.account_id,
+        )
+    else:
+        row = await pool.fetchrow(
+            """
+            SELECT id, company_name, target_mode, contact_name, contact_email,
+                   contact_role, products_tracked, competitors_tracked, tier,
+                   status, notes, account_id, created_at, updated_at
+            FROM vendor_targets
+            WHERE id = $1
+            """,
+            target_id,
+        )
     if not row:
         raise HTTPException(status_code=404, detail="Target not found")
 
-    target = dict(row)
+    target = _shape_vendor_target(row, user)
 
     # Fetch campaign stats for this target
     campaign_stats = await pool.fetchrow(
@@ -234,7 +388,11 @@ async def get_vendor_target(target_id: UUID):
 
 
 @router.put("/{target_id}")
-async def update_vendor_target(target_id: UUID, body: VendorTargetUpdate):
+async def update_vendor_target(
+    target_id: UUID,
+    body: VendorTargetUpdate,
+    user: AuthUser | None = Depends(optional_auth),
+):
     """Update a vendor/challenger target."""
     pool = _pool_or_503()
 
@@ -263,6 +421,24 @@ async def update_vendor_target(target_id: UUID, body: VendorTargetUpdate):
         if body.target_mode not in ("vendor_retention", "challenger_intel"):
             raise HTTPException(status_code=400, detail="target_mode must be 'vendor_retention' or 'challenger_intel'")
 
+    if user:
+        existing = await pool.fetchrow(
+            """
+            SELECT id, account_id
+            FROM vendor_targets
+            WHERE id = $1
+              AND (account_id = $2 OR account_id IS NULL)
+            """,
+            target_id,
+            user.account_id,
+        )
+        if not existing:
+            raise HTTPException(status_code=404, detail="Target not found")
+        if existing.get("account_id") is None:
+            updates.append(f"account_id = ${idx}")
+            params.append(user.account_id)
+            idx += 1
+
     updates.append(f"updated_at = NOW()")
 
     row = await pool.fetchrow(
@@ -272,7 +448,7 @@ async def update_vendor_target(target_id: UUID, body: VendorTargetUpdate):
         WHERE id = ${idx}
         RETURNING id, company_name, target_mode, contact_name, contact_email,
                   contact_role, products_tracked, competitors_tracked, tier,
-                  status, notes, created_at, updated_at
+                  status, notes, account_id, created_at, updated_at
         """,
         *params, target_id,
     )
@@ -280,34 +456,187 @@ async def update_vendor_target(target_id: UUID, body: VendorTargetUpdate):
     if not row:
         raise HTTPException(status_code=404, detail="Target not found")
 
-    return dict(row)
+    result = _shape_vendor_target(row, user)
+    tracked_vendor_sync = await _sync_vendor_target_tracking(
+        pool,
+        user,
+        str(result.get("id") or ""),
+        str(result.get("company_name") or ""),
+        result.get("competitors_tracked"),
+    )
+    if tracked_vendor_sync is not None:
+        result["tracked_vendor_sync"] = tracked_vendor_sync
+    return result
+
+
+@router.post("/{target_id}/claim")
+async def claim_vendor_target(
+    target_id: UUID,
+    user: AuthUser = Depends(require_auth),
+):
+    """Explicitly claim a legacy global vendor target into account scope."""
+    pool = _pool_or_503()
+
+    async with pool.transaction() as conn:
+        existing = await conn.fetchrow(
+            """
+            SELECT id, company_name, target_mode, contact_name, contact_email,
+                   contact_role, products_tracked, competitors_tracked, tier,
+                   status, notes, account_id, created_at, updated_at
+            FROM vendor_targets
+            WHERE id = $1
+              AND (account_id = $2 OR account_id IS NULL)
+            """,
+            target_id,
+            user.account_id,
+        )
+        if not existing:
+            raise HTTPException(status_code=404, detail="Target not found")
+
+        already_claimed = existing.get("account_id") == user.account_id
+        row = existing
+        if not already_claimed:
+            duplicate = await conn.fetchrow(
+                """
+                SELECT id
+                FROM vendor_targets
+                WHERE account_id = $1
+                  AND LOWER(company_name) = LOWER($2)
+                  AND target_mode = $3
+                  AND id <> $4
+                LIMIT 1
+                """,
+                user.account_id,
+                existing["company_name"],
+                existing["target_mode"],
+                target_id,
+            )
+            if duplicate:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "An owned target already exists for this company and "
+                        "target_mode. Resolve the duplicate before claiming "
+                        "the legacy global row."
+                    ),
+                )
+            row = await conn.fetchrow(
+                """
+                UPDATE vendor_targets
+                SET account_id = $1,
+                    updated_at = NOW()
+                WHERE id = $2
+                  AND account_id IS NULL
+                RETURNING id, company_name, target_mode, contact_name,
+                          contact_email, contact_role, products_tracked,
+                          competitors_tracked, tier, status, notes,
+                          account_id, created_at, updated_at
+                """,
+                user.account_id,
+                target_id,
+            )
+            if not row:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Legacy global target was claimed concurrently.",
+                )
+
+    result = _shape_vendor_target(row, user)
+    tracked_vendor_sync = await _sync_vendor_target_tracking(
+        pool,
+        user,
+        str(result.get("id") or ""),
+        str(result.get("company_name") or ""),
+        result.get("competitors_tracked"),
+    )
+    result["already_claimed"] = already_claimed
+    if tracked_vendor_sync is not None:
+        result["tracked_vendor_sync"] = tracked_vendor_sync
+    return result
 
 
 @router.delete("/{target_id}")
-async def delete_vendor_target(target_id: UUID):
+async def delete_vendor_target(
+    target_id: UUID,
+    user: AuthUser | None = Depends(optional_auth),
+):
     """Remove a vendor/challenger target."""
     pool = _pool_or_503()
 
-    result = await pool.execute(
-        "DELETE FROM vendor_targets WHERE id = $1",
-        target_id,
-    )
+    if user:
+        existing = await pool.fetchrow(
+            """
+            SELECT id, account_id
+            FROM vendor_targets
+            WHERE id = $1
+              AND (account_id = $2 OR account_id IS NULL)
+            """,
+            target_id,
+            user.account_id,
+        )
+        if not existing:
+            raise HTTPException(status_code=404, detail="Target not found")
+        if existing.get("account_id") is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Legacy global target must be claimed by an authenticated update before deletion.",
+            )
+        row = await pool.fetchrow(
+            """
+            DELETE FROM vendor_targets
+            WHERE id = $1 AND account_id = $2
+            RETURNING id
+            """,
+            target_id,
+            user.account_id,
+        )
+    else:
+        row = await pool.fetchrow(
+            """
+            DELETE FROM vendor_targets
+            WHERE id = $1
+            RETURNING id
+            """,
+            target_id,
+        )
 
-    if result == "DELETE 0":
+    if not row:
         raise HTTPException(status_code=404, detail="Target not found")
 
-    return {"deleted": True}
+    tracked_vendor_cleanup = await delete_vendor_target_sources_for_all_accounts(
+        pool,
+        str(target_id),
+    )
+    return {
+        "deleted": True,
+        "tracked_vendor_cleanup": tracked_vendor_cleanup,
+    }
 
 
 @router.post("/{target_id}/generate-report")
-async def generate_target_report(target_id: UUID):
+async def generate_target_report(
+    target_id: UUID,
+    user: AuthUser | None = Depends(optional_auth),
+):
     """Generate an intelligence report for this target (vendor or challenger)."""
     pool = _pool_or_503()
 
-    row = await pool.fetchrow(
-        "SELECT company_name, target_mode FROM vendor_targets WHERE id = $1",
-        target_id,
-    )
+    if user:
+        row = await pool.fetchrow(
+            """
+            SELECT company_name, target_mode
+            FROM vendor_targets
+            WHERE id = $1
+              AND (account_id = $2 OR account_id IS NULL)
+            """,
+            target_id,
+            user.account_id,
+        )
+    else:
+        row = await pool.fetchrow(
+            "SELECT company_name, target_mode FROM vendor_targets WHERE id = $1",
+            target_id,
+        )
     if not row:
         raise HTTPException(status_code=404, detail="Target not found")
 

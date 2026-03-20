@@ -182,6 +182,20 @@ async def resolve_vendor_name(raw: str) -> str:
     return _resolve_from_cache(raw)
 
 
+async def resolve_known_vendor_name(raw: str) -> str | None:
+    """Resolve only exact canonical/alias hits from the vendor registry.
+
+    Unlike ``resolve_vendor_name()``, this does not fuzzy-match and does not
+    title-case unknown input. It is intended for guardrailed flows where
+    arbitrary free text must not be promoted into tracked vendor scope.
+    """
+    stripped = (raw or "").strip()
+    if not stripped:
+        return None
+    await _ensure_cache()
+    return _cache.get(stripped.lower())
+
+
 def resolve_vendor_name_cached(raw: str) -> str:
     """Resolve a raw vendor name using cache only (sync).
 

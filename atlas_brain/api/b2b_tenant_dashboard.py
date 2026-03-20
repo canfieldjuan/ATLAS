@@ -17,6 +17,15 @@ from ..autonomous.tasks.b2b_campaign_generation import (
     generate_campaigns as _generate_campaigns,
 )
 from ..config import settings
+from ..services.scraping.target_provisioning import (
+    provision_vendor_onboarding_targets,
+)
+from ..services.tracked_vendor_sources import (
+    MANUAL_DIRECT_SOURCE_KEY,
+    MANUAL_SOURCE_TYPE,
+    purge_tracked_vendor_sources,
+    upsert_tracked_vendor_source,
+)
 from ..services.vendor_registry import resolve_vendor_name
 from ..storage.database import get_db_pool
 
@@ -68,6 +77,8 @@ def _require_b2b_product(user: AuthUser):
 
 class AddVendorRequest(BaseModel):
     vendor_name: str = Field(..., max_length=256)
+    product_category: str | None = Field(None, max_length=200)
+    scrape_target_slugs: dict[str, str] = Field(default_factory=dict)
     track_mode: str = Field(default="own", description="own (P5) | competitor (P6)")
     label: str = Field(default="", max_length=256)
 
@@ -133,37 +144,99 @@ async def add_tracked_vendor(req: AddVendorRequest, user: AuthUser = Depends(req
     if req.track_mode not in ("own", "competitor"):
         raise HTTPException(status_code=400, detail="track_mode must be 'own' or 'competitor'")
 
+    canonical_vendor = await resolve_vendor_name(req.vendor_name)
+    label = req.label.strip() if req.label else ""
     async with pool.transaction() as conn:
-        current_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM tracked_vendors WHERE account_id = $1",
-            acct,
-        )
-        vendor_limit = await conn.fetchval(
-            "SELECT vendor_limit FROM saas_accounts WHERE id = $1",
-            acct,
-        )
-        if current_count >= (vendor_limit or 1):
-            raise HTTPException(
-                status_code=403,
-                detail="Vendor limit reached. Upgrade your plan for more.",
-            )
-
-        canonical_vendor = await resolve_vendor_name(req.vendor_name)
-        row = await conn.fetchrow(
+        existing_row = await conn.fetchrow(
             """
-            INSERT INTO tracked_vendors (account_id, vendor_name, track_mode, label)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (account_id, vendor_name) DO NOTHING
-            RETURNING id, vendor_name, track_mode, label, added_at
+            SELECT id, vendor_name, track_mode, label, added_at
+            FROM tracked_vendors
+            WHERE account_id = $1 AND vendor_name = $2
             """,
             acct,
             canonical_vendor,
-            req.track_mode,
-            req.label.strip() if req.label else None,
+        )
+        has_manual_source = await conn.fetchval(
+            """
+            SELECT 1
+            FROM tracked_vendor_sources
+            WHERE account_id = $1
+              AND vendor_name = $2
+              AND source_type = $3
+            LIMIT 1
+            """,
+            acct,
+            canonical_vendor,
+            MANUAL_SOURCE_TYPE,
+        )
+        if existing_row and has_manual_source:
+            raise HTTPException(status_code=409, detail="Vendor already tracked")
+        if not existing_row:
+            current_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM tracked_vendors WHERE account_id = $1",
+                acct,
+            )
+            vendor_limit = await conn.fetchval(
+                "SELECT vendor_limit FROM saas_accounts WHERE id = $1",
+                acct,
+            )
+            if current_count >= (vendor_limit or 1):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Vendor limit reached. Upgrade your plan for more.",
+                )
+
+        await upsert_tracked_vendor_source(
+            conn,
+            str(acct),
+            canonical_vendor,
+            source_type=MANUAL_SOURCE_TYPE,
+            source_key=MANUAL_DIRECT_SOURCE_KEY,
+            track_mode=req.track_mode,
+        )
+        if label:
+            await conn.execute(
+                """
+                UPDATE tracked_vendors
+                SET label = $3
+                WHERE account_id = $1 AND vendor_name = $2
+                """,
+                acct,
+                canonical_vendor,
+                label,
+            )
+        row = await conn.fetchrow(
+            """
+            SELECT id, vendor_name, track_mode, label, added_at
+            FROM tracked_vendors
+            WHERE account_id = $1 AND vendor_name = $2
+            """,
+            acct,
+            canonical_vendor,
         )
 
-    if not row:
-        raise HTTPException(status_code=409, detail="Vendor already tracked")
+    try:
+        scrape_provisioning = await provision_vendor_onboarding_targets(
+            pool,
+            canonical_vendor,
+            product_category=req.product_category,
+            source_slug_overrides=req.scrape_target_slugs,
+            dry_run=False,
+        )
+    except Exception as exc:  # pragma: no cover - defensive operational guard
+        logger.warning(
+            "Auto scrape provisioning failed for tracked vendor %s: %s",
+            canonical_vendor,
+            exc,
+        )
+        scrape_provisioning = {
+            "status": "error",
+            "requested": 0,
+            "applied": 0,
+            "matched_vendors": [],
+            "unmatched_vendors": [canonical_vendor.lower()],
+            "actions": [],
+        }
 
     return {
         "id": str(row["id"]),
@@ -171,6 +244,7 @@ async def add_tracked_vendor(req: AddVendorRequest, user: AuthUser = Depends(req
         "track_mode": row["track_mode"],
         "label": row["label"],
         "added_at": str(row["added_at"]) if row["added_at"] else None,
+        "scrape_provisioning": scrape_provisioning,
     }
 
 
@@ -181,16 +255,31 @@ async def remove_tracked_vendor(vendor_name: str, user: AuthUser = Depends(requi
     pool = _pool_or_503()
     acct = _uuid.UUID(user.account_id)
 
-    result = await pool.execute(
-        "DELETE FROM tracked_vendors WHERE account_id = $1 AND vendor_name = $2",
+    canonical_vendor = await resolve_vendor_name(vendor_name)
+    was_tracked = await pool.fetchval(
+        """
+        SELECT 1
+        FROM tracked_vendors
+        WHERE account_id = $1 AND vendor_name = $2
+        LIMIT 1
+        """,
         acct,
-        vendor_name.strip(),
+        canonical_vendor,
     )
-
-    if result == "DELETE 0":
+    cleanup = await purge_tracked_vendor_sources(
+        pool,
+        str(acct),
+        canonical_vendor,
+    )
+    if not was_tracked and not cleanup["removed_sources"]:
         raise HTTPException(status_code=404, detail="Vendor not found in tracked list")
 
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "vendor_name": canonical_vendor,
+        "removed_sources": cleanup["removed_sources"],
+        "still_tracked": cleanup["still_tracked"],
+    }
 
 
 @router.get("/vendors/search")
