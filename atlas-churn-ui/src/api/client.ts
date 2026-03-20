@@ -26,6 +26,7 @@ import type {
   AuditEvent,
   BriefingDraft,
 } from '../types'
+import { normalizeReportDetail, normalizeVendorProfile } from '../lib/reportNormalization'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 const BASE = `${API_BASE}/api/v1/b2b/dashboard`
@@ -183,7 +184,8 @@ export async function fetchHighIntent(params?: {
 }
 
 export async function fetchVendorProfile(vendorName: string) {
-  return get<VendorProfile>(BASE, `/vendors/${encodeURIComponent(vendorName)}`)
+  const profile = await get<VendorProfile>(BASE, `/vendors/${encodeURIComponent(vendorName)}`)
+  return normalizeVendorProfile(profile)
 }
 
 export async function fetchVendorHistory(vendorName: string, params?: {
@@ -241,7 +243,8 @@ export async function generateAccountDeepDiveReport(body: {
 }
 
 export async function fetchReport(reportId: string) {
-  return get<ReportDetail>(BASE, `/reports/${reportId}`)
+  const report = await get<ReportDetail>(BASE, `/reports/${reportId}`)
+  return normalizeReportDetail(report)
 }
 
 export async function fetchReviews(params?: {
@@ -366,6 +369,10 @@ export async function createVendorTarget(body: Partial<VendorTarget>) {
 
 export async function updateVendorTarget(id: string, body: Partial<VendorTarget>) {
   return put<VendorTarget>(TARGETS_BASE, `/${id}`, body)
+}
+
+export async function claimVendorTarget(id: string) {
+  return post<VendorTarget & { already_claimed?: boolean }>(TARGETS_BASE, `/${id}/claim`)
 }
 
 export async function deleteVendorTarget(id: string) {

@@ -8,6 +8,12 @@ import {
 import PublicLayout from '../components/PublicLayout'
 import SeoHead from '../components/SeoHead'
 import { useAuth } from '../auth/AuthContext'
+import { StructuredReportData } from '../components/report-renderers/StructuredReportData'
+import {
+  isSpecializedReportType,
+  SpecializedReportData,
+} from '../components/report-renderers/SpecializedReportData'
+import { normalizeReportObject } from '../lib/reportNormalization'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 const GATE_URL = `${API_BASE}/api/v1/b2b/briefings/gate`
@@ -35,17 +41,18 @@ async function startCheckout(vendorName: string, tier: 'standard' | 'pro') {
 
 type Status = 'idle' | 'submitting' | 'loading_report' | 'report' | 'error'
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
+type UnknownRecord = Record<string, unknown>
+
 type ReportData = {
   vendor_name: string
-  briefing: Record<string, any>
+  briefing: UnknownRecord
   intelligence_reports: Array<{
     report_type: string
     executive_summary: string | null
-    data: Record<string, any>
+    data: UnknownRecord
     report_date: string | null
   }>
-  product_profile: Record<string, any> | null
+  product_profile: UnknownRecord | null
 }
 
 // ---------------------------------------------------------------------------
@@ -73,14 +80,57 @@ function TrendIcon({ trend }: { trend: string | null }) {
   return <Minus className="h-4 w-4 text-slate-400" />
 }
 
-function fmtPct(v: any) {
+function isRecord(value: unknown): value is UnknownRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function asRecord(value: unknown): UnknownRecord {
+  return isRecord(value) ? value : {}
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : []
+}
+
+function firstStringValue(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.trim()) return value
+  if (!isRecord(value)) return undefined
+  return Object.values(value).find(
+    (entry): entry is string => typeof entry === 'string' && entry.trim().length > 0,
+  )
+}
+
+function formatApiDetail(detail: unknown, statusCode: number): string {
+  if (typeof detail === 'string' && detail.trim()) return detail
+  if (Array.isArray(detail)) {
+    return detail.map((item) => {
+      if (isRecord(item) && typeof item.msg === 'string') return item.msg
+      return JSON.stringify(item)
+    }).join('; ')
+  }
+  return `Error ${statusCode}`
+}
+
+function fmtPct(v: unknown) {
   const n = Number(v)
   return isNaN(n) ? 'N/A' : `${n.toFixed(1)}%`
 }
 
-function fmtScore(v: any) {
+function fmtScore(v: unknown) {
   const n = Number(v)
   return isNaN(n) ? 'N/A' : n.toFixed(1)
+}
+
+function normalizePublicReportData(data: ReportData): ReportData {
+  return {
+    ...data,
+    briefing: normalizeReportObject(data.briefing),
+    intelligence_reports: data.intelligence_reports.map((report) => ({
+      ...report,
+      data: normalizeReportObject(report.data),
+    })),
+    product_profile: data.product_profile ? normalizeReportObject(data.product_profile) : null,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -200,15 +250,15 @@ function PricingModal({ vendorName, onClose }: { vendorName: string; onClose: ()
 
 function ReportView({ data }: { data: ReportData }) {
   const [showPricing, setShowPricing] = useState(false)
-  const b = data.briefing
+  const b = asRecord(data.briefing)
   const score = Number(b.churn_pressure_score) || 0
-  const pains: any[] = b.pain_breakdown || []
-  const maxPain = Math.max(...pains.map((p: any) => Number(p.count) || 0), 1)
-  const displacements: any[] = b.top_displacement_targets || []
-  const evidence: any[] = b.evidence || []
-  const namedAccountCount: number = b.named_account_count || (b.named_accounts || []).length
-  const featureGaps: any[] = b.top_feature_gaps || []
-  const painLabels: Record<string, string> = b.pain_labels || {}
+  const pains = asArray(b.pain_breakdown).filter(isRecord)
+  const maxPain = Math.max(...pains.map((pain) => Number(pain.count) || 0), 1)
+  const displacements = asArray(b.top_displacement_targets).filter(isRecord)
+  const evidence = asArray(b.evidence)
+  const namedAccountCount = Number(b.named_account_count) || asArray(b.named_accounts).length
+  const featureGaps = asArray(b.top_feature_gaps)
+  const painLabels = asRecord(b.pain_labels) as Record<string, string>
 
   return (
     <PublicLayout variant="report" onCtaClick={() => setShowPricing(true)}>
@@ -229,28 +279,28 @@ function ReportView({ data }: { data: ReportData }) {
             <div className="flex items-center gap-3 mb-2">
               <h1 className="text-3xl sm:text-4xl font-bold">{data.vendor_name}</h1>
               <span className="px-3 py-1 bg-slate-700/60 rounded-full text-xs text-slate-300 uppercase tracking-wider">
-                {b.category || 'Software'}
+                {firstStringValue(b.category) || 'Software'}
               </span>
             </div>
-            {b.headline && (
-              <p className="text-lg text-slate-300 font-medium">{b.headline}</p>
+            {firstStringValue(b.headline) && (
+              <p className="text-lg text-slate-300 font-medium">{firstStringValue(b.headline)}</p>
             )}
           </div>
           <div className={`flex flex-col items-center px-6 py-4 rounded-xl border ${pressureBg(score)}`}>
             <div className={`text-4xl font-bold ${pressureColor(score)}`}>{score.toFixed(0)}</div>
             <div className="text-xs text-slate-400 uppercase tracking-wider">Churn Pressure</div>
             <div className="flex items-center gap-1 mt-1">
-              <TrendIcon trend={b.trend} />
-              <span className="text-xs text-slate-400 capitalize">{b.trend || 'Stable'}</span>
+              <TrendIcon trend={firstStringValue(b.trend) ?? null} />
+              <span className="text-xs text-slate-400 capitalize">{firstStringValue(b.trend) || 'Stable'}</span>
             </div>
           </div>
         </div>
 
         {/* Executive Summary */}
-        {b.executive_summary && (
+        {firstStringValue(b.executive_summary) && (
           <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-6 mb-8">
             <h3 className="text-sm font-medium text-cyan-400 uppercase tracking-wider mb-3">Executive Summary</h3>
-            <p className="text-sm text-slate-300 leading-relaxed">{b.executive_summary}</p>
+            <p className="text-sm text-slate-300 leading-relaxed">{firstStringValue(b.executive_summary)}</p>
           </div>
         )}
 
@@ -279,10 +329,10 @@ function ReportView({ data }: { data: ReportData }) {
                 What's Driving Churn
               </h3>
               <div className="space-y-2">
-                {pains.map((p: any, i: number) => (
+                {pains.map((p, i: number) => (
                   <RankedBar
                     key={i}
-                    label={painLabels[p.category] || p.category || 'Other'}
+                    label={painLabels[String(p.category)] || String(p.category || 'Other')}
                     count={Number(p.count) || 0}
                     max={maxPain}
                   />
@@ -299,10 +349,10 @@ function ReportView({ data }: { data: ReportData }) {
                 Where They're Going
               </h3>
               <div className="space-y-2">
-                {displacements.map((d: any, i: number) => (
+                {displacements.map((d, i: number) => (
                   <div key={i} className="flex items-center justify-between py-2 border-b border-slate-800 last:border-0">
-                    <span className="text-sm text-slate-300">{d.competitor || d.name}</span>
-                    <span className="text-sm text-slate-400">{d.count || d.mentions} mentions</span>
+                    <span className="text-sm text-slate-300">{String(d.competitor || d.name || '')}</span>
+                    <span className="text-sm text-slate-400">{String(d.count || d.mentions || 0)} mentions</span>
                   </div>
                 ))}
               </div>
@@ -336,10 +386,10 @@ function ReportView({ data }: { data: ReportData }) {
             <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
               <h3 className="text-sm font-medium text-cyan-400 uppercase tracking-wider mb-4">Top Feature Gaps</h3>
               <ul className="space-y-2">
-                {featureGaps.map((g: any, i: number) => (
+                {featureGaps.map((g, i: number) => (
                   <li key={i} className="text-sm text-slate-300 flex items-start gap-2">
                     <span className="text-cyan-500 mt-0.5">--</span>
-                    {typeof g === 'string' ? g : g.feature || g.name || g.gap || g.area || Object.values(g).find((v: any) => typeof v === 'string') || `#${i + 1}`}
+                    {typeof g === 'string' ? g : firstStringValue(g) || `#${i + 1}`}
                   </li>
                 ))}
               </ul>
@@ -352,8 +402,8 @@ function ReportView({ data }: { data: ReportData }) {
           <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 mb-8">
             <h3 className="text-sm font-medium text-cyan-400 uppercase tracking-wider mb-4">What Customers Are Saying</h3>
             <div className="space-y-3">
-              {evidence.map((q: any, i: number) => {
-                const text = typeof q === 'string' ? q : q.quote || q.text || ''
+              {evidence.map((q, i: number) => {
+                const text = typeof q === 'string' ? q : String(asRecord(q).quote || asRecord(q).text || '')
                 if (!text) return null
                 return (
                   <blockquote key={i} className="text-sm text-slate-300 italic border-l-2 border-red-500/50 pl-3">
@@ -383,7 +433,7 @@ function ReportView({ data }: { data: ReportData }) {
                   {report.executive_summary && (
                     <p className="text-sm text-slate-300 mb-4">{report.executive_summary}</p>
                   )}
-                  <IntelligenceData data={report.data} />
+                  <IntelligenceData reportType={report.report_type} data={report.data} />
                 </div>
               ))}
             </div>
@@ -394,29 +444,29 @@ function ReportView({ data }: { data: ReportData }) {
         {data.product_profile && (
           <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 mb-8">
             <h3 className="text-sm font-medium text-cyan-400 uppercase tracking-wider mb-3">Product Profile</h3>
-            {data.product_profile.profile_summary && (
-              <p className="text-sm text-slate-300 mb-4">{data.product_profile.profile_summary}</p>
+            {firstStringValue(data.product_profile.profile_summary) && (
+              <p className="text-sm text-slate-300 mb-4">{firstStringValue(data.product_profile.profile_summary)}</p>
             )}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {data.product_profile.strengths && (
+              {asArray(data.product_profile.strengths).length > 0 && (
                 <div>
                   <h4 className="text-xs font-medium text-emerald-400 uppercase mb-2">Strengths</h4>
                   <ul className="space-y-1">
-                    {(Array.isArray(data.product_profile.strengths) ? data.product_profile.strengths : []).map((s: any, i: number) => (
+                    {asArray(data.product_profile.strengths).map((s, i: number) => (
                       <li key={i} className="text-xs text-slate-400">
-                        {typeof s === 'string' ? s : s.area || s.name || s.strength || s.description || Object.values(s).find(v => typeof v === 'string') || `#${i + 1}`}
+                        {typeof s === 'string' ? s : firstStringValue(s) || `#${i + 1}`}
                       </li>
                     ))}
                   </ul>
                 </div>
               )}
-              {data.product_profile.weaknesses && (
+              {asArray(data.product_profile.weaknesses).length > 0 && (
                 <div>
                   <h4 className="text-xs font-medium text-red-400 uppercase mb-2">Weaknesses</h4>
                   <ul className="space-y-1">
-                    {(Array.isArray(data.product_profile.weaknesses) ? data.product_profile.weaknesses : []).map((w: any, i: number) => (
+                    {asArray(data.product_profile.weaknesses).map((w, i: number) => (
                       <li key={i} className="text-xs text-slate-400">
-                        {typeof w === 'string' ? w : w.area || w.name || w.weakness || w.description || Object.values(w).find(v => typeof v === 'string') || `#${i + 1}`}
+                        {typeof w === 'string' ? w : firstStringValue(w) || `#${i + 1}`}
                       </li>
                     ))}
                   </ul>
@@ -450,91 +500,16 @@ function ReportView({ data }: { data: ReportData }) {
 }
 
 /** Render intelligence data fields as key-value cards */
-function IntelligenceData({ data }: { data: Record<string, any> }) {
-  const SKIP_KEYS = new Set([
-    'report_date', 'window_days', 'primary_vendor', 'comparison_vendor',
-  ])
-
-  const entries = Object.entries(data).filter(([k]) => !SKIP_KEYS.has(k))
-  if (entries.length === 0) return null
-
+function IntelligenceData({ reportType, data }: { reportType: string; data: unknown }) {
+  if (isSpecializedReportType(reportType)) {
+    return <SpecializedReportData reportType={reportType} data={data} />
+  }
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-      {entries.map(([key, value]) => (
-        <div key={key} className="bg-slate-800/50 rounded-lg p-3">
-          <h5 className="text-xs text-slate-400 mb-1.5">{key.replace(/_/g, ' ')}</h5>
-          <IntelValue value={value} />
-        </div>
-      ))}
-    </div>
+    <StructuredReportData
+      data={normalizeReportObject(isRecord(data) ? data : {})}
+      skipKeys={['report_date', 'window_days', 'primary_vendor', 'comparison_vendor']}
+    />
   )
-}
-
-function IntelValue({ value }: { value: any }) {
-  if (typeof value === 'string') return <p className="text-xs text-slate-300">{value}</p>
-  if (typeof value === 'number') return <span className="text-sm font-bold text-white">{value}</span>
-  if (typeof value === 'boolean') return <span className="text-xs text-slate-300">{value ? 'Yes' : 'No'}</span>
-
-  // Ranked list [{category/name/competitor: str, count: n}]
-  if (Array.isArray(value) && value.length > 0 && typeof value[0] === 'object' && 'count' in value[0]) {
-    const max = Math.max(...value.map((v: any) => Number(v.count) || 0), 1)
-    return (
-      <div className="space-y-1">
-        {value.slice(0, 8).map((item: any, i: number) => {
-          const label = item.category || item.name || item.competitor || item.feature || `#${i + 1}`
-          return <RankedBar key={i} label={label} count={Number(item.count) || 0} max={max} />
-        })}
-      </div>
-    )
-  }
-
-  // String array
-  if (Array.isArray(value) && value.length > 0 && typeof value[0] === 'string') {
-    return (
-      <div className="space-y-1">
-        {value.slice(0, 5).map((s: string, i: number) => (
-          <p key={i} className="text-xs text-slate-300">{s}</p>
-        ))}
-      </div>
-    )
-  }
-
-  // Object array (e.g. displacement flows with companies)
-  if (Array.isArray(value) && value.length > 0) {
-    return (
-      <div className="space-y-1">
-        {value.slice(0, 5).map((item: any, i: number) => {
-          const label = item.name || item.company || item.competitor || item.label || item.category || Object.values(item).find((v: any) => typeof v === 'string') || `#${i + 1}`
-          const companies = item.companies
-          return (
-            <div key={i}>
-              <span className="text-xs text-slate-300 font-medium">{label}</span>
-              {item.count != null && <span className="text-xs text-slate-500 ml-1">({item.count})</span>}
-              {Array.isArray(companies) && companies.length > 0 && (
-                <div className="text-xs text-slate-500 ml-2">{companies.join(', ')}</div>
-              )}
-            </div>
-          )
-        })}
-      </div>
-    )
-  }
-
-  // Flat object
-  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-    return (
-      <div className="space-y-0.5">
-        {Object.entries(value).slice(0, 8).map(([k, v]) => (
-          <div key={k} className="flex justify-between text-xs">
-            <span className="text-slate-400">{k.replace(/_/g, ' ')}</span>
-            <span className="text-white">{typeof v === 'number' ? v.toLocaleString() : String(v)}</span>
-          </div>
-        ))}
-      </div>
-    )
-  }
-
-  return <span className="text-xs text-slate-500">--</span>
 }
 
 // ---------------------------------------------------------------------------
@@ -797,19 +772,12 @@ export default function Report() {
     try {
       const res = await fetch(`${REPORT_DATA_URL}?token=${encodeURIComponent(reportToken)}`)
       if (res.ok) {
-        const data = await res.json()
+        const data = normalizePublicReportData(await res.json() as ReportData)
         setReportData(data)
         setStatus('report')
       } else {
         const body = await res.json().catch(() => ({ detail: 'Failed to load report' }))
-        const detail = body.detail
-        // Pydantic returns detail as array of objects -- flatten to string
-        const msg = typeof detail === 'string'
-          ? detail
-          : Array.isArray(detail)
-            ? detail.map((d: any) => d.msg || JSON.stringify(d)).join('; ')
-            : `Error ${res.status}`
-        setErrorMsg(msg)
+        setErrorMsg(formatApiDetail(body.detail, res.status))
         setStatus('error')
       }
     } catch {
@@ -839,13 +807,7 @@ export default function Report() {
         await loadReport(reportToken)
       } else {
         const body = await res.json().catch(() => ({ detail: 'Something went wrong' }))
-        const detail = body.detail
-        const msg = typeof detail === 'string'
-          ? detail
-          : Array.isArray(detail)
-            ? detail.map((d: any) => d.msg || JSON.stringify(d)).join('; ')
-            : `Error ${res.status}`
-        setErrorMsg(msg)
+        setErrorMsg(formatApiDetail(body.detail, res.status))
         setStatus('error')
       }
     } catch {

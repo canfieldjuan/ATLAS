@@ -410,6 +410,7 @@ export interface BriefingDraft {
 
 export type TargetMode = 'vendor_retention' | 'challenger_intel'
 export type TargetTier = 'report' | 'dashboard' | 'api'
+export type VendorTargetOwnershipScope = 'owned' | 'legacy_global' | 'account_owned'
 
 export interface VendorTarget {
   id: string
@@ -423,6 +424,8 @@ export interface VendorTarget {
   tier: TargetTier
   status: string
   notes: string | null
+  account_id?: string | null
+  ownership_scope?: VendorTargetOwnershipScope
   created_at: string
   updated_at: string
   campaign_stats?: {

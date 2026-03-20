@@ -58,6 +58,17 @@ function DetailSkeleton() {
   )
 }
 
+function extractNestedLabel(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (typeof value === 'object' && value !== null) {
+    const obj = value as Record<string, unknown>
+    const nested = obj.name ?? obj.label ?? obj.value ?? obj.text
+    return nested ? extractNestedLabel(nested) : ''
+  }
+  return ''
+}
+
 export default function VendorDetail() {
   const { name } = useParams<{ name: string }>()
   const navigate = useNavigate()
@@ -492,9 +503,7 @@ export default function VendorDetail() {
                     {signal.top_competitors.map((c, i) => {
                       if (typeof c === 'string') return <li key={i} className="text-sm text-slate-300">{c}</li>
                       const obj = c as Record<string, unknown>
-                      // competitor field may be a stringified JSON object
-                      let name = String(obj.name ?? obj.competitor ?? '')
-                      try { if (name.startsWith('{')) name = (JSON.parse(name) as Record<string, unknown>).name as string ?? name } catch { /* ignore parse errors */ }
+                      const name = extractNestedLabel(obj.name ?? obj.competitor)
                       const mentions = Number(obj.mentions ?? obj.count ?? 0)
                       return (
                         <li key={i} className="flex items-center justify-between text-sm">
@@ -513,7 +522,7 @@ export default function VendorDetail() {
                     {signal.top_feature_gaps.map((g, i) => {
                       if (typeof g === 'string') return <li key={i} className="text-sm text-slate-300">{g}</li>
                       const obj = g as Record<string, unknown>
-                      const label = String(obj.feature ?? obj.name ?? obj.gap ?? obj.area ?? '')
+                      const label = extractNestedLabel(obj.feature ?? obj.name ?? obj.gap ?? obj.area)
                       const count = Number(obj.count ?? obj.mentions ?? 0)
                       return (
                         <li key={i} className="flex items-center justify-between text-sm">

@@ -9,6 +9,7 @@ import {
   FileBarChart,
   Send,
   Building2,
+  UserCheck,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import StatCard from '../components/StatCard'
@@ -22,6 +23,7 @@ import {
   deleteVendorTarget,
   generateVendorReport,
   generateCampaigns,
+  claimVendorTarget,
 } from '../api/client'
 import type { VendorTarget } from '../types'
 
@@ -70,6 +72,21 @@ function StatusBadge({ status }: { status: string }) {
   )
 }
 
+function OwnershipBadge({ scope }: { scope?: VendorTarget['ownership_scope'] }) {
+  if (scope === 'legacy_global') {
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-rose-500/15 text-rose-300">
+        Legacy Global
+      </span>
+    )
+  }
+  return (
+    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/15 text-emerald-300">
+      Owned
+    </span>
+  )
+}
+
 const EMPTY_FORM = {
   company_name: '',
   target_mode: 'vendor_retention' as string,
@@ -99,6 +116,7 @@ export default function VendorTargets() {
   // Detail panel
   const [generatingReport, setGeneratingReport] = useState<string | null>(null)
   const [generatingCampaign, setGeneratingCampaign] = useState<string | null>(null)
+  const [claimingTarget, setClaimingTarget] = useState<string | null>(null)
   const [actionResult, setActionResult] = useState<string | null>(null)
 
   useEffect(() => {
@@ -121,6 +139,7 @@ export default function VendorTargets() {
   const targets = data?.targets ?? []
   const vendorTargets = targets.filter(t => t.target_mode === 'vendor_retention')
   const challengerTargets = targets.filter(t => t.target_mode === 'challenger_intel')
+  const legacyTargets = targets.filter(t => t.ownership_scope === 'legacy_global')
 
   function openAdd(mode: string = 'vendor_retention') {
     setEditingId(null)
@@ -227,6 +246,24 @@ export default function VendorTargets() {
     }
   }
 
+  async function handleClaimTarget(t: VendorTarget) {
+    setClaimingTarget(t.id)
+    setActionResult(null)
+    try {
+      const result = await claimVendorTarget(t.id)
+      setActionResult(
+        result.already_claimed
+          ? `${t.company_name} is already owned by your account`
+          : `${t.company_name} claimed into your account scope`,
+      )
+      refresh()
+    } catch (err) {
+      setActionResult(err instanceof Error ? err.message : 'Target claim failed')
+    } finally {
+      setClaimingTarget(null)
+    }
+  }
+
   const columns: Column<VendorTarget>[] = [
     {
       key: 'company',
@@ -237,6 +274,11 @@ export default function VendorTargets() {
       key: 'mode',
       header: 'Mode',
       render: (r) => <ModeBadge mode={r.target_mode} />,
+    },
+    {
+      key: 'ownership',
+      header: 'Ownership',
+      render: (r) => <OwnershipBadge scope={r.ownership_scope} />,
     },
     {
       key: 'contact',
@@ -274,6 +316,16 @@ export default function VendorTargets() {
       header: '',
       render: (r) => (
         <div className="flex items-center gap-1">
+          {r.ownership_scope === 'legacy_global' && (
+            <button
+              onClick={(e) => { e.stopPropagation(); handleClaimTarget(r) }}
+              disabled={claimingTarget === r.id}
+              className="p-1 text-slate-400 hover:text-emerald-400 transition-colors disabled:opacity-50"
+              title="Claim Target"
+            >
+              <UserCheck className={clsx('h-3.5 w-3.5', claimingTarget === r.id && 'animate-pulse')} />
+            </button>
+          )}
           <button
             onClick={(e) => { e.stopPropagation(); handleGenerateReport(r) }}
             disabled={generatingReport === r.id}
@@ -352,7 +404,7 @@ export default function VendorTargets() {
       )}
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         <StatCard
           label="Total Targets"
           value={targets.length}
@@ -377,6 +429,12 @@ export default function VendorTargets() {
           icon={<Shield className="h-5 w-5" />}
           skeleton={loading}
         />
+        <StatCard
+          label="Needs Claim"
+          value={legacyTargets.length}
+          icon={<UserCheck className="h-5 w-5" />}
+          skeleton={loading}
+        />
       </div>
 
       {/* Filters */}
@@ -399,6 +457,15 @@ export default function VendorTargets() {
           ))}
         </select>
       </div>
+
+      {legacyTargets.length > 0 && (
+        <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 px-4 py-3">
+          <p className="text-sm text-rose-200">
+            {legacyTargets.length} legacy global target{legacyTargets.length === 1 ? '' : 's'} still need
+            explicit account claim. Use the <span className="font-medium">User Check</span> action in the table.
+          </p>
+        </div>
+      )}
 
       {/* Inline Form */}
       {showForm && (
