@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -189,8 +188,18 @@ class StratifiedReasoner:
             logger.warning("Normalized invalid risk_level %r -> 'medium'", risk)
             conclusion["risk_level"] = "medium"
 
+        # Normalize new ecosystem/temporal fields (safe defaults for older models)
+        _VALID_TREND = {"accelerating", "stable", "decelerating", "unknown"}
+        _VALID_DISP_DIR = {"positive", "negative", "balanced", "insufficient_data"}
+        if conclusion.get("trend_direction") not in _VALID_TREND:
+            conclusion["trend_direction"] = "unknown"
+        if conclusion.get("displacement_net_direction") not in _VALID_DISP_DIR:
+            conclusion["displacement_net_direction"] = "insufficient_data"
+        if not isinstance(conclusion.get("displacement_winner"), (str, type(None))):
+            conclusion["displacement_winner"] = None
+
         # Coerce list fields
-        for fld in ("key_signals", "falsification_conditions", "uncertainty_sources"):
+        for fld in ("key_signals", "falsification_conditions", "uncertainty_sources", "compound_signals"):
             val = conclusion.get(fld)
             if val is None:
                 conclusion[fld] = []
@@ -782,8 +791,6 @@ class StratifiedReasoner:
         tier_context: dict[str, Any] | None = None,
     ) -> ReasoningResult:
         """Full LLM synthesis. Store result in both memories."""
-        from ..pipelines.llm import parse_json_response, trace_llm_call
-        from ..services.protocols import Message
         from ..services.tracing import build_business_trace_context
 
         # Build user payload
@@ -826,13 +833,6 @@ class StratifiedReasoner:
             )
         llm_light = resolve_stratified_llm_light(_rcfg)
 
-        messages = [
-            Message(role="system", content=_REASON_SYSTEM_PROMPT),
-            Message(
-                role="user",
-                content=json.dumps(payload, separators=(",", ":"), sort_keys=True, default=str),
-            ),
-        ]
         trace_metadata = {
             "workflow": "stratified_reasoning",
             "phase": "stratified_reason",
@@ -849,133 +849,69 @@ class StratifiedReasoner:
         if business:
             trace_metadata["business"] = business
 
+        # Choose prompt: consolidated single-pass or classic multi-pass
         if _rcfg.multi_pass_enabled:
-            from .multi_pass import multi_pass_reason
-
-            try:
-                mp_result = await multi_pass_reason(
-                    llm=llm,
-                    llm_light=llm_light,
-                    system_prompt=_REASON_SYSTEM_PROMPT,
-                    evidence_payload=payload,
-                    json_schema=REASONING_CONCLUSION_JSON_SCHEMA,
-                    max_tokens=_rcfg.max_tokens,
-                    temperature=_rcfg.temperature,
-                    verify_enabled=_rcfg.multi_pass_verify_enabled,
-                    verify_min_reviews=_rcfg.multi_pass_verify_min_reviews,
-                    verify_min_snapshot_days=_rcfg.multi_pass_verify_min_snapshot_days,
-                    verify_min_grounded_signals=_rcfg.multi_pass_verify_min_grounded_signals,
-                    verify_confidence_cap=_rcfg.multi_pass_verify_confidence_cap,
-                    light_pass_max_tokens=_rcfg.multi_pass_light_max_tokens,
-                    challenge_confidence_floor=_rcfg.multi_pass_challenge_confidence_floor,
-                    challenge_min_reviews=_rcfg.multi_pass_challenge_min_reviews,
-                    challenge_mixed_polarity_min_share=_rcfg.multi_pass_challenge_mixed_polarity_min_share,
-                    challenge_high_impact_churn_density=_rcfg.multi_pass_challenge_high_impact_churn_density,
-                    challenge_high_impact_avg_urgency=_rcfg.multi_pass_challenge_high_impact_avg_urgency,
-                    challenge_high_impact_displacement_mentions=_rcfg.multi_pass_challenge_high_impact_displacement_mentions,
-                    ground_change_threshold=_rcfg.multi_pass_ground_change_threshold,
-                    ground_always=_rcfg.multi_pass_ground_always,
-                    span_prefix="reasoning.stratified",
-                    trace_metadata=trace_metadata,
-                    normalize_fn=self._normalize_conclusion,
-                )
-                conclusion = mp_result.final_conclusion
-                tokens = mp_result.total_tokens
-                duration_ms = mp_result.total_duration_ms
-                reasoning_steps = [
-                    {
-                        "pass_number": p.pass_number,
-                        "pass_type": p.pass_type,
-                        "tokens_used": p.tokens_used,
-                        "duration_ms": round(p.duration_ms, 2),
-                        "changed": p.changed,
-                        "metadata": dict(p.metadata or {}),
-                    }
-                    for p in mp_result.passes
-                ]
-                boundary_conditions = dict(mp_result.boundary_conditions or {})
-            except Exception:
-                logger.exception("Multi-pass reasoning failed for %s", vendor_name)
-                return ReasoningResult(
-                    mode="reason",
-                    conclusion={"error": "llm_failed"},
-                    confidence=0.0,
-                    pattern_sig=pattern_sig,
-                    evidence_hash=evidence_hash,
-                    tokens_used=0,
-                    cached=False,
-                )
+            effective_prompt = _REASON_SYSTEM_PROMPT
         else:
-            t0 = time.monotonic()
-            try:
-                result = await asyncio.to_thread(
-                    llm.chat,
-                    messages=messages,
-                    max_tokens=_rcfg.max_tokens,
-                    temperature=_rcfg.temperature,
-                    guided_json=REASONING_CONCLUSION_JSON_SCHEMA,
-                    response_format={"type": "json_object"},
-                )
-                text = result.get("response", "").strip()
-                usage = result.get("usage", {})
-                tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
-                trace_meta = result.get("_trace_meta", {})
-                duration_ms = (time.monotonic() - t0) * 1000
+            from .single_pass_prompts.vendor_classify import VENDOR_CLASSIFY_SINGLE_PASS
+            effective_prompt = VENDOR_CLASSIFY_SINGLE_PASS
 
-                trace_llm_call(
-                    span_name="reasoning.stratified.reason",
-                    input_tokens=usage.get("input_tokens", 0),
-                    output_tokens=usage.get("output_tokens", 0),
-                    model=getattr(llm, "model", getattr(llm, "model_id", "")),
-                    provider=getattr(llm, "name", ""),
-                    duration_ms=duration_ms,
-                    metadata=trace_metadata,
-                    input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in messages]},
-                    output_data={"response": text[:2000]} if text else None,
-                    api_endpoint=trace_meta.get("api_endpoint"),
-                    provider_request_id=trace_meta.get("provider_request_id"),
-                    ttft_ms=trace_meta.get("ttft_ms"),
-                    inference_time_ms=trace_meta.get("inference_time_ms"),
-                    queue_time_ms=trace_meta.get("queue_time_ms"),
-                )
+        from .multi_pass import multi_pass_reason
 
-                # Clean think tags
-                import re
-                text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-
-                conclusion = parse_json_response(text, recover_truncated=True)
-                conclusion = self._normalize_conclusion(conclusion)
-                reasoning_steps = [{
-                    "pass_number": 1,
-                    "pass_type": "classify",
-                    "tokens_used": tokens,
-                    "duration_ms": round(duration_ms, 2),
-                    "changed": False,
-                    "metadata": {},
-                }]
-                boundary_conditions = {}
-            except Exception as exc:
-                trace_llm_call(
-                    span_name="reasoning.stratified.reason",
-                    model=getattr(llm, "model", getattr(llm, "model_id", "")),
-                    provider=getattr(llm, "name", ""),
-                    duration_ms=(time.monotonic() - t0) * 1000,
-                    status="failed",
-                    metadata=trace_metadata,
-                    error_message=str(exc)[:500],
-                    error_type=type(exc).__name__,
-                    input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in messages]},
-                )
-                logger.exception("LLM reasoning failed for %s", vendor_name)
-                return ReasoningResult(
-                    mode="reason",
-                    conclusion={"error": "llm_failed"},
-                    confidence=0.0,
-                    pattern_sig=pattern_sig,
-                    evidence_hash=evidence_hash,
-                    tokens_used=0,
-                    cached=False,
-                )
+        try:
+            mp_result = await multi_pass_reason(
+                llm=llm,
+                llm_light=llm_light,
+                system_prompt=effective_prompt,
+                evidence_payload=payload,
+                json_schema=REASONING_CONCLUSION_JSON_SCHEMA,
+                max_tokens=_rcfg.max_tokens,
+                temperature=_rcfg.temperature,
+                enabled=_rcfg.multi_pass_enabled,
+                verify_enabled=_rcfg.multi_pass_verify_enabled,
+                verify_min_reviews=_rcfg.multi_pass_verify_min_reviews,
+                verify_min_snapshot_days=_rcfg.multi_pass_verify_min_snapshot_days,
+                verify_min_grounded_signals=_rcfg.multi_pass_verify_min_grounded_signals,
+                verify_confidence_cap=_rcfg.multi_pass_verify_confidence_cap,
+                light_pass_max_tokens=_rcfg.multi_pass_light_max_tokens,
+                challenge_confidence_floor=_rcfg.multi_pass_challenge_confidence_floor,
+                challenge_min_reviews=_rcfg.multi_pass_challenge_min_reviews,
+                challenge_mixed_polarity_min_share=_rcfg.multi_pass_challenge_mixed_polarity_min_share,
+                challenge_high_impact_churn_density=_rcfg.multi_pass_challenge_high_impact_churn_density,
+                challenge_high_impact_avg_urgency=_rcfg.multi_pass_challenge_high_impact_avg_urgency,
+                challenge_high_impact_displacement_mentions=_rcfg.multi_pass_challenge_high_impact_displacement_mentions,
+                ground_change_threshold=_rcfg.multi_pass_ground_change_threshold,
+                ground_always=_rcfg.multi_pass_ground_always,
+                span_prefix="reasoning.stratified",
+                trace_metadata=trace_metadata,
+                normalize_fn=self._normalize_conclusion,
+            )
+            conclusion = mp_result.final_conclusion
+            tokens = mp_result.total_tokens
+            duration_ms = mp_result.total_duration_ms
+            reasoning_steps = [
+                {
+                    "pass_number": p.pass_number,
+                    "pass_type": p.pass_type,
+                    "tokens_used": p.tokens_used,
+                    "duration_ms": round(p.duration_ms, 2),
+                    "changed": p.changed,
+                    "metadata": dict(p.metadata or {}),
+                }
+                for p in mp_result.passes
+            ]
+            boundary_conditions = dict(mp_result.boundary_conditions or {})
+        except Exception:
+            logger.exception("Reasoning failed for %s", vendor_name)
+            return ReasoningResult(
+                mode="reason",
+                conclusion={"error": "llm_failed"},
+                confidence=0.0,
+                pattern_sig=pattern_sig,
+                evidence_hash=evidence_hash,
+                tokens_used=0,
+                cached=False,
+            )
 
         confidence = conclusion.get("confidence", 0.5)
         archetype = conclusion.get("archetype", "unknown")
@@ -1112,9 +1048,14 @@ class StratifiedReasoner:
     # ------------------------------------------------------------------
 
     def _build_pattern_sig(self, vendor_name: str, evidence_hash: str) -> str:
-        """Deterministic signature: vendor + evidence hash."""
+        """Deterministic signature: vendor + evidence hash + prompt version.
+
+        Including the prompt version hash ensures that a prompt change
+        automatically invalidates cached conclusions from older prompts.
+        """
+        from .single_pass_prompts.vendor_classify import VENDOR_CLASSIFY_PROMPT_VERSION
         safe_name = vendor_name.lower().replace(" ", "_").replace(".", "")
-        return f"{safe_name}:{evidence_hash}"
+        return f"{safe_name}:{evidence_hash}:{VENDOR_CLASSIFY_PROMPT_VERSION}"
 
     @staticmethod
     def _evidence_summary(evidence: dict[str, Any], vendor_name: str) -> str:

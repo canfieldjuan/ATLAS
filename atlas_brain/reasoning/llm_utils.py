@@ -18,8 +18,12 @@ REASONING_CONCLUSION_JSON_SCHEMA = {
         "secondary_archetype",
         "confidence",
         "risk_level",
+        "trend_direction",
+        "displacement_net_direction",
+        "displacement_winner",
         "executive_summary",
         "key_signals",
+        "compound_signals",
         "falsification_conditions",
         "uncertainty_sources",
     ],
@@ -51,6 +55,17 @@ REASONING_CONCLUSION_JSON_SCHEMA = {
             "type": "string",
             "enum": ["low", "medium", "high", "critical"],
         },
+        "trend_direction": {
+            "type": "string",
+            "enum": ["accelerating", "stable", "decelerating", "unknown"],
+        },
+        "displacement_net_direction": {
+            "type": "string",
+            "enum": ["positive", "negative", "balanced", "insufficient_data"],
+        },
+        "displacement_winner": {
+            "type": ["string", "null"],
+        },
         "executive_summary": {
             "type": "string",
         },
@@ -58,6 +73,10 @@ REASONING_CONCLUSION_JSON_SCHEMA = {
             "type": "array",
             "items": {"type": "string"},
             "maxItems": 5,
+        },
+        "compound_signals": {
+            "type": "array",
+            "items": {"type": "string"},
         },
         "falsification_conditions": {
             "type": "array",

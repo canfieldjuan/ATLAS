@@ -150,12 +150,16 @@ def _valid_uuid(value: Any) -> str | None:
 
 async def _llm_generate(llm, prompt: str, system_prompt: str,
                          max_tokens: int = 1024, temperature: float = 0.3,
-                         timeout: float = 120.0) -> dict[str, Any]:
+                         timeout: float = 120.0,
+                         json_mode: bool = False) -> dict[str, Any]:
     """Call LLM.chat() from async context and return response with usage.
 
     Args:
         timeout: Maximum seconds to wait for the LLM response (default 120s).
                  Raises asyncio.TimeoutError if exceeded.
+        json_mode: When True, pass response_format={"type":"json_object"} to
+                   force structured JSON output (needed for reasoning models
+                   like o4-mini that may return prose otherwise).
 
     Returns:
         Dict with 'response' (str) and 'usage' (dict with input_tokens, output_tokens)
@@ -166,16 +170,18 @@ async def _llm_generate(llm, prompt: str, system_prompt: str,
         Message(role="system", content=system_prompt),
         Message(role="user", content=prompt),
     ]
+    kwargs: dict[str, Any] = {
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "timeout": timeout,
+    }
+    if json_mode:
+        kwargs["response_format"] = {"type": "json_object"}
     # Always use sync chat() via thread -- chat_async() returns only str,
     # losing the usage dict needed for token tracking.
     result = await asyncio.wait_for(
-        asyncio.to_thread(
-            llm.chat,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            timeout=timeout,
-        ),
+        asyncio.to_thread(llm.chat, **kwargs),
         timeout=timeout,
     )
     return {
@@ -258,7 +264,7 @@ async def run_reasoning_graph(state: ReasoningAgentState) -> ReasoningAgentState
 
 async def _node_triage(state: ReasoningAgentState) -> ReasoningAgentState:
     """Classify event priority and whether reasoning is needed."""
-    from .prompts import TRIAGE_SYSTEM
+    from .graph_prompts import TRIAGE_SYSTEM
     from ..config import settings
 
     event_desc = (
@@ -281,6 +287,7 @@ async def _node_triage(state: ReasoningAgentState) -> ReasoningAgentState:
             llm, event_desc, TRIAGE_SYSTEM,
             max_tokens=settings.reasoning.triage_max_tokens,
             temperature=0.1,
+            json_mode=True,
         )
         text = result["response"]
         usage = result.get("usage", {})
@@ -371,7 +378,7 @@ async def _node_check_lock(state: ReasoningAgentState) -> ReasoningAgentState:
 
 async def _node_reason(state: ReasoningAgentState) -> ReasoningAgentState:
     """Deep reasoning with full context via pipeline-configured LLM routing."""
-    from .prompts import REASONING_SYSTEM
+    from .graph_prompts import REASONING_SYSTEM
     from ..config import settings
 
     # Build context prompt
@@ -441,6 +448,7 @@ async def _node_reason(state: ReasoningAgentState) -> ReasoningAgentState:
             llm, prompt, REASONING_SYSTEM,
             max_tokens=settings.reasoning.max_tokens,
             temperature=settings.reasoning.temperature,
+            json_mode=True,
         )
         text = result["response"]
         usage = result.get("usage", {})
@@ -566,7 +574,7 @@ async def _node_synthesize(state: ReasoningAgentState) -> ReasoningAgentState:
         state["summary"] = ""
         return state
 
-    from .prompts import SYNTHESIS_SYSTEM
+    from .graph_prompts import SYNTHESIS_SYSTEM
     from ..config import settings
 
     context = (

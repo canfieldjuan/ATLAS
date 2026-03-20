@@ -427,6 +427,9 @@ async def multi_pass_reason(
             }
 
             text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+            # Strip complexity-gated scratchpad (emitted before JSON on complex cases)
+            if "<scratchpad>" in text:
+                text = text.split("</scratchpad>")[-1].strip()
             conclusion = parse_json_response(text, recover_truncated=True)
             if isinstance(conclusion, dict) and conclusion.get("_parse_fallback"):
                 _pending_trace = None
@@ -518,6 +521,27 @@ async def multi_pass_reason(
     result.final_conclusion = p1_conclusion
 
     if not enabled:
+        # Still run deterministic verification in single-pass mode
+        if verify_enabled:
+            raw_evidence = evidence_payload.get("evidence", evidence_payload)
+            p1_conclusion, verifier_issues, verifier_changed = _verify_evidence_sufficiency(
+                p1_conclusion,
+                raw_evidence,
+                min_reviews=verify_min_reviews,
+                min_snapshot_days=verify_min_snapshot_days,
+                min_grounded_signals=verify_min_grounded_signals,
+                confidence_cap=verify_confidence_cap,
+            )
+            if verifier_changed:
+                p1_conclusion = _normalize(p1_conclusion)
+                result.passes[0].conclusion = p1_conclusion
+                result.final_conclusion = p1_conclusion
+            result.boundary_conditions["verifier_issues"] = verifier_issues
+            result.boundary_conditions["verifier_changed"] = verifier_changed
+            result.passes[0].metadata = {
+                "verifier_issues": verifier_issues,
+                "verifier_changed": verifier_changed,
+            }
         return result
 
     raw_evidence = evidence_payload.get("evidence", evidence_payload)

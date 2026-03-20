@@ -31,7 +31,7 @@ async def run_reflection() -> dict[str, Any]:
         return {"findings": 0, "actions": 0, "notifications": 0}
 
     # 2. LLM analysis of findings
-    from .prompts import REFLECTION_SYSTEM
+    from .graph_prompts import REFLECTION_SYSTEM
     from ..config import settings
     from ..pipelines.llm import get_pipeline_llm
 

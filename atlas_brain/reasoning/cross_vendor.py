@@ -16,7 +16,6 @@ import hashlib
 import json
 import logging
 import re
-import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -528,8 +527,6 @@ class CrossVendorReasoner:
             )
 
         # --- LLM call ---
-        from ..pipelines.llm import parse_json_response, trace_llm_call
-        from ..services.protocols import Message
         from ..services.tracing import build_business_trace_context
         from .config import ReasoningConfig
         from .llm_utils import resolve_stratified_llm_light
@@ -555,14 +552,6 @@ class CrossVendorReasoner:
                 pattern_sig=pattern_sig,
             )
 
-        messages = [
-            Message(role="system", content=system_prompt),
-            Message(
-                role="user",
-                content=json.dumps(payload, separators=(",", ":"), sort_keys=True, default=str),
-            ),
-        ]
-
         trace_metadata = {
             "workflow": "cross_vendor_reasoning",
             "phase": f"cross_vendor_{analysis_type}",
@@ -575,9 +564,14 @@ class CrossVendorReasoner:
         if business:
             trace_metadata["business"] = business
 
-        t0 = time.monotonic()
+        # Choose prompt: consolidated single-pass or classic multi-pass
+        if not _rcfg.multi_pass_enabled and analysis_type == "pairwise_battle":
+            from .single_pass_prompts.cross_vendor_battle import CROSS_VENDOR_BATTLE_SINGLE_PASS
+            effective_prompt = CROSS_VENDOR_BATTLE_SINGLE_PASS
+        else:
+            effective_prompt = system_prompt
 
-        # Select contradiction finder
+        # Select contradiction finder for multi-pass mode
         finder = None
         if _rcfg.multi_pass_enabled:
             if analysis_type == "pairwise_battle":
@@ -588,71 +582,35 @@ class CrossVendorReasoner:
                 finder = _find_asymmetry_contradictions
 
         try:
-            if _rcfg.multi_pass_enabled and finder:
-                mp_result = await multi_pass_reason(
-                    llm=llm,
-                    llm_light=llm_light,
-                    system_prompt=system_prompt,
-                    evidence_payload=payload,
-                    json_schema=CROSS_VENDOR_JSON_SCHEMA,
-                    max_tokens=_rcfg.max_tokens,
-                    temperature=_rcfg.temperature,
-                    enabled=True,
-                    verify_enabled=_rcfg.multi_pass_verify_enabled,
-                    verify_min_reviews=_rcfg.multi_pass_verify_min_reviews,
-                    verify_min_snapshot_days=_rcfg.multi_pass_verify_min_snapshot_days,
-                    verify_min_grounded_signals=_rcfg.multi_pass_verify_min_grounded_signals,
-                    verify_confidence_cap=_rcfg.multi_pass_verify_confidence_cap,
-                    light_pass_max_tokens=_rcfg.multi_pass_light_max_tokens,
-                    challenge_confidence_floor=_rcfg.multi_pass_challenge_confidence_floor,
-                    challenge_min_reviews=_rcfg.multi_pass_challenge_min_reviews,
-                    challenge_mixed_polarity_min_share=_rcfg.multi_pass_challenge_mixed_polarity_min_share,
-                    challenge_high_impact_churn_density=_rcfg.multi_pass_challenge_high_impact_churn_density,
-                    challenge_high_impact_avg_urgency=_rcfg.multi_pass_challenge_high_impact_avg_urgency,
-                    challenge_high_impact_displacement_mentions=_rcfg.multi_pass_challenge_high_impact_displacement_mentions,
-                    ground_change_threshold=_rcfg.multi_pass_ground_change_threshold,
-                    ground_always=_rcfg.multi_pass_ground_always,
-                    span_prefix=f"reasoning.cross_vendor.{analysis_type}",
-                    trace_metadata=trace_metadata,
-                    contradiction_finder=finder,
-                )
-                conclusion = mp_result.final_conclusion
-                tokens = mp_result.total_tokens
-            else:
-                result = await asyncio.to_thread(
-                    llm.chat,
-                    messages=messages,
-                    max_tokens=_rcfg.max_tokens,
-                    temperature=_rcfg.temperature,
-                    guided_json=CROSS_VENDOR_JSON_SCHEMA,
-                    response_format={"type": "json_object"},
-                )
-                text = result.get("response", "").strip()
-                usage = result.get("usage", {})
-                tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
-                trace_meta = result.get("_trace_meta", {})
-                duration_ms = (time.monotonic() - t0) * 1000
-
-                trace_llm_call(
-                    span_name=f"reasoning.cross_vendor.{analysis_type}",
-                    input_tokens=usage.get("input_tokens", 0),
-                    output_tokens=usage.get("output_tokens", 0),
-                    model=getattr(llm, "model", getattr(llm, "model_id", "")),
-                    provider=getattr(llm, "name", ""),
-                    duration_ms=duration_ms,
-                    metadata=trace_metadata,
-                    input_data={"messages": [{"role": m.role, "content": m.content[:500]} for m in messages]},
-                    output_data={"response": text[:2000]} if text else None,
-                    api_endpoint=trace_meta.get("api_endpoint"),
-                    provider_request_id=trace_meta.get("provider_request_id"),
-                    ttft_ms=trace_meta.get("ttft_ms"),
-                    inference_time_ms=trace_meta.get("inference_time_ms"),
-                    queue_time_ms=trace_meta.get("queue_time_ms"),
-                )
-
-                # Clean think tags
-                text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-                conclusion = parse_json_response(text, recover_truncated=True)
+            mp_result = await multi_pass_reason(
+                llm=llm,
+                llm_light=llm_light,
+                system_prompt=effective_prompt,
+                evidence_payload=payload,
+                json_schema=CROSS_VENDOR_JSON_SCHEMA,
+                max_tokens=_rcfg.max_tokens,
+                temperature=_rcfg.temperature,
+                enabled=_rcfg.multi_pass_enabled,
+                verify_enabled=_rcfg.multi_pass_verify_enabled,
+                verify_min_reviews=_rcfg.multi_pass_verify_min_reviews,
+                verify_min_snapshot_days=_rcfg.multi_pass_verify_min_snapshot_days,
+                verify_min_grounded_signals=_rcfg.multi_pass_verify_min_grounded_signals,
+                verify_confidence_cap=_rcfg.multi_pass_verify_confidence_cap,
+                light_pass_max_tokens=_rcfg.multi_pass_light_max_tokens,
+                challenge_confidence_floor=_rcfg.multi_pass_challenge_confidence_floor,
+                challenge_min_reviews=_rcfg.multi_pass_challenge_min_reviews,
+                challenge_mixed_polarity_min_share=_rcfg.multi_pass_challenge_mixed_polarity_min_share,
+                challenge_high_impact_churn_density=_rcfg.multi_pass_challenge_high_impact_churn_density,
+                challenge_high_impact_avg_urgency=_rcfg.multi_pass_challenge_high_impact_avg_urgency,
+                challenge_high_impact_displacement_mentions=_rcfg.multi_pass_challenge_high_impact_displacement_mentions,
+                ground_change_threshold=_rcfg.multi_pass_ground_change_threshold,
+                ground_always=_rcfg.multi_pass_ground_always,
+                span_prefix=f"reasoning.cross_vendor.{analysis_type}",
+                trace_metadata=trace_metadata,
+                contradiction_finder=finder,
+            )
+            conclusion = mp_result.final_conclusion
+            tokens = mp_result.total_tokens
 
         except Exception:
             logger.exception("Cross-vendor LLM call failed for %s", pattern_sig)

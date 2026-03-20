@@ -8,6 +8,19 @@ from atlas_brain.reasoning.reflection import run_reflection
 from atlas_brain.pipelines.llm import get_pipeline_llm
 
 
+def test_reasoning_prompt_exports_are_available_from_both_modules():
+    from atlas_brain.reasoning import graph_prompts, prompts
+
+    assert graph_prompts.TRIAGE_SYSTEM
+    assert graph_prompts.REASONING_SYSTEM
+    assert graph_prompts.SYNTHESIS_SYSTEM
+    assert graph_prompts.REFLECTION_SYSTEM
+    assert prompts.TRIAGE_SYSTEM == graph_prompts.TRIAGE_SYSTEM
+    assert prompts.REASONING_SYSTEM == graph_prompts.REASONING_SYSTEM
+    assert prompts.SYNTHESIS_SYSTEM == graph_prompts.SYNTHESIS_SYSTEM
+    assert prompts.REFLECTION_SYSTEM == graph_prompts.REFLECTION_SYSTEM
+
+
 @pytest.mark.asyncio
 async def test_graph_triage_uses_configured_pipeline_workload(monkeypatch):
     monkeypatch.setattr(settings.reasoning, "graph_triage_workload", "openrouter")

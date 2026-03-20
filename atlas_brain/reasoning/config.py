@@ -39,12 +39,16 @@ class ReasoningConfig(BaseSettings):
         description="Pipeline LLM workload for stratified reasoning: 'openrouter', 'vllm', 'anthropic', or 'auto'",
     )
     stratified_openrouter_model: str = Field(
-        default="openai/gpt-5.1",
+        default="anthropic/claude-sonnet-4",
         description="OpenRouter model for Tier 1 (heavy) reasoning: archetype classify, pairwise battles",
     )
     stratified_openrouter_model_light: str = Field(
         default="openai/o4-mini",
         description="OpenRouter model for Tier 2 (light) reasoning: challenge/ground passes, reconstitute, category councils, asymmetry",
+    )
+    stratified_anthropic_model: str = Field(
+        default="claude-sonnet-4-20250514",
+        description="Anthropic model for stratified reasoning when workload is 'anthropic'",
     )
 
     triage_model: str = Field(
@@ -125,8 +129,10 @@ class ReasoningConfig(BaseSettings):
 
     # Multi-pass reasoning (classify -> challenge -> ground)
     multi_pass_enabled: bool = Field(
-        default=True,
-        description="Enable multi-pass reasoning (classify -> challenge -> ground)",
+        default=False,
+        description="Enable multi-pass reasoning (classify -> challenge -> ground). "
+        "Claude Sonnet 4 handles classify+challenge+ground in a single pass; "
+        "enable for GPT-5.1 or models that need multi-pass self-checking.",
     )
     multi_pass_verify_enabled: bool = Field(
         default=True,
@@ -177,7 +183,7 @@ class ReasoningConfig(BaseSettings):
         description="Challenge low-confidence conclusions when displacement mentions are at or above this threshold",
     )
     multi_pass_ground_always: bool = Field(
-        default=True,
+        default=False,
         description="Run the lightweight grounding pass even when challenge is skipped",
     )
     multi_pass_ground_change_threshold: float = Field(

@@ -99,6 +99,10 @@ def test_asymmetry_contradictions_match_suffix_variation_and_insider_gap():
 
 
 def test_cross_vendor_reasoner_runs_classify_challenge_ground(monkeypatch):
+    # Enable multi-pass for this test (default is now False)
+    monkeypatch.setenv("ATLAS_REASONING__MULTI_PASS_ENABLED", "true")
+    monkeypatch.setenv("ATLAS_REASONING__MULTI_PASS_GROUND_ALWAYS", "true")
+
     cache = _FakeCache()
     llm = _MockLLM([_make_xv_conclusion()])
     seen = {}
@@ -118,6 +122,7 @@ def test_cross_vendor_reasoner_runs_classify_challenge_ground(monkeypatch):
         )
 
     monkeypatch.setattr("atlas_brain.reasoning.cross_vendor.resolve_stratified_llm", lambda cfg: llm)
+    monkeypatch.setattr("atlas_brain.reasoning.llm_utils.resolve_stratified_llm_light", lambda cfg: llm)
     monkeypatch.setattr("atlas_brain.reasoning.cross_vendor.multi_pass_reason", _fake_multi_pass_reason)
 
     async def _run():
@@ -138,6 +143,10 @@ def test_cross_vendor_reasoner_runs_classify_challenge_ground(monkeypatch):
 
 
 def test_cross_vendor_reasoner_skips_ground_when_challenge_unchanged(monkeypatch):
+    # Enable multi-pass for this test (default is now False)
+    monkeypatch.setenv("ATLAS_REASONING__MULTI_PASS_ENABLED", "true")
+    monkeypatch.setenv("ATLAS_REASONING__MULTI_PASS_GROUND_ALWAYS", "true")
+
     cache = _FakeCache()
     llm = _MockLLM([_make_xv_conclusion()])
 
@@ -154,6 +163,7 @@ def test_cross_vendor_reasoner_skips_ground_when_challenge_unchanged(monkeypatch
         )
 
     monkeypatch.setattr("atlas_brain.reasoning.cross_vendor.resolve_stratified_llm", lambda cfg: llm)
+    monkeypatch.setattr("atlas_brain.reasoning.llm_utils.resolve_stratified_llm_light", lambda cfg: llm)
     monkeypatch.setattr("atlas_brain.reasoning.cross_vendor.multi_pass_reason", _fake_multi_pass_reason)
 
     async def _run():
