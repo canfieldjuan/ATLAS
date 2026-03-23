@@ -140,7 +140,6 @@ DEFAULT_ALLOWLIST_SOURCES: frozenset[ReviewSource] = frozenset({
     ReviewSource.GETAPP,
     ReviewSource.SOFTWARE_ADVICE,
     ReviewSource.TRUSTPILOT,
-    ReviewSource.SOURCEFORGE,
     ReviewSource.REDDIT,
     ReviewSource.HACKERNEWS,
 })

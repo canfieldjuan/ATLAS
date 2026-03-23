@@ -2670,7 +2670,7 @@ class B2BScrapeConfig(BaseSettings):
     enrichment_on_scrape: bool = Field(default=True, description="Fire enrichment immediately after scraping new reviews (disable to save credits when enrichment model is failing)")
     max_targets_per_run: int = Field(default=0, description="Max targets to scrape per run (0 = unlimited)")
     source_allowlist: str = Field(
-        default="g2,capterra,trustradius,gartner,peerspot,software_advice,trustpilot,reddit,hackernews,sourceforge",
+        default="g2,capterra,trustradius,gartner,peerspot,getapp,software_advice,trustpilot,reddit,hackernews",
         description="Sources allowed for automated scrape intake (comma-separated)",
     )
     source_fit_filter_enabled: bool = Field(
@@ -2780,6 +2780,26 @@ class B2BScrapeConfig(BaseSettings):
     # Relevance filtering (social media noise reduction)
     relevance_filter_enabled: bool = Field(default=True, description="Enable relevance filtering for social media sources")
     relevance_threshold: float = Field(default=0.55, description="Min relevance score (0.0-1.0) for social media posts")
+    source_quality_gate_enabled: bool = Field(
+        default=True,
+        description="Enable source-specific pre-insert quality gates for noisy sources",
+    )
+    source_quality_gate_sources: str = Field(
+        default="quora,twitter,capterra",
+        description="Comma-separated sources with pre-insert quality gating",
+    )
+    source_quality_twitter_require_intent: bool = Field(
+        default=True,
+        description="Require churn/comparison intent language for Twitter/X rows",
+    )
+    source_quality_twitter_drop_vendor_self_posts: bool = Field(
+        default=True,
+        description="Drop Twitter/X rows authored by vendor-owned accounts",
+    )
+    source_quality_drop_capterra_aggregates: bool = Field(
+        default=True,
+        description="Drop Capterra JSON-LD aggregate pages that are not real reviews",
+    )
 
     # Exhaustive scrape mode
     exhaustive_lookback_days: int = Field(default=365, description="Date cutoff for exhaustive mode (days)")

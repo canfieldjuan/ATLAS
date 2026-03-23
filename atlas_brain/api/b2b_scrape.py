@@ -21,6 +21,7 @@ from ..services.scraping.target_planning import build_scrape_coverage_plan
 from ..services.scraping.target_provisioning import (
     apply_missing_core_targets,
     fetch_coverage_inputs,
+    provision_vendor_onboarding_targets,
 )
 from ..services.scraping.target_validation import is_source_allowed, validate_target_input
 from ..services.scraping.sources import parse_source_allowlist
@@ -65,6 +66,14 @@ class SeedMissingCoreRequest(BaseModel):
     vendors: list[str] = Field(default_factory=list)
     sources: list[str] = Field(default_factory=list)
     verticals: list[str] = Field(default_factory=list)
+
+
+class VendorOnboardingTargetsRequest(BaseModel):
+    vendor_name: str
+    product_category: Optional[str] = None
+    source_slug_overrides: dict[str, str] = Field(default_factory=dict)
+    dry_run: bool = True
+    limit: int = Field(default=200, ge=1, le=1000)
 
 
 class DisablePoorFitRequest(BaseModel):
@@ -712,6 +721,27 @@ async def coverage_plan(
     return plan
 
 
+@router.post("/targets/onboard-vendor")
+async def onboard_vendor_targets(body: VendorOnboardingTargetsRequest) -> dict:
+    """Bootstrap scrape targets for a net-new vendor."""
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(status_code=503, detail="Database not ready")
+
+    vendor_name = str(body.vendor_name or "").strip()
+    if not vendor_name:
+        raise HTTPException(status_code=422, detail="vendor_name is required")
+
+    return await provision_vendor_onboarding_targets(
+        pool,
+        vendor_name,
+        product_category=body.product_category,
+        source_slug_overrides=body.source_slug_overrides,
+        dry_run=body.dry_run,
+        limit=body.limit,
+    )
+
+
 @router.post("/targets/coverage-plan/seed-missing-core")
 async def seed_missing_core_targets(body: SeedMissingCoreRequest) -> dict:
     """Seed or re-enable verified missing core scrape targets."""
@@ -1156,6 +1186,7 @@ async def trigger_scrape(target_id: UUID) -> dict:
     insert_stats = {
         "inserted": 0,
         "skipped_short": 0,
+        "skipped_quality_gate": 0,
         "duplicate_or_existing": 0,
         "duplicate_same_batch": 0,
         "duplicate_existing": 0,
@@ -1167,10 +1198,10 @@ async def trigger_scrape(target_id: UUID) -> dict:
     if result.reviews:
         from ..autonomous.tasks.b2b_scrape_intake import (
             _insert_reviews,
-            _load_existing_review_identity_sets,
+            _load_existing_review_fingerprints,
         )
         batch_id = f"manual_{target.source}_{target.product_slug}_{int(_time.time())}"
-        known_keys, known_identities = await _load_existing_review_identity_sets(
+        known_keys, known_identities, known_content_hashes = await _load_existing_review_fingerprints(
             pool,
             target.vendor_name,
             target.source,
@@ -1182,6 +1213,7 @@ async def trigger_scrape(target_id: UUID) -> dict:
             parser_version=pv,
             known_keys=known_keys,
             known_identities=known_identities,
+            known_content_hashes=known_content_hashes,
             target_context={"scrape_target_id": str(target_id)},
         )
         inserted = insert_stats["inserted"]
@@ -1256,6 +1288,7 @@ async def trigger_scrape(target_id: UUID) -> dict:
         "duplicate_db_conflict": insert_stats["duplicate_db_conflict"],
         "named_company_reviews": insert_stats["named_company_reviews"],
         "skipped_short": insert_stats["skipped_short"],
+        "skipped_quality_gate": insert_stats["skipped_quality_gate"],
         "pages_scraped": result.pages_scraped,
         "duration_ms": duration_ms,
         "errors": result.errors,
@@ -1365,7 +1398,7 @@ async def trigger_scrape_all(
     from ..autonomous.tasks.b2b_scrape_intake import (
         _build_scrape_state,
         _filter_by_date, _determine_stop_reason, _insert_reviews,
-        _load_existing_review_identity_sets,
+        _load_existing_review_fingerprints,
         _log_scrape_exhaustive, _prepare_scrape_target, _review_date_stats,
         _scrape_state_from_row,
         _update_target_after_scrape,
@@ -1419,6 +1452,7 @@ async def trigger_scrape_all(
         insert_stats = {
             "inserted": 0,
             "skipped_short": 0,
+            "skipped_quality_gate": 0,
             "duplicate_or_existing": 0,
             "duplicate_same_batch": 0,
             "duplicate_existing": 0,
@@ -1429,7 +1463,7 @@ async def trigger_scrape_all(
         pv = getattr(parser, 'version', None)
         if result.reviews:
             batch_id = f"bulk_{target.source}_{target.product_slug}_{int(_time.time())}"
-            known_keys, known_identities = await _load_existing_review_identity_sets(
+            known_keys, known_identities, known_content_hashes = await _load_existing_review_fingerprints(
                 pool,
                 target.vendor_name,
                 target.source,
@@ -1441,6 +1475,7 @@ async def trigger_scrape_all(
                 parser_version=pv,
                 known_keys=known_keys,
                 known_identities=known_identities,
+                known_content_hashes=known_content_hashes,
                 target_context={"scrape_target_id": str(row["id"])},
             )
             inserted = insert_stats["inserted"]
@@ -1514,6 +1549,7 @@ async def trigger_scrape_all(
             "duplicate_db_conflict": insert_stats["duplicate_db_conflict"],
             "named_company_reviews": insert_stats["named_company_reviews"],
             "skipped_short": insert_stats["skipped_short"],
+            "skipped_quality_gate": insert_stats["skipped_quality_gate"],
             "filtered": filtered_count,
             "date_dropped": date_dropped,
         })
@@ -1531,6 +1567,7 @@ async def trigger_scrape_all(
         "total_duplicate_same_batch": sum(int(result.get("duplicate_same_batch") or 0) for result in results),
         "total_duplicate_existing": sum(int(result.get("duplicate_existing") or 0) for result in results),
         "total_duplicate_db_conflict": sum(int(result.get("duplicate_db_conflict") or 0) for result in results),
+        "total_skipped_quality_gate": sum(int(result.get("skipped_quality_gate") or 0) for result in results),
         "results": results,
     }
 

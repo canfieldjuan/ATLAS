@@ -101,15 +101,15 @@ _CORE_SOURCES: dict[ScrapeVertical, frozenset[str]] = {
     }),
     ScrapeVertical.cloud_devops_security: frozenset({
         "g2", "trustradius", "gartner", "peerspot", "reddit",
-        "hackernews", "github", "stackoverflow", "rss", "sourceforge",
+        "hackernews", "github", "stackoverflow", "rss", "getapp",
     }),
     ScrapeVertical.project_collaboration: frozenset({
         "g2", "capterra", "trustradius", "getapp", "software_advice",
         "trustpilot", "reddit",
     }),
     ScrapeVertical.data_analytics: frozenset({
-        "g2", "trustradius", "gartner", "peerspot", "reddit",
-        "hackernews", "stackoverflow",
+        "g2", "capterra", "trustradius", "gartner", "peerspot",
+        "getapp", "software_advice", "reddit", "hackernews", "stackoverflow",
     }),
     ScrapeVertical.ecommerce_retail: frozenset({
         "g2", "capterra", "getapp", "software_advice",
@@ -132,9 +132,9 @@ _CORE_SOURCES: dict[ScrapeVertical, frozenset[str]] = {
 
 _AVOID_SOURCES: dict[ScrapeVertical, frozenset[str]] = {
     ScrapeVertical.crm_support_marketing: frozenset({"github", "stackoverflow", "sourceforge"}),
-    ScrapeVertical.cloud_devops_security: frozenset(),
+    ScrapeVertical.cloud_devops_security: frozenset({"sourceforge"}),
     ScrapeVertical.project_collaboration: frozenset({"github", "stackoverflow", "sourceforge"}),
-    ScrapeVertical.data_analytics: frozenset(),
+    ScrapeVertical.data_analytics: frozenset({"sourceforge"}),
     ScrapeVertical.ecommerce_retail: frozenset({"github", "stackoverflow", "sourceforge", "peerspot"}),
     ScrapeVertical.hr_hcm: frozenset({"github", "stackoverflow", "hackernews", "sourceforge", "twitter"}),
     ScrapeVertical.finance_erp_billing: frozenset({"github", "stackoverflow", "hackernews", "sourceforge", "twitter"}),

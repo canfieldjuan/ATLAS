@@ -21,6 +21,7 @@ from ..services.vendor_registry import resolve_vendor_name
 from ..storage.database import get_db_pool
 from ..autonomous.tasks.b2b_scrape_intake import (
     _load_existing_review_identity_sets,
+    _make_review_content_hash,
     _make_review_identity_key,
 )
 
@@ -104,6 +105,7 @@ async def import_b2b_reviews(reviews: list[B2BReviewInput]) -> dict:
     rows = []
     seen_hashes: set[str] = set()
     seen_identities: set[str] = set()
+    seen_content_hashes: set[str] = set()
     existing_cache: dict[tuple[str, str], tuple[set[str], set[str]]] = {}
     for r in reviews:
         reviewed_at_ts = None
@@ -127,6 +129,7 @@ async def import_b2b_reviews(reviews: list[B2BReviewInput]) -> dict:
             r.reviewer_name,
             reviewed_at_ts or r.reviewed_at,
         )
+        content_hash = _make_review_content_hash(r.review_text, r.pros, r.cons)
         cache_key = (canonical_vendor, r.source)
         if cache_key not in existing_cache:
             try:
@@ -141,13 +144,19 @@ async def import_b2b_reviews(reviews: list[B2BReviewInput]) -> dict:
         if (
             dedup_key in seen_hashes
             or identity_key in seen_identities
+            or (content_hash is not None and content_hash in seen_content_hashes)
             or dedup_key in known_hashes
             or identity_key in known_identities
         ):
             continue
         seen_hashes.add(dedup_key)
         seen_identities.add(identity_key)
+        if content_hash is not None:
+            seen_content_hashes.add(content_hash)
         reviewer_company_norm = normalize_company_name(r.reviewer_company or "") or None
+        metadata = dict(r.metadata or {})
+        if content_hash is not None:
+            metadata["review_content_hash"] = content_hash
 
         rows.append((
             dedup_key,
@@ -171,7 +180,7 @@ async def import_b2b_reviews(reviews: list[B2BReviewInput]) -> dict:
             r.reviewer_industry,
             reviewed_at_ts,
             batch_id,
-            json.dumps(r.metadata or {}),
+            json.dumps(metadata),
             None,  # parser_version: N/A for API imports
         ))
 
