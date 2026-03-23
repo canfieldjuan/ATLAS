@@ -347,6 +347,77 @@ async def test_insert_reviews_dedupes_duplicate_reviews_within_same_batch(monkey
 
 
 @pytest.mark.asyncio
+async def test_insert_reviews_dedupes_by_text_hash_when_ids_differ(monkeypatch):
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _insert_reviews
+
+    async def _resolve(vendor_name):
+        return vendor_name
+
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_scrape_intake.resolve_vendor_name",
+        _resolve,
+    )
+
+    pool = _FakeInsertPool()
+    reviews = [
+        {
+            "source": "reddit",
+            "vendor_name": "HubSpot",
+            "source_review_id": "post-1",
+            "review_text": "same body text " * 12,
+            "reviewed_at": "2026-03-20",
+        },
+        {
+            "source": "reddit",
+            "vendor_name": "HubSpot",
+            "source_review_id": "post-2",
+            "review_text": "same body text " * 12,
+            "reviewed_at": "2026-03-21",
+        },
+    ]
+
+    stats = await _insert_reviews(pool, reviews, "batch-hash", parser_version="reddit:1")
+
+    assert len(pool.inserted_rows) == 1
+    assert stats["inserted"] == 1
+    assert stats["duplicate_or_existing"] == 1
+    assert stats["duplicate_same_batch"] == 1
+    assert stats["skipped_quality_gate"] == 0
+
+
+@pytest.mark.asyncio
+async def test_insert_reviews_skips_capterra_aggregate_pages(monkeypatch):
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _insert_reviews
+
+    async def _resolve(vendor_name):
+        return vendor_name
+
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_scrape_intake.resolve_vendor_name",
+        _resolve,
+    )
+
+    pool = _FakeInsertPool()
+    reviews = [
+        {
+            "source": "capterra",
+            "vendor_name": "HubSpot",
+            "source_review_id": "agg-1",
+            "review_text": "aggregate row body " * 10,
+            "reviewed_at": "2026-03-20",
+            "raw_metadata": {"extraction_method": "jsonld_aggregate"},
+        }
+    ]
+
+    stats = await _insert_reviews(pool, reviews, "batch-agg", parser_version="capterra:1")
+
+    assert pool.inserted_rows == []
+    assert stats["inserted"] == 0
+    assert stats["skipped_quality_gate"] == 1
+    assert stats["eligible_rows"] == 0
+
+
+@pytest.mark.asyncio
 async def test_insert_reviews_skips_legacy_existing_identity_even_when_hash_differs(monkeypatch):
     from atlas_brain.autonomous.tasks.b2b_scrape_intake import (
         _insert_reviews,

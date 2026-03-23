@@ -49,16 +49,17 @@ def test_structured_sources_match_verified_review_platforms():
     assert ReviewSource.SOFTWARE_ADVICE in STRUCTURED_SOURCES
 
 
-def test_paused_source_allowlist_excludes_getapp():
+def test_default_source_allowlist_includes_getapp_and_excludes_sourceforge():
     from atlas_brain.services.scraping.sources import is_source_allowed
 
     allowlist = (
         "g2,capterra,trustradius,gartner,peerspot,"
-        "software_advice,trustpilot,reddit,hackernews,sourceforge"
+        "getapp,software_advice,trustpilot,reddit,hackernews"
     )
 
-    assert not is_source_allowed("getapp", allowlist)
+    assert is_source_allowed("getapp", allowlist)
     assert not is_source_allowed("twitter", allowlist)
+    assert not is_source_allowed("sourceforge", allowlist)
     assert is_source_allowed("software_advice", allowlist)
 
 
@@ -566,6 +567,55 @@ async def test_seed_missing_core_endpoint_inserts_verified_target():
     assert result["actions"][0]["source"] == "software_advice"
     assert result["actions"][0]["product_slug"] == "project-management/atlassian-jira-profile"
     pool.fetchrow.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_onboard_vendor_targets_endpoint_bootstraps_net_new_vendor():
+    from atlas_brain.api.b2b_scrape import (
+        VendorOnboardingTargetsRequest,
+        onboard_vendor_targets,
+    )
+
+    pool = AsyncMock()
+    pool.is_initialized = True
+
+    expected = {
+        "status": "dry_run",
+        "requested": 2,
+        "applied": 2,
+        "matched_vendors": ["Microsoft Defender for Endpoint"],
+        "unmatched_vendors": [],
+        "inventory_source": "manual_bootstrap",
+        "inventory_source_breakdown": {"manual_bootstrap": 1},
+        "bootstrap_used": True,
+        "actions": [
+            {"source": "reddit", "vendor_name": "Microsoft Defender for Endpoint"},
+            {"source": "hackernews", "vendor_name": "Microsoft Defender for Endpoint"},
+        ],
+    }
+
+    with patch("atlas_brain.api.b2b_scrape.get_db_pool", return_value=pool):
+        with patch(
+            "atlas_brain.api.b2b_scrape.provision_vendor_onboarding_targets",
+            new=AsyncMock(return_value=expected),
+        ) as provision:
+            result = await onboard_vendor_targets(
+                VendorOnboardingTargetsRequest(
+                    vendor_name="Microsoft Defender for Endpoint",
+                    product_category="Cybersecurity",
+                    dry_run=True,
+                )
+            )
+
+    assert result == expected
+    provision.assert_awaited_once_with(
+        pool,
+        "Microsoft Defender for Endpoint",
+        product_category="Cybersecurity",
+        source_slug_overrides={},
+        dry_run=True,
+        limit=200,
+    )
 
 
 @pytest.mark.asyncio

@@ -134,6 +134,33 @@ def test_build_specialized_blog_review_rows_from_evidence_vault_filters_pricing(
     assert rows[0]["source_name"] == "reddit"
 
 
+def test_ensure_methodology_context_injects_review_period_and_disclaimer():
+    blueprint = blog_mod.PostBlueprint(
+        topic_type="vendor_showdown",
+        slug="crowdstrike-vs-sentinelone-2026-03",
+        suggested_title="CrowdStrike vs SentinelOne",
+        tags=["security"],
+        data_context={
+            "review_period": "2025-06 to 2026-03",
+            "data_source_label": "public B2B software review platforms",
+        },
+        sections=[
+            blog_mod.SectionSpec(
+                id="hook",
+                heading="Introduction",
+                goal="Lead with the comparison",
+            ),
+        ],
+        charts=[],
+    )
+    content = {"content": "# CrowdStrike vs SentinelOne\n\nOpening paragraph."}
+
+    updated = blog_mod._ensure_methodology_context(blueprint, content)
+
+    assert "2025-06 to 2026-03" in updated["content"]
+    assert "self-selected" in updated["content"]
+
+
 def _section_by_id(blueprint, section_id: str):
     for section in blueprint.sections:
         if section.id == section_id:
@@ -555,3 +582,134 @@ async def test_detect_campaign_content_gaps_marks_showdown_drafts_as_coverage():
 
     gaps = await _detect_campaign_content_gaps(_GapPool())
     assert gaps == {}
+
+
+def test_blog_post_covers_showdown_pair_from_topic_ctx():
+    post = {
+        "topic_type": "vendor_showdown",
+        "title": "CrowdStrike vs SentinelOne",
+        "slug": "crowdstrike-vs-sentinelone-2026-03",
+        "data_context": {
+            "topic_ctx": {
+                "vendor_a": "CrowdStrike",
+                "vendor_b": "SentinelOne",
+            },
+        },
+    }
+
+    assert blog_mod._blog_post_covers_showdown_pair(post, "SentinelOne", "CrowdStrike") is True
+
+
+@pytest.mark.asyncio
+async def test_find_outbound_showdown_gap_candidates_skips_existing_pair(monkeypatch):
+    monkeypatch.setattr(
+        blog_mod,
+        "_fetch_existing_showdown_posts",
+        AsyncMock(return_value=[
+            {
+                "topic_type": "vendor_showdown",
+                "title": "CrowdStrike vs SentinelOne",
+                "slug": "crowdstrike-vs-sentinelone-2026-03",
+                "data_context": {
+                    "topic_ctx": {
+                        "vendor_a": "CrowdStrike",
+                        "vendor_b": "SentinelOne",
+                    },
+                },
+            },
+        ]),
+    )
+    monkeypatch.setattr(
+        blog_mod,
+        "_fetch_outbound_review_queue_candidates",
+        AsyncMock(return_value=[
+            {
+                "company_name": "Pax8",
+                "vendor_name": "CrowdStrike",
+                "product_category": "Endpoint Protection",
+                "opportunity_score": 67,
+                "comparison_asset": {
+                    "company_safe": True,
+                    "pain_categories": ["support"],
+                    "incumbent_vendor": "CrowdStrike",
+                    "alternative_vendor": "SentinelOne",
+                    "primary_blog_post": {
+                        "topic_type": "vendor_deep_dive",
+                        "title": "SentinelOne Deep Dive",
+                    },
+                },
+            },
+        ]),
+    )
+    build_candidate = AsyncMock(return_value={"vendor_a": "CrowdStrike", "vendor_b": "SentinelOne"})
+    monkeypatch.setattr(blog_mod, "_build_outbound_showdown_candidate", build_candidate)
+
+    result = await blog_mod._find_outbound_showdown_gap_candidates(object())
+
+    assert result == []
+    build_candidate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_select_topic_prioritizes_outbound_showdown_gap(monkeypatch):
+    monkeypatch.setattr(
+        blog_mod,
+        "_find_vendor_alternative_candidates",
+        AsyncMock(return_value=[
+            {
+                "vendor": "HubSpot",
+                "category": "CRM",
+                "urgency": 8.4,
+                "review_count": 42,
+            },
+        ]),
+    )
+    monkeypatch.setattr(blog_mod, "_find_vendor_showdown_candidates", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        blog_mod,
+        "_find_outbound_showdown_gap_candidates",
+        AsyncMock(return_value=[
+            {
+                "vendor_a": "CrowdStrike",
+                "vendor_b": "SentinelOne",
+                "category": "Endpoint Protection",
+                "reviews_a": 71,
+                "reviews_b": 64,
+                "total_reviews": 135,
+                "urgency_a": 7.9,
+                "urgency_b": 6.6,
+                "pain_diff": 1.3,
+                "outbound_gap_priority": True,
+            },
+        ]),
+    )
+    monkeypatch.setattr(blog_mod, "_find_churn_report_candidates", AsyncMock(return_value=[]))
+    monkeypatch.setattr(blog_mod, "_find_migration_guide_candidates", AsyncMock(return_value=[]))
+    monkeypatch.setattr(blog_mod, "_find_vendor_deep_dive_candidates", AsyncMock(return_value=[]))
+    monkeypatch.setattr(blog_mod, "_find_market_landscape_candidates", AsyncMock(return_value=[]))
+    monkeypatch.setattr(blog_mod, "_find_pricing_reality_check_candidates", AsyncMock(return_value=[]))
+    monkeypatch.setattr(blog_mod, "_find_switching_story_candidates", AsyncMock(return_value=[]))
+    monkeypatch.setattr(blog_mod, "_find_pain_point_roundup_candidates", AsyncMock(return_value=[]))
+    monkeypatch.setattr(blog_mod, "_find_best_fit_guide_candidates", AsyncMock(return_value=[]))
+    monkeypatch.setattr(blog_mod, "_detect_campaign_content_gaps", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        blog_mod,
+        "_batch_vendor_review_counts",
+        AsyncMock(return_value={
+            "hubspot": 42,
+            "crowdstrike": 71,
+            "sentinelone": 64,
+        }),
+    )
+    monkeypatch.setattr(blog_mod, "_batch_slug_check", AsyncMock(return_value=set()))
+    monkeypatch.setattr(
+        blog_mod,
+        "_recently_covered_vendors",
+        AsyncMock(return_value={"crowdstrike", "sentinelone"}),
+    )
+
+    topic_type, topic_ctx = await blog_mod._select_topic(object())
+
+    assert topic_type == "vendor_showdown"
+    assert topic_ctx["vendor_a"] == "CrowdStrike"
+    assert topic_ctx["vendor_b"] == "SentinelOne"

@@ -15,7 +15,7 @@ from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import HTTPException
 
-from atlas_brain.api.autonomous import run_task_now
+from atlas_brain.api.autonomous import disable_task, enable_task, run_task_now
 from atlas_brain.autonomous.scheduler import TaskScheduler
 from atlas_brain.storage.models import ScheduledTask, TaskExecution
 from atlas_brain.storage.repositories.scheduled_task import ScheduledTaskRepository
@@ -348,6 +348,49 @@ class TestRunNow:
         mock_repo.complete_execution.assert_awaited_once()
 
 
+class TestScheduleSync:
+    @pytest.mark.asyncio
+    @patch("atlas_brain.storage.repositories.scheduled_task.get_scheduled_task_repo")
+    async def test_register_and_schedule_persists_next_run(self, mock_repo_fn):
+        s = _scheduler()
+        s._running = True
+        s._scheduler = MagicMock()
+
+        next_run = datetime(2026, 3, 23, 20, 0, tzinfo=timezone.utc)
+        s._scheduler.get_job.return_value = MagicMock(next_run_time=next_run)
+
+        task = _task(schedule_type="interval", cron=None, interval=300, enabled=True)
+        mock_repo = AsyncMock()
+        mock_repo.get_by_id.return_value = None
+        mock_repo_fn.return_value = mock_repo
+
+        result = await s.register_and_schedule(task)
+
+        s._scheduler.add_job.assert_called_once()
+        mock_repo.update_next_run.assert_awaited_once_with(task.id, next_run)
+        assert result.next_run_at == next_run
+
+    @pytest.mark.asyncio
+    @patch("atlas_brain.storage.repositories.scheduled_task.get_scheduled_task_repo")
+    async def test_register_and_schedule_clears_next_run_when_disabled(self, mock_repo_fn):
+        s = _scheduler()
+        s._running = True
+        s._scheduler = MagicMock()
+
+        task = _task(enabled=False)
+        task.next_run_at = datetime(2026, 3, 23, 20, 0, tzinfo=timezone.utc)
+        mock_repo = AsyncMock()
+        mock_repo.get_by_id.return_value = None
+        mock_repo_fn.return_value = mock_repo
+
+        result = await s.register_and_schedule(task)
+
+        s._scheduler.add_job.assert_not_called()
+        s._scheduler.remove_job.assert_called_once_with(str(task.id))
+        mock_repo.update_next_run.assert_awaited_once_with(task.id, None)
+        assert result.next_run_at is None
+
+
 class TestAutonomousApiRunNow:
     @pytest.mark.asyncio
     @patch("atlas_brain.autonomous.scheduler.get_task_scheduler")
@@ -437,6 +480,49 @@ class TestAutonomousApiRunNow:
         mock_repo.complete_execution.assert_awaited_once()
         status_arg = mock_repo.complete_execution.call_args[0][1]
         assert status_arg == "timeout"
+
+
+class TestAutonomousApiScheduling:
+    @pytest.mark.asyncio
+    @patch("atlas_brain.autonomous.scheduler.get_task_scheduler")
+    @patch("atlas_brain.storage.repositories.scheduled_task.get_scheduled_task_repo")
+    async def test_enable_task_returns_rescheduled_next_run(self, mock_repo_fn, mock_sched_fn):
+        task = _task(enabled=True, schedule_type="interval", cron=None, interval=300)
+        next_run = datetime(2026, 3, 23, 20, 0, tzinfo=timezone.utc)
+        task.next_run_at = next_run
+
+        mock_repo = AsyncMock()
+        mock_repo.update.return_value = _task(enabled=True, schedule_type="interval", cron=None, interval=300)
+        mock_repo_fn.return_value = mock_repo
+
+        mock_scheduler = AsyncMock()
+        mock_scheduler.register_and_schedule.return_value = task
+        mock_sched_fn.return_value = mock_scheduler
+
+        result = await enable_task(task.id)
+
+        assert result["enabled"] is True
+        assert result["next_run_at"] == next_run.isoformat()
+
+    @pytest.mark.asyncio
+    @patch("atlas_brain.autonomous.scheduler.get_task_scheduler")
+    @patch("atlas_brain.storage.repositories.scheduled_task.get_scheduled_task_repo")
+    async def test_disable_task_clears_next_run(self, mock_repo_fn, mock_sched_fn):
+        task = _task(enabled=False)
+        task.next_run_at = None
+
+        mock_repo = AsyncMock()
+        mock_repo.update.return_value = _task(enabled=False)
+        mock_repo_fn.return_value = mock_repo
+
+        mock_scheduler = AsyncMock()
+        mock_scheduler.register_and_schedule.return_value = task
+        mock_sched_fn.return_value = mock_scheduler
+
+        result = await disable_task(task.id)
+
+        assert result["enabled"] is False
+        assert result["next_run_at"] is None
 
 
 # ---------------------------------------------------------------------------
