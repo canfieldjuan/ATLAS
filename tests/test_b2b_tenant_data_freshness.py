@@ -66,6 +66,54 @@ def test_owner_role_gets_admin_scope_even_without_is_admin_flag(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_dashboard_overview_owner_role_reads_global_vendor_count(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchval=AsyncMock(return_value=56),
+        fetchrow=AsyncMock(return_value={"avg_urgency": 3.6, "total_churn_signals": 100, "total_reviews": 2000}),
+        fetch=AsyncMock(return_value=[]),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="owner", is_admin=False)
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.dashboard_overview(user=user)
+
+    assert result["tracked_vendors"] == 56
+    fetchval_sql = pool.fetchval.await_args.args[0]
+    assert "COUNT(DISTINCT vendor_name) FROM b2b_churn_signals" in fetchval_sql
+    fetchrow_sql = pool.fetchrow.await_args.args[0]
+    assert "WHERE TRUE" in fetchrow_sql
+
+
+@pytest.mark.asyncio
+async def test_dashboard_overview_member_role_reads_account_scoped_vendor_count(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchval=AsyncMock(return_value=15),
+        fetchrow=AsyncMock(return_value={"avg_urgency": 4.2, "total_churn_signals": 22, "total_reviews": 330}),
+        fetch=AsyncMock(return_value=[]),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="member", is_admin=False)
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.dashboard_overview(user=user)
+
+    assert result["tracked_vendors"] == 15
+    fetchval_sql, fetchval_acct = pool.fetchval.await_args.args
+    assert "COUNT(*) FROM tracked_vendors WHERE account_id = $1" in fetchval_sql
+    assert str(fetchval_acct) == user.account_id
+    fetchrow_sql, fetchrow_acct = pool.fetchrow.await_args.args
+    assert "vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1)" in fetchrow_sql
+    assert str(fetchrow_acct) == user.account_id
+
+
+@pytest.mark.asyncio
 async def test_list_tenant_reports_excludes_stale_and_allows_global_rows(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 

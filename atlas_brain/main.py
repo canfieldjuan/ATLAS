@@ -18,6 +18,7 @@ import subprocess
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 from .api import router as api_router
 from .config import settings
@@ -744,6 +745,28 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+@app.middleware("http")
+async def _b2b_dashboard_deprecation_guard(request, call_next):
+    """Return an explicit deprecation response for removed legacy B2B routes."""
+    legacy_prefix = "/api/v1/b2b/dashboard"
+    if request.url.path.startswith(legacy_prefix):
+        suffix = request.url.path[len(legacy_prefix):] or ""
+        tenant_path = f"/api/v1/b2b/tenant{suffix}"
+        detail = (
+            "Legacy endpoint removed. "
+            f"Use '{tenant_path}' instead."
+        )
+        return JSONResponse(
+            status_code=410,
+            content={
+                "detail": detail,
+                "deprecated_path": request.url.path,
+                "replacement_path": tenant_path,
+            },
+        )
+    return await call_next(request)
 
 
 @app.middleware("http")
