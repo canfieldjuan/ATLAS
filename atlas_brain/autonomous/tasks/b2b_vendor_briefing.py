@@ -1377,6 +1377,8 @@ async def generate_account_cards(
 async def build_vendor_briefing(
     vendor_name: str,
     target_mode: str = "vendor_retention",
+    analyst_summary_enabled: bool = True,
+    account_cards_reasoning_depth: int | None = None,
 ) -> dict[str, Any] | None:
     """
     Build a briefing data dict for *vendor_name* from existing DB tables.
@@ -1608,12 +1610,16 @@ async def build_vendor_briefing(
     except Exception:
         logger.debug("Correlated articles skipped for %s", vendor_name, exc_info=True)
 
-    # Analyst enrichment (Kimi K2.5) -- adds headline, executive_summary,
-    # pain_labels.  Falls back silently if OpenRouter is unavailable.
-    await _enrich_with_analyst_summary(briefing)
+    # Analyst enrichment -- optional for scheduled deterministic batching.
+    if analyst_summary_enabled:
+        await _enrich_with_analyst_summary(briefing)
 
     # Account cards -- baseline data + optional LLM enrichment
-    await generate_account_cards(briefing, target_mode=target_mode)
+    await generate_account_cards(
+        briefing,
+        reasoning_depth=account_cards_reasoning_depth,
+        target_mode=target_mode,
+    )
 
     _finalize_briefing_presentation(briefing)
 
@@ -2237,6 +2243,10 @@ async def send_batch_briefings() -> dict[str, Any]:
     cfg = settings.b2b_churn
     max_batch = cfg.vendor_briefing_max_per_batch
     cooldown_days = cfg.vendor_briefing_cooldown_days
+    analyst_summary_enabled = cfg.vendor_briefing_scheduled_analyst_enrichment_enabled
+    account_cards_reasoning_depth = (
+        cfg.vendor_briefing_scheduled_account_cards_reasoning_depth
+    )
 
     # Fetch eligible vendor targets (both retention and challenger)
     rows = await pool.fetch(
@@ -2279,7 +2289,10 @@ async def send_batch_briefings() -> dict[str, Any]:
 
         # Build briefing data (pass target_mode for challenger framing)
         briefing_data = await build_vendor_briefing(
-            vendor_name, target_mode=target_mode,
+            vendor_name,
+            target_mode=target_mode,
+            analyst_summary_enabled=analyst_summary_enabled,
+            account_cards_reasoning_depth=account_cards_reasoning_depth,
         )
         if not briefing_data:
             skipped_no_data += 1

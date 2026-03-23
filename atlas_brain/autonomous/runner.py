@@ -60,7 +60,15 @@ class HeadlessRunner:
         Returns:
             AgentResult with success/failure and response text
         """
-        if task.task_type in ("agent_prompt", "hook"):
+        if task.task_type == "hook":
+            meta = task.metadata
+            if isinstance(meta, str):
+                import json as _json
+                meta = _json.loads(meta)
+            if (meta or {}).get("builtin_handler"):
+                return await self._run_builtin(task)
+            return await self._run_agent_prompt(task)
+        elif task.task_type == "agent_prompt":
             return await self._run_agent_prompt(task)
         elif task.task_type == "builtin":
             return await self._run_builtin(task)

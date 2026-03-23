@@ -102,6 +102,7 @@ _SUBJECT_SPAM_TRIGGERS = re.compile(
     r"|congratulations|winner|alert|warning|immediate)\b",
     re.IGNORECASE,
 )
+_SIGNOFF_RE = re.compile(r"<p>\s*(best|thanks|regards|sincerely|cheers)\s*,?\s*(<br>|</p>)", re.IGNORECASE)
 
 
 def _ensure_html(body: str) -> str:
@@ -167,6 +168,28 @@ def _truncate_to_limit(body: str, max_words: int) -> str:
     if truncated.count("<p>") > truncated.count("</p>"):
         truncated += "</p>"
     return truncated if truncated.strip() else body
+
+
+def _append_signoff(body: str, payload: dict[str, Any]) -> str:
+    """Append a deterministic sender sign-off when the model omits one."""
+    if _SIGNOFF_RE.search(body):
+        return body
+    selling = payload.get("selling") or {}
+    sender_name = str(selling.get("sender_name") or "").strip()
+    sender_title = str(selling.get("sender_title") or "").strip()
+    sender_company = str(selling.get("sender_company") or "").strip()
+    if not sender_name and not sender_company:
+        return body
+    if not sender_name and sender_company:
+        sender_name = f"{sender_company} team"
+    lines = ["Best,", sender_name]
+    if sender_title and sender_company:
+        lines.append(f"{sender_title}, {sender_company}")
+    elif sender_title:
+        lines.append(sender_title)
+    elif sender_company and sender_company.lower() not in sender_name.lower():
+        lines.append(sender_company)
+    return f"{body}<p>{'<br>'.join(lines)}</p>"
 
 
 def _validate_campaign_content(
@@ -2836,6 +2859,7 @@ async def _generate_content(
                 issues["word_count"], issues["max_words"],
             )
 
+        validated["body"] = _append_signoff(validated["body"], payload)
         return validated
 
     return None

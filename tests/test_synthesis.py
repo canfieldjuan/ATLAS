@@ -40,6 +40,20 @@ def _builtin_task(
     )
 
 
+def _hook_builtin_task(handler: str = "gmail_digest") -> ScheduledTask:
+    return ScheduledTask(
+        id=uuid4(),
+        name=f"hook_{handler}",
+        task_type="hook",
+        schedule_type="cron",
+        enabled=True,
+        metadata={
+            "builtin_handler": handler,
+            "trigger_rules": ["presence_departure"],
+        },
+    )
+
+
 SAMPLE_RAW_RESULT = {
     "total_emails": 5,
     "emails": [
@@ -69,7 +83,7 @@ class TestSkillLoading:
         assert "email" in skill.tags
         assert "triage" in skill.tags
         assert "autonomous" in skill.tags
-        assert skill.version == 3
+        assert skill.version == 4
 
     def test_email_triage_skill_has_content(self):
         registry = get_skill_registry()
@@ -245,6 +259,15 @@ class TestRunBuiltinSynthesis:
             cfg.synthesis_enabled = True
             mock_reg.get_active.return_value = None
             result = await runner._run_builtin(task)
+
+        assert result.success is True
+        assert result.response_text == str(SAMPLE_RAW_RESULT)
+
+    @pytest.mark.asyncio
+    async def test_hook_task_with_builtin_handler_uses_builtin_path(self, runner):
+        task = _hook_builtin_task(handler="gmail_digest")
+
+        result = await runner.run(task)
 
         assert result.success is True
         assert result.response_text == str(SAMPLE_RAW_RESULT)

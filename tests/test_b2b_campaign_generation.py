@@ -901,3 +901,35 @@ async def test_generate_vendor_campaigns_bypass_briefing_gate(monkeypatch):
 
     assert result_default["generated"] == 0
     assert result_bypass["generated"] > 0
+
+
+@pytest.mark.asyncio
+async def test_generate_content_appends_signoff_when_missing(monkeypatch):
+    async def _fake_call_llm(llm, system_prompt, user_content, max_tokens, temperature):
+        return json.dumps({
+            "subject": "CrowdStrike vs SentinelOne",
+            "body": "<p>Hi there,</p><p>Here is the comparison.</p>",
+            "cta": "Read the analysis",
+        })
+
+    monkeypatch.setattr(mod, "_call_llm", _fake_call_llm)
+
+    payload = {
+        "channel": "email_cold",
+        "selling": {
+            "sender_name": "Juan Canfield",
+            "sender_title": "Founder",
+            "sender_company": "Atlas Intel",
+        },
+    }
+
+    result = await mod._generate_content(
+        llm=object(),
+        system_prompt="skill",
+        payload=payload,
+        max_tokens=256,
+        temperature=0.1,
+    )
+
+    assert result is not None
+    assert "Best,<br>Juan Canfield<br>Founder, Atlas Intel" in result["body"]

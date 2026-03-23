@@ -47,6 +47,7 @@ _BUILTIN_TASKS = [
     ("product_metadata_sync", "run", "product_metadata_sync"),
     ("subcategory_intelligence", "run", "subcategory_intelligence"),
     ("b2b_vendor_briefing", "run", "b2b_vendor_briefing"),
+    ("b2b_scrape_target_pruning", "run", "b2b_scrape_target_pruning"),
     ("b2b_score_calibration", "run", "b2b_score_calibration"),
     ("challenger_target_discovery", "run", "challenger_target_discovery"),
     ("crm_event_processing", "run", "crm_event_processing"),

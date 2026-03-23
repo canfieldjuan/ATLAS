@@ -17,12 +17,59 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ...config import settings
+from ...services.scraping.universal.html_cleaner import html_to_text
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from ._google_news import is_google_news_wrapper_url, resolve_google_news_url
 
 logger = logging.getLogger("atlas.autonomous.tasks.article_enrichment")
 
 _VALID_PRESSURE_DIRECTIONS = frozenset({"building", "steady", "releasing", "unclear"})
+_SORAM_CLASSIFICATION_JSON_SCHEMA: dict[str, Any] = {
+    "title": "soram_classification",
+    "type": "object",
+    "properties": {
+        "soram_channels": {
+            "type": "object",
+            "properties": {
+                "societal": {"type": "number"},
+                "operational": {"type": "number"},
+                "regulatory": {"type": "number"},
+                "alignment": {"type": "number"},
+                "media": {"type": "number"},
+            },
+            "required": ["societal", "operational", "regulatory", "alignment", "media"],
+            "additionalProperties": False,
+        },
+        "linguistic_indicators": {
+            "type": "object",
+            "properties": {
+                "permission_shift": {"type": "boolean"},
+                "certainty_spike": {"type": "boolean"},
+                "linguistic_dissociation": {"type": "boolean"},
+                "hedging_withdrawal": {"type": "boolean"},
+                "urgency_escalation": {"type": "boolean"},
+            },
+            "required": [
+                "permission_shift",
+                "certainty_spike",
+                "linguistic_dissociation",
+                "hedging_withdrawal",
+                "urgency_escalation",
+            ],
+            "additionalProperties": False,
+        },
+        "entities": {"type": "array", "items": {"type": "string"}},
+        "pressure_direction": {"type": "string", "enum": sorted(_VALID_PRESSURE_DIRECTIONS)},
+    },
+    "required": [
+        "soram_channels",
+        "linguistic_indicators",
+        "entities",
+        "pressure_direction",
+    ],
+    "additionalProperties": False,
+}
 
 
 async def run(task: ScheduledTask) -> dict[str, Any]:
@@ -71,17 +118,19 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         try:
             if status == "pending":
                 # Phase 1: fetch content
-                fetched_content = await _fetch_article_content(row["url"], cfg)
+                fetched_content, fetched_url = await _fetch_article_content(row["url"], cfg)
                 if fetched_content:
                     await pool.execute(
                         """
                         UPDATE news_articles
                         SET content = $1,
+                            url = $2,
                             enrichment_status = 'fetched',
-                            enrichment_attempts = $2
-                        WHERE id = $3
+                            enrichment_attempts = $3
+                        WHERE id = $4
                         """,
                         fetched_content[:cfg.enrichment_content_max_chars],
+                        fetched_url or row["url"],
                         attempts + 1,
                         article_id,
                     )
@@ -92,9 +141,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     await pool.execute(
                         """
                         UPDATE news_articles
-                        SET enrichment_attempts = $1
-                        WHERE id = $2
+                        SET url = $1,
+                            enrichment_attempts = $2
+                        WHERE id = $3
                         """,
+                        fetched_url or row["url"],
                         attempts + 1,
                         article_id,
                     )
@@ -190,17 +241,27 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     }
 
 
-async def _fetch_article_content(url: str, cfg) -> str | None:
-    """Fetch article HTML and extract main content via trafilatura."""
+async def _fetch_article_content(url: str, cfg) -> tuple[str | None, str]:
+    """Fetch article HTML and extract main content from the publisher page."""
     import httpx
 
+    fetch_url = url
     try:
         async with httpx.AsyncClient(
             follow_redirects=True,
             timeout=cfg.enrichment_fetch_timeout,
         ) as client:
+            if is_google_news_wrapper_url(url):
+                resolved = await resolve_google_news_url(
+                    url,
+                    timeout=cfg.enrichment_fetch_timeout,
+                    client=client,
+                )
+                if resolved:
+                    fetch_url = resolved
+
             resp = await client.get(
-                url,
+                fetch_url,
                 headers={
                     "User-Agent": "Mozilla/5.0 (compatible; AtlasBot/1.0)",
                     "Accept": "text/html,application/xhtml+xml",
@@ -209,19 +270,20 @@ async def _fetch_article_content(url: str, cfg) -> str | None:
             resp.raise_for_status()
             html = resp.text
 
-        # trafilatura is CPU-bound; run in thread
-        import trafilatura
-
-        content = await asyncio.to_thread(trafilatura.extract, html)
+        content = await asyncio.to_thread(
+            html_to_text,
+            html,
+            cfg.enrichment_content_max_chars,
+        )
         if content and len(content.strip()) > 50:
-            return content.strip()
+            return content.strip(), fetch_url
 
-        logger.debug("trafilatura returned insufficient content for %s", url)
-        return None
+        logger.debug("html extraction returned insufficient content for %s", fetch_url)
+        return None, fetch_url
 
     except Exception as e:
-        logger.debug("Failed to fetch article content from %s: %s", url, e)
-        return None
+        logger.debug("Failed to fetch article content from %s: %s", fetch_url, e)
+        return None, fetch_url
 
 
 async def _classify_soram(
@@ -241,11 +303,17 @@ async def _classify_soram(
     }
 
     usage: dict[str, Any] = {}
+    max_output_tokens = max(
+        256,
+        int(getattr(settings.external_data, "enrichment_classification_max_tokens", 1200)),
+    )
     text = call_llm_with_skill(
         "digest/soram_classification", payload,
-        max_tokens=512, temperature=0.1,
-        workload="triage",
-        try_openrouter=False, auto_activate_ollama=True,
+        max_tokens=max_output_tokens,
+        temperature=0.1,
+        workload="openrouter",
+        response_format={"type": "json_object"},
+        guided_json=_SORAM_CLASSIFICATION_JSON_SCHEMA,
         usage_out=usage,
     )
     if usage.get("input_tokens"):
@@ -303,6 +371,7 @@ def _validate_classification(raw: dict[str, Any]) -> dict[str, Any]:
     # Validate pressure_direction
     direction = raw.get("pressure_direction", "unclear")
     if direction not in _VALID_PRESSURE_DIRECTIONS:
-        raw["pressure_direction"] = "unclear"
+        direction = "unclear"
+    raw["pressure_direction"] = direction
 
     return raw

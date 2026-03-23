@@ -8,6 +8,7 @@ Tests _execute_task with mocked DB repo and headless runner.
 from datetime import datetime, timezone
 from uuid import uuid4
 from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 from apscheduler.triggers.cron import CronTrigger
@@ -76,6 +77,30 @@ class TestBuildTrigger:
         task = _task(schedule_type="cron", cron="0 8 * * *")
         trigger = s._build_trigger(task)
         assert isinstance(trigger, CronTrigger)
+
+    def test_cron_day_of_week_uses_standard_crontab_semantics(self):
+        s = _scheduler()
+        task = _task(schedule_type="cron", cron="0 9 * * 1")
+        trigger = s._build_trigger(task)
+
+        start = datetime(2026, 3, 22, 8, 0, tzinfo=ZoneInfo("America/Chicago"))
+        next_fire = trigger.get_next_fire_time(None, start)
+
+        assert next_fire is not None
+        assert next_fire.date().isoformat() == "2026-03-23"
+        assert next_fire.weekday() == 0
+
+    def test_cron_day_range_maps_weekdays_correctly(self):
+        s = _scheduler()
+        task = _task(schedule_type="cron", cron="0 23 * * 1-5")
+        trigger = s._build_trigger(task)
+
+        start = datetime(2026, 3, 22, 20, 0, tzinfo=ZoneInfo("America/Chicago"))
+        next_fire = trigger.get_next_fire_time(None, start)
+
+        assert next_fire is not None
+        assert next_fire.date().isoformat() == "2026-03-23"
+        assert next_fire.weekday() == 0
 
     def test_interval_schedule_returns_interval_trigger(self):
         s = _scheduler()

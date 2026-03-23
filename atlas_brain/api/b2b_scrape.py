@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ..config import settings
+from ..services.scraping.source_yield import prune_low_yield_targets
 from ..services.scraping.source_fit import classify_source_fit
 from ..services.scraping.target_planning import build_scrape_coverage_plan
 from ..services.scraping.target_provisioning import (
@@ -110,6 +111,16 @@ class DisableLowYieldProbationRequest(BaseModel):
     vendors: list[str] = Field(default_factory=list)
     sources: list[str] = Field(default_factory=list)
     verticals: list[str] = Field(default_factory=list)
+
+
+class DisableLowYieldSourceRequest(BaseModel):
+    dry_run: bool = True
+    source: Optional[str] = None
+    lookback_runs: Optional[int] = Field(default=None, ge=1, le=20)
+    min_runs: Optional[int] = Field(default=None, ge=1, le=20)
+    max_inserted_total: Optional[int] = Field(default=None, ge=0, le=10000)
+    max_disable_per_run: Optional[int] = Field(default=None, ge=1, le=1000)
+    enabled_only: bool = True
 
 
 class PromoteProbationTargetsRequest(BaseModel):
@@ -697,6 +708,42 @@ async def promote_probation_targets(body: PromoteProbationTargetsRequest) -> dic
         },
         "targets": candidates,
     }
+
+
+@router.post("/targets/source-yield/disable-low-yield")
+async def disable_low_yield_source_targets(body: DisableLowYieldSourceRequest) -> dict:
+    """Disable low-yield scrape targets for a source using recent scrape logs."""
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(status_code=503, detail="Database not ready")
+
+    cfg = settings.b2b_scrape
+    source = (body.source or cfg.source_low_yield_pruning_source).strip().lower()
+    lookback_runs = int(body.lookback_runs or cfg.source_low_yield_pruning_lookback_runs)
+    min_runs = int(body.min_runs or cfg.source_low_yield_pruning_min_runs)
+    max_inserted_total = int(
+        body.max_inserted_total
+        if body.max_inserted_total is not None
+        else cfg.source_low_yield_pruning_max_inserted_total
+    )
+    max_disable_per_run = int(
+        body.max_disable_per_run
+        or cfg.source_low_yield_pruning_max_disable_per_run
+    )
+
+    try:
+        return await prune_low_yield_targets(
+            pool,
+            source=source,
+            lookback_runs=lookback_runs,
+            min_runs=min_runs,
+            max_inserted_total=max_inserted_total,
+            max_disable_per_run=max_disable_per_run,
+            dry_run=body.dry_run,
+            enabled_only=body.enabled_only,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/targets/coverage-plan")

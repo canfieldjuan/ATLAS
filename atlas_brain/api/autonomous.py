@@ -100,8 +100,10 @@ async def create_task(req: TaskCreateRequest):
         raise HTTPException(400, "run_at required for once schedule")
 
     # Validate task_type config
-    if req.task_type in ("agent_prompt", "hook") and not req.prompt:
-        raise HTTPException(400, "prompt required for agent_prompt/hook tasks")
+    if req.task_type == "agent_prompt" and not req.prompt:
+        raise HTTPException(400, "prompt required for agent_prompt tasks")
+    if req.task_type == "hook" and not req.prompt and not req.metadata.get("builtin_handler"):
+        raise HTTPException(400, "hook tasks require prompt or metadata.builtin_handler")
     if req.task_type == "builtin" and not req.metadata.get("builtin_handler"):
         raise HTTPException(400, "metadata.builtin_handler required for builtin tasks")
 

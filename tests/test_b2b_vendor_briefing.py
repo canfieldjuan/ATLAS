@@ -418,3 +418,130 @@ async def test_build_vendor_briefing_uses_account_reasoning_named_account_fallba
     assert briefing["account_pressure_summary"] == "Two accounts are actively evaluating alternatives."
     assert briefing["named_accounts"][0]["company"] == "Acme Corp"
     assert briefing["executive_summary"] == "Two accounts are actively evaluating alternatives."
+
+
+@pytest.mark.asyncio
+async def test_build_vendor_briefing_can_skip_analyst_summary_and_force_baseline_cards(monkeypatch):
+    class DummyPool:
+        is_initialized = True
+
+        async def fetchrow(self, *args, **kwargs):
+            return None
+
+        async def fetch(self, *args, **kwargs):
+            return []
+
+    analyst_mock = AsyncMock(return_value=None)
+    card_mock = AsyncMock(return_value=[])
+
+    monkeypatch.setattr(briefing_mod, "get_db_pool", lambda: DummyPool())
+    monkeypatch.setattr(
+        briefing_mod,
+        "_extract_feed_entry",
+        AsyncMock(
+            return_value={
+                "churn_pressure_score": 48,
+                "churn_signal_density": 12.5,
+                "avg_urgency": 4.4,
+                "total_reviews": 30,
+                "dm_churn_rate": 12.0,
+                "pain_breakdown": [],
+                "top_displacement_targets": [],
+                "evidence": [],
+                "named_accounts": [],
+                "top_feature_gaps": [],
+                "category": "CRM",
+            }
+        ),
+    )
+    monkeypatch.setattr(briefing_mod, "_fetch_vendor_evidence_vault", AsyncMock(return_value=None))
+    monkeypatch.setattr(briefing_mod, "_fetch_product_profile", AsyncMock(return_value=None))
+    monkeypatch.setattr(briefing_mod, "_fetch_high_urgency_quotes", AsyncMock(return_value=[]))
+    monkeypatch.setattr(briefing_mod, "_enrich_with_analyst_summary", analyst_mock)
+    monkeypatch.setattr(briefing_mod, "generate_account_cards", card_mock)
+
+    briefing = await briefing_mod.build_vendor_briefing(
+        "Zendesk",
+        analyst_summary_enabled=False,
+        account_cards_reasoning_depth=0,
+    )
+
+    assert briefing is not None
+    analyst_mock.assert_not_awaited()
+    card_mock.assert_awaited_once_with(
+        briefing,
+        reasoning_depth=0,
+        target_mode="vendor_retention",
+    )
+
+
+@pytest.mark.asyncio
+async def test_send_batch_briefings_uses_deterministic_scheduled_mode(monkeypatch):
+    class DummyPool:
+        is_initialized = True
+
+        def __init__(self):
+            self.execute_calls = []
+
+        async def fetch(self, query, *args):
+            if "FROM vendor_targets" in query:
+                return [
+                    {
+                        "company_name": "Zendesk",
+                        "contact_email": "ops@zendesk.test",
+                        "contact_name": "Ops",
+                        "contact_role": "VP Operations",
+                        "target_mode": "vendor_retention",
+                        "account_id": None,
+                        "created_at": None,
+                        "updated_at": None,
+                    }
+                ]
+            return []
+
+        async def execute(self, query, *args):
+            self.execute_calls.append((query, args))
+            return "INSERT 0 1"
+
+    pool = DummyPool()
+    build_mock = AsyncMock(
+        return_value={
+            "vendor_name": "Zendesk",
+            "challenger_mode": False,
+            "data_sources": {},
+        }
+    )
+
+    monkeypatch.setattr(briefing_mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(briefing_mod, "dedupe_vendor_target_rows", lambda rows: rows)
+    monkeypatch.setattr(briefing_mod, "_check_cooldown", AsyncMock(return_value=False))
+    monkeypatch.setattr(briefing_mod, "is_suppressed", AsyncMock(return_value=False))
+    monkeypatch.setattr(briefing_mod, "_is_first_briefing", AsyncMock(return_value=False))
+    monkeypatch.setattr(briefing_mod, "build_vendor_briefing", build_mock)
+    monkeypatch.setattr(briefing_mod, "render_vendor_briefing_html", lambda _: "<html></html>")
+    monkeypatch.setattr(
+        briefing_mod.settings.b2b_churn,
+        "vendor_briefing_scheduled_analyst_enrichment_enabled",
+        False,
+    )
+    monkeypatch.setattr(
+        briefing_mod.settings.b2b_churn,
+        "vendor_briefing_scheduled_account_cards_reasoning_depth",
+        0,
+    )
+    monkeypatch.setattr(
+        briefing_mod.settings.b2b_churn,
+        "vendor_briefing_max_per_batch",
+        1,
+    )
+
+    result = await briefing_mod.send_batch_briefings()
+
+    assert result["queued"] == 1
+    build_mock.assert_awaited_once_with(
+        "Zendesk",
+        target_mode="vendor_retention",
+        analyst_summary_enabled=False,
+        account_cards_reasoning_depth=0,
+    )
+    assert pool.execute_calls

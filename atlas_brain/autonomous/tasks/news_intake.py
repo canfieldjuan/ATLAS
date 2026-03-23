@@ -16,6 +16,7 @@ from typing import Any
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from ._google_news import is_google_news_wrapper_url, resolve_google_news_url
 
 logger = logging.getLogger("atlas.autonomous.tasks.news_intake")
 
@@ -259,7 +260,42 @@ async def _fetch_google_rss(
         return articles[:max_articles]
 
     try:
-        return await asyncio.to_thread(_sync_parse)
+        articles = await asyncio.to_thread(_sync_parse)
     except Exception:
         logger.warning("Google RSS fetch failed", exc_info=True)
         return []
+
+    if not articles:
+        return []
+
+    wrappers = [a for a in articles if is_google_news_wrapper_url(a.get("url", ""))]
+    if not wrappers:
+        return articles
+
+    import httpx
+
+    semaphore = asyncio.Semaphore(5)
+    resolved_count = 0
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
+        async def _resolve(article: dict[str, Any]) -> None:
+            nonlocal resolved_count
+            async with semaphore:
+                original = article.get("url", "")
+                resolved = await resolve_google_news_url(
+                    original,
+                    timeout=timeout,
+                    client=client,
+                )
+            if resolved and resolved != original:
+                article["url"] = resolved
+                resolved_count += 1
+
+        await asyncio.gather(*[_resolve(article) for article in wrappers])
+
+    if resolved_count:
+        logger.info(
+            "Resolved %d Google News article URLs during intake",
+            resolved_count,
+        )
+    return articles

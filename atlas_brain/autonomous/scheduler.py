@@ -22,6 +22,17 @@ from .config import autonomous_config
 
 logger = logging.getLogger("atlas.autonomous.scheduler")
 
+_CRONTAB_DOW_NAMES = {
+    "0": "sun",
+    "1": "mon",
+    "2": "tue",
+    "3": "wed",
+    "4": "thu",
+    "5": "fri",
+    "6": "sat",
+    "7": "sun",
+}
+
 
 class TaskScheduler:
     """
@@ -206,7 +217,8 @@ class TaskScheduler:
             for row in rows:
                 try:
                     trigger = CronTrigger.from_crontab(
-                        row["cron_expression"], timezone=default_tz,
+                        self._normalize_crontab_day_of_week(row["cron_expression"]),
+                        timezone=default_tz,
                     )
                     # get_next_fire_time with a reference time at the start of
                     # the grace window tells us if there was a fire in range.
@@ -360,7 +372,7 @@ class TaskScheduler:
         {
             "name": "departure_auto_fix",
             "description": "Auto-fix lights, locks, covers when house goes empty",
-            "task_type": "builtin",
+            "task_type": "hook",
             "schedule_type": "cron",
             "cron_expression": None,
             "timeout_seconds": 30,
@@ -674,6 +686,16 @@ class TaskScheduler:
             },
         },
         {
+            "name": "b2b_scrape_target_pruning",
+            "description": "Disable low-yield scrape targets based on recent scrape outcomes",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": None,  # resolved from settings.b2b_scrape.source_low_yield_pruning_interval_seconds
+            "timeout_seconds": 120,
+            "enabled": True,  # no-op unless ATLAS_B2B_SCRAPE_SOURCE_LOW_YIELD_PRUNING_ENABLED=true
+            "metadata": {"builtin_handler": "b2b_scrape_target_pruning"},
+        },
+        {
             "name": "consumer_weekly_digest",
             "description": "Weekly email digest with review metrics for consumer accounts with tracked ASINs",
             "task_type": "builtin",
@@ -801,6 +823,7 @@ class TaskScheduler:
                 "weather_traffic_alerts": settings.alert_monitor.check_interval_seconds,
                 "campaign_sequence_progression": settings.campaign_sequence.check_interval_seconds,
                 "b2b_churn_alert": settings.b2b_alert.interval_seconds,
+                "b2b_scrape_target_pruning": settings.b2b_scrape.source_low_yield_pruning_interval_seconds,
             }
 
             # Resolve configurable cron expressions at runtime
@@ -895,7 +918,7 @@ class TaskScheduler:
                     metadata=task_def.get("metadata"),
                 )
                 if task.enabled:
-                    self._register_task(task)
+                    await self.register_and_schedule(task)
                 schedule_info = (
                     task.cron_expression
                     or (f"every {task.interval_seconds}s" if task.interval_seconds else task.schedule_type)
@@ -931,6 +954,7 @@ class TaskScheduler:
                 "weather_traffic_alerts": settings.alert_monitor.check_interval_seconds,
                 "campaign_sequence_progression": settings.campaign_sequence.check_interval_seconds,
                 "b2b_churn_alert": settings.b2b_alert.interval_seconds,
+                "b2b_scrape_target_pruning": settings.b2b_scrape.source_low_yield_pruning_interval_seconds,
             }
 
             # Merge pipeline interval overrides
@@ -952,7 +976,7 @@ class TaskScheduler:
                 old = task.interval_seconds
                 updated = await repo.update(task.id, interval_seconds=desired_interval)
                 if updated:
-                    self._register_task(updated)
+                    await self.register_and_schedule(updated)
                     logger.info(
                         "Updated '%s' interval: %ss -> %ss (from config)",
                         task_name, old, desired_interval,
@@ -989,7 +1013,7 @@ class TaskScheduler:
                 old = task.cron_expression
                 updated = await repo.update(task.id, cron_expression=desired_cron)
                 if updated:
-                    self._register_task(updated)
+                    await self.register_and_schedule(updated)
                     logger.info(
                         "Updated '%s' cron: '%s' -> '%s' (from config)",
                         task_name, old, desired_cron,
@@ -1035,7 +1059,7 @@ class TaskScheduler:
         default_tz = autonomous_config.default_timezone
         if task.schedule_type == "cron" and task.cron_expression:
             return CronTrigger.from_crontab(
-                task.cron_expression,
+                self._normalize_crontab_day_of_week(task.cron_expression),
                 timezone=task.timezone or default_tz,
             )
         elif task.schedule_type == "interval" and task.interval_seconds:
@@ -1046,6 +1070,46 @@ class TaskScheduler:
                 timezone=task.timezone or default_tz,
             )
         return None
+
+    @staticmethod
+    def _normalize_crontab_day_of_week(expression: str) -> str:
+        """Normalize standard crontab DOW semantics to APScheduler-friendly values."""
+        parts = expression.split()
+        if len(parts) != 5:
+            return expression
+        parts[4] = TaskScheduler._normalize_crontab_dow_field(parts[4])
+        return " ".join(parts)
+
+    @staticmethod
+    def _normalize_crontab_dow_field(field: str) -> str:
+        """Convert numeric crontab DOW tokens to explicit weekday names."""
+        if any(ch.isalpha() for ch in field):
+            return field.lower()
+        terms = [TaskScheduler._normalize_crontab_dow_term(term) for term in field.split(",")]
+        return ",".join(terms)
+
+    @staticmethod
+    def _normalize_crontab_dow_term(term: str) -> str:
+        if "/" in term:
+            base, step = term.split("/", 1)
+            return f"{TaskScheduler._normalize_crontab_dow_base(base)}/{step}"
+        return TaskScheduler._normalize_crontab_dow_base(term)
+
+    @staticmethod
+    def _normalize_crontab_dow_base(base: str) -> str:
+        if base == "*":
+            return base
+        if "-" in base:
+            start, end = base.split("-", 1)
+            return (
+                f"{TaskScheduler._normalize_crontab_dow_value(start)}"
+                f"-{TaskScheduler._normalize_crontab_dow_value(end)}"
+            )
+        return TaskScheduler._normalize_crontab_dow_value(base)
+
+    @staticmethod
+    def _normalize_crontab_dow_value(value: str) -> str:
+        return _CRONTAB_DOW_NAMES.get(value, value)
 
     async def _execute_task(self, task_id, retry_count: int = 0) -> None:
         """Execute a scheduled task with concurrency control and error handling."""

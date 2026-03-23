@@ -413,7 +413,7 @@ async def _enrich_rows(rows, cfg, pool) -> dict[str, Any]:
     enriched = 0
     failed = 0
 
-    sem = asyncio.Semaphore(30)
+    sem = asyncio.Semaphore(max(1, cfg.enrichment_concurrency))
 
     async def _bounded_enrich(row):
         async with sem:
@@ -452,6 +452,29 @@ async def _enrich_rows(rows, cfg, pool) -> dict[str, Any]:
         "no_signal": no_signal or 0,
         "failed": failed,
     }
+
+
+async def _recover_orphaned_enriching(pool, max_attempts: int) -> int:
+    """Reset rows stranded in enriching after an interrupted prior run."""
+    result = await pool.execute(
+        """
+        UPDATE b2b_reviews
+        SET enrichment_attempts = enrichment_attempts + 1,
+            enrichment_status = CASE
+                WHEN enrichment_attempts + 1 >= $1 THEN 'failed'
+                ELSE 'pending'
+            END
+        WHERE enrichment_status = 'enriching'
+        """,
+        max_attempts,
+    )
+    try:
+        count = int(str(result).split()[-1])
+    except (TypeError, ValueError, IndexError):
+        count = 0
+    if count:
+        logger.warning("Recovered %d orphaned B2B enrichment rows", count)
+    return count
 
 
 async def _queue_version_upgrades(pool) -> int:
@@ -518,18 +541,21 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not pool.is_initialized:
         return {"_skip_synthesis": "DB not ready"}
 
+    orphaned = await _recover_orphaned_enriching(pool, cfg.enrichment_max_attempts)
+
     # Auto re-process reviews scraped with outdated parser versions
     requeued = await _queue_version_upgrades(pool)
 
     max_batch = min(cfg.enrichment_max_per_batch, 500)
     max_attempts = cfg.enrichment_max_attempts
+    max_rounds = max(1, cfg.enrichment_max_rounds_per_run)
 
     total_enriched = 0
     total_failed = 0
     total_no_signal = 0
     rounds = 0
 
-    while True:
+    while rounds < max_rounds:
         rows = await pool.fetch(
             """
             WITH batch AS (
@@ -581,6 +607,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "failed": total_failed,
         "no_signal": total_no_signal,
         "rounds": rounds,
+        "orphaned_requeued": orphaned,
         "_skip_synthesis": "B2B enrichment complete",
     }
     if requeued:

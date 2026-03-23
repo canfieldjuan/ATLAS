@@ -2093,6 +2093,10 @@ class ExternalDataConfig(BaseSettings):
     enrichment_max_attempts: int = Field(default=3, description="Max fetch attempts before marking failed")
     enrichment_content_max_chars: int = Field(default=10000, description="Max chars to store from article body")
     enrichment_fetch_timeout: float = Field(default=15.0, description="HTTP timeout for article content fetch")
+    enrichment_classification_max_tokens: int = Field(
+        default=1200,
+        description="Max LLM output tokens for article SORAM classification",
+    )
     # Pressure scoring
     pressure_enabled: bool = Field(default=True, description="Enable pressure signal detection")
     pressure_baseline_window_days: int = Field(default=180, description="Rolling window for baseline (6 months)")
@@ -2173,6 +2177,18 @@ class B2BChurnConfig(BaseSettings):
     # Enrichment
     enrichment_interval_seconds: int = Field(default=300, description="Enrichment polling interval")
     enrichment_max_per_batch: int = Field(default=10, description="Max reviews to enrich per batch")
+    enrichment_max_rounds_per_run: int = Field(
+        default=1,
+        ge=1,
+        le=100,
+        description="Max enrichment claim rounds to process per scheduled run",
+    )
+    enrichment_concurrency: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="Concurrent review enrichments allowed within a single batch",
+    )
     enrichment_max_attempts: int = Field(default=3, description="Max enrichment attempts")
     enrichment_auto_requeue_parser_upgrades: bool = Field(
         default=False,
@@ -2395,6 +2411,16 @@ class B2BChurnConfig(BaseSettings):
     vendor_briefing_cooldown_days: int = Field(default=7, description="Min days between briefings to same vendor")
     vendor_briefing_max_per_batch: int = Field(default=10, description="Max briefings per batch send run")
     vendor_briefing_timeout_seconds: int = Field(default=1800, description="Task timeout for vendor briefing batch")
+    vendor_briefing_scheduled_analyst_enrichment_enabled: bool = Field(
+        default=False,
+        description="Allow scheduled vendor briefing batches to call analyst LLM enrichment",
+    )
+    vendor_briefing_scheduled_account_cards_reasoning_depth: int = Field(
+        default=0,
+        ge=0,
+        le=2,
+        description="Reasoning depth for account cards in scheduled vendor briefing batches",
+    )
     vendor_briefing_account_cards_enabled: bool = Field(default=True, description="Generate account cards in briefings")
     vendor_briefing_account_cards_max: int = Field(default=3, description="Max account cards per briefing")
     vendor_briefing_account_cards_reasoning_depth: int = Field(default=2, description="Reasoning depth for card enrichment (0=baseline, 1=CoT, 2=multi-pass)")
@@ -2704,6 +2730,48 @@ class B2BScrapeConfig(BaseSettings):
     source_fit_probation_actionable_urgency_min: float = Field(
         default=7.0,
         description="Urgency threshold used when counting actionable enriched reviews for probation telemetry",
+    )
+    source_low_yield_pruning_enabled: bool = Field(
+        default=False,
+        description="Enable automated disabling of scrape targets that repeatedly produce no inserted reviews",
+    )
+    source_low_yield_pruning_source: str = Field(
+        default="twitter",
+        description="Source slug to evaluate for low-yield pruning",
+    )
+    source_low_yield_pruning_lookback_runs: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        description="Number of most recent runs to evaluate per target",
+    )
+    source_low_yield_pruning_min_runs: int = Field(
+        default=2,
+        ge=1,
+        le=20,
+        description="Minimum observed runs required before a target can be disabled",
+    )
+    source_low_yield_pruning_max_inserted_total: int = Field(
+        default=0,
+        ge=0,
+        le=10000,
+        description="Disable targets whose inserted review sum across lookback runs is at or below this value",
+    )
+    source_low_yield_pruning_max_disable_per_run: int = Field(
+        default=25,
+        ge=1,
+        le=1000,
+        description="Safety cap on number of targets disabled per pruning run",
+    )
+    source_low_yield_pruning_interval_seconds: int = Field(
+        default=21600,
+        ge=300,
+        le=604800,
+        description="Scheduler interval for low-yield pruning task",
+    )
+    source_low_yield_pruning_dry_run: bool = Field(
+        default=False,
+        description="Run low-yield pruning in dry-run mode even when scheduled",
     )
 
     # Proxies (comma-separated URLs)

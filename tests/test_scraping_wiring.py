@@ -1,6 +1,7 @@
 """Tests for scraper wiring outside parser-local behavior."""
 
 import sys
+from uuid import uuid4
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -77,6 +78,12 @@ def test_capabilities_match_getapp_twitter_and_sourceforge_parser_paths():
     assert getapp.fallback_chain == ("web_unlocker", "js_rendered", "html_scrape")
     assert twitter.fallback_chain == ("js_rendered", "html_scrape")
     assert sourceforge.fallback_chain == ("html_scrape",)
+
+
+def test_builtin_task_registry_includes_scrape_target_pruning():
+    from atlas_brain.autonomous.tasks import _BUILTIN_TASKS
+
+    assert ("b2b_scrape_target_pruning", "run", "b2b_scrape_target_pruning") in _BUILTIN_TASKS
 
 
 def test_source_fit_policy_flags_crm_github_but_allows_cloud_github():
@@ -257,6 +264,162 @@ def test_coverage_planner_prefers_specific_category_over_b2b_software():
             "inventory_source": "b2b_product_profiles",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_source_yield_prune_dry_run_selects_candidates():
+    from atlas_brain.services.scraping.source_yield import prune_low_yield_targets
+
+    target_id = uuid4()
+    pool = AsyncMock()
+    pool.fetch = AsyncMock(
+        return_value=[
+            {
+                "target_id": target_id,
+                "source": "twitter",
+                "vendor_name": "BigCommerce",
+                "product_slug": "bigcommerce",
+                "product_category": "Ecommerce",
+                "enabled": True,
+                "metadata": {"region": "us"},
+                "runs_observed": 3,
+                "inserted_sum": 0,
+                "last_run_at": None,
+                "statuses": ["partial", "success", "success"],
+            }
+        ]
+    )
+    pool.execute = AsyncMock(return_value="UPDATE 1")
+
+    result = await prune_low_yield_targets(
+        pool,
+        source="twitter",
+        lookback_runs=3,
+        min_runs=2,
+        max_inserted_total=0,
+        max_disable_per_run=10,
+        dry_run=True,
+    )
+
+    assert result["dry_run"] is True
+    assert result["requested"] == 1
+    assert result["disabled"] == 1
+    assert result["targets"][0]["target_id"] == str(target_id)
+    pool.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_source_yield_prune_apply_disables_selected_targets():
+    from atlas_brain.services.scraping.source_yield import prune_low_yield_targets
+
+    pool = AsyncMock()
+    pool.fetch = AsyncMock(
+        return_value=[
+            {
+                "target_id": uuid4(),
+                "source": "twitter",
+                "vendor_name": "Tableau",
+                "product_slug": "tableau",
+                "product_category": "Analytics",
+                "enabled": True,
+                "metadata": {},
+                "runs_observed": 3,
+                "inserted_sum": 0,
+                "last_run_at": None,
+                "statuses": ["partial", "partial", "partial"],
+            }
+        ]
+    )
+    pool.execute = AsyncMock(return_value="UPDATE 1")
+
+    result = await prune_low_yield_targets(
+        pool,
+        source="twitter",
+        lookback_runs=3,
+        min_runs=2,
+        max_inserted_total=0,
+        max_disable_per_run=1,
+        dry_run=False,
+    )
+
+    assert result["dry_run"] is False
+    assert result["requested"] == 1
+    assert result["disabled"] == 1
+    pool.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_disable_low_yield_source_endpoint_uses_config_defaults(monkeypatch):
+    from atlas_brain.api.b2b_scrape import (
+        DisableLowYieldSourceRequest,
+        disable_low_yield_source_targets,
+    )
+
+    pool = AsyncMock()
+    pool.is_initialized = True
+
+    with patch("atlas_brain.api.b2b_scrape.get_db_pool", return_value=pool):
+        with patch("atlas_brain.api.b2b_scrape.prune_low_yield_targets", new_callable=AsyncMock) as mock_prune:
+            mock_prune.return_value = {"disabled": 0, "requested": 0, "targets": []}
+            from atlas_brain.config import settings
+
+            monkeypatch.setattr(settings.b2b_scrape, "source_low_yield_pruning_source", "twitter")
+            monkeypatch.setattr(settings.b2b_scrape, "source_low_yield_pruning_lookback_runs", 3)
+            monkeypatch.setattr(settings.b2b_scrape, "source_low_yield_pruning_min_runs", 2)
+            monkeypatch.setattr(settings.b2b_scrape, "source_low_yield_pruning_max_inserted_total", 0)
+            monkeypatch.setattr(settings.b2b_scrape, "source_low_yield_pruning_max_disable_per_run", 25)
+
+            result = await disable_low_yield_source_targets(DisableLowYieldSourceRequest())
+
+    assert result["disabled"] == 0
+    kwargs = mock_prune.await_args.kwargs
+    assert kwargs["source"] == "twitter"
+    assert kwargs["lookback_runs"] == 3
+    assert kwargs["min_runs"] == 2
+    assert kwargs["max_inserted_total"] == 0
+    assert kwargs["max_disable_per_run"] == 25
+    assert kwargs["dry_run"] is True
+
+
+@pytest.mark.asyncio
+async def test_scrape_target_pruning_task_uses_shared_policy(monkeypatch):
+    from atlas_brain.autonomous.tasks.b2b_scrape_target_pruning import run
+    from atlas_brain.config import settings
+
+    pool = AsyncMock()
+    pool.is_initialized = True
+
+    monkeypatch.setattr(settings.b2b_scrape, "source_low_yield_pruning_enabled", True)
+    monkeypatch.setattr(settings.b2b_scrape, "source_low_yield_pruning_source", "twitter")
+    monkeypatch.setattr(settings.b2b_scrape, "source_low_yield_pruning_lookback_runs", 3)
+    monkeypatch.setattr(settings.b2b_scrape, "source_low_yield_pruning_min_runs", 2)
+    monkeypatch.setattr(settings.b2b_scrape, "source_low_yield_pruning_max_inserted_total", 0)
+    monkeypatch.setattr(settings.b2b_scrape, "source_low_yield_pruning_max_disable_per_run", 25)
+    monkeypatch.setattr(settings.b2b_scrape, "source_low_yield_pruning_dry_run", False)
+
+    with patch(
+        "atlas_brain.autonomous.tasks.b2b_scrape_target_pruning.get_db_pool",
+        return_value=pool,
+    ):
+        with patch(
+            "atlas_brain.autonomous.tasks.b2b_scrape_target_pruning.prune_low_yield_targets",
+            new_callable=AsyncMock,
+        ) as mock_prune:
+            mock_prune.return_value = {
+                "source": "twitter",
+                "requested": 1,
+                "disabled": 1,
+                "dry_run": False,
+                "targets": [],
+            }
+            result = await run(MagicMock())
+
+    assert result["disabled"] == 1
+    assert result["_skip_synthesis"] is True
+    kwargs = mock_prune.await_args.kwargs
+    assert kwargs["source"] == "twitter"
+    assert kwargs["lookback_runs"] == 3
+    assert kwargs["min_runs"] == 2
 
 
 def test_coverage_planner_flags_missing_core_and_poor_fit_targets():
