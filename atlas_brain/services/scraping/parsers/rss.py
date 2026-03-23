@@ -19,7 +19,7 @@ import feedparser
 from datetime import datetime, timezone
 
 from ..client import AntiDetectionClient
-from . import ScrapeResult, ScrapeTarget, register_parser
+from . import ScrapeResult, ScrapeTarget, apply_date_cutoff, register_parser
 
 logger = logging.getLogger("atlas.services.scraping.parsers.rss")
 
@@ -148,7 +148,7 @@ class RSSParser:
                     # Categories
                     categories = [t.get("term", "") for t in entry.get("tags", []) if t.get("term")]
 
-                    reviews.append({
+                    review = {
                         "source": "rss",
                         "source_url": entry.get("link", ""),
                         "source_review_id": entry_id,
@@ -175,7 +175,13 @@ class RSSParser:
                             "categories": categories,
                             "feed_url": feed_url,
                         },
-                    })
+                    }
+                    if target.date_cutoff:
+                        kept_reviews, _ = apply_date_cutoff([review], target.date_cutoff)
+                        if not kept_reviews:
+                            continue
+                        review = kept_reviews[0]
+                    reviews.append(review)
 
             except Exception as exc:
                 errors.append(f"RSS feed {feed_url}: {exc}")

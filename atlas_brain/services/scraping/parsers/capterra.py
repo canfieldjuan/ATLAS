@@ -32,7 +32,7 @@ class CapterraParser:
 
     source_name = "capterra"
     prefer_residential = True
-    version = "capterra:1"
+    version = "capterra:2"
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
         """Scrape Capterra reviews -- Web Unlocker first, then HTTP client."""
@@ -314,27 +314,128 @@ class CapterraParser:
         )
 
 
-def _supplement_pros_cons_from_html(html: str, reviews: list[dict]) -> None:
-    """Fill in pros/cons/reviewer_title/reviewer_company from HTML cards for JSON-LD reviews.
+def _normalize_review_match_value(value: str | None) -> str:
+    """Normalize review text fragments for cross-path matching."""
+    text = re.sub(r"\s+", " ", str(value or "")).strip().lower()
+    if not text:
+        return ""
+    return hashlib.sha256(text[:500].encode()).hexdigest()[:16]
 
-    JSON-LD captures reviewBody but always leaves pros/cons as None.
-    The HTML cards have proper pros/cons selectors. Match by source_review_id.
-    Modifies reviews in-place; gracefully no-ops if HTML parsing finds nothing.
-    """
-    soup = BeautifulSoup(html, "html.parser")
+
+def _build_review_match_keys(review: dict[str, object]) -> set[str]:
+    """Build match keys that survive JSON-LD and HTML ID differences."""
+    keys: set[str] = set()
+    review_id = str(review.get("source_review_id") or "").strip()
+    if review_id:
+        keys.add(review_id)
+        review_tail = review_id.rsplit("/", 1)[-1]
+        if review_tail:
+            keys.add(review_tail)
+            keys.add(f"review-{review_tail}")
+    for field in ("review_text", "summary"):
+        value = _normalize_review_match_value(str(review.get(field) or ""))
+        if value:
+            keys.add(value)
+    reviewer_name = str(review.get("reviewer_name") or "").strip().lower()
+    if reviewer_name:
+        keys.add(f"name:{reviewer_name}")
+        reviewed_at = str(review.get("reviewed_at") or "").strip().lower()
+        if reviewed_at:
+            keys.add(f"name_date:{reviewer_name}|{reviewed_at}")
+    return keys
+
+
+def _get_reviewer_title(card) -> str | None:
+    """Extract reviewer title without confusing it with the review headline."""
+    return _get_text(
+        card,
+        '[class*="job"], [class*="role"], [class*="title"]:not([class*="review"])',
+    )
+
+
+def _select_review_cards(soup: BeautifulSoup) -> list:
+    """Return review card containers from legacy or current live DOM shapes."""
     cards = soup.select(
         '[data-testid="review-card"], '
         '.review-card, '
         '[class*="ReviewCard"], '
         'div[class*="review-"][class*="card"]'
     )
-    if not cards:
-        cards = soup.select('div[id^="review-"], div[class*="review-content"]')
+    if cards:
+        return cards
+    cards = soup.select('div[id^="review-"], div[class*="review-content"]')
+    if cards:
+        return cards
+
+    current_cards = []
+    seen: set[int] = set()
+    for img in soup.select('img[data-testid="reviewer-profile-pic"]'):
+        card = img
+        while card and "Overall Rating" not in card.get_text(" ", strip=True):
+            card = card.parent
+        if not card or id(card) in seen:
+            continue
+        seen.add(id(card))
+        current_cards.append(card)
+    return current_cards
+
+
+def _extract_live_profile_metadata(card) -> dict[str, str | None]:
+    """Extract reviewer metadata from Capterra's current header block."""
+    img = card.select_one('img[data-testid="reviewer-profile-pic"]')
+    if not img or not getattr(img.parent, "parent", None):
+        return {"reviewer_title": None, "reviewer_company": None, "company_size_raw": None, "reviewer_industry": None}
+
+    lines = [text.strip() for text in img.parent.parent.stripped_strings if text and text.strip() != "Link Copied!"]
+    meta_lines: list[str] = []
+    for line in lines[1:]:
+        if line.startswith("Used the software for:"):
+            break
+        if line.lower().startswith("verified "):
+            continue
+        meta_lines.append(line)
+
+    reviewer_title = meta_lines[0] if meta_lines else None
+    reviewer_industry = None
+    company_size = None
+    if len(meta_lines) > 1:
+        industry_line = meta_lines[1]
+        if "employees" in industry_line.lower():
+            match = re.search(
+                r"((?:[\d,]+(?:\+)?(?:\s*-\s*[\d,]+(?:\+)?)?\s*employees|self-employed))$",
+                industry_line,
+                re.IGNORECASE,
+            )
+            if match:
+                company_size = match.group(1).strip()
+                reviewer_industry = industry_line[:match.start()].strip(" ,") or None
+            else:
+                company_size = industry_line
+        else:
+            reviewer_industry = industry_line
+
+    return {
+        "reviewer_title": reviewer_title,
+        "reviewer_company": None,
+        "company_size_raw": company_size,
+        "reviewer_industry": reviewer_industry,
+    }
+
+
+def _supplement_pros_cons_from_html(html: str, reviews: list[dict]) -> None:
+    """Fill in JSON-LD review gaps from HTML cards when available.
+
+    JSON-LD captures reviewBody but always leaves pros/cons as None.
+    The HTML cards may also have reviewer firmographics that the JSON-LD omits.
+    Match by source_review_id first, then normalized text fingerprints.
+    Modifies reviews in-place; gracefully no-ops if HTML parsing finds nothing.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    cards = _select_review_cards(soup)
     if not cards:
         return
 
-    # Build a lookup from review_id -> parsed HTML card data
-    html_data: dict[str, dict] = {}
+    html_lookup: dict[str, dict[str, str | None]] = {}
     for card in cards:
         card_id = card.get("id", "") or card.get("data-review-id", "")
         if not card_id:
@@ -351,31 +452,66 @@ def _supplement_pros_cons_from_html(html: str, reviews: list[dict]) -> None:
             if text:
                 cons = text[:5000]
 
-        reviewer_title = _get_text(card, '[class*="title"], [class*="job"]')
-        reviewer_company = _get_text(card, '[class*="company"], [class*="org"]')
+        profile_meta = _extract_live_profile_metadata(card)
+        reviewer_title = _get_reviewer_title(card) or profile_meta["reviewer_title"]
+        reviewer_company = _get_text(card, '[class*="company"], [class*="org"]') or profile_meta["reviewer_company"]
+        company_size = _get_text(card, '[class*="size"], [class*="employees"]') or profile_meta["company_size_raw"]
+        reviewer_industry = _get_text(card, '[class*="industry"]') or profile_meta["reviewer_industry"]
+        summary = _get_text(card, '[class*="review-title"], [class*="ReviewTitle"], [itemprop="name"], h3, h4')
+        review_text = _get_text(
+            card,
+            '[itemprop="reviewBody"], [class*="review-text"], [class*="ReviewText"], [class*="overall"]',
+        )
+        if not review_text:
+            paragraphs = [p.get_text(" ", strip=True) for p in card.select("p") if p.get_text(" ", strip=True)]
+            if paragraphs:
+                review_text = paragraphs[0]
+                if pros is None and len(paragraphs) > 1:
+                    pros = paragraphs[1][:5000]
+                if cons is None and len(paragraphs) > 2:
+                    cons = paragraphs[2][:5000]
+            if not review_text:
+                parts = [part for part in (pros, cons) if part]
+                review_text = "\n".join(parts) if parts else None
+        reviewer_name = None
+        if review_text:
+            lines = [text.strip() for text in card.stripped_strings if text and text.strip() != "Link Copied!"]
+            if lines:
+                reviewer_name = lines[0]
+        reviewed_at = None
+        date_el = card.select_one("time, [class*='date']")
+        if date_el:
+            reviewed_at = date_el.get("datetime") or date_el.get_text(strip=True)
 
-        html_data[card_id] = {
+        card_data = {
             "pros": pros,
             "cons": cons,
+            "reviewer_name": reviewer_name,
             "reviewer_title": reviewer_title,
             "reviewer_company": reviewer_company,
+            "company_size_raw": company_size,
+            "reviewer_industry": reviewer_industry,
+            "reviewed_at": reviewed_at,
+            "summary": summary,
+            "review_text": review_text,
         }
+        for key in _build_review_match_keys(
+            {
+                "source_review_id": card_id,
+                "reviewer_name": reviewer_name,
+                "reviewed_at": reviewed_at,
+                "review_text": review_text,
+                "summary": summary,
+            }
+        ):
+            html_lookup.setdefault(key, card_data)
 
-    # Match JSON-LD reviews to HTML cards and fill gaps.
-    # JSON-LD @id may be a full URL like "https://www.capterra.com/reviews/12345"
-    # while HTML card id may be "review-12345" or just "12345". Also try
-    # content-hash fallback when IDs don't match.
     for review in reviews:
-        rid = review.get("source_review_id", "")
-        card_data = html_data.get(rid)
-        if not card_data:
-            # Try matching by trailing numeric segment (e.g. ".../12345" -> "12345")
-            rid_tail = rid.rsplit("/", 1)[-1] if "/" in rid else rid
-            for cid, cdata in html_data.items():
-                # Match "12345" == "12345" or "review-12345" ends with "12345"
-                if cid == rid_tail or cid.endswith(f"-{rid_tail}") or rid_tail.endswith(cid):
-                    card_data = cdata
-                    break
+        card_data = None
+        for key in _build_review_match_keys(review):
+            card_data = html_lookup.get(key)
+            if card_data:
+                break
         if not card_data:
             continue
         if review.get("pros") is None and card_data["pros"]:
@@ -386,6 +522,10 @@ def _supplement_pros_cons_from_html(html: str, reviews: list[dict]) -> None:
             review["reviewer_title"] = card_data["reviewer_title"]
         if review.get("reviewer_company") is None and card_data["reviewer_company"]:
             review["reviewer_company"] = card_data["reviewer_company"]
+        if review.get("company_size_raw") is None and card_data["company_size_raw"]:
+            review["company_size_raw"] = card_data["company_size_raw"]
+        if review.get("reviewer_industry") is None and card_data["reviewer_industry"]:
+            review["reviewer_industry"] = card_data["reviewer_industry"]
 
 
 def _parse_json_ld(
@@ -479,18 +619,7 @@ def _parse_html(
     """Parse Capterra review page HTML as fallback."""
     soup = BeautifulSoup(html, "html.parser")
     reviews: list[dict] = []
-
-    # Look for review containers
-    review_cards = soup.select(
-        '[data-testid="review-card"], '
-        '.review-card, '
-        '[class*="ReviewCard"], '
-        'div[class*="review-"][class*="card"]'
-    )
-
-    if not review_cards:
-        # Broader fallback
-        review_cards = soup.select('div[id^="review-"], div[class*="review-content"]')
+    review_cards = _select_review_cards(soup)
 
     for card in review_cards:
         try:
@@ -519,6 +648,10 @@ def _parse_capterra_card(card, target: ScrapeTarget) -> dict | None:
         match = re.search(r"(\d+(?:\.\d+)?)", aria)
         if match:
             rating = float(match.group(1))
+    if rating is None:
+        match = re.search(r"(\d+(?:\.\d+)?)\s+Overall Rating", card.get_text(" ", strip=True))
+        if match:
+            rating = float(match.group(1))
 
     # Review text -- Capterra often has Overall, Pros, Cons sections
     overall_text = ""
@@ -541,6 +674,14 @@ def _parse_capterra_card(card, target: ScrapeTarget) -> dict | None:
         if text and len(text) > 20:
             overall_text = text[:10000]
             break
+    if not overall_text:
+        paragraphs = [p.get_text(" ", strip=True) for p in card.select("p") if p.get_text(" ", strip=True)]
+        if paragraphs:
+            overall_text = paragraphs[0][:10000]
+            if pros is None and len(paragraphs) > 1:
+                pros = paragraphs[1][:5000]
+            if cons is None and len(paragraphs) > 2:
+                cons = paragraphs[2][:5000]
 
     # Combine if no overall text
     review_text = overall_text
@@ -556,11 +697,12 @@ def _parse_capterra_card(card, target: ScrapeTarget) -> dict | None:
         return None
 
     # Reviewer info
+    profile_meta = _extract_live_profile_metadata(card)
     reviewer_name = _get_text(card, '[class*="reviewer"], [class*="author"]')
-    reviewer_title = _get_text(card, '[class*="title"], [class*="job"]')
-    reviewer_company = _get_text(card, '[class*="company"], [class*="org"]')
-    company_size = _get_text(card, '[class*="size"], [class*="employees"]')
-    reviewer_industry = _get_text(card, '[class*="industry"]')
+    reviewer_title = _get_reviewer_title(card) or profile_meta["reviewer_title"]
+    reviewer_company = _get_text(card, '[class*="company"], [class*="org"]') or profile_meta["reviewer_company"]
+    company_size = _get_text(card, '[class*="size"], [class*="employees"]') or profile_meta["company_size_raw"]
+    reviewer_industry = _get_text(card, '[class*="industry"]') or profile_meta["reviewer_industry"]
 
     # Date
     reviewed_at = None

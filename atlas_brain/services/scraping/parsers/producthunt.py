@@ -20,7 +20,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from ..client import AntiDetectionClient
-from . import ScrapeResult, ScrapeTarget, register_parser
+from . import ScrapeResult, ScrapeTarget, apply_date_cutoff, register_parser
 
 logger = logging.getLogger("atlas.services.scraping.parsers.producthunt")
 
@@ -241,15 +241,23 @@ class ProductHuntParser:
                     if not edges:
                         break  # No more reviews
 
+                    page_reviews: list[dict] = []
                     for edge in edges:
                         node = edge.get("node") or {}
                         review = _parse_graphql_review(node, target, product_name, seen_ids)
                         if review:
-                            reviews.append(review)
+                            page_reviews.append(review)
+
+                    if target.date_cutoff:
+                        page_reviews, cutoff_hit = apply_date_cutoff(page_reviews, target.date_cutoff)
+                    else:
+                        cutoff_hit = False
+
+                    reviews.extend(page_reviews)
 
                     # Pagination
                     page_info = reviews_data.get("pageInfo") or {}
-                    if not page_info.get("hasNextPage"):
+                    if cutoff_hit or not page_info.get("hasNextPage"):
                         break
                     after_cursor = page_info.get("endCursor")
                     if not after_cursor:
@@ -322,7 +330,15 @@ class ProductHuntParser:
                         )
                     break
 
+                if target.date_cutoff:
+                    page_reviews, cutoff_hit = apply_date_cutoff(page_reviews, target.date_cutoff)
+                else:
+                    cutoff_hit = False
+
                 reviews.extend(page_reviews)
+
+                if cutoff_hit:
+                    break
 
             except Exception as exc:
                 errors.append(f"HTML page {page}: {exc}")

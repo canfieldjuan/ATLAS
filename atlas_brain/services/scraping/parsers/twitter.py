@@ -78,6 +78,15 @@ def _stable_id(source_url: str, text: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:24]
 
 
+def _append_temporal_query_operator(query: str, date_cutoff: str | None) -> str:
+    """Append a cutoff operator to an X or SERP query when available."""
+    if not date_cutoff:
+        return query
+    if " since:" in query or " after:" in query:
+        return query
+    return f"{query} since:{date_cutoff}"
+
+
 def _parse_iso_date(date_str: str | None) -> str | None:
     """Attempt to parse various date formats to ISO8601.
 
@@ -134,6 +143,25 @@ class TwitterParser:
         except (ValueError, TypeError):
             max_per_query = 50
 
+        # Priority 0: SERP-based tweet discovery (X blocks all direct access)
+        if settings.b2b_scrape.serp_api_token:
+            try:
+                result = await self._scrape_via_serp(
+                    target, min_likes, min_retweets,
+                    include_replies, max_per_query,
+                )
+                if result.reviews:
+                    return result
+                logger.info(
+                    "SERP discovery for X/%s returned 0 tweets, trying browser",
+                    target.vendor_name,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "SERP discovery failed for X/%s: %s -- falling back",
+                    target.vendor_name, exc,
+                )
+
         # Priority 1: Scraping Browser (X blocks all non-browser requests)
         sb_url = settings.b2b_scrape.scraping_browser_ws_url.strip()
         if sb_url:
@@ -170,7 +198,7 @@ class TwitterParser:
         page_logs = []
         prior_hashes: set[str] = set()
         prior_review_ids: set[str] = set()
-        queries = self._build_queries(target)
+        queries = self._build_queries(target)[:target.max_pages]
 
         for query_num, query in enumerate(queries, start=1):
             url = self._build_search_url(query, include_replies, 0)
@@ -240,6 +268,92 @@ class TwitterParser:
         )
 
     # ------------------------------------------------------------------
+    # SERP discovery path (finds tweets indexed by Google)
+    # ------------------------------------------------------------------
+
+    async def _scrape_via_serp(
+        self,
+        target: ScrapeTarget,
+        min_likes: int,
+        min_retweets: int,
+        include_replies: bool,
+        max_per_query: int,
+    ) -> ScrapeResult:
+        """Discover tweets via Google SERP with cached text snippets."""
+        from ..serp_discovery import discover_urls_with_snippets
+
+        suffixes = list(_DEFAULT_SUFFIXES)
+        custom = target.metadata.get("search_terms")
+        if isinstance(custom, list):
+            suffixes.extend(custom)
+        if target.date_cutoff:
+            suffixes = [
+                f"{suffix} after:{target.date_cutoff}".strip()
+                for suffix in suffixes
+            ]
+
+        suffixes = suffixes[:target.max_pages]
+        serp_results = await discover_urls_with_snippets(
+            site_domain=_DOMAIN,
+            vendor_name=target.vendor_name,
+            query_suffixes=suffixes,
+            max_results_per_query=10,
+        )
+
+        if not serp_results:
+            return ScrapeResult(reviews=[], pages_scraped=0, errors=[])
+
+        reviews: list[dict] = []
+        seen_ids: set[str] = set()
+
+        for item in serp_results:
+            url = item.get("url", "")
+            snippet = item.get("snippet", "")
+
+            # Extract tweet ID: x.com/{user}/status/{id}
+            match = re.search(r"/status/(\d+)", url)
+            if not match:
+                continue
+            tweet_id = match.group(1)
+            if tweet_id in seen_ids:
+                continue
+            seen_ids.add(tweet_id)
+
+            # Skip tweets with no text (Google didn't cache the snippet)
+            if len(snippet) < _MIN_TEXT_LEN:
+                continue
+
+            user_match = re.search(r"x\.com/([^/]+)/status", url)
+            username = user_match.group(1) if user_match else ""
+
+            reviews.append({
+                "source": "twitter",
+                "source_url": url,
+                "source_review_id": tweet_id,
+                "vendor_name": target.vendor_name,
+                "product_name": target.product_name,
+                "product_category": target.product_category,
+                "reviewer_name": username,
+                "review_text": snippet,
+                "raw_metadata": {
+                    "tweet_id": tweet_id,
+                    "username": username,
+                    "discovery_method": "serp",
+                    "snippet_length": len(snippet),
+                },
+            })
+
+        logger.info(
+            "X SERP discovery for %s: %d tweets with text from %d URLs",
+            target.vendor_name, len(reviews), len(serp_results),
+        )
+        return ScrapeResult(
+            reviews=reviews,
+            pages_scraped=len(suffixes),
+            errors=[],
+        )
+
+    # ------------------------------------------------------------------
     # Scraping Browser path (Bright Data cloud Chromium for X)
     # ------------------------------------------------------------------
 
@@ -266,7 +380,7 @@ class TwitterParser:
         page_logs = []
         prior_hashes: set[str] = set()
         prior_review_ids: set[str] = set()
-        queries = self._build_queries(target)
+        queries = self._build_queries(target)[:target.max_pages]
 
         try:
             async with async_playwright() as pw:
@@ -276,7 +390,7 @@ class TwitterParser:
 
                 for query_num, query in enumerate(queries, start=1):
                     query_count = 0
-                    url = self._build_search_url(query, include_replies, 0)
+                    url = self._build_search_url(query, include_replies, 0, target.date_cutoff)
                     try:
                         resp = await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
                         pages_scraped += 1
@@ -349,22 +463,23 @@ class TwitterParser:
         custom_terms = target.metadata.get("search_terms")
         if custom_terms and isinstance(custom_terms, list):
             for term in custom_terms[:8]:
-                queries.append(str(term))
+                queries.append(_append_temporal_query_operator(str(term), target.date_cutoff))
 
         # Default churn-signal queries
         for suffix in _DEFAULT_SUFFIXES:
-            queries.append(f'"{vendor}" {suffix}')
+            queries.append(_append_temporal_query_operator(f'"{vendor}" {suffix}', target.date_cutoff))
 
         # Direct vendor complaints (no reply noise)
-        queries.append(f'"{vendor}" -filter:replies')
+        queries.append(_append_temporal_query_operator(f'"{vendor}" -filter:replies', target.date_cutoff))
 
         return queries
 
     @staticmethod
-    def _build_search_url(query: str, include_replies: bool, page: int) -> str:
+    def _build_search_url(query: str, include_replies: bool, page: int, date_cutoff: str | None = None) -> str:
         """Build X search URL with filters."""
         # f=live for latest tweets (chronological, better for churn signals)
-        encoded = quote_plus(query)
+        effective_query = _append_temporal_query_operator(query, date_cutoff)
+        encoded = quote_plus(effective_query)
         url = f"{_SEARCH_URL}?q={encoded}&f=live"
         if not include_replies:
             url += "&pf=on"  # "People you follow" is off, but this suppresses some replies

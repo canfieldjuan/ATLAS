@@ -98,6 +98,7 @@ class PeerSpotParser:
         prior_review_ids: set[str] = set()
         import time as _time
         stop_reason = ""
+        consecutive_empty = 0
 
         for page in range(1, target.max_pages + 1):
             url = f"{_BASE_URL}/{target.product_slug}-reviews"
@@ -149,6 +150,21 @@ class PeerSpotParser:
                 page_reviews = _parse_json_ld(resp.text, target, seen_ids)
                 if not page_reviews:
                     page_reviews = _parse_html(resp.text, target, seen_ids)
+
+                # Retry once if 200 OK but 0 reviews (Cloudflare soft-block)
+                if not page_reviews and resp.status_code == 200:
+                    await asyncio.sleep(random.uniform(3.0, 6.0))
+                    retry_start = _time.monotonic()
+                    async with httpx.AsyncClient(
+                        proxy=proxy_url, verify=False, timeout=60.0,
+                    ) as http_retry:
+                        resp = await http_retry.get(url, headers=headers)
+                    elapsed_ms += int((_time.monotonic() - retry_start) * 1000)
+                    if resp.status_code == 200:
+                        page_reviews = _parse_json_ld(resp.text, target, seen_ids)
+                        if not page_reviews:
+                            page_reviews = _parse_html(resp.text, target, seen_ids)
+
                 page_reviews, cutoff_hit = apply_date_cutoff(page_reviews, target.date_cutoff)
 
                 pl = log_page(page, url, status_code=200, duration_ms=elapsed_ms,
@@ -161,10 +177,14 @@ class PeerSpotParser:
                 page_logs.append(pl)
 
                 if not page_reviews:
+                    consecutive_empty += 1
                     if page == 1:
                         logger.warning("PeerSpot Web Unlocker page 1 returned 0 reviews for %s", target.product_slug)
-                    break
+                    if consecutive_empty >= 2:
+                        break
+                    continue
 
+                consecutive_empty = 0
                 reviews.extend(page_reviews)
 
             except Exception as exc:

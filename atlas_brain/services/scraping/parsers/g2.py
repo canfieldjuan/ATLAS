@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 from urllib.parse import quote_plus
 
 from bs4 import BeautifulSoup
@@ -25,6 +26,10 @@ logger = logging.getLogger("atlas.services.scraping.parsers.g2")
 
 _DOMAIN = "g2.com"
 _BASE_URL = "https://www.g2.com/products"
+_VERIFIED_USER_RE = re.compile(
+    r"^Verified User in\s+(?P<industry>.+?)\s*This reviewer's identity",
+    re.I | re.S,
+)
 
 
 class G2Parser:
@@ -32,7 +37,7 @@ class G2Parser:
 
     source_name = "g2"
     prefer_residential = True
-    version = "g2:1"
+    version = "g2:2"
 
     async def scrape(self, target: ScrapeTarget, client: AntiDetectionClient) -> ScrapeResult:
         """Scrape G2 reviews -- Web Unlocker first, then browser, then HTTP."""
@@ -101,6 +106,7 @@ class G2Parser:
         prior_review_ids: set[str] = set()
         import time as _time
         stop_reason = ""
+        consecutive_empty = 0
 
         for page in range(1, target.max_pages + 1):
             url = f"{_BASE_URL}/{target.product_slug}/reviews"
@@ -159,6 +165,19 @@ class G2Parser:
                     continue
 
                 page_reviews = _parse_page(resp.text, target, seen_ids)
+
+                # Retry once if 200 OK but 0 reviews (Cloudflare soft-block)
+                if not page_reviews and resp.status_code == 200:
+                    await asyncio.sleep(random.uniform(3.0, 6.0))
+                    retry_start = _time.monotonic()
+                    async with httpx.AsyncClient(
+                        proxy=proxy_url, verify=False, timeout=60.0,
+                    ) as http_retry:
+                        resp = await http_retry.get(url, headers=headers)
+                    elapsed_ms += int((_time.monotonic() - retry_start) * 1000)
+                    if resp.status_code == 200:
+                        page_reviews = _parse_page(resp.text, target, seen_ids)
+
                 page_reviews, cutoff_hit = apply_date_cutoff(page_reviews, target.date_cutoff)
 
                 pl = log_page(
@@ -175,12 +194,17 @@ class G2Parser:
                 page_logs.append(pl)
 
                 if not page_reviews:
+                    consecutive_empty += 1
                     if page == 1:
                         logger.warning(
                             "G2 Web Unlocker page 1 returned 0 reviews for %s",
                             target.product_slug,
                         )
-                    break
+                    if consecutive_empty >= 2:
+                        break
+                    continue
+
+                consecutive_empty = 0
 
                 reviews.extend(page_reviews)
 
@@ -567,6 +591,11 @@ def _parse_review_card(card, target: ScrapeTarget) -> dict | None:
     if date_el:
         reviewed_at = date_el.get("datetime") or date_el.get("content") or date_el.get_text(strip=True)
 
+    reviewer_name, reviewer_industry = _sanitize_reviewer_identity(
+        reviewer_name,
+        reviewer_industry,
+    )
+
     return {
         "source": "g2",
         "source_url": f"https://www.g2.com/products/{target.product_slug}/reviews#{review_id}",
@@ -620,6 +649,21 @@ def _extract_g2_section(card, *keywords: str) -> str | None:
                 return text[:5000]
 
     return None
+
+
+def _sanitize_reviewer_identity(
+    reviewer_name: str | None,
+    reviewer_industry: str | None,
+) -> tuple[str | None, str | None]:
+    """Normalize G2 verified-user strings into stable reviewer metadata."""
+    name = str(reviewer_name or "").strip()
+    if not name:
+        return reviewer_name, reviewer_industry
+    match = _VERIFIED_USER_RE.match(name)
+    if not match:
+        return reviewer_name, reviewer_industry
+    industry = reviewer_industry or match.group("industry").strip()
+    return "Verified User", industry or None
 
 
 def _get_text(card, selector: str) -> str | None:

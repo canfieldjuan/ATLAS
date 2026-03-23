@@ -74,18 +74,40 @@ _COMMENT_TRIGGER_KEYWORDS = {
 
 # Default B2B discussion subreddits (churn / deep profiles)
 _DEFAULT_SUBREDDITS = [
+    # General B2B / IT
     "sysadmin", "salesforce", "aws", "ITManagers",
     "devops", "msp", "networking", "cybersecurity",
     "CRM", "projectmanagement", "SaaS", "startups",
     "smallbusiness", "marketing", "CustomerSuccess",
     "EnterpriseIT", "business", "softwarearchitecture",
+    # Vendor-specific (high subscriber count)
+    "shopify", "notion", "hubspot", "clickup", "jira",
+    "slack", "trello", "zoho", "zendesk", "mailchimp",
+    "asana", "mondaydotcom", "woocommerce", "bigcommerce",
+    "fortinet", "paloaltonetworks", "crowdstrike",
+    "microsoftteams", "zoom", "ringcentral", "rippling",
+    "activecampaign", "pipedrive", "freshdesk",
+    # Category-specific
+    "ecommerce", "dropship", "helpdesk",
+    "dataengineering", "BusinessIntelligence",
+    "PowerBI", "tableau", "humanresources",
 ]
 
 # Subreddits focused on employee/org insider accounts
 _INSIDER_SUBREDDITS = [
-    "cscareerquestions", "ExperiencedDevs", "ITCareerQuestions",
-    "sysadmin", "devops", "antiwork", "jobs", "technology",
-    "cscareeradvice", "softwaregore",
+    # Tier 1: direct employee/workplace (highest insider signal)
+    "cscareerquestions", "ExperiencedDevs", "antiwork",
+    "recruitinghell", "overemployed", "layoffs", "workreform",
+    # Tier 2: industry career (good insider context)
+    "ITCareerQuestions", "ProductManagement", "CustomerSuccess",
+    "sales", "consulting", "recruiting", "careerguidance",
+    "MBA", "jobs",
+    # Tier 3: tech discussion with insider spillover
+    "sysadmin", "devops", "cybersecurity", "netsec",
+    "aws", "salesforce", "datascience", "programming",
+    "webdev", "UXDesign", "SaaS", "startups",
+    "RemoteWork", "WorkOnline", "microsoft", "google",
+    "cscareeradvice", "management", "technology", "softwaregore",
 ]
 
 # ---------------------------------------------------------------------------
@@ -130,17 +152,25 @@ _DEEP_QUERY_TEMPLATES = [
 
 # Insider profile -- employee/org intelligence
 _INSIDER_QUERY_TEMPLATES = [
+    # Exact phrases (high precision)
     '"worked at {vendor}"',
     '"left {vendor}"',
-    '"{vendor}" culture toxic',
-    '"{vendor}" layoffs',
-    '"{vendor}" morale',
-    '"{vendor}" product quality declining',
-    '"{vendor}" engineering culture',
-    '"{vendor}" management terrible',
-    '"{vendor}" glassdoor',
     '"inside {vendor}"',
-    '"{vendor}" employees',
+    '"quit {vendor}"',
+    # Broader queries (higher recall for subreddit-restricted search)
+    '{vendor} layoffs',
+    '{vendor} culture',
+    '{vendor} morale',
+    '{vendor} management',
+    '{vendor} engineering',
+    '{vendor} glassdoor',
+    '{vendor} employees',
+    '{vendor} work life balance',
+    '{vendor} hiring freeze',
+    '{vendor} reorg',
+    '{vendor} product quality',
+    '{vendor} decline',
+    '{vendor} review',
 ]
 
 # ---------------------------------------------------------------------------
@@ -581,6 +611,7 @@ def _score_candidate(
     post: dict,
     alias_pattern: re.Pattern[str],
     subreddit: str,
+    profile: str = "churn",
 ) -> tuple[float, list[str]]:
     """Score a Reddit post candidate before full parsing.
 
@@ -648,13 +679,30 @@ def _score_candidate(
     score += engagement
     reasons.append(f"engagement=+{engagement:.1f}")
 
+    # -- Insider-specific bonuses --
+    # Words that are noise for churn profiles are signal for insider profiles
+    if profile == "insider":
+        _INSIDER_SIGNAL_WORDS = frozenset({
+            "culture", "morale", "layoff", "layoffs", "reorg",
+            "management", "leadership", "decline", "toxic",
+            "glassdoor", "employee", "employees", "quit",
+            "burnout", "work life", "remote", "rto",
+        })
+        insider_hits = sum(1 for w in _INSIDER_SIGNAL_WORDS if w in combined)
+        if insider_hits > 0:
+            bonus = min(insider_hits * 1.0, 3.0)
+            score += bonus
+            reasons.append(f"insider_signal({insider_hits})=+{bonus:.1f}")
+
     # -- Penalties --
 
-    # Job-hunt / interview noise
-    job_noise = sum(1 for w in _JOB_NOISE_WORDS if w in combined)
-    if job_noise >= 2:
-        score -= 2.0
-        reasons.append(f"job_noise({job_noise})=-2.0")
+    # Job-hunt / interview noise (skip for insider -- these words are
+    # positive signals in employee/org context)
+    if profile != "insider":
+        job_noise = sum(1 for w in _JOB_NOISE_WORDS if w in combined)
+        if job_noise >= 2:
+            score -= 2.0
+            reasons.append(f"job_noise({job_noise})=-2.0")
 
     # Vendor-list detection: if the text contains 3+ other vendor/company names
     # in a list-like pattern near the vendor mention, it's likely noise
@@ -770,6 +818,23 @@ def _compute_author_churn_score(author_posts: list[dict]) -> float:
         + qualifier_count * 2
     )
     return min(round(raw, 2), 10.0)
+
+
+def _apply_author_batch_signals(
+    review: dict[str, Any],
+    author_posts: list[dict],
+    batch_trending: str,
+) -> None:
+    """Attach author-level churn metadata without polluting reviewer_title."""
+    churn_score = _compute_author_churn_score(author_posts)
+    meta = review.get("raw_metadata") or {}
+    meta["author_churn_score"] = churn_score
+    meta["author_post_count_in_batch"] = len(author_posts)
+    meta["author_high_churn_signal"] = (
+        churn_score >= _AUTHOR_HIGH_SCORE_THRESHOLD
+    )
+    meta["trending_score"] = batch_trending
+    review["raw_metadata"] = meta
 
 
 def _compute_batch_trending_score(vendor_posts: list[dict]) -> str:
@@ -933,8 +998,7 @@ class RedditParser:
                     logger.info("Reddit: approaching rate limit, pausing 120s")
                     await asyncio.sleep(120)
 
-            # ---- Strategy 1 (PRIMARY): global intent search across ALL of Reddit ----
-            # Paginated, multi-sort search with budget control.
+            # ---- Strategy 1 (PRIMARY): intent search ----
             scrape_mode = (target.metadata.get("scrape_mode") or "incremental").lower()
 
             if scrape_mode == "initial":
@@ -948,21 +1012,65 @@ class RedditParser:
                 search_budget = _SEARCH_BUDGET_INCREMENTAL
                 max_pages = _MAX_PAGES_PER_QUERY_INCR
 
+            # Insider posts are rare per sub -- widen time window to year
+            if profile == "insider":
+                time_window = "year"
+
             budget_ref = [search_budget]
             queries = self._build_global_queries(target.vendor_name, profile)
 
-            for query in queries:
-                if budget_ref[0] <= 0:
-                    break
-                for sort in sorts:
+            if profile == "insider":
+                # Insider: restrict search to insider subreddits only.
+                # Strategy: one broad vendor-name query per sub first (covers
+                # all subs within budget), then targeted insider queries on
+                # remaining budget. This ensures we reach all 36 subs instead
+                # of exhausting budget on the first 2.
+                broad_query = target.vendor_name
+                for sub in subreddits:
                     if budget_ref[0] <= 0:
                         break
                     found = await self._search_with_pagination(
-                        http, _get, query, sort, time_window,
+                        http, _get, broad_query, "relevance", time_window,
                         target, seen_ids, profile, alias_pattern,
-                        author_index, budget_ref, max_pages, _maybe_pause,
+                        author_index, budget_ref, max_pages,
+                        _maybe_pause,
+                        subreddit=sub,
                     )
                     reviews.extend(found)
+                # Second pass: targeted insider queries on high-value subs
+                _high_value_subs = [
+                    "cscareerquestions", "ExperiencedDevs", "antiwork",
+                    "layoffs", "sales", "SaaS", "startups",
+                ]
+                for sub in _high_value_subs:
+                    if budget_ref[0] <= 0:
+                        break
+                    for query in queries[:5]:
+                        if budget_ref[0] <= 0:
+                            break
+                        found = await self._search_with_pagination(
+                            http, _get, query, "relevance", time_window,
+                            target, seen_ids, profile, alias_pattern,
+                            author_index, budget_ref, max_pages,
+                            _maybe_pause,
+                            subreddit=sub,
+                        )
+                        reviews.extend(found)
+            else:
+                # Churn/deep: global search across all of Reddit.
+                for query in queries:
+                    if budget_ref[0] <= 0:
+                        break
+                    for sort in sorts:
+                        if budget_ref[0] <= 0:
+                            break
+                        found = await self._search_with_pagination(
+                            http, _get, query, sort, time_window,
+                            target, seen_ids, profile, alias_pattern,
+                            author_index, budget_ref, max_pages,
+                            _maybe_pause,
+                        )
+                        reviews.extend(found)
 
             # ---- Comment harvesting for deep / insider profiles ----
             if profile in ("deep", "insider"):
@@ -1075,19 +1183,11 @@ class RedditParser:
             for review in reviews:
                 author = review.get("reviewer_name", "")
                 author_posts = author_index.get(author, [])
-                churn_score = _compute_author_churn_score(author_posts)
-
-                meta = review.get("raw_metadata") or {}
-                meta["author_churn_score"] = churn_score
-                meta["author_post_count_in_batch"] = len(author_posts)
-
-                if churn_score >= _AUTHOR_HIGH_SCORE_THRESHOLD:
-                    # Don't overwrite extracted_role with churn label
-                    if not review.get("reviewer_title"):
-                        review["reviewer_title"] = f"Repeat Churn Signal (Score: {churn_score})"
-
-                meta["trending_score"] = batch_trending
-                review["raw_metadata"] = meta
+                _apply_author_batch_signals(
+                    review,
+                    author_posts,
+                    batch_trending,
+                )
 
         pages_scraped = pages_scraped_ref[0]
         logger.info(
@@ -1164,8 +1264,14 @@ class RedditParser:
         budget_ref: list[int],
         max_pages: int,
         _maybe_pause,
+        *,
+        subreddit: str | None = None,
     ) -> list[dict]:
-        """Search one query+sort combination with cursor-based pagination."""
+        """Search one query+sort combination with cursor-based pagination.
+
+        When *subreddit* is provided, restricts the search to that subreddit
+        using ``restrict_sr=on`` (used by the insider profile).
+        """
         collected: list[dict] = []
         cursor: str | None = None
 
@@ -1174,9 +1280,16 @@ class RedditParser:
             if budget_ref[0] <= 0:
                 break
 
+            if subreddit:
+                base = f"https://oauth.reddit.com/r/{subreddit}/search"
+                restrict = "&restrict_sr=on"
+            else:
+                base = "https://oauth.reddit.com/search"
+                restrict = ""
             url = (
-                f"https://oauth.reddit.com/search"
+                f"{base}"
                 f"?q={quote_plus(query)}&sort={sort}&limit=100&t={time_window}"
+                f"{restrict}"
             )
             if cursor:
                 url += f"&after={cursor}"
@@ -1282,7 +1395,11 @@ class RedditParser:
             return None
         if selftext in ("[removed]", "[deleted]"):
             return None
-        if len(selftext) < _MIN_SELFTEXT_LEN:
+        # Insider posts are often title-only questions with discussion
+        # in comments -- use a lower threshold so comment harvesting
+        # can process them.
+        min_text = 30 if profile == "insider" else _MIN_SELFTEXT_LEN
+        if len(selftext) < min_text:
             return None
 
         title = post.get("title", "")
@@ -1312,6 +1429,7 @@ class RedditParser:
         # ---- Candidate scoring gate ----
         candidate_score, candidate_reasons = _score_candidate(
             title, selftext, post, alias_pattern, subreddit,
+            profile=profile,
         )
 
         # Hard reject: no alias match at all in title or body

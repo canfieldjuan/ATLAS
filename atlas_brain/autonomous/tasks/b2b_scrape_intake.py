@@ -41,6 +41,12 @@ _DATE_FORMATS = [
     "%d/%m/%Y",                      # "15/02/2024" (EU)
 ]
 
+_DATE_SPARSE_INCREMENTAL_SOURCES = frozenset({"quora", "twitter"})
+_INCREMENTAL_MAX_PAGES_OVERRIDES = {
+    "quora": 3,
+    "twitter": 4,
+}
+
 
 def _parse_date(raw: Any) -> datetime | None:
     """Parse a date string in various formats.  Returns None on failure."""
@@ -94,6 +100,71 @@ def _make_dedup_key(
     else:
         raw = f"{source}:{vendor_name}:{reviewer_name or ''}:{reviewed_at or ''}"
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _normalize_review_identity_timestamp(raw: Any) -> str:
+    """Normalize review timestamps for semantic dedupe checks."""
+    parsed = _parse_date(raw)
+    if parsed is not None:
+        return parsed.astimezone(timezone.utc).isoformat()
+    return str(raw or "").strip()
+
+
+def _make_review_identity_key(
+    source: str,
+    vendor_name: str,
+    source_review_id: str | None,
+    reviewer_name: str | None,
+    reviewed_at: Any,
+) -> str:
+    """Build a semantic review identity key independent of stored dedup hashes.
+
+    This protects the current intake path from two cases:
+    - duplicate reviews repeated within the same scrape result
+    - historical rows saved under an older/incorrect dedup_key formula
+    """
+    source_norm = str(source or "").strip().lower()
+    vendor_norm = str(vendor_name or "").strip()
+    review_id = str(source_review_id or "").strip()
+    if review_id:
+        return f"id:{source_norm}:{vendor_norm}:{review_id}"
+    reviewer_norm = str(reviewer_name or "").strip()
+    reviewed_norm = _normalize_review_identity_timestamp(reviewed_at)
+    return f"fallback:{source_norm}:{vendor_norm}:{reviewer_norm}:{reviewed_norm}"
+
+
+async def _load_existing_review_identity_sets(
+    pool,
+    vendor_name: str,
+    source: str,
+) -> tuple[set[str], set[str]]:
+    """Load existing dedup hashes and semantic identities for one source/vendor."""
+    canonical_vendor = await resolve_vendor_name(vendor_name)
+    rows = await pool.fetch(
+        """
+        SELECT dedup_key, source_review_id, reviewer_name, reviewed_at
+        FROM b2b_reviews
+        WHERE vendor_name = $1 AND source = $2
+        """,
+        canonical_vendor,
+        source,
+    )
+    known_keys: set[str] = set()
+    known_identities: set[str] = set()
+    for row in rows:
+        dedup_key = row.get("dedup_key")
+        if dedup_key:
+            known_keys.add(str(dedup_key))
+        known_identities.add(
+            _make_review_identity_key(
+                source,
+                canonical_vendor,
+                row.get("source_review_id"),
+                row.get("reviewer_name"),
+                row.get("reviewed_at"),
+            )
+        )
+    return known_keys, known_identities
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +407,24 @@ INSERT INTO b2b_reviews (
 ON CONFLICT (dedup_key) DO NOTHING
 """
 
+_REPAIR_PARSER_FIELDS_SQL = """
+UPDATE b2b_reviews
+SET reviewer_title = COALESCE(reviewer_title, $2::text),
+    reviewer_company = COALESCE(reviewer_company, $3::text),
+    reviewer_company_norm = COALESCE(reviewer_company_norm, $4::text),
+    company_size_raw = COALESCE(company_size_raw, $5::text),
+    reviewer_industry = COALESCE(reviewer_industry, $6::text),
+    parser_version = COALESCE($7::text, parser_version)
+WHERE dedup_key = $1
+  AND (
+    (reviewer_title IS NULL AND $2::text IS NOT NULL) OR
+    (reviewer_company IS NULL AND $3::text IS NOT NULL) OR
+    (reviewer_company_norm IS NULL AND $4::text IS NOT NULL) OR
+    (company_size_raw IS NULL AND $5::text IS NOT NULL) OR
+    (reviewer_industry IS NULL AND $6::text IS NOT NULL)
+  )
+"""
+
 # Resolve parent_review_id for comments after all posts in the batch are inserted
 _RESOLVE_PARENT_SQL = """
 UPDATE b2b_reviews AS c
@@ -497,6 +586,8 @@ def _incremental_cutoff_from_row(row: dict[str, Any], metadata: dict[str, Any]) 
     legacy_state = metadata.get("scrape_state")
     if isinstance(legacy_state, dict):
         return _date_to_iso(legacy_state.get("newest_review"))
+    if row.get("source") in _DATE_SPARSE_INCREMENTAL_SOURCES and row.get("last_scraped_at"):
+        return _date_to_iso(row.get("last_scraped_at"))
     return None
 
 
@@ -534,6 +625,9 @@ def _prepare_scrape_target(row: dict[str, Any], cfg) -> tuple[Any, str, dict[str
             )
     else:
         target.date_cutoff = _incremental_cutoff_from_row(row, metadata)
+        override_max_pages = _INCREMENTAL_MAX_PAGES_OVERRIDES.get(target.source)
+        if override_max_pages is not None:
+            target.max_pages = min(target.max_pages, override_max_pages)
 
     return target, scrape_mode, metadata
 
@@ -785,13 +879,22 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 return
 
             # Relevance filter
+            # Quora answers are opinion-heavy and SERP discovery already
+            # ensures topical relevance -- use a lower threshold.
+            _RELAXED_RELEVANCE_SOURCES = frozenset({"quora"})
+            _RELAXED_THRESHOLD = 0.3
             filtered_count = 0
             if (cfg.relevance_filter_enabled
                     and target.source not in STRUCTURED_SOURCES
                     and result.reviews):
+                threshold = (
+                    _RELAXED_THRESHOLD
+                    if target.source in _RELAXED_RELEVANCE_SOURCES
+                    else cfg.relevance_threshold
+                )
                 original_count = len(result.reviews)
                 result.reviews, filtered_count = filter_reviews(
-                    result.reviews, target.vendor_name, cfg.relevance_threshold,
+                    result.reviews, target.vendor_name, threshold,
                 )
                 if filtered_count:
                     logger.info(
@@ -812,16 +915,33 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 "inserted": 0,
                 "skipped_short": 0,
                 "duplicate_or_existing": 0,
+                "duplicate_same_batch": 0,
+                "duplicate_existing": 0,
+                "duplicate_db_conflict": 0,
                 "named_company_reviews": 0,
                 "eligible_rows": 0,
             }
             pv = getattr(parser, 'version', None)
             if result.reviews:
+                # Pre-fetch existing review identities for this vendor+source
+                # so we can skip known rows before building INSERT tuples.
+                _existing_keys: set[str] = set()
+                _existing_identities: set[str] = set()
+                try:
+                    _existing_keys, _existing_identities = await _load_existing_review_identity_sets(
+                        pool,
+                        target.vendor_name,
+                        target.source,
+                    )
+                except Exception:
+                    pass  # Fall back to INSERT-time dedup
                 insert_stats = await _insert_reviews(
                     pool,
                     result.reviews,
                     batch_id,
                     parser_version=pv,
+                    known_keys=_existing_keys,
+                    known_identities=_existing_identities,
                     target_context={
                         "scrape_target_id": str(row["id"]),
                         "scrape_target_source_fit": row.get("_source_fit"),
@@ -832,7 +952,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 inserted = insert_stats["inserted"]
 
                 # Fire enrichment NOW -- don't wait for it, let vLLM chew
-                if inserted > 0:
+                # Skip when enrichment_on_scrape is disabled (saves credits
+                # when the enrichment model is failing)
+                if inserted > 0 and cfg.enrichment_on_scrape:
                     asyncio.create_task(
                         _fire_enrichment(batch_id, target.source, target.vendor_name),
                         name=f"enrich_{batch_id}",
@@ -933,6 +1055,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     "source_fit": row.get("_source_fit"),
                     "vertical": row.get("_scrape_vertical"),
                     "duplicate_or_existing": insert_stats["duplicate_or_existing"],
+                    "duplicate_same_batch": insert_stats["duplicate_same_batch"],
+                    "duplicate_existing": insert_stats["duplicate_existing"],
+                    "duplicate_db_conflict": insert_stats["duplicate_db_conflict"],
                     "named_company_reviews": insert_stats["named_company_reviews"],
                     "skipped_short": insert_stats["skipped_short"],
                 }
@@ -992,6 +1117,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "targets_skipped_source_fit": len(source_fit_skipped),
         "total_reviews_found": total_reviews,
         "total_reviews_inserted": total_inserted,
+        "total_duplicate_or_existing": sum(
+            int(result.get("duplicate_or_existing") or 0) for result in results_summary
+        ),
+        "total_duplicate_same_batch": sum(
+            int(result.get("duplicate_same_batch") or 0) for result in results_summary
+        ),
+        "total_duplicate_existing": sum(
+            int(result.get("duplicate_existing") or 0) for result in results_summary
+        ),
+        "total_duplicate_db_conflict": sum(
+            int(result.get("duplicate_db_conflict") or 0) for result in results_summary
+        ),
         "skipped_targets": source_fit_skipped[:20],
         "results": results_summary,
     }
@@ -1026,11 +1163,22 @@ async def _insert_reviews(
     batch_id: str,
     parser_version: str | None = None,
     *,
+    known_keys: set[str] | None = None,
+    known_identities: set[str] | None = None,
     target_context: dict[str, Any] | None = None,
 ) -> dict[str, int]:
     """Insert reviews into b2b_reviews with dedup and return batch stats."""
     rows = []
+    _known = set(known_keys or set())
+    _known_identities = set(known_identities or set())
+    _existing_keys = set(_known)
+    _existing_identities = set(_known_identities)
     skipped_short = 0
+    duplicate_or_existing = 0
+    duplicate_same_batch = 0
+    duplicate_existing = 0
+    repaired_existing = 0
+    repair_candidates: list[tuple[str, str | None, str | None, str | None, str | None, str | None, str | None]] = []
     for r in reviews:
         # Gate: don't insert reviews with no meaningful text body
         # Combine review_text + pros + cons for length check (some sources
@@ -1054,9 +1202,39 @@ async def _insert_reviews(
             r.get("reviewer_name"),
             r.get("reviewed_at"),
         )
-
+        identity_key = _make_review_identity_key(
+            r["source"],
+            canonical_vendor,
+            r.get("source_review_id"),
+            r.get("reviewer_name"),
+            reviewed_at_ts or r.get("reviewed_at"),
+        )
         reviewer_company = r.get("reviewer_company")
         reviewer_company_norm = normalize_company_name(reviewer_company or "") or None
+
+        # Skip reviews already known in DB or already seen in this batch.
+        if dedup_key in _known or identity_key in _known_identities:
+            duplicate_or_existing += 1
+            if dedup_key in _existing_keys or identity_key in _existing_identities:
+                duplicate_existing += 1
+                if any(
+                    r.get(field)
+                    for field in ("reviewer_title", "reviewer_company", "company_size_raw", "reviewer_industry")
+                ):
+                    repair_candidates.append((
+                        dedup_key,
+                        r.get("reviewer_title"),
+                        reviewer_company,
+                        reviewer_company_norm,
+                        r.get("company_size_raw"),
+                        r.get("reviewer_industry"),
+                        parser_version,
+                    ))
+            else:
+                duplicate_same_batch += 1
+            continue
+        _known.add(dedup_key)
+        _known_identities.add(identity_key)
 
         raw_metadata = _merge_scrape_raw_metadata(r.get("raw_metadata", {}), target_context)
 
@@ -1111,11 +1289,21 @@ async def _insert_reviews(
     if skipped_short:
         logger.info("Skipped %d reviews with text < %d chars", skipped_short, _MIN_ENRICHABLE_TEXT_LEN)
 
+    if repair_candidates:
+        for candidate in repair_candidates:
+            result = await pool.execute(_REPAIR_PARSER_FIELDS_SQL, *candidate)
+            if str(result).split()[-1:] == ["1"]:
+                repaired_existing += 1
+
     if not rows:
         return {
             "inserted": 0,
             "skipped_short": skipped_short,
-            "duplicate_or_existing": 0,
+            "duplicate_or_existing": duplicate_or_existing,
+            "duplicate_same_batch": duplicate_same_batch,
+            "duplicate_existing": duplicate_existing,
+            "duplicate_db_conflict": 0,
+            "repaired_existing": repaired_existing,
             "named_company_reviews": 0,
             "eligible_rows": 0,
         }
@@ -1128,7 +1316,11 @@ async def _insert_reviews(
         return {
             "inserted": 0,
             "skipped_short": skipped_short,
-            "duplicate_or_existing": len(rows),
+            "duplicate_or_existing": duplicate_or_existing + len(rows),
+            "duplicate_same_batch": duplicate_same_batch,
+            "duplicate_existing": duplicate_existing,
+            "duplicate_db_conflict": len(rows),
+            "repaired_existing": repaired_existing,
             "named_company_reviews": 0,
             "eligible_rows": len(rows),
         }
@@ -1155,10 +1347,15 @@ async def _insert_reviews(
     )
     inserted = int(count_row["cnt"] or 0) if count_row else 0
     named_company_reviews = int(count_row["named_company_reviews"] or 0) if count_row else 0
+    duplicate_db_conflict = max(len(rows) - inserted, 0)
     return {
         "inserted": inserted,
         "skipped_short": skipped_short,
-        "duplicate_or_existing": max(len(rows) - inserted, 0),
+        "duplicate_or_existing": duplicate_or_existing + duplicate_db_conflict,
+        "duplicate_same_batch": duplicate_same_batch,
+        "duplicate_existing": duplicate_existing,
+        "duplicate_db_conflict": duplicate_db_conflict,
+        "repaired_existing": repaired_existing,
         "named_company_reviews": named_company_reviews,
         "eligible_rows": len(rows),
     }

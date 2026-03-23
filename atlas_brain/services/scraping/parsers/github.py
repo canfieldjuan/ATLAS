@@ -14,7 +14,7 @@ import os
 from urllib.parse import quote_plus
 
 from ..client import AntiDetectionClient
-from . import ScrapeResult, ScrapeTarget, register_parser
+from . import ScrapeResult, ScrapeTarget, apply_date_cutoff, register_parser
 
 logger = logging.getLogger("atlas.services.scraping.parsers.github")
 
@@ -23,6 +23,27 @@ _BASE_URL = "https://api.github.com"
 _PER_PAGE = 50
 _MIN_TEXT_LEN = 200  # Min body length for issues (skip short bug reports)
 _MIN_REPO_DESC_LEN = 80  # Min description length for repos
+
+
+def _issue_search_query(vendor_name: str, label: str, date_cutoff: str | None) -> str:
+    """Build a GitHub issue-search query string."""
+    parts = [vendor_name, f"label:{label}"]
+    if date_cutoff:
+        parts.append(f"created:>={date_cutoff}")
+    return " ".join(part for part in parts if part)
+
+
+def _repo_search_query(vendor_name: str, min_stars: int, date_cutoff: str | None) -> str:
+    """Build a GitHub repository-search query string."""
+    parts = [
+        vendor_name,
+        "migration",
+        "topic:migration",
+        f"stars:>={min_stars}",
+    ]
+    if date_cutoff:
+        parts.append(f"created:>={date_cutoff}")
+    return " ".join(part for part in parts if part)
 
 
 class GitHubParser:
@@ -70,10 +91,12 @@ class GitHubParser:
             for label in labels:
                 consecutive_empty = 0
                 for page in range(1, target.max_pages + 1):
+                    issue_query = _issue_search_query(target.vendor_name, label, target.date_cutoff)
+                    sort_param = "created" if target.date_cutoff else "reactions"
                     url = (
                         f"{_BASE_URL}/search/issues"
-                        f"?q={vendor_encoded}+label:{quote_plus(label)}"
-                        f"&sort=reactions&per_page={_PER_PAGE}&page={page}"
+                        f"?q={quote_plus(issue_query)}"
+                        f"&sort={sort_param}&order=desc&per_page={_PER_PAGE}&page={page}"
                     )
 
                     try:
@@ -105,6 +128,7 @@ class GitHubParser:
                         if not items:
                             break
 
+                        page_reviews: list[dict] = []
                         for item in items:
                             repo_full_name = item.get("repository_url", "").rsplit("/repos/", 1)[-1]
                             number = item.get("number", 0)
@@ -122,7 +146,7 @@ class GitHubParser:
                             reactions = item.get("reactions", {})
                             total_reactions = reactions.get("total_count", 0)
 
-                            reviews.append({
+                            page_reviews.append({
                                 "source": "github",
                                 "source_url": item.get("html_url", ""),
                                 "source_review_id": review_id,
@@ -153,12 +177,21 @@ class GitHubParser:
                                 },
                             })
 
+                        if target.date_cutoff:
+                            page_reviews, cutoff_hit = apply_date_cutoff(page_reviews, target.date_cutoff)
+                        else:
+                            cutoff_hit = False
+
+                        reviews.extend(page_reviews)
+
                         if len(reviews) == before:
                             consecutive_empty += 1
                             if consecutive_empty >= 2:
                                 break
                         else:
                             consecutive_empty = 0
+                        if cutoff_hit:
+                            break
 
                     except Exception as exc:
                         errors.append(f"GitHub issue search label:{label} page {page}: {exc}")
@@ -169,11 +202,12 @@ class GitHubParser:
         if search_mode in ("repos", "both"):
             consecutive_empty = 0
             for page in range(1, target.max_pages + 1):
+                repo_query = _repo_search_query(target.vendor_name, min_stars, target.date_cutoff)
+                sort_param = "updated" if target.date_cutoff else "stars"
                 url = (
                     f"{_BASE_URL}/search/repositories"
-                    f"?q={vendor_encoded}+migration+topic:migration"
-                    f"+stars:>={min_stars}"
-                    f"&sort=stars&per_page={_PER_PAGE}&page={page}"
+                    f"?q={quote_plus(repo_query)}"
+                    f"&sort={sort_param}&order=desc&per_page={_PER_PAGE}&page={page}"
                 )
 
                 try:
@@ -205,6 +239,7 @@ class GitHubParser:
                     if not items:
                         break
 
+                    page_reviews: list[dict] = []
                     for item in items:
                         full_name = item.get("full_name", "")
                         review_id = f"repo_{full_name}"
@@ -221,7 +256,7 @@ class GitHubParser:
                         stars = item.get("stargazers_count", 0)
                         summary = f"{full_name} ({stars} stars)"
 
-                        reviews.append({
+                        page_reviews.append({
                             "source": "github",
                             "source_url": item.get("html_url", ""),
                             "source_review_id": review_id,
@@ -253,12 +288,21 @@ class GitHubParser:
                             },
                         })
 
+                    if target.date_cutoff:
+                        page_reviews, cutoff_hit = apply_date_cutoff(page_reviews, target.date_cutoff)
+                    else:
+                        cutoff_hit = False
+
+                    reviews.extend(page_reviews)
+
                     if len(reviews) == before:
                         consecutive_empty += 1
                         if consecutive_empty >= 2:
                             break
                     else:
                         consecutive_empty = 0
+                    if cutoff_hit:
+                        break
 
                 except Exception as exc:
                     errors.append(f"GitHub repo search page {page}: {exc}")

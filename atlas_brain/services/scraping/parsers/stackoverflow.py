@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from urllib.parse import quote_plus
 
 from ..client import AntiDetectionClient
-from . import ScrapeResult, ScrapeTarget, register_parser
+from . import ScrapeResult, ScrapeTarget, apply_date_cutoff, register_parser
 
 logger = logging.getLogger("atlas.services.scraping.parsers.stackoverflow")
 
@@ -53,6 +53,19 @@ def _epoch_to_iso(epoch: int | None) -> str | None:
         return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
     except (OSError, ValueError):
         return None
+
+
+def _cutoff_epoch(date_cutoff: str | None) -> int | None:
+    """Convert a YYYY-MM-DD cutoff into a UTC epoch for Stack Exchange APIs."""
+    if not date_cutoff:
+        return None
+    try:
+        dt = datetime.fromisoformat(date_cutoff)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp())
 
 
 def _get_api_key() -> str:
@@ -187,6 +200,7 @@ class StackOverflowParser:
                 high_score_qids: list[int] = []
 
                 for page in range(1, target.max_pages + 1):
+                    cutoff_epoch = _cutoff_epoch(target.date_cutoff)
                     url = self._append_key(
                         f"{_BASE_URL}/search/advanced"
                         f"?q={quote_plus(term)}"
@@ -195,6 +209,7 @@ class StackOverflowParser:
                         f"&filter=withbody"
                         f"&pagesize={_PAGE_SIZE}"
                         f"&page={page}"
+                        f"{f'&fromdate={cutoff_epoch}' if cutoff_epoch is not None else ''}"
                     )
 
                     try:
@@ -210,6 +225,7 @@ class StackOverflowParser:
                         if not items:
                             break
 
+                        page_reviews: list[dict] = []
                         for item in items:
                             qid = item.get("question_id")
                             review_id = f"{site}_q_{qid}"
@@ -235,7 +251,7 @@ class StackOverflowParser:
                             owner = item.get("owner") or {}
                             tags = item.get("tags", [])
 
-                            reviews.append({
+                            page_reviews.append({
                                 "source": "stackoverflow",
                                 "source_url": item.get("link", f"https://stackoverflow.com/q/{qid}"),
                                 "source_review_id": review_id,
@@ -272,12 +288,20 @@ class StackOverflowParser:
                             if include_answers and score >= _MIN_SCORE_FOR_ANSWERS:
                                 high_score_qids.append(qid)
 
+                        if target.date_cutoff:
+                            page_reviews, cutoff_hit = apply_date_cutoff(page_reviews, target.date_cutoff)
+                        else:
+                            cutoff_hit = False
+                        reviews.extend(page_reviews)
+
                         if len(reviews) == before:
                             consecutive_empty += 1
                             if consecutive_empty >= 2:
                                 break
                         else:
                             consecutive_empty = 0
+                        if cutoff_hit:
+                            break
 
                     except Exception as exc:
                         errors.append(f"SE {site} search '{term}' page {page}: {exc}")
@@ -310,7 +334,7 @@ class StackOverflowParser:
                                 seen_ids.add(review_id)
                                 owner = ans.get("owner") or {}
 
-                                reviews.append({
+                                review = {
                                     "source": "stackoverflow",
                                     "source_url": f"https://stackoverflow.com/a/{aid}",
                                     "source_review_id": review_id,
@@ -340,7 +364,13 @@ class StackOverflowParser:
                                         "search_term": term,
                                         "content_type": "answer",
                                     },
-                                })
+                                }
+                                if target.date_cutoff:
+                                    kept_reviews, _ = apply_date_cutoff([review], target.date_cutoff)
+                                    if not kept_reviews:
+                                        continue
+                                    review = kept_reviews[0]
+                                reviews.append(review)
 
                     except Exception as exc:
                         errors.append(f"SE {site} answers fetch: {exc}")

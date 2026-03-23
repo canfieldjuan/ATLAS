@@ -21,7 +21,7 @@ from urllib.parse import quote_plus
 import httpx
 
 from ..client import AntiDetectionClient
-from . import ScrapeResult, ScrapeTarget, register_parser
+from . import ScrapeResult, ScrapeTarget, apply_date_cutoff, register_parser
 
 logger = logging.getLogger("atlas.services.scraping.parsers.youtube")
 
@@ -112,9 +112,11 @@ class YouTubeParser:
                     "q": query,
                     "type": "video",
                     "maxResults": max_videos,
-                    "order": "relevance",
+                    "order": "date" if target.date_cutoff else "relevance",
                     "key": api_key,
                 }
+                if target.date_cutoff:
+                    params["publishedAfter"] = f"{target.date_cutoff}T00:00:00Z"
                 try:
                     resp = await http.get(_SEARCH_ENDPOINT, params=params)
                     pages_scraped += 1
@@ -191,6 +193,11 @@ class YouTubeParser:
                         for item in items:
                             review = self._parse_comment(item, target, vid, meta, seen_ids)
                             if review:
+                                if target.date_cutoff:
+                                    kept_reviews, _ = apply_date_cutoff([review], target.date_cutoff)
+                                    if not kept_reviews:
+                                        continue
+                                    review = kept_reviews[0]
                                 reviews.append(review)
 
                         page_token = data.get("nextPageToken")

@@ -77,6 +77,22 @@ class GetAppParser:
         """Scrape GetApp reviews -- Web Unlocker first, then HTTP client."""
         from atlas_brain.config import settings
 
+        # Priority 0: SERP-based review page discovery (bypasses Cloudflare)
+        if settings.b2b_scrape.serp_api_token:
+            try:
+                result = await self._scrape_via_serp(target)
+                if result.reviews:
+                    return result
+                logger.info(
+                    "SERP discovery for GetApp/%s returned 0 reviews, trying Web Unlocker",
+                    target.vendor_name,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "SERP discovery failed for GetApp/%s: %s -- falling back",
+                    target.vendor_name, exc,
+                )
+
         unlocker_errors: list[str] = []
         result = ScrapeResult(reviews=[], pages_scraped=0, errors=[])
         sb_url = settings.b2b_scrape.scraping_browser_ws_url.strip()
@@ -152,6 +168,78 @@ class GetAppParser:
         if unlocker_errors and not result.errors[: len(unlocker_errors)] == unlocker_errors:
             result.errors = unlocker_errors + result.errors
         return result
+
+    # ------------------------------------------------------------------
+    # SERP discovery path (bypasses Cloudflare via Google cached pages)
+    # ------------------------------------------------------------------
+
+    async def _scrape_via_serp(self, target: ScrapeTarget) -> ScrapeResult:
+        """Discover GetApp review pages via Google SERP, then parse."""
+        import httpx
+        from atlas_brain.config import settings
+        from ..serp_discovery import discover_urls
+
+        _GETAPP_SUFFIXES = ["reviews", "alternatives", "pricing"]
+        question_urls = await discover_urls(
+            site_domain=_DOMAIN,
+            vendor_name=target.vendor_name,
+            query_suffixes=_GETAPP_SUFFIXES,
+            max_results_per_query=5,
+        )
+
+        if not question_urls:
+            return ScrapeResult(reviews=[], pages_scraped=0, errors=[])
+
+        # Filter to actual review page URLs (not category/compare pages)
+        review_urls = [u for u in question_urls if "/reviews" in u or "/a/" in u]
+        if not review_urls:
+            return ScrapeResult(reviews=[], pages_scraped=0, errors=[])
+
+        proxy_url = settings.b2b_scrape.web_unlocker_url.strip()
+        reviews: list[dict] = []
+        errors: list[str] = []
+        pages_scraped = 0
+        seen_ids: set[str] = set()
+
+        for url in review_urls[:5]:
+            try:
+                async with httpx.AsyncClient(
+                    proxy=proxy_url, verify=False, timeout=90.0,
+                ) as http:
+                    resp = await http.get(url, headers={
+                        "User-Agent": (
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/124.0.0.0 Safari/537.36"
+                        ),
+                    })
+
+                pages_scraped += 1
+                if resp.status_code != 200:
+                    errors.append(f"SERP URL {url}: HTTP {resp.status_code}")
+                    continue
+
+                page_reviews = _parse_json_ld(resp.text, target, seen_ids)
+                if not page_reviews:
+                    page_reviews = _parse_html(resp.text, target, seen_ids)
+                reviews.extend(page_reviews)
+
+            except Exception as exc:
+                errors.append(f"SERP URL {url}: {exc}")
+
+            import asyncio
+            import random
+            await asyncio.sleep(random.uniform(2.0, 4.0))
+
+        logger.info(
+            "GetApp SERP scrape for %s: %d reviews from %d pages",
+            target.vendor_name, len(reviews), pages_scraped,
+        )
+        return ScrapeResult(
+            reviews=reviews,
+            pages_scraped=pages_scraped,
+            errors=errors,
+        )
 
     # ------------------------------------------------------------------
     # Web Unlocker path (Bright Data -- handles Cloudflare internally)
