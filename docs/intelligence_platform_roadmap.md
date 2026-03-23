@@ -142,15 +142,15 @@ Consumer dashboard expanded from 14 to 24 endpoints.
    - `source_distribution` JSONB populated on all tables
    - `sample_review_ids` reference real `b2b_reviews` rows
 2. Test MCP tools: `list_vendor_pain_points`, `list_vendor_use_cases`, `list_vendor_integrations`, `list_vendor_buyer_profiles` (all support `min_confidence` filter)
-3. Test dashboard endpoints: `GET /b2b/dashboard/vendor-pain-points`, `GET /b2b/dashboard/vendor-use-cases`, `GET /b2b/dashboard/vendor-integrations`, `GET /b2b/dashboard/vendor-buyer-profiles` (all support `min_confidence` filter)
+3. Test dashboard endpoints: `GET /b2b/tenant/vendor-pain-points`, `GET /b2b/tenant/vendor-use-cases`, `GET /b2b/tenant/vendor-integrations`, `GET /b2b/tenant/vendor-buyer-profiles` (all support `min_confidence` filter)
 4. Verify existing JSONB columns (`top_pain_categories`, `top_use_cases`, `top_integration_stacks`) still written (backwards compatible)
 5. Verify all tests pass: `python -m pytest tests/test_b2b_intelligence_validation.py -x`
 
 **Phase 3 Sprint 4** (cross-vendor trend correlation): Migration 109 applied (3 correlation indexes).
 
 1. Verify indexes: `\di idx_bce_date_type`, `\di idx_bvs_date_vendor`, `\di idx_displacement_edges_date_pair`
-2. Test REST: `GET /b2b/dashboard/concurrent-events?days=30&min_vendors=2` returns dates with multi-vendor events
-3. Test REST: `GET /b2b/dashboard/vendor-correlation?vendor_a=X&vendor_b=Y&metric=churn_density` returns time-series + Pearson r
+2. Test REST: `GET /b2b/tenant/concurrent-events?days=30&min_vendors=2` returns dates with multi-vendor events
+3. Test REST: `GET /b2b/tenant/vendor-correlation?vendor_a=X&vendor_b=Y&metric=churn_density` returns time-series + Pearson r
 4. Test REST: vendor-correlation with invalid metric returns 400
 5. Test MCP: `list_concurrent_events` with event_type filter returns filtered concurrent shifts
 6. Test MCP: `get_vendor_correlation` returns correlation, series, displacement edges
@@ -163,7 +163,7 @@ Consumer dashboard expanded from 14 to 24 endpoints.
 2. Verify indexes: `\di idx_bpps_vendor_date`, `\di idx_bpps_date`
 3. Trigger product profile generation: run `b2b_product_profiles` task, verify `snapshots_persisted > 0` in return dict
 4. Verify snapshots: `SELECT * FROM b2b_product_profile_snapshots LIMIT 5` shows daily snapshot rows
-5. Test REST: `GET /b2b/dashboard/product-profile-history?vendor_name=Salesforce` returns snapshot time-series
+5. Test REST: `GET /b2b/tenant/product-profile-history?vendor_name=Salesforce` returns snapshot time-series
 6. Test MCP: `get_product_profile_history(vendor_name="Salesforce")` returns same data
 7. Verify idempotent: re-run profile generation, verify ON CONFLICT updates existing snapshots (no duplicates)
 8. AST parse: `python -c "import ast; ast.parse(open('atlas_brain/autonomous/tasks/b2b_product_profiles.py').read())"`
@@ -175,17 +175,17 @@ Consumer dashboard expanded from 14 to 24 endpoints.
 3. Test REST: `GET /b2b/campaigns/sequences/{id}/outcome` returns outcome + history
 4. Test MCP: `record_campaign_outcome` tool records outcome and returns success
 5. Test MCP: `get_signal_effectiveness` tool with group_by options (buying_stage, role_type, etc.)
-6. Test dashboard: `GET /b2b/dashboard/signal-effectiveness` with tenant scoping
+6. Test dashboard: `GET /b2b/tenant/signal-effectiveness` with tenant scoping
 7. Verify outcome_history JSONB accumulates entries on repeated updates
 8. Verify `campaign_audit_log` has `outcome_*` event types
 
 **Phase 6 Sprint 1** (data corrections infrastructure): Migration 105 applied.
 
 1. Verify table: `\d data_corrections` shows all columns, constraints (chk_correction_type, chk_correction_status, chk_entity_type), indexes
-2. Test REST: `POST /b2b/dashboard/corrections` with `{"entity_type": "review", "entity_id": "<uuid>", "correction_type": "suppress", "reason": "Bad data"}`, verify 200
-3. Test REST: `GET /b2b/dashboard/corrections` with filters (entity_type, correction_type, status), verify filtered results
-4. Test REST: `GET /b2b/dashboard/corrections/{id}` returns full correction with metadata
-5. Test REST: `POST /b2b/dashboard/corrections/{id}/revert` sets status=reverted, populates reverted_at/reverted_by
+2. Test REST: `POST /b2b/tenant/corrections` with `{"entity_type": "review", "entity_id": "<uuid>", "correction_type": "suppress", "reason": "Bad data"}`, verify 200
+3. Test REST: `GET /b2b/tenant/corrections` with filters (entity_type, correction_type, status), verify filtered results
+4. Test REST: `GET /b2b/tenant/corrections/{id}` returns full correction with metadata
+5. Test REST: `POST /b2b/tenant/corrections/{id}/revert` sets status=reverted, populates reverted_at/reverted_by
 6. Test MCP: `create_data_correction` tool records correction and returns success
 7. Test MCP: `list_data_corrections` tool with filters matches REST output
 8. Test MCP: `revert_data_correction` tool reverts applied correction, rejects non-applied
@@ -194,20 +194,20 @@ Consumer dashboard expanded from 14 to 24 endpoints.
 
 **Phase 6 Sprint 2** (correction application logic): NOT EXISTS subqueries added to all read paths.
 
-1. Create a suppress correction: `POST /b2b/dashboard/corrections` with entity_type=review, entity_id=<uuid>, correction_type=suppress
-2. Verify `GET /b2b/dashboard/reviews` no longer returns the suppressed review
-3. Verify `GET /b2b/dashboard/reviews/{id}` for the suppressed review returns 404
-4. Verify `GET /b2b/dashboard/high-intent` excludes the suppressed review
-5. Verify `GET /b2b/dashboard/signals` excludes suppressed churn signals
+1. Create a suppress correction: `POST /b2b/tenant/corrections` with entity_type=review, entity_id=<uuid>, correction_type=suppress
+2. Verify `GET /b2b/tenant/reviews` no longer returns the suppressed review
+3. Verify `GET /b2b/tenant/reviews/{id}` for the suppressed review returns 404
+4. Verify `GET /b2b/tenant/high-intent` excludes the suppressed review
+5. Verify `GET /b2b/tenant/signals` excludes suppressed churn signals
 6. Verify MCP `search_reviews` excludes suppressed reviews
 7. Verify MCP `get_review` for suppressed review returns "Review not found"
 8. Verify MCP `get_pipeline_status` counts exclude suppressed reviews
-9. Revert the correction: `POST /b2b/dashboard/corrections/{id}/revert`
+9. Revert the correction: `POST /b2b/tenant/corrections/{id}/revert`
 10. Verify the review reappears in all queries after revert
 
 **Phase 6 Sprint 3** (vendor merge execution): merge_vendor correction type now executes real merges.
 
-1. Create merge_vendor correction: `POST /b2b/dashboard/corrections` with entity_type=vendor, entity_id=<any uuid>, correction_type=merge_vendor, old_value="Source Vendor", new_value="Target Vendor", reason="Duplicate"
+1. Create merge_vendor correction: `POST /b2b/tenant/corrections` with entity_type=vendor, entity_id=<any uuid>, correction_type=merge_vendor, old_value="Source Vendor", new_value="Target Vendor", reason="Duplicate"
 2. Verify affected_count is populated on the correction record
 3. Verify metadata contains per-table counts (table_counts)
 4. Verify `b2b_reviews` rows with old vendor_name now show target vendor_name
@@ -218,11 +218,11 @@ Consumer dashboard expanded from 14 to 24 endpoints.
 
 **Phase 6 Sprint 4** (field override reads): Single-entity endpoints return corrected values when override_field corrections exist.
 
-1. Create override_field correction: `POST /b2b/dashboard/corrections` with entity_type=review, entity_id=<uuid>, correction_type=override_field, field_name=vendor_name, old_value="Original", new_value="Corrected", reason="typo"
-2. Fetch the review: `GET /b2b/dashboard/reviews/<uuid>` -- verify vendor_name shows "Corrected" and `_overrides_applied` array is present
+1. Create override_field correction: `POST /b2b/tenant/corrections` with entity_type=review, entity_id=<uuid>, correction_type=override_field, field_name=vendor_name, old_value="Original", new_value="Corrected", reason="typo"
+2. Fetch the review: `GET /b2b/tenant/reviews/<uuid>` -- verify vendor_name shows "Corrected" and `_overrides_applied` array is present
 3. Fetch via MCP: `get_review` -- same verification
-4. Create override on churn_signal: `GET /b2b/dashboard/signals/<vendor>` -- verify overridden field and `_overrides_applied`
-5. Fetch vendor profile: `GET /b2b/dashboard/vendors/<vendor>` -- verify churn_signal sub-dict has overridden field
+4. Create override on churn_signal: `GET /b2b/tenant/signals/<vendor>` -- verify overridden field and `_overrides_applied`
+5. Fetch vendor profile: `GET /b2b/tenant/vendors/<vendor>` -- verify churn_signal sub-dict has overridden field
 6. Revert the correction, fetch again -- verify original value restored and `_overrides_applied` absent
 7. Verify list queries (GET /reviews, GET /signals) are NOT affected (overrides only on single-entity reads)
 
@@ -230,10 +230,10 @@ Consumer dashboard expanded from 14 to 24 endpoints.
 
 1. Apply migration: `psql -p 5433 -f atlas_brain/storage/migrations/110_source_quality.sql`
 2. Verify CHECK constraints updated: `\d data_corrections` shows entity_type includes 'source', correction_type includes 'suppress_source'
-3. Create global source suppression: `POST /b2b/dashboard/corrections` with `{entity_type: "source", entity_id: "<uuid5>", correction_type: "suppress_source", metadata: {"source_name": "reddit"}, reason: "Low quality"}`
+3. Create global source suppression: `POST /b2b/tenant/corrections` with `{entity_type: "source", entity_id: "<uuid5>", correction_type: "suppress_source", metadata: {"source_name": "reddit"}, reason: "Low quality"}`
 4. Create vendor-scoped suppression: same but add `field_name: "Acme Software"`
 5. Verify intelligence queries exclude reviews from suppressed source (trigger intelligence run or inspect query)
-6. Verify `GET /b2b/dashboard/source-corrections/impact` shows affected review counts
+6. Verify `GET /b2b/tenant/source-corrections/impact` shows affected review counts
 7. Verify MCP `get_source_correction_impact` returns same data
 8. Verify MCP `create_data_correction` with suppress_source and metadata validates source_name against known sources
 9. Revert the correction, verify reviews reappear in intelligence queries
@@ -253,7 +253,7 @@ Consumer dashboard expanded from 14 to 24 endpoints.
 **Phase 1 Sprint 2** (auto re-processing on parser version change): No migration required.
 
 1. Verify `_queue_version_upgrades()` exists: `python -c "from atlas_brain.autonomous.tasks.b2b_enrichment import _queue_version_upgrades; print('OK')"`
-2. Verify REST: `GET /b2b/dashboard/parser-version-status` returns per-source version status with review counts
+2. Verify REST: `GET /b2b/tenant/parser-version-status` returns per-source version status with review counts
 3. Verify MCP: `get_parser_version_status` returns same data as REST endpoint
 4. Verify re-queue logic: manually set a review's `parser_version` to an old value, trigger enrichment cycle, verify review reset to `enrichment_status='pending'`
 5. Verify return dict: enrichment run return dict includes `version_upgrade_requeued` count when > 0
@@ -267,7 +267,7 @@ Consumer dashboard expanded from 14 to 24 endpoints.
 3. Test MCP: `trigger_score_calibration` with insufficient data returns `calibrated: false` with reason
 4. Record 20+ outcomes on sequences, then trigger calibration -- verify weights populated
 5. Test MCP: `get_calibration_weights` returns weights grouped by dimension with lift values
-6. Test dashboard: `GET /b2b/dashboard/calibration-weights` returns same data with optional dimension filter
+6. Test dashboard: `GET /b2b/tenant/calibration-weights` returns same data with optional dimension filter
 7. Verify `_compute_score()` loads weights from cache and adjusts scoring (log before/after for a known row)
 8. Verify weight_adjustment capped at +/- 50% of static_default (no wild swings)
 9. Verify model_version increments on each calibration run
@@ -316,10 +316,10 @@ Consumer dashboard expanded from 14 to 24 endpoints.
 3. Test REST: `GET /b2b/crm/events?status=matched&start_date=2026-01-01&end_date=2026-04-01` returns date-filtered events
 4. Test REST: `GET /b2b/crm/events?status=invalid` returns 400 with valid status list
 5. Test REST: `POST /b2b/crm/events/batch` returns `created_ids` array matching ingested count
-6. Test REST: `GET /b2b/dashboard/outcome-distribution` returns funnel with counts, pct, revenue per outcome
-7. Test REST: `GET /b2b/dashboard/signal-to-outcome?group_by=buying_stage` returns attribution groups
-8. Test REST: `GET /b2b/dashboard/signal-to-outcome?group_by=invalid` returns 400
-9. Test REST: `POST /b2b/dashboard/calibration/trigger` runs calibration and returns result
+6. Test REST: `GET /b2b/tenant/outcome-distribution` returns funnel with counts, pct, revenue per outcome
+7. Test REST: `GET /b2b/tenant/signal-to-outcome?group_by=buying_stage` returns attribution groups
+8. Test REST: `GET /b2b/tenant/signal-to-outcome?group_by=invalid` returns 400
+9. Test REST: `POST /b2b/tenant/calibration/trigger` runs calibration and returns result
 10. Test MCP: `list_crm_events(start_date="2026-01-01", end_date="2026-04-01")` returns date-filtered events
 11. Test MCP: `list_crm_events(status="invalid")` returns error
 12. Test MCP: `get_outcome_distribution` returns funnel view matching REST
@@ -330,12 +330,12 @@ Consumer dashboard expanded from 14 to 24 endpoints.
 
 1. Verify tables: `\d b2b_webhook_subscriptions` shows all columns, UNIQUE constraint on (account_id, url)
 2. Verify tables: `\d b2b_webhook_delivery_log` shows all columns, FK to subscriptions
-3. Test REST: `POST /b2b/dashboard/webhooks` creates subscription (requires auth), verify 200
-4. Test REST: `GET /b2b/dashboard/webhooks` lists account's subscriptions
-5. Test REST: `GET /b2b/dashboard/webhooks/{id}` returns subscription details
-6. Test REST: `DELETE /b2b/dashboard/webhooks/{id}` deletes subscription + cascade delivery logs
-7. Test REST: `GET /b2b/dashboard/webhooks/{id}/deliveries` returns delivery log
-8. Test REST: `POST /b2b/dashboard/webhooks/{id}/test` sends test payload and returns success/failure
+3. Test REST: `POST /b2b/tenant/webhooks` creates subscription (requires auth), verify 200
+4. Test REST: `GET /b2b/tenant/webhooks` lists account's subscriptions
+5. Test REST: `GET /b2b/tenant/webhooks/{id}` returns subscription details
+6. Test REST: `DELETE /b2b/tenant/webhooks/{id}` deletes subscription + cascade delivery logs
+7. Test REST: `GET /b2b/tenant/webhooks/{id}/deliveries` returns delivery log
+8. Test REST: `POST /b2b/tenant/webhooks/{id}/test` sends test payload and returns success/failure
 9. Test MCP: `list_webhook_subscriptions` returns subscriptions with 7-day delivery stats
 10. Test MCP: `send_test_webhook_tool` delivers test payload to subscription URL
 11. Verify HMAC signing: `X-Atlas-Signature` header matches `sha256=HMAC(secret, payload)`
@@ -350,7 +350,7 @@ Consumer dashboard expanded from 14 to 24 endpoints.
 2. Import check: `python -c "from atlas_brain.services.b2b.pdf_renderer import render_report_pdf"`
 3. Smoke test: generate PDFs for all 5 report families (churn feed, scorecard, comparison, deep dive, generic)
 4. Verify PDF header: output starts with `%PDF`
-5. Test REST: `GET /b2b/dashboard/reports/{id}/pdf` returns `application/pdf` with `Content-Disposition` header
+5. Test REST: `GET /b2b/tenant/reports/{id}/pdf` returns `application/pdf` with `Content-Disposition` header
 6. Test access control: unauthenticated user can access, tracked-vendor check enforced
 7. Test 404: nonexistent report_id returns 404
 8. Test 400: invalid UUID returns 400
@@ -362,23 +362,23 @@ Consumer dashboard expanded from 14 to 24 endpoints.
 **Phase 5 Sprint 3** (Slack + Teams notification channels): Migration 112 applied.
 
 1. Verify column: `\d b2b_webhook_subscriptions` shows `channel TEXT NOT NULL DEFAULT 'generic'` with CHECK constraint
-2. Test REST: `POST /b2b/dashboard/webhooks` with `{url, secret, event_types, channel: "slack"}` creates Slack subscription
-3. Test REST: `POST /b2b/dashboard/webhooks` with invalid channel (e.g. "discord") returns 400
-4. Test REST: `GET /b2b/dashboard/webhooks` returns `channel` field on each subscription
-5. Test REST: `GET /b2b/dashboard/webhooks/{id}` returns `channel` field
+2. Test REST: `POST /b2b/tenant/webhooks` with `{url, secret, event_types, channel: "slack"}` creates Slack subscription
+3. Test REST: `POST /b2b/tenant/webhooks` with invalid channel (e.g. "discord") returns 400
+4. Test REST: `GET /b2b/tenant/webhooks` returns `channel` field on each subscription
+5. Test REST: `GET /b2b/tenant/webhooks/{id}` returns `channel` field
 6. Test MCP: `list_webhook_subscriptions` returns `channel` on each subscription
 7. Verify Slack formatting: trigger a change event for a tracked vendor with a Slack subscription, inspect delivery log payload for Block Kit structure
 8. Verify Teams formatting: same test with a Teams subscription, inspect for Adaptive Card structure
-9. Test test webhook: `POST /b2b/dashboard/webhooks/{id}/test` for Slack/Teams subscriptions sends correctly formatted payload
+9. Test test webhook: `POST /b2b/tenant/webhooks/{id}/test` for Slack/Teams subscriptions sends correctly formatted payload
 10. AST parse: `python -c "import ast; ast.parse(open('atlas_brain/services/b2b/webhook_dispatcher.py').read())"`
 
 **Phase 5 Sprint 4** (CRM outbound push): Migration 113 applied.
 
 1. Verify column: `\d b2b_webhook_subscriptions` shows `channel` CHECK includes crm_hubspot/crm_salesforce/crm_pipedrive, `auth_header TEXT` column
 2. Verify table: `\d b2b_crm_push_log` shows signal_type, vendor_name, company_name, crm_record_id, crm_record_type, status
-3. Test REST: `POST /b2b/dashboard/webhooks` with `{channel: "crm_hubspot", auth_header: "Bearer pat-xxx", ...}` creates CRM subscription
-4. Test REST: `POST /b2b/dashboard/webhooks` with `{channel: "crm_hubspot"}` and no auth_header returns 400
-5. Test REST: `GET /b2b/dashboard/webhooks/{id}/crm-push-log` returns push history
+3. Test REST: `POST /b2b/tenant/webhooks` with `{channel: "crm_hubspot", auth_header: "Bearer pat-xxx", ...}` creates CRM subscription
+4. Test REST: `POST /b2b/tenant/webhooks` with `{channel: "crm_hubspot"}` and no auth_header returns 400
+5. Test REST: `GET /b2b/tenant/webhooks/{id}/crm-push-log` returns push history
 6. Test MCP: `list_crm_pushes` returns push log entries with channel and webhook_url
 7. Verify HubSpot formatting: create crm_hubspot subscription, trigger churn_alert, inspect delivery log for HubSpot properties format
 8. Verify Salesforce formatting: inspect for custom field format (`Atlas_Vendor__c`, etc.)
@@ -391,9 +391,9 @@ Consumer dashboard expanded from 14 to 24 endpoints.
 1. Verify extension: `SELECT * FROM pg_extension WHERE extname = 'pg_trgm'`
 2. Verify indexes: `\di idx_b2b_vendors_canonical_trgm`, `\di idx_b2b_company_signals_company_trgm`
 3. Test SQL similarity: `SELECT canonical_name, similarity(canonical_name, 'Salesfroce') FROM b2b_vendors WHERE similarity(canonical_name, 'Salesfroce') > 0.3 ORDER BY similarity DESC`
-4. Test REST: `GET /b2b/dashboard/fuzzy-vendor-search?q=Salesfroce` returns "Salesforce" as top match
-5. Test REST: `GET /b2b/dashboard/fuzzy-vendor-search?q=` returns 400
-6. Test REST: `GET /b2b/dashboard/fuzzy-company-search?q=Acme&vendor_name=Salesforce` returns matching companies
+4. Test REST: `GET /b2b/tenant/fuzzy-vendor-search?q=Salesfroce` returns "Salesforce" as top match
+5. Test REST: `GET /b2b/tenant/fuzzy-vendor-search?q=` returns 400
+6. Test REST: `GET /b2b/tenant/fuzzy-company-search?q=Acme&vendor_name=Salesforce` returns matching companies
 7. Test MCP: `fuzzy_vendor_search(query="Hubspt")` returns "HubSpot" as top match
 8. Test MCP: `fuzzy_company_search(query="Acm Corp")` returns similar company names
 9. Test Python fuzzy fallback: `python -c "from atlas_brain.services.vendor_registry import _resolve_from_cache; ..."` with a near-miss name returns canonical match
@@ -402,15 +402,15 @@ Consumer dashboard expanded from 14 to 24 endpoints.
 
 **Surface Sprint 5** (Phase 5 thin delivery surfaces): No migration required.
 
-1. Test REST: `PATCH /b2b/dashboard/webhooks/{id}` with `{"enabled": false}` disables webhook, returns updated record
-2. Test REST: `PATCH /b2b/dashboard/webhooks/{id}` with `{"event_types": ["churn_alert"]}` updates event filter
-3. Test REST: `PATCH /b2b/dashboard/webhooks/{id}` with invalid event_types returns 400
-4. Test REST: `PATCH /b2b/dashboard/webhooks/{id}` with empty body returns 400 ("No fields to update")
-5. Test REST: `GET /b2b/dashboard/webhooks` now includes `recent_deliveries_7d` and `recent_success_rate_7d` per webhook
-6. Test REST: `GET /b2b/dashboard/webhooks/{id}/deliveries?success=false` returns only failed deliveries
-7. Test REST: `GET /b2b/dashboard/webhooks/{id}/deliveries?start_date=2026-03-01&end_date=2026-03-10` returns date-filtered deliveries
-8. Test REST: `GET /b2b/dashboard/webhooks/{id}/deliveries?event_type=churn_alert` returns event-type-filtered deliveries
-9. Test REST: `GET /b2b/dashboard/webhooks/delivery-summary?days=7` returns aggregate delivery health (total, success rate, p95 latency)
+1. Test REST: `PATCH /b2b/tenant/webhooks/{id}` with `{"enabled": false}` disables webhook, returns updated record
+2. Test REST: `PATCH /b2b/tenant/webhooks/{id}` with `{"event_types": ["churn_alert"]}` updates event filter
+3. Test REST: `PATCH /b2b/tenant/webhooks/{id}` with invalid event_types returns 400
+4. Test REST: `PATCH /b2b/tenant/webhooks/{id}` with empty body returns 400 ("No fields to update")
+5. Test REST: `GET /b2b/tenant/webhooks` now includes `recent_deliveries_7d` and `recent_success_rate_7d` per webhook
+6. Test REST: `GET /b2b/tenant/webhooks/{id}/deliveries?success=false` returns only failed deliveries
+7. Test REST: `GET /b2b/tenant/webhooks/{id}/deliveries?start_date=2026-03-01&end_date=2026-03-10` returns date-filtered deliveries
+8. Test REST: `GET /b2b/tenant/webhooks/{id}/deliveries?event_type=churn_alert` returns event-type-filtered deliveries
+9. Test REST: `GET /b2b/tenant/webhooks/delivery-summary?days=7` returns aggregate delivery health (total, success rate, p95 latency)
 10. Test MCP: `update_webhook(subscription_id="...", enabled=false)` toggles webhook off
 11. Test MCP: `update_webhook(subscription_id="...", event_types="change_event,churn_alert")` updates event filter
 12. Test MCP: `get_webhook_delivery_summary(days=7)` returns aggregate stats matching REST
@@ -418,11 +418,11 @@ Consumer dashboard expanded from 14 to 24 endpoints.
 
 **Surface Sprint 6** (Phase 6 analyst control surfaces): No migration required.
 
-1. Test REST: `GET /b2b/dashboard/corrections?corrected_by=api` returns only corrections by API users
-2. Test REST: `GET /b2b/dashboard/corrections?start_date=2026-03-01&end_date=2026-03-10` returns date-filtered corrections
-3. Test REST: `GET /b2b/dashboard/corrections?corrected_by=mcp&correction_type=suppress` combines filters correctly
-4. Test REST: `GET /b2b/dashboard/corrections/stats?days=30` returns aggregate activity (by_status, by_type, by_entity, top_correctors)
-5. Test REST: `GET /b2b/dashboard/corrections/stats?days=7` returns narrower window
+1. Test REST: `GET /b2b/tenant/corrections?corrected_by=api` returns only corrections by API users
+2. Test REST: `GET /b2b/tenant/corrections?start_date=2026-03-01&end_date=2026-03-10` returns date-filtered corrections
+3. Test REST: `GET /b2b/tenant/corrections?corrected_by=mcp&correction_type=suppress` combines filters correctly
+4. Test REST: `GET /b2b/tenant/corrections/stats?days=30` returns aggregate activity (by_status, by_type, by_entity, top_correctors)
+5. Test REST: `GET /b2b/tenant/corrections/stats?days=7` returns narrower window
 6. Test MCP: `list_data_corrections(corrected_by="mcp")` returns filtered corrections
 7. Test MCP: `list_data_corrections(start_date="2026-03-01", end_date="2026-03-10")` returns date-filtered
 8. Test MCP: `get_data_correction(correction_id="...")` returns full correction details

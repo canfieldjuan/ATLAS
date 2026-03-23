@@ -102,13 +102,13 @@ check "Health check" GET "/api/v1/health"
 echo ""
 echo -e "${YELLOW}[Phase 0] Source Naming / Vendor Registry / Provenance${NC}"
 
-check "Source health" GET "/api/v1/b2b/dashboard/source-health"
-check "Source health telemetry" GET "/api/v1/b2b/dashboard/source-health/telemetry"
-check "Source health telemetry timeline" GET "/api/v1/b2b/dashboard/source-health/telemetry-timeline"
-check "Source capabilities" GET "/api/v1/b2b/dashboard/source-capabilities"
-check "Fuzzy vendor search" GET "/api/v1/b2b/dashboard/fuzzy-vendor-search?q=Salesfroce"
-check "Fuzzy vendor search empty" GET "/api/v1/b2b/dashboard/fuzzy-vendor-search?q=" "400"
-check "Fuzzy company search" GET "/api/v1/b2b/dashboard/fuzzy-company-search?q=Acme"
+check "Source health" GET "/api/v1/b2b/tenant/source-health"
+check "Source health telemetry" GET "/api/v1/b2b/tenant/source-health/telemetry"
+check "Source health telemetry timeline" GET "/api/v1/b2b/tenant/source-health/telemetry-timeline"
+check "Source capabilities" GET "/api/v1/b2b/tenant/source-capabilities"
+check "Fuzzy vendor search" GET "/api/v1/b2b/tenant/fuzzy-vendor-search?q=Salesfroce"
+check "Fuzzy vendor search empty" GET "/api/v1/b2b/tenant/fuzzy-vendor-search?q=" "400"
+check "Fuzzy company search" GET "/api/v1/b2b/tenant/fuzzy-company-search?q=Acme"
 
 # ════════════════════════════════════════════════════════════
 # PHASE 1: Managed Intelligence Substrate
@@ -117,8 +117,8 @@ echo ""
 echo -e "${YELLOW}[Phase 1] Scrape Telemetry / Parser Versioning${NC}"
 
 check "Scrape targets list" GET "/api/v1/b2b/scrape/targets"
-check "Parser version status" GET "/api/v1/b2b/dashboard/parser-version-status"
-check "Operational overview" GET "/api/v1/b2b/dashboard/operational-overview"
+check "Parser version status" GET "/api/v1/b2b/tenant/parser-version-status"
+check "Operational overview" GET "/api/v1/b2b/tenant/operational-overview"
 
 # ════════════════════════════════════════════════════════════
 # PHASE 2: Canonical Intelligence Model
@@ -126,13 +126,13 @@ check "Operational overview" GET "/api/v1/b2b/dashboard/operational-overview"
 echo ""
 echo -e "${YELLOW}[Phase 2] Entity Tables / Confidence Scoring${NC}"
 
-check "Vendor pain points" GET "/api/v1/b2b/dashboard/vendor-pain-points?vendor_name=${VENDOR}"
-check "Vendor pain points (min_confidence)" GET "/api/v1/b2b/dashboard/vendor-pain-points?vendor_name=${VENDOR}&min_confidence=0.5"
-check "Vendor use cases" GET "/api/v1/b2b/dashboard/vendor-use-cases?vendor_name=${VENDOR}"
-check "Vendor integrations" GET "/api/v1/b2b/dashboard/vendor-integrations?vendor_name=${VENDOR}"
-check "Vendor buyer profiles" GET "/api/v1/b2b/dashboard/vendor-buyer-profiles?vendor_name=${VENDOR}"
-check "Vendor buyer profiles (min_confidence)" GET "/api/v1/b2b/dashboard/vendor-buyer-profiles?min_confidence=0.3"
-check "Displacement history" GET "/api/v1/b2b/dashboard/displacement-history?from_vendor=${VENDOR}&to_vendor=Zendesk"
+check "Vendor pain points" GET "/api/v1/b2b/tenant/vendor-pain-points?vendor_name=${VENDOR}"
+check "Vendor pain points (min_confidence)" GET "/api/v1/b2b/tenant/vendor-pain-points?vendor_name=${VENDOR}&min_confidence=0.5"
+check "Vendor use cases" GET "/api/v1/b2b/tenant/vendor-use-cases?vendor_name=${VENDOR}"
+check "Vendor integrations" GET "/api/v1/b2b/tenant/vendor-integrations?vendor_name=${VENDOR}"
+check "Vendor buyer profiles" GET "/api/v1/b2b/tenant/vendor-buyer-profiles?vendor_name=${VENDOR}"
+check "Vendor buyer profiles (min_confidence)" GET "/api/v1/b2b/tenant/vendor-buyer-profiles?min_confidence=0.3"
+check "Displacement history" GET "/api/v1/b2b/tenant/displacement-history?from_vendor=${VENDOR}&to_vendor=Zendesk"
 
 # ════════════════════════════════════════════════════════════
 # PHASE 3: Historical Memory
@@ -140,15 +140,15 @@ check "Displacement history" GET "/api/v1/b2b/dashboard/displacement-history?fro
 echo ""
 echo -e "${YELLOW}[Phase 3] Snapshots / Change Events / Correlation${NC}"
 
-check "Vendor history" GET "/api/v1/b2b/dashboard/vendor-history?vendor_name=${VENDOR}"
-check "Change events" GET "/api/v1/b2b/dashboard/change-events"
-check "Change events (type filter)" GET "/api/v1/b2b/dashboard/change-events?event_type=urgency_spike"
-check "Change events summary" GET "/api/v1/b2b/dashboard/change-events/summary"
-check "Concurrent events" GET "/api/v1/b2b/dashboard/concurrent-events?days=90&min_vendors=2"
-check "Vendor correlation" GET "/api/v1/b2b/dashboard/vendor-correlation?vendor_a=Freshdesk&vendor_b=Zendesk&metric=churn_density"
-check "Vendor correlation (bad metric)" GET "/api/v1/b2b/dashboard/vendor-correlation?vendor_a=Freshdesk&vendor_b=Zendesk&metric=invalid" "400"
-check "Product profile" GET "/api/v1/b2b/dashboard/product-profile?vendor_name=${VENDOR}"
-check "Product profile history" GET "/api/v1/b2b/dashboard/product-profile-history?vendor_name=${VENDOR}"
+check "Vendor history" GET "/api/v1/b2b/tenant/vendor-history?vendor_name=${VENDOR}"
+check "Change events" GET "/api/v1/b2b/tenant/change-events"
+check "Change events (type filter)" GET "/api/v1/b2b/tenant/change-events?event_type=urgency_spike"
+check "Change events summary" GET "/api/v1/b2b/tenant/change-events/summary"
+check "Concurrent events" GET "/api/v1/b2b/tenant/concurrent-events?days=90&min_vendors=2"
+check "Vendor correlation" GET "/api/v1/b2b/tenant/vendor-correlation?vendor_a=Freshdesk&vendor_b=Zendesk&metric=churn_density"
+check "Vendor correlation (bad metric)" GET "/api/v1/b2b/tenant/vendor-correlation?vendor_a=Freshdesk&vendor_b=Zendesk&metric=invalid" "400"
+check "Product profile" GET "/api/v1/b2b/tenant/product-profile?vendor_name=${VENDOR}"
+check "Product profile history" GET "/api/v1/b2b/tenant/product-profile-history?vendor_name=${VENDOR}"
 
 # ════════════════════════════════════════════════════════════
 # PHASE 4: Action Feedback Loop
@@ -167,21 +167,21 @@ check "Record outcome (meeting_booked)" POST "/api/v1/b2b/campaigns/sequences/${
 check "Record outcome (bad value)" POST "/api/v1/b2b/campaigns/sequences/${SEQUENCE_ID}/outcome" "400" '{"outcome":"invalid_value"}'
 
 # Signal effectiveness
-check "Signal effectiveness (buying_stage)" GET "/api/v1/b2b/dashboard/signal-effectiveness?group_by=buying_stage"
-check "Signal effectiveness (role_type)" GET "/api/v1/b2b/dashboard/signal-effectiveness?group_by=role_type"
-check "Signal effectiveness (bad group)" GET "/api/v1/b2b/dashboard/signal-effectiveness?group_by=invalid" "400"
+check "Signal effectiveness (buying_stage)" GET "/api/v1/b2b/tenant/signal-effectiveness?group_by=buying_stage"
+check "Signal effectiveness (role_type)" GET "/api/v1/b2b/tenant/signal-effectiveness?group_by=role_type"
+check "Signal effectiveness (bad group)" GET "/api/v1/b2b/tenant/signal-effectiveness?group_by=invalid" "400"
 
 # Outcome distribution
-check "Outcome distribution" GET "/api/v1/b2b/dashboard/outcome-distribution"
-check "Outcome distribution (vendor)" GET "/api/v1/b2b/dashboard/outcome-distribution?vendor_name=${VENDOR}"
+check "Outcome distribution" GET "/api/v1/b2b/tenant/outcome-distribution"
+check "Outcome distribution (vendor)" GET "/api/v1/b2b/tenant/outcome-distribution?vendor_name=${VENDOR}"
 
 # Signal-to-outcome attribution
-check "Signal-to-outcome" GET "/api/v1/b2b/dashboard/signal-to-outcome?group_by=buying_stage"
-check "Signal-to-outcome (bad group)" GET "/api/v1/b2b/dashboard/signal-to-outcome?group_by=invalid" "400"
+check "Signal-to-outcome" GET "/api/v1/b2b/tenant/signal-to-outcome?group_by=buying_stage"
+check "Signal-to-outcome (bad group)" GET "/api/v1/b2b/tenant/signal-to-outcome?group_by=invalid" "400"
 
 # Calibration
-check "Calibration weights" GET "/api/v1/b2b/dashboard/calibration-weights"
-check "Trigger calibration" POST "/api/v1/b2b/dashboard/calibration/trigger" "200"
+check "Calibration weights" GET "/api/v1/b2b/tenant/calibration-weights"
+check "Trigger calibration" POST "/api/v1/b2b/tenant/calibration/trigger" "200"
 
 # CRM Events
 check "List CRM events" GET "/api/v1/b2b/crm/events"
@@ -205,19 +205,19 @@ echo ""
 echo -e "${YELLOW}[Phase 5] Webhooks / PDF / Delivery${NC}"
 
 # Webhooks (require auth -- expect 401 in local dev)
-check "List webhooks (auth-gated)" GET "/api/v1/b2b/dashboard/webhooks" "401"
-check "Webhook delivery summary (auth-gated)" GET "/api/v1/b2b/dashboard/webhooks/delivery-summary" "401"
+check "List webhooks (auth-gated)" GET "/api/v1/b2b/tenant/webhooks" "401"
+check "Webhook delivery summary (auth-gated)" GET "/api/v1/b2b/tenant/webhooks/delivery-summary" "401"
 
 # PDF export
-check "PDF export" GET "/api/v1/b2b/dashboard/reports/${REPORT_ID}/pdf"
+check "PDF export" GET "/api/v1/b2b/tenant/reports/${REPORT_ID}/pdf"
 
 # Reports
-check "List reports" GET "/api/v1/b2b/dashboard/reports"
-check "Get report" GET "/api/v1/b2b/dashboard/reports/${REPORT_ID}"
-check "Get report (bad UUID)" GET "/api/v1/b2b/dashboard/reports/not-a-uuid" "400"
+check "List reports" GET "/api/v1/b2b/tenant/reports"
+check "Get report" GET "/api/v1/b2b/tenant/reports/${REPORT_ID}"
+check "Get report (bad UUID)" GET "/api/v1/b2b/tenant/reports/not-a-uuid" "400"
 
 # CRM push log (requires auth -- expect 401 in local dev)
-check "CRM push log (auth-gated)" GET "/api/v1/b2b/dashboard/webhooks/00000000-0000-0000-0000-000000000000/crm-push-log" "401"
+check "CRM push log (auth-gated)" GET "/api/v1/b2b/tenant/webhooks/00000000-0000-0000-0000-000000000000/crm-push-log" "401"
 
 # ════════════════════════════════════════════════════════════
 # PHASE 6: Analyst Controls
@@ -226,17 +226,17 @@ echo ""
 echo -e "${YELLOW}[Phase 6] Corrections / Merge / Overrides${NC}"
 
 # Corrections CRUD
-check "List corrections" GET "/api/v1/b2b/dashboard/corrections"
-check "List corrections (type filter)" GET "/api/v1/b2b/dashboard/corrections?correction_type=suppress"
-check "List corrections (corrected_by)" GET "/api/v1/b2b/dashboard/corrections?corrected_by=api"
-check "List corrections (date range)" GET "/api/v1/b2b/dashboard/corrections?start_date=2026-01-01&end_date=2026-12-31"
-check "Correction stats" GET "/api/v1/b2b/dashboard/corrections/stats"
-check "Correction stats (7d)" GET "/api/v1/b2b/dashboard/corrections/stats?days=7"
-check "Get correction" GET "/api/v1/b2b/dashboard/corrections/${CORRECTION_ID}"
-check "Get correction (bad UUID)" GET "/api/v1/b2b/dashboard/corrections/not-a-uuid" "400"
+check "List corrections" GET "/api/v1/b2b/tenant/corrections"
+check "List corrections (type filter)" GET "/api/v1/b2b/tenant/corrections?correction_type=suppress"
+check "List corrections (corrected_by)" GET "/api/v1/b2b/tenant/corrections?corrected_by=api"
+check "List corrections (date range)" GET "/api/v1/b2b/tenant/corrections?start_date=2026-01-01&end_date=2026-12-31"
+check "Correction stats" GET "/api/v1/b2b/tenant/corrections/stats"
+check "Correction stats (7d)" GET "/api/v1/b2b/tenant/corrections/stats?days=7"
+check "Get correction" GET "/api/v1/b2b/tenant/corrections/${CORRECTION_ID}"
+check "Get correction (bad UUID)" GET "/api/v1/b2b/tenant/corrections/not-a-uuid" "400"
 
 # Source correction impact
-check "Source correction impact" GET "/api/v1/b2b/dashboard/source-corrections/impact"
+check "Source correction impact" GET "/api/v1/b2b/tenant/source-corrections/impact"
 
 # Create a suppress correction for testing, then revert it
 echo ""
@@ -245,7 +245,7 @@ echo -e "${YELLOW}[Phase 6] Suppress + Revert round-trip${NC}"
 # Create suppress
 SUPPRESS_BODY='{"entity_type":"review","entity_id":"'${REVIEW_ID}'","correction_type":"suppress","reason":"Live test suppression"}'
 TOTAL=$((TOTAL + 1))
-SUPPRESS_RESULT=$(curl -s -X POST "${BASE}/api/v1/b2b/dashboard/corrections" \
+SUPPRESS_RESULT=$(curl -s -X POST "${BASE}/api/v1/b2b/tenant/corrections" \
     -H "Content-Type: application/json" \
     -d "$SUPPRESS_BODY" 2>/dev/null)
 SUPPRESS_ID=$(echo "$SUPPRESS_RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
@@ -256,7 +256,7 @@ if [ -n "$SUPPRESS_ID" ] && [ "$SUPPRESS_ID" != "" ]; then
 
     # Verify review is suppressed
     TOTAL=$((TOTAL + 1))
-    REVIEW_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${BASE}/api/v1/b2b/dashboard/reviews/${REVIEW_ID}" 2>/dev/null)
+    REVIEW_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${BASE}/api/v1/b2b/tenant/reviews/${REVIEW_ID}" 2>/dev/null)
     if [ "$REVIEW_CODE" = "404" ]; then
         PASS=$((PASS + 1))
         echo -e "  ${GREEN}PASS${NC} [404] Suppressed review returns 404"
@@ -266,11 +266,11 @@ if [ -n "$SUPPRESS_ID" ] && [ "$SUPPRESS_ID" != "" ]; then
     fi
 
     # Revert (body required -- RevertCorrectionBody with optional reason)
-    check "Revert suppress correction" POST "/api/v1/b2b/dashboard/corrections/${SUPPRESS_ID}/revert" "200" '{"reason":"Live test cleanup"}'
+    check "Revert suppress correction" POST "/api/v1/b2b/tenant/corrections/${SUPPRESS_ID}/revert" "200" '{"reason":"Live test cleanup"}'
 
     # Verify review is back
     TOTAL=$((TOTAL + 1))
-    REVIEW_CODE2=$(curl -s -o /dev/null -w "%{http_code}" "${BASE}/api/v1/b2b/dashboard/reviews/${REVIEW_ID}" 2>/dev/null)
+    REVIEW_CODE2=$(curl -s -o /dev/null -w "%{http_code}" "${BASE}/api/v1/b2b/tenant/reviews/${REVIEW_ID}" 2>/dev/null)
     if [ "$REVIEW_CODE2" = "200" ]; then
         PASS=$((PASS + 1))
         echo -e "  ${GREEN}PASS${NC} [200] Review restored after revert"
@@ -293,7 +293,7 @@ echo -e "${YELLOW}[Phase 6] Field Override round-trip${NC}"
 
 OVERRIDE_BODY='{"entity_type":"review","entity_id":"'${REVIEW_ID}'","correction_type":"override_field","field_name":"vendor_name","old_value":"original","new_value":"Corrected Vendor","reason":"Live test override"}'
 TOTAL=$((TOTAL + 1))
-OVERRIDE_RESULT=$(curl -s -X POST "${BASE}/api/v1/b2b/dashboard/corrections" \
+OVERRIDE_RESULT=$(curl -s -X POST "${BASE}/api/v1/b2b/tenant/corrections" \
     -H "Content-Type: application/json" \
     -d "$OVERRIDE_BODY" 2>/dev/null)
 OVERRIDE_ID=$(echo "$OVERRIDE_RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
@@ -303,10 +303,10 @@ if [ -n "$OVERRIDE_ID" ] && [ "$OVERRIDE_ID" != "" ]; then
     echo -e "  ${GREEN}PASS${NC} [201] Create override_field correction"
 
     # Check review has _overrides_applied
-    check_contains "Review shows override" GET "/api/v1/b2b/dashboard/reviews/${REVIEW_ID}" "_overrides_applied"
+    check_contains "Review shows override" GET "/api/v1/b2b/tenant/reviews/${REVIEW_ID}" "_overrides_applied"
 
     # Revert (body required)
-    check "Revert override" POST "/api/v1/b2b/dashboard/corrections/${OVERRIDE_ID}/revert" "200" '{"reason":"Live test cleanup"}'
+    check "Revert override" POST "/api/v1/b2b/tenant/corrections/${OVERRIDE_ID}/revert" "200" '{"reason":"Live test cleanup"}'
 else
     FAIL=$((FAIL + 1))
     echo -e "  ${RED}FAIL${NC} Create override_field correction failed"
@@ -320,11 +320,11 @@ fi
 echo ""
 echo -e "${YELLOW}[Cross-cutting] Core dashboard endpoints${NC}"
 
-check "Reviews list" GET "/api/v1/b2b/dashboard/reviews?limit=5"
-check "Review detail" GET "/api/v1/b2b/dashboard/reviews/${REVIEW_ID}"
-check "Signals list" GET "/api/v1/b2b/dashboard/signals"
-check "High-intent companies" GET "/api/v1/b2b/dashboard/high-intent"
-check "Vendor detail" GET "/api/v1/b2b/dashboard/vendors/${VENDOR}"
+check "Reviews list" GET "/api/v1/b2b/tenant/reviews?limit=5"
+check "Review detail" GET "/api/v1/b2b/tenant/reviews/${REVIEW_ID}"
+check "Signals list" GET "/api/v1/b2b/tenant/signals"
+check "High-intent companies" GET "/api/v1/b2b/tenant/high-intent"
+check "Vendor detail" GET "/api/v1/b2b/tenant/vendors/${VENDOR}"
 
 # ════════════════════════════════════════════════════════════
 # VALIDATION: Bad inputs return proper errors
@@ -332,11 +332,11 @@ check "Vendor detail" GET "/api/v1/b2b/dashboard/vendors/${VENDOR}"
 echo ""
 echo -e "${YELLOW}[Validation] Error handling${NC}"
 
-check "Bad review UUID" GET "/api/v1/b2b/dashboard/reviews/not-a-uuid" "400"
-check "Nonexistent review" GET "/api/v1/b2b/dashboard/reviews/00000000-0000-0000-0000-000000000000" "404"
+check "Bad review UUID" GET "/api/v1/b2b/tenant/reviews/not-a-uuid" "400"
+check "Nonexistent review" GET "/api/v1/b2b/tenant/reviews/00000000-0000-0000-0000-000000000000" "404"
 check "Bad outcome value" POST "/api/v1/b2b/campaigns/sequences/${SEQUENCE_ID}/outcome" "400" '{"outcome":"bogus"}'
 check "Bad CRM status" GET "/api/v1/b2b/crm/events?status=bogus" "400"
-check "Bad correction UUID" GET "/api/v1/b2b/dashboard/corrections/not-a-uuid" "400"
+check "Bad correction UUID" GET "/api/v1/b2b/tenant/corrections/not-a-uuid" "400"
 
 # ════════════════════════════════════════════════════════════
 # RESTORE: Reset the test outcome we set earlier

@@ -171,13 +171,25 @@ class LLMConfig(BaseSettings):
 
     # OpenRouter reasoning model (synthesis/reasoning workloads)
     openrouter_reasoning_model: str = Field(
-        default="openai/o4-mini",
-        description="OpenRouter model for synthesis/reasoning workloads",
+        default="openai/gpt-oss-120b",
+        description=(
+            "OpenRouter model for synthesis/reasoning workloads. "
+            "Set via ATLAS_LLM__OPENROUTER_REASONING_MODEL "
+            "(or ATLAS_LLM_OPENROUTER_REASONING_MODEL)."
+        ),
+    )
+    openrouter_reasoning_strict: bool = Field(
+        default=False,
+        description=(
+            "When true, synthesis/reasoning workloads fail closed if the "
+            "configured OpenRouter reasoning model is unavailable instead of "
+            "falling back to Anthropic, triage, or local models."
+        ),
     )
 
     # Anthropic settings (email draft generation)
     anthropic_model: str = Field(
-        default="claude-sonnet-4-5-20250929",
+        default="claude-3-5-haiku-latest",
         description="Anthropic model name for email drafting",
     )
     anthropic_api_key: Optional[str] = Field(
@@ -659,7 +671,7 @@ class EmailDraftConfig(BaseSettings):
         description="Use LLM to classify ambiguous emails as replyable/not",
     )
     triage_model: str = Field(
-        default="claude-haiku-4-5-20251001",
+        default="claude-3-5-haiku-latest",
         description="Anthropic model for replyable triage (cheap/fast)",
     )
     triage_max_tokens: int = Field(
@@ -1612,7 +1624,7 @@ class ModelPricingConfig(BaseModel):
     groq_llama70b_input: float = 0.59
     groq_llama70b_output: float = 0.79
 
-    # OpenRouter (varies -- default to o4-mini pricing)
+    # OpenRouter (varies -- default baseline pricing)
     openrouter_default_input: float = 1.10
     openrouter_default_output: float = 4.40
 
@@ -2129,7 +2141,7 @@ class ExternalDataConfig(BaseSettings):
     blog_base_url: str = Field(default="https://atlas-intel-ui-two.vercel.app", description="Base URL for consumer blog (full URLs in campaign emails)")
     amazon_associate_tag: str = Field(default="", description="Amazon Associates tag for consumer affiliate links")
     blog_post_openrouter_model: str = Field(
-        default="moonshotai/kimi-k2.5",
+        default="openai/gpt-oss-120b",
         description="OpenRouter model for blog post generation",
     )
     # Blog auto-deploy (git push + Vercel deploy hook)
@@ -2162,11 +2174,21 @@ class B2BChurnConfig(BaseSettings):
     enrichment_interval_seconds: int = Field(default=300, description="Enrichment polling interval")
     enrichment_max_per_batch: int = Field(default=10, description="Max reviews to enrich per batch")
     enrichment_max_attempts: int = Field(default=3, description="Max enrichment attempts")
+    enrichment_auto_requeue_parser_upgrades: bool = Field(
+        default=False,
+        description=(
+            "Automatically reset enriched/no-signal reviews to pending when a parser_version changes. "
+            "Disabled by default to avoid expensive mass re-enrichment during normal testing."
+        ),
+    )
     enrichment_max_tokens: int = Field(default=2048, description="Max LLM output tokens")
     enrichment_local_only: bool = Field(default=False, description="Force local LLM only")
     enrichment_openrouter_model: str = Field(
-        default="openai/gpt-4.1",
-        description="OpenRouter model for B2B enrichment (structured extraction)",
+        default="",
+        description=(
+            "OpenRouter model for B2B enrichment (structured extraction). "
+            "Empty = inherit ATLAS_LLM__OPENROUTER_REASONING_MODEL."
+        ),
     )
 
     # Hybrid two-pass enrichment (Tier 1 local + Tier 2 cloud)
@@ -2335,7 +2357,7 @@ class B2BChurnConfig(BaseSettings):
         description="LLM backend for product profiles: 'vllm' (local) or 'openrouter'",
     )
     product_profile_openrouter_model: str = Field(
-        default="moonshotai/kimi-k2.5",
+        default="openai/gpt-oss-120b",
         description="OpenRouter model for product profile synthesis",
     )
 
@@ -2347,7 +2369,7 @@ class B2BChurnConfig(BaseSettings):
     blog_post_timeout_seconds: int = Field(default=1800, description="Task timeout for blog post generation")
     blog_post_ui_path: str = Field(default="", description="Path to atlas-churn-ui blog content dir")
     blog_base_url: str = Field(default="https://churnsignals.co", description="Base URL for B2B blog (full URLs in campaign emails)")
-    blog_post_openrouter_model: str = Field(default="moonshotai/kimi-k2.5", description="OpenRouter model for blog generation")
+    blog_post_openrouter_model: str = Field(default="openai/gpt-oss-120b", description="OpenRouter model for blog generation")
     # Blog auto-deploy (git push + Vercel deploy hook)
     blog_auto_deploy_enabled: bool = Field(default=False, description="Auto git-push + Vercel deploy after B2B blog publish")
     blog_auto_deploy_branch: str = Field(default="main", description="Git branch to push B2B blog commits to")
@@ -2380,7 +2402,25 @@ class B2BChurnConfig(BaseSettings):
 
     # Analyst enrichment (OpenRouter)
     openrouter_api_key: str = Field(default="", description="OpenRouter API key for analyst enrichment")
-    briefing_analyst_model: str = Field(default="moonshotai/kimi-k2.5", description="OpenRouter model for briefing analyst summary")
+    briefing_analyst_model: str = Field(default="openai/gpt-oss-120b", description="OpenRouter model for briefing analyst summary")
+    scorecard_narrative_max_tokens: int = Field(
+        default=300,
+        ge=128,
+        le=4096,
+        description="Default max output tokens for vendor scorecard narrative generation",
+    )
+    scorecard_narrative_gpt_oss_max_tokens: int = Field(
+        default=1600,
+        ge=256,
+        le=8192,
+        description="Max output tokens for vendor scorecard narratives when the synthesis model is gpt-oss",
+    )
+    scorecard_narrative_deepseek_max_tokens: int = Field(
+        default=1200,
+        ge=256,
+        le=8192,
+        description="Max output tokens for vendor scorecard narratives when the synthesis model is DeepSeek",
+    )
 
     # Briefing gate (email capture for full report)
     vendor_briefing_gate_base_url: str = Field(default="https://churnsignals.co/report", description="Base URL for briefing gate landing page")
@@ -2389,6 +2429,24 @@ class B2BChurnConfig(BaseSettings):
     # Stratified reasoning integration (global intelligence run)
     stratified_reasoning_enabled: bool = Field(default=False, description="Route vendors through stratified reasoner during global intelligence run")
     stratified_reasoning_concurrency: int = Field(default=5, description="Max concurrent vendor reasoning tasks")
+    reasoning_synthesis_attempts: int = Field(
+        default=2,
+        ge=1,
+        le=5,
+        description="Max generation attempts per vendor reasoning synthesis, including validation-repair retries",
+    )
+    reasoning_synthesis_retry_delay_seconds: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=30.0,
+        description="Delay between vendor reasoning synthesis retry attempts",
+    )
+    reasoning_synthesis_feedback_limit: int = Field(
+        default=5,
+        ge=1,
+        le=10,
+        description="Max validator issues to feed back into synthesis repair retries",
+    )
     stratified_reasoning_vendor_cap: int = Field(default=60, description="Max vendors to send through stratified reasoning (top N by urgency)")
     intelligence_focus_categories: str = Field(
         default="all",
@@ -2431,8 +2489,11 @@ class B2BChurnConfig(BaseSettings):
         ),
     )
     battle_card_openrouter_model: str = Field(
-        default="anthropic/claude-haiku-4-5-20251001",
-        description="OpenRouter model override for battle-card sales copy",
+        default="",
+        description=(
+            "OpenRouter model override for battle-card sales copy. "
+            "Empty = inherit ATLAS_LLM__OPENROUTER_REASONING_MODEL."
+        ),
     )
     battle_card_llm_max_tokens: int = Field(default=16384, ge=256, le=32768, description="Max output tokens for battle card sales copy (reasoning models need extra budget)")
     battle_card_llm_temperature: float = Field(default=0.5, ge=0.0, le=1.5, description="Sampling temperature for battle card sales copy generation")
@@ -2441,6 +2502,44 @@ class B2BChurnConfig(BaseSettings):
     battle_card_high_priority_score_min: float = Field(default=60.0, ge=0.0, le=100.0, description="Min churn pressure score required before battle-card copy can use high-priority language")
     battle_card_high_priority_urgency_min: float = Field(default=5.0, ge=0.0, le=10.0, description="Min average urgency required before battle-card copy can use high-priority language")
     battle_card_feature_gap_headline_min_mentions: int = Field(default=5, ge=1, le=100, description="Min feature-gap mention count before a battle-card headline can elevate that gap directly")
+    battle_card_quality_max_stale_days: int = Field(
+        default=1,
+        ge=0,
+        le=30,
+        description="Max allowed staleness (days) before battle-card quality gate hard-blocks publishing",
+    )
+    battle_card_quality_eval_divergence_warn_delta: int = Field(
+        default=25,
+        ge=1,
+        le=1000,
+        description="Warn when active-evaluation metrics differ by at least this absolute amount",
+    )
+    battle_card_quality_min_high_intent_urgency: float = Field(
+        default=7.0,
+        ge=0.0,
+        le=10.0,
+        description="Min urgency required for a high-intent account to qualify for strict battle-card readiness",
+    )
+    battle_card_quality_required_stages: list[str] = Field(
+        default=["evaluation", "renewal_decision"],
+        description="Allowed buying stages for high-intent accounts in strict battle-card readiness",
+    )
+    battle_card_quality_allow_global_eval_fallback: bool = Field(
+        default=True,
+        description="Allow strict readiness to pass account-stage requirement when global active-eval evidence exists",
+    )
+    battle_card_quality_min_total_plays: int = Field(
+        default=2,
+        ge=1,
+        le=10,
+        description="Minimum recommended plays required for final battle-card readiness",
+    )
+    battle_card_quality_min_actionable_plays: int = Field(
+        default=1,
+        ge=1,
+        le=10,
+        description="Minimum recommended plays that include targeting, timing, and CTA language",
+    )
     synthesis_reference_confidence_min: float = Field(default=0.6, ge=0.0, le=1.0, description="Min reasoning or cross-vendor confidence before synthesis may reference a structured conclusion directly")
     synthesis_expert_take_max_words: int = Field(default=80, ge=20, le=200, description="Max word count for synthesized scorecard expert_take narratives")
     battle_card_leaving_patterns: list[str] = Field(
@@ -2568,6 +2667,7 @@ class B2BScrapeConfig(BaseSettings):
 
     # Schedule
     intake_interval_seconds: int = Field(default=3600, description="Scrape polling interval (1 hour)")
+    enrichment_on_scrape: bool = Field(default=True, description="Fire enrichment immediately after scraping new reviews (disable to save credits when enrichment model is failing)")
     max_targets_per_run: int = Field(default=0, description="Max targets to scrape per run (0 = unlimited)")
     source_allowlist: str = Field(
         default="g2,capterra,trustradius,gartner,peerspot,software_advice,trustpilot,reddit,hackernews,sourceforge",
@@ -2712,6 +2812,20 @@ class B2BScrapeConfig(BaseSettings):
         description="Domains to route through Scraping Browser instead of Web Unlocker (comma-separated)",
     )
 
+    # Bright Data SERP API (for discovering URLs on blocked sites via Google)
+    serp_api_token: str = Field(
+        default="",
+        description="Bright Data SERP API bearer token",
+    )
+    serp_api_zone: str = Field(
+        default="serp_api1",
+        description="Bright Data SERP API zone name",
+    )
+    serp_api_url: str = Field(
+        default="https://api.brightdata.com/request",
+        description="Bright Data SERP API endpoint URL",
+    )
+
 
 class B2BCampaignConfig(BaseSettings):
     """B2B ABM campaign generation configuration."""
@@ -2737,6 +2851,31 @@ class B2BCampaignConfig(BaseSettings):
     default_sender_title: str = Field(default="", description="Sender title for outreach")
     default_sender_company: str = Field(default="", description="Sender company name for outreach")
     default_booking_url: str = Field(default="", description="Default booking/calendar URL for outreach CTAs")
+    require_display_safe_company: bool = Field(
+        default=True,
+        description="Require churning-company outreach targets to be display-safe named companies",
+    )
+    require_primary_blog_post: bool = Field(
+        default=True,
+        description="Require a matched blog post before generating churning-company outreach",
+    )
+    min_pain_categories: int = Field(
+        default=1,
+        ge=1,
+        description="Minimum number of distinct pain categories required for churning-company outreach",
+    )
+    review_queue_min_score: int = Field(
+        default=55,
+        ge=0,
+        le=100,
+        description="Lower bound for the analyst review queue score band",
+    )
+    review_queue_max_score: int = Field(
+        default=69,
+        ge=0,
+        le=100,
+        description="Upper bound for the analyst review queue score band",
+    )
     target_mode: str = Field(
         default="vendor_retention",
         description="Campaign target mode: vendor_retention | challenger_intel | churning_company",
