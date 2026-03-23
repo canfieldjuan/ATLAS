@@ -12,7 +12,7 @@ import math
 import re
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Iterable
 
 from ...config import settings
 from ...services.apollo_company_overrides import fetch_company_override_map
@@ -435,6 +435,8 @@ def _battle_card_numeric_paths(path: str) -> bool:
         or ".evidence" in path
         or ".proof_point" in path
         or path.startswith("competitive_landscape.")
+        or path.startswith("recommended_plays[")
+        or path.startswith("talk_track.")
     )
 
 
@@ -446,6 +448,25 @@ def _battle_card_headline_paths(path: str) -> bool:
 def _battle_card_numeric_tokens(text: str) -> set[str]:
     """Extract numeric tokens from narrative sections for validation."""
     return set(re.findall(r"\b\d[\d,]*(?:\.\d+)?%?", text or ""))
+
+
+def _battle_card_normalize_numeric_token(token: str) -> str:
+    """Canonicalize equivalent numeric strings like 27 and 27.0%."""
+    text = str(token or "").strip()
+    if not text:
+        return text
+    has_pct = text.endswith("%")
+    raw = text[:-1] if has_pct else text
+    raw = raw.replace(",", "")
+    try:
+        numeric = float(raw)
+    except ValueError:
+        return text
+    if numeric.is_integer():
+        base = str(int(numeric))
+    else:
+        base = f"{numeric:.1f}".rstrip("0").rstrip(".")
+    return f"{base}%" if has_pct else base
 
 
 def _battle_card_add_claim(claims: set[str], value: Any, *, pct: bool = False) -> None:
@@ -470,9 +491,16 @@ def _battle_card_add_claim(claims: set[str], value: Any, *, pct: bool = False) -
         claims.add(f"{int(round(num))}")
 
 
+def _battle_card_add_wrapper_claim(claims: set[str], wrapper: Any) -> None:
+    """Add numeric tokens from a {value, source_id} wrapper when possible."""
+    if not isinstance(wrapper, dict):
+        return
+    _battle_card_add_claim(claims, wrapper.get("value"))
+
+
 def _battle_card_allowed_claims(card: dict[str, Any]) -> set[str]:
     """Build the set of numeric claims supported by deterministic card input."""
-    claims: set[str] = _battle_card_numeric_tokens(json.dumps(card, default=str))
+    claims: set[str] = set()
     _battle_card_add_claim(claims, card.get("total_reviews"))
     _battle_card_add_claim(claims, card.get("churn_pressure_score"))
     data = card.get("objection_data") or {}
@@ -482,7 +510,7 @@ def _battle_card_allowed_claims(card: dict[str, Any]) -> set[str]:
         _battle_card_add_claim(claims, data.get(key))
     for item in card.get("vendor_weaknesses") or []:
         _battle_card_add_claim(claims, item.get("evidence_count") or item.get("count"))
-    for item in card.get("competitor_differentiators") or []:
+    for item in _battle_card_aggregated_competitors(card).values():
         _battle_card_add_claim(claims, item.get("mentions"))
         _battle_card_add_claim(claims, item.get("switch_count"))
     for item in data.get("top_feature_gaps") or []:
@@ -490,7 +518,139 @@ def _battle_card_allowed_claims(card: dict[str, Any]) -> set[str]:
     for key in ("avg_seat_count", "max_seat_count", "median_seat_count", "price_increase_count"):
         _battle_card_add_claim(claims, (data.get("budget_context") or {}).get(key))
     _battle_card_add_claim(claims, (data.get("budget_context") or {}).get("price_increase_rate"), pct=True)
+    contracts = card.get("reasoning_contracts")
+    if isinstance(contracts, dict):
+        vendor_core = contracts.get("vendor_core_reasoning") or {}
+        if isinstance(vendor_core, dict):
+            timing = vendor_core.get("timing_intelligence") or {}
+            if isinstance(timing, dict):
+                _battle_card_add_wrapper_claim(claims, timing.get("active_eval_signals"))
+            segments = vendor_core.get("segment_playbook") or {}
+            if isinstance(segments, dict):
+                for segment in segments.get("priority_segments") or []:
+                    if not isinstance(segment, dict):
+                        continue
+                    _battle_card_add_wrapper_claim(claims, segment.get("estimated_reach"))
+                    _battle_card_add_claim(claims, segment.get("sample_size"))
+        displacement = contracts.get("displacement_reasoning") or {}
+        if isinstance(displacement, dict):
+            migration = displacement.get("migration_proof") or {}
+            if isinstance(migration, dict):
+                _battle_card_add_wrapper_claim(claims, migration.get("switch_volume"))
+                _battle_card_add_wrapper_claim(claims, migration.get("active_evaluation_volume"))
+                _battle_card_add_wrapper_claim(claims, migration.get("displacement_mention_volume"))
+            reframes = displacement.get("competitive_reframes") or {}
+            if isinstance(reframes, dict):
+                for item in reframes.get("reframes") or []:
+                    if not isinstance(item, dict):
+                        continue
+                    proof = item.get("proof_point") or {}
+                    if isinstance(proof, dict):
+                        _battle_card_add_claim(claims, proof.get("value"))
+        category = contracts.get("category_reasoning") or {}
+        if isinstance(category, dict):
+            _battle_card_add_claim(claims, category.get("vendor_count"))
+            _battle_card_add_claim(claims, category.get("displacement_flow_count"))
     return claims
+
+
+def _battle_card_contract(card: dict[str, Any], name: str) -> dict[str, Any]:
+    """Resolve a battle-card reasoning contract from canonical storage."""
+    contracts = card.get("reasoning_contracts")
+    if isinstance(contracts, dict):
+        contract = contracts.get(name)
+        if isinstance(contract, dict) and contract:
+            return contract
+        if contracts:
+            return {}
+    return {}
+
+
+def _battle_card_contract_section(
+    card: dict[str, Any],
+    contract_name: str,
+    section_name: str,
+    flat_name: str,
+) -> dict[str, Any]:
+    """Resolve a section from contracts first, then flat compatibility fields."""
+    contract = _battle_card_contract(card, contract_name)
+    if contract:
+        section = contract.get(section_name)
+        if isinstance(section, dict) and section:
+            return section
+    contracts = card.get("reasoning_contracts")
+    if isinstance(contracts, dict) and contracts:
+        return {}
+    flat = card.get(flat_name)
+    if isinstance(flat, dict) and flat:
+        return flat
+    return {}
+
+
+def _battle_card_validator_source(card: dict[str, Any]) -> dict[str, Any]:
+    """Return the contract-first source-of-truth view for validation.
+
+    The renderer now consumes a compact contract-first packet. Validation should
+    use the same authoritative view so stale flat mirrors do not expand the set
+    of accepted claims.
+    """
+    base_keys = (
+        "vendor",
+        "category",
+        "churn_pressure_score",
+        "risk_level",
+        "total_reviews",
+        "confidence",
+        "vendor_weaknesses",
+        "customer_pain_quotes",
+        "competitor_differentiators",
+        "weakness_analysis",
+        "competitive_landscape",
+        "archetype",
+        "synthesis_wedge",
+        "synthesis_wedge_label",
+        "archetype_risk_level",
+        "archetype_key_signals",
+        "evidence_depth_warning",
+        "objection_data",
+        "cross_vendor_battles",
+        "category_council",
+        "resource_asymmetry",
+        "ecosystem_context",
+        "high_intent_companies",
+        "integration_stack",
+        "buyer_authority",
+        "keyword_spikes",
+        "retention_signals",
+        "active_evaluation_deadlines",
+        "falsification_conditions",
+        "uncertainty_sources",
+        "evidence_window",
+        "evidence_window_days",
+        "reasoning_source",
+        "synthesis_schema_version",
+        "render_packet_version",
+    )
+    source = {
+        key: card[key]
+        for key in base_keys
+        if key in card
+    }
+    reasoning_contracts = card.get("reasoning_contracts")
+    if isinstance(reasoning_contracts, dict) and reasoning_contracts:
+        source["reasoning_contracts"] = reasoning_contracts
+
+    for contract_name, section_name, flat_name in (
+        ("vendor_core_reasoning", "causal_narrative", "causal_narrative"),
+        ("vendor_core_reasoning", "segment_playbook", "segment_playbook"),
+        ("vendor_core_reasoning", "timing_intelligence", "timing_intelligence"),
+        ("displacement_reasoning", "competitive_reframes", "competitive_reframes"),
+        ("displacement_reasoning", "migration_proof", "migration_proof"),
+    ):
+        section = _battle_card_contract_section(card, contract_name, section_name, flat_name)
+        if section:
+            source[flat_name] = section
+    return source
 
 
 def _battle_card_competitor_names(card: dict[str, Any], *, limit: int = 2) -> list[str]:
@@ -535,6 +695,752 @@ def _battle_card_safe_summary(card: dict[str, Any]) -> str:
     return f"{vendor} is showing churn pressure around {pain} in recent buyer feedback."
 
 
+def _battle_card_segment_evidence_is_thin(card: dict[str, Any]) -> bool:
+    """Return True when segment targeting should stay explicitly tentative."""
+    if card.get("high_intent_companies"):
+        return False
+    segment_playbook = _battle_card_contract_section(
+        card,
+        "vendor_core_reasoning",
+        "segment_playbook",
+        "segment_playbook",
+    )
+    if not isinstance(segment_playbook, dict) or not segment_playbook:
+        return False
+    data_gaps = [
+        str(item).strip().lower()
+        for item in (segment_playbook.get("data_gaps") or [])
+        if str(item).strip()
+    ]
+    return any("no account-level intelligence" in gap for gap in data_gaps)
+
+
+def _battle_card_segment_playbook(card: dict[str, Any]) -> dict[str, Any]:
+    """Return the contract-first segment playbook section."""
+    return _battle_card_contract_section(
+        card,
+        "vendor_core_reasoning",
+        "segment_playbook",
+        "segment_playbook",
+    )
+
+
+_SEGMENT_STRATEGIC_ROLE_TYPES = frozenset((
+    "decision_maker",
+    "economic_buyer",
+    "champion",
+    "evaluator",
+))
+
+_SEGMENT_ROLE_LABELS: dict[str, str] = {
+    "decision_maker": "decision-makers",
+    "economic_buyer": "economic buyers",
+    "champion": "internal champions",
+    "evaluator": "evaluators",
+    "end_user": "end users",
+}
+
+_SEGMENT_DEPARTMENT_LABELS: dict[str, str] = {
+    "it": "IT",
+    "hr": "HR",
+    "qa": "QA",
+    "bi": "BI",
+}
+
+_SEGMENT_GENERIC_CONTRACTS = frozenset((
+    "smb",
+    "mid market",
+    "enterprise",
+    "enterprise mid",
+    "enterprise high",
+))
+
+_SEGMENT_SAFE_USE_CASE_ACRONYMS = frozenset((
+    "crm", "erp", "hr", "hris", "it", "bi", "qa", "seo", "sms",
+    "etl", "api", "csm", "plg", "okr", "kpi",
+))
+
+_SEGMENT_PRIORITY_LABEL_OVERRIDES: dict[str, str] = {
+    "small business": "Small Business",
+    "mid market": "Mid-Market",
+}
+
+_SEGMENT_OPENING_ANGLE_LOWERCASE_WORDS = frozenset((
+    "advanced",
+    "benchmark",
+    "compare",
+    "cost",
+    "demonstrate",
+    "emphasize",
+    "feature",
+    "focus",
+    "frame",
+    "highlight",
+    "lead",
+    "license",
+    "offer",
+    "open",
+    "position",
+    "reliable",
+    "show",
+    "simplified",
+    "target",
+    "use",
+))
+
+_TIMING_GENERIC_TRIGGER_PATTERNS = (
+    "active evaluation signal",
+    "active evaluation signals",
+    "signal detected",
+    "price increase signal",
+    "price increase count spike",
+    "timeline signal",
+    "contract renewal deadline",
+    "within quarter evaluation deadline",
+)
+
+
+def _clean_segment_label(value: Any) -> str:
+    text = re.sub(r"[_-]+", " ", str(value or "").strip())
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _join_segment_labels(labels: list[str]) -> str:
+    items = [str(label).strip() for label in labels if str(label).strip()]
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return ", ".join(items[:-1]) + f", and {items[-1]}"
+
+
+def _segment_role_display_label(role_type: Any) -> str:
+    role_name = str(role_type or "").strip() or "unknown"
+    return _SEGMENT_ROLE_LABELS.get(role_name, _clean_segment_label(role_name) or "buyers")
+
+
+def _segment_priority_display_label(value: Any) -> str:
+    text = re.sub(r"\([^)]*\d[^)]*\)", "", _clean_segment_label(value)).strip(" -")
+    if not text:
+        return ""
+    lower = re.sub(r"\s+role$", "", text.lower()).strip()
+    role_key = lower.replace(" ", "_")
+    if role_key in _SEGMENT_ROLE_LABELS:
+        return _segment_role_display_label(role_key)
+    override = _SEGMENT_PRIORITY_LABEL_OVERRIDES.get(lower)
+    if override:
+        return override
+    return text
+
+
+def _segment_opening_angle_phrase(value: Any) -> str:
+    text = _clean_segment_label(value)
+    if not text:
+        return ""
+    first_word = text.split(" ", 1)[0].strip().lower()
+    if first_word in _SEGMENT_OPENING_ANGLE_LOWERCASE_WORDS:
+        return text[:1].lower() + text[1:]
+    return text
+
+
+def _segment_playbook_supporting_list(
+    segment_playbook: dict[str, Any],
+    key: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(segment_playbook, dict):
+        return []
+    supporting = segment_playbook.get("supporting_evidence") or {}
+    items = supporting.get(key) or []
+    return [dict(item) for item in items if isinstance(item, dict)]
+
+
+def _segment_role_sort_value(item: dict[str, Any]) -> tuple[float, float, float, str]:
+    role_type = str(item.get("role_type") or "").strip() or "unknown"
+    try:
+        priority = float(item.get("priority_score") or 0)
+    except (TypeError, ValueError):
+        priority = 0.0
+    try:
+        review_count = float(item.get("review_count") or 0)
+    except (TypeError, ValueError):
+        review_count = 0.0
+    return (priority, review_count, _SEGMENT_ROLE_SCORES.get(role_type, 0.0), role_type)
+
+
+def _segment_playbook_strategic_roles(
+    segment_playbook: dict[str, Any],
+    *,
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    roles = _segment_playbook_supporting_list(segment_playbook, "top_strategic_roles")
+    if not roles:
+        roles = [
+            item for item in _segment_playbook_supporting_list(segment_playbook, "top_roles")
+            if str(item.get("role_type") or "").strip() in _SEGMENT_STRATEGIC_ROLE_TYPES
+        ]
+    roles.sort(key=_segment_role_sort_value, reverse=True)
+    return roles[:limit]
+
+
+def _segment_playbook_context_label(
+    segment_playbook: dict[str, Any],
+    key: str,
+    field: str,
+) -> str:
+    items = _segment_playbook_supporting_list(segment_playbook, key)
+    if not items:
+        return ""
+    return _clean_segment_label(items[0].get(field))
+
+
+def _segment_department_label(value: Any) -> str:
+    text = _clean_segment_label(value).lower()
+    if not text:
+        return ""
+    return _SEGMENT_DEPARTMENT_LABELS.get(text, text.title())
+
+
+def _segment_context_key(value: Any) -> str:
+    text = _clean_segment_label(value).lower()
+    if not text:
+        return ""
+    return re.sub(r"[^a-z0-9]+", " ", text).strip()
+
+
+def _segment_contract_clause(segment_playbook: dict[str, Any]) -> tuple[int, str]:
+    text = _segment_playbook_context_label(segment_playbook, "top_contract_segments", "segment")
+    if not text:
+        return (0, "")
+    priority = 35 if text.lower() in _SEGMENT_GENERIC_CONTRACTS else 50
+    return (priority, f"{text} contracts")
+
+
+def _segment_safe_use_case_label(value: Any) -> str:
+    text = _clean_segment_label(value)
+    if not text:
+        return ""
+    raw_tokens = [tok for tok in re.split(r"\s+", text) if tok]
+    if not raw_tokens:
+        return ""
+    has_title_case = any(
+        any(ch.isupper() for ch in tok[1:]) or (tok[:1].isupper() and tok[1:].islower())
+        for tok in raw_tokens
+    )
+    if has_title_case:
+        return ""
+    normalized = text.lower()
+    compact = re.sub(r"[^a-z0-9/+-]", "", normalized)
+    if compact in _SEGMENT_SAFE_USE_CASE_ACRONYMS:
+        return text.upper()
+    words = [tok for tok in re.split(r"[^a-z0-9/+-]+", normalized) if tok]
+    if not words:
+        return ""
+    if len(words) == 1 and len(words[0]) > 12:
+        return ""
+    return text
+
+
+def _segment_context_clauses(
+    segment_playbook: dict[str, Any],
+    *,
+    limit: int = 2,
+) -> list[tuple[str, str]]:
+    candidates: list[tuple[int, str, str]] = []
+    department = _segment_department_label(
+        _segment_playbook_context_label(segment_playbook, "top_departments", "department"),
+    )
+    if department:
+        candidates.append((90, "in", f"{department} teams"))
+    size = _segment_playbook_context_label(segment_playbook, "top_company_sizes", "segment")
+    size_key = _segment_context_key(size)
+    if size:
+        candidates.append((80, "in", f"{size} accounts"))
+    safe_use_case = ""
+    for item in _segment_playbook_supporting_list(segment_playbook, "top_use_cases"):
+        safe_use_case = _segment_safe_use_case_label(item.get("use_case"))
+        if safe_use_case:
+            break
+    if safe_use_case:
+        candidates.append((65, "plain", f"for {safe_use_case} workflows"))
+    duration = _segment_playbook_context_label(segment_playbook, "top_usage_durations", "duration")
+    if duration:
+        candidates.append((55, "plain", f"after {duration} of usage"))
+    contract_priority, contract_clause = _segment_contract_clause(segment_playbook)
+    contract_key = _segment_context_key(
+        _segment_playbook_context_label(segment_playbook, "top_contract_segments", "segment"),
+    )
+    if contract_clause and contract_key != size_key:
+        candidates.append((contract_priority, "in", contract_clause))
+    candidates.sort(key=lambda item: (item[0], item[2]), reverse=True)
+    clauses: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for _, mode, clause in candidates:
+        norm = clause.lower()
+        if norm in seen:
+            continue
+        seen.add(norm)
+        clauses.append((mode, clause))
+        if len(clauses) >= limit:
+            break
+    return clauses
+
+
+def _segment_best_timing_sentence(timing_intelligence: dict[str, Any] | None) -> str:
+    if not isinstance(timing_intelligence, dict):
+        return ""
+    window = _clean_segment_label(timing_intelligence.get("best_timing_window"))
+    if not window:
+        return ""
+    lower = window[:1].lower() + window[1:] if window else ""
+    if re.match(r"^(during|before|after|when|within|immediately|at)\b", lower):
+        return f"Best tested {lower}."
+    return f"Best tested during {lower}."
+
+
+def _segment_targeting_summary(
+    segment_playbook: dict[str, Any],
+    timing_intelligence: dict[str, Any] | None = None,
+) -> str:
+    roles = _segment_playbook_strategic_roles(segment_playbook, limit=2)
+    if roles:
+        labels = [_segment_role_display_label(item.get("role_type")) for item in roles]
+        contexts = _segment_context_clauses(segment_playbook, limit=2)
+        summary = f"Strongest current pressure is surfacing with {_join_segment_labels(labels)}"
+        in_clauses = [text for mode, text in contexts if mode == "in"]
+        plain_clauses = [text for mode, text in contexts if mode == "plain"]
+        if in_clauses and plain_clauses:
+            sentence = (
+                f"{summary}, especially in {_join_segment_labels(in_clauses)}, "
+                f"and {_join_segment_labels(plain_clauses)}."
+            )
+        elif in_clauses:
+            sentence = f"{summary}, especially in {_join_segment_labels(in_clauses)}."
+        elif plain_clauses:
+            sentence = f"{summary}, especially {_join_segment_labels(plain_clauses)}."
+        else:
+            sentence = summary + "."
+        timing = _segment_best_timing_sentence(timing_intelligence)
+        context_texts = [text for _, text in contexts]
+        if timing and (not context_texts or all("contracts" in ctx.lower() for ctx in context_texts)):
+            return f"{sentence} {timing}"
+        return sentence
+    for segment in segment_playbook.get("priority_segments") or []:
+        if not isinstance(segment, dict):
+            continue
+        name = _segment_priority_display_label(segment.get("segment"))
+        angle = _segment_opening_angle_phrase(segment.get("best_opening_angle"))
+        if name and angle:
+            timing = _segment_best_timing_sentence(timing_intelligence)
+            sentence = f"Best current segment wedge is {name}, led with {angle}."
+            return f"{sentence} {timing}".strip() if timing else sentence
+        if name:
+            timing = _segment_best_timing_sentence(timing_intelligence)
+            sentence = f"Best current segment wedge is {name}."
+            return f"{sentence} {timing}".strip() if timing else sentence
+    return ""
+
+
+def _timing_wrapper_int(value: Any) -> int | None:
+    if isinstance(value, dict):
+        value = value.get("value")
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _timing_wrapper_float(value: Any) -> float | None:
+    if isinstance(value, dict):
+        value = value.get("value")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _summary_sentence(text: Any) -> str:
+    sentence = str(text or "").strip()
+    if not sentence:
+        return ""
+    sentence = sentence[0].upper() + sentence[1:]
+    if sentence[-1] not in ".!?":
+        sentence += "."
+    return sentence
+
+
+def _timing_window_conflicts_with_active_eval(
+    best_window: Any,
+    active_eval: int | None,
+) -> bool:
+    if active_eval is None or active_eval <= 0:
+        return False
+    text = str(best_window or "").strip().lower()
+    if not text:
+        return False
+    if text.startswith("no strong timing signal"):
+        return True
+    if "no active evaluation" in text:
+        return True
+    if text.startswith("none") and "no" in text:
+        return True
+    return False
+
+
+def _timing_summary_key(text: Any) -> str:
+    cleaned = str(text or "").strip().lower()
+    cleaned = re.sub(r"[_-]+", " ", cleaned)
+    cleaned = re.sub(r"[^a-z0-9% ]+", " ", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _timing_window_is_generic(best_window: Any) -> bool:
+    text = _timing_summary_key(best_window)
+    if not text:
+        return False
+    if re.search(r"\b(after|before|following|during|when)\b", text):
+        return False
+    return text.startswith((
+        "immediate",
+        "immediately",
+        "within",
+        "next 30 days",
+        "current quarter",
+        "q4",
+        "this week",
+    ))
+
+
+def _timing_trigger_is_generic(label: Any) -> bool:
+    text = _timing_summary_key(label)
+    if not text:
+        return True
+    return any(pattern in text for pattern in _TIMING_GENERIC_TRIGGER_PATTERNS)
+
+
+def _timing_trigger_sentence(
+    best_window: Any,
+    trigger_labels: list[str],
+) -> str:
+    best_key = _timing_summary_key(best_window)
+    if not trigger_labels:
+        return ""
+    for label in trigger_labels:
+        text = str(label or "").strip()
+        key = _timing_summary_key(text)
+        if not key or _timing_trigger_is_generic(text):
+            continue
+        if best_key and (key in best_key or best_key in key):
+            continue
+        return f"Key trigger: {_summary_sentence(text).rstrip('.') }."
+    return ""
+
+
+def _timing_summary_payload(
+    timing_intelligence: dict[str, Any] | None,
+) -> tuple[str, dict[str, Any], list[str]]:
+    if not isinstance(timing_intelligence, dict) or not timing_intelligence:
+        return ("", {}, [])
+
+    metrics: dict[str, Any] = {}
+    triggers = timing_intelligence.get("immediate_triggers") or []
+    trigger_labels: list[str] = []
+    seen_triggers: set[str] = set()
+    for item in triggers:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("trigger") or item.get("label") or "").strip()
+        if not label:
+            continue
+        norm = label.casefold()
+        if norm in seen_triggers:
+            continue
+        seen_triggers.add(norm)
+        trigger_labels.append(label)
+        if len(trigger_labels) >= 3:
+            break
+    if triggers:
+        metrics["immediate_trigger_count"] = len(triggers)
+
+    active_eval = _timing_wrapper_int(timing_intelligence.get("active_eval_signals"))
+    if active_eval is not None:
+        metrics["active_eval_signals"] = active_eval
+
+    supporting = timing_intelligence.get("supporting_evidence") or {}
+    timeline = supporting.get("timeline_signal_summary") or {}
+    for field in (
+        "evaluation_deadline_signals",
+        "contract_end_signals",
+        "renewal_signals",
+        "budget_cycle_signals",
+    ):
+        value = _timing_wrapper_int(timeline.get(field))
+        if value is not None:
+            metrics[field] = value
+
+    sentiment_direction = str(
+        timing_intelligence.get("sentiment_direction") or ""
+    ).strip().lower()
+    if sentiment_direction:
+        metrics["sentiment_direction"] = sentiment_direction
+
+    sentiment = supporting.get("sentiment_snapshot") or {}
+    for field in ("declining_pct", "improving_pct"):
+        value = _timing_wrapper_float(sentiment.get(field))
+        if value is not None:
+            metrics[field] = round(value, 2)
+
+    best_window = str(timing_intelligence.get("best_timing_window") or "").strip()
+    summary_parts: list[str] = []
+    if best_window and not _timing_window_conflicts_with_active_eval(best_window, active_eval):
+        summary_parts.append(_summary_sentence(best_window))
+    trigger_sentence = ""
+    if not best_window or _timing_window_is_generic(best_window):
+        trigger_sentence = _timing_trigger_sentence(best_window, trigger_labels)
+    if trigger_sentence:
+        summary_parts.append(trigger_sentence)
+    if active_eval is not None and active_eval > 0:
+        summary_parts.append(
+            f"{active_eval} active evaluation signals are visible right now."
+        )
+    elif metrics.get("immediate_trigger_count"):
+        count = int(metrics["immediate_trigger_count"])
+        summary_parts.append(
+            f"{count} immediate timing triggers are currently open."
+        )
+
+    if sentiment_direction == "declining":
+        summary_parts.append("Review sentiment is skewing more negative.")
+    elif sentiment_direction == "improving":
+        summary_parts.append(
+            "Review sentiment is improving, so outreach should stay tied to concrete events."
+        )
+
+    return (" ".join(summary_parts).strip(), metrics, trigger_labels)
+
+
+def _battle_card_timing_intelligence(card: dict[str, Any]) -> dict[str, Any]:
+    """Return the contract-first timing intelligence section."""
+    return _battle_card_contract_section(
+        card,
+        "vendor_core_reasoning",
+        "timing_intelligence",
+        "timing_intelligence",
+    )
+
+
+def _battle_card_primary_weakness(card: dict[str, Any]) -> str:
+    """Return the strongest weakness label available for safe seller phrasing."""
+    weaknesses = card.get("vendor_weaknesses") or []
+    if weaknesses and isinstance(weaknesses[0], dict):
+        area = str(
+            weaknesses[0].get("area")
+            or weaknesses[0].get("weakness")
+            or ""
+        ).strip().lower()
+        if area:
+            return area
+    return "fit and value"
+
+
+def _battle_card_structured_proof_text(card: dict[str, Any]) -> str:
+    """Return the strongest supported proof-point sentence for seller copy."""
+    timing = _battle_card_contract_section(
+        card,
+        "vendor_core_reasoning",
+        "timing_intelligence",
+        "timing_intelligence",
+    )
+    active_eval = {}
+    if isinstance(timing, dict):
+        active_eval = timing.get("active_eval_signals") or {}
+    if isinstance(active_eval, dict):
+        value = active_eval.get("value")
+        try:
+            count = int(round(float(value)))
+        except (TypeError, ValueError):
+            count = 0
+        if count > 0:
+            weakness = _battle_card_primary_weakness(card)
+            if weakness:
+                return f"{count} active evaluation signals show recurring buyer pressure around {weakness}."
+            return f"{count} active evaluation signals show recurring buyer pressure."
+
+    weaknesses = card.get("vendor_weaknesses") or []
+    if weaknesses and isinstance(weaknesses[0], dict):
+        top = weaknesses[0]
+        area = str(top.get("area") or top.get("weakness") or "customer fit").strip().lower()
+        count = top.get("evidence_count") or top.get("count")
+        try:
+            count_int = int(round(float(count)))
+        except (TypeError, ValueError):
+            count_int = 0
+        if count_int > 0:
+            return f"{count_int} recurring complaints point to buyer friction around {area}."
+
+    return "The input shows recurring buyer friction and credible evaluation pressure."
+
+
+def _battle_card_safe_play_text(card: dict[str, Any], path: str) -> str:
+    """Return grounded fallback text for recommended plays and talk tracks."""
+    weakness = _battle_card_primary_weakness(card)
+    if path.endswith(".target_segment"):
+        if weakness == "pricing":
+            return "Support, finance, and operations teams already feeling pricing pressure."
+        if weakness == "support":
+            return "Support leaders already dealing with service friction and renewal pressure."
+        return "Teams already showing evaluation pressure around fit and value."
+    if path.endswith(".key_message"):
+        if weakness == "pricing":
+            return "Lead with pricing clarity, spend control, and fewer forced add-ons."
+        if weakness == "support":
+            return "Lead with more responsive support operations and clearer accountability."
+        return "Lead with a simpler path to better fit, lower friction, and clearer value."
+    if path.endswith(".timing"):
+        return "Best tested during active evaluation windows, renewal review, or planning cycles."
+    if path.endswith(".play"):
+        prefix = "Best tested on" if _battle_card_segment_evidence_is_thin(card) else "Target"
+        if weakness == "pricing":
+            return f"{prefix} teams facing pricing pressure with a focused pricing and packaging benchmark."
+        if weakness == "support":
+            return f"{prefix} support teams with a support-operations benchmark against current escalation pain."
+        return f"{prefix} teams showing fit and renewal pressure with a focused benchmark."
+    if path.startswith("talk_track."):
+        if path.endswith(".opening"):
+            return _battle_card_safe_summary(card)
+        if path.endswith(".mid_call_pivot"):
+            return "Once pain is confirmed, pivot to the recurring friction and evaluation pressure visible in the current evidence."
+        if path.endswith(".closing"):
+            return "Close with a working session to benchmark current fit, costs, and switching timing before renewal."
+    return ""
+
+
+def _battle_card_role_target_segment(
+    segment_playbook: dict[str, Any],
+    role: dict[str, Any],
+) -> str:
+    role_label = _segment_role_display_label(role.get("role_type"))
+    contexts = _segment_context_clauses(segment_playbook, limit=1)
+    if contexts:
+        mode, clause = contexts[0]
+        if mode == "plain":
+            return f"{role_label} {clause}"
+        return f"{role_label} in {clause}"
+    return role_label
+
+
+def _battle_card_role_opening_angle(card: dict[str, Any], role_type: str) -> str:
+    weakness = _battle_card_primary_weakness(card)
+    if role_type in {"decision_maker", "economic_buyer"} and weakness == "pricing":
+        return "a finance-ready pricing and renewal benchmark"
+    if role_type in {"decision_maker", "economic_buyer"}:
+        return "a decision-ready fit, risk, and renewal benchmark"
+    if role_type == "champion":
+        return "an adoption and internal-alignment review"
+    if role_type == "evaluator":
+        return "a side-by-side evaluation on fit and switching friction"
+    return "a focused benchmark on fit and value"
+
+
+def _battle_card_role_key_message(card: dict[str, Any], role_type: str) -> str:
+    weakness = _battle_card_primary_weakness(card)
+    if role_type in {"decision_maker", "economic_buyer"} and weakness == "pricing":
+        return "Lead with pricing predictability, spend control, and fewer surprise costs"
+    if role_type in {"decision_maker", "economic_buyer"}:
+        return "Lead with clearer vendor accountability, lower friction, and more predictable value"
+    if role_type == "champion":
+        return "Lead with smoother adoption, fewer workarounds, and less internal pushback"
+    if role_type == "evaluator":
+        return "Lead with faster evaluation clarity, cleaner validation, and fewer edge-case surprises"
+    return _battle_card_safe_play_text(card, "recommended_plays[0].key_message").rstrip(".")
+
+
+def _battle_card_fallback_recommended_plays(
+    card: dict[str, Any],
+    *,
+    limit: int = 2,
+) -> list[dict[str, str]]:
+    """Build deterministic recommended-play fallbacks from segment contracts."""
+    segment_playbook = _battle_card_segment_playbook(card)
+    timing = _battle_card_timing_intelligence(card)
+    best_timing_window = str(timing.get("best_timing_window") or "").strip()
+    default_timing = best_timing_window or "Best tested during active evaluation windows, renewal review, or planning cycles."
+    thin = _battle_card_segment_evidence_is_thin(card)
+    prefix = "Best tested on" if thin else "Target"
+    plays: list[dict[str, str]] = []
+    seen_segments: set[str] = set()
+    for segment in segment_playbook.get("priority_segments") or []:
+        if not isinstance(segment, dict):
+            continue
+        segment_name = str(segment.get("segment") or "").strip()
+        if not segment_name:
+            continue
+        display_segment = re.sub(r"\([^)]*\d[^)]*\)", "", segment_name).strip()
+        display_segment = re.sub(r"\s+", " ", display_segment).strip()
+        norm = re.sub(r"\s+", " ", display_segment.lower()).strip()
+        if not norm or norm in seen_segments:
+            continue
+        seen_segments.add(norm)
+        opening = str(segment.get("best_opening_angle") or "").strip()
+        sample_size = None
+        try:
+            sample_size = int(round(float(segment.get("sample_size"))))
+        except (TypeError, ValueError):
+            sample_size = None
+        segment_label = display_segment
+        if sample_size and sample_size > 0:
+            segment_label = f"{display_segment} (sample n={sample_size})"
+        play_text = f"{prefix} {display_segment} with {opening or 'a focused benchmark on fit and value'}"
+        target_text = segment_label
+        key_message = opening or _battle_card_safe_play_text(card, "recommended_plays[0].key_message")
+        timing_text = default_timing
+        plays.append({
+            "play": play_text.rstrip(".") + ".",
+            "target_segment": target_text,
+            "key_message": key_message.rstrip(".") + ".",
+            "timing": timing_text.rstrip(".") + ".",
+        })
+        if len(plays) >= limit:
+            break
+    for role in _segment_playbook_strategic_roles(segment_playbook, limit=limit):
+        if len(plays) >= limit:
+            break
+        role_type = str(role.get("role_type") or "").strip()
+        target_text = _battle_card_role_target_segment(segment_playbook, role)
+        norm = re.sub(r"\s+", " ", target_text.lower()).strip()
+        if not norm or norm in seen_segments:
+            continue
+        seen_segments.add(norm)
+        plays.append({
+            "play": f"{prefix} {target_text} with {_battle_card_role_opening_angle(card, role_type)}.",
+            "target_segment": target_text,
+            "key_message": _battle_card_role_key_message(card, role_type).rstrip(".") + ".",
+            "timing": default_timing.rstrip(".") + ".",
+        })
+    return plays
+
+
+def _battle_card_has_duplicate_recommended_play_segments(generated: dict[str, Any]) -> bool:
+    """Return True when recommended plays collapse onto the same target segment."""
+    plays = generated.get("recommended_plays")
+    if not isinstance(plays, list):
+        return False
+    seen: set[str] = set()
+    for item in plays:
+        if not isinstance(item, dict):
+            continue
+        segment = str(item.get("target_segment") or "").strip().lower()
+        segment = re.sub(r"\s*\(sample n=\d+\)\s*$", "", segment)
+        segment = re.sub(r"\s+", " ", segment)
+        if not segment:
+            continue
+        if segment in seen:
+            return True
+        seen.add(segment)
+    return False
+
+
 def _battle_card_safe_text(card: dict[str, Any], path: str) -> str:
     """Return grounded replacement text for numeric-sensitive paths."""
     if path == "executive_summary":
@@ -542,7 +1448,9 @@ def _battle_card_safe_text(card: dict[str, Any], path: str) -> str:
     if path.endswith(".evidence"):
         return "Supported by recurring customer complaints and churn-oriented review evidence."
     if path.endswith(".proof_point"):
-        return "The input shows recurring buyer friction and credible evaluation pressure."
+        return _battle_card_structured_proof_text(card)
+    if path.startswith("recommended_plays[") or path.startswith("talk_track."):
+        return _battle_card_safe_play_text(card, path)
     if path.startswith("competitive_landscape."):
         competitors = _battle_card_competitor_names(card)
         if "top_alternatives" in path and competitors:
@@ -568,8 +1476,18 @@ def _sanitize_battle_card_text(
 ) -> str:
     """Rewrite overclaiming battle-card strings into validator-safe text."""
     cleaned = str(text or "")
+    normalized_allowed_claims = {
+        _battle_card_normalize_numeric_token(token) for token in (allowed_claims or set())
+    }
+    if path.startswith("recommended_plays[") and path.endswith(".timing"):
+        if _battle_card_numeric_tokens(cleaned):
+            cleaned = _battle_card_safe_text(card, path)
     if _battle_card_numeric_paths(path):
-        bad = sorted(tok for tok in _battle_card_numeric_tokens(cleaned) if tok not in allowed_claims)
+        bad = sorted(
+            tok
+            for tok in _battle_card_numeric_tokens(cleaned)
+            if _battle_card_normalize_numeric_token(tok) not in normalized_allowed_claims
+        )
         if bad:
             cleaned = _battle_card_safe_text(card, path)
     years = [year for year in re.findall(r"\b20\d{2}\b", cleaned) if year not in source_text]
@@ -597,6 +1515,9 @@ def _sanitize_battle_card_text(
             cleaned,
             flags=re.IGNORECASE,
         )
+    if _battle_card_segment_evidence_is_thin(card) and path.endswith(".play"):
+        cleaned = re.sub(r"^\s*target\b", "Best tested on", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"^\s*engage\b", "Best tested on", cleaned, flags=re.IGNORECASE)
     if _battle_card_headline_paths(path):
         for term in low_gap_terms:
             if term and term in cleaned.lower():
@@ -755,12 +1676,57 @@ def _battle_card_competitor_bucket_key(raw_label: str, buckets: dict[str, dict[s
     return norm, label
 
 
+def _battle_card_competitor_is_eligible(label: str) -> bool:
+    """Return True when a competitor label is seller-usable in battle cards."""
+    lower = str(label or "").strip().lower()
+    if not lower:
+        return False
+    blocked_terms = (
+        " integration",
+        "integrations",
+        "plugin",
+        "plug-in",
+        "add-on",
+        "addon",
+        "workflow",
+        "workaround",
+        "custom ",
+        "internal ",
+        "in-house",
+    )
+    return not any(term in lower for term in blocked_terms)
+
+
+def _battle_card_aggregated_competitors(card: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Aggregate seller-usable competitor counts for battle-card surfaces."""
+    aggregated_competitors: dict[str, dict[str, Any]] = {}
+    for item in card.get("competitor_differentiators") or []:
+        if not isinstance(item, dict):
+            continue
+        raw_label = str(item.get("competitor") or "").strip()
+        bucket_key, label = _battle_card_competitor_bucket_key(raw_label, aggregated_competitors)
+        if not label or not bucket_key or not _battle_card_competitor_is_eligible(label):
+            continue
+        bucket = aggregated_competitors.setdefault(
+            bucket_key,
+            {"competitor": label, "mentions": 0, "switch_count": 0, "driver_counts": Counter()},
+        )
+        if len(label) > len(str(bucket.get("competitor") or "")):
+            bucket["competitor"] = label
+        bucket["mentions"] += int(item.get("mentions") or 0)
+        bucket["switch_count"] += int(item.get("switch_count") or 0)
+        driver = str(item.get("primary_driver") or "buyer fit").strip()
+        if driver:
+            bucket["driver_counts"][driver] += max(int(item.get("mentions") or 0), 1)
+    return aggregated_competitors
+
+
 def _sanitize_battle_card_sales_copy(card: dict[str, Any], generated: dict[str, Any]) -> dict[str, Any]:
     """Deterministically rewrite near-miss sales copy before final rejection."""
     if not isinstance(generated, dict):
         return {}
     allowed = _battle_card_allowed_claims(card)
-    source_text = json.dumps(card, default=str).lower()
+    source_text = json.dumps(_battle_card_validator_source(card), default=str).lower()
     max_switch = max(
         (int(c.get("switch_count") or 0) for c in card.get("competitor_differentiators") or []),
         default=0,
@@ -796,6 +1762,10 @@ def _sanitize_battle_card_sales_copy(card: dict[str, Any], generated: dict[str, 
         return value
 
     sanitized = _walk(generated)
+    if isinstance(sanitized, dict) and _battle_card_has_duplicate_recommended_play_segments(sanitized):
+        fallback_plays = _battle_card_fallback_recommended_plays(card)
+        if fallback_plays:
+            sanitized["recommended_plays"] = fallback_plays
     allowed_quotes = _battle_card_allowed_quotes(card)
     weaknesses = sanitized.get("weakness_analysis") if isinstance(sanitized, dict) else None
     if allowed_quotes and isinstance(weaknesses, list):
@@ -867,25 +1837,21 @@ def _build_deterministic_battle_card_competitive_landscape(
     budget = data.get("budget_context") or {}
     sentiment = str(data.get("sentiment_direction") or "").strip()
     council = card.get("category_council") or {}
-    aggregated_competitors: dict[str, dict[str, Any]] = {}
-    for item in card.get("competitor_differentiators") or []:
-        if not isinstance(item, dict):
-            continue
-        raw_label = str(item.get("competitor") or "").strip()
-        bucket_key, label = _battle_card_competitor_bucket_key(raw_label, aggregated_competitors)
-        if not label or not bucket_key:
-            continue
-        bucket = aggregated_competitors.setdefault(
-            bucket_key,
-            {"competitor": label, "mentions": 0, "switch_count": 0, "driver_counts": Counter()},
-        )
-        if len(label) > len(str(bucket.get("competitor") or "")):
-            bucket["competitor"] = label
-        bucket["mentions"] += int(item.get("mentions") or 0)
-        bucket["switch_count"] += int(item.get("switch_count") or 0)
-        driver = str(item.get("primary_driver") or "buyer fit").strip()
-        if driver:
-            bucket["driver_counts"][driver] += max(int(item.get("mentions") or 0), 1)
+    category_reasoning = {}
+    contracts = card.get("reasoning_contracts")
+    if isinstance(contracts, dict):
+        contract = contracts.get("category_reasoning")
+        if isinstance(contract, dict):
+            category_reasoning = contract
+    if not category_reasoning:
+        raw_category = card.get("category_reasoning")
+        if isinstance(raw_category, dict):
+            category_reasoning = raw_category
+    market_regime = (
+        str(council.get("market_regime") or "").strip()
+        or str(category_reasoning.get("market_regime") or "").strip()
+    )
+    aggregated_competitors = _battle_card_aggregated_competitors(card)
     alternatives: list[str] = []
     ranked_competitors = sorted(
         aggregated_competitors.values(),
@@ -896,6 +1862,8 @@ def _build_deterministic_battle_card_competitive_landscape(
         label = str(item["competitor"]).strip()
         switches = int(item["switch_count"] or 0)
         mentions = int(item["mentions"] or 0)
+        if switches <= 0 and mentions <= 0:
+            continue
         driver_counts = item.get("driver_counts") or Counter()
         driver = driver_counts.most_common(1)[0][0] if driver_counts else "buyer fit"
         if switches > 0:
@@ -909,8 +1877,8 @@ def _build_deterministic_battle_card_competitive_landscape(
         window_bits.append("recent price increases are creating renewal scrutiny")
     if card.get("active_evaluation_deadlines"):
         window_bits.append("near-term evaluation timing is visible in review signals")
-    if council.get("market_regime"):
-        window_bits.append(f"the category backdrop is {council['market_regime']}")
+    if market_regime:
+        window_bits.append(f"the category backdrop is {market_regime}")
     if not window_bits:
         window_bits.append("buyers are actively re-evaluating fit and value")
     triggers: list[str] = []
@@ -971,7 +1939,7 @@ def _build_battle_card_locked_facts(card: dict[str, Any]) -> dict[str, Any]:
     """Build source-of-truth synthesis constraints for battle-card copy."""
     objection_data = card.get("objection_data") or {}
     allowed_opponents: list[str] = []
-    for comp in card.get("competitor_differentiators") or []:
+    for comp in _battle_card_aggregated_competitors(card).values():
         name = str(comp.get("competitor") or "").strip()
         if name and name not in allowed_opponents:
             allowed_opponents.append(name)
@@ -1132,12 +2100,20 @@ def _classify_trend(
 
 def _infer_driver_from_reasons(reasons: list[str], fallback: str = "other") -> str:
     """Classify a driver label from competitor-reason text."""
+    for reason in reasons:
+        normalized = _normalize_displacement_driver_label(reason)
+        if normalized:
+            return normalized
     text = " ".join(reasons).lower()
     keyword_map = {
         "pricing": ("price", "pricing", "cost", "cheaper", "affordable", "budget"),
-        "reliability": ("outage", "uptime", "reliable", "stability", "incident", "support"),
+        "support": ("support", "service", "response", "help desk", "ticket"),
+        "reliability": ("outage", "uptime", "reliable", "stability", "incident"),
         "ux": ("ui", "ux", "easy", "simpler", "interface", "adoption", "learning curve"),
-        "features": ("feature", "workflow", "automation", "integration", "reporting", "capability"),
+        "integration": ("integration", "api", "connector", "webhook", "plugin", "stack"),
+        "features": ("feature", "workflow", "automation", "reporting", "capability"),
+        "security": ("security", "privacy", "governance", "server", "encryption"),
+        "compliance": ("compliance", "gdpr", "hipaa", "soc2", "soc 2"),
     }
     for label, keywords in keyword_map.items():
         if any(keyword in text for keyword in keywords):
@@ -1317,8 +2293,10 @@ def _validate_battle_card_sales_copy(
     if not isinstance(generated, dict):
         return ["battle card sales copy is not a JSON object"]
     warnings: list[str] = []
+    if _battle_card_has_duplicate_recommended_play_segments(generated):
+        warnings.append("recommended_plays repeat the same target segment")
     allowed = _battle_card_allowed_claims(card)
-    source_text = json.dumps(card, default=str).lower()
+    source_text = json.dumps(_battle_card_validator_source(card), default=str).lower()
     max_switch = max((int(c.get("switch_count") or 0) for c in card.get("competitor_differentiators") or []), default=0)
     score = float(card.get("churn_pressure_score") or 0)
     urgency = float(((card.get("objection_data") or {}).get("avg_urgency")) or 0)
@@ -1331,7 +2309,11 @@ def _validate_battle_card_sales_copy(
     for path, text in _battle_card_iter_text(generated):
         lowered = text.lower()
         if _battle_card_numeric_paths(path):
-            bad = sorted(tok for tok in _battle_card_numeric_tokens(text) if tok not in allowed)
+            bad = sorted(
+                tok
+                for tok in _battle_card_numeric_tokens(text)
+                if _battle_card_normalize_numeric_token(tok) not in allowed
+            )
             if bad:
                 warnings.append(f"{path} uses unsupported numeric claims: {', '.join(bad[:4])}")
         years = re.findall(r"\b20\d{2}\b", text)
@@ -1342,6 +2324,9 @@ def _validate_battle_card_sales_copy(
         if score < _battle_card_high_priority_score_min() or urgency < _battle_card_high_priority_urgency_min():
             if "high-priority target" in lowered or "high priority target" in lowered:
                 warnings.append(f"{path} overstates urgency for a moderate-priority card")
+        if _battle_card_segment_evidence_is_thin(card) and path.endswith(".play"):
+            if lowered.startswith("target ") or lowered.startswith("engage "):
+                warnings.append(f"{path} overstates segment certainty without account-level intelligence")
         if _battle_card_headline_paths(path):
             for term in low_gap_terms:
                 if term and term in lowered:
@@ -2021,6 +3006,80 @@ async def _fetch_vendor_churn_scores(pool, window_days: int, min_reviews: int) -
     ]
 
 
+def _is_generic_vendor_score_category(category: str | None) -> bool:
+    """Return True for generic vendor-score categories we should down-rank."""
+    return str(category or "").strip().lower() in {"", "unknown", "b2b software"}
+
+
+async def _fetch_vendor_churn_scores_from_signals(
+    pool,
+    window_days: int,
+    min_reviews: int,
+) -> list[dict[str, Any]]:
+    """Read canonical vendor churn scores from persisted churn signals.
+
+    This is the canonical downstream read path for battle-card eligibility and
+    deterministic card construction. It preserves the existing ``vendor_scores``
+    shape while sourcing the metrics from ``b2b_churn_signals`` instead of
+    recomputing them from raw reviews.
+
+    If a vendor has both a generic category row (for example ``B2B Software``)
+    and one or more specific category rows, the generic row is dropped so
+    downstream category-aware surfaces prefer the specific product category.
+    """
+    rows = await pool.fetch(
+        """
+        SELECT vendor_name,
+               product_category,
+               total_reviews,
+               churn_intent_count AS churn_intent,
+               avg_urgency_score AS avg_urgency,
+               last_computed_at,
+               review_window_end
+        FROM b2b_churn_signals
+        WHERE total_reviews >= $2
+          AND COALESCE(review_window_end, last_computed_at::date) >= CURRENT_DATE - $1::int
+        ORDER BY vendor_name, total_reviews DESC, last_computed_at DESC
+        """,
+        window_days,
+        min_reviews,
+    )
+    mapped = [
+        {
+            "vendor_name": r["vendor_name"],
+            "product_category": r["product_category"],
+            "total_reviews": int(r["total_reviews"] or 0),
+            "churn_intent": int(r["churn_intent"] or 0),
+            "avg_urgency": float(r["avg_urgency"]) if r["avg_urgency"] is not None else 0.0,
+        }
+        for r in rows
+        if r.get("vendor_name")
+    ]
+
+    categories_by_vendor: dict[str, set[str]] = {}
+    for row in mapped:
+        vendor = _canonicalize_vendor(row.get("vendor_name") or "")
+        if not vendor:
+            continue
+        categories_by_vendor.setdefault(vendor, set()).add(
+            str(row.get("product_category") or "").strip()
+        )
+
+    filtered: list[dict[str, Any]] = []
+    for row in mapped:
+        vendor = _canonicalize_vendor(row.get("vendor_name") or "")
+        category = str(row.get("product_category") or "").strip()
+        categories = categories_by_vendor.get(vendor) or set()
+        has_specific_category = any(
+            not _is_generic_vendor_score_category(value)
+            for value in categories
+        )
+        if has_specific_category and _is_generic_vendor_score_category(category):
+            continue
+        filtered.append(row)
+    return filtered
+
+
 async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days: int) -> list[dict[str, Any]]:
     """Companies showing high churn intent -- the money feed."""
     sources = _intelligence_source_allowlist()
@@ -2029,6 +3088,9 @@ async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days
         f"""
         SELECT id AS review_id, source,
             reviewer_company, vendor_name, product_category,
+            reviewer_title,
+            company_size_raw,
+            COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry,
             enrichment->'reviewer_context'->>'role_level' AS role_level,
             (enrichment->'reviewer_context'->>'decision_maker')::boolean AS is_dm,
             (enrichment->>'urgency_score')::numeric AS urgency,
@@ -2055,6 +3117,18 @@ async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days
     )
     results = []
     for r in rows:
+        alternatives = _safe_json(r["alternatives"])
+        blocked_names = {
+            normalize_company_name(name)
+            for name in _extract_alternative_names(alternatives)
+            if normalize_company_name(name)
+        }
+        if not _company_signal_name_is_eligible(
+            r["reviewer_company"],
+            current_vendor=r["vendor_name"],
+            blocked_names=blocked_names,
+        ):
+            continue
         try:
             urgency = float(r["urgency"]) if r["urgency"] is not None else 0
         except (ValueError, TypeError):
@@ -2070,11 +3144,14 @@ async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days
             "company": r["reviewer_company"],
             "vendor": r["vendor_name"],
             "category": r["product_category"],
+            "title": r["reviewer_title"],
+            "company_size": r["company_size_raw"],
+            "industry": r["industry"],
             "role_level": r["role_level"],
             "decision_maker": r["is_dm"],
             "urgency": urgency,
             "pain": r["pain"],
-            "alternatives": _safe_json(r["alternatives"]),
+            "alternatives": alternatives,
             "quotes": _safe_json(r["quotes"]),
             "contract_signal": r["value_signal"],
             "review_id": str(r["review_id"]) if r["review_id"] else None,
@@ -2096,14 +3173,23 @@ async def _fetch_existing_company_signals(
     """Fetch canonical company-signal rows still active in the analysis window."""
     rows = await pool.fetch(
         """
-        SELECT company_name, vendor_name, urgency_score,
+        SELECT cs.company_name, cs.vendor_name, cs.urgency_score,
                pain_category, buyer_role, decision_maker,
                seat_count, contract_end, buying_stage,
-               review_id, source, confidence_score,
-               first_seen_at, last_seen_at
-        FROM b2b_company_signals
-        WHERE last_seen_at >= NOW() - make_interval(days => $1)
-        ORDER BY vendor_name, urgency_score DESC NULLS LAST, last_seen_at DESC
+               cs.review_id, cs.source, cs.confidence_score,
+               cs.first_seen_at, cs.last_seen_at,
+               r.reviewer_title,
+               r.company_size_raw,
+               COALESCE(
+                   r.reviewer_industry,
+                   r.enrichment->'reviewer_context'->>'industry'
+               ) AS industry,
+               r.enrichment->'competitors_mentioned' AS alternatives,
+               r.enrichment->'quotable_phrases' AS quotes
+        FROM b2b_company_signals cs
+        LEFT JOIN b2b_reviews r ON r.id = cs.review_id
+        WHERE cs.last_seen_at >= NOW() - make_interval(days => $1)
+        ORDER BY cs.vendor_name, cs.urgency_score DESC NULLS LAST, cs.last_seen_at DESC
         """,
         window_days,
     )
@@ -2127,6 +3213,11 @@ async def _fetch_existing_company_signals(
             "confidence_score": float(row["confidence_score"]) if row.get("confidence_score") is not None else None,
             "first_seen_at": str(row.get("first_seen_at") or "") or None,
             "last_seen_at": str(row.get("last_seen_at") or "") or None,
+            "title": row.get("reviewer_title"),
+            "company_size": row.get("company_size_raw"),
+            "industry": row.get("industry"),
+            "alternatives": _safe_json(row.get("alternatives"), default=[]),
+            "quotes": _safe_json(row.get("quotes"), default=[]),
         })
     return lookup
 
@@ -2784,6 +3875,8 @@ async def _fetch_churning_companies(pool, window_days: int) -> list[dict[str, An
                 'urgency', (enrichment->>'urgency_score')::numeric,
                 'role', enrichment->'reviewer_context'->>'role_level',
                 'pain', enrichment->>'pain_category',
+                'decision_maker', (enrichment->'reviewer_context'->>'decision_maker')::boolean,
+                'buying_stage', enrichment->'buyer_authority'->>'buying_stage',
                 'title', reviewer_title,
                 'company_size', company_size_raw,
                 'industry', COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry')
@@ -3031,6 +4124,7 @@ async def fetch_all_pool_layers(
         ("b2b_temporal_intelligence", "temporal", "temporal"),
         ("b2b_account_intelligence", "accounts", "accounts"),
     ]
+    generic_categories = {"", "unknown", "b2b software"}
     result: dict[str, dict[str, Any]] = {}
 
     for table, col, key in _POOL_TABLES:
@@ -3072,7 +4166,7 @@ async def fetch_all_pool_layers(
             analysis_window_days,
         )
         for row in disp_rows:
-            fv = row.get("from_vendor") or ""
+            fv = _canonicalize_vendor(row.get("from_vendor") or "")
             data = _safe_json(row.get("dynamics"), default={})
             if fv and isinstance(data, dict):
                 result.setdefault(fv, {}).setdefault(
@@ -3083,6 +4177,26 @@ async def fetch_all_pool_layers(
 
     # Category dynamics: keyed by category
     try:
+        profile_rows = await pool.fetch(
+            """
+            SELECT DISTINCT ON (vendor_name)
+                   vendor_name, product_category
+            FROM b2b_product_profiles
+            ORDER BY vendor_name,
+                     CASE
+                         WHEN lower(COALESCE(product_category, '')) IN ('', 'unknown', 'b2b software')
+                         THEN 1 ELSE 0
+                     END,
+                     total_reviews_analyzed DESC NULLS LAST
+            """,
+        )
+        preferred_vendor_categories: dict[str, str] = {}
+        for row in profile_rows:
+            vendor = _canonicalize_vendor(row.get("vendor_name") or "")
+            category = str(row.get("product_category") or "").strip()
+            if vendor and category:
+                preferred_vendor_categories[vendor] = category
+
         cat_rows = await pool.fetch(
             """
             SELECT DISTINCT ON (category)
@@ -3104,13 +4218,305 @@ async def fetch_all_pool_layers(
         # Attach category to each vendor based on evidence_vault
         for vn, layers in result.items():
             ev = layers.get("evidence_vault") or {}
-            cat = ev.get("product_category") or ""
+            cat = str(ev.get("product_category") or "").strip()
+            preferred = str(preferred_vendor_categories.get(vn) or "").strip()
+            if preferred and preferred in cat_map and cat.lower() in generic_categories:
+                cat = preferred
+            if cat.lower() in generic_categories:
+                continue
             if cat and cat in cat_map:
                 layers["category"] = cat_map[cat]
     except Exception:
         logger.debug("Category dynamics unavailable", exc_info=True)
 
     return result
+
+
+async def _fetch_latest_account_intelligence(
+    pool,
+    *,
+    as_of: date,
+    analysis_window_days: int,
+) -> dict[str, dict[str, Any]]:
+    """Load latest canonical account-intelligence rows per vendor."""
+    rows = await pool.fetch(
+        """
+        SELECT DISTINCT ON (vendor_name)
+               vendor_name, accounts
+        FROM b2b_account_intelligence
+        WHERE as_of_date <= $1
+          AND analysis_window_days = $2
+        ORDER BY vendor_name, as_of_date DESC, created_at DESC
+        """,
+        as_of,
+        analysis_window_days,
+    )
+    lookup: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        vendor = _canonicalize_vendor(row.get("vendor_name") or "")
+        if not vendor:
+            continue
+        data = _safe_json(row.get("accounts"), default={})
+        if isinstance(data, dict):
+            lookup[vendor] = data
+    return lookup
+
+
+async def _fetch_latest_displacement_dynamics(
+    pool,
+    *,
+    as_of: date,
+    analysis_window_days: int,
+) -> dict[str, list[dict[str, Any]]]:
+    """Load latest canonical displacement dynamics rows keyed by vendor."""
+    rows = await pool.fetch(
+        """
+        SELECT DISTINCT ON (from_vendor, to_vendor)
+               from_vendor, to_vendor, dynamics
+        FROM b2b_displacement_dynamics
+        WHERE as_of_date <= $1
+          AND analysis_window_days = $2
+        ORDER BY from_vendor, to_vendor, as_of_date DESC, created_at DESC
+        """,
+        as_of,
+        analysis_window_days,
+    )
+    lookup: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        from_vendor = _canonicalize_vendor(row.get("from_vendor") or "")
+        to_vendor = str(row.get("to_vendor") or "").strip()
+        data = _safe_json(row.get("dynamics"), default={})
+        if not from_vendor or not to_vendor or not isinstance(data, dict):
+            continue
+        data.setdefault("from_vendor", row.get("from_vendor") or from_vendor)
+        data.setdefault("to_vendor", row.get("to_vendor") or to_vendor)
+        lookup.setdefault(from_vendor, []).append(data)
+    return lookup
+
+
+def _normalize_displacement_driver_label(value: Any) -> str:
+    """Map free-text displacement reasons into stable seller-safe driver buckets."""
+    text = str(value or "").strip()
+    lower = text.lower()
+    if not lower:
+        return ""
+    if any(token in lower for token in ("price", "pricing", "cost", "budget", "cheap", "cheaper", "affordable", "economics", "refund", "free", "fee")):
+        return "pricing"
+    if any(token in lower for token in ("feature", "capability", "automation", "workflow", "ai", "reporting", "dashboard", "customization")):
+        return "features"
+    if any(token in lower for token in ("integrat", "api", "connector", "webhook", "plugin", "stack")):
+        return "integration"
+    if any(token in lower for token in ("ux", "ui", "usability", "easy", "easier", "simple", "onboarding", "setup", "interface")):
+        return "ux"
+    if any(token in lower for token in ("support", "service", "response", "help desk", "ticket")):
+        return "support"
+    if any(token in lower for token in ("reliab", "uptime", "outage", "stability", "downtime")):
+        return "reliability"
+    if any(token in lower for token in ("security", "privacy", "server", "governance", "data residency", "encryption")):
+        return "security"
+    if any(token in lower for token in ("compliance", "gdpr", "hipaa", "soc2", "soc 2", "regulatory", "certification")):
+        return "compliance"
+    if any(token in lower for token in ("performance", "slow", "latency", "speed")):
+        return "performance"
+    if any(token in lower for token in ("migrat", "import", "export")):
+        return "migration"
+    return text
+
+
+def _competitive_disp_from_dynamics(
+    displacement_lookup: dict[str, list[dict[str, Any]]] | None,
+) -> list[dict[str, Any]]:
+    """Normalize canonical displacement dynamics into legacy competitor rows."""
+    def _normalize_evidence_type(value: Any) -> str | None:
+        text = str(value or "").strip().lower()
+        if not text:
+            return None
+        if text in {"explicit_switch", "switch", "switched_to"}:
+            return "explicit_switch"
+        if text in {"active_evaluation", "evaluation", "considering", "trial", "poc"}:
+            return "active_evaluation"
+        if text in {"implied_preference", "compared", "preference"}:
+            return "implied_preference"
+        return None
+
+    def _direction_to_evidence_type(value: Any) -> str:
+        text = str(value or "").strip().lower()
+        if not text:
+            return "implied_preference"
+        if text in {"switched_to", "migrated_to", "replaced_with"}:
+            return "explicit_switch"
+        if text in {
+            "considering", "evaluation", "evaluating", "active_evaluation",
+            "trial", "poc", "active_purchase",
+        }:
+            return "active_evaluation"
+        if "switch" in text and "from" not in text:
+            return "explicit_switch"
+        if "consider" in text or "evaluat" in text or "trial" in text:
+            return "active_evaluation"
+        return "implied_preference"
+
+    def _intish(value: Any, default: int = 0) -> int:
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return default
+
+    rows: list[dict[str, Any]] = []
+    for vendor, flows in (displacement_lookup or {}).items():
+        for flow in flows:
+            competitor = str(
+                flow.get("to_vendor") or flow.get("competitor") or "",
+            ).strip()
+            if not competitor:
+                continue
+            flow_summary = flow.get("flow_summary") or {}
+            edge_metrics = flow.get("edge_metrics") or {}
+            reason_categories: dict[str, int] = {}
+            industries: list[str] = []
+            company_sizes: list[str] = []
+            normalized_breakdown: list[dict[str, Any]] = []
+            breakdown_counts = {
+                "explicit_switch": 0,
+                "active_evaluation": 0,
+                "implied_preference": 0,
+            }
+            for item in flow.get("evidence_breakdown") or []:
+                if not isinstance(item, dict):
+                    continue
+                evidence_type = _normalize_evidence_type(item.get("evidence_type"))
+                cats = item.get("reason_categories") or {}
+                mention_count = _intish(item.get("mention_count"))
+                if mention_count <= 0 and isinstance(cats, dict):
+                    mention_count = sum(_intish(v) for v in cats.values())
+                if evidence_type and mention_count > 0:
+                    normalized_breakdown.append({
+                        "evidence_type": evidence_type,
+                        "mention_count": mention_count,
+                        "reason_categories": {
+                            str(k): _intish(v)
+                            for k, v in cats.items()
+                            if str(k or "").strip() and _intish(v) > 0
+                        },
+                        "industries": [
+                            str(v).strip()
+                            for v in (item.get("industries") or [])
+                            if str(v or "").strip() and str(v).strip().lower() != "unknown"
+                        ],
+                        "company_sizes": [
+                            str(v).strip()
+                            for v in (item.get("company_sizes") or [])
+                            if str(v or "").strip()
+                        ],
+                    })
+                    breakdown_counts[evidence_type] += mention_count
+                industries.extend(
+                    str(v).strip()
+                    for v in (item.get("industries") or [])
+                    if str(v or "").strip() and str(v).strip().lower() != "unknown"
+                )
+                company_sizes.extend(
+                    str(v).strip()
+                    for v in (item.get("company_sizes") or [])
+                    if str(v or "").strip()
+                )
+
+            reason_direction_counts = {
+                "explicit_switch": 0,
+                "active_evaluation": 0,
+                "implied_preference": 0,
+            }
+            for item in flow.get("switch_reasons") or []:
+                if not isinstance(item, dict):
+                    continue
+                key = str(
+                    item.get("reason_category") or item.get("reason") or "",
+                ).strip()
+                reason_count = _intish(item.get("mention_count"), default=1)
+                if not key:
+                    key = str(item.get("reason_detail") or "").strip()
+                key = _normalize_displacement_driver_label(key)
+                if key:
+                    reason_categories[key] = (
+                        reason_categories.get(key, 0) + reason_count
+                    )
+                evidence_type = _direction_to_evidence_type(item.get("direction"))
+                reason_direction_counts[evidence_type] += reason_count
+            mention_count = max(
+                _intish(
+                    flow_summary.get("total_flow_mentions")
+                    or edge_metrics.get("mention_count"),
+                ),
+                sum(breakdown_counts.values()),
+                sum(reason_direction_counts.values()),
+            )
+            explicit_switches = max(
+                _intish(flow_summary.get("explicit_switch_count")),
+                breakdown_counts["explicit_switch"],
+                reason_direction_counts["explicit_switch"],
+            )
+            active_evaluations = max(
+                _intish(flow_summary.get("active_evaluation_count")),
+                breakdown_counts["active_evaluation"],
+                reason_direction_counts["active_evaluation"],
+            )
+            implied_preferences = max(
+                mention_count - explicit_switches - active_evaluations,
+                breakdown_counts["implied_preference"],
+                reason_direction_counts["implied_preference"],
+            )
+            if not normalized_breakdown:
+                for evidence_type, count in (
+                    ("explicit_switch", explicit_switches),
+                    ("active_evaluation", active_evaluations),
+                    ("implied_preference", implied_preferences),
+                ):
+                    if count <= 0:
+                        continue
+                    normalized_breakdown.append({
+                        "evidence_type": evidence_type,
+                        "mention_count": count,
+                        "reason_categories": {},
+                        "industries": [],
+                        "company_sizes": [],
+                    })
+            if not mention_count:
+                mention_count = sum(item["mention_count"] for item in normalized_breakdown)
+            rows.append({
+                "vendor": vendor,
+                "competitor": competitor,
+                "mention_count": mention_count,
+                "explicit_switches": explicit_switches,
+                "active_evaluations": active_evaluations,
+                "implied_preferences": implied_preferences,
+                "reason_categories": reason_categories,
+                "industries": sorted(set(i for i in industries if i)),
+                "company_sizes": sorted(set(s for s in company_sizes if s)),
+                "evidence_breakdown": normalized_breakdown,
+            })
+    return rows
+
+
+async def _fetch_competitive_displacement_source_of_truth(
+    pool,
+    *,
+    as_of: date,
+    analysis_window_days: int,
+) -> list[dict[str, Any]]:
+    """Prefer canonical displacement dynamics, fall back to legacy review query."""
+    try:
+        lookup = await _fetch_latest_displacement_dynamics(
+            pool,
+            as_of=as_of,
+            analysis_window_days=analysis_window_days,
+        )
+    except Exception:
+        logger.debug("Displacement dynamics lookup failed", exc_info=True)
+        lookup = {}
+    rows = _competitive_disp_from_dynamics(lookup)
+    if rows:
+        return rows
+    return await _fetch_competitive_displacement(pool, analysis_window_days)
 
 
 def _merge_pain_lookup_with_evidence_vault(
@@ -3525,6 +4931,39 @@ async def _fetch_department_distribution(pool, window_days: int) -> list[dict[st
     ]
 
 
+async def _fetch_company_size_distribution(pool, window_days: int) -> list[dict[str, Any]]:
+    """Count reviews per normalized company-size segment per vendor."""
+    sources = _intelligence_source_allowlist()
+    filters = _eligible_review_filters(window_param=1, source_param=2)
+    rows = await pool.fetch(
+        f"""
+        SELECT vendor_name,
+            enrichment->'reviewer_context'->>'company_size_segment' AS segment,
+            count(*) AS review_count,
+            count(*) FILTER (
+                WHERE (enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
+            ) AS churning_count
+        FROM b2b_reviews
+        WHERE {filters}
+          AND enrichment->'reviewer_context'->>'company_size_segment' IS NOT NULL
+          AND enrichment->'reviewer_context'->>'company_size_segment' NOT IN ('', 'unknown')
+        GROUP BY vendor_name, enrichment->'reviewer_context'->>'company_size_segment'
+        ORDER BY review_count DESC
+        """,
+        window_days,
+        sources,
+    )
+    return [
+        {
+            "vendor": r["vendor_name"],
+            "segment": r["segment"],
+            "review_count": r["review_count"],
+            "churn_rate": round(r["churning_count"] / r["review_count"], 2) if r["review_count"] else 0,
+        }
+        for r in rows
+    ]
+
+
 async def _fetch_contract_context_distribution(pool, window_days: int) -> tuple[list[dict], list[dict]]:
     """Aggregate contract_value_signal and usage_duration per vendor.
 
@@ -3624,6 +5063,66 @@ async def _fetch_buyer_authority_summary(pool, window_days: int) -> list[dict[st
         }
         for r in rows
     ]
+
+
+async def _fetch_role_churn_summary(pool, window_days: int) -> list[dict[str, Any]]:
+    """Per-vendor, per-role_type churn rate and dominant pain category.
+
+    Returns one row per (vendor, role_type) with the fraction of reviews
+    showing churn intent and the most common pain_category for that role.
+    """
+    sources = _intelligence_source_allowlist()
+    filters = _eligible_review_filters(window_param=1, source_param=2)
+    rows = await pool.fetch(
+        f"""
+        SELECT vendor_name,
+            enrichment->'buyer_authority'->>'role_type' AS role_type,
+            count(*) AS total,
+            count(*) FILTER (
+                WHERE (enrichment->>'churn_intent')::boolean IS TRUE
+            ) AS churn_count,
+            mode() WITHIN GROUP (
+                ORDER BY enrichment->>'pain_category'
+            ) FILTER (
+                WHERE enrichment->>'pain_category' IS NOT NULL
+            ) AS top_pain
+        FROM b2b_reviews
+        WHERE {filters}
+          AND enrichment->'buyer_authority' IS NOT NULL
+          AND enrichment->'buyer_authority' != 'null'::jsonb
+        GROUP BY vendor_name,
+            enrichment->'buyer_authority'->>'role_type'
+        HAVING count(*) >= 3
+        """,
+        window_days,
+        sources,
+    )
+    return [
+        {
+            "vendor": r["vendor_name"],
+            "role_type": r["role_type"],
+            "total": r["total"],
+            "churn_count": r["churn_count"],
+            "churn_rate": round(r["churn_count"] / r["total"], 3) if r["total"] else 0.0,
+            "top_pain": r["top_pain"],
+        }
+        for r in rows
+    ]
+
+
+def _build_role_churn_lookup(
+    role_churn_rows: list[dict[str, Any]],
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """vendor -> role_type -> {churn_rate, top_pain}."""
+    lookup: dict[str, dict[str, dict[str, Any]]] = {}
+    for row in role_churn_rows:
+        vendor = row.get("vendor", "")
+        rt = row.get("role_type", "unknown")
+        lookup.setdefault(vendor, {})[rt] = {
+            "churn_rate": row.get("churn_rate"),
+            "top_pain": row.get("top_pain"),
+        }
+    return lookup
 
 
 async def _fetch_timeline_signals(pool, window_days: int, *, limit: int = 50) -> list[dict[str, Any]]:
@@ -3808,6 +5307,64 @@ def _build_pain_lookup(pain_dist: list[dict]) -> dict[str, list[dict]]:
 def _aggregate_competitive_disp(competitive_disp: list[dict]) -> list[dict]:
     """Merge rows with same (vendor, competitor), preserving evidence breakdown."""
     agg: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def _intish(value: Any, default: int = 0) -> int:
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return default
+
+    def _normalize_evidence_type(value: Any) -> str | None:
+        text = str(value or "").strip().lower()
+        if not text:
+            return None
+        if text in {"explicit_switch", "switch", "switched_to"}:
+            return "explicit_switch"
+        if text in {"active_evaluation", "evaluation", "considering", "trial", "poc"}:
+            return "active_evaluation"
+        if text in {"implied_preference", "compared", "preference"}:
+            return "implied_preference"
+        return None
+
+    def _merge_breakdown_item(
+        entry: dict[str, Any],
+        evidence_type: str | None,
+        mention_count: int,
+        reason_categories: dict[str, Any] | None = None,
+        industries: list[str] | None = None,
+        company_sizes: list[str] | None = None,
+    ) -> None:
+        if not evidence_type or mention_count <= 0:
+            return
+        bucket = entry["evidence_breakdown"].setdefault(
+            evidence_type,
+            {
+                "evidence_type": evidence_type,
+                "mention_count": 0,
+                "reason_categories": {},
+                "industries": set(),
+                "company_sizes": set(),
+            },
+        )
+        bucket["mention_count"] += mention_count
+        for rc, rc_cnt in (reason_categories or {}).items():
+            if not str(rc or "").strip():
+                continue
+            count = _intish(rc_cnt)
+            if count <= 0:
+                continue
+            bucket["reason_categories"][rc] = (
+                bucket["reason_categories"].get(rc, 0) + count
+            )
+        for value in industries or []:
+            text = str(value or "").strip()
+            if text and text.lower() != "unknown":
+                bucket["industries"].add(text)
+        for value in company_sizes or []:
+            text = str(value or "").strip()
+            if text:
+                bucket["company_sizes"].add(text)
+
     for row in competitive_disp:
         key = (row.get("vendor", ""), row.get("competitor", ""))
         if key not in agg:
@@ -3817,23 +5374,116 @@ def _aggregate_competitive_disp(competitive_disp: list[dict]) -> list[dict]:
                 "active_evaluations": 0,
                 "implied_preferences": 0,
                 "reason_categories": {},
+                "industries": set(),
+                "company_sizes": set(),
+                "evidence_breakdown": {},
             }
         entry = agg[key]
-        cnt = int(row.get("mention_count") or 0)
-        entry["mention_count"] += cnt
-        et = row.get("evidence_type", "implied_preference")
-        if et == "explicit_switch":
-            entry["explicit_switches"] += cnt
-        elif et == "active_evaluation":
-            entry["active_evaluations"] += cnt
-        else:
-            entry["implied_preferences"] += cnt
+        cnt = _intish(row.get("mention_count") or 0)
+        explicit = _intish(row.get("explicit_switches") or 0)
+        active_eval = _intish(row.get("active_evaluations") or 0)
+        implied = _intish(row.get("implied_preferences") or 0)
+        breakdown_seen = False
+        for item in row.get("evidence_breakdown") or []:
+            if not isinstance(item, dict):
+                continue
+            evidence_type = _normalize_evidence_type(item.get("evidence_type"))
+            reason_categories = item.get("reason_categories") or {}
+            mention_count = _intish(item.get("mention_count") or 0)
+            if mention_count <= 0 and isinstance(reason_categories, dict):
+                mention_count = sum(_intish(v) for v in reason_categories.values())
+            if not evidence_type or mention_count <= 0:
+                continue
+            breakdown_seen = True
+            _merge_breakdown_item(
+                entry,
+                evidence_type,
+                mention_count,
+                reason_categories,
+                item.get("industries") or [],
+                item.get("company_sizes") or [],
+            )
+        if not breakdown_seen:
+            evidence_type = _normalize_evidence_type(row.get("evidence_type"))
+            if explicit <= 0 and active_eval <= 0 and implied <= 0 and evidence_type:
+                if evidence_type == "explicit_switch":
+                    explicit = cnt
+                elif evidence_type == "active_evaluation":
+                    active_eval = cnt
+                else:
+                    implied = cnt
+            if cnt <= 0:
+                cnt = explicit + active_eval + implied
+            for evidence_type, count in (
+                ("explicit_switch", explicit),
+                ("active_evaluation", active_eval),
+                ("implied_preference", implied),
+            ):
+                _merge_breakdown_item(
+                    entry,
+                    evidence_type,
+                    count,
+                    row.get("reason_categories") or {},
+                    row.get("industries") or [],
+                    row.get("company_sizes") or [],
+                )
+        entry["mention_count"] += cnt or (explicit + active_eval + implied)
+        entry["explicit_switches"] += explicit
+        entry["active_evaluations"] += active_eval
+        entry["implied_preferences"] += implied
         # Merge reason_categories from this row
         for rc, rc_cnt in (row.get("reason_categories") or {}).items():
-            entry["reason_categories"][rc] = entry["reason_categories"].get(rc, 0) + rc_cnt
+            count = _intish(rc_cnt)
+            if count <= 0:
+                continue
+            entry["reason_categories"][rc] = entry["reason_categories"].get(rc, 0) + count
+        for value in row.get("industries") or []:
+            text = str(value or "").strip()
+            if text and text.lower() != "unknown":
+                entry["industries"].add(text)
+        for value in row.get("company_sizes") or []:
+            text = str(value or "").strip()
+            if text:
+                entry["company_sizes"].add(text)
 
     results = []
     for (v, c), data in sorted(agg.items(), key=lambda x: x[1]["mention_count"], reverse=True):
+        breakdown = sorted(
+            (
+                {
+                    "evidence_type": item["evidence_type"],
+                    "mention_count": item["mention_count"],
+                    "reason_categories": dict(
+                        sorted(
+                            item["reason_categories"].items(),
+                            key=lambda kv: kv[1],
+                            reverse=True,
+                        ),
+                    ),
+                    "industries": sorted(item["industries"]),
+                    "company_sizes": sorted(item["company_sizes"]),
+                }
+                for item in data["evidence_breakdown"].values()
+                if item["mention_count"] > 0
+            ),
+            key=lambda item: item["mention_count"],
+            reverse=True,
+        )
+        if not breakdown:
+            for evidence_type, count in (
+                ("explicit_switch", data["explicit_switches"]),
+                ("active_evaluation", data["active_evaluations"]),
+                ("implied_preference", data["implied_preferences"]),
+            ):
+                if count <= 0:
+                    continue
+                breakdown.append({
+                    "evidence_type": evidence_type,
+                    "mention_count": count,
+                    "reason_categories": {},
+                    "industries": [],
+                    "company_sizes": [],
+                })
         results.append({
             "vendor": v,
             "competitor": c,
@@ -3842,6 +5492,9 @@ def _aggregate_competitive_disp(competitive_disp: list[dict]) -> list[dict]:
             "active_evaluations": data["active_evaluations"],
             "implied_preferences": data["implied_preferences"],
             "reason_categories": data["reason_categories"],
+            "industries": sorted(data["industries"]),
+            "company_sizes": sorted(data["company_sizes"]),
+            "evidence_breakdown": breakdown,
         })
     return results
 
@@ -3915,6 +5568,27 @@ def _build_integration_lookup(use_case_dist: list[dict]) -> dict[str, list[dict]
     return lookup
 
 
+def _build_lock_in_lookup(use_case_dist: list[dict]) -> dict[str, str]:
+    """vendor -> dominant lock_in_level (high/medium/low)."""
+    vendor_counts: dict[str, dict[str, int]] = {}
+    for entry in use_case_dist:
+        if entry.get("type") != "lock_in":
+            continue
+        for row in entry.get("data", []):
+            vendor = row.get("vendor_name", "")
+            level = str(row.get("lock_in_level") or "unknown").lower().strip()
+            if not vendor or level in ("unknown", "none", "null"):
+                continue
+            vendor_counts.setdefault(vendor, {})[level] = (
+                vendor_counts.get(vendor, {}).get(level, 0) + int(row.get("cnt") or 0)
+            )
+    lookup: dict[str, str] = {}
+    for vendor, counts in vendor_counts.items():
+        if counts:
+            lookup[vendor] = max(counts, key=counts.get)
+    return lookup
+
+
 def _build_sentiment_lookup(sentiment_traj: list[dict]) -> dict[str, dict[str, int]]:
     """vendor -> {direction: count}."""
     lookup: dict[str, dict[str, int]] = {}
@@ -3926,17 +5600,23 @@ def _build_sentiment_lookup(sentiment_traj: list[dict]) -> dict[str, dict[str, i
 
 
 def _build_buyer_auth_lookup(buyer_auth: list[dict]) -> dict[str, dict]:
-    """vendor -> {role_types: {type: count}, buying_stages: {stage: count}}."""
+    """vendor -> role and buying-stage summaries for segment intelligence."""
     lookup: dict[str, dict] = {}
     for row in buyer_auth:
         vendor = row.get("vendor", "")
         if vendor not in lookup:
-            lookup[vendor] = {"role_types": {}, "buying_stages": {}}
+            lookup[vendor] = {
+                "role_types": {},
+                "buying_stages": {},
+                "role_buying_stages": {},
+            }
         rt = row.get("role_type", "unknown")
         bs = row.get("buying_stage", "unknown")
         cnt = row.get("count", 0)
         lookup[vendor]["role_types"][rt] = lookup[vendor]["role_types"].get(rt, 0) + cnt
         lookup[vendor]["buying_stages"][bs] = lookup[vendor]["buying_stages"].get(bs, 0) + cnt
+        role_stage_counts = lookup[vendor]["role_buying_stages"].setdefault(rt, {})
+        role_stage_counts[bs] = role_stage_counts.get(bs, 0) + cnt
     return lookup
 
 
@@ -4506,6 +6186,7 @@ def _merge_canonical_company_signals(
     persisted_lookup: dict[str, list[dict[str, Any]]] | None,
     *,
     as_of: datetime | None = None,
+    blocked_names_by_vendor: dict[str, set[str]] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Merge current high-intent rows with canonical persisted company signals."""
     as_of = as_of or datetime.now(timezone.utc)
@@ -4535,11 +6216,43 @@ def _merge_canonical_company_signals(
             1 if signal.get("buying_stage") else 0,
         )
 
+    def _merge_record_list(primary: Any, secondary: Any, *, quote_mode: bool = False) -> list[Any]:
+        merged_items: list[Any] = []
+        seen_keys: set[str] = set()
+        for source in (primary, secondary):
+            if not isinstance(source, list):
+                continue
+            for item in source:
+                if quote_mode:
+                    text = _quote_text(item) if isinstance(item, dict) else str(item or "").strip()
+                    key = text.lower()
+                else:
+                    name = item.get("name") if isinstance(item, dict) else item
+                    key = normalize_company_name(name) or str(name or "").strip().lower()
+                if not key or key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                merged_items.append(item)
+        return merged_items
+
     for vendor, items in (persisted_lookup or {}).items():
         vendor_bucket = merged.setdefault(vendor, {})
+        base_blocked_names = (blocked_names_by_vendor or {}).get(vendor) or set()
         for item in items or []:
             company_name = normalize_company_name(item.get("company_name") or "")
             if not company_name:
+                continue
+            blocked_names = set(base_blocked_names)
+            blocked_names.update(
+                normalize_company_name(name)
+                for name in _extract_alternative_names(item.get("alternatives") or [])
+                if normalize_company_name(name)
+            )
+            if not _company_signal_name_is_eligible(
+                item.get("company_name"),
+                current_vendor=vendor,
+                blocked_names=blocked_names,
+            ):
                 continue
             current = dict(item)
             current["company_name"] = company_name
@@ -4550,6 +6263,18 @@ def _merge_canonical_company_signals(
         vendor = _canonicalize_vendor(hi.get("vendor") or hi.get("vendor_name") or "")
         company_name = normalize_company_name(hi.get("company") or hi.get("company_name") or "")
         if not vendor or not company_name:
+            continue
+        blocked_names = set((blocked_names_by_vendor or {}).get(vendor) or set())
+        blocked_names.update(
+            normalize_company_name(name)
+            for name in _extract_alternative_names(hi.get("alternatives") or [])
+            if normalize_company_name(name)
+        )
+        if not _company_signal_name_is_eligible(
+            hi.get("company") or hi.get("company_name"),
+            current_vendor=vendor,
+            blocked_names=blocked_names,
+        ):
             continue
         vendor_bucket = merged.setdefault(vendor, {})
         existing = vendor_bucket.get(company_name, {})
@@ -4613,6 +6338,9 @@ def _merge_canonical_company_signals(
                 or str(fallback_source.get("review_id") or "")
                 or None
             ),
+            "title": field_source.get("title") or fallback_source.get("title"),
+            "company_size": field_source.get("company_size") or fallback_source.get("company_size"),
+            "industry": field_source.get("industry") or fallback_source.get("industry"),
             "source": field_source.get("source") or fallback_source.get("source"),
             "confidence_score": max(
                 float(existing.get("confidence_score") or 0),
@@ -4620,6 +6348,15 @@ def _merge_canonical_company_signals(
             ),
             "first_seen_at": existing.get("first_seen_at") or now_text,
             "last_seen_at": now_text,
+            "alternatives": _merge_record_list(
+                field_source.get("alternatives"),
+                fallback_source.get("alternatives"),
+            ),
+            "quotes": _merge_record_list(
+                field_source.get("quotes"),
+                fallback_source.get("quotes"),
+                quote_mode=True,
+            ),
             "_merge_rank": max(existing_rank, current_rank),
         }
 
@@ -4649,6 +6386,97 @@ def _merge_canonical_company_signals(
 
 _EVIDENCE_VAULT_SCHEMA_VERSION = "v1"
 
+_WEAKNESS_CORRELATION_MIN_OVERLAP = 0.3
+_WEAKNESS_CORRELATION_MIN_SHARED = 3
+
+
+def _correlate_weakness_clusters(
+    weakness_evidence: list[dict[str, Any]],
+    *,
+    min_overlap_ratio: float = _WEAKNESS_CORRELATION_MIN_OVERLAP,
+    min_shared_reviews: int = _WEAKNESS_CORRELATION_MIN_SHARED,
+) -> None:
+    """Detect co-mentioned weaknesses and annotate correlation metadata.
+
+    Two weaknesses are correlated when they share a meaningful fraction of
+    their supporting reviews -- indicating a common root cause.  For example,
+    "poor support" and "slow response times" often co-occur in the same
+    reviews, so they should be treated as one amplified signal rather than
+    two independent items.
+
+    Mutates *weakness_evidence* in place: adds ``correlated_with`` (list of
+    related keys) and ``correlation_bonus`` (float added to confidence).
+    """
+    if len(weakness_evidence) < 2:
+        return
+
+    # Build review-ID sets per weakness (index-keyed for speed)
+    id_sets: list[set[str]] = []
+    for w in weakness_evidence:
+        ids = w.get("supporting_review_ids") or []
+        id_sets.append({str(rid) for rid in ids if rid})
+
+    n = len(weakness_evidence)
+
+    # Pairwise overlap check
+    edges: list[tuple[int, int, float]] = []
+    for i in range(n):
+        if not id_sets[i]:
+            continue
+        for j in range(i + 1, n):
+            if not id_sets[j]:
+                continue
+            shared = id_sets[i] & id_sets[j]
+            if len(shared) < min_shared_reviews:
+                continue
+            smaller = min(len(id_sets[i]), len(id_sets[j])) or 1
+            ratio = len(shared) / smaller
+            if ratio >= min_overlap_ratio:
+                edges.append((i, j, ratio))
+
+    if not edges:
+        return
+
+    # Union-find to group into clusters
+    parent = list(range(n))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    for i, j, _ in edges:
+        union(i, j)
+
+    # Build cluster membership
+    clusters: dict[int, list[int]] = {}
+    for idx in range(n):
+        root = find(idx)
+        clusters.setdefault(root, []).append(idx)
+
+    # Annotate each weakness with its cluster peers
+    for members in clusters.values():
+        if len(members) < 2:
+            continue
+        member_keys = [weakness_evidence[m]["key"] for m in members]
+        combined_ids: set[str] = set()
+        for m in members:
+            combined_ids |= id_sets[m]
+        for m in members:
+            own_key = weakness_evidence[m]["key"]
+            peers = [k for k in member_keys if k != own_key]
+            weakness_evidence[m]["correlated_with"] = peers
+            weakness_evidence[m]["cluster_review_count"] = len(combined_ids)
+            weakness_evidence[m]["correlation_bonus"] = round(
+                min(0.1, 0.05 * (len(members) - 1)), 2,
+            )
+
 
 def build_evidence_vault(
     vendor_name: str,
@@ -4667,6 +6495,7 @@ def build_evidence_vault(
     dm_rate: float | None = None,
     price_rate: float | None = None,
     product_category: str | None = None,
+    blocked_names: set[str] | None = None,
     analysis_window_days: int = 90,
     recent_window_days: int = 30,
 ) -> dict[str, Any]:
@@ -4775,33 +6604,101 @@ def build_evidence_vault(
                 "confidence_score": None,
             })
 
-    # Sort weaknesses by mention count descending
-    weakness_evidence.sort(key=lambda w: w["mention_count_total"] or 0, reverse=True)
+    # Sort weaknesses by composite signal: mention count + urgency weight.
+    # This prevents a high-urgency weakness with fewer mentions from being
+    # buried below a low-urgency weakness with more mentions.
+    def _weakness_sort_key(w: dict) -> float:
+        mc = float(w.get("mention_count_total") or 0)
+        sm = w.get("supporting_metrics") if isinstance(w.get("supporting_metrics"), dict) else {}
+        urg = float(sm.get("avg_urgency_when_mentioned") or sm.get("avg_urgency") or 0)
+        # Normalize urgency (0-10) to a 0-1 scale and weight it at 30% of
+        # the sort signal so urgency influences order without dominating.
+        return mc + (min(urg, 10.0) / 10.0) * max(mc, 1) * 0.3
 
-    # Derive pass-1 confidence: based on mention count + evidence type coverage
+    weakness_evidence.sort(key=_weakness_sort_key, reverse=True)
+
+    # Detect co-mentioned weaknesses (shared root cause clustering)
+    _correlate_weakness_clusters(weakness_evidence)
+
+    # Derive pass-1 confidence: mention share + type + volume + correlation
+    # + recency + urgency bonuses
     total_mentions = sum(w["mention_count_total"] or 0 for w in weakness_evidence) or 1
     for w in weakness_evidence:
         mc = w["mention_count_total"] or 0
         share = mc / total_mentions
         type_bonus = 0.1 if w["evidence_type"] == "pain_category" else 0.0
-        w["confidence_score"] = round(min(0.95, share + type_bonus + (0.1 if mc >= 10 else 0.0)), 2)
+        volume_bonus = 0.1 if mc >= 10 else 0.0
+        corr_bonus = float(w.get("correlation_bonus") or 0)
+        trend = w.get("trend") if isinstance(w.get("trend"), dict) else {}
+        direction = str(trend.get("direction") or "").strip()
+        if direction == "accelerating":
+            recency_bonus = 0.1
+        elif direction == "new":
+            recency_bonus = 0.1
+        elif direction == "declining":
+            recency_bonus = -0.05
+        else:
+            recency_bonus = 0.0
+        sm = w.get("supporting_metrics") if isinstance(w.get("supporting_metrics"), dict) else {}
+        urg = float(sm.get("avg_urgency_when_mentioned") or sm.get("avg_urgency") or 0)
+        urgency_bonus = 0.1 if urg >= 8.0 else (0.05 if urg >= 6.0 else 0.0)
+        w["confidence_score"] = round(min(0.95, max(0.0, share + type_bonus + volume_bonus + corr_bonus + recency_bonus + urgency_bonus)), 2)
 
-    # Fallback: assign the top vendor quote to the top weakness if no direct
-    # weakness-level quote was matched from pass-2 review evidence.
-    if weakness_evidence and quotes and not any(item.get("best_quote") for item in weakness_evidence):
-        top_q = quotes[0] if quotes else None
-        if top_q:
-            weakness_evidence[0]["best_quote"] = top_q.get("quote")
-            weakness_evidence[0]["quote_source"] = {
-                "review_id": str(top_q.get("review_id") or ""),
-                "source": top_q.get("source"),
-                "company": top_q.get("company"),
-                "reviewer_title": top_q.get("title"),
-                "company_size": top_q.get("company_size"),
-                "industry": top_q.get("industry"),
-                "reviewed_at": _quote_reviewed_at_text(top_q.get("reviewed_at")),
-                "rating": float(top_q["rating"]) if top_q.get("rating") is not None else None,
-            }
+    # Fallback: assign vendor quotes to weaknesses that lack a best_quote
+    # from pass-2 review evidence.  Uses keyword matching to pair each quote
+    # to the weakness it is most relevant to, instead of blindly assigning
+    # the first quote to the top weakness.
+    if weakness_evidence and quotes:
+        unquoted = [w for w in weakness_evidence if not w.get("best_quote")]
+        if unquoted:
+            used_quote_ids: set[str] = set()
+            for w in unquoted:
+                wkey = str(w.get("key") or w.get("label") or "").lower()
+                wlabel = str(w.get("label") or w.get("key") or "").lower()
+                w_tokens = set(wkey.replace("_", " ").split()) | set(wlabel.replace("_", " ").split())
+                best_match = None
+                best_overlap = 0
+                for q in quotes:
+                    qid = str(q.get("review_id") or id(q))
+                    if qid in used_quote_ids:
+                        continue
+                    qtext = str(q.get("quote") or "").lower()
+                    overlap = sum(1 for t in w_tokens if len(t) >= 3 and t in qtext)
+                    if overlap > best_overlap:
+                        best_overlap = overlap
+                        best_match = q
+                        best_match_id = qid
+                if best_match and best_overlap > 0:
+                    used_quote_ids.add(best_match_id)
+                    w["best_quote"] = best_match.get("quote")
+                    w["quote_source"] = {
+                        "review_id": str(best_match.get("review_id") or ""),
+                        "source": best_match.get("source"),
+                        "company": best_match.get("company"),
+                        "reviewer_title": best_match.get("title"),
+                        "company_size": best_match.get("company_size"),
+                        "industry": best_match.get("industry"),
+                        "reviewed_at": _quote_reviewed_at_text(best_match.get("reviewed_at")),
+                        "rating": float(best_match["rating"]) if best_match.get("rating") is not None else None,
+                    }
+            # Last resort: if no keyword match found for the top weakness,
+            # assign the first unused quote so the vault is never quote-less
+            if not weakness_evidence[0].get("best_quote") and quotes:
+                for q in quotes:
+                    qid = str(q.get("review_id") or id(q))
+                    if qid not in used_quote_ids:
+                        weakness_evidence[0]["best_quote"] = q.get("quote")
+                        weakness_evidence[0]["quote_source"] = {
+                            "review_id": str(q.get("review_id") or ""),
+                            "source": q.get("source"),
+                            "company": q.get("company"),
+                            "reviewer_title": q.get("title"),
+                            "company_size": q.get("company_size"),
+                            "industry": q.get("industry"),
+                            "reviewed_at": _quote_reviewed_at_text(q.get("reviewed_at")),
+                            "rating": float(q["rating"]) if q.get("rating") is not None else None,
+                        }
+                        break
 
     # --- Strength evidence ---
     strength_evidence: list[dict] = []
@@ -4907,8 +6804,15 @@ def build_evidence_vault(
     # --- Company signals (pre-filtered for this vendor) ---
     cs_out: list[dict] = []
     for cs in company_signals:
+        company_name = cs.get("company") or cs.get("company_name") or ""
+        if not _company_signal_name_is_eligible(
+            company_name,
+            current_vendor=vendor_name,
+            blocked_names=blocked_names,
+        ):
+            continue
         cs_out.append({
-            "company_name": cs.get("company") or cs.get("company_name") or "",
+            "company_name": company_name,
             "signal_type": "churning",
             "urgency_score": _sf(cs.get("urgency") or cs.get("urgency_score")),
             "pain_category": cs.get("pain") or cs.get("pain_category"),
@@ -4952,6 +6856,75 @@ def build_evidence_vault(
 
 
 _SEGMENT_INTELLIGENCE_SCHEMA_VERSION = "v1"
+_SEGMENT_ROLE_SCORES: dict[str, float] = {
+    "decision_maker": 20.0,
+    "economic_buyer": 15.0,
+    "champion": 15.0,
+    "evaluator": 10.0,
+    "end_user": 0.0,
+    "unknown": 0.0,
+}
+_SEGMENT_ROLE_SCORE_DIVISOR = 5.0
+
+
+def _segment_role_multiplier(role_type: Any) -> float:
+    role_name = str(role_type or "").strip() or "unknown"
+    role_score = _SEGMENT_ROLE_SCORES.get(role_name, 0.0)
+    return max(1.0, role_score / _SEGMENT_ROLE_SCORE_DIVISOR)
+
+
+def _segment_role_priority_score(role_type: Any, count: Any) -> float:
+    try:
+        raw_count = float(count or 0)
+    except (TypeError, ValueError):
+        raw_count = 0.0
+    return raw_count * _segment_role_multiplier(role_type)
+
+
+def _segment_role_count_value(count: Any) -> float:
+    try:
+        return float(count or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _sorted_segment_role_counts(role_types: dict[str, Any] | None) -> list[tuple[str, Any]]:
+    entries = list((role_types or {}).items())
+    return sorted(
+        entries,
+        key=lambda item: (
+            _segment_role_priority_score(item[0], item[1]),
+            _segment_role_count_value(item[1]),
+            _SEGMENT_ROLE_SCORES.get(str(item[0] or "").strip() or "unknown", 0.0),
+            str(item[0] or ""),
+        ),
+        reverse=True,
+    )
+
+
+def _known_buying_stage_counts(stage_counts: dict[str, Any] | None) -> dict[str, Any]:
+    """Prefer explicit buying stages over placeholder labels like 'unknown'."""
+    raw = stage_counts or {}
+    known: dict[str, Any] = {}
+    unknown_total = 0
+    for stage, count in raw.items():
+        stage_name = str(stage or "").strip() or "unknown"
+        if stage_name.lower() in {"unknown", "none", "null", "n/a", "na"}:
+            unknown_total += count or 0
+            continue
+        known[stage_name] = known.get(stage_name, 0) + (count or 0)
+    if known:
+        return known
+    if unknown_total:
+        return {"unknown": unknown_total}
+    return {}
+
+
+def _dominant_segment_role(role_types: dict[str, Any] | None) -> str:
+    ranked = _sorted_segment_role_counts(role_types)
+    if not ranked:
+        return "unknown"
+    return str(ranked[0][0] or "").strip() or "unknown"
 
 
 def build_segment_intelligence(
@@ -4959,11 +6932,14 @@ def build_segment_intelligence(
     *,
     buyer_auth: dict | None = None,
     department_entries: list[dict] | None = None,
+    company_size_entries: list[dict] | None = None,
     budget: dict | None = None,
     dm_rate: float | None = None,
     contract_value_entries: list[dict] | None = None,
     usage_duration_entries: list[dict] | None = None,
     use_case_entries: list[dict] | None = None,
+    role_churn: dict[str, dict[str, Any]] | None = None,
+    vendor_lock_in_level: str | None = None,
     analysis_window_days: int = 90,
 ) -> dict[str, Any]:
     """Build a canonical segment intelligence object for a single vendor.
@@ -4988,20 +6964,48 @@ def build_segment_intelligence(
 
     # --- Affected roles (from buyer_auth_lookup) ---
     affected_roles: list[dict] = []
-    role_types = ba.get("role_types") or {}
-    buying_stages = ba.get("buying_stages") or {}
-    for rt, count in sorted(role_types.items(), key=lambda x: -x[1]):
+    role_types_raw = ba.get("role_types") or {}
+    known_role_types: dict[str, Any] = {}
+    unknown_role_count = 0
+    for role_type, count in role_types_raw.items():
+        role_name = str(role_type or "").strip() or "unknown"
+        if role_name.lower() in {"unknown", "none", "null", "n/a", "na"}:
+            unknown_role_count += count or 0
+            continue
+        known_role_types[role_name] = (
+            known_role_types.get(role_name, 0) + (count or 0)
+        )
+    if known_role_types:
+        role_types = known_role_types
+    elif unknown_role_count:
+        role_types = {"unknown": unknown_role_count}
+    else:
+        role_types = {}
+    buying_stages = _known_buying_stage_counts(ba.get("buying_stages") or {})
+    role_buying_stages = ba.get("role_buying_stages") or {}
+    for rt, count in _sorted_segment_role_counts(role_types):
+        top_stage = None
+        per_role_stages = _known_buying_stage_counts(role_buying_stages.get(rt) or {})
+        if per_role_stages:
+            top_stage = max(
+                per_role_stages.items(),
+                key=lambda item: (item[1], str(item[0] or "")),
+            )[0]
+        rc = (role_churn or {}).get(rt) or {}
         affected_roles.append({
             "role_type": rt,
             "review_count": count,
-            "top_buying_stage": None,
-            "churn_rate": None,
-            "top_pain": None,
+            "priority_score": round(_segment_role_priority_score(rt, count), 2),
+            "top_buying_stage": top_stage,
+            "churn_rate": _sf(rc.get("churn_rate")),
+            "top_pain": rc.get("top_pain") or None,
         })
-    # Attach top buying stage to the top role if stages exist
+    # Fill remaining gaps with the dominant global stage.
     if affected_roles and buying_stages:
         top_stage = max(buying_stages, key=buying_stages.get)
-        affected_roles[0]["top_buying_stage"] = top_stage
+        for role in affected_roles:
+            if not role.get("top_buying_stage"):
+                role["top_buying_stage"] = top_stage
 
     # --- Affected departments ---
     affected_departments: list[dict] = []
@@ -5013,12 +7017,22 @@ def build_segment_intelligence(
             "avg_urgency": _sf(d.get("avg_urgency")),
         })
 
+    size_distribution = [
+        {
+            "segment": entry.get("segment", ""),
+            "review_count": entry.get("review_count", 0),
+            "churn_rate": _sf(entry.get("churn_rate")),
+        }
+        for entry in (company_size_entries or [])
+        if entry.get("segment")
+    ]
+
     # --- Company size signals ---
     affected_company_sizes = {
         "avg_seat_count": _sf(bg.get("avg_seat_count")),
         "median_seat_count": _sf(bg.get("median_seat_count")),
         "max_seat_count": _sf(bg.get("max_seat_count")),
-        "size_distribution": None,
+        "size_distribution": size_distribution or None,
     }
 
     # --- Budget pressure ---
@@ -5049,12 +7063,13 @@ def build_segment_intelligence(
         })
 
     # --- Top use cases under pressure ---
+    _lock_in = vendor_lock_in_level or None
     top_use_cases: list[dict] = []
     for uc in (use_case_entries or [])[:10]:
         top_use_cases.append({
             "use_case": uc.get("module") or uc.get("use_case_name") or uc.get("use_case", ""),
             "mention_count": uc.get("mentions") or uc.get("mention_count", 0),
-            "lock_in_level": None,
+            "lock_in_level": _lock_in,
             "confidence_score": _sf(uc.get("confidence_score")),
         })
 
@@ -5092,6 +7107,8 @@ def build_temporal_intelligence(
     timeline_entries: list[dict] | None = None,
     keyword_spikes: dict | None = None,
     sentiment: dict | None = None,
+    sentiment_tenure: list[dict[str, Any]] | None = None,
+    turning_points: list[dict[str, Any]] | None = None,
     analysis_window_days: int = 90,
 ) -> dict[str, Any]:
     """Build a canonical temporal intelligence object for a single vendor.
@@ -5163,6 +7180,37 @@ def build_temporal_intelligence(
     eval_deadline_count = sum(
         1 for e in raw_entries if e.get("evaluation_deadline")
     )
+    # Renewal signals: contract_end dates within the analysis window
+    _renewal_horizon = analysis_window_days
+    _today = date.today()
+    renewal_count = 0
+    for e in raw_entries:
+        ce = _parse_timeline_date(e.get("contract_end"))
+        if ce is not None and _today <= ce <= _today + timedelta(days=_renewal_horizon):
+            renewal_count += 1
+    # Budget cycle signals: decision_timeline mentions of budget/planning terms
+    _budget_terms = ("budget", "planning", "fiscal", "annual review", "quarterly review")
+    budget_cycle_count = sum(
+        1 for e in raw_entries
+        if any(t in str(e.get("decision_timeline") or "").lower() for t in _budget_terms)
+    )
+
+    tenure_distribution = [
+        {
+            "tenure": item.get("tenure"),
+            "count": item.get("count", 0),
+        }
+        for item in (sentiment_tenure or [])
+        if isinstance(item, dict) and item.get("tenure")
+    ]
+    turning_point_summary = [
+        {
+            "trigger": item.get("trigger"),
+            "mentions": item.get("mentions", 0),
+        }
+        for item in (turning_points or [])
+        if isinstance(item, dict) and item.get("trigger")
+    ]
 
     return {
         "vendor_name": vendor_name,
@@ -5177,10 +7225,14 @@ def build_temporal_intelligence(
             "keyword_details": spike_keywords,
         },
         "sentiment_trajectory": sentiment_trajectory,
+        "sentiment_tenure": tenure_distribution[:10],
+        "turning_points": turning_point_summary[:10],
         "timeline_signal_summary": {
             "total_signals": len(raw_entries),
             "contract_end_signals": contract_end_count,
             "evaluation_deadline_signals": eval_deadline_count,
+            "renewal_signals": renewal_count,
+            "budget_cycle_signals": budget_cycle_count,
         },
         "trend_per_weakness": None,
         "acceleration_metrics": None,
@@ -5227,6 +7279,24 @@ def build_displacement_dynamics(
         except (TypeError, ValueError):
             return None
 
+    def _intish(v: Any, default: int = 0) -> int:
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return default
+
+    def _normalize_evidence_type(value: Any) -> str | None:
+        text = str(value or "").strip().lower()
+        if not text:
+            return None
+        if text in {"explicit_switch", "switch", "switched_to"}:
+            return "explicit_switch"
+        if text in {"active_evaluation", "evaluation", "considering", "trial", "poc"}:
+            return "active_evaluation"
+        if text in {"implied_preference", "compared", "preference"}:
+            return "implied_preference"
+        return None
+
     # --- Edge metrics (from persisted displacement edges) ---
     edge_metrics = {
         "mention_count": eg.get("mention_count") or 0,
@@ -5242,13 +7312,58 @@ def build_displacement_dynamics(
     evidence_breakdown: list[dict] = []
     flows = displacement_flows or []
     for f in flows:
-        evidence_breakdown.append({
-            "evidence_type": f.get("evidence_type", "unknown"),
-            "mention_count": f.get("mention_count", 0),
-            "reason_categories": f.get("reason_categories") or {},
-            "industries": f.get("industries") or [],
-            "company_sizes": f.get("company_sizes") or [],
-        })
+        row_breakdown = f.get("evidence_breakdown") or []
+        if isinstance(row_breakdown, list) and row_breakdown:
+            for item in row_breakdown:
+                if not isinstance(item, dict):
+                    continue
+                evidence_type = _normalize_evidence_type(item.get("evidence_type"))
+                mention_count = _intish(item.get("mention_count") or 0)
+                reason_categories = item.get("reason_categories") or {}
+                if mention_count <= 0 and isinstance(reason_categories, dict):
+                    mention_count = sum(_intish(v) for v in reason_categories.values())
+                if not evidence_type or mention_count <= 0:
+                    continue
+                evidence_breakdown.append({
+                    "evidence_type": evidence_type,
+                    "mention_count": mention_count,
+                    "reason_categories": reason_categories,
+                    "industries": item.get("industries") or f.get("industries") or [],
+                    "company_sizes": item.get("company_sizes") or f.get("company_sizes") or [],
+                })
+            continue
+
+        explicit = _intish(f.get("explicit_switches") or 0)
+        active_eval = _intish(f.get("active_evaluations") or 0)
+        implied = _intish(f.get("implied_preferences") or 0)
+        mention_count = _intish(f.get("mention_count") or 0)
+        if mention_count <= 0:
+            mention_count = explicit + active_eval + implied
+        if explicit <= 0 and active_eval <= 0 and implied <= 0:
+            evidence_type = _normalize_evidence_type(f.get("evidence_type")) or "implied_preference"
+            if mention_count > 0:
+                evidence_breakdown.append({
+                    "evidence_type": evidence_type,
+                    "mention_count": mention_count,
+                    "reason_categories": f.get("reason_categories") or {},
+                    "industries": f.get("industries") or [],
+                    "company_sizes": f.get("company_sizes") or [],
+                })
+            continue
+        for evidence_type, count in (
+            ("explicit_switch", explicit),
+            ("active_evaluation", active_eval),
+            ("implied_preference", max(implied, mention_count - explicit - active_eval)),
+        ):
+            if count <= 0:
+                continue
+            evidence_breakdown.append({
+                "evidence_type": evidence_type,
+                "mention_count": count,
+                "reason_categories": {},
+                "industries": f.get("industries") or [],
+                "company_sizes": f.get("company_sizes") or [],
+            })
     evidence_breakdown.sort(
         key=lambda x: x["mention_count"], reverse=True,
     )
@@ -5290,6 +7405,10 @@ def build_displacement_dynamics(
         f["mention_count"] for f in evidence_breakdown
         if f["evidence_type"] == "active_evaluation"
     )
+    total_mentions = max(
+        _intish(edge_metrics.get("mention_count")),
+        sum(f["mention_count"] for f in evidence_breakdown),
+    )
 
     return {
         "from_vendor": from_vendor,
@@ -5304,7 +7423,7 @@ def build_displacement_dynamics(
         "flow_summary": {
             "explicit_switch_count": total_explicit,
             "active_evaluation_count": total_eval,
-            "total_flow_mentions": edge_metrics["mention_count"],
+            "total_flow_mentions": total_mentions,
         },
         "segment_displacement": None,
         "trend_acceleration": None,
@@ -5395,6 +7514,7 @@ def build_account_intelligence(
     *,
     high_intent_entries: list[dict] | None = None,
     persisted_signals: list[dict] | None = None,
+    blocked_names: set[str] | None = None,
     analysis_window_days: int = 90,
 ) -> dict[str, Any]:
     """Build a canonical account intelligence object for a single vendor.
@@ -5431,11 +7551,17 @@ def build_account_intelligence(
         cn = (ps.get("company_name") or "").strip()
         if not cn:
             continue
+        if not _company_signal_name_is_eligible(
+            cn,
+            current_vendor=vendor_name,
+            blocked_names=blocked_names,
+        ):
+            continue
         key = cn.lower()
         if key in seen_companies:
             continue
         seen_companies.add(key)
-        accounts.append({
+        acct: dict[str, Any] = {
             "company_name": cn,
             "urgency_score": _sf(ps.get("urgency_score")),
             "pain_category": ps.get("pain_category"),
@@ -5454,17 +7580,44 @@ def build_account_intelligence(
             "last_seen_at": (
                 str(ps.get("last_seen_at") or "") or None
             ),
-        })
+        }
+        if ps.get("title"):
+            acct["title"] = ps["title"]
+        if ps.get("company_size"):
+            acct["company_size"] = ps["company_size"]
+        if ps.get("industry"):
+            acct["industry"] = ps["industry"]
+        ps_alts = ps.get("alternatives")
+        if isinstance(ps_alts, list) and ps_alts:
+            acct["alternatives"] = ps_alts
+        ps_quotes = ps.get("quotes")
+        if isinstance(ps_quotes, list) and ps_quotes:
+            acct["quotes"] = ps_quotes
+        if ps.get("review_id"):
+            acct["review_id"] = str(ps["review_id"])
+        accounts.append(acct)
 
     for hi in (high_intent_entries or []):
         cn = (hi.get("company") or "").strip()
         if not cn:
             continue
+        blocked = set(blocked_names or set())
+        blocked.update(
+            normalize_company_name(name)
+            for name in _extract_alternative_names(hi.get("alternatives") or [])
+            if normalize_company_name(name)
+        )
+        if not _company_signal_name_is_eligible(
+            cn,
+            current_vendor=vendor_name,
+            blocked_names=blocked,
+        ):
+            continue
         key = cn.lower()
         if key in seen_companies:
             continue
         seen_companies.add(key)
-        accounts.append({
+        acct_hi: dict[str, Any] = {
             "company_name": cn,
             "urgency_score": _sf(hi.get("urgency")),
             "pain_category": hi.get("pain"),
@@ -5479,7 +7632,22 @@ def build_account_intelligence(
             "confidence_score": None,
             "first_seen_at": None,
             "last_seen_at": None,
-        })
+        }
+        if hi.get("title"):
+            acct_hi["title"] = hi["title"]
+        if hi.get("company_size"):
+            acct_hi["company_size"] = hi["company_size"]
+        if hi.get("industry"):
+            acct_hi["industry"] = hi["industry"]
+        if hi.get("review_id"):
+            acct_hi["review_id"] = str(hi["review_id"])
+        alts = hi.get("alternatives")
+        if alts:
+            acct_hi["alternatives"] = alts if isinstance(alts, list) else []
+        hi_quotes = hi.get("quotes")
+        if hi_quotes:
+            acct_hi["quotes"] = hi_quotes if isinstance(hi_quotes, list) else []
+        accounts.append(acct_hi)
 
     accounts.sort(
         key=lambda a: a.get("urgency_score") or 0, reverse=True,
@@ -5544,11 +7712,199 @@ def _battle_card_weaknesses_from_evidence_vault(
     return weaknesses[:limit]
 
 
+def _battle_card_strengths_from_evidence_vault(
+    vault: dict[str, Any] | None,
+    *,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Normalize vault strength evidence into battle-card shape.
+
+    Mirrors ``_battle_card_weaknesses_from_evidence_vault`` so the LLM can
+    ground objection handler ``acknowledge`` fields in real incumbent strengths.
+    """
+    if not isinstance(vault, dict):
+        return []
+    strengths: list[dict[str, Any]] = []
+    for item in vault.get("strength_evidence") or []:
+        if not isinstance(item, dict):
+            continue
+        area = str(item.get("label") or item.get("key") or "").strip()
+        if not area:
+            continue
+        total = int(item.get("mention_count_total") or 0)
+        trend = item.get("trend") if isinstance(item.get("trend"), dict) else {}
+        entry: dict[str, Any] = {
+            "area": area,
+            "mention_count": total,
+            "source": str(item.get("evidence_type") or "evidence_vault"),
+        }
+        direction = str(trend.get("direction") or "").strip()
+        if direction:
+            entry["trend"] = direction
+        quote = str(item.get("best_quote") or "").strip()
+        if quote:
+            entry["customer_quote"] = quote
+        strengths.append(entry)
+    strengths.sort(key=lambda s: -int(s.get("mention_count") or 0))
+    return strengths[:limit]
+
+
 def _looks_like_company_domain(raw_name: str) -> bool:
     text = str(raw_name or "").strip().lower()
     if not text or " " in text or "/" in text or "@" in text:
         return False
     return bool(re.fullmatch(r"[a-z0-9-]+(?:\.[a-z0-9-]+)+", text))
+
+
+_GENERIC_COMPANY_PATTERNS = (
+    re.compile(r"^(msp|saas|fintech|startup|start up|non-?profit|university|school|government|public sector)$", re.I),
+    re.compile(r"(^| )(software company|tech company|saas company|consulting company)( |$)", re.I),
+    re.compile(r"(^| )(government agency|b2c fintech|b2c fintech company|b2b fintech|b2b fintech company)( |$)", re.I),
+    re.compile(
+        r"(^| )(b2b|b2c|e-?commerce|ecommerce|support|video|marketing|design|creative|recruitment|retail|fintech)( |-|_).*(startup|agency|studio|company|team|business|organization|department)( |$)",
+        re.I,
+    ),
+    re.compile(r"(^| )(agency|organization|vendor|provider|department)( |$)", re.I),
+    re.compile(r"(^| )\d+\s+employees?( |$)", re.I),
+)
+
+_PLACEHOLDER_COMPANY_NAMES = {
+    "company",
+    "mycompany",
+    "my company",
+    "ourcompany",
+    "our company",
+    "ourdomain",
+    "customer",
+    "client",
+}
+
+_LOCATION_LIKE_COMPANY_NAMES = {
+    "costa rica",
+    "united states",
+    "usa",
+    "united kingdom",
+    "uk",
+    "canada",
+    "australia",
+    "india",
+    "germany",
+    "france",
+    "mexico",
+    "brazil",
+}
+
+_PARTNERISH_COMPANY_PATTERNS = (
+    re.compile(r".*partners?$", re.I),
+    re.compile(r".*(reseller|consulting|consultancy|implementer|implementation)$", re.I),
+)
+
+
+def _looks_like_generic_company_descriptor(raw_name: Any) -> bool:
+    """Return True for descriptive labels that are not seller-usable org names."""
+    text = str(raw_name or "").strip()
+    if not text:
+        return True
+    normalized = normalize_company_name(text)
+    if not normalized:
+        return True
+    if normalized in _PLACEHOLDER_COMPANY_NAMES:
+        return True
+    return any(pattern.search(normalized) for pattern in _GENERIC_COMPANY_PATTERNS)
+
+
+def _looks_like_location_label(raw_name: Any) -> bool:
+    normalized = normalize_company_name(raw_name)
+    if not normalized:
+        return False
+    return normalized in _LOCATION_LIKE_COMPANY_NAMES
+
+
+def _looks_like_partner_or_tool_label(raw_name: Any) -> bool:
+    normalized = normalize_company_name(raw_name)
+    if not normalized:
+        return False
+    return any(pattern.fullmatch(normalized) for pattern in _PARTNERISH_COMPANY_PATTERNS)
+
+
+def _build_company_signal_blocked_names_by_vendor(
+    vendor_names: Iterable[Any],
+    *,
+    high_intent_entries: list[dict[str, Any]] | None = None,
+    integration_lookup: dict[str, list[Any]] | None = None,
+) -> dict[str, set[str]]:
+    """Build vendor-specific blocklists for non-prospect company labels."""
+    vendor_list = list(vendor_names or [])
+    normalized_vendors = {
+        normalize_company_name(name)
+        for name in vendor_list
+        if normalize_company_name(name)
+    }
+    blocked_by_vendor: dict[str, set[str]] = {}
+    for name in vendor_list:
+        vendor = _canonicalize_vendor(name or "")
+        if vendor:
+            blocked_by_vendor[vendor] = set(normalized_vendors)
+
+    for vendor, items in (integration_lookup or {}).items():
+        vendor_key = _canonicalize_vendor(vendor or "")
+        if not vendor_key:
+            continue
+        bucket = blocked_by_vendor.setdefault(vendor_key, set(normalized_vendors))
+        for item in items or []:
+            if isinstance(item, dict):
+                raw_name = (
+                    item.get("integration_name")
+                    or item.get("integration")
+                    or item.get("name")
+                    or ""
+                )
+            else:
+                raw_name = item
+            normalized = normalize_company_name(raw_name)
+            if normalized:
+                bucket.add(normalized)
+
+    for hi in high_intent_entries or []:
+        vendor = _canonicalize_vendor(hi.get("vendor") or hi.get("vendor_name") or "")
+        if not vendor:
+            continue
+        bucket = blocked_by_vendor.setdefault(vendor, set(normalized_vendors))
+        for name in _extract_alternative_names(hi.get("alternatives") or []):
+            normalized = normalize_company_name(name)
+            if normalized:
+                bucket.add(normalized)
+
+    return blocked_by_vendor
+
+
+def _company_signal_name_is_eligible(
+    raw_name: Any,
+    *,
+    current_vendor: str = "",
+    blocked_names: set[str] | None = None,
+) -> bool:
+    """Return True when a company-like label is safe to keep as a signal."""
+    name = str(raw_name or "").strip()
+    if not name:
+        return False
+    normalized = normalize_company_name(name)
+    if not normalized:
+        return False
+    if _looks_like_company_domain(name):
+        return False
+    if _looks_like_generic_company_descriptor(name):
+        return False
+    if _looks_like_location_label(name):
+        return False
+    if _looks_like_partner_or_tool_label(name):
+        return False
+    if current_vendor and normalized == normalize_company_name(current_vendor):
+        return False
+    blocked = blocked_names or set()
+    if normalized in blocked:
+        return False
+    return True
 
 
 def _battle_card_company_is_display_safe(
@@ -5560,21 +7916,54 @@ def _battle_card_company_is_display_safe(
     company_size: Any = None,
     buying_stage: Any = None,
 ) -> bool:
-    name = str(raw_name or "").strip()
-    if not name:
-        return False
-    normalized = normalize_company_name(name)
-    if not normalized:
-        return False
-    if _looks_like_company_domain(name):
-        return False
-    if current_vendor and normalized == normalize_company_name(current_vendor):
-        return False
-    blocked = blocked_names or set()
-    if normalized in blocked:
+    if not _company_signal_name_is_eligible(
+        raw_name,
+        current_vendor=current_vendor,
+        blocked_names=blocked_names,
+    ):
         return False
     # Seller-facing rows need at least one qualifier beyond just a name.
     return any(bool(val) for val in (role, company_size, buying_stage))
+
+
+def _normalize_buying_stage(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    return text.replace("-", "_").replace(" ", "_")
+
+
+def _battle_card_required_buying_stages() -> set[str]:
+    raw = getattr(settings.b2b_churn, "battle_card_quality_required_stages", None)
+    if not isinstance(raw, list):
+        return set()
+    return {_normalize_buying_stage(item) for item in raw if str(item or "").strip()}
+
+
+def _battle_card_min_high_intent_urgency() -> float:
+    return float(getattr(settings.b2b_churn, "battle_card_quality_min_high_intent_urgency", 7.0))
+
+
+def _rank_high_intent_companies(companies: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    required_stages = _battle_card_required_buying_stages()
+    min_urgency = _battle_card_min_high_intent_urgency()
+
+    def _score(item: dict[str, Any]) -> tuple[int, float, int, float, str]:
+        try:
+            urgency = float(item.get("urgency") or 0)
+        except (TypeError, ValueError):
+            urgency = 0.0
+        stage = _normalize_buying_stage(item.get("buying_stage"))
+        stage_qualified = int(bool(required_stages) and stage in required_stages and urgency >= min_urgency)
+        dm = int(bool(item.get("decision_maker")))
+        try:
+            confidence = float(item.get("confidence_score") or 0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        name = str(item.get("company") or "").strip().lower()
+        return (stage_qualified, urgency, dm, confidence, name)
+
+    return sorted(companies, key=_score, reverse=True)
 
 
 def _battle_card_companies_from_evidence_vault(
@@ -5601,7 +7990,7 @@ def _battle_card_companies_from_evidence_vault(
             buying_stage=item.get("buying_stage"),
         ):
             continue
-        companies.append({
+        entry: dict[str, Any] = {
             "company": name,
             "urgency": item.get("urgency_score"),
             "role": item.get("buyer_role"),
@@ -5609,9 +7998,15 @@ def _battle_card_companies_from_evidence_vault(
             "company_size": item.get("seat_count"),
             "source": item.get("source"),
             "buying_stage": item.get("buying_stage"),
-        })
-    companies.sort(key=lambda item: float(item.get("urgency") or 0), reverse=True)
-    return companies[:limit]
+        }
+        if item.get("decision_maker") is not None:
+            entry["decision_maker"] = item["decision_maker"]
+        if item.get("confidence_score") is not None:
+            entry["confidence_score"] = item["confidence_score"]
+        if item.get("contract_end"):
+            entry["contract_end"] = str(item["contract_end"])
+        companies.append(entry)
+    return _rank_high_intent_companies(companies)[:limit]
 
 
 def _battle_card_provenance_from_evidence_vault(
@@ -5835,7 +8230,11 @@ async def fetch_vendor_evidence(
         return None
 
     # Fetch vendor score rows
-    all_scores = await _fetch_vendor_churn_scores(pool, window_days, min_reviews)
+    all_scores = await _fetch_vendor_churn_scores_from_signals(
+        pool,
+        window_days,
+        min_reviews,
+    )
     vs_match = [v for v in all_scores if _canonicalize_vendor(v.get("vendor_name", "")) == canonical]
     if not vs_match:
         return None
@@ -5849,7 +8248,11 @@ async def fetch_vendor_evidence(
         use_case_dist, buyer_auth,
     ) = await asyncio.gather(
         _fetch_pain_distribution(pool, window_days),
-        _fetch_competitive_displacement(pool, window_days),
+        _fetch_competitive_displacement_source_of_truth(
+            pool,
+            as_of=date.today(),
+            analysis_window_days=window_days,
+        ),
         _fetch_feature_gaps(pool, window_days),
         _fetch_price_complaint_rates(pool, window_days),
         _fetch_dm_churn_rates(pool, window_days),
@@ -6098,7 +8501,7 @@ def _build_deterministic_vendor_feed(
         # Dominant buyer role
         ba = buyer_auth_lookup.get(vendor, {})
         role_types = ba.get("role_types", {})
-        dominant_role = max(role_types.items(), key=lambda x: x[1])[0] if role_types else "unknown"
+        dominant_role = _dominant_segment_role(role_types)
 
         # Sentiment direction
         sentiment_counts = sentiment_lookup.get(vendor, {})
@@ -6233,6 +8636,8 @@ def _build_deterministic_displacement_map(
         competitor = _canonicalize_competitor(row.get("competitor") or "")
         if not vendor or not competitor or vendor.lower() == competitor.lower():
             continue
+        if not _battle_card_competitor_is_eligible(competitor):
+            continue
 
         mention_count = int(row.get("mention_count") or 0)
         explicit = int(row.get("explicit_switches") or 0)
@@ -6246,7 +8651,31 @@ def _build_deterministic_displacement_map(
         # Primary driver: use structured reason_categories; fall back to keyword inference
         reason_cats = row.get("reason_categories") or {}
         if reason_cats:
-            driver = max(reason_cats.items(), key=lambda x: x[1])[0]
+            normalized_reason_cats: dict[str, int] = {}
+            for key, count in reason_cats.items():
+                label = _normalize_displacement_driver_label(key)
+                if not label:
+                    continue
+                normalized_reason_cats[label] = normalized_reason_cats.get(label, 0) + int(count or 0)
+            if normalized_reason_cats:
+                canonical_priority = {
+                    "pricing": 9,
+                    "features": 8,
+                    "integration": 7,
+                    "ux": 6,
+                    "support": 5,
+                    "reliability": 4,
+                    "security": 3,
+                    "compliance": 2,
+                    "performance": 1,
+                    "migration": 1,
+                }
+                driver = max(
+                    normalized_reason_cats.items(),
+                    key=lambda x: (x[1], canonical_priority.get(x[0], 0)),
+                )[0]
+            else:
+                driver = max(reason_cats.items(), key=lambda x: x[1])[0]
         else:
             reasons = reason_lookup.get((vendor, competitor), [])
             driver = _infer_driver_from_reasons(reasons)
@@ -6563,7 +8992,7 @@ def _build_deterministic_vendor_scorecards(
         # Buyer authority
         ba = buyer_auth_lookup.get(vendor, {})
         role_types = ba.get("role_types", {})
-        dominant_role = max(role_types.items(), key=lambda x: x[1])[0] if role_types else "unknown"
+        dominant_role = _dominant_segment_role(role_types)
 
         sc_entry = {
             "vendor": vendor,
@@ -6811,6 +9240,17 @@ def _build_deterministic_category_overview(
     return results[:limit]
 
 
+def _battle_card_has_confident_synthesis(synthesis: dict[str, Any] | None) -> bool:
+    """Return True when validated synthesis provides a usable wedge."""
+    if not isinstance(synthesis, dict) or not synthesis:
+        return False
+    contracts = synthesis.get("reasoning_contracts") or {}
+    vendor_core = contracts.get("vendor_core_reasoning") or {}
+    causal = vendor_core.get("causal_narrative") or synthesis.get("causal_narrative") or {}
+    confidence = str(causal.get("confidence") or "").strip().lower()
+    return bool(causal.get("primary_wedge")) and confidence in {"medium", "high"}
+
+
 def _build_deterministic_battle_cards(
     vendor_scores: list[dict[str, Any]],
     *,
@@ -6836,7 +9276,10 @@ def _build_deterministic_battle_cards(
     keyword_spike_lookup: dict[str, dict] | None = None,
     evidence_vault_lookup: dict[str, dict[str, Any]] | None = None,
     reasoning_synthesis_lookup: dict[str, dict[str, Any]] | None = None,
-    limit: int = 15,
+    reasoning_synthesis_as_of_lookup: dict[str, Any] | None = None,
+    synthesis_requested_as_of: date | None = None,
+    category_dynamics_lookup: dict[str, dict[str, Any]] | None = None,
+    limit: int | None = None,
 ) -> list[dict[str, Any]]:
     """Build per-vendor battle cards from aggregated data.
 
@@ -6881,7 +9324,10 @@ def _build_deterministic_battle_cards(
 
         # Qualification gate -- reasoning can lower thresholds for high-confidence archetypes
         _rc = (reasoning_lookup or {}).get(vendor, {})
-        _has_reasoning = bool(_rc.get("archetype")) and _rc.get("confidence", 0) >= 0.7
+        _synth = (reasoning_synthesis_lookup or {}).get(vendor, {})
+        _has_reasoning = (
+            bool(_rc.get("archetype")) and _rc.get("confidence", 0) >= 0.7
+        ) or _battle_card_has_confident_synthesis(_synth)
         _density_gate = 10 if _has_reasoning else 15
         _urgency_gate = 5 if _has_reasoning else 6
         _dm_gate = 0.2 if _has_reasoning else 0.3
@@ -7058,7 +9504,9 @@ def _build_deterministic_battle_cards(
             for g in feature_gap_lookup.get(vendor, [])[:5]
         ]
 
-        objection_data = {
+        vault_snapshot = vendor_vault.get("metric_snapshot") if isinstance(vendor_vault, dict) else None
+        vault_snapshot = vault_snapshot if isinstance(vault_snapshot, dict) else {}
+        objection_data: dict[str, Any] = {
             "price_complaint_rate": round(price_rate, 3),
             "dm_churn_rate": round(dm_rate, 3),
             "sentiment_direction": sentiment_dir,
@@ -7068,6 +9516,18 @@ def _build_deterministic_battle_cards(
             "avg_urgency": avg_urgency,
             "budget_context": budget_lookup.get(vendor, {}),
         }
+        _rr = vault_snapshot.get("recommend_ratio")
+        if _rr is not None:
+            try:
+                objection_data["recommend_ratio"] = round(float(_rr), 2)
+            except (TypeError, ValueError):
+                pass
+        _pp = vault_snapshot.get("positive_review_pct")
+        if _pp is not None:
+            try:
+                objection_data["positive_review_pct"] = round(float(_pp), 1)
+            except (TypeError, ValueError):
+                pass
 
         integrations = (product_profile_lookup.get(vendor, {}).get("top_integrations") or [])[:8]
         blocked_company_names = {
@@ -7080,15 +9540,16 @@ def _build_deterministic_battle_cards(
         }
 
         # -- Section 5: High-intent companies --
+        has_vault_company_signals = isinstance(vendor_vault, dict) and "company_signals" in vendor_vault
         hi_companies = _battle_card_companies_from_evidence_vault(
             vendor_vault,
             current_vendor=vendor,
             blocked_names=blocked_company_names,
             limit=5,
         )
-        if not hi_companies:
-            hi_companies = [
-                item for item in (company_lookup.get(vendor, [])[:10])
+        if not hi_companies and not has_vault_company_signals:
+            fallback_candidates = [
+                item for item in (company_lookup.get(vendor, []))
                 if _battle_card_company_is_display_safe(
                     item.get("company"),
                     current_vendor=vendor,
@@ -7097,7 +9558,8 @@ def _build_deterministic_battle_cards(
                     company_size=item.get("company_size"),
                     buying_stage=item.get("buying_stage"),
                 )
-            ][:5]
+            ]
+            hi_companies = _rank_high_intent_companies(fallback_candidates)[:5]
 
         # -- Section 6: Integration stack --
 
@@ -7129,6 +9591,9 @@ def _build_deterministic_battle_cards(
         positives = (positive_lookup or {}).get(vendor, [])
         if positives:
             card_entry["retention_signals"] = positives[:5]
+        vault_strengths = _battle_card_strengths_from_evidence_vault(vendor_vault, limit=5)
+        if vault_strengths:
+            card_entry["incumbent_strengths"] = vault_strengths
         if keyword_spikes.get("spike_count"):
             card_entry["keyword_spikes"] = {
                 "spike_count": int(keyword_spikes.get("spike_count") or 0),
@@ -7161,12 +9626,49 @@ def _build_deterministic_battle_cards(
             card_entry["falsification_conditions"] = rc.get("falsification_conditions", [])
             card_entry["uncertainty_sources"] = rc.get("uncertainty_sources", [])
 
+        # Inject category dynamics pool data for downstream council resolution
+        _cat_key = card_entry.get("category") or ""
+        _cat_dyn = (category_dynamics_lookup or {}).get(_cat_key)
+        if isinstance(_cat_dyn, dict):
+            card_entry["category_dynamics"] = _cat_dyn
+
         # Inject reasoning synthesis via typed reader contract
         synth = (reasoning_synthesis_lookup or {}).get(vendor, {})
         if synth:
             from ._b2b_synthesis_reader import load_synthesis_view, inject_synthesis_into_card
-            view = load_synthesis_view(synth, vendor)
-            inject_synthesis_into_card(card_entry, view)
+            as_of_date = (reasoning_synthesis_as_of_lookup or {}).get(vendor)
+            view = load_synthesis_view(
+                synth,
+                vendor,
+                as_of_date=as_of_date,
+            )
+            inject_synthesis_into_card(
+                card_entry,
+                view,
+                requested_as_of=synthesis_requested_as_of,
+            )
+        segment_playbook = _battle_card_segment_playbook(card_entry)
+        if segment_playbook:
+            card_entry["segment_playbook"] = segment_playbook
+        timing_intelligence = _battle_card_timing_intelligence(card_entry)
+        if timing_intelligence:
+            card_entry["timing_intelligence"] = timing_intelligence
+            timing_summary, timing_metrics, priority_triggers = (
+                _timing_summary_payload(timing_intelligence)
+            )
+            if timing_summary:
+                card_entry["timing_summary"] = timing_summary
+            if timing_metrics:
+                card_entry["timing_metrics"] = timing_metrics
+            if priority_triggers:
+                card_entry["priority_timing_triggers"] = priority_triggers
+        if segment_playbook:
+            targeting_summary = _segment_targeting_summary(
+                segment_playbook,
+                timing_intelligence if timing_intelligence else None,
+            )
+            if targeting_summary:
+                card_entry["segment_targeting_summary"] = targeting_summary
         cards.append(card_entry)
 
     def _bc_sort_key(x: dict) -> tuple:
@@ -7175,6 +9677,8 @@ def _build_deterministic_battle_cards(
         reasoning_boost = min(rc.get("confidence", 0) * 5, 5.0) if rc.get("archetype") else 0
         return (-(score + reasoning_boost),)
     cards.sort(key=_bc_sort_key)
+    if limit is None:
+        return cards
     return cards[:limit]
 
 
