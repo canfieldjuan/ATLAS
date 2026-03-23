@@ -29,12 +29,21 @@ import type {
 import { normalizeReportDetail, normalizeVendorProfile } from '../lib/reportNormalization'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
-const BASE = `${API_BASE}/api/v1/b2b/dashboard`
+const TENANT_BASE = `${API_BASE}/api/v1/b2b/tenant`
+const AFFILIATES_BASE = `${TENANT_BASE}/affiliates`
 const CAMPAIGNS_BASE = `${API_BASE}/api/v1/b2b/campaigns`
 const TARGETS_BASE = `${API_BASE}/api/v1/b2b/vendor-targets`
 const BLOG_ADMIN_BASE = `${API_BASE}/api/v1/admin/blog`
 const PROSPECTS_BASE = `${API_BASE}/api/v1/b2b/prospects`
 const BRIEFINGS_BASE = `${API_BASE}/api/v1/b2b/briefings`
+const CACHE_BUSTER_PARAM = '_ts'
+
+function freshHeaders(): Record<string, string> {
+  return {
+    'Cache-Control': 'no-cache',
+    Pragma: 'no-cache',
+  }
+}
 
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem('atlas_token')
@@ -96,7 +105,11 @@ async function get<T>(base: string, path: string, params?: Record<string, string
       }
     }
   }
-  const doFetch = () => fetch(url.toString(), { headers: authHeaders() })
+  url.searchParams.set(CACHE_BUSTER_PARAM, String(Date.now()))
+  const doFetch = () => fetch(url.toString(), {
+    headers: { ...freshHeaders(), ...authHeaders() },
+    cache: 'no-store',
+  })
   const res = await doFetch()
   return handleResponse<T>(res, doFetch)
 }
@@ -105,7 +118,8 @@ async function post<T>(base: string, path: string, body?: unknown): Promise<T> {
   const url = base + path
   const doFetch = () => fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    headers: { 'Content-Type': 'application/json', ...freshHeaders(), ...authHeaders() },
+    cache: 'no-store',
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
   const res = await doFetch()
@@ -116,7 +130,8 @@ async function patch<T>(base: string, path: string, body: unknown): Promise<T> {
   const url = base + path
   const doFetch = () => fetch(url, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    headers: { 'Content-Type': 'application/json', ...freshHeaders(), ...authHeaders() },
+    cache: 'no-store',
     body: JSON.stringify(body),
   })
   const res = await doFetch()
@@ -127,7 +142,8 @@ async function put<T>(base: string, path: string, body: unknown): Promise<T> {
   const url = base + path
   const doFetch = () => fetch(url, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    headers: { 'Content-Type': 'application/json', ...freshHeaders(), ...authHeaders() },
+    cache: 'no-store',
     body: JSON.stringify(body),
   })
   const res = await doFetch()
@@ -136,7 +152,11 @@ async function put<T>(base: string, path: string, body: unknown): Promise<T> {
 
 async function del<T>(base: string, path: string): Promise<T> {
   const url = base + path
-  const doFetch = () => fetch(url, { method: 'DELETE', headers: authHeaders() })
+  const doFetch = () => fetch(url, {
+    method: 'DELETE',
+    headers: { ...freshHeaders(), ...authHeaders() },
+    cache: 'no-store',
+  })
   const res = await doFetch()
   return handleResponse<T>(res, doFetch)
 }
@@ -157,7 +177,7 @@ export async function fetchSignals(params?: {
     total_vendors?: number
     high_urgency_count?: number
     total_signal_reviews?: number
-  }>(BASE, '/signals', params)
+  }>(TENANT_BASE, '/signals', params)
 }
 
 export async function fetchSlowBurnWatchlist(params?: {
@@ -165,11 +185,11 @@ export async function fetchSlowBurnWatchlist(params?: {
   category?: string
   limit?: number
 }) {
-  return get<{ signals: ChurnSignal[]; count: number }>(BASE, '/slow-burn-watchlist', params)
+  return get<{ signals: ChurnSignal[]; count: number }>(TENANT_BASE, '/slow-burn-watchlist', params)
 }
 
 export async function fetchSignal(vendorName: string, productCategory?: string) {
-  return get<ChurnSignalDetail>(BASE, `/signals/${encodeURIComponent(vendorName)}`, {
+  return get<ChurnSignalDetail>(TENANT_BASE, `/signals/${encodeURIComponent(vendorName)}`, {
     product_category: productCategory,
   })
 }
@@ -180,11 +200,11 @@ export async function fetchHighIntent(params?: {
   window_days?: number
   limit?: number
 }) {
-  return get<{ companies: HighIntentCompany[]; count: number }>(BASE, '/high-intent', params)
+  return get<{ companies: HighIntentCompany[]; count: number }>(TENANT_BASE, '/high-intent', params)
 }
 
 export async function fetchVendorProfile(vendorName: string) {
-  const profile = await get<VendorProfile>(BASE, `/vendors/${encodeURIComponent(vendorName)}`)
+  const profile = await get<VendorProfile>(TENANT_BASE, `/signals/${encodeURIComponent(vendorName)}`)
   return normalizeVendorProfile(profile)
 }
 
@@ -192,7 +212,7 @@ export async function fetchVendorHistory(vendorName: string, params?: {
   days?: number
   limit?: number
 }) {
-  return get<VendorHistoryResponse>(BASE, '/vendor-history', {
+  return get<VendorHistoryResponse>(TENANT_BASE, '/vendor-history', {
     vendor_name: vendorName,
     ...params,
   })
@@ -202,7 +222,7 @@ export async function compareVendorPeriods(vendorName: string, params?: {
   period_a_days_ago?: number
   period_b_days_ago?: number
 }) {
-  return get<VendorPeriodComparisonResponse>(BASE, '/compare-vendor-periods', {
+  return get<VendorPeriodComparisonResponse>(TENANT_BASE, '/compare-vendor-periods', {
     vendor_name: vendorName,
     ...params,
   })
@@ -213,7 +233,7 @@ export async function fetchReports(params?: {
   vendor_filter?: string
   limit?: number
 }) {
-  return get<{ reports: Report[]; count: number }>(BASE, '/reports', params)
+  return get<{ reports: Report[]; count: number }>(TENANT_BASE, '/reports', params)
 }
 
 export async function generateVendorComparisonReport(body: {
@@ -222,7 +242,7 @@ export async function generateVendorComparisonReport(body: {
   window_days?: number
   persist?: boolean
 }) {
-  return post<Record<string, unknown>>(BASE, '/reports/compare', body)
+  return post<Record<string, unknown>>(TENANT_BASE, '/reports/compare', body)
 }
 
 export async function generateAccountComparisonReport(body: {
@@ -231,7 +251,7 @@ export async function generateAccountComparisonReport(body: {
   window_days?: number
   persist?: boolean
 }) {
-  return post<Record<string, unknown>>(BASE, '/reports/compare-companies', body)
+  return post<Record<string, unknown>>(TENANT_BASE, '/reports/compare-companies', body)
 }
 
 export async function generateAccountDeepDiveReport(body: {
@@ -239,11 +259,11 @@ export async function generateAccountDeepDiveReport(body: {
   window_days?: number
   persist?: boolean
 }) {
-  return post<Record<string, unknown>>(BASE, '/reports/company-deep-dive', body)
+  return post<Record<string, unknown>>(TENANT_BASE, '/reports/company-deep-dive', body)
 }
 
 export async function fetchReport(reportId: string) {
-  const report = await get<ReportDetail>(BASE, `/reports/${reportId}`)
+  const report = await get<ReportDetail>(TENANT_BASE, `/reports/${reportId}`)
   return normalizeReportDetail(report)
 }
 
@@ -256,15 +276,15 @@ export async function fetchReviews(params?: {
   window_days?: number
   limit?: number
 }) {
-  return get<{ reviews: ReviewSummary[]; count: number }>(BASE, '/reviews', params)
+  return get<{ reviews: ReviewSummary[]; count: number }>(TENANT_BASE, '/reviews', params)
 }
 
 export async function fetchReview(reviewId: string) {
-  return get<ReviewDetail>(BASE, `/reviews/${reviewId}`)
+  return get<ReviewDetail>(TENANT_BASE, `/reviews/${reviewId}`)
 }
 
 export async function fetchPipeline() {
-  return get<PipelineStatus>(BASE, '/pipeline')
+  return get<PipelineStatus>(TENANT_BASE, '/pipeline')
 }
 
 // ---------------------------------------------------------------------------
@@ -279,31 +299,31 @@ export async function fetchAffiliateOpportunities(params?: {
   vendor_name?: string
   dm_only?: boolean
 }) {
-  return get<{ opportunities: AffiliateOpportunity[]; count: number }>(BASE, '/affiliates/opportunities', params)
+  return get<{ opportunities: AffiliateOpportunity[]; count: number }>(AFFILIATES_BASE, '/opportunities', params)
 }
 
 export async function fetchAffiliatePartners() {
-  return get<{ partners: AffiliatePartner[]; count: number }>(BASE, '/affiliates/partners')
+  return get<{ partners: AffiliatePartner[]; count: number }>(AFFILIATES_BASE, '/partners')
 }
 
 export async function fetchClickSummary() {
-  return get<{ clicks: ClickSummary[] }>(BASE, '/affiliates/clicks/summary')
+  return get<{ clicks: ClickSummary[] }>(AFFILIATES_BASE, '/clicks/summary')
 }
 
 export async function createAffiliatePartner(body: Omit<AffiliatePartner, 'id' | 'created_at' | 'updated_at'>) {
-  return post<AffiliatePartner>(BASE, '/affiliates/partners', body)
+  return post<AffiliatePartner>(AFFILIATES_BASE, '/partners', body)
 }
 
 export async function updateAffiliatePartner(id: string, body: Partial<AffiliatePartner>) {
-  return patch<AffiliatePartner>(BASE, `/affiliates/partners/${id}`, body)
+  return patch<AffiliatePartner>(AFFILIATES_BASE, `/partners/${id}`, body)
 }
 
 export async function deleteAffiliatePartner(id: string) {
-  return del<{ status: string }>(BASE, `/affiliates/partners/${id}`)
+  return del<{ status: string }>(AFFILIATES_BASE, `/partners/${id}`)
 }
 
 export async function recordAffiliateClick(partnerId: string, reviewId?: string) {
-  return post<{ status: string }>(BASE, '/affiliates/clicks', { partner_id: partnerId, review_id: reviewId, referrer: 'dashboard' })
+  return post<{ status: string }>(AFFILIATES_BASE, '/clicks', { partner_id: partnerId, review_id: reviewId, referrer: 'dashboard' })
 }
 
 // ---------------------------------------------------------------------------
@@ -387,7 +407,7 @@ export function downloadCsv(
   path: string,
   params?: Record<string, string | number | boolean | undefined>,
 ) {
-  const url = new URL(BASE + path, window.location.origin)
+  const url = new URL(TENANT_BASE + path, window.location.origin)
   if (params) {
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null && v !== '') {
@@ -485,8 +505,6 @@ export async function bulkRejectCampaigns(ids: string[], reason?: string) {
 // ---------------------------------------------------------------------------
 // Tenant Vendor Tracking (onboarding + scoped data)
 // ---------------------------------------------------------------------------
-
-const TENANT_BASE = `${API_BASE}/api/v1/b2b/tenant`
 
 export interface TrackedVendor {
   id: string

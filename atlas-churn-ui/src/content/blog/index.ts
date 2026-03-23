@@ -33,6 +33,10 @@ import migrationFromPipedrive202603 from './migration-from-pipedrive-2026-03'
 import helpScoutChurnReport202603 from './help-scout-churn-report-2026-03'
 import insightlyChurnReport202603 from './insightly-churn-report-2026-03'
 import bestCrmFor51200202603 from './best-crm-for-51-200-2026-03'
+import realCostOfMailchimp202603 from './real-cost-of-mailchimp-2026-03'
+import mailchimpVsIntercom202603 from './mailchimp-vs-intercom-2026-03'
+import salesforceVsHubspot202603 from './salesforce-vs-hubspot-2026-03'
+import asanaVsMondaycom202603 from './asana-vs-mondaycom-2026-03'
 type ChartValue = string | number | null | undefined
 type ChartDatum = Record<string, ChartValue>
 
@@ -135,4 +139,8 @@ export const POSTS: BlogPost[] = [
   helpScoutChurnReport202603,
   insightlyChurnReport202603,
   bestCrmFor51200202603,
+  realCostOfMailchimp202603,
+  mailchimpVsIntercom202603,
+  salesforceVsHubspot202603,
+  asanaVsMondaycom202603,
 ]

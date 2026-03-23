@@ -1157,18 +1157,31 @@ async def trigger_scrape(target_id: UUID) -> dict:
         "inserted": 0,
         "skipped_short": 0,
         "duplicate_or_existing": 0,
+        "duplicate_same_batch": 0,
+        "duplicate_existing": 0,
+        "duplicate_db_conflict": 0,
         "named_company_reviews": 0,
         "eligible_rows": 0,
     }
     pv = getattr(parser, 'version', None)
     if result.reviews:
-        from ..autonomous.tasks.b2b_scrape_intake import _insert_reviews
+        from ..autonomous.tasks.b2b_scrape_intake import (
+            _insert_reviews,
+            _load_existing_review_identity_sets,
+        )
         batch_id = f"manual_{target.source}_{target.product_slug}_{int(_time.time())}"
+        known_keys, known_identities = await _load_existing_review_identity_sets(
+            pool,
+            target.vendor_name,
+            target.source,
+        )
         insert_stats = await _insert_reviews(
             pool,
             result.reviews,
             batch_id,
             parser_version=pv,
+            known_keys=known_keys,
+            known_identities=known_identities,
             target_context={"scrape_target_id": str(target_id)},
         )
         inserted = insert_stats["inserted"]
@@ -1238,6 +1251,9 @@ async def trigger_scrape(target_id: UUID) -> dict:
         "reviews_filtered": filtered_count,
         "date_dropped": date_dropped,
         "duplicate_or_existing": insert_stats["duplicate_or_existing"],
+        "duplicate_same_batch": insert_stats["duplicate_same_batch"],
+        "duplicate_existing": insert_stats["duplicate_existing"],
+        "duplicate_db_conflict": insert_stats["duplicate_db_conflict"],
         "named_company_reviews": insert_stats["named_company_reviews"],
         "skipped_short": insert_stats["skipped_short"],
         "pages_scraped": result.pages_scraped,
@@ -1349,6 +1365,7 @@ async def trigger_scrape_all(
     from ..autonomous.tasks.b2b_scrape_intake import (
         _build_scrape_state,
         _filter_by_date, _determine_stop_reason, _insert_reviews,
+        _load_existing_review_identity_sets,
         _log_scrape_exhaustive, _prepare_scrape_target, _review_date_stats,
         _scrape_state_from_row,
         _update_target_after_scrape,
@@ -1403,17 +1420,27 @@ async def trigger_scrape_all(
             "inserted": 0,
             "skipped_short": 0,
             "duplicate_or_existing": 0,
+            "duplicate_same_batch": 0,
+            "duplicate_existing": 0,
+            "duplicate_db_conflict": 0,
             "named_company_reviews": 0,
             "eligible_rows": 0,
         }
         pv = getattr(parser, 'version', None)
         if result.reviews:
             batch_id = f"bulk_{target.source}_{target.product_slug}_{int(_time.time())}"
+            known_keys, known_identities = await _load_existing_review_identity_sets(
+                pool,
+                target.vendor_name,
+                target.source,
+            )
             insert_stats = await _insert_reviews(
                 pool,
                 result.reviews,
                 batch_id,
                 parser_version=pv,
+                known_keys=known_keys,
+                known_identities=known_identities,
                 target_context={"scrape_target_id": str(row["id"])},
             )
             inserted = insert_stats["inserted"]
@@ -1482,6 +1509,9 @@ async def trigger_scrape_all(
             "found": len(result.reviews) + filtered_count + date_dropped,
             "inserted": inserted,
             "duplicate_or_existing": insert_stats["duplicate_or_existing"],
+            "duplicate_same_batch": insert_stats["duplicate_same_batch"],
+            "duplicate_existing": insert_stats["duplicate_existing"],
+            "duplicate_db_conflict": insert_stats["duplicate_db_conflict"],
             "named_company_reviews": insert_stats["named_company_reviews"],
             "skipped_short": insert_stats["skipped_short"],
             "filtered": filtered_count,
@@ -1497,6 +1527,10 @@ async def trigger_scrape_all(
         "targets_scraped": len(results),
         "total_inserted": total_inserted,
         "total_filtered": total_filtered,
+        "total_duplicate_or_existing": sum(int(result.get("duplicate_or_existing") or 0) for result in results),
+        "total_duplicate_same_batch": sum(int(result.get("duplicate_same_batch") or 0) for result in results),
+        "total_duplicate_existing": sum(int(result.get("duplicate_existing") or 0) for result in results),
+        "total_duplicate_db_conflict": sum(int(result.get("duplicate_db_conflict") or 0) for result in results),
         "results": results,
     }
 

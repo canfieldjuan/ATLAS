@@ -19,6 +19,10 @@ from ..services.company_normalization import normalize_company_name
 from ..services.scraping.sources import ReviewSource
 from ..services.vendor_registry import resolve_vendor_name
 from ..storage.database import get_db_pool
+from ..autonomous.tasks.b2b_scrape_intake import (
+    _load_existing_review_identity_sets,
+    _make_review_identity_key,
+)
 
 _VALID_SOURCES = {s.value for s in ReviewSource}
 
@@ -98,6 +102,9 @@ async def import_b2b_reviews(reviews: list[B2BReviewInput]) -> dict:
 
     batch_id = f"api_{int(time.time())}"
     rows = []
+    seen_hashes: set[str] = set()
+    seen_identities: set[str] = set()
+    existing_cache: dict[tuple[str, str], tuple[set[str], set[str]]] = {}
     for r in reviews:
         reviewed_at_ts = None
         if r.reviewed_at:
@@ -113,6 +120,33 @@ async def import_b2b_reviews(reviews: list[B2BReviewInput]) -> dict:
             r.source, canonical_vendor, r.source_review_id,
             r.reviewer_name, r.reviewed_at,
         )
+        identity_key = _make_review_identity_key(
+            r.source,
+            canonical_vendor,
+            r.source_review_id,
+            r.reviewer_name,
+            reviewed_at_ts or r.reviewed_at,
+        )
+        cache_key = (canonical_vendor, r.source)
+        if cache_key not in existing_cache:
+            try:
+                existing_cache[cache_key] = await _load_existing_review_identity_sets(
+                    pool,
+                    canonical_vendor,
+                    r.source,
+                )
+            except Exception:
+                existing_cache[cache_key] = (set(), set())
+        known_hashes, known_identities = existing_cache[cache_key]
+        if (
+            dedup_key in seen_hashes
+            or identity_key in seen_identities
+            or dedup_key in known_hashes
+            or identity_key in known_identities
+        ):
+            continue
+        seen_hashes.add(dedup_key)
+        seen_identities.add(identity_key)
         reviewer_company_norm = normalize_company_name(r.reviewer_company or "") or None
 
         rows.append((

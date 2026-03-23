@@ -1,13 +1,13 @@
 /* eslint-disable react-refresh/only-export-components */
 import { useNavigate } from 'react-router-dom'
-import { FileBarChart, RefreshCw, Search, X, Loader2 } from 'lucide-react'
+import { FileBarChart, RefreshCw, Search, X, Loader2, ChevronLeft, ChevronRight } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PageError } from '../components/ErrorBoundary'
 import UpgradeGate from '../components/UpgradeGate'
 import useApiData from '../hooks/useApiData'
 import { usePlanGate } from '../hooks/usePlanGate'
 import { fetchReports, generateAccountComparisonReport, generateAccountDeepDiveReport, generateVendorComparisonReport } from '../api/client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import type { Report } from '../types'
 
 export const REPORT_TYPE_COLORS: Record<string, string> = {
@@ -22,6 +22,20 @@ export const REPORT_TYPE_COLORS: Record<string, string> = {
   vendor_retention: 'bg-orange-500/20 text-orange-400',
   challenger_intel: 'bg-purple-500/20 text-purple-400',
   battle_card: 'bg-red-500/20 text-red-400',
+}
+
+const QUALITY_STATUS_COLORS: Record<string, string> = {
+  sales_ready: 'bg-emerald-500/20 text-emerald-300',
+  needs_review: 'bg-amber-500/20 text-amber-300',
+  deterministic_fallback: 'bg-rose-500/20 text-rose-300',
+}
+
+function qualityStatusLabel(status: string | null | undefined): string {
+  const key = (status || '').toLowerCase()
+  if (key === 'sales_ready') return 'Sales Ready'
+  if (key === 'needs_review') return 'Needs Review'
+  if (key === 'deterministic_fallback') return 'Fallback'
+  return ''
 }
 
 function CardSkeleton() {
@@ -39,10 +53,17 @@ function CardSkeleton() {
   )
 }
 
+function toIso(value: string | null | undefined): string | null {
+  if (!value) return null
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? null : date.toISOString()
+}
+
 export default function Reports() {
   const navigate = useNavigate()
   const { canAccessReports } = usePlanGate()
   const [typeFilter, setTypeFilter] = useState('')
+  const [qualityFilter, setQualityFilter] = useState('')
   const [vendorSearch, setVendorSearch] = useState('')
   const [debouncedVendor, setDebouncedVendor] = useState('')
   const [primaryVendor, setPrimaryVendor] = useState('')
@@ -60,16 +81,50 @@ export default function Reports() {
   }, [vendorSearch])
 
   const { data, loading, error, refresh, refreshing } = useApiData(
-    () => fetchReports({ report_type: typeFilter || undefined, vendor_filter: debouncedVendor || undefined, limit: 50 }),
+    () => fetchReports({ report_type: typeFilter || undefined, vendor_filter: debouncedVendor || undefined, limit: 200 }),
     [typeFilter, debouncedVendor],
   )
 
+  const PAGE_SIZES = [25, 50, 100] as const
+  const [page, setPage] = useState(0)
+  const [perPage, setPerPage] = useState<number>(PAGE_SIZES[0])
+
   const reports = data?.reports ?? []
-  const hasFilters = typeFilter !== '' || vendorSearch !== ''
+  const filteredReports = useMemo(
+    () => reports.filter((report) => {
+      if (!qualityFilter) return true
+      if (report.report_type !== 'battle_card') return false
+      return (report.quality_status || '').toLowerCase() === qualityFilter
+    }),
+    [reports, qualityFilter],
+  )
+
+  // Reset page when data or filters change
+  const reportCount = filteredReports.length
+  useEffect(() => { setPage(0) }, [reportCount, typeFilter, debouncedVendor, qualityFilter])
+
+  const totalPages = Math.max(1, Math.ceil(filteredReports.length / perPage))
+  const safePage = Math.min(page, totalPages - 1)
+  const pagedReports = useMemo(
+    () => filteredReports.slice(safePage * perPage, (safePage + 1) * perPage),
+    [filteredReports, safePage, perPage],
+  )
+  const showPagination = filteredReports.length > PAGE_SIZES[0]
+
+  const newestReportAt = filteredReports
+    .map((report) => toIso(report.created_at ?? report.report_date))
+    .filter((value): value is string => Boolean(value))
+    .sort((a, b) => b.localeCompare(a))[0] ?? null
+  const newestReportAgeHours = newestReportAt
+    ? (Date.now() - new Date(newestReportAt).getTime()) / (1000 * 60 * 60)
+    : null
+  const reportsStale = newestReportAgeHours !== null && newestReportAgeHours > 24
+  const hasFilters = typeFilter !== '' || vendorSearch !== '' || qualityFilter !== ''
   const debouncePending = vendorSearch !== debouncedVendor
 
   function clearFilters() {
     setTypeFilter('')
+    setQualityFilter('')
     setVendorSearch('')
     setDebouncedVendor('')
   }
@@ -204,6 +259,16 @@ export default function Reports() {
             <option value="challenger_intel">Challenger Intel</option>
             <option value="battle_card">Battle Card</option>
           </select>
+          <select
+            value={qualityFilter}
+            onChange={(e) => setQualityFilter(e.target.value)}
+            className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+          >
+            <option value="">All Quality</option>
+            <option value="sales_ready">Sales Ready</option>
+            <option value="needs_review">Needs Review</option>
+            <option value="deterministic_fallback">Fallback</option>
+          </select>
           {hasFilters && (
             <button
               onClick={clearFilters}
@@ -222,7 +287,17 @@ export default function Reports() {
               Searching...
             </>
           ) : (
-            <span>{reports.length} report{reports.length !== 1 ? 's' : ''} found</span>
+            <span>{filteredReports.length} report{filteredReports.length !== 1 ? 's' : ''} found{reports.length >= 200 ? ' (showing max 200)' : ''}</span>
+          )}
+        </div>
+        <div className="text-xs">
+          {newestReportAt ? (
+            <span className={reportsStale ? 'text-amber-400' : 'text-slate-500'}>
+              Latest report generated {new Date(newestReportAt).toLocaleString()}
+              {reportsStale ? ' (older than 24h)' : ''}
+            </span>
+          ) : (
+            <span className="text-slate-500">No report freshness timestamp available</span>
           )}
         </div>
       </div>
@@ -314,7 +389,7 @@ export default function Reports() {
             <CardSkeleton key={i} />
           ))}
         </div>
-      ) : reports.length === 0 ? (
+      ) : filteredReports.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-24 text-center">
           <FileBarChart className="h-10 w-10 text-slate-600 mb-4" />
           <p className="text-slate-500 mb-4">No reports found</p>
@@ -328,39 +403,86 @@ export default function Reports() {
           )}
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {reports.map((r: Report) => (
-            <button
-              key={r.id}
-              onClick={() => navigate(`/reports/${r.id}`)}
-              className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-5 text-left hover:border-cyan-500/30 transition-colors"
-            >
-              <div className="flex items-start justify-between mb-3">
-                <span
-                  className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                    REPORT_TYPE_COLORS[r.report_type] ?? 'bg-slate-500/20 text-slate-400'
-                  }`}
-                >
-                  {r.report_type.replace(/_/g, ' ')}
-                </span>
-                <FileBarChart className="h-4 w-4 text-slate-500" />
-              </div>
-              {(r.vendor_filter || r.category_filter) && (
-                <p className="text-sm text-white font-medium mb-1">
-                  {['vendor_comparison', 'account_comparison'].includes(r.report_type) && r.vendor_filter && r.category_filter
-                    ? `${r.vendor_filter} vs ${r.category_filter}`
-                    : r.vendor_filter}
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {pagedReports.map((r: Report) => (
+              <button
+                key={r.id}
+                onClick={() => navigate(`/reports/${r.id}`)}
+                className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-5 text-left hover:border-cyan-500/30 transition-colors"
+              >
+                <div className="flex items-start justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                        REPORT_TYPE_COLORS[r.report_type] ?? 'bg-slate-500/20 text-slate-400'
+                      }`}
+                    >
+                      {r.report_type.replace(/_/g, ' ')}
+                    </span>
+                    {r.report_type === 'battle_card' && r.quality_status && (
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${QUALITY_STATUS_COLORS[r.quality_status] || 'bg-slate-500/20 text-slate-300'}`}>
+                        {qualityStatusLabel(r.quality_status)}
+                      </span>
+                    )}
+                  </div>
+                  <FileBarChart className="h-4 w-4 text-slate-500" />
+                </div>
+                {(r.vendor_filter || r.category_filter) && (
+                  <p className="text-sm text-white font-medium mb-1">
+                    {['vendor_comparison', 'account_comparison'].includes(r.report_type) && r.vendor_filter && r.category_filter
+                      ? `${r.vendor_filter} vs ${r.category_filter}`
+                      : r.vendor_filter}
+                  </p>
+                )}
+                <p className="text-sm text-slate-400 line-clamp-2">
+                  {r.executive_summary ?? 'No summary available'}
                 </p>
-              )}
-              <p className="text-sm text-slate-400 line-clamp-2">
-                {r.executive_summary ?? 'No summary available'}
-              </p>
-              <p className="text-xs text-slate-500 mt-3">
-                {r.report_date ?? r.created_at ?? '--'}
-              </p>
-            </button>
-          ))}
-        </div>
+                <p className="text-xs text-slate-500 mt-3">
+                  {r.report_date ?? r.created_at ?? '--'}
+                </p>
+              </button>
+            ))}
+          </div>
+
+          {showPagination && (
+            <div className="flex items-center justify-between px-4 py-3 bg-slate-900/50 border border-slate-700/50 rounded-xl">
+              <div className="flex items-center gap-2 text-xs text-slate-400">
+                  <span>
+                  {safePage * perPage + 1}--{Math.min((safePage + 1) * perPage, filteredReports.length)} of {filteredReports.length}
+                </span>
+                <select
+                  value={perPage}
+                  onChange={(e) => { setPerPage(Number(e.target.value)); setPage(0) }}
+                  className="bg-slate-800/50 border border-slate-700/50 rounded px-1.5 py-0.5 text-xs text-white focus:outline-none"
+                >
+                  {PAGE_SIZES.map((s) => (
+                    <option key={s} value={s}>{s} / page</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  disabled={safePage === 0}
+                  className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                <span className="text-xs text-slate-400 px-2">
+                  {safePage + 1} / {totalPages}
+                </span>
+                <button
+                  onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                  disabled={safePage >= totalPages - 1}
+                  className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   )

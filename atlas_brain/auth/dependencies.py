@@ -39,6 +39,13 @@ def _synthetic_admin() -> AuthUser:
     )
 
 
+def _effective_is_admin(role: str | None, is_admin_flag: bool | None) -> bool:
+    if bool(is_admin_flag):
+        return True
+    role_normalized = (role or "").strip().lower()
+    return role_normalized in {"owner", "admin"}
+
+
 def _extract_token(request: Request) -> Optional[str]:
     """Extract JWT from Authorization header or cookie."""
     auth = request.headers.get("authorization", "")
@@ -106,7 +113,7 @@ async def require_auth(request: Request) -> AuthUser:
         role=row["role"],
         product=row["product"] or "consumer",
         trial_ends_at=trial_ends,
-        is_admin=bool(row["is_admin"]),
+        is_admin=_effective_is_admin(row["role"], row["is_admin"]),
     )
 
 
@@ -167,7 +174,7 @@ async def optional_auth(request: Request) -> Optional[AuthUser]:
         role=row["role"],
         product=row["product"] or "consumer",
         trial_ends_at=row["trial_ends_at"],
-        is_admin=bool(row["is_admin"]),
+        is_admin=_effective_is_admin(row["role"], row["is_admin"]),
     )
 
 

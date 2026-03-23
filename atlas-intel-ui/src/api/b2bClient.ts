@@ -230,6 +230,8 @@ export interface B2BReport {
   executive_summary: string | null
   vendor_filter: string | null
   status: string | null
+  quality_status?: string | null
+  quality_score?: number | null
   created_at: string | null
 }
 

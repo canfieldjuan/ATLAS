@@ -22,7 +22,7 @@ import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
 import { usePlanGate } from '../hooks/usePlanGate'
 import {
-  fetchAffiliateOpportunities,
+  fetchHighIntent,
   fetchCampaigns,
   fetchCampaignStats,
   generateCampaigns,
@@ -31,34 +31,15 @@ import {
   updateCampaign,
 } from '../api/client'
 import type {
-  AffiliateOpportunity,
   Campaign,
   CampaignStats,
+  HighIntentCompany,
 } from '../types'
 
 interface LeadsData {
-  opportunities: AffiliateOpportunity[]
+  opportunities: HighIntentCompany[]
   campaigns: Campaign[]
   stats: CampaignStats
-}
-
-function ScoreBadge({ score }: { score: number }) {
-  return (
-    <span
-      className={clsx(
-        'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium',
-        score >= 80
-          ? 'bg-green-500/20 text-green-400'
-          : score >= 60
-            ? 'bg-cyan-500/20 text-cyan-400'
-            : score >= 40
-              ? 'bg-amber-500/20 text-amber-400'
-              : 'bg-slate-500/20 text-slate-400',
-      )}
-    >
-      {score}
-    </span>
-  )
 }
 
 function CampaignStatusBadge({ status }: { status: string }) {
@@ -177,8 +158,6 @@ export default function Leads() {
   const [vendorSearch, setVendorSearch] = useState('')
   const [debouncedVendor, setDebouncedVendor] = useState('')
   const [minUrgency, setMinUrgency] = useState(5)
-  const [minScore, setMinScore] = useState(0)
-  const [dmOnly, setDmOnly] = useState(false)
 
   // Campaign generation
   const [generating, setGenerating] = useState(false)
@@ -196,23 +175,21 @@ export default function Leads() {
   const { data, loading, error, refresh, refreshing } = useApiData<LeadsData>(
     async () => {
       const [oppRes, campRes, statsRes] = await Promise.all([
-        fetchAffiliateOpportunities({
+        fetchHighIntent({
           min_urgency: minUrgency,
-          min_score: minScore,
           vendor_name: debouncedVendor || undefined,
-          dm_only: dmOnly || undefined,
           limit: 100,
         }),
         fetchCampaigns({ limit: 200 }),
         fetchCampaignStats(),
       ])
       return {
-        opportunities: oppRes.opportunities,
+        opportunities: oppRes.companies,
         campaigns: campRes.campaigns,
         stats: statsRes,
       }
     },
-    [minUrgency, minScore, debouncedVendor, dmOnly],
+    [minUrgency, debouncedVendor],
   )
 
   const opportunities = data?.opportunities ?? []
@@ -220,9 +197,9 @@ export default function Leads() {
   const stats = data?.stats ?? { by_status: {}, by_channel: {}, top_vendors: [], total: 0 }
 
   const campaignsSent = (stats.by_status['sent'] ?? 0) + (stats.by_status['approved'] ?? 0)
-  const avgScore =
+  const avgUrgency =
     opportunities.length > 0
-      ? Math.round(opportunities.reduce((s, o) => s + o.opportunity_score, 0) / opportunities.length)
+      ? Math.round((opportunities.reduce((s, o) => s + o.urgency, 0) / opportunities.length) * 10) / 10
       : 0
 
   // Build a lookup: company_name (lower) -> campaign status
@@ -242,7 +219,7 @@ export default function Leads() {
     try {
       const result = await generateCampaigns({
         vendor_name: debouncedVendor || undefined,
-        min_score: Math.max(minScore, 70),
+        min_score: 70,
         limit: 20,
       })
       setGenResult(`Generated ${result.generated ?? 0} campaign(s) for ${result.companies ?? 0} companies`)
@@ -278,30 +255,31 @@ export default function Leads() {
   }
 
   // -- Table columns --
-  const columns: Column<AffiliateOpportunity>[] = [
-    {
-      key: 'score',
-      header: 'Score',
-      render: (r) => <ScoreBadge score={r.opportunity_score} />,
-      sortable: true,
-      sortValue: (r) => r.opportunity_score,
-    },
+  const columns: Column<HighIntentCompany>[] = [
     {
       key: 'vendor',
       header: 'Churning From',
-      render: (r) => <span className="text-white font-medium">{r.vendor_name}</span>,
+      render: (r) => <span className="text-white font-medium">{r.vendor}</span>,
     },
     {
       key: 'company',
       header: 'Company',
-      render: (r) => <span className="text-slate-300">{r.reviewer_company ?? '--'}</span>,
+      render: (r) => <span className="text-slate-300">{r.company || '--'}</span>,
     },
     {
       key: 'competitor',
       header: 'Considering',
-      render: (r) => (
-        <span className="text-cyan-400 font-medium">{r.competitor_name}</span>
-      ),
+      render: (r) => {
+        const names = Array.isArray(r.alternatives)
+          ? r.alternatives
+              .map((alt) => alt?.name?.trim())
+              .filter((name): name is string => Boolean(name))
+              .slice(0, 2)
+          : []
+        return (
+          <span className="text-cyan-400 font-medium">{names.join(', ') || '--'}</span>
+        )
+      },
     },
     {
       key: 'urgency',
@@ -314,7 +292,7 @@ export default function Leads() {
       key: 'dm',
       header: 'DM',
       render: (r) =>
-        r.is_dm ? (
+        r.decision_maker ? (
           <span className="text-cyan-400 text-xs font-medium">Yes</span>
         ) : (
           <span className="text-slate-500 text-xs">No</span>
@@ -350,7 +328,7 @@ export default function Leads() {
       key: 'campaign',
       header: 'Campaign',
       render: (r) => {
-        const company = (r.reviewer_company ?? '').toLowerCase()
+        const company = (r.company ?? '').toLowerCase()
         const campaign = campaignByCompany.get(company)
         if (!campaign) {
           return <span className="text-slate-500 text-xs">--</span>
@@ -512,8 +490,8 @@ export default function Leads() {
           skeleton={loading}
         />
         <StatCard
-          label="Avg Score"
-          value={avgScore}
+          label="Avg Urgency"
+          value={avgUrgency}
           icon={<TrendingUp className="h-5 w-5" />}
           skeleton={loading}
         />
@@ -543,27 +521,6 @@ export default function Leads() {
               onChange={(e) => setMinUrgency(Number(e.target.value))}
               className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-2 py-1.5 text-sm text-white w-16 focus:outline-none focus:border-cyan-500/50"
             />
-          </label>
-          <label className="flex items-center gap-2 text-sm text-slate-400">
-            Min Score
-            <input
-              type="number"
-              min={0}
-              max={100}
-              step={5}
-              value={minScore}
-              onChange={(e) => setMinScore(Number(e.target.value))}
-              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-2 py-1.5 text-sm text-white w-16 focus:outline-none focus:border-cyan-500/50"
-            />
-          </label>
-          <label className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={dmOnly}
-              onChange={(e) => setDmOnly(e.target.checked)}
-              className="rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500/30"
-            />
-            DM only
           </label>
         </div>
 

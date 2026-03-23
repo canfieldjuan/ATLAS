@@ -368,19 +368,29 @@ async def get_vendor_target(
     )
     target["campaign_stats"] = dict(campaign_stats) if campaign_stats else {}
 
-    # Fetch recent reports for this target
-    report_type = "vendor_retention" if target["target_mode"] == "vendor_retention" else "challenger_intel"
+    # Fetch recent reports for this target, preferring newer report families.
+    if target["target_mode"] == "vendor_retention":
+        report_types = ["accounts_in_motion", "vendor_retention", "weekly_churn_feed"]
+    else:
+        report_types = ["challenger_brief", "challenger_intel"]
+
     reports = await pool.fetch(
         """
         SELECT id, report_date, report_type, executive_summary, created_at
         FROM b2b_intelligence
         WHERE vendor_filter ILIKE '%' || $1 || '%'
-          AND report_type = $2
-        ORDER BY report_date DESC
+          AND report_type = ANY($2::text[])
+        ORDER BY CASE
+                   WHEN report_type = ANY($3::text[]) THEN 0
+                   ELSE 1
+                 END,
+                 report_date DESC,
+                 created_at DESC
         LIMIT 5
         """,
         target["company_name"],
-        report_type,
+        report_types,
+        report_types[:1],
     )
     target["recent_reports"] = [dict(r) for r in reports]
 

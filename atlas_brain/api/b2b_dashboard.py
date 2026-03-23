@@ -13,7 +13,7 @@ import json
 import logging
 import re
 import uuid as _uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -101,6 +101,12 @@ def _safe_float(val, default=None):
         return float(val)
     except (ValueError, TypeError):
         return default
+
+
+def _safe_dict(val):
+    if isinstance(val, dict):
+        return val
+    return {}
 
 
 def _pool_or_503():
@@ -957,7 +963,8 @@ async def compare_vendor_reasoning(
 async def list_reports(
     report_type: Optional[str] = Query(None),
     vendor_filter: Optional[str] = Query(None),
-    limit: int = Query(10, ge=1, le=50),
+    include_stale: bool = Query(False),
+    limit: int = Query(50, ge=1, le=500),
     user: AuthUser | None = Depends(optional_auth),
 ):
     if report_type and report_type not in VALID_REPORT_TYPES:
@@ -985,17 +992,35 @@ async def list_reports(
         params.append(vendor_filter)
         idx += 1
 
+    if not include_stale:
+        conditions.append(
+            "COALESCE((intelligence_data->>'data_stale')::boolean, false) = false"
+        )
+
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    capped = min(limit, 50)
+    capped = min(limit, 500)
     params.append(capped)
 
     rows = await pool.fetch(
         f"""
         SELECT id, report_date, report_type, executive_summary,
-             vendor_filter, category_filter, status, created_at
+             vendor_filter, category_filter, status, created_at,
+             CASE
+               WHEN report_type = 'battle_card'
+               THEN COALESCE(intelligence_data->>'quality_status', intelligence_data->'battle_card_quality'->>'status')
+               ELSE NULL
+             END AS quality_status,
+             CASE
+               WHEN report_type = 'battle_card'
+               THEN COALESCE(
+                 (intelligence_data->'battle_card_quality'->>'score')::int,
+                 NULL
+               )
+               ELSE NULL
+             END AS quality_score
         FROM b2b_intelligence
         {where}
-        ORDER BY report_date DESC
+        ORDER BY report_date DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
         LIMIT ${idx}
         """,
         *params,
@@ -1010,6 +1035,8 @@ async def list_reports(
             "vendor_filter": r["vendor_filter"],
             "category_filter": r["category_filter"],
             "status": r["status"],
+            "quality_status": r["quality_status"],
+            "quality_score": r["quality_score"],
             "created_at": str(r["created_at"]) if r["created_at"] else None,
         }
         for r in rows
@@ -1046,6 +1073,12 @@ async def get_report(report_id: str, user: AuthUser | None = Depends(optional_au
         if not is_tracked:
             raise HTTPException(status_code=403, detail="Report vendor not in your tracked list")
     # NULL vendor_filter (global reports) visible to any authenticated user
+    intelligence_data = _safe_json(row["intelligence_data"])
+    quality = {}
+    quality_status = None
+    if isinstance(intelligence_data, dict):
+        quality = _safe_dict(intelligence_data.get("battle_card_quality"))
+        quality_status = intelligence_data.get("quality_status")
 
     return {
         "id": str(row["id"]),
@@ -1054,9 +1087,11 @@ async def get_report(report_id: str, user: AuthUser | None = Depends(optional_au
         "vendor_filter": row["vendor_filter"],
         "category_filter": row["category_filter"],
         "executive_summary": row["executive_summary"],
-        "intelligence_data": _safe_json(row["intelligence_data"]),
+        "intelligence_data": intelligence_data,
         "data_density": _safe_json(row["data_density"]),
         "status": row["status"],
+        "quality_status": quality_status or quality.get("status"),
+        "quality_score": quality.get("score"),
         "llm_model": row["llm_model"],
         "created_at": str(row["created_at"]) if row["created_at"] else None,
     }
@@ -5026,13 +5061,22 @@ async def _list_accounts_in_motion_from_report(
         )
     )
     accounts = await _enrich_accounts_in_motion_accounts(pool, shaped[:limit])
+    report_date = str(row["report_date"]) if row["report_date"] else None
+    stale_days = None
+    if report_date:
+        try:
+            stale_days = max(0, (date.today() - date.fromisoformat(report_date[:10])).days)
+        except (TypeError, ValueError):
+            stale_days = None
     return {
         "vendor": vendor,
         "accounts": accounts,
         "count": len(accounts),
         "window_days": settings.b2b_churn.intelligence_window_days,
         "min_urgency": min_urgency,
-        "report_date": str(row["report_date"]) if row["report_date"] else None,
+        "report_date": report_date,
+        "stale_days": stale_days,
+        "is_stale": bool(stale_days and stale_days > 0),
         "data_source": "persisted_report",
     }
 

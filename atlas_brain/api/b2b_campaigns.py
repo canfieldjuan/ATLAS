@@ -50,6 +50,9 @@ class GenerateRequest(BaseModel):
     min_score: int = 70
     limit: int = Field(default=20, ge=1, le=200)
     target_mode: str | None = None  # vendor_retention | challenger_intel | churning_company
+    force: bool = False
+    ignore_recent_dedup: bool = False
+    ignore_briefing_gate: bool = False
 
 
 class SetRecipientBody(BaseModel):
@@ -703,6 +706,66 @@ async def review_queue(
     }
 
 
+@router.get("/review-candidates")
+async def review_candidates(
+    limit: int = Query(50, ge=1, le=200),
+    min_score: int = Query(settings.b2b_campaign.review_queue_min_score, ge=0, le=100),
+    max_score: int = Query(settings.b2b_campaign.review_queue_max_score, ge=0, le=100),
+    vendor: str | None = Query(None),
+    company: str | None = Query(None),
+    qualified_only: bool = Query(True),
+    ignore_recent_dedup: bool = Query(False),
+):
+    """Analyst review queue for mid-band named-account candidates before draft generation."""
+    if min_score > max_score:
+        raise HTTPException(status_code=400, detail="min_score must be less than or equal to max_score")
+
+    pool = _pool_or_503()
+    from ..autonomous.tasks.b2b_campaign_generation import list_churning_company_review_candidates
+
+    return await list_churning_company_review_candidates(
+        pool,
+        min_score=min_score,
+        max_score=max_score,
+        limit=limit,
+        vendor_filter=vendor,
+        company_filter=company,
+        qualified_only=qualified_only,
+        ignore_recent_dedup=ignore_recent_dedup,
+    )
+
+
+@router.get("/review-candidates/summary")
+async def review_candidates_summary(
+    min_score: int = Query(settings.b2b_campaign.review_queue_min_score, ge=0, le=100),
+    max_score: int = Query(settings.b2b_campaign.review_queue_max_score, ge=0, le=100),
+    vendor: str | None = Query(None),
+    company: str | None = Query(None),
+    ignore_recent_dedup: bool = Query(False),
+):
+    """Compact summary for the analyst candidate review queue."""
+    if min_score > max_score:
+        raise HTTPException(status_code=400, detail="min_score must be less than or equal to max_score")
+
+    pool = _pool_or_503()
+    from ..autonomous.tasks.b2b_campaign_generation import list_churning_company_review_candidates
+
+    result = await list_churning_company_review_candidates(
+        pool,
+        min_score=min_score,
+        max_score=max_score,
+        limit=200,
+        vendor_filter=vendor,
+        company_filter=company,
+        qualified_only=False,
+        ignore_recent_dedup=ignore_recent_dedup,
+    )
+    return {
+        "count": result["count"],
+        "summary": result["summary"],
+    }
+
+
 @router.post("/bulk-approve")
 async def bulk_approve(body: BulkApproveBody, user: AuthUser = require_b2b_plan("b2b_growth")):
     """Approve, queue-send, or reject multiple campaigns at once."""
@@ -1257,6 +1320,9 @@ async def generate_campaigns_endpoint(
         vendor_filter=body.vendor_name,
         company_filter=body.company_name,
         target_mode=body.target_mode,
+        force=body.force,
+        ignore_recent_dedup=body.ignore_recent_dedup,
+        ignore_briefing_gate=body.ignore_briefing_gate,
     )
 
     generated = result.get("generated", 0)

@@ -85,6 +85,142 @@ def _safe_list(val: Any) -> list:
     return []
 
 
+def _copy_dict(val: Any) -> dict[str, Any]:
+    return dict(val) if isinstance(val, dict) else {}
+
+
+def _battle_card_contract(card: dict[str, Any], name: str) -> dict[str, Any]:
+    contracts = card.get("reasoning_contracts")
+    if isinstance(contracts, dict):
+        contract = contracts.get(name)
+        if isinstance(contract, dict) and contract:
+            return dict(contract)
+        if contracts:
+            return {}
+    return {}
+
+
+def _battle_card_contract_section(
+    card: dict[str, Any],
+    contract_name: str,
+    section_name: str,
+    flat_name: str,
+) -> dict[str, Any]:
+    contract = _battle_card_contract(card, contract_name)
+    section = contract.get(section_name)
+    if isinstance(section, dict) and section:
+        return dict(section)
+    contracts = card.get("reasoning_contracts")
+    if isinstance(contracts, dict) and contracts:
+        return {}
+    flat = card.get(flat_name)
+    return dict(flat) if isinstance(flat, dict) else {}
+
+
+def _trace_value(val: Any) -> Any:
+    if isinstance(val, dict) and "value" in val:
+        return val.get("value")
+    return val
+
+
+def _titleize_slug(val: Any) -> str:
+    text = str(val or "").strip()
+    if not text:
+        return ""
+    return text.replace("_", " ").replace("-", " ").title()
+
+
+def _battle_card_render_view(card: dict[str, Any]) -> dict[str, Any]:
+    view = dict(card)
+
+    reasoning_contracts = card.get("reasoning_contracts")
+    if isinstance(reasoning_contracts, dict) and reasoning_contracts:
+        view["reasoning_contracts"] = dict(reasoning_contracts)
+        for key in (
+            "vendor_core_reasoning",
+            "displacement_reasoning",
+            "category_reasoning",
+            "causal_narrative",
+            "segment_playbook",
+            "timing_intelligence",
+            "competitive_reframes",
+            "migration_proof",
+        ):
+            view.pop(key, None)
+
+    for contract_name, section_name, flat_name in (
+        ("vendor_core_reasoning", "causal_narrative", "causal_narrative"),
+        ("vendor_core_reasoning", "segment_playbook", "segment_playbook"),
+        ("vendor_core_reasoning", "timing_intelligence", "timing_intelligence"),
+        ("displacement_reasoning", "competitive_reframes", "competitive_reframes"),
+        ("displacement_reasoning", "migration_proof", "migration_proof"),
+    ):
+        section = _battle_card_contract_section(card, contract_name, section_name, flat_name)
+        if section:
+            view[flat_name] = section
+
+    wedge_label = (
+        card.get("synthesis_wedge_label")
+        or view.get("causal_narrative", {}).get("primary_wedge_label")
+        or _titleize_slug(
+            card.get("synthesis_wedge")
+            or view.get("causal_narrative", {}).get("primary_wedge"),
+        )
+    )
+    if wedge_label:
+        view["synthesis_wedge_label"] = str(wedge_label)
+
+    evidence_window_label = str(
+        card.get("evidence_window_label")
+        or (card.get("evidence_window") or {}).get("label")
+        or "",
+    ).strip()
+    evidence_window_days = card.get("evidence_window_days")
+    if evidence_window_days is None:
+        evidence_window_days = (card.get("evidence_window") or {}).get("days")
+    if evidence_window_days is not None:
+        view["evidence_window_days"] = evidence_window_days
+    if evidence_window_label:
+        view["evidence_window_label"] = evidence_window_label
+    view["evidence_window_is_thin"] = bool(card.get("evidence_window_is_thin"))
+
+    weakness_analysis = _safe_list(card.get("weakness_analysis"))
+    if weakness_analysis:
+        view["weakness_analysis"] = weakness_analysis
+    competitive_landscape = _copy_dict(card.get("competitive_landscape"))
+    if competitive_landscape:
+        view["competitive_landscape"] = competitive_landscape
+
+    return view
+
+
+def _battle_card_priority_segments(card: dict[str, Any]) -> list[dict[str, Any]]:
+    segment_playbook = _copy_dict(card.get("segment_playbook"))
+    segments = _safe_list(segment_playbook.get("priority_segments"))
+    rows: list[dict[str, Any]] = []
+    for segment in segments:
+        if not isinstance(segment, dict):
+            continue
+        segment_name = _safe_str(segment.get("segment")).strip()
+        if not segment_name:
+            continue
+        reach = _trace_value(segment.get("estimated_reach"))
+        sample_size = segment.get("sample_size")
+        try:
+            sample_size = int(round(float(sample_size)))
+        except (TypeError, ValueError):
+            sample_size = None
+        rows.append({
+            "segment": segment_name,
+            "reach": reach,
+            "sample_size": sample_size if sample_size and sample_size > 0 else None,
+            "best_opening_angle": _safe_str(segment.get("best_opening_angle")).strip(),
+            "why_vulnerable": _safe_str(segment.get("why_vulnerable")).strip(),
+            "disqualifier": _safe_str(segment.get("disqualifier")).strip(),
+        })
+    return rows
+
+
 class IntelligenceReportPDF(FPDF):
     """Custom FPDF subclass with Atlas branding."""
 
@@ -809,7 +945,7 @@ def _render_battle_card(
     pdf: IntelligenceReportPDF, data: Any, exec_summary: str | None,
 ) -> None:
     """Render a per-vendor battle card report."""
-    card = data if isinstance(data, dict) else {}
+    card = _battle_card_render_view(data if isinstance(data, dict) else {})
 
     if exec_summary:
         pdf.section_title("Executive Summary")
@@ -832,25 +968,179 @@ def _render_battle_card(
         f"Churn Pressure Score: {score:.0f}/100 | "
         f"Reviews: {total_reviews} | Confidence: {confidence}"
     ), new_x="LMARGIN", new_y="NEXT")
+    context_parts: list[str] = []
+    wedge_label = _safe_str(card.get("synthesis_wedge_label"))
+    if wedge_label:
+        context_parts.append(f"Wedge: {wedge_label}")
+    evidence_window_days = card.get("evidence_window_days")
+    evidence_window_label = _safe_str(card.get("evidence_window_label"))
+    if evidence_window_days:
+        window_text = f"Evidence Window: {evidence_window_days} days"
+        if evidence_window_label:
+            window_text += f" ({evidence_window_label})"
+        if card.get("evidence_window_is_thin"):
+            window_text += " [thin]"
+        context_parts.append(window_text)
+    elif evidence_window_label:
+        context_parts.append(f"Evidence Window: {evidence_window_label}")
+    reasoning_source = _safe_str(card.get("reasoning_source"))
+    if reasoning_source:
+        context_parts.append(f"Reasoning: {reasoning_source}")
+    if context_parts:
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_text_color(*_CLR_MUTED)
+        pdf.multi_cell(0, 4, _latin1_safe(" | ".join(context_parts)))
     pdf.ln(3)
 
-    # Section 1: Vendor Weaknesses
-    weaknesses = _safe_list(card.get("vendor_weaknesses"))
-    if weaknesses:
-        pdf.section_title("Vendor Weaknesses")
+    # Section 1: Causal Narrative
+    causal = _copy_dict(card.get("causal_narrative"))
+    if causal:
+        pdf.section_title("Causal Narrative")
+        if causal.get("primary_wedge") or wedge_label:
+            pdf.metric_row("Primary Wedge", wedge_label or _titleize_slug(causal.get("primary_wedge")))
+        if causal.get("trigger"):
+            pdf.metric_row("Trigger", _safe_str(causal.get("trigger"))[:80])
+        if causal.get("who_most_affected"):
+            pdf.metric_row("Most Affected", _safe_str(causal.get("who_most_affected"))[:80])
+        if causal.get("why_now"):
+            pdf.body_text(_safe_str(causal.get("why_now"))[:300])
+        if causal.get("causal_chain"):
+            pdf.body_text(_safe_str(causal.get("causal_chain"))[:300])
+
+    # Section 2: Priority Segments
+    priority_segments = _battle_card_priority_segments(card)
+    if priority_segments:
+        pdf.section_title("Priority Segments")
+        for segment in priority_segments[:3]:
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_text_color(*_CLR_DARK)
+            pdf.cell(0, 5, _latin1_safe(segment["segment"]), new_x="LMARGIN", new_y="NEXT")
+            meta_parts: list[str] = []
+            if segment.get("reach") is not None:
+                meta_parts.append(f"Reach: {_safe_str(segment['reach'])}")
+            if segment.get("sample_size") is not None:
+                meta_parts.append(f"Sample n={segment['sample_size']}")
+            if meta_parts:
+                pdf.set_font("Helvetica", "", 8)
+                pdf.set_text_color(*_CLR_MUTED)
+                pdf.multi_cell(0, 4, _latin1_safe(" | ".join(meta_parts)))
+            if segment.get("best_opening_angle"):
+                pdf.body_text(f"Opening angle: {segment['best_opening_angle'][:220]}")
+            if segment.get("why_vulnerable"):
+                pdf.body_text(f"Why vulnerable: {segment['why_vulnerable'][:220]}")
+            if segment.get("disqualifier"):
+                pdf.body_text(f"Disqualifier: {segment['disqualifier'][:180]}")
+
+    # Section 3: Timing Intelligence
+    timing = _copy_dict(card.get("timing_intelligence"))
+    if timing:
+        pdf.section_title("Timing Intelligence")
+        if timing.get("best_timing_window"):
+            pdf.metric_row("Best Timing Window", _safe_str(timing.get("best_timing_window"))[:80])
+        active_eval_signals = _trace_value(timing.get("active_eval_signals"))
+        if active_eval_signals is not None:
+            pdf.metric_row("Active Eval Signals", _safe_str(active_eval_signals))
+        immediate_triggers = _safe_list(timing.get("immediate_triggers"))
+        if immediate_triggers:
+            rows = []
+            for trigger in immediate_triggers[:4]:
+                if isinstance(trigger, dict):
+                    rows.append([
+                        _safe_str(trigger.get("trigger", ""))[:40],
+                        _safe_str(trigger.get("urgency", ""))[:12],
+                        _safe_str(trigger.get("action", ""))[:28],
+                    ])
+            if rows:
+                pdf.simple_table(["Trigger", "Urgency", "Action"], rows, [70, 25, 35])
+
+    # Section 4: Migration Proof
+    migration = _copy_dict(card.get("migration_proof"))
+    if migration:
+        pdf.section_title("Migration Proof")
+        if migration.get("evidence_type"):
+            pdf.metric_row("Evidence Type", _safe_str(migration.get("evidence_type")).replace("_", " ").title())
+        switch_volume = _trace_value(migration.get("switch_volume"))
+        if switch_volume is not None:
+            pdf.metric_row("Confirmed Switches", _safe_str(switch_volume))
+        eval_volume = _trace_value(migration.get("active_evaluation_volume"))
+        if eval_volume is not None:
+            pdf.metric_row("Active Evaluations", _safe_str(eval_volume))
+        mention_volume = _trace_value(migration.get("displacement_mention_volume"))
+        if mention_volume is not None:
+            pdf.metric_row("Displacement Mentions", _safe_str(mention_volume))
+        top_destination = migration.get("top_destination")
+        if isinstance(top_destination, dict):
+            top_destination = top_destination.get("value")
+        if top_destination:
+            pdf.metric_row("Top Destination", _safe_str(top_destination)[:80])
+        switch_driver = migration.get("primary_switch_driver")
+        if isinstance(switch_driver, dict):
+            switch_driver = switch_driver.get("value")
+        if switch_driver:
+            pdf.metric_row("Primary Switch Driver", _safe_str(switch_driver)[:80])
+
+    # Section 5: Competitive Reframes
+    reframes = _safe_list((_copy_dict(card.get("competitive_reframes"))).get("reframes"))
+    if reframes:
+        pdf.section_title("Competitive Reframes")
         rows = []
-        for w in weaknesses[:5]:
-            if isinstance(w, dict):
-                evidence = str(w.get("evidence_count") or w.get("count", ""))
+        for item in reframes[:4]:
+            if isinstance(item, dict):
                 rows.append([
-                    _safe_str(w.get("area", ""))[:35],
-                    evidence,
-                    _safe_str(w.get("source", ""))[:20],
+                    _safe_str(item.get("incumbent_claim", ""))[:30],
+                    _safe_str(item.get("reframe", ""))[:55],
+                    _safe_str(item.get("best_segment", ""))[:20],
                 ])
         if rows:
-            pdf.simple_table(["Weakness", "Evidence", "Source"], rows, [70, 35, 45])
+            pdf.simple_table(["Incumbent Claim", "Reframe", "Best Segment"], rows, [40, 65, 25])
 
-    # Section 2: Customer Pain Quotes
+    # Section 6: Weakness Analysis
+    weakness_analysis = _safe_list(card.get("weakness_analysis"))
+    if weakness_analysis:
+        pdf.section_title("Weakness Analysis")
+        for item in weakness_analysis[:3]:
+            if not isinstance(item, dict):
+                continue
+            headline = _safe_str(item.get("weakness", ""))[:120]
+            evidence = _safe_str(item.get("evidence", ""))[:240]
+            winning_position = _safe_str(item.get("winning_position", ""))[:200]
+            customer_quote = _safe_str(item.get("customer_quote", ""))[:300]
+            if headline:
+                pdf.set_x(pdf.l_margin)
+                pdf.set_font("Helvetica", "B", 9)
+                pdf.set_text_color(*_CLR_DARK)
+                pdf.cell(0, 5, _latin1_safe(headline), new_x="LMARGIN", new_y="NEXT")
+            if evidence:
+                pdf.set_x(pdf.l_margin)
+                pdf.set_font("Helvetica", "", 8)
+                pdf.set_text_color(*_CLR_DARK)
+                pdf.multi_cell(0, 4, _latin1_safe(evidence))
+            if winning_position:
+                pdf.set_x(pdf.l_margin)
+                pdf.set_font("Helvetica", "I", 8)
+                pdf.set_text_color(*_CLR_MUTED)
+                pdf.multi_cell(0, 4, _latin1_safe(f"Winning position: {winning_position}"))
+            if customer_quote:
+                pdf.set_x(pdf.l_margin)
+                pdf.quote_block(customer_quote)
+            pdf.ln(2)
+    else:
+        weaknesses = _safe_list(card.get("vendor_weaknesses"))
+        if weaknesses:
+            pdf.section_title("Vendor Weaknesses")
+            rows = []
+            for w in weaknesses[:5]:
+                if isinstance(w, dict):
+                    evidence = str(w.get("evidence_count") or w.get("count", ""))
+                    rows.append([
+                        _safe_str(w.get("area", ""))[:35],
+                        evidence,
+                        _safe_str(w.get("source", ""))[:20],
+                    ])
+            if rows:
+                pdf.simple_table(["Weakness", "Evidence", "Source"], rows, [70, 35, 45])
+
+    # Section 7: Customer Pain Quotes
     quotes = _safe_list(card.get("customer_pain_quotes"))
     if quotes:
         pdf.section_title("Customer Pain Points")
@@ -872,26 +1162,46 @@ def _render_battle_card(
                              new_x="LMARGIN", new_y="NEXT")
                 pdf.quote_block(str(text)[:300])
 
-    # Section 3: Competitor Differentiators
-    diffs = _safe_list(card.get("competitor_differentiators"))
-    if diffs:
-        pdf.section_title("Competitor Differentiators")
-        rows = []
-        for d in diffs[:5]:
-            if isinstance(d, dict):
-                rows.append([
-                    _safe_str(d.get("competitor", ""))[:25],
-                    str(d.get("mentions", 0)),
-                    _safe_str(d.get("solves_weakness") or "-")[:30],
-                    _safe_str(d.get("primary_driver", ""))[:15],
-                ])
-        if rows:
-            pdf.simple_table(
-                ["Competitor", "Mentions", "Solves", "Driver"],
-                rows, [40, 25, 50, 35],
-            )
+    # Section 8: Competitive Landscape
+    landscape = _copy_dict(card.get("competitive_landscape"))
+    if landscape:
+        pdf.section_title("Competitive Landscape")
+        if landscape.get("vulnerability_window"):
+            pdf.body_text(_safe_str(landscape.get("vulnerability_window"))[:300])
+        top_alternatives = _safe_list(landscape.get("top_alternatives"))
+        if top_alternatives:
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_text_color(*_CLR_DARK)
+            pdf.cell(0, 6, "Top Alternatives:", new_x="LMARGIN", new_y="NEXT")
+            for alt in top_alternatives[:4]:
+                pdf.body_text(f"  - {_safe_str(alt)[:200]}")
+        triggers = _safe_list(landscape.get("displacement_triggers"))
+        if triggers:
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_text_color(*_CLR_DARK)
+            pdf.cell(0, 6, "Displacement Triggers:", new_x="LMARGIN", new_y="NEXT")
+            for trigger in triggers[:4]:
+                pdf.body_text(f"  - {_safe_str(trigger)[:200]}")
+    else:
+        diffs = _safe_list(card.get("competitor_differentiators"))
+        if diffs:
+            pdf.section_title("Competitor Differentiators")
+            rows = []
+            for d in diffs[:5]:
+                if isinstance(d, dict):
+                    rows.append([
+                        _safe_str(d.get("competitor", ""))[:25],
+                        str(d.get("mentions", 0)),
+                        _safe_str(d.get("solves_weakness") or "-")[:30],
+                        _safe_str(d.get("primary_driver", ""))[:15],
+                    ])
+            if rows:
+                pdf.simple_table(
+                    ["Competitor", "Mentions", "Solves", "Driver"],
+                    rows, [40, 25, 50, 35],
+                )
 
-    # Section 4: Objection Handlers (LLM-generated)
+    # Section 9: Objection Handlers (LLM-generated)
     objections = _safe_list(card.get("objection_handlers"))
     if objections:
         pdf.section_title("Objection Handlers")
@@ -902,19 +1212,22 @@ def _render_battle_card(
                 backing = obj.get("data_backing", "")
                 pdf.set_font("Helvetica", "B", 9)
                 pdf.set_text_color(*_CLR_DARK)
+                pdf.set_x(pdf.l_margin)
                 pdf.cell(0, 5, _latin1_safe(f'"{objection_text}"'),
                          new_x="LMARGIN", new_y="NEXT")
                 pdf.set_font("Helvetica", "", 9)
                 pdf.set_text_color(*_CLR_DARK)
+                pdf.set_x(pdf.l_margin)
                 pdf.multi_cell(0, 5, _latin1_safe(response_text))
                 if backing:
                     pdf.set_font("Helvetica", "I", 7)
                     pdf.set_text_color(*_CLR_MUTED)
+                    pdf.set_x(pdf.l_margin)
                     pdf.cell(0, 4, _latin1_safe(f"Data: {backing}"),
                              new_x="LMARGIN", new_y="NEXT")
                 pdf.ln(2)
 
-    # Section 5: Recommended Plays (LLM-generated)
+    # Section 10: Recommended Plays (LLM-generated)
     plays = _safe_list(card.get("recommended_plays"))
     if plays:
         pdf.section_title("Recommended Plays")
@@ -922,6 +1235,7 @@ def _render_battle_card(
             if isinstance(play, dict):
                 pdf.set_font("Helvetica", "B", 9)
                 pdf.set_text_color(*_CLR_DARK)
+                pdf.set_x(pdf.l_margin)
                 pdf.multi_cell(0, 5, _latin1_safe(play.get("play", "")))
                 details = []
                 if play.get("target_segment"):
@@ -931,6 +1245,7 @@ def _render_battle_card(
                 if details:
                     pdf.set_font("Helvetica", "", 8)
                     pdf.set_text_color(*_CLR_MUTED)
+                    pdf.set_x(pdf.l_margin)
                     pdf.multi_cell(0, 4, _latin1_safe(" | ".join(details)))
                 pdf.ln(2)
 

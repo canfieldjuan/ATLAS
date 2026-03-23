@@ -7,17 +7,23 @@ to identify monetization opportunities ranked by purchase-intent signals.
 
 import logging
 import uuid as _uuid
+from datetime import date, datetime
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from ..auth.dependencies import AuthUser, require_auth
+from ..config import settings
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.b2b_affiliates")
 
-router = APIRouter(prefix="/b2b/dashboard/affiliates", tags=["b2b-affiliates"])
-
+tenant_router = APIRouter(
+    prefix="/b2b/tenant/affiliates",
+    tags=["b2b-affiliates"],
+    dependencies=[Depends(require_auth)],
+)
 
 def _safe_float(val, default=None):
     if val is None:
@@ -33,6 +39,14 @@ def _pool_or_503():
     if not pool.is_initialized:
         raise HTTPException(status_code=503, detail="Database not ready")
     return pool
+
+
+def _as_iso_text(value):
+    if value is None:
+        return None
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    return str(value)
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +120,7 @@ def _compute_score(row: dict) -> int:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/opportunities")
+@tenant_router.get("/opportunities")
 async def list_opportunities(
     min_urgency: float = Query(5),
     min_score: int = Query(0),
@@ -114,6 +128,7 @@ async def list_opportunities(
     limit: int = Query(50, ge=1, le=200),
     vendor_name: Optional[str] = Query(None),
     dm_only: bool = Query(False),
+    user: AuthUser = Depends(require_auth),
 ):
     pool = _pool_or_503()
 
@@ -129,10 +144,29 @@ async def list_opportunities(
     if dm_only:
         extra_conditions += " AND (r.enrichment->'reviewer_context'->>'decision_maker')::boolean = true"
 
+    account_id = getattr(user, "account_id", None)
+    if settings.saas_auth.enabled and account_id:
+        extra_conditions += (
+            f" AND r.vendor_name IN ("
+            f"SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid"
+            f")"
+        )
+        params.append(account_id)
+        idx += 1
+
     rows = await pool.fetch(
         f"""
         WITH review_competitors AS (
-            SELECT r.id AS review_id, r.vendor_name, r.reviewer_company, r.product_category,
+            SELECT r.id AS review_id,
+                   r.vendor_name,
+                   COALESCE(
+                       NULLIF(BTRIM(r.reviewer_company_norm), ''),
+                       NULLIF(BTRIM(r.reviewer_company), '')
+                   ) AS reviewer_company,
+                   NULLIF(BTRIM(r.reviewer_name), '') AS reviewer_name,
+                   r.product_category,
+                   r.source,
+                   r.reviewed_at,
                    (r.enrichment->>'urgency_score')::numeric AS urgency,
                    (r.enrichment->'reviewer_context'->>'decision_maker')::boolean AS is_dm,
                    r.enrichment->'buyer_authority'->>'role_type' AS role_type,
@@ -141,7 +175,7 @@ async def list_opportunities(
                         THEN (r.enrichment->'budget_signals'->>'seat_count')::int END AS seat_count,
                    r.enrichment->'timeline'->>'contract_end' AS contract_end,
                    r.enrichment->'timeline'->>'decision_timeline' AS decision_timeline,
-                   comp.value->>'name' AS competitor_name,
+                   NULLIF(BTRIM(comp.value->>'name'), '') AS competitor_name,
                    comp.value->>'context' AS mention_context,
                    comp.value->>'reason' AS mention_reason
             FROM b2b_reviews r
@@ -151,8 +185,9 @@ async def list_opportunities(
                      ELSE '[]'::jsonb END
             ) AS comp(value)
             WHERE r.enrichment_status = 'enriched'
-              AND r.enriched_at > NOW() - make_interval(days => $1)
+              AND COALESCE(r.reviewed_at, r.imported_at, r.enriched_at) > NOW() - make_interval(days => $1)
               AND (r.enrichment->>'urgency_score')::numeric >= $2
+              AND NULLIF(BTRIM(comp.value->>'name'), '') IS NOT NULL
               {extra_conditions}
         )
         SELECT rc.*, ap.id AS partner_id, ap.name AS partner_name,
@@ -162,6 +197,10 @@ async def list_opportunities(
         JOIN affiliate_partners ap ON ap.enabled = true
             AND (LOWER(rc.competitor_name) = LOWER(ap.product_name)
                  OR LOWER(rc.competitor_name) = ANY(SELECT LOWER(unnest(ap.product_aliases))))
+            AND rc.reviewer_company IS NOT NULL
+            AND LOWER(rc.competitor_name) <> LOWER(rc.vendor_name)
+            AND LOWER(rc.reviewer_company) <> LOWER(rc.vendor_name)
+            AND LOWER(rc.reviewer_company) <> LOWER(rc.competitor_name)
         ORDER BY rc.urgency DESC, rc.is_dm DESC NULLS LAST
         LIMIT $3
         """,
@@ -174,10 +213,17 @@ async def list_opportunities(
         opp_score = _compute_score(row_dict)
         if opp_score < min_score:
             continue
+        reviewer_company = r["reviewer_company"]
+        if not reviewer_company:
+            # Defensive guard: opportunities must map to a real company.
+            continue
+        reviewer_company_display = reviewer_company
         opportunities.append({
             "review_id": str(r["review_id"]),
             "vendor_name": r["vendor_name"],
-            "reviewer_company": r["reviewer_company"],
+            "reviewer_company": reviewer_company,
+            "reviewer_company_display": reviewer_company_display,
+            "reviewer_company_inferred": False,
             "product_category": r["product_category"],
             "urgency": _safe_float(r["urgency"], 0),
             "is_dm": r["is_dm"],
@@ -186,6 +232,8 @@ async def list_opportunities(
             "seat_count": r["seat_count"],
             "contract_end": r["contract_end"],
             "decision_timeline": r["decision_timeline"],
+            "source": r["source"],
+            "reviewed_at": _as_iso_text(r["reviewed_at"]),
             "competitor_name": r["competitor_name"],
             "mention_context": r["mention_context"],
             "mention_reason": r["mention_reason"],
@@ -233,7 +281,7 @@ class PartnerUpdate(BaseModel):
     enabled: bool | None = None
 
 
-@router.get("/partners")
+@tenant_router.get("/partners")
 async def list_partners():
     pool = _pool_or_503()
     rows = await pool.fetch(
@@ -266,7 +314,7 @@ async def list_partners():
     return {"partners": partners, "count": len(partners)}
 
 
-@router.post("/partners", status_code=201)
+@tenant_router.post("/partners", status_code=201)
 async def create_partner(body: PartnerCreate):
     pool = _pool_or_503()
     try:
@@ -298,7 +346,7 @@ async def create_partner(body: PartnerCreate):
     return {"id": str(row["id"]), "created_at": str(row["created_at"])}
 
 
-@router.patch("/partners/{partner_id}")
+@tenant_router.patch("/partners/{partner_id}")
 async def update_partner(partner_id: str, body: PartnerUpdate):
     try:
         pid = _uuid.UUID(partner_id)
@@ -347,7 +395,7 @@ async def update_partner(partner_id: str, body: PartnerUpdate):
     return {"ok": True}
 
 
-@router.delete("/partners/{partner_id}")
+@tenant_router.delete("/partners/{partner_id}")
 async def delete_partner(partner_id: str):
     try:
         pid = _uuid.UUID(partner_id)
@@ -372,7 +420,7 @@ class ClickRecord(BaseModel):
     referrer: str | None = "dashboard"
 
 
-@router.post("/clicks", status_code=201)
+@tenant_router.post("/clicks", status_code=201)
 async def record_click(body: ClickRecord):
     try:
         pid = _uuid.UUID(body.partner_id)
@@ -399,7 +447,7 @@ async def record_click(body: ClickRecord):
     return {"ok": True}
 
 
-@router.get("/clicks/summary")
+@tenant_router.get("/clicks/summary")
 async def click_summary():
     pool = _pool_or_503()
     rows = await pool.fetch(

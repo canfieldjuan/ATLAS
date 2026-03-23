@@ -12,11 +12,11 @@ type AnyData = Record<string, any>
 
 function Section({ title, icon, children }: { title: string; icon?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="mt-5">
-      <h3 className="flex items-center gap-2 text-sm font-semibold text-cyan-400 uppercase tracking-wide mb-2">
+    <div className="mt-5 min-w-0">
+      <h3 className="flex items-center gap-2 text-sm font-semibold text-cyan-400 uppercase tracking-wide mb-2 min-w-0 break-words">
         {icon}{title}
       </h3>
-      <div className="space-y-2">{children}</div>
+      <div className="space-y-2 min-w-0">{children}</div>
     </div>
   )
 }
@@ -24,16 +24,16 @@ function Section({ title, icon, children }: { title: string; icon?: React.ReactN
 function Metric({ label, value, color }: { label: string; value: string | number | null | undefined; color?: string }) {
   const display = value == null || value === '' ? '--' : value
   return (
-    <div className="flex justify-between text-sm py-0.5">
-      <span className="text-slate-400">{label}</span>
-      <span className={display === '--' ? 'text-slate-600' : (color || 'text-white font-medium')}>{display}</span>
+    <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3 text-sm py-0.5 items-start">
+      <span className="text-slate-400 min-w-0 break-words">{label}</span>
+      <span className={`min-w-0 break-words text-right ${display === '--' ? 'text-slate-600' : (color || 'text-white font-medium')}`}>{display}</span>
     </div>
   )
 }
 
 function QuoteBlock({ text }: { text: string }) {
   return (
-    <blockquote className="border-l-2 border-cyan-700/60 pl-3 py-1 text-xs text-slate-300 italic leading-relaxed">
+    <blockquote className="border-l-2 border-cyan-700/60 pl-3 py-1 text-xs text-slate-300 italic leading-relaxed break-words whitespace-pre-wrap">
       {text.slice(0, 300)}
     </blockquote>
   )
@@ -43,11 +43,11 @@ function MiniTable({ headers, rows }: { headers: string[]; rows: (string | numbe
   if (!rows.length) return null
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-xs">
+      <table className="w-full text-xs table-fixed">
         <thead>
           <tr className="border-b border-slate-700/50">
             {headers.map((h, i) => (
-              <th key={i} className="text-left text-slate-500 font-medium py-1.5 px-2">{h}</th>
+              <th key={i} className="text-left text-slate-500 font-medium py-1.5 px-2 align-top break-words">{h}</th>
             ))}
           </tr>
         </thead>
@@ -55,7 +55,7 @@ function MiniTable({ headers, rows }: { headers: string[]; rows: (string | numbe
           {rows.map((row, ri) => (
             <tr key={ri} className="border-b border-slate-800/30 hover:bg-slate-800/30">
               {row.map((cell, ci) => (
-                <td key={ci} className="text-slate-300 py-1.5 px-2">{cell ?? '--'}</td>
+                <td key={ci} className="text-slate-300 py-1.5 px-2 align-top break-words">{cell ?? '--'}</td>
               ))}
             </tr>
           ))}
@@ -67,6 +67,14 @@ function MiniTable({ headers, rows }: { headers: string[]; rows: (string | numbe
 
 function Badge({ text, color }: { text: string; color: string }) {
   return <span className={`inline-block text-xs px-2 py-0.5 rounded-full font-medium ${color}`}>{text}</span>
+}
+
+function qualityBadge(status: string | null | undefined) {
+  const key = (status || '').toLowerCase()
+  if (key === 'sales_ready') return <Badge text="Sales Ready" color="bg-emerald-900/40 text-emerald-300" />
+  if (key === 'needs_review') return <Badge text="Needs Review" color="bg-amber-900/40 text-amber-300" />
+  if (key === 'deterministic_fallback') return <Badge text="Fallback" color="bg-rose-900/40 text-rose-300" />
+  return null
 }
 
 function riskColor(level: string | undefined) {
@@ -456,12 +464,15 @@ function BattleCardView({ d }: { d: AnyData }) {
   const diffs = Array.isArray(d.competitor_differentiators) ? d.competitor_differentiators : []
   const objections = Array.isArray(d.objection_handlers) ? d.objection_handlers : []
   const plays = Array.isArray(d.recommended_plays) ? d.recommended_plays : []
+  const qualityStatus = d.quality_status || d?.battle_card_quality?.status
+  const qualityScore = d?.battle_card_quality?.score
 
   return (
     <>
       <div className="flex items-center gap-3 mb-1">
         <Shield className="h-5 w-5 text-cyan-400" />
         <span className="text-lg font-bold text-white">Battle Card: {d.vendor || 'Unknown'}</span>
+        {qualityBadge(qualityStatus)}
       </div>
 
       <div className="bg-slate-900/40 rounded-lg p-3 space-y-1 mt-3">
@@ -469,6 +480,7 @@ function BattleCardView({ d }: { d: AnyData }) {
         <Metric label="Risk Level" value={fmt(d.risk_level)} color={riskColor(d.risk_level)} />
         <Metric label="Total Reviews" value={d.total_reviews} />
         <Metric label="Confidence" value={d.confidence} />
+        <Metric label="Quality Score" value={qualityScore ?? '--'} />
       </div>
 
       {weaknesses.length > 0 && (
@@ -662,11 +674,17 @@ export default function B2BReports() {
     {
       key: 'status',
       header: 'Status',
-      render: r => (
-        <span className={r.status === 'published' ? 'text-green-400 text-xs' : 'text-slate-500 text-xs'}>
-          {r.status || 'draft'}
-        </span>
-      ),
+      render: r => {
+        if (r.report_type === 'battle_card') {
+          const badge = qualityBadge(r.quality_status)
+          if (badge) return badge
+        }
+        return (
+          <span className={r.status === 'published' ? 'text-green-400 text-xs' : 'text-slate-500 text-xs'}>
+            {r.status || 'draft'}
+          </span>
+        )
+      },
     },
   ]
 
@@ -717,7 +735,7 @@ export default function B2BReports() {
       {selected && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60" onClick={() => setSelected(null)}>
           <div
-            className="bg-slate-800 border border-slate-700 rounded-xl p-6 max-w-4xl w-full max-h-[85vh] overflow-y-auto"
+            className="bg-slate-800 border border-slate-700 rounded-xl p-6 max-w-4xl w-full max-h-[85vh] overflow-y-auto overflow-x-hidden"
             onClick={e => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-4">

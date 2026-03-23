@@ -473,6 +473,8 @@ export function toBattleCardViewModel(value: UnknownRecord): BattleCardViewModel
       Object.entries(asRecord(value.source_distribution)).filter(([, count]) => typeof count === 'number'),
     ) as Record<string, number>,
     llm_render_status: asString(value.llm_render_status),
+    quality_status: asString(value.quality_status ?? asRecord(value.battle_card_quality).status),
+    quality_score: asNumber(asRecord(value.battle_card_quality).score) ?? null,
   }
 }
 

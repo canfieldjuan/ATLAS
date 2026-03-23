@@ -16,6 +16,16 @@ import { fetchReport } from '../api/client'
 import { REPORT_TYPE_COLORS } from './Reports'
 import type { ReportDetail as ReportDetailType } from '../types'
 
+function formatInlineValue(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '--'
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+  if (Array.isArray(value)) return `${value.length} item${value.length === 1 ? '' : 's'}`
+  if (typeof value === 'object') return `${Object.keys(value).length} field${Object.keys(value).length === 1 ? '' : 's'}`
+  return '--'
+}
+
 function DetailSkeleton() {
   return (
     <div className="space-y-6 max-w-4xl animate-pulse">
@@ -75,7 +85,7 @@ export default function ReportDetail() {
   })
 
   return (
-    <div className="space-y-6 max-w-4xl">
+    <div className="space-y-6 max-w-4xl min-w-0">
       <div className="flex items-center justify-between">
         <button
           onClick={() => navigate('/reports')}
@@ -97,23 +107,23 @@ export default function ReportDetail() {
         <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium mb-2', badgeColor)}>
           {report.report_type.replace(/_/g, ' ')}
         </span>
-        <h1 className="text-2xl font-bold text-white">
+        <h1 className="text-2xl font-bold text-white break-words">
           {title}
         </h1>
-        <p className="text-sm text-slate-400 mt-1">
+        <p className="text-sm text-slate-400 mt-1 break-all">
           {report.report_date ?? report.created_at}
           {report.llm_model && ` | Model: ${report.llm_model}`}
         </p>
       </div>
 
       {report.executive_summary && (
-        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 min-w-0 overflow-hidden">
           <h3 className="text-sm font-medium text-slate-300 mb-2">Executive Summary</h3>
-          <p className="text-sm text-slate-300 whitespace-pre-wrap">{report.executive_summary}</p>
+          <p className="text-sm text-slate-300 whitespace-pre-wrap break-words">{report.executive_summary}</p>
         </div>
       )}
 
-      {/* Challenger brief — dedicated renderer */}
+      {/* Challenger brief - dedicated renderer */}
       {isSpecializedReportType(report.report_type) && (
         <SpecializedReportData reportType={report.report_type} data={intelIsArray ? rawIntel : intel} />
       )}
@@ -151,13 +161,13 @@ export default function ReportDetail() {
       )}
 
       {report.data_density && Object.keys(report.data_density).length > 0 && (
-        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 min-w-0 overflow-hidden">
           <h3 className="text-sm font-medium text-slate-300 mb-3">Data Density</h3>
           <dl className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
             {Object.entries(report.data_density).map(([key, value]) => (
-              <div key={key} className="flex justify-between">
-                <dt className="text-slate-400">{key.replace(/_/g, ' ')}</dt>
-                <dd className="text-white">{String(value)}</dd>
+              <div key={key} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-2">
+                <dt className="text-slate-400 min-w-0 break-words">{key.replace(/_/g, ' ')}</dt>
+                <dd className="text-white text-right min-w-0 break-all">{formatInlineValue(value)}</dd>
               </div>
             ))}
           </dl>

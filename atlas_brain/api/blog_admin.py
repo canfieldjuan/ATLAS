@@ -8,7 +8,6 @@ blog_posts table. This router exposes list/get/patch/publish operations.
 import json
 import logging
 import os
-import re
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
@@ -429,6 +428,7 @@ async def generate_post(
         _gather_data,
         _build_blueprint,
         _generate_content,
+        _enforce_blog_quality,
         _assemble_and_store,
         build_manual_topic_ctx,
     )
@@ -483,25 +483,22 @@ async def generate_post(
     if content is None:
         raise HTTPException(500, "LLM content generation failed")
 
-    # Inject affiliate links
-    affiliate_url = blueprint.data_context.get("affiliate_url", "")
-    affiliate_slug = blueprint.data_context.get("affiliate_slug", "")
-    partner_info = blueprint.data_context.get("affiliate_partner", {})
-    partner_name = partner_info.get("name", "") or partner_info.get("product_name", "")
-    if affiliate_slug and affiliate_url and content.get("content"):
-        md_link = f"[{partner_name}]({affiliate_url})" if partner_name else affiliate_url
-        content["content"] = content["content"].replace(
-            f"{{{{affiliate:{affiliate_slug}}}}}",
-            md_link,
+    content, quality_report = _enforce_blog_quality(
+        llm,
+        blueprint,
+        content,
+        cfg.blog_post_max_tokens,
+    )
+    if content is None:
+        raise HTTPException(
+            422,
+            {
+                "error": "Generated content failed quality gate",
+                "blocking_issues": quality_report.get("blocking_issues", []),
+                "warnings": quality_report.get("warnings", []),
+            },
         )
-        raw = content["content"]
-        if affiliate_url in raw:
-            raw = re.sub(
-                r'(?<!\]\()' + re.escape(affiliate_url) + r'(?!\))',
-                md_link,
-                raw,
-            )
-            content["content"] = raw
+    blueprint.data_context["generation_quality"] = quality_report
 
     post_id = await _assemble_and_store(pool, blueprint, content, llm)
     if not post_id:

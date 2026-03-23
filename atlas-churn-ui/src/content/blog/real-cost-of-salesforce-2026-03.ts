@@ -4,38 +4,38 @@ const post: BlogPost = {
   slug: 'real-cost-of-salesforce-2026-03',
   title: 'The Real Cost of Salesforce: 55 Pricing Complaints Across 177 Reviews',
   description: 'Analysis of 55 pricing complaints in 177 Salesforce reviews. What reviewers say about cost, hidden fees, and value for money—with real quotes from users who switched or stayed.',
-  date: '2026-03-12',
-  author: 'Churn Signals Team',
+  date: '2026-03-22',
+  author: 'Atlas Intelligence',
   tags: ["CRM", "salesforce", "pricing", "honest-review", "cost-analysis"],
   topic_type: 'pricing_reality_check',
   charts: [
   {
-    "chart_id": "pricing-urgency",
-    "chart_type": "bar",
-    "title": "Pricing Complaint Severity: Salesforce",
     "data": [
       {
         "name": "Critical (8-10)",
         "count": 10
       }
     ],
+    "title": "Pricing Complaint Severity: Salesforce",
     "config": {
-      "x_key": "name",
       "bars": [
         {
-          "dataKey": "count",
-          "color": "#f87171"
+          "color": "#f87171",
+          "dataKey": "count"
         }
-      ]
-    }
+      ],
+      "x_key": "name"
+    },
+    "chart_id": "pricing-urgency",
+    "chart_type": "bar"
   }
 ],
   data_context: {
   "affiliate_url": "https://hubspot.com/?ref=atlas",
   "affiliate_partner": {
     "name": "HubSpot Partner",
-    "product_name": "HubSpot",
-    "slug": "hubspot"
+    "slug": "hubspot",
+    "product_name": "HubSpot"
   },
   "booking_url": "https://churnsignals.co"
 },
@@ -45,16 +45,16 @@ const post: BlogPost = {
   secondary_keywords: ["salesforce cost complaints", "salesforce hidden fees", "is salesforce worth the price"],
   faq: [
   {
-    "question": "How many Salesforce reviews mention pricing as a problem?",
-    "answer": "55 out of 177 enriched Salesforce reviews collected between February 25 and March 10, 2026 flag pricing as a pain point, with an average urgency score of 3.1/10. This represents 31% of the review sample."
+    "answer": "55 out of 177 enriched Salesforce reviews collected between February 25 and March 10, 2026 flag pricing as a pain point, with an average urgency score of 3.1/10. This represents 31% of the review sample.",
+    "question": "How many Salesforce reviews mention pricing as a problem?"
   },
   {
-    "question": "What are the most common Salesforce pricing complaints?",
-    "answer": "Reviewers most frequently cite contract pressure tactics, slow support response relative to cost, and a clunky interface that doesn't justify the premium price. Several reviews describe feeling misled during the sales process."
+    "answer": "Reviewers most frequently cite contract pressure tactics, slow support response relative to cost, and a clunky interface that doesn't justify the premium price. Several reviews describe feeling misled during the sales process.",
+    "question": "What are the most common Salesforce pricing complaints?"
   },
   {
-    "question": "Is Salesforce worth the price for small businesses?",
-    "answer": "Reviewer sentiment is mixed. Small business reviewers report frustration with pricing relative to usability, describing the platform as 'massively overpriced' and difficult to navigate even after training. Larger organizations with complex needs show more positive sentiment about value."
+    "answer": "Reviewer sentiment is mixed. Small business reviewers report frustration with pricing relative to usability, describing the platform as 'massively overpriced' and difficult to navigate even after training. Larger organizations with complex needs show more positive sentiment about value.",
+    "question": "Is Salesforce worth the price for small businesses?"
   }
 ],
   related_slugs: ["real-cost-of-amazon-web-services-2026-03", "freshsales-deep-dive-2026-03", "salesforce-vs-zoho-crm-2026-03", "copper-vs-salesforce-2026-03"],

@@ -36,6 +36,16 @@ interface AffiliatesData {
   clicks: ClickSummary[]
 }
 
+function companyDisplay(opportunity: AffiliateOpportunity): { text: string; inferred: boolean } {
+  if (opportunity.reviewer_company) {
+    return { text: opportunity.reviewer_company, inferred: false }
+  }
+  if (opportunity.reviewer_company_display) {
+    return { text: `Reviewer: ${opportunity.reviewer_company_display}`, inferred: true }
+  }
+  return { text: '--', inferred: false }
+}
+
 function ScoreBadge({ score }: { score: number }) {
   return (
     <span
@@ -222,7 +232,14 @@ export default function Affiliates() {
     {
       key: 'company',
       header: 'Company',
-      render: (r) => <span className="text-slate-300">{r.reviewer_company ?? '--'}</span>,
+      render: (r) => {
+        const display = companyDisplay(r)
+        return (
+          <span className={display.inferred ? 'text-slate-500 italic' : 'text-slate-300'}>
+            {display.text}
+          </span>
+        )
+      },
     },
     {
       key: 'competitor',

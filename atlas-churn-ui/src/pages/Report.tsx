@@ -19,14 +19,37 @@ const API_BASE = import.meta.env.VITE_API_BASE || ''
 const GATE_URL = `${API_BASE}/api/v1/b2b/briefings/gate`
 const REPORT_DATA_URL = `${API_BASE}/api/v1/b2b/briefings/report-data`
 const CHECKOUT_URL = `${API_BASE}/api/v1/b2b/briefings/checkout`
+const CACHE_BUSTER_PARAM = '_ts'
+
+function addFreshParam(url: string, params: Record<string, string>): string {
+  const next = new URL(url, window.location.origin)
+  for (const [key, value] of Object.entries(params)) {
+    if (value) next.searchParams.set(key, value)
+  }
+  next.searchParams.set(CACHE_BUSTER_PARAM, String(Date.now()))
+  return next.toString()
+}
+
+function noStoreInit(init: RequestInit = {}): RequestInit {
+  const headers = init.headers ? (init.headers as Record<string, string>) : {}
+  return {
+    ...init,
+    cache: 'no-store',
+    headers: {
+      ...headers,
+      'Cache-Control': 'no-cache',
+      Pragma: 'no-cache',
+    },
+  }
+}
 
 async function startCheckout(vendorName: string, tier: 'standard' | 'pro') {
   try {
-    const res = await fetch(CHECKOUT_URL, {
+    const res = await fetch(CHECKOUT_URL, noStoreInit({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ vendor_name: vendorName, tier }),
-    })
+    }))
     if (res.ok) {
       const { url } = await res.json()
       window.location.href = url
@@ -406,7 +429,7 @@ function ReportView({ data }: { data: ReportData }) {
                 const text = typeof q === 'string' ? q : String(asRecord(q).quote || asRecord(q).text || '')
                 if (!text) return null
                 return (
-                  <blockquote key={i} className="text-sm text-slate-300 italic border-l-2 border-red-500/50 pl-3">
+                  <blockquote key={i} className="text-sm text-slate-300 italic border-l-2 border-red-500/50 pl-3 break-words whitespace-pre-wrap">
                     "{text}"
                   </blockquote>
                 )
@@ -421,17 +444,17 @@ function ReportView({ data }: { data: ReportData }) {
             <h2 className="text-lg font-bold mb-4">Deep Analysis</h2>
             <div className="space-y-6">
               {data.intelligence_reports.map((report, idx) => (
-                <div key={idx} className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
-                  <div className="flex items-center gap-3 mb-3">
-                    <span className="px-2 py-0.5 bg-cyan-500/20 text-cyan-400 rounded text-xs font-medium">
+                <div key={idx} className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 min-w-0 overflow-hidden">
+                  <div className="flex flex-wrap items-center gap-3 mb-3">
+                    <span className="px-2 py-0.5 bg-cyan-500/20 text-cyan-400 rounded text-xs font-medium break-all">
                       {report.report_type.replace(/_/g, ' ')}
                     </span>
                     {report.report_date && (
-                      <span className="text-xs text-slate-500">{report.report_date}</span>
+                      <span className="text-xs text-slate-500 break-all">{report.report_date}</span>
                     )}
                   </div>
                   {report.executive_summary && (
-                    <p className="text-sm text-slate-300 mb-4">{report.executive_summary}</p>
+                    <p className="text-sm text-slate-300 mb-4 break-words whitespace-pre-wrap">{report.executive_summary}</p>
                   )}
                   <IntelligenceData reportType={report.report_type} data={report.data} />
                 </div>
@@ -533,7 +556,7 @@ function CheckoutSuccess({ vendor, sessionId }: { vendor: string; sessionId: str
 
   useEffect(() => {
     if (!sessionId) return
-    fetch(`${CHECKOUT_SESSION_URL}?session_id=${encodeURIComponent(sessionId)}`)
+    fetch(addFreshParam(CHECKOUT_SESSION_URL, { session_id: sessionId }), noStoreInit())
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (data?.email) setSessionEmail(data.email)
@@ -770,7 +793,10 @@ export default function Report() {
   async function loadReport(reportToken: string) {
     setStatus('loading_report')
     try {
-      const res = await fetch(`${REPORT_DATA_URL}?token=${encodeURIComponent(reportToken)}`)
+      const res = await fetch(
+        addFreshParam(REPORT_DATA_URL, { token: reportToken }),
+        noStoreInit(),
+      )
       if (res.ok) {
         const data = normalizePublicReportData(await res.json() as ReportData)
         setReportData(data)
@@ -794,11 +820,11 @@ export default function Report() {
     setErrorMsg('')
 
     try {
-      const res = await fetch(GATE_URL, {
+      const res = await fetch(GATE_URL, noStoreInit({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: email.trim(), token }),
-      })
+      }))
 
       if (res.ok) {
         const body = await res.json()

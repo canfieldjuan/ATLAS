@@ -1,6 +1,26 @@
 import type { ReportDetail, VendorProfile } from '../types'
 
 const JSONISH_PATTERN = /^\s*[\[{].*[\]}]\s*$/s
+const LIST_STRING_KEYS = new Set([
+  'integration_stack',
+  'archetype_key_signals',
+  'falsification_conditions',
+  'uncertainty_sources',
+  'top_alternatives',
+  'displacement_triggers',
+  'proof_points',
+  'top_feature_gaps',
+  'key_signals',
+  'shared',
+  'challenger_exclusive',
+  'incumbent_exclusive',
+  'shared_pain_categories',
+  'shared_alternatives',
+  'shared_vendors',
+  'discovery_questions',
+  'landmine_questions',
+  'commonly_switched_from',
+])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -14,6 +34,45 @@ function tryParseJsonish(raw: string): unknown {
   } catch {
     return raw
   }
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const value of values) {
+    const item = value.trim()
+    if (!item || seen.has(item)) continue
+    seen.add(item)
+    out.push(item)
+  }
+  return out
+}
+
+function salvageStringList(raw: string, key: string): string[] | null {
+  const text = raw.trim()
+  if (!text) return null
+  const looksListLike = text.startsWith('[') || text.includes('","') || text.includes('",')
+  if (!LIST_STRING_KEYS.has(key) && !looksListLike) return null
+
+  const quotedTokens = Array.from(text.matchAll(/"([^"]+)"/g))
+    .map((match) => (match[1] ?? '').trim())
+    .filter(Boolean)
+  if (quotedTokens.length > 0) {
+    return uniqueStrings(quotedTokens)
+  }
+
+  const stripped = text
+    .replace(/^\s*\[/, '')
+    .replace(/\]\s*$/, '')
+  const splitTokens = stripped
+    .split(',')
+    .map((item) => item.trim().replace(/^"+|"+$/g, '').trim())
+    .filter(Boolean)
+  if (splitTokens.length > 0) {
+    return uniqueStrings(splitTokens)
+  }
+
+  return null
 }
 
 function normalizeInsights(value: unknown[]): unknown[] {
@@ -34,7 +93,9 @@ function normalizeInsights(value: unknown[]): unknown[] {
 export function normalizeUnknown(value: unknown, key = ''): unknown {
   if (typeof value === 'string') {
     const parsed = tryParseJsonish(value)
-    return parsed === value ? value : normalizeUnknown(parsed, key)
+    if (parsed !== value) return normalizeUnknown(parsed, key)
+    const salvaged = salvageStringList(value, key)
+    return salvaged ?? value
   }
 
   if (Array.isArray(value)) {

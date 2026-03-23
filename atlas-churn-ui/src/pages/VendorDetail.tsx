@@ -69,6 +69,15 @@ function extractNestedLabel(value: unknown): string {
   return ''
 }
 
+function extractQuoteText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (typeof value === 'object' && value !== null) {
+    const obj = value as Record<string, unknown>
+    return extractNestedLabel(obj.quote ?? obj.text ?? obj.value ?? obj.summary)
+  }
+  return ''
+}
+
 export default function VendorDetail() {
   const { name } = useParams<{ name: string }>()
   const navigate = useNavigate()
@@ -572,7 +581,7 @@ export default function VendorDetail() {
                         key={i}
                         className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3"
                       >
-                        {typeof q === 'string' ? q : String((q as Record<string, unknown>).quote ?? (q as Record<string, unknown>).text ?? '')}
+                        {extractQuoteText(q)}
                       </blockquote>
                     ))}
                   </div>

@@ -52,6 +52,21 @@ const FIELD_LABELS: Record<string, string> = {
   weakness_analysis: 'Weakness Analysis',
 }
 
+const SUMMARY_LABEL_KEYS = [
+  'label', 'name', 'title', 'company', 'vendor', 'competitor', 'opponent',
+  'category', 'feature', 'role', 'pain_category', 'stage',
+]
+
+const SUMMARY_DETAIL_KEYS = [
+  'summary', 'description', 'conclusion', 'evidence', 'quote', 'text',
+  'key_message', 'timing', 'resource_advantage', 'battle_conclusion',
+]
+
+const SUMMARY_META_KEYS = [
+  'count', 'mentions', 'mention_count', 'switch_count', 'confidence',
+  'urgency', 'score', 'evidence_count',
+]
+
 function isScalarValue(value: unknown): boolean {
   return value === null || value === undefined || ['string', 'number', 'boolean'].includes(typeof value)
 }
@@ -71,6 +86,39 @@ export function humanLabel(key: string): string {
   return FIELD_LABELS[key] ?? key.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase())
 }
 
+function getRenderableColumns(rows: AnyObject[]): string[] {
+  return Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).filter((key) =>
+    rows.some((row) => isScalarValue(row[key])),
+  )
+}
+
+function firstScalarText(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.trim()) return value.trim()
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (!isRecord(value)) return undefined
+  for (const entry of Object.values(value)) {
+    const nested = firstScalarText(entry)
+    if (nested) return nested
+  }
+  return undefined
+}
+
+function getSummaryText(obj: AnyObject, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = firstScalarText(obj[key])
+    if (value) return value
+  }
+  return undefined
+}
+
+function getSummaryMeta(obj: AnyObject): string[] {
+  return SUMMARY_META_KEYS.flatMap((key) => {
+    const value = obj[key]
+    if (!isScalarValue(value) || value === null || value === undefined || value === '') return []
+    return [`${humanLabel(key)}: ${formatValue(value)}`]
+  }).slice(0, 3)
+}
+
 function isRankedList(value: unknown): value is AnyObject[] {
   if (!Array.isArray(value) || value.length === 0) return false
   return value.every((item) => isRecord(item) && ['count', 'mentions', 'mention_count'].some((key) => key in item))
@@ -82,18 +130,16 @@ function getRankCount(item: AnyObject): number {
 
 function StructuredTable({ rows }: { rows: AnyObject[] }) {
   if (rows.length === 0) return null
-  const columns = Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).filter((key) =>
-    rows.some((row) => isScalarValue(row[key])),
-  )
+  const columns = getRenderableColumns(rows)
   if (columns.length === 0) return null
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-sm">
+      <table className="w-full text-sm table-fixed">
         <thead>
           <tr className="border-b border-slate-700/50">
             {columns.map((column) => (
-              <th key={column} className="text-left text-xs font-medium text-slate-400 uppercase tracking-wider px-3 py-2 whitespace-nowrap">
+              <th key={column} className="text-left text-xs font-medium text-slate-400 uppercase tracking-wider px-3 py-2 align-top break-words">
                 {humanLabel(column)}
               </th>
             ))}
@@ -106,13 +152,13 @@ function StructuredTable({ rows }: { rows: AnyObject[] }) {
                 const value = row[column]
                 if (column === 'archetype' && typeof value === 'string' && value) {
                   return (
-                    <td key={column} className="px-3 py-2 whitespace-nowrap">
+                    <td key={column} className="px-3 py-2 align-top break-words">
                       <ArchetypeBadge archetype={value} confidence={typeof row.archetype_confidence === 'number' ? row.archetype_confidence : undefined} showConfidence />
                     </td>
                   )
                 }
                 return (
-                  <td key={column} className="px-3 py-2 text-slate-300 whitespace-nowrap">
+                  <td key={column} className="px-3 py-2 text-slate-300 align-top break-words">
                     {formatValue(value)}
                   </td>
                 )
@@ -121,6 +167,59 @@ function StructuredTable({ rows }: { rows: AnyObject[] }) {
           ))}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+function ObjectSummaryCard({ obj, index }: { obj: AnyObject; index: number }) {
+  const title = getSummaryText(obj, SUMMARY_LABEL_KEYS) ?? `Item ${index + 1}`
+  const detail = getSummaryText(obj, SUMMARY_DETAIL_KEYS)
+  const meta = getSummaryMeta(obj)
+  const remaining = Object.entries(obj)
+    .filter(([key, value]) => !SUMMARY_LABEL_KEYS.includes(key) && !SUMMARY_DETAIL_KEYS.includes(key) && isScalarValue(value) && value !== null && value !== undefined && value !== '')
+    .slice(0, 3)
+
+  return (
+    <div className="bg-slate-800/50 rounded-lg p-3 space-y-2">
+      <p className="text-sm text-slate-200 font-medium break-words">{title}</p>
+      {detail && detail !== title && <p className="text-xs text-slate-400 break-words">{detail}</p>}
+      {meta.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {meta.map((item) => (
+            <span key={item} className="px-2 py-0.5 bg-slate-900/70 rounded text-[11px] text-slate-300 max-w-full break-all whitespace-normal">
+              {item}
+            </span>
+          ))}
+        </div>
+      )}
+      {remaining.length > 0 && (
+        <dl className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-xs">
+          {remaining.map(([key, value]) => (
+            <div key={key} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-2">
+              <dt className="text-slate-500 min-w-0 break-words">{humanLabel(key)}</dt>
+              <dd className="text-slate-300 text-right min-w-0 break-words">{formatValue(value)}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </div>
+  )
+}
+
+function MixedArrayList({ items }: { items: unknown[] }) {
+  return (
+    <div className="space-y-2">
+      {items.slice(0, 8).map((item, index) => {
+        if (isRecord(item)) return <ObjectSummaryCard key={index} obj={item} index={index} />
+        return (
+          <div key={index} className="bg-slate-800/50 rounded-lg px-3 py-2 text-sm text-slate-300 break-all">
+            {formatValue(item)}
+          </div>
+        )
+      })}
+      {items.length > 8 && (
+        <p className="text-xs text-slate-500">Showing 8 of {items.length} items</p>
+      )}
     </div>
   )
 }
@@ -135,9 +234,9 @@ function RankedList({ items }: { items: AnyObject[] }) {
         const pct = Math.max(5, Math.round((count / maxCount) * 100))
         return (
           <div key={index}>
-            <div className="flex items-center justify-between text-xs mb-0.5">
-              <span className="text-slate-300">{label}</span>
-              <span className="text-slate-400">{count}</span>
+            <div className="flex items-start justify-between gap-2 text-xs mb-0.5">
+              <span className="text-slate-300 min-w-0 break-words">{label}</span>
+              <span className="text-slate-400 shrink-0">{count}</span>
             </div>
             <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
               <div className="h-full bg-cyan-500/60 rounded-full" style={{ width: `${pct}%` }} />
@@ -164,7 +263,7 @@ function StringList({ items, asQuotes }: { items: string[]; asQuotes?: boolean }
   return (
     <div className="flex flex-wrap gap-1.5">
       {items.map((item, index) => (
-        <span key={index} className="px-2 py-0.5 bg-slate-800 rounded text-xs text-slate-300">
+        <span key={index} className="px-2 py-0.5 bg-slate-800 rounded text-xs text-slate-300 max-w-full break-all whitespace-normal">
           {item}
         </span>
       ))}
@@ -177,9 +276,9 @@ function InsightList({ items }: { items: KeyInsightViewModel[] }) {
     <div className="space-y-3">
       {items.map((item, index) => (
         <div key={index} className="bg-slate-800/50 rounded-lg p-3">
-          <p className="text-sm text-slate-200">{item.insight}</p>
+          <p className="text-sm text-slate-200 break-words">{item.insight}</p>
           {typeof item.evidence === 'string' && item.evidence.trim() && (
-            <p className="text-xs text-slate-500 mt-1">{item.evidence}</p>
+            <p className="text-xs text-slate-500 mt-1 break-all">{item.evidence}</p>
           )}
         </div>
       ))}
@@ -215,7 +314,7 @@ function PainQuotes({ items }: { items: PainQuoteViewModel[] }) {
     <div className="space-y-3">
       {items.map((item, index) => (
         <div key={index} className="border-l-2 border-cyan-500/50 pl-3">
-          <blockquote className="text-sm text-slate-300 italic">"{String(item.quote ?? item.text ?? '')}"</blockquote>
+          <blockquote className="text-sm text-slate-300 italic break-words whitespace-pre-wrap">"{String(item.quote ?? item.text ?? '')}"</blockquote>
           <div className="flex flex-wrap gap-3 mt-1 text-xs text-slate-500">
             {typeof item.company === 'string' && <span>{item.company}</span>}
             {typeof item.role === 'string' && <span>{item.role}</span>}
@@ -276,7 +375,7 @@ function WeaknessAnalysis({ items }: { items: WeaknessAnalysisItemViewModel[] })
           <p className="text-sm text-white font-medium">{String(item.weakness ?? item.area ?? '')}</p>
           {typeof item.evidence === 'string' && <p className="text-sm text-slate-400">{item.evidence}</p>}
           {typeof item.customer_quote === 'string' && item.customer_quote.trim() && (
-            <blockquote className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3">{item.customer_quote}</blockquote>
+            <blockquote className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3 break-words whitespace-pre-wrap">{item.customer_quote}</blockquote>
           )}
           {typeof item.winning_position === 'string' && <p className="text-sm text-cyan-300">{item.winning_position}</p>}
           {typeof item.recommendation === 'string' && <p className="text-sm text-cyan-300">{item.recommendation}</p>}
@@ -315,20 +414,15 @@ function UnknownFallback({ value }: { value: unknown }) {
       {keys.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {keys.slice(0, 8).map((key) => (
-            <span key={key} className="px-2 py-0.5 bg-slate-800 rounded text-xs text-slate-300">
+            <span key={key} className="px-2 py-0.5 bg-slate-800 rounded text-xs text-slate-300 max-w-full break-all whitespace-normal">
               {humanLabel(key)}
             </span>
           ))}
         </div>
       )}
-      <details className="group">
-        <summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-300">
-          Show raw data
-        </summary>
-        <pre className="mt-2 text-xs text-slate-400 bg-slate-800/50 rounded p-3 overflow-x-auto">
-          {JSON.stringify(value, null, 2)}
-        </pre>
-      </details>
+      <p className="text-xs text-slate-500">
+        This field is structured data without a dedicated card yet, but it is no longer rendered as raw JSON.
+      </p>
     </div>
   )
 }
@@ -343,9 +437,9 @@ function MixedObjectCard({ obj, label }: { obj: AnyObject; label?: string }) {
       {scalars.length > 0 && (
         <dl className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
           {scalars.map(([key, value]) => (
-            <div key={key} className="flex justify-between">
-              <dt className="text-slate-400">{humanLabel(key)}</dt>
-              <dd className="text-white font-medium">{formatValue(value)}</dd>
+            <div key={key} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-2">
+              <dt className="text-slate-400 min-w-0 break-words">{humanLabel(key)}</dt>
+              <dd className="text-white font-medium text-right min-w-0 break-words">{formatValue(value)}</dd>
             </div>
           ))}
         </dl>
@@ -365,7 +459,7 @@ function MixedObjectCard({ obj, label }: { obj: AnyObject; label?: string }) {
 
 export function StructuredReportValue({ fieldKey, value }: { fieldKey: string; value: unknown }) {
   if (value === null || value === undefined) return <span className="text-sm text-slate-500">--</span>
-  if (typeof value === 'string') return <p className="text-sm text-slate-300 whitespace-pre-wrap">{value}</p>
+  if (typeof value === 'string') return <p className="text-sm text-slate-300 whitespace-pre-wrap break-words">{value}</p>
   if (typeof value === 'number') return <span className="text-lg font-bold text-white">{formatValue(value)}</span>
   if (typeof value === 'boolean') return <span className="text-sm text-slate-300">{value ? 'Yes' : 'No'}</span>
   if (isRankedList(value)) return <RankedList items={value} />
@@ -385,7 +479,12 @@ export function StructuredReportValue({ fieldKey, value }: { fieldKey: string; v
     return talkTrack ? <TalkTrack obj={talkTrack} /> : <span className="text-sm text-slate-500">--</span>
   }
   if (fieldKey === 'competitor_differentiators' && Array.isArray(value)) return <StructuredTable rows={value.filter(isRecord)} />
-  if (Array.isArray(value) && value.every(isRecord)) return <StructuredTable rows={value} />
+  if (Array.isArray(value) && value.every(isRecord)) {
+    return getRenderableColumns(value).length > 0
+      ? <StructuredTable rows={value} />
+      : <MixedArrayList items={value} />
+  }
+  if (Array.isArray(value)) return <MixedArrayList items={value} />
   if (isRecord(value)) return <MixedObjectCard obj={value} />
   return <UnknownFallback value={value} />
 }
@@ -414,8 +513,8 @@ export function StructuredReportData({
   return (
     <div className={clsx('grid grid-cols-1 lg:grid-cols-2 gap-6', className)}>
       {entries.map(([key, value]) => (
-        <div key={key} className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
-          <h4 className="text-xs font-medium text-cyan-400 uppercase tracking-wider mb-3">
+        <div key={key} className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 min-w-0 overflow-hidden">
+          <h4 className="text-xs font-medium text-cyan-400 uppercase tracking-wider mb-3 break-words">
             {humanLabel(key)}
           </h4>
           <StructuredReportValue fieldKey={key} value={value} />

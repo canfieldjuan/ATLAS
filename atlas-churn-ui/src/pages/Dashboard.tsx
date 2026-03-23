@@ -35,6 +35,20 @@ function formatGrowthRate(value: number | null) {
   return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`
 }
 
+function toIso(value: string | null | undefined): string | null {
+  if (!value) return null
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? null : date.toISOString()
+}
+
+function maxIso(values: (string | null | undefined)[]): string | null {
+  const isoValues = values
+    .map((value) => toIso(value))
+    .filter((value): value is string => Boolean(value))
+  if (isoValues.length === 0) return null
+  return isoValues.sort((a, b) => b.localeCompare(a))[0]
+}
+
 export default function Dashboard() {
   const navigate = useNavigate()
 
@@ -66,6 +80,18 @@ export default function Dashboard() {
   const companies = data?.companies ?? []
   const pipeline = data?.pipeline ?? null
   const summary = data?.signalSummary ?? { totalVendors: 0, highUrgency: 0, totalReviews: 0 }
+  const latestSignalComputedAt = maxIso(signals.map((signal) => signal.last_computed_at))
+  const lastEnrichmentAt = toIso(pipeline?.last_enrichment_at)
+  const lastScrapeAt = toIso(pipeline?.last_scrape_at)
+  const freshnessAnchor = maxIso([latestSignalComputedAt, lastEnrichmentAt, lastScrapeAt])
+  const freshnessAgeHours = freshnessAnchor
+    ? (Date.now() - new Date(freshnessAnchor).getTime()) / (1000 * 60 * 60)
+    : null
+  const freshnessState = freshnessAgeHours === null
+    ? 'unknown'
+    : freshnessAgeHours > 24
+      ? 'stale'
+      : 'fresh'
 
   const totalReviews = pipeline
     ? Object.values(pipeline.enrichment_counts).reduce((a, b) => a + b, 0)
@@ -155,6 +181,16 @@ export default function Dashboard() {
           <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
           Refresh
         </button>
+      </div>
+      <div className="text-xs">
+        {freshnessAnchor ? (
+          <span className={freshnessState === 'stale' ? 'text-amber-400' : 'text-slate-500'}>
+            Data last updated {new Date(freshnessAnchor).toLocaleString()}
+            {freshnessState === 'stale' ? ' (older than 24h)' : ''}
+          </span>
+        ) : (
+          <span className="text-slate-500">Data freshness timestamp unavailable</span>
+        )}
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

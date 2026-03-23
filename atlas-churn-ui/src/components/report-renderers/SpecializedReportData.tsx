@@ -45,8 +45,8 @@ export function isSpecializedReportType(reportType: string): boolean {
 
 function SectionCard({ title, icon, children }: { title: string; icon?: ReactNode; children: ReactNode }) {
   return (
-    <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
-      <h3 className="flex items-center gap-2 text-sm font-medium text-slate-300 mb-3">
+    <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 min-w-0 overflow-hidden">
+      <h3 className="flex items-center gap-2 text-sm font-medium text-slate-300 mb-3 min-w-0 break-words">
         {icon}
         {title}
       </h3>
@@ -58,9 +58,9 @@ function SectionCard({ title, icon, children }: { title: string; icon?: ReactNod
 function MetricRow({ label, value, color }: { label: string; value: string | number | null | undefined; color?: string }) {
   if (value === null || value === undefined || value === '') return null
   return (
-    <div className="flex justify-between text-sm">
-      <span className="text-slate-400">{label}</span>
-      <span className={color ?? 'text-white'}>{String(value)}</span>
+    <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3 text-sm items-start">
+      <span className="text-slate-400 min-w-0 break-words">{label}</span>
+      <span className={clsx('min-w-0 break-words text-right', color ?? 'text-white')}>{String(value)}</span>
     </div>
   )
 }
@@ -122,7 +122,7 @@ function ChallengerBriefDetail({ data }: { data: ChallengerBriefViewModel }) {
           </p>
         )}
         {disp.key_quote && (
-          <blockquote className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3 mt-2">
+          <blockquote className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3 mt-2 break-words whitespace-pre-wrap">
             "{disp.key_quote}"
           </blockquote>
         )}
@@ -132,9 +132,11 @@ function ChallengerBriefDetail({ data }: { data: ChallengerBriefViewModel }) {
         <SectionCard title={`Incumbent: ${data.incumbent}`} icon={<Shield className="h-4 w-4 text-red-400" />}>
           <div className="space-y-1">
             {inc.archetype && (
-              <div className="flex justify-between items-center text-sm">
-                <span className="text-slate-400">Archetype</span>
-                <ArchetypeBadge archetype={inc.archetype} confidence={inc.archetype_confidence} showConfidence />
+              <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 items-start text-sm">
+                <span className="text-slate-400 min-w-0 break-words">Archetype</span>
+                <div className="min-w-0">
+                  <ArchetypeBadge archetype={inc.archetype} confidence={inc.archetype_confidence} showConfidence />
+                </div>
               </div>
             )}
             <MetricRow label="Risk Level" value={inc.risk_level} color={riskColor(inc.risk_level)} />
@@ -162,18 +164,18 @@ function ChallengerBriefDetail({ data }: { data: ChallengerBriefViewModel }) {
           {Array.isArray(inc.top_weaknesses) && inc.top_weaknesses.length > 0 && (
             <div className="mt-3 overflow-x-auto">
               <p className="text-xs font-medium text-slate-400 mb-1">Top Weaknesses</p>
-              <table className="w-full text-sm">
+              <table className="w-full text-sm table-fixed">
                 <thead>
                   <tr className="border-b border-slate-700/50">
-                    <th className="text-left text-xs text-slate-400 px-2 py-1">Weakness</th>
-                    <th className="text-right text-xs text-slate-400 px-2 py-1">Evidence</th>
+                    <th className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">Weakness</th>
+                    <th className="text-right text-xs text-slate-400 px-2 py-1 align-top break-words">Evidence</th>
                   </tr>
                 </thead>
                 <tbody>
                   {inc.top_weaknesses.slice(0, 8).map((weakness: WeaknessAnalysisItemViewModel, index: number) => (
                     <tr key={index} className="border-b border-slate-800/50">
-                      <td className="px-2 py-1 text-slate-300">{weakness.area ?? weakness.weakness ?? weakness.name ?? ''}</td>
-                      <td className="px-2 py-1 text-slate-400 text-right">{weakness.count ?? weakness.evidence_count ?? ''}</td>
+                      <td className="px-2 py-1 text-slate-300 align-top break-words">{weakness.area ?? weakness.weakness ?? weakness.name ?? ''}</td>
+                      <td className="px-2 py-1 text-slate-400 text-right align-top break-words">{weakness.count ?? weakness.evidence_count ?? ''}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -201,18 +203,18 @@ function ChallengerBriefDetail({ data }: { data: ChallengerBriefViewModel }) {
 
           {Array.isArray(adv.strengths) && adv.strengths.length > 0 && (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm table-fixed">
                 <thead>
                   <tr className="border-b border-slate-700/50">
-                    <th className="text-left text-xs text-slate-400 px-2 py-1">Strength</th>
-                    <th className="text-right text-xs text-slate-400 px-2 py-1">Evidence</th>
+                    <th className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">Strength</th>
+                    <th className="text-right text-xs text-slate-400 px-2 py-1 align-top break-words">Evidence</th>
                   </tr>
                 </thead>
                 <tbody>
                   {adv.strengths.slice(0, 8).map((strength, index: number) => (
                     <tr key={index} className="border-b border-slate-800/50">
-                      <td className="px-2 py-1 text-slate-300">{strength.area ?? strength.name ?? ''}</td>
-                      <td className="px-2 py-1 text-slate-400 text-right">{strength.evidence_count ?? strength.mentions ?? ''}</td>
+                      <td className="px-2 py-1 text-slate-300 align-top break-words">{strength.area ?? strength.name ?? ''}</td>
+                      <td className="px-2 py-1 text-slate-400 text-right align-top break-words">{strength.evidence_count ?? strength.mentions ?? ''}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -223,17 +225,17 @@ function ChallengerBriefDetail({ data }: { data: ChallengerBriefViewModel }) {
           {Array.isArray(adv.weakness_coverage) && adv.weakness_coverage.length > 0 && (
             <div className="mt-3 overflow-x-auto">
               <p className="text-xs font-medium text-slate-400 mb-1">Weakness Coverage</p>
-              <table className="w-full text-sm">
+              <table className="w-full text-sm table-fixed">
                 <thead>
                   <tr className="border-b border-slate-700/50">
-                    <th className="text-left text-xs text-slate-400 px-2 py-1">Incumbent Weakness</th>
-                    <th className="text-left text-xs text-slate-400 px-2 py-1">Match</th>
+                    <th className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">Incumbent Weakness</th>
+                    <th className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">Match</th>
                   </tr>
                 </thead>
                 <tbody>
                   {adv.weakness_coverage.slice(0, 8).map((coverage, index: number) => (
                     <tr key={index} className="border-b border-slate-800/50">
-                      <td className="px-2 py-1 text-slate-300">{coverage.incumbent_weakness ?? ''}</td>
+                      <td className="px-2 py-1 text-slate-300 align-top break-words">{coverage.incumbent_weakness ?? ''}</td>
                       <td className="px-2 py-1">
                         <span className={clsx('text-xs px-1.5 py-0.5 rounded', coverage.match_quality === 'strong' ? 'bg-green-500/15 text-green-300' : 'bg-amber-500/15 text-amber-300')}>
                           {coverage.match_quality}
@@ -276,9 +278,9 @@ function ChallengerBriefDetail({ data }: { data: ChallengerBriefViewModel }) {
                 const text = insight.insight ?? ''
                 const evidence = insight.evidence ?? ''
                 return (
-                  <li key={index} className="text-xs text-slate-400 flex gap-2">
-                    <span className="text-cyan-400">-</span>
-                    <span>{text}{evidence && <span className="text-slate-600 ml-1">({evidence})</span>}</span>
+                  <li key={index} className="text-xs text-slate-400 flex gap-2 min-w-0">
+                    <span className="text-cyan-400 shrink-0">-</span>
+                    <span className="min-w-0 break-words">{text}{evidence && <span className="text-slate-600 ml-1 break-all">({evidence})</span>}</span>
                   </li>
                 )
               })}
@@ -290,22 +292,22 @@ function ChallengerBriefDetail({ data }: { data: ChallengerBriefViewModel }) {
       {targets.length > 0 && (
         <SectionCard title={`Target Accounts (${data.total_target_accounts ?? targets.length} total, ${data.accounts_considering_challenger ?? 0} considering ${data.challenger})`} icon={<Target className="h-4 w-4 text-amber-400" />}>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm table-fixed">
               <thead>
                 <tr className="border-b border-slate-700/50">
                   {['Company', 'Score', 'Stage', 'Urg', 'Industry', 'Chall?'].map((header) => (
-                    <th key={header} className="text-left text-xs text-slate-400 px-2 py-1 whitespace-nowrap">{header}</th>
+                    <th key={header} className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">{header}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {targets.slice(0, 15).map((target: ChallengerTargetAccountViewModel, index: number) => (
                   <tr key={index} className="border-b border-slate-800/50 hover:bg-slate-800/30">
-                    <td className="px-2 py-1 text-slate-300">{target.company ?? ''}</td>
+                    <td className="px-2 py-1 text-slate-300 align-top break-words">{target.company ?? ''}</td>
                     <td className="px-2 py-1 text-white font-medium">{target.opportunity_score ?? ''}</td>
-                    <td className="px-2 py-1 text-slate-300">{(target.buying_stage ?? '').replace(/_/g, ' ')}</td>
-                    <td className="px-2 py-1 text-slate-300">{typeof target.urgency === 'number' ? target.urgency.toFixed(0) : ''}</td>
-                    <td className="px-2 py-1 text-slate-400">{(target.industry ?? '').slice(0, 20)}</td>
+                    <td className="px-2 py-1 text-slate-300 align-top break-words">{(target.buying_stage ?? '').replace(/_/g, ' ')}</td>
+                    <td className="px-2 py-1 text-slate-300 align-top break-words">{typeof target.urgency === 'number' ? target.urgency.toFixed(0) : ''}</td>
+                    <td className="px-2 py-1 text-slate-400 align-top break-words">{(target.industry ?? '').slice(0, 20)}</td>
                     <td className="px-2 py-1">{target.considers_challenger ? <span className="text-green-400">Y</span> : ''}</td>
                   </tr>
                 ))}
@@ -469,18 +471,18 @@ function AccountsInMotionDetail({ data }: { data: AccountsInMotionViewModel }) {
         {gaps.length > 0 && (
           <SectionCard title="Top Feature Gaps">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm table-fixed">
                 <thead>
                   <tr className="border-b border-slate-700/50">
-                    <th className="text-left text-xs text-slate-400 px-2 py-1">Feature</th>
-                    <th className="text-right text-xs text-slate-400 px-2 py-1">Mentions</th>
+                    <th className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">Feature</th>
+                    <th className="text-right text-xs text-slate-400 px-2 py-1 align-top break-words">Mentions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {gaps.slice(0, 10).map((gap: FeatureGapViewModel, index: number) => (
                     <tr key={index} className="border-b border-slate-800/50">
-                      <td className="px-2 py-1 text-slate-300">{gap.feature ?? ''}</td>
-                      <td className="px-2 py-1 text-slate-400 text-right">{gap.mentions ?? ''}</td>
+                      <td className="px-2 py-1 text-slate-300 align-top break-words">{gap.feature ?? ''}</td>
+                      <td className="px-2 py-1 text-slate-400 text-right align-top break-words">{gap.mentions ?? ''}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -503,29 +505,29 @@ function AccountsInMotionDetail({ data }: { data: AccountsInMotionViewModel }) {
       {accounts.length > 0 && (
         <SectionCard title={`Prospecting List (${accounts.length} accounts)`} icon={<Target className="h-4 w-4 text-amber-400" />}>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm table-fixed">
               <thead>
                 <tr className="border-b border-slate-700/50">
                   {['Company', 'Score', 'Stage', 'Urg', 'Pain', 'Industry', 'Domain', 'Alts'].map((header) => (
-                    <th key={header} className="text-left text-xs text-slate-400 px-2 py-1 whitespace-nowrap">{header}</th>
+                    <th key={header} className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">{header}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {accounts.slice(0, 25).map((account: AccountsInMotionAccountViewModel, index: number) => (
                   <tr key={index} className="border-b border-slate-800/50 hover:bg-slate-800/30">
-                    <td className="px-2 py-1 text-slate-300">{(account.company ?? '').slice(0, 24)}</td>
+                    <td className="px-2 py-1 text-slate-300 align-top break-words">{(account.company ?? '').slice(0, 24)}</td>
                     <td className="px-2 py-1">
                       <span className={clsx('font-medium', Number(account.opportunity_score) >= 50 ? 'text-green-400' : Number(account.opportunity_score) >= 30 ? 'text-amber-400' : 'text-slate-300')}>
                         {account.opportunity_score ?? ''}
                       </span>
                     </td>
-                    <td className="px-2 py-1 text-slate-300">{(account.buying_stage ?? '').replace(/_/g, ' ')}</td>
-                    <td className="px-2 py-1 text-slate-300">{typeof account.urgency === 'number' ? account.urgency.toFixed(0) : ''}</td>
-                    <td className="px-2 py-1 text-slate-400">{(account.pain_category ?? '').replace(/_/g, ' ')}</td>
-                    <td className="px-2 py-1 text-slate-400">{(account.industry ?? '').slice(0, 18)}</td>
-                    <td className="px-2 py-1 text-slate-400">{(account.domain ?? '').slice(0, 22)}</td>
-                    <td className="px-2 py-1 text-xs text-slate-500">{Array.isArray(account.alternatives_considering) ? account.alternatives_considering.slice(0, 2).join(', ') : ''}</td>
+                    <td className="px-2 py-1 text-slate-300 align-top break-words">{(account.buying_stage ?? '').replace(/_/g, ' ')}</td>
+                    <td className="px-2 py-1 text-slate-300 align-top break-words">{typeof account.urgency === 'number' ? account.urgency.toFixed(0) : ''}</td>
+                    <td className="px-2 py-1 text-slate-400 align-top break-words">{(account.pain_category ?? '').replace(/_/g, ' ')}</td>
+                    <td className="px-2 py-1 text-slate-400 align-top break-words">{(account.industry ?? '').slice(0, 18)}</td>
+                    <td className="px-2 py-1 text-slate-400 align-top break-words">{(account.domain ?? '').slice(0, 22)}</td>
+                    <td className="px-2 py-1 text-xs text-slate-500 align-top break-words">{Array.isArray(account.alternatives_considering) ? account.alternatives_considering.slice(0, 2).join(', ') : ''}</td>
                   </tr>
                 ))}
               </tbody>
@@ -539,7 +541,7 @@ function AccountsInMotionDetail({ data }: { data: AccountsInMotionViewModel }) {
                 {accounts.filter((account) => account.top_quote).slice(0, 5).map((account, index) => (
                   <div key={index}>
                     <span className="text-[10px] text-slate-500">{account.company}{account.urgency ? ` (urgency: ${account.urgency})` : ''}</span>
-                    <blockquote className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3">
+                    <blockquote className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3 break-words whitespace-pre-wrap">
                       "{account.top_quote}"
                     </blockquote>
                   </div>
@@ -555,6 +557,16 @@ function AccountsInMotionDetail({ data }: { data: AccountsInMotionViewModel }) {
 
 function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawData: Record<string, unknown> }) {
   const weaknesses = data.weakness_analysis.length > 0 ? data.weakness_analysis : data.vendor_weaknesses
+  const qualityClass = data.quality_status === 'sales_ready'
+    ? 'bg-emerald-500/15 text-emerald-300'
+    : data.quality_status === 'needs_review'
+      ? 'bg-amber-500/15 text-amber-300'
+      : data.quality_status === 'deterministic_fallback'
+        ? 'bg-rose-500/15 text-rose-300'
+        : 'bg-slate-500/15 text-slate-300'
+  const qualityLabel = data.quality_status
+    ? data.quality_status.replace(/_/g, ' ')
+    : null
   const skipKeys = [
     'vendor', 'category', 'churn_pressure_score', 'total_reviews', 'confidence',
     'archetype', 'archetype_risk_level', 'archetype_key_signals',
@@ -562,7 +574,7 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
     'competitor_differentiators', 'cross_vendor_battles', 'competitive_landscape',
     'resource_asymmetry', 'category_council', 'objection_handlers', 'talk_track',
     'recommended_plays', 'active_evaluation_deadlines', 'source_distribution',
-    'llm_render_status',
+    'llm_render_status', 'quality_status', 'quality_score', 'battle_card_quality',
   ]
 
   return (
@@ -585,6 +597,18 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
           <p className="text-sm font-medium text-white">{data.llm_render_status ?? 'unknown'}</p>
         </div>
       </div>
+      {(qualityLabel || data.quality_score != null) && (
+        <div className="flex flex-wrap items-center gap-2">
+          {qualityLabel && (
+            <span className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-medium ${qualityClass}`}>
+              {qualityLabel}
+            </span>
+          )}
+          {data.quality_score != null && (
+            <span className="text-xs text-slate-400">quality score: <span className="text-white font-medium">{Math.round(data.quality_score)}</span></span>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {weaknesses.length > 0 && (
@@ -594,7 +618,7 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
                 <div key={index} className="bg-slate-800/50 rounded-lg p-3">
                   <p className="text-sm font-medium text-white">{weakness.weakness ?? weakness.area ?? weakness.name ?? ''}</p>
                   {weakness.evidence && <p className="text-xs text-slate-400 mt-1">{weakness.evidence}</p>}
-                  {weakness.customer_quote && <blockquote className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3 mt-2">"{weakness.customer_quote}"</blockquote>}
+                  {weakness.customer_quote && <blockquote className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3 mt-2 break-words whitespace-pre-wrap">"{weakness.customer_quote}"</blockquote>}
                   {weakness.winning_position && <p className="text-xs text-cyan-300 mt-2">{weakness.winning_position}</p>}
                 </div>
               ))}
@@ -622,7 +646,10 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
                 <p className="text-xs font-medium text-slate-400 mb-1">Displacement Triggers</p>
                 <ul className="space-y-1">
                   {data.competitive_landscape.displacement_triggers.slice(0, 4).map((trigger, index) => (
-                    <li key={index} className="text-sm text-slate-300 flex gap-2"><span className="text-cyan-400">-</span>{trigger}</li>
+                    <li key={index} className="text-sm text-slate-300 flex gap-2 min-w-0">
+                      <span className="text-cyan-400 shrink-0">-</span>
+                      <span className="min-w-0 break-words">{trigger}</span>
+                    </li>
                   ))}
                 </ul>
               </div>
@@ -638,7 +665,7 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
               <div className="space-y-3">
                 {data.customer_pain_quotes.slice(0, 5).map((quote, index) => (
                   <div key={index}>
-                    <blockquote className="text-sm text-slate-300 italic border-l-2 border-amber-500/50 pl-3">"{quote.quote}"</blockquote>
+                    <blockquote className="text-sm text-slate-300 italic border-l-2 border-amber-500/50 pl-3 break-words whitespace-pre-wrap">"{quote.quote}"</blockquote>
                     <div className="flex flex-wrap gap-2 mt-1 text-xs text-slate-500">
                       {quote.company && <span>{quote.company}</span>}
                       {quote.role && <span>{quote.role}</span>}
@@ -654,20 +681,20 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
           {data.competitor_differentiators.length > 0 && (
             <SectionCard title="Competitor Differentiators" icon={<Zap className="h-4 w-4 text-green-400" />}>
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="w-full text-sm table-fixed">
                   <thead>
                     <tr className="border-b border-slate-700/50">
-                      <th className="text-left text-xs text-slate-400 px-2 py-1">Competitor</th>
-                      <th className="text-right text-xs text-slate-400 px-2 py-1">Mentions</th>
-                      <th className="text-left text-xs text-slate-400 px-2 py-1">Driver</th>
+                      <th className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">Competitor</th>
+                      <th className="text-right text-xs text-slate-400 px-2 py-1 align-top break-words">Mentions</th>
+                      <th className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">Driver</th>
                     </tr>
                   </thead>
                   <tbody>
                     {data.competitor_differentiators.slice(0, 8).map((item: CompetitorDifferentiatorViewModel, index: number) => (
                       <tr key={index} className="border-b border-slate-800/50">
-                        <td className="px-2 py-1 text-slate-300">{item.competitor ?? ''}</td>
-                        <td className="px-2 py-1 text-right text-slate-400">{item.mentions ?? item.count ?? ''}</td>
-                        <td className="px-2 py-1 text-slate-400">{item.primary_driver ?? item.solves_weakness ?? ''}</td>
+                        <td className="px-2 py-1 text-slate-300 align-top break-words">{item.competitor ?? ''}</td>
+                        <td className="px-2 py-1 text-right text-slate-400 align-top break-words">{item.mentions ?? item.count ?? ''}</td>
+                        <td className="px-2 py-1 text-slate-400 align-top break-words">{item.primary_driver ?? item.solves_weakness ?? ''}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -705,7 +732,10 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
               {data.category_council?.key_insights.length ? (
                 <ul className="space-y-1 mt-3">
                   {data.category_council.key_insights.slice(0, 4).map((insight, index) => (
-                    <li key={index} className="text-xs text-slate-400 flex gap-2"><span className="text-cyan-400">-</span>{insight.insight}</li>
+                    <li key={index} className="text-xs text-slate-400 flex gap-2 min-w-0">
+                      <span className="text-cyan-400 shrink-0">-</span>
+                      <span className="min-w-0 break-all">{insight.insight}</span>
+                    </li>
                   ))}
                 </ul>
               ) : null}
@@ -719,20 +749,20 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
           {data.active_evaluation_deadlines.length > 0 && (
             <SectionCard title="Active Evaluation Deadlines" icon={<Target className="h-4 w-4 text-red-400" />}>
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="w-full text-sm table-fixed">
                   <thead>
                     <tr className="border-b border-slate-700/50">
-                      <th className="text-left text-xs text-slate-400 px-2 py-1">Company</th>
-                      <th className="text-left text-xs text-slate-400 px-2 py-1">Timeline</th>
-                      <th className="text-right text-xs text-slate-400 px-2 py-1">Urgency</th>
+                      <th className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">Company</th>
+                      <th className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">Timeline</th>
+                      <th className="text-right text-xs text-slate-400 px-2 py-1 align-top break-words">Urgency</th>
                     </tr>
                   </thead>
                   <tbody>
                     {data.active_evaluation_deadlines.slice(0, 8).map((item, index) => (
                       <tr key={index} className="border-b border-slate-800/50">
-                        <td className="px-2 py-1 text-slate-300">{item.company ?? ''}</td>
-                        <td className="px-2 py-1 text-slate-400">{item.decision_timeline ?? item.evaluation_deadline ?? item.contract_end ?? ''}</td>
-                        <td className="px-2 py-1 text-right text-slate-400">{item.urgency ?? ''}</td>
+                        <td className="px-2 py-1 text-slate-300 align-top break-words">{item.company ?? ''}</td>
+                        <td className="px-2 py-1 text-slate-400 align-top break-words">{item.decision_timeline ?? item.evaluation_deadline ?? item.contract_end ?? ''}</td>
+                        <td className="px-2 py-1 text-right text-slate-400 align-top break-words">{item.urgency ?? ''}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -752,7 +782,7 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
                   ].map(({ key, label }) => {
                     const value = data.talk_track?.[key]
                     if (!value) return null
-                    return <div key={key}><p className="text-xs text-slate-500 uppercase mb-1">{label}</p><p className="text-sm text-slate-300">{value}</p></div>
+                    return <div key={key}><p className="text-xs text-slate-500 uppercase mb-1">{label}</p><p className="text-sm text-slate-300 break-words">{value}</p></div>
                   })}
                 </div>
               )}
@@ -812,20 +842,20 @@ function ComparisonReportDetail({ data, rawData }: { data: ComparisonReportViewM
     <div className="space-y-6">
       <SectionCard title="Side-by-Side Metrics" icon={<Swords className="h-4 w-4 text-cyan-400" />}>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm table-fixed">
             <thead>
               <tr className="border-b border-slate-700/50">
-                <th className="text-left text-xs text-slate-400 px-2 py-1">Metric</th>
-                <th className="text-left text-xs text-slate-400 px-2 py-1">{data.primary_name ?? 'Primary'}</th>
-                <th className="text-left text-xs text-slate-400 px-2 py-1">{data.comparison_name ?? 'Comparison'}</th>
+                <th className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">Metric</th>
+                <th className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">{data.primary_name ?? 'Primary'}</th>
+                <th className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">{data.comparison_name ?? 'Comparison'}</th>
               </tr>
             </thead>
             <tbody>
               {metricRows.map(([label, primary, comparison]) => (
                 <tr key={String(label)} className="border-b border-slate-800/50">
-                  <td className="px-2 py-1 text-slate-400">{label}</td>
-                  <td className="px-2 py-1 text-slate-300">{primary ?? '--'}</td>
-                  <td className="px-2 py-1 text-slate-300">{comparison ?? '--'}</td>
+                  <td className="px-2 py-1 text-slate-400 align-top break-words">{label}</td>
+                  <td className="px-2 py-1 text-slate-300 align-top break-words">{primary ?? '--'}</td>
+                  <td className="px-2 py-1 text-slate-300 align-top break-words">{comparison ?? '--'}</td>
                 </tr>
               ))}
             </tbody>
@@ -913,7 +943,7 @@ function WeeklyChurnFeedDetail({ items }: { items: WeeklyChurnFeedItemViewModel[
             <MetricRow label="Urgency" value={item.avg_urgency} />
             <MetricRow label="Reviews" value={item.total_reviews} />
           </div>
-          {item.key_quote && <blockquote className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3 mb-3">"{item.key_quote}"</blockquote>}
+          {item.key_quote && <blockquote className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3 mb-3 break-words whitespace-pre-wrap">"{item.key_quote}"</blockquote>}
           {item.action_recommendation && <p className="text-sm text-cyan-300 mb-3">{item.action_recommendation}</p>}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {item.pain_breakdown.length > 0 && (

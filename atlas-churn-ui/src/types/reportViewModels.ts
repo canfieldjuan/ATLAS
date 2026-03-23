@@ -218,6 +218,8 @@ export interface BattleCardViewModel {
   active_evaluation_deadlines: ActiveEvaluationDeadlineViewModel[]
   source_distribution: Record<string, number>
   llm_render_status?: string
+  quality_status?: string
+  quality_score?: number | null
 }
 
 export interface ComparisonMetricSnapshotViewModel {

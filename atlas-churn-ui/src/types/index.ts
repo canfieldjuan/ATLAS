@@ -133,6 +133,8 @@ export interface Report {
   vendor_filter: string | null
   category_filter?: string | null
   status: string | null
+  quality_status?: string | null
+  quality_score?: number | null
   created_at: string | null
 }
 
@@ -219,6 +221,8 @@ export interface AffiliateOpportunity {
   review_id: string
   vendor_name: string
   reviewer_company: string | null
+  reviewer_company_display?: string | null
+  reviewer_company_inferred?: boolean
   product_category: string | null
   urgency: number
   is_dm: boolean | null
@@ -227,6 +231,8 @@ export interface AffiliateOpportunity {
   seat_count: number | null
   contract_end: string | null
   decision_timeline: string | null
+  source?: string | null
+  reviewed_at?: string | null
   competitor_name: string
   mention_context: string | null
   mention_reason: string | null
