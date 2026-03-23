@@ -3,6 +3,19 @@ import { API_BASE } from './config'
 
 const BASE = `${API_BASE}/api/v1/b2b/tenant`
 
+function maybeFallbackApiPath(url: string): string | null {
+  if (!url.includes('/api/v1/')) return null
+  return url.replace('/api/v1/', '/api/')
+}
+
+async function fetchWithApiFallback(url: string, init?: RequestInit): Promise<Response> {
+  const res = await fetch(url, init)
+  if (res.status !== 404) return res
+  const fallbackUrl = maybeFallbackApiPath(url)
+  if (!fallbackUrl) return res
+  return fetch(fallbackUrl, init)
+}
+
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem('atlas_token')
   return token ? { Authorization: `Bearer ${token}` } : {}
@@ -55,14 +68,14 @@ async function get<T>(path: string, params?: Record<string, string | number | bo
       }
     }
   }
-  const doFetch = () => fetch(url.toString(), { headers: authHeaders() })
+  const doFetch = () => fetchWithApiFallback(url.toString(), { headers: authHeaders() })
   const res = await doFetch()
   return handleResponse<T>(res, doFetch)
 }
 
 async function post<T>(path: string, body?: unknown): Promise<T> {
   const doFetch = () =>
-    fetch(`${BASE}${path}`, {
+    fetchWithApiFallback(`${BASE}${path}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: body ? JSON.stringify(body) : undefined,
@@ -73,7 +86,7 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
 
 async function del<T>(path: string): Promise<T> {
   const doFetch = () =>
-    fetch(`${BASE}${path}`, {
+    fetchWithApiFallback(`${BASE}${path}`, {
       method: 'DELETE',
       headers: authHeaders(),
     })
@@ -83,7 +96,7 @@ async function del<T>(path: string): Promise<T> {
 
 async function patch<T>(path: string, body?: unknown): Promise<T> {
   const doFetch = () =>
-    fetch(`${BASE}${path}`, {
+    fetchWithApiFallback(`${BASE}${path}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: body ? JSON.stringify(body) : undefined,

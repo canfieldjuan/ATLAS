@@ -38,6 +38,19 @@ const PROSPECTS_BASE = `${API_BASE}/api/v1/b2b/prospects`
 const BRIEFINGS_BASE = `${API_BASE}/api/v1/b2b/briefings`
 const CACHE_BUSTER_PARAM = '_ts'
 
+function maybeFallbackApiPath(url: string): string | null {
+  if (!url.includes('/api/v1/')) return null
+  return url.replace('/api/v1/', '/api/')
+}
+
+async function fetchWithApiFallback(url: string, init?: RequestInit): Promise<Response> {
+  const res = await fetch(url, init)
+  if (res.status !== 404) return res
+  const fallbackUrl = maybeFallbackApiPath(url)
+  if (!fallbackUrl) return res
+  return fetch(fallbackUrl, init)
+}
+
 function freshHeaders(): Record<string, string> {
   return {
     'Cache-Control': 'no-cache',
@@ -106,7 +119,7 @@ async function get<T>(base: string, path: string, params?: Record<string, string
     }
   }
   url.searchParams.set(CACHE_BUSTER_PARAM, String(Date.now()))
-  const doFetch = () => fetch(url.toString(), {
+  const doFetch = () => fetchWithApiFallback(url.toString(), {
     headers: { ...freshHeaders(), ...authHeaders() },
     cache: 'no-store',
   })
@@ -116,7 +129,7 @@ async function get<T>(base: string, path: string, params?: Record<string, string
 
 async function post<T>(base: string, path: string, body?: unknown): Promise<T> {
   const url = base + path
-  const doFetch = () => fetch(url, {
+  const doFetch = () => fetchWithApiFallback(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...freshHeaders(), ...authHeaders() },
     cache: 'no-store',
@@ -128,7 +141,7 @@ async function post<T>(base: string, path: string, body?: unknown): Promise<T> {
 
 async function patch<T>(base: string, path: string, body: unknown): Promise<T> {
   const url = base + path
-  const doFetch = () => fetch(url, {
+  const doFetch = () => fetchWithApiFallback(url, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', ...freshHeaders(), ...authHeaders() },
     cache: 'no-store',
@@ -140,7 +153,7 @@ async function patch<T>(base: string, path: string, body: unknown): Promise<T> {
 
 async function put<T>(base: string, path: string, body: unknown): Promise<T> {
   const url = base + path
-  const doFetch = () => fetch(url, {
+  const doFetch = () => fetchWithApiFallback(url, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...freshHeaders(), ...authHeaders() },
     cache: 'no-store',
@@ -152,7 +165,7 @@ async function put<T>(base: string, path: string, body: unknown): Promise<T> {
 
 async function del<T>(base: string, path: string): Promise<T> {
   const url = base + path
-  const doFetch = () => fetch(url, {
+  const doFetch = () => fetchWithApiFallback(url, {
     method: 'DELETE',
     headers: { ...freshHeaders(), ...authHeaders() },
     cache: 'no-store',
