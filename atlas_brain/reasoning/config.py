@@ -25,11 +25,11 @@ class ReasoningConfig(BaseSettings):
 
     # LLM models (cross-domain reasoning agent)
     model: str = Field(
-        default="claude-sonnet-4-5-20250929",
+        default="claude-3-5-haiku-latest",
         description="Anthropic model for deep reasoning",
     )
     max_tokens: int = Field(default=16384, description="Max tokens for reasoning calls (includes thinking tokens for reasoning models)")
-    temperature: float = Field(default=0.3, description="Temperature for reasoning calls (ignored by reasoning models like o4-mini)")
+    temperature: float = Field(default=0.3, description="Temperature for reasoning calls (ignored by some reasoning models)")
 
     # Stratified reasoning LLM backend (B2B churn pipeline)
     # Heavy model: archetype classification (Pass 1), pairwise battles
@@ -39,20 +39,24 @@ class ReasoningConfig(BaseSettings):
         description="Pipeline LLM workload for stratified reasoning: 'openrouter', 'vllm', 'anthropic', or 'auto'",
     )
     stratified_openrouter_model: str = Field(
-        default="anthropic/claude-sonnet-4",
+        default="openai/gpt-oss-120b",
         description="OpenRouter model for Tier 1 (heavy) reasoning: archetype classify, pairwise battles",
     )
     stratified_openrouter_model_light: str = Field(
-        default="openai/o4-mini",
-        description="OpenRouter model for Tier 2 (light) reasoning: challenge/ground passes, reconstitute, category councils, asymmetry",
+        default="",
+        description=(
+            "OpenRouter model for Tier 2 (light) reasoning: challenge/ground "
+            "passes, reconstitute, category councils, asymmetry. "
+            "Empty = reuse stratified_openrouter_model."
+        ),
     )
     stratified_anthropic_model: str = Field(
-        default="claude-sonnet-4-20250514",
+        default="claude-3-5-haiku-latest",
         description="Anthropic model for stratified reasoning when workload is 'anthropic'",
     )
 
     triage_model: str = Field(
-        default="claude-haiku-4-5-20251001",
+        default="claude-3-5-haiku-latest",
         description="Cheap model for event triage classification",
     )
     triage_max_tokens: int = Field(default=256, description="Max tokens for triage calls")
@@ -83,8 +87,9 @@ class ReasoningConfig(BaseSettings):
     graph_openrouter_model: str = Field(
         default="",
         description=(
-            "Optional OpenRouter model override for reasoning-graph workloads "
-            "(empty = use global OpenRouter reasoning model)"
+            "Optional OpenRouter model override for reasoning-graph deep "
+            "analysis node. Empty = use the workload's default model. "
+            "Triage and synthesis always use their workload defaults."
         ),
     )
 

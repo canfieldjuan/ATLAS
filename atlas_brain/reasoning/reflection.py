@@ -36,9 +36,8 @@ async def run_reflection() -> dict[str, Any]:
     from ..pipelines.llm import get_pipeline_llm
 
     llm = get_pipeline_llm(
-        workload=settings.reasoning.graph_reasoning_workload,
+        workload=settings.reasoning.graph_synthesis_workload,
         auto_activate_ollama=False,
-        openrouter_model=settings.reasoning.graph_openrouter_model or None,
     )
     if not llm:
         # No LLM available -- just notify on all findings

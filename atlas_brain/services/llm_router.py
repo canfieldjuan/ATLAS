@@ -114,7 +114,7 @@ def get_draft_llm() -> Optional[LLMService]:
 
 
 def init_triage_llm(
-    model: str = "claude-haiku-4-5-20251001",
+    model: str = "claude-3-5-haiku-latest",
     api_key: str | None = None,
 ) -> Optional[LLMService]:
     """Initialize the triage LLM singleton (Anthropic Haiku). Called from main.py lifespan."""
@@ -146,7 +146,7 @@ def get_triage_llm() -> Optional[LLMService]:
 
 
 def init_reasoning_llm(
-    model: str = "claude-sonnet-4-5-20250929",
+    model: str = "claude-3-5-haiku-latest",
     api_key: str | None = None,
 ) -> Optional[LLMService]:
     """Initialize the reasoning LLM singleton (Anthropic). Called from main.py lifespan."""

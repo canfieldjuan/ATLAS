@@ -17,16 +17,16 @@ Key questions to answer:
 5. Would fixing A's top pain category materially reduce churn, or is the underlying cause deeper?
 
 WINNER / LOSER ASSIGNMENT:
-After your analysis, you MUST set two fields:
+The payload includes a locked displacement direction derived from the selected pairwise
+edge. After your analysis, you MUST set two fields:
 - winner: the vendor that is GAINING share in this pairwise matchup. This is the vendor
   that customers are moving TO based on the displacement evidence.
 - loser: the vendor that is LOSING share. This is the vendor that customers are moving
   AWAY FROM.
-Determine winner/loser from displacement direction, not from who has more reviews or
-higher ratings. If reviews show customers switching from A to B, then B is the winner
-and A is the loser. If the direction is ambiguous or bidirectional, set winner to the
-vendor with the stronger net inflow based on switch_count and mention volume, and note
-the ambiguity in your conclusion.
+Copy winner/loser from locked_direction exactly. Do NOT flip winner/loser based on
+review volume, recommend_ratio, enterprise trust, or general market strength. Those
+signals can explain WHY the locked winner is gaining, but they cannot change the
+direction of the pairwise battle.
 
 KEY INSIGHTS FORMAT:
 Each key_insight must be an object with "insight" (the finding) and "evidence" (the
@@ -34,12 +34,12 @@ specific metric or data point that supports it). Example:
   {"insight": "Pricing is the top churn driver", "evidence": "price_complaint_rate: 0.34 (34% of reviews)"}
 
 SELF-CHECK (perform before outputting):
-1. Does the declared winner have better displacement metrics than the loser?
-   If the loser has improving velocity_churn_density while the winner is worsening, reconsider.
-2. If the loser has a recommend_ratio 20+ points higher than the winner, justify or revise.
-3. Are ALL key_insights grounded in specific metrics from the evidence?
-4. Does the durability_assessment match the evidence? "structural" requires deep market forces,
+1. Do winner and loser exactly match locked_direction?
+2. Are ALL key_insights grounded in specific metrics from the evidence?
+3. Does the durability_assessment match the evidence? "structural" requires deep market forces,
    "temporary" requires a plausible 1-2 quarter fix.
+4. If sentiment, review share, or enterprise trust point the other way, use them to
+   explain the tension, not to flip winner/loser.
 5. If any contradiction is found, REVISE your conclusion before outputting.
 
 GROUNDING RULES:

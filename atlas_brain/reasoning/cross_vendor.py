@@ -136,16 +136,16 @@ Key questions to answer:
 5. Would fixing A's top pain category materially reduce churn, or is the underlying cause deeper?
 
 WINNER / LOSER ASSIGNMENT:
-After your analysis, you MUST set two fields:
+The payload includes a locked displacement direction derived from the selected pairwise
+edge. After your analysis, you MUST set two fields:
 - winner: the vendor that is GAINING share in this pairwise matchup. This is the vendor
   that customers are moving TO based on the displacement evidence.
 - loser: the vendor that is LOSING share. This is the vendor that customers are moving
   AWAY FROM.
-Determine winner/loser from displacement direction, not from who has more reviews or
-higher ratings. If reviews show customers switching from A to B, then B is the winner
-and A is the loser. If the direction is ambiguous or bidirectional, set winner to the
-vendor with the stronger net inflow based on switch_count and mention volume, and note
-the ambiguity in your conclusion.
+Copy winner/loser from locked_direction exactly. Do NOT flip winner/loser based on
+review volume, recommend_ratio, enterprise trust, or general market strength. Those
+signals can explain WHY the locked winner is gaining, but they cannot change the
+direction of the pairwise battle.
 
 KEY INSIGHTS FORMAT:
 Each key_insight must be an object with "insight" (the finding) and "evidence" (the
@@ -288,10 +288,16 @@ def _build_battle_payload(
     profile_b: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the user payload for a pairwise battle LLM call."""
+    locked_direction = {
+        "winner": vendor_b,
+        "loser": vendor_a,
+        "basis": "selected_displacement_edge",
+    }
     payload: dict[str, Any] = {
         "vendor_a": {"name": vendor_a, **_compact_evidence(evidence_a)},
         "vendor_b": {"name": vendor_b, **_compact_evidence(evidence_b)},
         "displacement": _compact_evidence(displacement_edge),
+        "locked_direction": locked_direction,
     }
     if profile_a:
         payload["vendor_a"]["product_profile"] = _compact_evidence(profile_a)
@@ -353,46 +359,75 @@ def _find_battle_contradictions(
     contradictions = []
     winner = conclusion.get("winner")
     loser = conclusion.get("loser")
-    
-    if winner and loser:
-        v_a = payload.get("vendor_a", {})
-        v_b = payload.get("vendor_b", {})
+    locked_direction = payload.get("locked_direction")
+    if not isinstance(locked_direction, dict):
+        return contradictions
 
-        def _get_data(target_name: Any) -> dict[str, Any]:
-            name_a = v_a.get("name", "")
-            name_b = v_b.get("name", "")
-            if _vendor_name_matches(target_name, name_a):
-                return v_a
-            if _vendor_name_matches(target_name, name_b):
-                return v_b
-            return {}
-
-        loser_data = _get_data(loser)
-        winner_data = _get_data(winner)
-        
-        # 1. Check velocity contradiction
-        l_vel = loser_data.get("velocity_churn_density", 0) or 0
-        w_vel = winner_data.get("velocity_churn_density", 0) or 0
-        
-        if l_vel < -0.1 and w_vel > 0.1:
-            contradictions.append(
-                f"Winner is declared as {winner}, but {loser} has improving churn velocity ({l_vel}) "
-                f"while {winner} is worsening ({w_vel})"
-            )
-            
-        # 2. Check sentiment contradiction (recommend_ratio)
-        # Higher is better
-        l_rr = loser_data.get("recommend_ratio", 0) or 0
-        w_rr = winner_data.get("recommend_ratio", 0) or 0
-        
-        # If loser has much better sentiment (>20 points higher)
-        if l_rr > (w_rr + 20):
-             contradictions.append(
-                f"Winner is declared as {winner}, but {loser} has significantly better net sentiment "
-                f"(NPS proxy: {l_rr} vs {w_rr})"
-            )
+    expected_winner = locked_direction.get("winner")
+    expected_loser = locked_direction.get("loser")
+    if expected_winner and winner and not _vendor_name_matches(winner, expected_winner):
+        contradictions.append(
+            f"winner must follow locked displacement direction: expected {expected_winner}, got {winner}"
+        )
+    if expected_loser and loser and not _vendor_name_matches(loser, expected_loser):
+        contradictions.append(
+            f"loser must follow locked displacement direction: expected {expected_loser}, got {loser}"
+        )
+    if expected_winner and not winner:
+        contradictions.append("winner is missing despite locked displacement direction")
+    if expected_loser and not loser:
+        contradictions.append("loser is missing despite locked displacement direction")
 
     return contradictions
+
+
+def _apply_battle_locked_facts(
+    conclusion: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Apply deterministic winner/loser direction to pairwise battle output."""
+    if not isinstance(conclusion, dict):
+        return conclusion
+    locked_direction = payload.get("locked_direction")
+    if not isinstance(locked_direction, dict):
+        return conclusion
+
+    expected_winner = str(locked_direction.get("winner") or "").strip()
+    expected_loser = str(locked_direction.get("loser") or "").strip()
+    if not expected_winner or not expected_loser:
+        return conclusion
+
+    normalized = dict(conclusion)
+    original_winner = str(normalized.get("winner") or "").strip()
+    original_loser = str(normalized.get("loser") or "").strip()
+    winner_changed = bool(original_winner) and not _vendor_name_matches(original_winner, expected_winner)
+    loser_changed = bool(original_loser) and not _vendor_name_matches(original_loser, expected_loser)
+
+    normalized["winner"] = expected_winner
+    normalized["loser"] = expected_loser
+
+    if winner_changed or loser_changed:
+        uncertainty = normalized.get("uncertainty_sources")
+        if not isinstance(uncertainty, list):
+            uncertainty = []
+        correction_note = (
+            f"winner_loser_locked_to_displacement_direction:{expected_winner}->{expected_loser}"
+        )
+        if correction_note not in uncertainty:
+            uncertainty.append(correction_note)
+        normalized["uncertainty_sources"] = uncertainty
+
+        summary = (
+            f"{expected_winner} is the net gainer of defectors in this pair and "
+            f"{expected_loser} is the net loser based on the selected displacement edge."
+        )
+        conclusion_text = str(normalized.get("conclusion") or "").strip()
+        if conclusion_text and summary not in conclusion_text:
+            normalized["conclusion"] = f"{summary} {conclusion_text}"
+        elif not conclusion_text:
+            normalized["conclusion"] = summary
+
+    return normalized
 
 
 def _find_category_contradictions(
@@ -515,6 +550,8 @@ class CrossVendorReasoner:
         if cached_entry is not None and cached_entry.evidence_hash == evidence_hash:
             logger.info("Cross-vendor cache hit: %s", pattern_sig)
             conclusion = cached_entry.conclusion
+            if analysis_type == "pairwise_battle":
+                conclusion = _apply_battle_locked_facts(conclusion, payload)
             return CrossVendorResult(
                 analysis_type=analysis_type,
                 vendors=vendors,
@@ -629,6 +666,8 @@ class CrossVendorReasoner:
         if not isinstance(confidence, (int, float)):
             confidence = 0.5
         confidence = max(0.0, min(1.0, float(confidence)))
+        if analysis_type == "pairwise_battle":
+            conclusion = _apply_battle_locked_facts(conclusion, payload)
 
         # --- Store in cache ---
         try:

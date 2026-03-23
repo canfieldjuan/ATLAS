@@ -23,6 +23,24 @@ logger = logging.getLogger("atlas.pipelines.llm")
 # ------------------------------------------------------------------
 
 
+def _resolve_openrouter_api_key() -> str:
+    """Resolve OpenRouter API key from env first, then configured settings."""
+    from ..config import settings as _settings
+
+    return (
+        os.environ.get("OPENROUTER_API_KEY", "")
+        or os.environ.get("ATLAS_B2B_CHURN_OPENROUTER_API_KEY", "")
+        or str(getattr(_settings.b2b_churn, "openrouter_api_key", "") or "").strip()
+    )
+
+
+def _strict_openrouter_reasoning() -> bool:
+    """Whether reasoning/synthesis should fail closed to OpenRouter."""
+    from ..config import settings as _settings
+
+    return bool(getattr(_settings.llm, "openrouter_reasoning_strict", False))
+
+
 def _resolve_workload(workload: str):
     """Try to resolve an LLM for a specific workload type.
 
@@ -39,7 +57,7 @@ def _resolve_workload(workload: str):
         return get_draft_llm()
 
     if workload in ("synthesis", "reasoning"):
-        # Primary: OpenRouter o4-mini (benchmarked at 121% of Opus quality)
+        # Primary: configured OpenRouter reasoning model
         from ..config import settings as _settings
         llm = _try_openrouter(_settings.llm.openrouter_reasoning_model)
         if llm is not None:
@@ -48,6 +66,12 @@ def _resolve_workload(workload: str):
                 _settings.llm.openrouter_reasoning_model, workload,
             )
             return llm
+        if _strict_openrouter_reasoning() and str(_settings.llm.openrouter_reasoning_model or "").strip():
+            logger.warning(
+                "OpenRouter reasoning strict mode enabled; not falling back for workload '%s'",
+                workload,
+            )
+            return None
         # Fallback: Anthropic Sonnet singletons
         llm = get_reasoning_llm()
         if llm is not None:
@@ -80,10 +104,14 @@ def _resolve_workload(workload: str):
 def _try_openrouter(openrouter_model: str | None = None):
     """Try to activate OpenRouter. Reuses existing instance if model matches."""
     from ..services import llm_registry
+    from ..config import settings as _settings
 
-    target_model = openrouter_model or "openai/o4-mini"
-    or_key = os.environ.get("OPENROUTER_API_KEY", "")
-    if not or_key:
+    target_model = (
+        str(openrouter_model or "").strip()
+        or str(_settings.llm.openrouter_reasoning_model or "").strip()
+    )
+    or_key = _resolve_openrouter_api_key()
+    if not or_key or not target_model:
         return None
 
     # Reuse existing OpenRouter instance if already active with the right model
@@ -205,8 +233,8 @@ def get_pipeline_llm(
     When *workload* is set, routes to the appropriate model singleton:
         triage     -> Haiku (cheap classification)
         draft      -> Sonnet (email drafts)
-        synthesis  -> OpenRouter o4-mini primary, Sonnet fallback
-        reasoning  -> OpenRouter o4-mini primary, Sonnet fallback
+        synthesis  -> configured OpenRouter reasoning model primary, fallback optional
+        reasoning  -> configured OpenRouter reasoning model primary, fallback optional
         openrouter -> OpenRouter only
         local_fast -> local vLLM/Ollama only
         vllm       -> vLLM primary, Anthropic fallback (no Ollama)
@@ -219,9 +247,10 @@ def get_pipeline_llm(
 
     # --- Workload-based routing (preferred) ---
     if workload is not None:
+        strict_reasoning = workload in ("synthesis", "reasoning") and _strict_openrouter_reasoning()
         # Explicit model override: create a standalone instance (don't swap the singleton)
         if openrouter_model and try_openrouter:
-            or_key = os.environ.get("OPENROUTER_API_KEY", "")
+            or_key = _resolve_openrouter_api_key()
             if or_key:
                 try:
                     from ..services.llm.openrouter import OpenRouterLLM
@@ -231,9 +260,17 @@ def get_pipeline_llm(
                     return _or
                 except Exception as e:
                     logger.warning("Explicit OpenRouter model %s failed: %s", openrouter_model, e)
+                    if strict_reasoning:
+                        return None
         llm = _resolve_workload(workload)
         if llm is not None:
             return llm
+        if strict_reasoning:
+            logger.warning(
+                "OpenRouter reasoning strict mode enabled; '%s' workload returning no LLM",
+                workload,
+            )
+            return None
         # local_fast: only local models
         if workload == "local_fast":
             if auto_activate_ollama:

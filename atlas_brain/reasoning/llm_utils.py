@@ -94,6 +94,12 @@ _SLOT_HEAVY = "reasoning_heavy"
 _SLOT_LIGHT = "reasoning_light"
 
 
+def _strict_openrouter_reasoning() -> bool:
+    from ..config import settings
+
+    return bool(getattr(settings.llm, "openrouter_reasoning_strict", False))
+
+
 def resolve_stratified_llm(cfg: Any) -> Any:
     """Resolve the Tier 1 (heavy) LLM for stratified reasoning.
 
@@ -177,14 +183,44 @@ def _activate_openrouter_slot(
     """
     api_key = _openrouter_api_key()
     if not api_key:
+        if _strict_openrouter_reasoning():
+            logger.warning(
+                "OpenRouter reasoning strict mode enabled; slot '%s' will not fall back without an API key",
+                slot_name,
+            )
+            return None
         logger.warning("No OpenRouter API key found, falling back to pipeline LLM")
         return get_pipeline_llm(workload="reasoning", auto_activate_ollama=False)
 
-    model = model_override or cfg.stratified_openrouter_model or "openai/o4-mini"
+    from ..config import settings
+
+    model = (
+        str(model_override or "").strip()
+        or str(getattr(cfg, "stratified_openrouter_model", "") or "").strip()
+        or str(settings.llm.openrouter_reasoning_model or "").strip()
+    )
+    if not model:
+        if _strict_openrouter_reasoning():
+            logger.warning(
+                "OpenRouter reasoning strict mode enabled; slot '%s' will not fall back without a model",
+                slot_name,
+            )
+            return None
+        logger.warning(
+            "No OpenRouter model configured for reasoning slot '%s'; "
+            "falling back to pipeline LLM",
+            slot_name,
+        )
+        return get_pipeline_llm(workload="reasoning", auto_activate_ollama=False)
 
     existing = llm_registry.get_slot(slot_name)
     if existing is not None and _matches_model(existing, model):
-        return existing
+        if getattr(existing, "is_loaded", True):
+            return existing
+        logger.warning(
+            "Reasoning slot '%s' matched model %s but instance was not loaded; reactivating",
+            slot_name, model,
+        )
 
     try:
         instance = llm_registry.activate_slot(
@@ -193,6 +229,12 @@ def _activate_openrouter_slot(
         logger.info("Reasoning slot '%s' -> %s", slot_name, model)
         return instance
     except Exception:
+        if _strict_openrouter_reasoning():
+            logger.warning(
+                "Failed to activate OpenRouter slot '%s' (%s); strict mode prevents fallback",
+                slot_name, model, exc_info=True,
+            )
+            return None
         logger.warning(
             "Failed to activate OpenRouter slot '%s' (%s), falling back",
             slot_name, model, exc_info=True,

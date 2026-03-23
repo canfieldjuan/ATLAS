@@ -27,7 +27,7 @@ class AnthropicLLM(BaseModelService):
 
     def __init__(
         self,
-        model: str = "claude-sonnet-4-5-20250929",
+        model: str = "claude-3-5-haiku-latest",
         api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> None:

@@ -20,6 +20,26 @@ from ..registry import register_llm
 logger = logging.getLogger("atlas.llm.openrouter")
 
 
+def _resolve_openrouter_api_key(api_key: Optional[str] = None) -> str:
+    """Resolve OpenRouter API key from explicit input, env, or settings."""
+    if api_key:
+        return api_key
+
+    env_key = (
+        os.environ.get("OPENROUTER_API_KEY", "")
+        or os.environ.get("ATLAS_B2B_CHURN_OPENROUTER_API_KEY", "")
+    )
+    if env_key:
+        return env_key
+
+    try:
+        from ...config import settings as _settings
+
+        return str(getattr(_settings.b2b_churn, "openrouter_api_key", "") or "").strip()
+    except Exception:
+        return ""
+
+
 @register_llm("openrouter")
 class OpenRouterLLM(BaseModelService):
     """LLM service using OpenRouter's API."""
@@ -36,7 +56,7 @@ class OpenRouterLLM(BaseModelService):
         super().__init__(name="openrouter", model_id=model)
         self.model = model
         self.base_url = base_url.rstrip("/")
-        self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
+        self.api_key = _resolve_openrouter_api_key(api_key)
         self._client: httpx.AsyncClient | None = None
         self._sync_client: httpx.Client | None = None
         self._loaded = False

@@ -42,15 +42,24 @@ _COMMON_SHORT_FINAL_WORDS = frozenset({
 })
 
 
-def _resolve_graph_llm(workload: str):
-    """Resolve reasoning-graph LLMs through the pipeline router."""
+def _resolve_graph_llm(workload: str, *, use_model_override: bool = False):
+    """Resolve reasoning-graph LLMs through the pipeline router.
+
+    Only passes the graph_openrouter_model override when *use_model_override*
+    is True (for the heavy reasoning node).  Triage and synthesis use their
+    workload's default model (Haiku) without override.
+    """
     from ..config import settings
     from ..pipelines.llm import get_pipeline_llm
+
+    model_override = None
+    if use_model_override:
+        model_override = settings.reasoning.graph_openrouter_model or None
 
     return get_pipeline_llm(
         workload=workload,
         auto_activate_ollama=False,
-        openrouter_model=settings.reasoning.graph_openrouter_model or None,
+        openrouter_model=model_override,
     )
 
 
@@ -158,8 +167,8 @@ async def _llm_generate(llm, prompt: str, system_prompt: str,
         timeout: Maximum seconds to wait for the LLM response (default 120s).
                  Raises asyncio.TimeoutError if exceeded.
         json_mode: When True, pass response_format={"type":"json_object"} to
-                   force structured JSON output (needed for reasoning models
-                   like o4-mini that may return prose otherwise).
+                   force structured JSON output (needed for some reasoning
+                   models that may return prose otherwise).
 
     Returns:
         Dict with 'response' (str) and 'usage' (dict with input_tokens, output_tokens)
@@ -435,7 +444,7 @@ async def _node_reason(state: ReasoningAgentState) -> ReasoningAgentState:
 
     prompt = "\n\n".join(sections)
 
-    llm = _resolve_graph_llm(settings.reasoning.graph_reasoning_workload)
+    llm = _resolve_graph_llm(settings.reasoning.graph_reasoning_workload, use_model_override=True)
     if not llm:
         state["reasoning_output"] = ""
         state["connections_found"] = []
