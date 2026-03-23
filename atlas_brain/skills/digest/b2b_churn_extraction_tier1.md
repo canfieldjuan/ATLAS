@@ -97,11 +97,11 @@ You are a B2B software intelligence analyst performing DETERMINISTIC extraction 
 - `support_escalation`: True if reviewer mentions escalating support tickets, contacting management, or filing formal complaints. False otherwise.
 
 ### reviewer_context (6 fields -- NER + enum mapping)
-- `role_level`: Map reviewer_title to one of: `executive` (C-suite), `director` (VP/Director/Head of), `manager`, `ic` (individual contributor), `unknown`.
+- `role_level`: Infer from reviewer_title when present. If reviewer_title is blank, infer from first-person self-identification or operating language in the review text. Map to one of: `executive` (C-suite/founder/owner), `director` (VP/Director/Head of), `manager`, `ic` (individual contributor), `unknown`.
 - `department`: Extract department from title (e.g., "VP of Sales" -> "sales", "Engineering Manager" -> "engineering"). Null if unclear.
 - `company_size_segment`: Map company_size_raw: 1000+ = `enterprise`, 201-1000 = `mid_market`, 51-200 = `smb`, 1-50 = `startup`, else `unknown`.
 - `industry`: Pass through from reviewer_industry. Null if empty.
-- `decision_maker`: True for executive/director roles. True for manager titles implying budget authority. False otherwise.
+- `decision_maker`: True for executive/director roles. Also true when the review explicitly says the author approved, signed off on, or made the purchase/renewal decision. True for manager titles implying budget authority. False otherwise.
 - `company_name`: Use reviewer_company if provided. Otherwise extract from text ONLY if explicitly stated. Null if not found.
 
 ### budget_signals (5 fields -- number/string extraction)

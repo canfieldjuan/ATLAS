@@ -31,7 +31,9 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(_ROOT / ".env")
+load_dotenv(_ROOT / ".env.local", override=True)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -224,7 +226,7 @@ async def main():
                 return
 
             parsed = parse_json(ext_result["content"])
-            if parsed and _validate_enrichment(parsed):
+            if parsed and _validate_enrichment(parsed, row):
                 await pool.execute(
                     """
                     UPDATE b2b_reviews

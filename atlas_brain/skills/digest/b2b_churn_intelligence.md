@@ -43,7 +43,7 @@ When community sources dominate (>60% of reviews or >70% of high-urgency rows), 
 
 Data sets:
 
-1. **vendor_churn_scores**: Per-vendor metrics (reviews, churn_intent, urgency, rating, recommend yes/no, positive_pct)
+1. **vendor_churn_scores**: Per-vendor metrics (reviews, churn_intent, urgency, rating, recommend yes/no, positive_pct) and, when available, a compact `category_council` with category-level winner/loser/regime context
 2. **high_intent_companies**: Companies with high churn intent. Each entry includes a `quotes` array — these are REAL verbatim quotes from that company's review. Use them as-is.
 3. **competitive_displacement**: Vendor-to-competitor flows (direction, volume)
 4. **pain_distribution**: Churn drivers per vendor

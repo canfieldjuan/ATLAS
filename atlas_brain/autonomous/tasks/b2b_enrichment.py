@@ -13,6 +13,8 @@ runner does not double-synthesize.
 import asyncio
 import json
 import logging
+import os
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -25,17 +27,23 @@ from ...services.scraping.sources import VERIFIED_SOURCES as _VERIFIED_SOURCES
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_enrichment")
 
 # Dedicated OpenRouter instance for enrichment -- not shared with the global
-# registry singleton (which synthesis/reasoning tasks swap to o4-mini).
+# registry singleton (used by synthesis/reasoning workloads).
 _enrichment_llm = None
 
 
 def _get_enrichment_llm():
     """Get or create a dedicated OpenRouter LLM for enrichment."""
     global _enrichment_llm
-    import os
-    target_model = settings.b2b_churn.enrichment_openrouter_model
-    or_key = os.environ.get("OPENROUTER_API_KEY", "")
-    if not or_key:
+    target_model = (
+        str(settings.b2b_churn.enrichment_openrouter_model or "").strip()
+        or str(settings.llm.openrouter_reasoning_model or "").strip()
+    )
+    or_key = (
+        str(settings.b2b_churn.openrouter_api_key or "").strip()
+        or os.environ.get("OPENROUTER_API_KEY", "")
+        or os.environ.get("ATLAS_B2B_CHURN_OPENROUTER_API_KEY", "")
+    )
+    if not or_key or not target_model:
         return None
 
     if _enrichment_llm is not None and getattr(_enrichment_llm, "model", "") == target_model:
@@ -68,8 +76,11 @@ def _get_tier2_llm(cfg):
     if _tier2_llm is not None and getattr(_tier2_llm, "model", "") == target_model:
         return _tier2_llm
 
-    import os
-    or_key = os.environ.get("OPENROUTER_API_KEY", "")
+    or_key = (
+        str(settings.b2b_churn.openrouter_api_key or "").strip()
+        or os.environ.get("OPENROUTER_API_KEY", "")
+        or os.environ.get("ATLAS_B2B_CHURN_OPENROUTER_API_KEY", "")
+    )
     if not or_key:
         return None
 
@@ -134,13 +145,13 @@ async def _call_vllm_tier1(payload_json: str, cfg, client) -> tuple[dict | None,
         if not text:
             return None, model_id
 
-        from ...pipelines.llm import clean_llm_output
+        from ...pipelines.llm import clean_llm_output, parse_json_response
         text = clean_llm_output(text)
-        parsed = json.loads(text)
-        if isinstance(parsed, dict):
+        parsed = parse_json_response(text, recover_truncated=True)
+        if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
             return parsed, model_id
         return None, model_id
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, ValueError):
         logger.warning("Tier 1 vLLM returned invalid JSON")
         return None, model_id
     except Exception:
@@ -189,11 +200,12 @@ async def _call_cloud_tier2(row, cfg, truncate_length: int) -> tuple[dict | None
         if not text:
             return None, model_id
         text = clean_llm_output(text)
-        parsed = json.loads(text)
-        if isinstance(parsed, dict):
+        from ...pipelines.llm import parse_json_response
+        parsed = parse_json_response(text, recover_truncated=True)
+        if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
             return parsed, model_id
         return None, model_id
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, ValueError):
         logger.warning("Tier 2 cloud returned invalid JSON for review %s", row["id"])
         return None, model_id
     except Exception:
@@ -449,6 +461,9 @@ async def _queue_version_upgrades(pool) -> int:
     parser version.  Reviews with older versions are re-queued for enrichment.
     Returns the number of reviews re-queued.
     """
+    if not settings.b2b_churn.enrichment_auto_requeue_parser_upgrades:
+        logger.info("Parser-version auto requeue disabled; skipping version-upgrade scan")
+        return 0
     try:
         from ...services.scraping.parsers import get_all_parsers
 
@@ -465,14 +480,17 @@ async def _queue_version_upgrades(pool) -> int:
             # Find enriched reviews with an older parser version
             count = await pool.fetchval(
                 """
-                UPDATE b2b_reviews
-                SET enrichment_status = 'pending',
-                    enrichment_attempts = 0
-                WHERE source = $1
-                  AND parser_version IS NOT NULL
-                  AND parser_version != $2
-                  AND enrichment_status IN ('enriched', 'no_signal')
-                RETURNING COUNT(*)
+                WITH updated AS (
+                    UPDATE b2b_reviews
+                    SET enrichment_status = 'pending',
+                        enrichment_attempts = 0
+                    WHERE source = $1
+                      AND parser_version IS NOT NULL
+                      AND parser_version != $2
+                      AND enrichment_status IN ('enriched', 'no_signal')
+                    RETURNING 1
+                )
+                SELECT count(*) FROM updated
                 """,
                 source_name,
                 current_version,
@@ -651,7 +669,7 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
                 timeout=120,
             )
 
-        if result and _validate_enrichment(result):
+        if result and _validate_enrichment(result, row):
             # Extract sentiment_trajectory subfields for indexed columns
             st = result.get("sentiment_trajectory") or {}
             st_direction = st.get("direction") if isinstance(st, dict) else None
@@ -853,7 +871,7 @@ async def _classify_review_async(row, local_only: bool, max_tokens: int,
     """
     from ...skills import get_skill_registry
     from ...services.protocols import Message
-    from ...pipelines.llm import get_pipeline_llm, clean_llm_output
+    from ...pipelines.llm import get_pipeline_llm, clean_llm_output, parse_json_response
 
     skill = get_skill_registry().get("digest/b2b_churn_extraction")
     if not skill:
@@ -897,11 +915,11 @@ async def _classify_review_async(row, local_only: bool, max_tokens: int,
         if not text:
             return None, model_id
         text = clean_llm_output(text)
-        parsed = json.loads(text)
-        if not isinstance(parsed, dict):
+        parsed = parse_json_response(text, recover_truncated=True)
+        if not isinstance(parsed, dict) or parsed.get("_parse_fallback"):
             return None, model_id
         return parsed, model_id
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, ValueError):
         logger.warning(
             "Failed to parse B2B enrichment JSON for review %s (vendor=%s)",
             row["id"], row["vendor_name"],
@@ -944,6 +962,7 @@ _KNOWN_SEVERITY_LEVELS = {"primary", "secondary", "minor"}
 _KNOWN_LOCK_IN_LEVELS = {"high", "medium", "low", "unknown"}
 _KNOWN_SENTIMENT_DIRECTIONS = {"declining", "consistently_negative", "improving", "stable_positive", "unknown"}
 _KNOWN_ROLE_TYPES = {"economic_buyer", "champion", "evaluator", "end_user", "unknown"}
+_KNOWN_ROLE_LEVELS = {"executive", "director", "manager", "ic", "unknown"}
 _KNOWN_BUYING_STAGES = {"active_purchase", "evaluation", "renewal_decision", "post_purchase", "unknown"}
 _KNOWN_DECISION_TIMELINES = {"immediate", "within_quarter", "within_year", "unknown"}
 _KNOWN_CONTRACT_VALUE_SIGNALS = {"enterprise_high", "enterprise_mid", "mid_market", "smb", "unknown"}
@@ -956,8 +975,226 @@ _KNOWN_INNOVATION_CLIMATES = {"stagnant", "declining", "healthy", "unknown"}
 _KNOWN_MORALE_LEVELS = {"high", "medium", "low", "unknown"}
 _KNOWN_DEPARTURE_TYPES = {"voluntary", "involuntary", "still_employed", "unknown"}
 
+_ROLE_TYPE_ALIASES = {
+    "economicbuyer": "economic_buyer",
+    "decisionmaker": "economic_buyer",
+    "buyer": "economic_buyer",
+    "budgetowner": "economic_buyer",
+    "executive": "economic_buyer",
+    "director": "economic_buyer",
+    "champion": "champion",
+    "manager": "champion",
+    "teamlead": "champion",
+    "lead": "champion",
+    "evaluator": "evaluator",
+    "admin": "evaluator",
+    "administrator": "evaluator",
+    "analyst": "evaluator",
+    "architect": "evaluator",
+    "enduser": "end_user",
+    "user": "end_user",
+    "ic": "end_user",
+    "individualcontributor": "end_user",
+    "unknown": "unknown",
+}
 
-def _validate_enrichment(result: dict) -> bool:
+_NOISY_REVIEWER_TITLE_PATTERNS = (
+    re.compile(r"^repeat churn signal", re.I),
+    re.compile(r"score:\s*\d", re.I),
+)
+_EXEC_REVIEWER_TITLE_PATTERN = re.compile(
+    r"\b(vp\b|vice president|director|head of|chief|cfo|ceo|coo|cio|cto|cro|cmo|founder|owner|president)\b",
+    re.I,
+)
+_CHAMPION_REVIEWER_TITLE_PATTERN = re.compile(
+    r"\b(manager|lead|supervisor|coordinator)\b",
+    re.I,
+)
+_EVALUATOR_REVIEWER_TITLE_PATTERN = re.compile(
+    r"\b(analyst|architect|engineer|developer|administrator|admin|consultant|specialist)\b",
+    re.I,
+)
+_EXEC_ROLE_TEXT_PATTERN = re.compile(
+    r"\b(i am|i'm|as|working as|as the)\s+(an?\s+|the\s+)?"
+    r"(ceo|cto|cfo|cio|coo|cmo|cro|chief|founder|owner|president)\b",
+    re.I,
+)
+_DIRECTOR_ROLE_TEXT_PATTERN = re.compile(
+    r"\b(i am|i'm|as|working as|as the)\s+(an?\s+|the\s+)?"
+    r"(vp|vice president|svp|evp|director|head of)\b",
+    re.I,
+)
+_MANAGER_ROLE_TEXT_PATTERN = re.compile(
+    r"\b(i am|i'm|as|working as|as the)\s+(an?\s+|the\s+)?"
+    r"(manager|team lead|lead|supervisor|coordinator)\b",
+    re.I,
+)
+_IC_ROLE_TEXT_PATTERN = re.compile(
+    r"\b(i am|i'm|as|working as|as the)\s+(an?\s+|the\s+)?"
+    r"(engineer|developer|administrator|admin|analyst|specialist|"
+    r"consultant|marketer|designer|architect)\b",
+    re.I,
+)
+_ECONOMIC_BUYER_TEXT_PATTERNS = (
+    re.compile(
+        r"\b(we|i) decided to (switch|move|migrate|leave|replace|renew|buy|adopt|go with)\b",
+        re.I,
+    ),
+    re.compile(r"\bapproved (the )?(purchase|renewal|budget)\b", re.I),
+    re.compile(r"\bsigned off on (the )?(purchase|renewal|budget|migration)\b", re.I),
+    re.compile(r"\bfinal decision (was|is) to\b", re.I),
+)
+_CHAMPION_TEXT_PATTERNS = (
+    re.compile(r"\b(i|we) recommended\b", re.I),
+    re.compile(r"\bchampioned\b", re.I),
+    re.compile(r"\bpushed for\b", re.I),
+    re.compile(r"\badvocated for\b", re.I),
+)
+_EVALUATOR_TEXT_PATTERNS = (
+    re.compile(r"\bevaluating alternatives\b", re.I),
+    re.compile(r"\bcomparing options\b", re.I),
+    re.compile(r"\bproof of concept\b", re.I),
+    re.compile(r"\bpoc\b", re.I),
+    re.compile(r"\bshortlist\b", re.I),
+    re.compile(r"\btrialing\b", re.I),
+    re.compile(r"\bpiloting\b", re.I),
+    re.compile(r"\btasked with evaluating\b", re.I),
+)
+_END_USER_TEXT_PATTERNS = (
+    re.compile(r"\bi use\b", re.I),
+    re.compile(r"\bwe use\b", re.I),
+    re.compile(r"\bday-to-day\b", re.I),
+    re.compile(r"\bdaily use\b", re.I),
+    re.compile(r"\buse it for\b", re.I),
+)
+
+
+def _canonical_role_type(value: Any) -> str:
+    raw = re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+    if not raw:
+        return "unknown"
+    return _ROLE_TYPE_ALIASES.get(raw, "unknown")
+
+
+def _clean_reviewer_title_for_role_inference(value: Any) -> str:
+    title = str(value or "").strip()
+    if not title or len(title) > 120:
+        return ""
+    lowered = title.lower()
+    if any(pattern.search(lowered) for pattern in _NOISY_REVIEWER_TITLE_PATTERNS):
+        return ""
+    return title
+
+
+def _canonical_role_level(value: Any) -> str:
+    raw = re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+    if raw in {"executive", "exec", "csuite", "cxo"}:
+        return "executive"
+    if raw in {"director", "vp", "vicepresident", "head"}:
+        return "director"
+    if raw in {"manager", "lead", "teamlead", "supervisor", "coordinator"}:
+        return "manager"
+    if raw in {"ic", "individualcontributor", "individual", "user"}:
+        return "ic"
+    return "unknown"
+
+
+def _combined_source_text(source_row: dict[str, Any] | None) -> str:
+    if not isinstance(source_row, dict):
+        return ""
+    parts = [
+        str(source_row.get("summary") or ""),
+        str(source_row.get("review_text") or ""),
+        str(source_row.get("pros") or ""),
+        str(source_row.get("cons") or ""),
+    ]
+    return "\n".join(part for part in parts if part).strip()
+
+
+def _infer_role_level_from_text(reviewer_title: Any, source_row: dict[str, Any] | None) -> str:
+    title = _clean_reviewer_title_for_role_inference(reviewer_title)
+    if title:
+        if re.search(r"\b(cfo|ceo|coo|cio|cto|cro|cmo|chief|founder|owner|president)\b", title, re.I):
+            return "executive"
+        if re.search(r"\b(vp\b|vice president|svp|evp|director|head of)\b", title, re.I):
+            return "director"
+        if _CHAMPION_REVIEWER_TITLE_PATTERN.search(title):
+            return "manager"
+        if _EVALUATOR_REVIEWER_TITLE_PATTERN.search(title):
+            return "ic"
+    source_text = _combined_source_text(source_row)
+    if not source_text:
+        return "unknown"
+    if _EXEC_ROLE_TEXT_PATTERN.search(source_text):
+        return "executive"
+    if _DIRECTOR_ROLE_TEXT_PATTERN.search(source_text):
+        return "director"
+    if _MANAGER_ROLE_TEXT_PATTERN.search(source_text):
+        return "manager"
+    if _IC_ROLE_TEXT_PATTERN.search(source_text):
+        return "ic"
+    return "unknown"
+
+
+def _infer_buyer_role_type_from_text(
+    buyer_authority: dict[str, Any],
+    source_row: dict[str, Any] | None,
+) -> str:
+    if not isinstance(source_row, dict):
+        return "unknown"
+    if str(source_row.get("content_type") or "").strip().lower() == "insider_account":
+        return "unknown"
+    source_text = _combined_source_text(source_row)
+    if not source_text:
+        return "unknown"
+    for pattern in _ECONOMIC_BUYER_TEXT_PATTERNS:
+        if pattern.search(source_text):
+            return "economic_buyer"
+    for pattern in _CHAMPION_TEXT_PATTERNS:
+        if pattern.search(source_text):
+            return "champion"
+    for pattern in _EVALUATOR_TEXT_PATTERNS:
+        if pattern.search(source_text):
+            return "evaluator"
+    buying_stage = str(buyer_authority.get("buying_stage") or "").strip().lower()
+    for pattern in _END_USER_TEXT_PATTERNS:
+        if pattern.search(source_text):
+            return "evaluator" if buying_stage in {"evaluation", "active_purchase"} else "end_user"
+    return "unknown"
+
+
+def _infer_buyer_role_type(
+    buyer_authority: dict[str, Any],
+    reviewer_context: dict[str, Any] | None,
+    reviewer_title: Any,
+    source_row: dict[str, Any] | None = None,
+) -> str:
+    ctx = reviewer_context if isinstance(reviewer_context, dict) else {}
+    role_level = str(ctx.get("role_level") or "").strip().lower()
+    buying_stage = str(buyer_authority.get("buying_stage") or "").strip().lower()
+    if _coerce_bool(buyer_authority.get("has_budget_authority")) is True:
+        return "economic_buyer"
+    if _coerce_bool(ctx.get("decision_maker")) is True:
+        return "economic_buyer"
+    if role_level in {"executive", "director"}:
+        return "economic_buyer"
+    title = _clean_reviewer_title_for_role_inference(reviewer_title)
+    if title and _EXEC_REVIEWER_TITLE_PATTERN.search(title):
+        return "economic_buyer"
+    if role_level == "manager":
+        return "champion"
+    if title and _CHAMPION_REVIEWER_TITLE_PATTERN.search(title):
+        return "champion"
+    if role_level == "ic" and buying_stage in {"evaluation", "active_purchase"}:
+        return "evaluator"
+    if title and _EVALUATOR_REVIEWER_TITLE_PATTERN.search(title):
+        return "evaluator" if buying_stage in {"evaluation", "active_purchase"} else "end_user"
+    if role_level == "ic":
+        return "end_user"
+    return _infer_buyer_role_type_from_text(buyer_authority, source_row)
+
+
+def _validate_enrichment(result: dict, source_row: dict[str, Any] | None = None) -> bool:
     """Validate enrichment output structure and data consistency."""
     if "churn_signals" not in result:
         return False
@@ -1157,6 +1394,23 @@ def _validate_enrichment(result: dict) -> bool:
             if lil and lil not in _KNOWN_LOCK_IN_LEVELS:
                 uc["lock_in_level"] = "unknown"
 
+    # reviewer_context: normalize role level and backfill from title/text
+    reviewer_ctx = result.get("reviewer_context")
+    if reviewer_ctx is None or not isinstance(reviewer_ctx, dict):
+        result["reviewer_context"] = {}
+        reviewer_ctx = result["reviewer_context"]
+    role_level = _canonical_role_level(reviewer_ctx.get("role_level"))
+    if role_level == "unknown":
+        role_level = _infer_role_level_from_text(
+            (source_row or {}).get("reviewer_title"),
+            source_row,
+        )
+    reviewer_ctx["role_level"] = role_level
+    decision_maker = _coerce_bool(reviewer_ctx.get("decision_maker"))
+    if decision_maker is None:
+        decision_maker = role_level in {"executive", "director"}
+    reviewer_ctx["decision_maker"] = decision_maker
+
     # sentiment_trajectory: dict with direction
     st = result.get("sentiment_trajectory")
     if st is not None:
@@ -1172,17 +1426,31 @@ def _validate_enrichment(result: dict) -> bool:
     if ba is not None:
         if not isinstance(ba, dict):
             result["buyer_authority"] = {}
+            ba = result["buyer_authority"]
+        reviewer_ctx = (
+            result.get("reviewer_context")
+            if isinstance(result.get("reviewer_context"), dict)
+            else {}
+        )
+        for bool_field in ("has_budget_authority", "executive_sponsor_mentioned"):
+            if bool_field in ba:
+                coerced = _coerce_bool(ba[bool_field])
+                ba[bool_field] = coerced if coerced is not None else False
+        bstage = ba.get("buying_stage")
+        if bstage and bstage not in _KNOWN_BUYING_STAGES:
+            ba["buying_stage"] = "unknown"
+        canonical_rt = _canonical_role_type(ba.get("role_type"))
+        if canonical_rt == "unknown":
+            ba["role_type"] = _infer_buyer_role_type(
+                ba,
+                reviewer_ctx,
+                (source_row or {}).get("reviewer_title"),
+                source_row,
+            )
         else:
-            rt = ba.get("role_type")
-            if rt and rt not in _KNOWN_ROLE_TYPES:
-                ba["role_type"] = "unknown"
-            for bool_field in ("has_budget_authority", "executive_sponsor_mentioned"):
-                if bool_field in ba:
-                    coerced = _coerce_bool(ba[bool_field])
-                    ba[bool_field] = coerced if coerced is not None else False
-            bstage = ba.get("buying_stage")
-            if bstage and bstage not in _KNOWN_BUYING_STAGES:
-                ba["buying_stage"] = "unknown"
+            ba["role_type"] = canonical_rt
+        if ba["role_type"] == "economic_buyer":
+            reviewer_ctx["decision_maker"] = True
 
     # timeline: dict with decision_timeline
     tl = result.get("timeline")

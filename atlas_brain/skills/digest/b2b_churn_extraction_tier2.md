@@ -173,7 +173,7 @@ The `name` field is the merge key with Tier 1. You MUST include the exact same c
 - `turning_point`: What caused sentiment to change. Null if no clear turning point.
 
 ### buyer_authority -- role classification
-- `role_type`: `economic_buyer` (controls budget), `champion` (advocates internally), `evaluator` (formally comparing), `end_user`, `unknown`.
+- `role_type`: `economic_buyer` (controls budget), `champion` (advocates internally), `evaluator` (formally comparing), `end_user`, `unknown`. Infer from title when present, but when title is blank use explicit purchase/renewal approval language, recommendation language, evaluation language, or day-to-day usage language in the review text.
 - `has_budget_authority`: True if reviewer explicitly mentions controlling or influencing budget.
 - `executive_sponsor_mentioned`: True if review references an executive decision-maker.
 - `buying_stage`: `active_purchase`, `evaluation`, `renewal_decision`, `post_purchase`, `unknown`.

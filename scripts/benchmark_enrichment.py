@@ -34,7 +34,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(_ROOT / ".env")
+load_dotenv(_ROOT / ".env.local", override=True)
 
 from atlas_brain.autonomous.tasks.b2b_enrichment import (
     _MIN_REVIEW_TEXT_LENGTH,
@@ -512,7 +514,7 @@ async def run_pipeline_for_model(
         return output
 
     parsed = parse_json_response(extraction_result["content"])
-    if parsed and _validate_enrichment(parsed):
+    if parsed and _validate_enrichment(parsed, row):
         output["pipeline_outcome"] = "enriched"
         output["parsed"] = parsed
         output["scores"] = score_extraction(parsed, review_text)

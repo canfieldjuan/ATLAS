@@ -178,8 +178,10 @@ Past tense switching ("we moved to X", "we ditched Y") scores 7-8, NOT 0. A comp
 - **ic**: Individual contributor, analyst, specialist, developer, engineer
 - **unknown**: Cannot determine
 
+Infer from `reviewer_title` when present. If `reviewer_title` is blank, use first-person self-identification or explicit operating language in the review text (for example "as an engineer", "I'm the VP of IT"). Do not require a title field when the review text itself clearly establishes the role.
+
 ### reviewer_context.decision_maker
-True when role_level is executive or director. Also true for manager titles that imply budget authority (IT Manager, Operations Manager). False for IC roles. When uncertain, false.
+True when role_level is executive or director. Also true for manager titles that imply budget authority (IT Manager, Operations Manager). True when the reviewer explicitly says they approved, signed off on, or made the purchase/renewal decision. False for IC roles. When uncertain, false.
 
 ### reviewer_context.company_size_segment
 - **enterprise**: 1000+ employees, or "Enterprise" in company_size_raw
@@ -297,6 +299,8 @@ ONLY extract explicitly stated figures. Never estimate or infer budgets.
   - **"evaluator"**: Formally comparing options ("I was tasked with evaluating")
   - **"end_user"**: Uses the product but has no purchase influence
   - **"unknown"**: Cannot determine
+
+When `reviewer_title` is blank, infer `role_type` from the review text itself. Strong purchase/renewal approval language indicates `economic_buyer`; formal comparison/POC/shortlist language indicates `evaluator`; clear day-to-day product use language without purchase authority indicates `end_user`.
 - `has_budget_authority`: Boolean. True if the reviewer explicitly mentions controlling or influencing budget.
 - `executive_sponsor_mentioned`: Boolean. True if the review references an executive decision-maker.
 - `buying_stage`: Where the reviewer is in the purchase cycle:
