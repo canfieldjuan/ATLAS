@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ._b2b_shared import _canonicalize_competitor, _segment_role_multiplier
+
 # ---------------------------------------------------------------------------
 # Scoring coefficients (weights must sum to 1.0)
 # ---------------------------------------------------------------------------
@@ -38,6 +40,7 @@ SPIKE_MAGNITUDE_MAX = 5.0
 
 # Decision-maker intent boost
 DM_INTENT_BOOST = 0.2
+ACTIVE_EVAL_ACCOUNT_BOOST = 0.1
 
 # Evidence window depth threshold (days)
 MIN_EVIDENCE_WINDOW_DAYS = 14
@@ -84,6 +87,41 @@ class TrackedAggregate:
     label: str
     value: Any
     source_id: str
+
+
+def _retain_kind_coverage(
+    items: list[ScoredItem],
+    *,
+    max_items: int,
+    required_kinds: tuple[str, ...],
+) -> list[ScoredItem]:
+    """Keep at least one item for each required kind when a pool is crowded."""
+    ranked = sorted(items, key=lambda x: x.score, reverse=True)
+    if len(ranked) <= max_items:
+        return ranked[:max_items]
+
+    selected: list[ScoredItem] = []
+    used_ids: set[int] = set()
+    for kind in required_kinds:
+        for idx, item in enumerate(ranked):
+            if idx in used_ids:
+                continue
+            if item.source_ref.kind != kind:
+                continue
+            selected.append(item)
+            used_ids.add(idx)
+            break
+
+    for idx, item in enumerate(ranked):
+        if idx in used_ids:
+            continue
+        selected.append(item)
+        used_ids.add(idx)
+        if len(selected) >= max_items:
+            break
+
+    selected.sort(key=lambda x: x.score, reverse=True)
+    return selected[:max_items]
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +197,111 @@ def _safe_int(val: Any, default: int = 0) -> int:
         return default
 
 
+def _normalize_account_intent_score(val: Any) -> float:
+    score = _safe_float(val, 0.0)
+    if score <= 0:
+        return 0.0
+    if score > 1.0:
+        score = score / 10.0
+    return max(0.0, min(score, 1.0))
+
+
+def _is_active_eval_stage(stage: Any) -> bool:
+    text = str(stage or "").strip().lower()
+    if not text:
+        return False
+    if text in {"evaluation", "active_purchase", "consideration", "trial", "poc"}:
+        return True
+    return "evaluat" in text or "consider" in text
+
+
+def _looks_like_displacement_tool_label(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    generic_modifiers = ("custom", "homegrown", "home-grown", "in-house", "internal")
+    generic_artifacts = (
+        "integration", "utility", "workflow", "tool", "stack",
+        "system", "automation", "bot",
+    )
+    return any(token in text for token in generic_modifiers) and any(
+        token in text for token in generic_artifacts
+    )
+
+
+def _displacement_flow_counts(flow: dict[str, Any]) -> tuple[float, int, int]:
+    summary = flow.get("flow_summary") or {}
+    edge_metrics = flow.get("edge_metrics") or {}
+    mentions = _safe_float(
+        summary.get("mention_count")
+        or summary.get("total_flow_mentions")
+        or edge_metrics.get("mention_count"),
+        0.0,
+    )
+    switches = _safe_int(summary.get("explicit_switch_count"), 0)
+    evals = _safe_int(summary.get("active_evaluation_count"), 0)
+    return mentions, switches, evals
+
+
+def _merge_displacement_flow_rows(flows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for flow in flows or []:
+        if not isinstance(flow, dict):
+            continue
+        raw_to_vendor = str(flow.get("to_vendor") or flow.get("competitor") or "").strip()
+        canonical_to_vendor = _canonicalize_competitor(raw_to_vendor) or raw_to_vendor
+        if not canonical_to_vendor or _looks_like_displacement_tool_label(canonical_to_vendor):
+            continue
+        from_vendor = str(flow.get("from_vendor") or "").strip()
+        if from_vendor and canonical_to_vendor.lower() == from_vendor.lower():
+            continue
+
+        key = canonical_to_vendor.lower()
+        current = merged.get(key)
+        if current is None:
+            current = dict(flow)
+            current["to_vendor"] = canonical_to_vendor
+            current["flow_summary"] = dict(flow.get("flow_summary") or {})
+            current["edge_metrics"] = dict(flow.get("edge_metrics") or {})
+            current["switch_reasons"] = list(flow.get("switch_reasons") or [])
+            current["evidence_breakdown"] = list(flow.get("evidence_breakdown") or [])
+            merged[key] = current
+            continue
+
+        existing_mentions, existing_switches, existing_evals = _displacement_flow_counts(current)
+        new_mentions, new_switches, new_evals = _displacement_flow_counts(flow)
+
+        current_summary = dict(current.get("flow_summary") or {})
+        current_summary["total_flow_mentions"] = existing_mentions + new_mentions
+        current_summary["mention_count"] = existing_mentions + new_mentions
+        current_summary["explicit_switch_count"] = existing_switches + new_switches
+        current_summary["active_evaluation_count"] = existing_evals + new_evals
+        current["flow_summary"] = current_summary
+
+        current_edge = dict(current.get("edge_metrics") or {})
+        new_edge = dict(flow.get("edge_metrics") or {})
+        if new_mentions > existing_mentions:
+            if new_edge.get("key_quote"):
+                current_edge["key_quote"] = new_edge.get("key_quote")
+            if new_edge.get("primary_driver"):
+                current_edge["primary_driver"] = new_edge.get("primary_driver")
+            if new_edge.get("signal_strength"):
+                current_edge["signal_strength"] = new_edge.get("signal_strength")
+        current_edge["mention_count"] = existing_mentions + new_mentions
+        current_edge["velocity_7d"] = _safe_float(current_edge.get("velocity_7d"), 0.0) + _safe_float(new_edge.get("velocity_7d"), 0.0)
+        current_edge["velocity_30d"] = _safe_float(current_edge.get("velocity_30d"), 0.0) + _safe_float(new_edge.get("velocity_30d"), 0.0)
+        current_edge["confidence_score"] = max(
+            _safe_float(current_edge.get("confidence_score"), 0.0),
+            _safe_float(new_edge.get("confidence_score"), 0.0),
+        )
+        current["edge_metrics"] = current_edge
+
+        current["switch_reasons"] = list(current.get("switch_reasons") or []) + list(flow.get("switch_reasons") or [])
+        current["evidence_breakdown"] = list(current.get("evidence_breakdown") or []) + list(flow.get("evidence_breakdown") or [])
+
+    return list(merged.values())
+
+
 def _uniqueness_penalty(
     item: dict[str, Any],
     higher_ranked: list[dict[str, Any]],
@@ -186,6 +329,27 @@ def _uniqueness_penalty(
     return 1.0
 
 
+def _vault_item_recency_score(item: dict[str, Any]) -> float:
+    """Derive a recency score from recent-count and trend metadata."""
+    total = _safe_float(
+        item.get("mention_count_total", item.get("mention_count", 0)),
+        0.0,
+    )
+    recent = _safe_float(item.get("mention_count_recent"), 0.0)
+    recency = RECENCY_DEFAULT
+    if total > 0 and recent > 0:
+        ratio = min(max(recent / total, 0.0), 1.0)
+        recency = max(recency, 0.7 + 0.3 * ratio)
+
+    trend = item.get("trend") if isinstance(item.get("trend"), dict) else {}
+    direction = str(trend.get("direction") or "").strip().lower()
+    if direction in {"accelerating", "new"}:
+        recency = min(1.0, recency + 0.15)
+    elif direction == "declining":
+        recency = max(RECENCY_LOW, recency - 0.15)
+    return recency
+
+
 # ---------------------------------------------------------------------------
 # Per-pool scorers
 # ---------------------------------------------------------------------------
@@ -202,8 +366,21 @@ def _score_evidence_vault(
 
     # Aggregates from metric snapshot
     for metric_key in (
-        "total_reviews", "churn_density", "displacement_mention_count",
-        "avg_rating", "negative_review_pct",
+        "total_reviews",
+        "reviews_in_analysis_window",
+        "reviews_in_recent_window",
+        "churn_density",
+        "avg_urgency",
+        "recommend_yes",
+        "recommend_no",
+        "recommend_ratio",
+        "price_complaint_rate",
+        "dm_churn_rate",
+        "positive_review_pct",
+        "displacement_mention_count",
+        "keyword_spike_count",
+        "avg_rating",
+        "negative_review_pct",
     ):
         val = ms.get(metric_key)
         if val is not None:
@@ -222,6 +399,72 @@ def _score_evidence_vault(
                 value=str(val),
                 source_id=f"vault:provenance:{prov_key}",
             ))
+
+    company_signals = ev.get("company_signals") or []
+    if company_signals:
+        high_urgency_count = 0
+        evaluation_count = 0
+        active_purchase_count = 0
+        decision_maker_count = 0
+        for signal in company_signals:
+            if not isinstance(signal, dict):
+                continue
+            urgency = _safe_float(signal.get("urgency_score"), 0.0)
+            stage = str(signal.get("buying_stage") or "").strip().lower()
+            if urgency >= 8.0:
+                high_urgency_count += 1
+            if "evaluat" in stage:
+                evaluation_count += 1
+            elif stage == "active_purchase":
+                active_purchase_count += 1
+            if signal.get("decision_maker") is True:
+                decision_maker_count += 1
+
+        for label, value, sid in (
+            ("company_signal_count", len(company_signals), "vault:company_signals:count"),
+            ("company_signal_high_urgency_count", high_urgency_count, "vault:company_signals:high_urgency_count"),
+            ("company_signal_evaluation_count", evaluation_count, "vault:company_signals:evaluation_count"),
+            ("company_signal_active_purchase_count", active_purchase_count, "vault:company_signals:active_purchase_count"),
+            ("company_signal_decision_maker_count", decision_maker_count, "vault:company_signals:decision_maker_count"),
+        ):
+            aggregates.append(TrackedAggregate(
+                label=label,
+                value=value,
+                source_id=sid,
+            ))
+
+        higher_ranked_companies: list[dict[str, Any]] = []
+        for signal in company_signals:
+            if not isinstance(signal, dict):
+                continue
+            name = str(signal.get("company_name") or signal.get("company") or "").strip()
+            if not name:
+                continue
+            intent = _normalize_account_intent_score(
+                signal.get("urgency_score") or signal.get("intent_score") or signal.get("confidence_score", 0),
+            )
+            is_dm = bool(signal.get("decision_maker") or signal.get("is_decision_maker"))
+            is_active_eval = _is_active_eval_stage(signal.get("buying_stage"))
+            signal_strength = intent
+            if is_dm:
+                signal_strength = min(signal_strength + DM_INTENT_BOOST, 1.0)
+            if is_active_eval:
+                signal_strength = min(signal_strength + ACTIVE_EVAL_ACCOUNT_BOOST, 1.0)
+            uniq = _uniqueness_penalty(signal, higher_ranked_companies)
+            score = W_RECENCY * RECENCY_DEFAULT + W_SIGNAL * signal_strength + W_UNIQUENESS * uniq
+            review_id = str(signal.get("review_id") or "").strip()
+            review_ids = (review_id,) if review_id else ()
+            items.append(ScoredItem(
+                data=signal,
+                score=score,
+                source_ref=SourceRef(
+                    pool="vault",
+                    kind="company",
+                    key=_slug(name),
+                    review_ids=review_ids,
+                ),
+            ))
+            higher_ranked_companies.append(signal)
 
     # Score weakness evidence
     weaknesses = ev.get("weakness_evidence") or []
@@ -246,17 +489,32 @@ def _score_evidence_vault(
             or w.get("theme")
             or "unknown"
         )
+        slug = _slug(cat)
         mc = _safe_float(w.get("mention_count_total", w.get("mention_count", 0)))
+        mc_recent = w.get("mention_count_recent")
         signal = mc / max(w_max_mc, 1.0) if w_max_mc > 0 else 0.0
         uniq = _uniqueness_penalty(w, higher_ranked)
-        score = W_RECENCY * RECENCY_DEFAULT + W_SIGNAL * signal + W_UNIQUENESS * uniq
+        recency = _vault_item_recency_score(w)
+        score = W_RECENCY * recency + W_SIGNAL * signal + W_UNIQUENESS * uniq
+
+        aggregates.append(TrackedAggregate(
+            label=f"vault_weakness_{slug}_mention_count_total",
+            value=mc,
+            source_id=f"vault:weakness:{slug}:mention_count_total",
+        ))
+        if mc_recent is not None:
+            aggregates.append(TrackedAggregate(
+                label=f"vault_weakness_{slug}_mention_count_recent",
+                value=mc_recent,
+                source_id=f"vault:weakness:{slug}:mention_count_recent",
+            ))
 
         rids = tuple(w.get("supporting_review_ids") or w.get("review_ids") or [])
         items.append(ScoredItem(
             data=w,
             score=score,
             source_ref=SourceRef(
-                pool="vault", kind="weakness", key=_slug(cat),
+                pool="vault", kind="weakness", key=slug,
                 review_ids=rids,
             ),
         ))
@@ -285,17 +543,32 @@ def _score_evidence_vault(
             or s.get("theme")
             or "unknown"
         )
+        slug = _slug(cat)
         mc = _safe_float(s.get("mention_count_total", s.get("mention_count", 0)))
+        mc_recent = s.get("mention_count_recent")
         signal = mc / max(s_max_mc, 1.0) if s_max_mc > 0 else 0.0
         uniq = _uniqueness_penalty(s, higher_ranked)
-        score = W_RECENCY * RECENCY_DEFAULT + W_SIGNAL * signal + W_UNIQUENESS * uniq
+        recency = _vault_item_recency_score(s)
+        score = W_RECENCY * recency + W_SIGNAL * signal + W_UNIQUENESS * uniq
+
+        aggregates.append(TrackedAggregate(
+            label=f"vault_strength_{slug}_mention_count_total",
+            value=mc,
+            source_id=f"vault:strength:{slug}:mention_count_total",
+        ))
+        if mc_recent is not None:
+            aggregates.append(TrackedAggregate(
+                label=f"vault_strength_{slug}_mention_count_recent",
+                value=mc_recent,
+                source_id=f"vault:strength:{slug}:mention_count_recent",
+            ))
 
         rids = tuple(s.get("supporting_review_ids") or s.get("review_ids") or [])
         items.append(ScoredItem(
             data=s,
             score=score,
             source_ref=SourceRef(
-                pool="vault", kind="strength", key=_slug(cat),
+                pool="vault", kind="strength", key=slug,
                 review_ids=rids,
             ),
         ))
@@ -317,6 +590,16 @@ def _score_segment(
     items: list[ScoredItem] = []
     aggregates: list[TrackedAggregate] = []
 
+    def _append_reach_aggregate(kind: str, name: str, sample_size: int) -> None:
+        if sample_size < MIN_SEGMENT_SAMPLE_SIZE:
+            return
+        slug = _slug(name or "unknown")
+        aggregates.append(TrackedAggregate(
+            label=f"segment_reach_{kind}_{slug}",
+            value=sample_size,
+            source_id=f"segment:reach:{kind}:{slug}",
+        ))
+
     # Affected departments (list of dicts with department, churn_rate, review_count)
     departments = seg.get("affected_departments") or []
     for d in departments:
@@ -335,6 +618,7 @@ def _score_segment(
                 pool="segment", kind="department", key=_slug(name),
             ),
         ))
+        _append_reach_aggregate("department", name, sample_size)
 
     # Affected roles (list of dicts with role_type, review_count, churn_rate)
     roles = seg.get("affected_roles") or []
@@ -346,7 +630,16 @@ def _score_segment(
             continue
         name = r.get("role_type") or "unknown"
         churn = _safe_float(r.get("churn_rate", 0))
-        score = W_RECENCY * RECENCY_LOW + W_SIGNAL * churn + W_UNIQUENESS * 1.0
+        priority_score = _safe_float(r.get("priority_score"), default=-1.0)
+        if priority_score < 0:
+            priority_score = sample_size * _segment_role_multiplier(name)
+        role_bonus = priority_score / 100.0
+        score = (
+            W_RECENCY * RECENCY_LOW
+            + W_SIGNAL * churn
+            + W_UNIQUENESS * 1.0
+            + role_bonus
+        )
         items.append(ScoredItem(
             data=r,
             score=score,
@@ -354,6 +647,7 @@ def _score_segment(
                 pool="segment", kind="role", key=_slug(name),
             ),
         ))
+        _append_reach_aggregate("role", name, sample_size)
 
     # Contract segments (list of dicts with segment, count, churn_rate)
     contracts = seg.get("contract_segments") or []
@@ -373,6 +667,55 @@ def _score_segment(
                 pool="segment", kind="contract", key=_slug(name),
             ),
         ))
+        _append_reach_aggregate("contract", name, sample_size)
+
+    # Usage duration segments (list of dicts with duration, count, churn_rate)
+    durations = seg.get("usage_duration_segments") or []
+    for d in durations:
+        if not isinstance(d, dict):
+            continue
+        sample_size = _safe_int(d.get("count", 0))
+        if sample_size < MIN_SEGMENT_SAMPLE_SIZE:
+            continue
+        name = d.get("duration") or "unknown"
+        churn = _safe_float(d.get("churn_rate", 0))
+        score = W_RECENCY * RECENCY_LOW + W_SIGNAL * churn + W_UNIQUENESS * 1.0
+        items.append(ScoredItem(
+            data=d,
+            score=score,
+            source_ref=SourceRef(
+                pool="segment", kind="duration", key=_slug(name),
+            ),
+        ))
+        _append_reach_aggregate("duration", name, sample_size)
+
+    # Use cases under pressure (list of dicts with use_case, mention_count)
+    use_cases = seg.get("top_use_cases_under_pressure") or []
+    max_mentions = max(
+        (_safe_float(u.get("mention_count", 0)) for u in use_cases if isinstance(u, dict)),
+        default=1.0,
+    )
+    higher_ranked_use_cases: list[dict[str, Any]] = []
+    for u in use_cases:
+        if not isinstance(u, dict):
+            continue
+        sample_size = _safe_int(u.get("mention_count", 0))
+        if sample_size < MIN_SEGMENT_SAMPLE_SIZE:
+            continue
+        name = u.get("use_case") or "unknown"
+        confidence = _safe_float(u.get("confidence_score", 0))
+        signal = max(sample_size / max(max_mentions, 1.0), confidence)
+        uniq = _uniqueness_penalty(u, higher_ranked_use_cases)
+        score = W_RECENCY * RECENCY_LOW + W_SIGNAL * signal + W_UNIQUENESS * uniq
+        items.append(ScoredItem(
+            data=u,
+            score=score,
+            source_ref=SourceRef(
+                pool="segment", kind="use_case", key=_slug(name),
+            ),
+        ))
+        _append_reach_aggregate("use_case", name, sample_size)
+        higher_ranked_use_cases.append(u)
 
     # Budget pressure (dict with dm_churn_rate, price_increase_rate, etc.)
     bp = seg.get("budget_pressure")
@@ -391,9 +734,97 @@ def _score_segment(
                 value=pi_rate,
                 source_id="segment:budget:price_increase_rate",
             ))
+        pi_count = bp.get("price_increase_count")
+        if pi_count is not None:
+            aggregates.append(TrackedAggregate(
+                label="price_increase_count",
+                value=pi_count,
+                source_id="segment:budget:price_increase_count",
+            ))
+        annual_spend_signals = bp.get("annual_spend_signals") or []
+        if annual_spend_signals:
+            aggregates.append(TrackedAggregate(
+                label="annual_spend_signal_count",
+                value=len(annual_spend_signals),
+                source_id="segment:budget:annual_spend_signal_count",
+            ))
+        price_per_seat_signals = bp.get("price_per_seat_signals") or []
+        if price_per_seat_signals:
+            aggregates.append(TrackedAggregate(
+                label="price_per_seat_signal_count",
+                value=len(price_per_seat_signals),
+                source_id="segment:budget:price_per_seat_signal_count",
+            ))
 
-    items.sort(key=lambda x: x.score, reverse=True)
-    return items[:max_items], aggregates
+    # Company size signals (dict with avg/median/max seat counts)
+    company_sizes = seg.get("affected_company_sizes")
+    if isinstance(company_sizes, dict):
+        for field in ("avg_seat_count", "median_seat_count", "max_seat_count"):
+            value = company_sizes.get(field)
+            if value is None:
+                continue
+            aggregates.append(TrackedAggregate(
+                label=f"segment_{field}",
+                value=value,
+                source_id=f"segment:size:{field}",
+            ))
+        for entry in company_sizes.get("size_distribution") or []:
+            if not isinstance(entry, dict):
+                continue
+            sample_size = _safe_int(entry.get("review_count", 0))
+            if sample_size < MIN_SEGMENT_SAMPLE_SIZE:
+                continue
+            name = entry.get("segment") or "unknown"
+            churn = _safe_float(entry.get("churn_rate", 0))
+            score = W_RECENCY * RECENCY_LOW + W_SIGNAL * churn + W_UNIQUENESS * 1.0
+            items.append(ScoredItem(
+                data=entry,
+                score=score,
+                source_ref=SourceRef(
+                    pool="segment", kind="size", key=_slug(name),
+                ),
+            ))
+            _append_reach_aggregate("size", name, sample_size)
+
+    # Buying-stage distribution can carry real evaluation pressure even when
+    # named account extraction is sparse or aggressively sanitized.
+    def _is_active_eval_stage(stage: Any) -> bool:
+        text = str(stage or "").strip().lower()
+        if not text:
+            return False
+        if text in {
+            "evaluation", "active_purchase", "consideration", "trial", "poc",
+        }:
+            return True
+        return "evaluat" in text or "consider" in text
+
+    active_eval_count = 0
+    for row in seg.get("buying_stage_distribution") or []:
+        if not isinstance(row, dict):
+            continue
+        if not _is_active_eval_stage(row.get("stage")):
+            continue
+        active_eval_count += _safe_int(row.get("count", 0))
+
+    if active_eval_count:
+        aggregates.append(TrackedAggregate(
+            label="segment_active_eval_signal_count",
+            value=active_eval_count,
+            source_id="segment:aggregate:active_eval_signal_count",
+        ))
+
+    return _retain_kind_coverage(
+        items,
+        max_items=max_items,
+        required_kinds=(
+            "role",
+            "department",
+            "contract",
+            "duration",
+            "size",
+            "use_case",
+        ),
+    ), aggregates
 
 
 def _score_temporal(
@@ -433,6 +864,21 @@ def _score_temporal(
     else:
         spikes = []
 
+    def _spike_signal_strength(spike: dict[str, Any]) -> float:
+        magnitude = _safe_float(
+            spike.get("magnitude") or spike.get("spike_ratio"),
+            0.0,
+        )
+        base = min(magnitude / SPIKE_MAGNITUDE_MAX, 1.0) if magnitude > 0 else 0.0
+        change_pct = abs(_safe_float(spike.get("change_pct"), 0.0))
+        if change_pct > 1.0:
+            change_pct = change_pct / 100.0
+        volume = _safe_float(spike.get("volume"), 0.0)
+        volume_signal = min(volume / 10.0, 1.0) if volume > 0 else 0.0
+        if spike.get("is_spike"):
+            base = max(base, 0.5)
+        return min(max(base, change_pct, volume_signal * 0.5), 1.0)
+
     for sp in spikes:
         if isinstance(sp, str):
             # Plain keyword string, no magnitude info
@@ -447,8 +893,8 @@ def _score_temporal(
         if not isinstance(sp, dict):
             continue
         kw = sp.get("keyword") or sp.get("term") or "unknown"
-        magnitude = _safe_float(sp.get("magnitude") or sp.get("spike_ratio", 0))
-        score = W_RECENCY * RECENCY_HIGH + W_SIGNAL * min(magnitude / SPIKE_MAGNITUDE_MAX, 1.0) + W_UNIQUENESS * 1.0
+        signal_strength = _spike_signal_strength(sp)
+        score = W_RECENCY * RECENCY_HIGH + W_SIGNAL * signal_strength + W_UNIQUENESS * 1.0
         items.append(ScoredItem(
             data=sp,
             score=score,
@@ -457,16 +903,134 @@ def _score_temporal(
             ),
         ))
 
-    # Evaluation deadlines
-    deadlines = temp.get("evaluation_deadlines") or []
-    for dl in deadlines:
-        label = dl.get("label") or dl.get("deadline") or "unknown"
-        score = W_RECENCY * RECENCY_HIGH + W_SIGNAL * RECENCY_DEFAULT + W_UNIQUENESS * 1.0
+    sent = temp.get("sentiment_trajectory") or {}
+    if isinstance(sent, dict):
+        for key in ("declining", "stable", "improving", "total"):
+            val = sent.get(key)
+            if val is not None:
+                aggregates.append(TrackedAggregate(
+                    label=f"sentiment_{key}",
+                    value=val,
+                    source_id=f"temporal:sentiment:{key}_count",
+                ))
+        for key in ("declining_pct", "improving_pct"):
+            val = sent.get(key)
+            if val is not None:
+                aggregates.append(TrackedAggregate(
+                    label=key,
+                    value=val,
+                    source_id=f"temporal:sentiment:{key}",
+                ))
+        for direction in ("declining", "improving", "stable"):
+            count = _safe_int(sent.get(direction))
+            total = max(_safe_int(sent.get("total")), 1)
+            if count <= 0:
+                continue
+            pct = _safe_float(sent.get(f"{direction}_pct"), count / total)
+            items.append(ScoredItem(
+                data={
+                    "direction": direction,
+                    "count": count,
+                    "pct": pct,
+                },
+                score=W_RECENCY * RECENCY_DEFAULT + W_SIGNAL * min(pct, 1.0) + W_UNIQUENESS * 1.0,
+                source_ref=SourceRef(
+                    pool="temporal", kind="sentiment", key=_slug(direction),
+                ),
+            ))
+
+    trigger_entries = temp.get("immediate_triggers") or []
+    deadline_entries = temp.get("evaluation_deadlines") or []
+    seen_triggers: set[tuple[str, str]] = set()
+
+    def _append_trigger_item(entry: dict[str, Any]) -> None:
+        trigger_type = str(
+            entry.get("trigger_type")
+            or entry.get("type")
+            or "signal"
+        ).strip().lower()
+        if not trigger_type:
+            trigger_type = "signal"
+        label = (
+            entry.get("label")
+            or entry.get("trigger")
+            or entry.get("deadline")
+            or entry.get("evaluation_deadline")
+            or entry.get("contract_end")
+            or entry.get("decision_timeline")
+            or entry.get("date")
+            or entry.get("company")
+            or trigger_type
+        )
+        key = _slug(str(label))
+        dedupe = (trigger_type, key)
+        if dedupe in seen_triggers:
+            return
+        seen_triggers.add(dedupe)
+        urgency = _safe_float(entry.get("urgency"), 0.0)
+        recency = RECENCY_HIGH if trigger_type in {"deadline", "contract_end", "spike"} else RECENCY_DEFAULT
+        signal_strength = min(max(urgency / 10.0, 0.4 if trigger_type in {"timeline_signal", "signal"} else 0.0), 1.0)
+        item = dict(entry)
+        item.setdefault("type", trigger_type)
+        item.setdefault("trigger_type", trigger_type)
         items.append(ScoredItem(
-            data=dl,
+            data=item,
+            score=W_RECENCY * recency + W_SIGNAL * signal_strength + W_UNIQUENESS * 1.0,
+            source_ref=SourceRef(
+                pool="temporal", kind=trigger_type, key=key,
+            ),
+        ))
+
+    for trigger in trigger_entries:
+        if isinstance(trigger, dict):
+            _append_trigger_item(trigger)
+    for dl in deadline_entries:
+        if isinstance(dl, dict):
+            _append_trigger_item(dl)
+
+    turning_points = temp.get("turning_points") or []
+    max_turning_mentions = max(
+        (_safe_float(item.get("mentions", 0)) for item in turning_points if isinstance(item, dict)),
+        default=1.0,
+    )
+    for tp in turning_points:
+        if not isinstance(tp, dict):
+            continue
+        trigger = tp.get("trigger") or "unknown"
+        mentions = _safe_float(tp.get("mentions", 0))
+        score = (
+            W_RECENCY * RECENCY_DEFAULT
+            + W_SIGNAL * (mentions / max(max_turning_mentions, 1.0))
+            + W_UNIQUENESS * 1.0
+        )
+        items.append(ScoredItem(
+            data=tp,
             score=score,
             source_ref=SourceRef(
-                pool="temporal", kind="deadline", key=_slug(str(label)),
+                pool="temporal", kind="turning_point", key=_slug(str(trigger)),
+            ),
+        ))
+
+    sentiment_tenure = temp.get("sentiment_tenure") or []
+    max_tenure_count = max(
+        (_safe_float(item.get("count", 0)) for item in sentiment_tenure if isinstance(item, dict)),
+        default=1.0,
+    )
+    for tenure in sentiment_tenure:
+        if not isinstance(tenure, dict):
+            continue
+        label = tenure.get("tenure") or "unknown"
+        count = _safe_float(tenure.get("count", 0))
+        score = (
+            W_RECENCY * RECENCY_LOW
+            + W_SIGNAL * (count / max(max_tenure_count, 1.0))
+            + W_UNIQUENESS * 1.0
+        )
+        items.append(ScoredItem(
+            data=tenure,
+            score=score,
+            source_ref=SourceRef(
+                pool="temporal", kind="tenure", key=_slug(str(label)),
             ),
         ))
 
@@ -481,26 +1045,43 @@ def _score_displacement(
     items: list[ScoredItem] = []
     aggregates: list[TrackedAggregate] = []
 
+    disp = _merge_displacement_flow_rows(disp)
     total_switches = 0
     total_evals = 0
+    total_mentions = 0
     d_max_mc = (
         max(
-            (_safe_float((x.get("flow_summary") or {}).get("mention_count", 0)) for x in disp),
+            (_displacement_flow_counts(x)[0] for x in disp),
             default=1.0,
         )
         if disp else 1.0
     )
+    d_max_switches = (
+        max((_displacement_flow_counts(x)[1] for x in disp), default=1)
+        if disp else 1
+    )
+    d_max_evals = (
+        max((_displacement_flow_counts(x)[2] for x in disp), default=1)
+        if disp else 1
+    )
 
     for d in disp:
         to_vendor = d.get("to_vendor") or d.get("competitor") or "unknown"
-        fs = d.get("flow_summary") or {}
-        mc = _safe_float(fs.get("mention_count", 0))
-        switches = int(_safe_float(fs.get("explicit_switch_count", 0)))
-        evals = int(_safe_float(fs.get("active_evaluation_count", 0)))
+        mc, switches, evals = _displacement_flow_counts(d)
+        fs = dict(d.get("flow_summary") or {})
+        fs["mention_count"] = mc
+        fs["total_flow_mentions"] = mc
+        fs["explicit_switch_count"] = switches
+        fs["active_evaluation_count"] = evals
+        d["flow_summary"] = fs
         total_switches += switches
         total_evals += evals
+        total_mentions += int(mc)
 
-        signal = mc / max(d_max_mc, 1.0) if d_max_mc > 0 else 0.0
+        mention_signal = mc / max(d_max_mc, 1.0) if d_max_mc > 0 else 0.0
+        switch_signal = switches / max(d_max_switches, 1.0) if d_max_switches > 0 else 0.0
+        eval_signal = evals / max(d_max_evals, 1.0) if d_max_evals > 0 else 0.0
+        signal = 0.55 * switch_signal + 0.3 * eval_signal + 0.15 * mention_signal
         score = W_RECENCY * RECENCY_DEFAULT + W_SIGNAL * signal + W_UNIQUENESS * 1.0
 
         items.append(ScoredItem(
@@ -521,6 +1102,11 @@ def _score_displacement(
         label="total_active_evaluations",
         value=total_evals,
         source_id="displacement:aggregate:total_active_evaluations",
+    ))
+    aggregates.append(TrackedAggregate(
+        label="total_flow_mentions",
+        value=total_mentions,
+        source_id="displacement:aggregate:total_flow_mentions",
     ))
 
     items.sort(key=lambda x: x.score, reverse=True)
@@ -551,6 +1137,15 @@ def _score_category(
     # Market regime as a scored item
     regime = cat.get("market_regime")
     if isinstance(regime, dict):
+        for field in ("confidence", "avg_churn_velocity", "avg_price_pressure"):
+            value = regime.get(field)
+            if value is None:
+                continue
+            aggregates.append(TrackedAggregate(
+                label=f"regime_{field}",
+                value=value,
+                source_id=f"category:regime:{field}",
+            ))
         regime_type = regime.get("regime_type") or "unknown"
         confidence = _safe_float(regime.get("confidence", 0))
         score = W_RECENCY * RECENCY_DEFAULT + W_SIGNAL * confidence + W_UNIQUENESS * 1.0
@@ -565,9 +1160,10 @@ def _score_category(
     # Council summary if present
     council = cat.get("council_summary")
     if isinstance(council, dict):
+        council_confidence = _safe_float(council.get("confidence", 0.0))
         items.append(ScoredItem(
             data=council,
-            score=W_RECENCY * RECENCY_LOW + W_SIGNAL * 0.5 + W_UNIQUENESS * 1.0,
+            score=W_RECENCY * RECENCY_LOW + W_SIGNAL * max(council_confidence, 0.5) + W_UNIQUENESS * 1.0,
             source_ref=SourceRef(
                 pool="category", kind="council", key="summary",
             ),
@@ -584,7 +1180,32 @@ def _score_accounts(
     items: list[ScoredItem] = []
     aggregates: list[TrackedAggregate] = []
 
-    summary = accts.get("summary") or {}
+    summary = dict(accts.get("summary") or {})
+    account_list = accts.get("accounts") or []
+
+    if "total_accounts" not in summary:
+        summary["total_accounts"] = len(account_list)
+
+    if "high_intent_count" not in summary:
+        from ...config import settings
+
+        threshold = float(
+            getattr(settings.b2b_churn, "high_churn_urgency_threshold", 7.0),
+        )
+        summary["high_intent_count"] = sum(
+            1
+            for a in account_list
+            if _safe_float(a.get("urgency_score") or a.get("intent_score"), 0.0)
+            >= threshold
+        )
+
+    if "active_eval_signal_count" not in summary:
+        summary["active_eval_signal_count"] = sum(
+            1
+            for a in account_list
+            if _is_active_eval_stage(a.get("buying_stage"))
+        )
+
     for agg_key in (
         "total_accounts",
         "decision_maker_count",
@@ -599,18 +1220,20 @@ def _score_accounts(
                 source_id=f"accounts:summary:{agg_key}",
             ))
 
-    account_list = accts.get("accounts") or []
     for a in account_list:
         if not isinstance(a, dict):
             continue
         name = a.get("company_name") or a.get("company") or a.get("name") or "unknown"
-        intent = _safe_float(
+        intent = _normalize_account_intent_score(
             a.get("urgency_score") or a.get("intent_score") or a.get("confidence_score", 0),
         )
         is_dm = bool(a.get("decision_maker") or a.get("is_decision_maker"))
+        is_active_eval = _is_active_eval_stage(a.get("buying_stage"))
         signal = intent
         if is_dm:
             signal = min(signal + DM_INTENT_BOOST, 1.0)
+        if is_active_eval:
+            signal = min(signal + ACTIVE_EVAL_ACCOUNT_BOOST, 1.0)
         score = W_RECENCY * RECENCY_DEFAULT + W_SIGNAL * signal + W_UNIQUENESS * 1.0
 
         rids = tuple(a.get("review_ids") or [])
@@ -668,10 +1291,11 @@ def compress_vendor_pools(
         all_aggregates.extend(aggs)
 
     # Displacement
-    disp = layers.get("displacement") or []
-    if disp:
-        items, aggs = _score_displacement(disp, max_items_per_pool)
-        all_pools["displacement"] = items
+    disp = layers.get("displacement")
+    if layers:
+        items, aggs = _score_displacement(disp or [], max_items_per_pool)
+        if items:
+            all_pools["displacement"] = items
         all_aggregates.extend(aggs)
 
     # Category

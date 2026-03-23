@@ -9,6 +9,7 @@ Handles both v1 and v2 schemas transparently.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
 from ...reasoning.wedge_registry import Wedge, validate_wedge
@@ -38,6 +39,96 @@ _REQUIRED_SECTIONS = (
     "competitive_reframes", "migration_proof",
 )
 
+_SECTION_CONTRACT_PATHS = {
+    "causal_narrative": ("vendor_core_reasoning", "causal_narrative"),
+    "segment_playbook": ("vendor_core_reasoning", "segment_playbook"),
+    "timing_intelligence": ("vendor_core_reasoning", "timing_intelligence"),
+    "competitive_reframes": ("displacement_reasoning", "competitive_reframes"),
+    "migration_proof": ("displacement_reasoning", "migration_proof"),
+}
+
+_CONSUMER_REQUIRED_CONTRACTS = {
+    "battle_card": (
+        "vendor_core_reasoning",
+        "displacement_reasoning",
+        "category_reasoning",
+        "account_reasoning",
+    ),
+    "weekly_churn_feed": ("vendor_core_reasoning", "account_reasoning"),
+    "vendor_scorecard": (
+        "vendor_core_reasoning",
+        "displacement_reasoning",
+        "account_reasoning",
+    ),
+    "displacement_report": ("displacement_reasoning", "category_reasoning"),
+    "accounts_in_motion": (
+        "vendor_core_reasoning",
+        "displacement_reasoning",
+        "account_reasoning",
+    ),
+    "challenger_brief": (
+        "vendor_core_reasoning",
+        "displacement_reasoning",
+        "category_reasoning",
+        "account_reasoning",
+    ),
+}
+
+
+def _repair_stale_timing_support(contracts: dict[str, Any]) -> dict[str, Any]:
+    vendor_core = contracts.get("vendor_core_reasoning")
+    if not isinstance(vendor_core, dict):
+        return contracts
+    segment = vendor_core.get("segment_playbook")
+    timing = vendor_core.get("timing_intelligence")
+    if not isinstance(segment, dict) and (not isinstance(timing, dict) or not timing):
+        return contracts
+    from ._b2b_reasoning_contracts import (
+        _canonicalize_segment_playbook,
+        _canonicalize_timing_intelligence,
+        _merge_timing_signal_rows,
+        _timing_signal_fallback_rows,
+        _timing_signal_summary_rows,
+    )
+
+    repaired = dict(contracts)
+    repaired_vendor_core = dict(vendor_core)
+    changed = False
+
+    if isinstance(segment, dict) and segment:
+        repaired_segment = _canonicalize_segment_playbook(dict(segment))
+        if repaired_segment != segment:
+            repaired_vendor_core["segment_playbook"] = repaired_segment
+            changed = True
+
+    if isinstance(timing, dict) and timing:
+        repaired_timing = _canonicalize_timing_intelligence(dict(timing))
+        repaired_supporting = (
+            dict(repaired_timing.get("supporting_evidence"))
+            if isinstance(repaired_timing.get("supporting_evidence"), dict)
+            else {}
+        )
+        timing_rows = list(repaired_supporting.get("top_timing_signals") or [])
+        timing_rows = _merge_timing_signal_rows(
+            timing_rows,
+            _timing_signal_fallback_rows(repaired_timing),
+        )
+        timing_rows = _merge_timing_signal_rows(
+            timing_rows,
+            _timing_signal_summary_rows(repaired_supporting),
+        )
+        if timing_rows:
+            repaired_supporting["top_timing_signals"] = timing_rows
+            repaired_timing["supporting_evidence"] = repaired_supporting
+        if repaired_timing != timing:
+            repaired_vendor_core["timing_intelligence"] = repaired_timing
+            changed = True
+
+    if not changed:
+        return contracts
+    repaired["vendor_core_reasoning"] = repaired_vendor_core
+    return repaired
+
 
 class SynthesisView:
     """Read-only view over a single vendor's reasoning synthesis.
@@ -46,26 +137,45 @@ class SynthesisView:
     and source traceability.
     """
 
-    __slots__ = ("vendor_name", "raw", "schema_version")
+    __slots__ = ("vendor_name", "raw", "schema_version", "as_of_date")
 
     def __init__(
         self,
         vendor_name: str,
         raw: dict[str, Any],
         schema_version: str = "v1",
+        as_of_date: date | None = None,
     ) -> None:
         self.vendor_name = vendor_name
         self.raw = raw
         self.schema_version = schema_version
+        self.as_of_date = as_of_date
 
     @property
     def is_v2(self) -> bool:
-        return self.schema_version.startswith("v2") or self.raw.get("schema_version") == "2.0"
+        return self.schema_version.startswith("v2") or str(self.raw.get("schema_version") or "").startswith("2.")
+
+    @property
+    def has_explicit_contracts(self) -> bool:
+        return bool(self.reasoning_contracts)
+
+    @property
+    def as_of_date_iso(self) -> str:
+        if self.as_of_date is None:
+            return ""
+        return self.as_of_date.isoformat()
+
+    def is_stale(self, requested_as_of: date | None = None) -> bool:
+        if self.as_of_date is None:
+            return False
+        if requested_as_of is None:
+            return False
+        return self.as_of_date < requested_as_of
 
     @property
     def primary_wedge(self) -> Wedge | None:
-        cn = self.raw.get("causal_narrative")
-        if not isinstance(cn, dict):
+        cn = self.section("causal_narrative")
+        if not cn:
             return None
         return validate_wedge(cn.get("primary_wedge", ""))
 
@@ -78,8 +188,21 @@ class SynthesisView:
 
     def section(self, name: str) -> dict[str, Any]:
         """Get a section dict, or empty dict if missing."""
+        contracts = self.reasoning_contracts
+        contract_path = _SECTION_CONTRACT_PATHS.get(name)
+        if contract_path:
+            contract_name, section_name = contract_path
+            contract = contracts.get(contract_name)
+            if isinstance(contract, dict):
+                nested = contract.get(section_name)
+                if isinstance(nested, dict):
+                    return nested
+            if self.has_explicit_contracts:
+                return {}
         val = self.raw.get(name)
-        return val if isinstance(val, dict) else {}
+        if isinstance(val, dict):
+            return val
+        return {}
 
     def confidence(self, section: str) -> str:
         """Get the confidence level for a section."""
@@ -180,27 +303,176 @@ class SynthesisView:
         w = self.raw.get("_validation_warnings")
         return w if isinstance(w, list) else []
 
+    @property
+    def reasoning_contracts(self) -> dict[str, Any]:
+        rc = self.raw.get("reasoning_contracts")
+        return rc if isinstance(rc, dict) else {}
+
+    def contract(self, name: str) -> dict[str, Any]:
+        rc = self.reasoning_contracts.get(name)
+        return rc if isinstance(rc, dict) else {}
+
+    def materialized_contracts(self) -> dict[str, Any]:
+        """Return contract-first reasoning blocks with flat-section fallback.
+
+        New synthesis rows persist explicit ``reasoning_contracts``. Older rows may
+        only expose the flat battle-card-shaped sections. This view normalizes both
+        cases so downstream consumers can treat contract blocks as canonical.
+        """
+        contracts: dict[str, Any] = {}
+        allow_flat_fallback = not self.has_explicit_contracts
+
+        vendor_core = self.contract("vendor_core_reasoning")
+        if not vendor_core and allow_flat_fallback:
+            vendor_sections = {
+                section: self.section(section)
+                for section in (
+                    "causal_narrative",
+                    "segment_playbook",
+                    "timing_intelligence",
+                )
+                if self.section(section)
+            }
+            if vendor_sections:
+                vendor_core = {
+                    "schema_version": "v1",
+                    **vendor_sections,
+                }
+        if vendor_core:
+            contracts["vendor_core_reasoning"] = vendor_core
+
+        displacement = self.contract("displacement_reasoning")
+        if not displacement and allow_flat_fallback:
+            displacement_sections = {
+                section: self.section(section)
+                for section in (
+                    "competitive_reframes",
+                    "migration_proof",
+                )
+                if self.section(section)
+            }
+            if displacement_sections:
+                displacement = {
+                    "schema_version": "v1",
+                    **displacement_sections,
+                }
+        if displacement:
+            contracts["displacement_reasoning"] = displacement
+
+        category = self.contract("category_reasoning")
+        if not category:
+            raw_category = self.raw.get("category_reasoning")
+            if isinstance(raw_category, dict) and raw_category:
+                category = raw_category
+        if category:
+            contracts["category_reasoning"] = category
+
+        account = self.contract("account_reasoning")
+        if not account:
+            raw_account = self.raw.get("account_reasoning")
+            if isinstance(raw_account, dict) and raw_account:
+                account = raw_account
+        if account:
+            contracts["account_reasoning"] = account
+
+        contracts = _repair_stale_timing_support(contracts)
+
+        if contracts:
+            contracts["schema_version"] = (
+                str(self.reasoning_contracts.get("schema_version") or "v1")
+            )
+        return contracts
+
+
+def _coerce_iso_date(value: Any) -> date | None:
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return date.fromisoformat(text[:10])
+        except ValueError:
+            return None
+    return None
+
+
+def required_contracts_for_consumer(consumer: str) -> tuple[str, ...]:
+    key = str(consumer or "").strip().lower()
+    return _CONSUMER_REQUIRED_CONTRACTS.get(key, ())
+
+
+def contract_gaps_for_consumer(view: SynthesisView | None, consumer: str) -> list[str]:
+    required = required_contracts_for_consumer(consumer)
+    if not required:
+        return []
+    if view is None:
+        return list(required)
+    materialized_contracts = getattr(view, "materialized_contracts", None)
+    if callable(materialized_contracts):
+        contracts = materialized_contracts() or {}
+    else:
+        contracts = {}
+        contract_getter = getattr(view, "contract", None)
+        if callable(contract_getter):
+            for name in required:
+                contract = contract_getter(name)
+                if isinstance(contract, dict) and contract:
+                    contracts[name] = contract
+    gaps: list[str] = []
+    for name in required:
+        section = contracts.get(name)
+        if not isinstance(section, dict) or not section:
+            gaps.append(name)
+    return gaps
+
+
+def inject_synthesis_freshness(
+    entry: dict[str, Any],
+    view: SynthesisView,
+    *,
+    requested_as_of: date | None = None,
+) -> None:
+    as_of_date = getattr(view, "as_of_date", None)
+    if as_of_date is not None:
+        entry["data_as_of_date"] = as_of_date.isoformat()
+    if requested_as_of is None:
+        return
+    is_stale = getattr(view, "is_stale", None)
+    if callable(is_stale):
+        entry["data_stale"] = bool(is_stale(requested_as_of))
+
 
 def load_synthesis_view(
     raw: dict[str, Any],
     vendor_name: str,
     schema_version: str = "",
+    as_of_date: date | str | None = None,
 ) -> SynthesisView:
     """Construct a SynthesisView, handling v1 backward compatibility.
 
     If ``schema_version`` is not provided, infers from the raw dict.
     """
     if not schema_version:
-        if raw.get("schema_version") == "2.0" or "meta" in raw:
+        if str(raw.get("schema_version") or "").startswith("2.") or "meta" in raw:
             schema_version = "v2"
         else:
             schema_version = "v1"
-    return SynthesisView(vendor_name=vendor_name, raw=raw, schema_version=schema_version)
+    return SynthesisView(
+        vendor_name=vendor_name,
+        raw=raw,
+        schema_version=schema_version,
+        as_of_date=_coerce_iso_date(as_of_date),
+    )
 
 
 def inject_synthesis_into_card(
     card_entry: dict[str, Any],
     view: SynthesisView,
+    *,
+    materialize_flat_sections: bool = False,
+    requested_as_of: date | None = None,
 ) -> None:
     """Inject synthesis sections into a battle card entry.
 
@@ -208,9 +480,23 @@ def inject_synthesis_into_card(
     churn angle -- it overrides the archetype label so the card tells one
     consistent story.
     """
-    for section in _REQUIRED_SECTIONS:
-        if not view.should_suppress(section):
-            card_entry[section] = view.section(section)
+    if materialize_flat_sections:
+        for section in _REQUIRED_SECTIONS:
+            if not view.should_suppress(section):
+                card_entry[section] = view.section(section)
+
+    contracts = view.materialized_contracts()
+    if contracts:
+        card_entry["reasoning_contracts"] = contracts
+        card_entry["reasoning_source"] = "b2b_reasoning_synthesis"
+    inject_synthesis_freshness(
+        card_entry,
+        view,
+        requested_as_of=requested_as_of,
+    )
+    contract_gaps = contract_gaps_for_consumer(view, "battle_card")
+    if contract_gaps:
+        card_entry["reasoning_contract_gaps"] = contract_gaps
 
     # Always inject meta and wedge info
     card_entry["evidence_window"] = view.meta
@@ -240,12 +526,16 @@ def inject_synthesis_into_card(
             end = _date.fromisoformat(str(ew_end)[:10])
             window_days = (end - start).days
             card_entry["evidence_window_days"] = window_days
+            card_entry["evidence_window_label"] = f"{window_days}-day evidence window"
             from ._b2b_pool_compression import MIN_EVIDENCE_WINDOW_DAYS
             if window_days < MIN_EVIDENCE_WINDOW_DAYS:
+                card_entry["evidence_window_is_thin"] = True
                 card_entry["evidence_depth_warning"] = (
                     f"Thin evidence window: {window_days} days. "
                     f"Confidence may improve with more data."
                 )
+            else:
+                card_entry["evidence_window_is_thin"] = False
         except (ValueError, TypeError):
             pass
 

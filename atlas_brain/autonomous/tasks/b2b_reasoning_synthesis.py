@@ -11,6 +11,12 @@ V2 changes over v1:
 
 V1 rows remain in DB as automatic fallback -- consumers pick latest by
 created_at DESC, so v2 wins when present.
+
+This task still prompts in a battle-card-oriented shape, but it now also
+decomposes the response into reusable reasoning contracts:
+- vendor_core_reasoning
+- displacement_reasoning
+- category_reasoning
 """
 
 import asyncio
@@ -34,6 +40,16 @@ def _compute_pool_hash(layers: dict[str, Any]) -> str:
     """Deterministic hash of all pool layer data for a vendor."""
     raw = json.dumps(layers, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _validation_feedback(vresult: Any, limit: int) -> list[str]:
+    """Convert validator errors into compact retry feedback lines."""
+    feedback: list[str] = []
+    for err in list(getattr(vresult, "errors", []))[:limit]:
+        path = getattr(err, "path", "") or "$"
+        message = getattr(err, "message", "") or "validation failed"
+        feedback.append(f"{path}: {message}")
+    return feedback
 
 
 async def run(task: ScheduledTask) -> dict[str, Any]:
@@ -131,22 +147,33 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     from ...services.protocols import Message
 
     from ._b2b_pool_compression import compress_vendor_pools
-    from ._b2b_synthesis_validation import validate_synthesis
+    from ._b2b_reasoning_contracts import build_persistable_synthesis
+    from ._b2b_synthesis_validation import (
+        normalize_synthesis_source_ids,
+        validate_synthesis,
+    )
 
     # Process vendors with concurrency limit
     max_concurrent = getattr(cfg, "reasoning_synthesis_concurrency", 4)
+    max_attempts = max(1, int(getattr(cfg, "reasoning_synthesis_attempts", 2)))
+    retry_delay = float(
+        getattr(cfg, "reasoning_synthesis_retry_delay_seconds", 0.5),
+    )
+    feedback_limit = max(
+        1, int(getattr(cfg, "reasoning_synthesis_feedback_limit", 5)),
+    )
     sem = asyncio.Semaphore(max_concurrent)
     total_tokens = 0
     succeeded = 0
     failed = 0
     validation_failures = 0
+    failed_vendors: list[dict[str, Any]] = []
 
     async def _reason_one(
         vendor_name: str, layers: dict, ev_hash: str,
     ) -> None:
-        nonlocal total_tokens, succeeded, failed, validation_failures
+        nonlocal total_tokens, succeeded, failed, validation_failures, failed_vendors
         async with sem:
-            # Scored compression with source traceability
             packet = compress_vendor_pools(vendor_name, layers)
             payload = json.dumps(
                 packet.to_llm_payload(),
@@ -154,96 +181,187 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 sort_keys=True,
                 default=str,
             )
-            messages = [
-                Message(role="system", content=BATTLE_CARD_REASONING_PROMPT),
-                Message(role="user", content=payload),
-            ]
-            try:
-                import re
+            failure_reasons: list[str] = []
+            last_text = ""
+            last_validation = None
+            synthesis: dict[str, Any] | None = None
+            vendor_tokens = 0
 
-                result = await asyncio.to_thread(
-                    llm.chat,
-                    messages=messages,
-                    max_tokens=rcfg.max_tokens,
-                    temperature=rcfg.temperature,
-                )
-                text = result.get("response", "").strip()
-                usage = result.get("usage", {})
-                tokens = (
-                    usage.get("input_tokens", 0)
-                    + usage.get("output_tokens", 0)
-                )
-                total_tokens += tokens
-
-                # Strip think/scratchpad tags
-                text = re.sub(
-                    r"<think>.*?</think>", "", text, flags=re.DOTALL,
-                ).strip()
-                if "<scratchpad>" in text:
-                    text = text.split("</scratchpad>")[-1].strip()
-
-                from ...pipelines.llm import parse_json_response
-
-                synthesis = parse_json_response(
-                    text, recover_truncated=True,
-                )
-                if not isinstance(synthesis, dict):
-                    logger.warning(
-                        "Reasoning synthesis for %s returned non-dict",
-                        vendor_name,
+            for attempt in range(max_attempts):
+                messages = [
+                    Message(role="system", content=BATTLE_CARD_REASONING_PROMPT),
+                    Message(role="user", content=payload),
+                ]
+                if attempt > 0 and last_text:
+                    messages.append(Message(role="assistant", content=last_text))
+                if attempt > 0 and failure_reasons:
+                    feedback = "\n".join(
+                        f"- {reason}" for reason in failure_reasons[:feedback_limit]
                     )
-                    failed += 1
-                    return
-                if synthesis.get("_parse_fallback"):
-                    logger.warning(
-                        "Reasoning synthesis for %s failed JSON parse",
-                        vendor_name,
-                    )
-                    failed += 1
-                    return
+                    messages.append(Message(
+                        role="user",
+                        content=(
+                            "Your previous response was rejected. "
+                            "Return a complete corrected JSON object only.\n"
+                            f"Fix these issues:\n{feedback}"
+                        ),
+                    ))
+                try:
+                    import re
+                    from ...pipelines.llm import parse_json_response
 
-                # Post-LLM validation
-                vresult = validate_synthesis(synthesis, packet)
-
-                if not vresult.is_valid:
-                    logger.warning(
-                        "Reasoning synthesis for %s failed validation: %s",
-                        vendor_name, vresult.summary(),
+                    result = await asyncio.to_thread(
+                        llm.chat,
+                        messages=messages,
+                        max_tokens=rcfg.max_tokens,
+                        temperature=rcfg.temperature,
                     )
-                    for err in vresult.errors:
-                        logger.debug(
-                            "  [%s] %s: %s", err.code, err.path, err.message,
+                    text = result.get("response", "").strip()
+                    usage = result.get("usage", {})
+                    tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+                    vendor_tokens += tokens
+                    total_tokens += tokens
+
+                    text = re.sub(
+                        r"<think>.*?</think>", "", text, flags=re.DOTALL,
+                    ).strip()
+                    if "<scratchpad>" in text:
+                        text = text.split("</scratchpad>")[-1].strip()
+                    last_text = text
+
+                    parsed = parse_json_response(text, recover_truncated=True)
+                    if not isinstance(parsed, dict):
+                        failure_reasons = ["LLM did not return a JSON object"]
+                        synthesis = None
+                    elif parsed.get("_parse_fallback"):
+                        failure_reasons = ["LLM did not return valid JSON"]
+                        synthesis = None
+                    else:
+                        parsed = normalize_synthesis_source_ids(parsed, packet)
+                        vresult = validate_synthesis(parsed, packet)
+                        if vresult.is_valid:
+                            synthesis = parsed
+                            last_validation = vresult
+                            break
+                        synthesis = None
+                        last_validation = vresult
+                        failure_reasons = _validation_feedback(
+                            vresult, feedback_limit,
+                        ) or [vresult.summary()]
+                        for err in vresult.errors:
+                            logger.debug(
+                                "  [%s] %s: %s", err.code, err.path, err.message,
+                            )
+                except Exception as exc:
+                    synthesis = None
+                    failure_reasons = [f"{type(exc).__name__}: {exc}"]
+                    if attempt + 1 >= max_attempts:
+                        logger.warning(
+                            "Reasoning synthesis failed for %s",
+                            vendor_name, exc_info=True,
                         )
-                    validation_failures += 1
+                        failed_vendors.append({
+                            "vendor_name": vendor_name,
+                            "stage": "llm_exception",
+                            "reasons": failure_reasons[:feedback_limit],
+                            "tokens_used": vendor_tokens,
+                            "attempts_used": attempt + 1,
+                        })
+                        failed += 1
+                        return
+
+                if synthesis is not None:
+                    break
+
+                if attempt + 1 >= max_attempts:
+                    if last_validation is not None:
+                        logger.warning(
+                            "Reasoning synthesis for %s failed validation: %s",
+                            vendor_name, last_validation.summary(),
+                        )
+                        failed_vendors.append({
+                            "vendor_name": vendor_name,
+                            "stage": "validation",
+                            "summary": last_validation.summary(),
+                            "reasons": failure_reasons[:feedback_limit],
+                            "tokens_used": vendor_tokens,
+                            "attempts_used": attempt + 1,
+                        })
+                        validation_failures += 1
+                    else:
+                        logger.warning(
+                            "Reasoning synthesis for %s failed: %s",
+                            vendor_name, "; ".join(failure_reasons[:3]),
+                        )
+                        failed_vendors.append({
+                            "vendor_name": vendor_name,
+                            "stage": "llm_response",
+                            "reasons": failure_reasons[:feedback_limit],
+                            "tokens_used": vendor_tokens,
+                            "attempts_used": attempt + 1,
+                        })
                     failed += 1
                     return
 
-                # Attach warnings to synthesis for downstream visibility
-                if vresult.warnings:
-                    synthesis["_validation_warnings"] = [
-                        {
-                            "path": w.path,
-                            "code": w.code,
-                            "message": w.message,
-                        }
-                        for w in vresult.warnings
-                    ]
-
-                # Inject meta if LLM didn't produce it
-                if "meta" not in synthesis:
-                    synthesis["meta"] = {}
-                meta = synthesis["meta"]
-                meta.setdefault(
-                    "synthesized_at",
-                    datetime.now(timezone.utc).isoformat(),
+                logger.info(
+                    "Reasoning synthesis retrying %s (%d/%d): %s",
+                    vendor_name,
+                    attempt + 2,
+                    max_attempts,
+                    "; ".join(failure_reasons[:3]),
                 )
-                # Count total evidence items from packet
-                total_items = sum(
-                    len(items) for items in packet.pools.values()
-                )
-                meta.setdefault("total_evidence_items", total_items)
+                if retry_delay > 0:
+                    await asyncio.sleep(retry_delay)
 
-                # Persist
+            assert synthesis is not None
+            assert last_validation is not None
+            vresult = last_validation
+
+            if "meta" not in synthesis:
+                synthesis["meta"] = {}
+            meta = synthesis["meta"]
+            meta.setdefault(
+                "synthesized_at",
+                datetime.now(timezone.utc).isoformat(),
+            )
+            total_items = sum(
+                len(items) for items in packet.pools.values()
+            )
+            meta.setdefault("total_evidence_items", total_items)
+            synthesis = build_persistable_synthesis(synthesis, packet)
+            persisted_vresult = validate_synthesis(synthesis, packet)
+            if not persisted_vresult.is_valid:
+                logger.warning(
+                    "Persisted reasoning synthesis for %s failed validation: %s",
+                    vendor_name, persisted_vresult.summary(),
+                )
+                failed_vendors.append({
+                    "vendor_name": vendor_name,
+                    "stage": "persisted_validation",
+                    "summary": persisted_vresult.summary(),
+                    "reasons": _validation_feedback(
+                        persisted_vresult, feedback_limit,
+                    ) or [persisted_vresult.summary()],
+                    "tokens_used": vendor_tokens,
+                    "attempts_used": max_attempts,
+                })
+                validation_failures += 1
+                failed += 1
+                return
+            if persisted_vresult.warnings:
+                synthesis["_validation_warnings"] = [
+                    {
+                        "path": w.path,
+                        "code": w.code,
+                        "message": w.message,
+                    }
+                    for w in persisted_vresult.warnings
+                ]
+            else:
+                synthesis.pop("_validation_warnings", None)
+            vresult = persisted_vresult
+
+            try:
                 await pool.execute(
                     """
                     INSERT INTO b2b_reasoning_synthesis
@@ -266,20 +384,29 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     _SCHEMA_VERSION,
                     ev_hash,
                     json.dumps(synthesis, default=str),
-                    tokens,
+                    vendor_tokens,
                     getattr(llm, "model", getattr(llm, "model_id", "")),
-                )
-                succeeded += 1
-                logger.info(
-                    "Reasoning synthesis v2: %s (%d tokens, %d warnings)",
-                    vendor_name, tokens, len(vresult.warnings),
                 )
             except Exception:
                 logger.warning(
                     "Reasoning synthesis failed for %s",
                     vendor_name, exc_info=True,
                 )
+                failed_vendors.append({
+                    "vendor_name": vendor_name,
+                    "stage": "persist",
+                    "reasons": ["Failed to persist reasoning synthesis row"],
+                    "tokens_used": vendor_tokens,
+                    "attempts_used": max_attempts,
+                })
                 failed += 1
+                return
+
+            succeeded += 1
+            logger.info(
+                "Reasoning synthesis v2: %s (%d tokens, %d warnings)",
+                vendor_name, vendor_tokens, len(vresult.warnings),
+            )
 
     await asyncio.gather(*[
         _reason_one(vn, layers, eh)
@@ -298,6 +425,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "vendors_reasoned": succeeded,
         "vendors_failed": failed,
         "vendors_validation_failures": validation_failures,
+        "failed_vendors": failed_vendors,
         "vendors_skipped": skipped,
         "total_tokens": total_tokens,
         "elapsed_seconds": elapsed,

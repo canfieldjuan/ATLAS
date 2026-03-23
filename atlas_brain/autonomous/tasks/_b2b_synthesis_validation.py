@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ...reasoning.wedge_registry import WEDGE_ENUM_VALUES, validate_wedge
+from ...services.company_normalization import normalize_company_name
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_synthesis_validation")
 
@@ -26,9 +27,19 @@ _VALID_SIGNAL_SOURCES = frozenset({
     "evidence_vault", "temporal", "displacement", "segment",
     "category", "accounts",
 })
+_SECTION_CONTRACT_PATHS = {
+    "causal_narrative": ("vendor_core_reasoning", "causal_narrative"),
+    "segment_playbook": ("vendor_core_reasoning", "segment_playbook"),
+    "timing_intelligence": ("vendor_core_reasoning", "timing_intelligence"),
+    "competitive_reframes": ("displacement_reasoning", "competitive_reframes"),
+    "migration_proof": ("displacement_reasoning", "migration_proof"),
+    "account_reasoning": ("account_reasoning",),
+    "category_reasoning": ("category_reasoning",),
+}
 _REQUIRED_SECTIONS = (
     "causal_narrative", "segment_playbook", "timing_intelligence",
-    "competitive_reframes", "migration_proof",
+    "competitive_reframes", "migration_proof", "account_reasoning",
+    "category_reasoning",
 )
 _UNCLASSIFIED_VAULT_PREFIXES = (
     "vault:weakness:unknown",
@@ -40,6 +51,9 @@ _FIELD_SOURCE_RULES = {
     },
     "migration_proof.active_evaluation_volume": {
         "displacement:aggregate:total_active_evaluations",
+        "accounts:summary:active_eval_signal_count",
+        "segment:aggregate:active_eval_signal_count",
+        "temporal:signal:evaluation_deadline_signals",
     },
     "migration_proof.displacement_mention_volume": {
         "vault:metric:displacement_mention_count",
@@ -47,13 +61,55 @@ _FIELD_SOURCE_RULES = {
     },
     "timing_intelligence.active_eval_signals": {
         "accounts:summary:active_eval_signal_count",
+        "segment:aggregate:active_eval_signal_count",
         "temporal:signal:evaluation_deadline_signals",
     },
     "segment_playbook.priority_segments[*].estimated_reach": {
         "accounts:summary:total_accounts",
         "accounts:summary:high_intent_count",
     },
+    "account_reasoning.total_accounts": {
+        "accounts:summary:total_accounts",
+    },
+    "account_reasoning.high_intent_count": {
+        "accounts:summary:high_intent_count",
+    },
+    "account_reasoning.active_eval_count": {
+        "accounts:summary:active_eval_signal_count",
+    },
 }
+
+_FIELD_SOURCE_PREFIX_RULES = {
+    "segment_playbook.priority_segments[*].estimated_reach": (
+        "segment:reach:",
+    ),
+}
+
+_FIELDS_REQUIRING_AGGREGATE_SOURCE = {
+    "competitive_reframes.reframes[*].proof_point",
+}
+
+_PLACEHOLDER_NAMED_EXAMPLE_PATTERNS = (
+    re.compile(r"^unknown\b", re.I),
+    re.compile(r"^anonymous\b", re.I),
+    re.compile(r"^redacted\b", re.I),
+    re.compile(r"\b(customer|prospect|company|account|buyer|reviewer|user|team|organization|organisation|business|department)\b", re.I),
+    re.compile(r"\b(smb|mid[\s_-]?market|enterprise)\b", re.I),
+)
+
+
+def _looks_like_tool_label(value: str) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    generic_modifiers = ("custom", "homegrown", "home-grown", "in-house", "internal")
+    generic_artifacts = (
+        "integration", "utility", "workflow", "tool", "stack",
+        "system", "automation", "bot",
+    )
+    return any(token in text for token in generic_modifiers) and any(
+        token in text for token in generic_artifacts
+    )
 
 
 @dataclass(slots=True)
@@ -111,6 +167,316 @@ def _normalized_path(path: str) -> str:
 
 def _is_unclassified_vault_source_id(source_id: str) -> bool:
     return any(source_id.startswith(prefix) for prefix in _UNCLASSIFIED_VAULT_PREFIXES)
+
+
+def _is_placeholder_named_example_company(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return True
+    normalized = normalize_company_name(text)
+    if not normalized:
+        return True
+    if _looks_like_tool_label(text):
+        return True
+    return any(pattern.search(text) for pattern in _PLACEHOLDER_NAMED_EXAMPLE_PATTERNS)
+
+
+def _build_source_alias_map(packet: Any | None) -> dict[str, str]:
+    """Map common shorthand source labels back to canonical packet source IDs."""
+    if packet is None:
+        return {}
+
+    alias_map: dict[str, str | None] = {}
+
+    def _register(alias: str, canonical: str) -> None:
+        key = str(alias or "").strip()
+        if not key or key == canonical:
+            return
+        existing = alias_map.get(key)
+        if existing is None:
+            alias_map[key] = canonical
+        elif existing != canonical:
+            alias_map[key] = None
+
+    for agg in getattr(packet, "aggregates", []):
+        canonical = agg.source_id
+        _register(agg.label, canonical)
+        _register(canonical.rsplit(":", 1)[-1], canonical)
+        if canonical == "category:aggregate:displacement_flow_count":
+            _register("displacement:aggregate:total_flow_mentions", canonical)
+        if canonical.endswith("_signal_count"):
+            _register(canonical.replace("_signal_count", "_count"), canonical)
+        if canonical.endswith(":mention_count_total"):
+            _register(canonical.rsplit(":", 1)[0], canonical)
+            prefix = canonical[: -len(":mention_count_total")]
+            _register(f"{prefix}_mention_count_total", canonical)
+        if canonical.endswith(":mention_count_recent"):
+            prefix = canonical[: -len(":mention_count_recent")]
+            _register(f"{prefix}_mention_count_recent", canonical)
+        if canonical.startswith("segment:reach:"):
+            _register(canonical.replace("segment:reach:", "segment:", 1), canonical)
+
+    return {
+        key: val for key, val in alias_map.items()
+        if isinstance(val, str) and val
+    }
+
+
+def _section_dicts(synthesis: dict[str, Any], section: str) -> list[dict[str, Any]]:
+    blocks: list[dict[str, Any]] = []
+    current = synthesis.get(section)
+    if isinstance(current, dict):
+        blocks.append(current)
+    contract_path = _SECTION_CONTRACT_PATHS.get(section)
+    if contract_path:
+        contract_name = contract_path[0]
+        contract = _contract_block(synthesis, contract_name)
+        nested: Any = contract
+        for path_part in contract_path[1:]:
+            if not isinstance(nested, dict):
+                nested = None
+                break
+            nested = nested.get(path_part)
+        if isinstance(nested, dict) and nested not in blocks:
+            blocks.append(nested)
+    return blocks
+
+
+def _normalize_constrained_wrappers(
+    synthesis: dict[str, Any],
+    packet: Any | None,
+) -> None:
+    if packet is None:
+        return
+    alias_map = _build_source_alias_map(packet)
+    aggregate_lookup = {
+        getattr(agg, "source_id", ""): getattr(agg, "value", None)
+        for agg in getattr(packet, "aggregates", []) or []
+        if getattr(agg, "source_id", "")
+    }
+    has_segment_reach = any(
+        getattr(agg, "source_id", "").startswith("segment:reach:")
+        for agg in getattr(packet, "aggregates", []) or []
+    )
+
+    def _numeric_equal(left: Any, right: Any) -> bool:
+        try:
+            return float(left) == float(right)
+        except (TypeError, ValueError):
+            return left == right
+
+    def _candidate_wrappers(field_path: str) -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
+        for sid in _FIELD_SOURCE_RULES.get(field_path, set()):
+            if sid in aggregate_lookup:
+                candidates.append({"value": aggregate_lookup[sid], "source_id": sid})
+        for prefix in _FIELD_SOURCE_PREFIX_RULES.get(field_path, ()):
+            for sid, value in aggregate_lookup.items():
+                if sid.startswith(prefix):
+                    candidates.append({"value": value, "source_id": sid})
+        return candidates
+
+    def _best_wrapper_for_field(
+        wrapper: Any,
+        field_path: str,
+    ) -> dict[str, Any] | None:
+        if not isinstance(wrapper, dict):
+            return None
+        sid = wrapper.get("source_id")
+        alias = alias_map.get(sid) if isinstance(sid, str) else None
+        if isinstance(alias, str) and alias and alias != sid:
+            wrapper = {**wrapper, "source_id": alias}
+        for candidate in _candidate_wrappers(field_path):
+            if _numeric_equal(candidate.get("value"), wrapper.get("value")):
+                return candidate
+        sid = wrapper.get("source_id")
+        if isinstance(sid, str) and sid in aggregate_lookup:
+            return {"value": aggregate_lookup[sid], "source_id": sid}
+        return wrapper
+
+    def _upgrade_wrapper_source(
+        wrapper: Any,
+        field_path: str,
+    ) -> None:
+        if not isinstance(wrapper, dict):
+            return
+        sid = wrapper.get("source_id")
+        if not isinstance(sid, str) or not sid:
+            return
+        resolved_sid = sid
+        alias = alias_map.get(sid)
+        if not isinstance(alias, str) or not alias:
+            alias = sid
+        if not _field_source_allowed(field_path, sid):
+            if (
+                field_path not in _FIELDS_REQUIRING_AGGREGATE_SOURCE
+                and not _field_source_allowed(field_path, alias)
+            ):
+                return
+            wrapper["source_id"] = alias
+            resolved_sid = alias
+        if (
+            (
+                field_path in _FIELDS_REQUIRING_AGGREGATE_SOURCE
+                or field_path in _FIELD_SOURCE_RULES
+                or field_path in _FIELD_SOURCE_PREFIX_RULES
+            )
+            and resolved_sid in aggregate_lookup
+        ):
+            wrapper["value"] = aggregate_lookup[resolved_sid]
+
+    explicit_switch = None
+    for agg in getattr(packet, "aggregates", []) or []:
+        if getattr(agg, "source_id", "") == "displacement:aggregate:total_explicit_switches":
+            explicit_switch = {
+                "value": getattr(agg, "value", None),
+                "source_id": "displacement:aggregate:total_explicit_switches",
+            }
+            break
+    if explicit_switch is None:
+        return
+    for migration_proof in _section_dicts(synthesis, "migration_proof"):
+        if isinstance(migration_proof.get("switch_volume"), dict):
+            migration_proof["switch_volume"] = dict(explicit_switch)
+        for field_path, key in (
+            ("migration_proof.active_evaluation_volume", "active_evaluation_volume"),
+            ("migration_proof.displacement_mention_volume", "displacement_mention_volume"),
+        ):
+            normalized = _best_wrapper_for_field(migration_proof.get(key), field_path)
+            if normalized is not None:
+                migration_proof[key] = normalized
+
+    for timing_intelligence in _section_dicts(synthesis, "timing_intelligence"):
+        normalized = _best_wrapper_for_field(
+            timing_intelligence.get("active_eval_signals"),
+            "timing_intelligence.active_eval_signals",
+        )
+        if normalized is not None:
+            timing_intelligence["active_eval_signals"] = normalized
+
+    for account_reasoning in _section_dicts(synthesis, "account_reasoning"):
+        for field_path, key in (
+            ("account_reasoning.total_accounts", "total_accounts"),
+            ("account_reasoning.high_intent_count", "high_intent_count"),
+            ("account_reasoning.active_eval_count", "active_eval_count"),
+        ):
+            normalized = _best_wrapper_for_field(account_reasoning.get(key), field_path)
+            if normalized is not None:
+                account_reasoning[key] = normalized
+
+    for segment_playbook in _section_dicts(synthesis, "segment_playbook"):
+        if not has_segment_reach:
+            segment_playbook["priority_segments"] = []
+            continue
+        for seg in segment_playbook.get("priority_segments") or []:
+            if not isinstance(seg, dict):
+                continue
+            _upgrade_wrapper_source(
+                seg.get("estimated_reach"),
+                "segment_playbook.priority_segments[*].estimated_reach",
+            )
+
+    for competitive_reframes in _section_dicts(synthesis, "competitive_reframes"):
+        for reframe in competitive_reframes.get("reframes") or []:
+            if not isinstance(reframe, dict):
+                continue
+            _upgrade_wrapper_source(
+                reframe.get("proof_point"),
+                "competitive_reframes.reframes[*].proof_point",
+            )
+
+
+def normalize_synthesis_source_ids(
+    synthesis: dict[str, Any],
+    packet: Any | None = None,
+) -> dict[str, Any]:
+    """Normalize shorthand source labels to packet source IDs in-place."""
+    if packet is None or not isinstance(synthesis, dict):
+        return synthesis
+
+    valid_source_ids = packet.source_ids()
+    alias_map = _build_source_alias_map(packet)
+    if alias_map:
+        def _normalize_sid(value: Any) -> Any:
+            if not isinstance(value, str):
+                return value
+            sid = value.strip()
+            if not sid or sid in valid_source_ids:
+                return value
+            return alias_map.get(sid, value)
+
+        def _walk(obj: Any) -> None:
+            if isinstance(obj, dict):
+                sid = obj.get("source_id")
+                if isinstance(sid, str):
+                    obj["source_id"] = _normalize_sid(sid)
+                cites = obj.get("citations")
+                if isinstance(cites, list):
+                    obj["citations"] = [_normalize_sid(sid) for sid in cites]
+                for value in obj.values():
+                    _walk(value)
+            elif isinstance(obj, list):
+                for value in obj:
+                    _walk(value)
+
+        _walk(synthesis)
+    _normalize_constrained_wrappers(synthesis, packet)
+    return synthesis
+
+
+def _field_source_allowed(path: str, sid: str) -> bool:
+    allowed_sources = _FIELD_SOURCE_RULES.get(path)
+    if allowed_sources and sid in allowed_sources:
+        return True
+    allowed_prefixes = _FIELD_SOURCE_PREFIX_RULES.get(path) or ()
+    return any(sid.startswith(prefix) for prefix in allowed_prefixes)
+
+
+def _contract_block(synthesis: dict[str, Any], name: str) -> dict[str, Any]:
+    contracts = synthesis.get("reasoning_contracts")
+    if isinstance(contracts, dict):
+        block = contracts.get(name)
+        if isinstance(block, dict):
+            return block
+    return {}
+
+
+def _normalized_synthesis_for_validation(synthesis: dict[str, Any]) -> dict[str, Any]:
+    """Materialize required flat sections from contract blocks for validation.
+
+    The persisted canonical shape is contracts-first, but validation rules are
+    still expressed against the section-level names. This view lets validation
+    operate on both legacy flat payloads and native contracts-first payloads.
+    """
+    normalized = dict(synthesis)
+    contracts = synthesis.get("reasoning_contracts")
+    has_explicit_contracts = isinstance(contracts, dict) and bool(contracts)
+    if has_explicit_contracts:
+        for section in _REQUIRED_SECTIONS:
+            normalized.pop(section, None)
+    for section, contract_path in _SECTION_CONTRACT_PATHS.items():
+        if isinstance(normalized.get(section), dict):
+            continue
+        if not contract_path:
+            continue
+        contract_name = contract_path[0]
+        contract = _contract_block(synthesis, contract_name)
+        if not contract:
+            continue
+        nested: Any = contract
+        for path_part in contract_path[1:]:
+            if not isinstance(nested, dict):
+                nested = None
+                break
+            nested = nested.get(path_part)
+        if isinstance(nested, dict):
+            normalized[section] = nested
+    # category_reasoning lives directly under reasoning_contracts (not nested)
+    if not isinstance(normalized.get("category_reasoning"), dict):
+        cr = _contract_block(synthesis, "category_reasoning")
+        if cr:
+            normalized["category_reasoning"] = cr
+    return normalized
 
 
 # ---------------------------------------------------------------------------
@@ -296,15 +662,37 @@ def _check_value_wrappers(
     if not aggregate_lookup:
         return
 
+    def _numeric_equal(left: Any, right: Any) -> bool:
+        try:
+            return abs(float(left) - float(right)) < 1e-9
+        except (TypeError, ValueError):
+            return False
+
     def _walk(obj: Any, path: str) -> None:
         if isinstance(obj, dict):
             if "value" in obj and "source_id" in obj:
                 sid = obj.get("source_id", "")
                 val = obj.get("value")
+                normalized_path = _normalized_path(path)
+                allowed_sources = _FIELD_SOURCE_RULES.get(normalized_path)
+                if (allowed_sources or _FIELD_SOURCE_PREFIX_RULES.get(normalized_path)) and not _field_source_allowed(normalized_path, sid):
+                    _add(
+                        result,
+                        path,
+                        "invalid_field_source",
+                        f"field '{normalized_path}' cannot cite source_id '{sid}'",
+                    )
+                if normalized_path in _FIELDS_REQUIRING_AGGREGATE_SOURCE and sid not in aggregate_lookup:
+                    _add(
+                        result,
+                        path,
+                        "proof_point_requires_aggregate_source",
+                        f"field '{normalized_path}' must cite a precomputed aggregate source_id, not '{sid}'",
+                    )
                 if sid and sid in aggregate_lookup:
                     expected = aggregate_lookup[sid]
                     if val is not None and expected is not None:
-                        if str(val) != str(expected):
+                        if not _numeric_equal(val, expected) and str(val) != str(expected):
                             _add(
                                 result, path, "value_mismatch",
                                 f"value {val!r} does not match aggregate "
@@ -326,21 +714,27 @@ def _check_value_wrappers(
 def _check_migration_coherence(
     synthesis: dict[str, Any], result: ValidationResult,
 ) -> None:
-    """Flag switching_is_real=true when switch_volume is 0."""
+    """Flag inconsistent migration-proof semantics."""
     mp = synthesis.get("migration_proof")
     if not isinstance(mp, dict):
         return
     switching = mp.get("switching_is_real")
     sv = mp.get("switch_volume")
+    av = mp.get("active_evaluation_volume")
     if isinstance(sv, dict):
         vol = sv.get("value")
     else:
         vol = sv
+    if isinstance(av, dict):
+        eval_vol = av.get("value")
+    else:
+        eval_vol = av
     # switching_is_real can be bool or string "true"/"false"
     is_real = switching is True or (isinstance(switching, str) and switching.lower() == "true")
     vol_zero = vol is not None and (vol == 0 or vol == "0")
+    et = mp.get("evidence_type", "")
+
     if is_real and vol_zero:
-        et = mp.get("evidence_type", "")
         if et != "active_evaluation":
             _add(
                 result,
@@ -348,6 +742,38 @@ def _check_migration_coherence(
                 "switching_real_but_zero_volume",
                 "switching_is_real=true but switch_volume=0 and evidence_type "
                 f"is '{et}', not 'active_evaluation'. This will confuse reps.",
+                severity="warning",
+            )
+    if is_real and vol_zero:
+        _add(
+            result,
+            "migration_proof.switching_is_real",
+            "switching_requires_confirmed_switches",
+            "switching_is_real must be false when confirmed switch volume is zero",
+        )
+    confidence = mp.get("confidence")
+    if confidence == "high" and et != "explicit_switch":
+        _add(
+            result,
+            "migration_proof.confidence",
+            "migration_confidence_too_high",
+            "migration_proof confidence cannot be high without explicit switch evidence",
+        )
+    if et == "explicit_switch" and vol_zero:
+        _add(
+            result,
+            "migration_proof.evidence_type",
+            "explicit_switch_without_volume",
+            "evidence_type is explicit_switch but confirmed switch volume is zero",
+        )
+    if et == "insufficient_data":
+        eval_zero = eval_vol is None or eval_vol == 0 or eval_vol == "0"
+        if not vol_zero or not eval_zero:
+            _add(
+                result,
+                "migration_proof.evidence_type",
+                "insufficient_data_with_signal_volume",
+                "evidence_type is insufficient_data despite non-zero switching or evaluation volume",
                 severity="warning",
             )
 
@@ -369,6 +795,26 @@ def _check_evidence_type(
         )
 
 
+def _check_named_examples(
+    synthesis: dict[str, Any], result: ValidationResult,
+) -> None:
+    mp = synthesis.get("migration_proof")
+    if not isinstance(mp, dict):
+        return
+    for idx, item in enumerate(mp.get("named_examples") or []):
+        if not isinstance(item, dict):
+            continue
+        company = item.get("company")
+        if _is_placeholder_named_example_company(company):
+            _add(
+                result,
+                f"migration_proof.named_examples[{idx}].company",
+                "placeholder_named_example",
+                "named_examples should not use placeholder or segment-style company labels",
+                severity="warning",
+            )
+
+
 def _check_falsification_structure(
     synthesis: dict[str, Any], result: ValidationResult,
 ) -> None:
@@ -388,6 +834,58 @@ def _check_falsification_structure(
                 "Falsification condition is a bare string; expected "
                 "{condition, signal_source, monitorable}",
                 severity="warning",
+            )
+
+
+def _check_segment_constraints(
+    synthesis: dict[str, Any], result: ValidationResult,
+) -> None:
+    """Reject seller-facing segments that are too thin or unsupported."""
+    sp = synthesis.get("segment_playbook")
+    if not isinstance(sp, dict):
+        return
+    for i, seg in enumerate(sp.get("priority_segments") or []):
+        if not isinstance(seg, dict):
+            continue
+        reach = seg.get("estimated_reach")
+        reach_value = None
+        if isinstance(reach, dict):
+            reach_value = reach.get("value")
+        elif reach is not None:
+            reach_value = reach
+        reach_num = None
+        if reach_value is not None:
+            try:
+                reach_num = float(reach_value)
+            except (TypeError, ValueError):
+                reach_num = None
+        path = f"segment_playbook.priority_segments[{i}]"
+        if reach_num is None:
+            _add(
+                result,
+                f"{path}.estimated_reach",
+                "missing_estimated_reach",
+                "Priority segment is missing a usable estimated_reach value",
+                severity="warning",
+            )
+        elif reach_num < 5:
+            _add(
+                result,
+                f"{path}.estimated_reach",
+                "segment_sample_too_small",
+                "Priority segment estimated_reach must be at least 5 for seller-facing output",
+            )
+
+        segment_text = " ".join(
+            str(seg.get(field) or "")
+            for field in ("segment", "why_vulnerable", "best_opening_angle")
+        )
+        if re.search(r"(?<!\d)\d{1,3}%(?!\d)", segment_text) and (reach_num is None or reach_num < 5):
+            _add(
+                result,
+                path,
+                "unsupported_segment_percentage",
+                "Percentage-based segment claim requires estimated_reach >= 5",
             )
 
 
@@ -413,6 +911,32 @@ def _check_trigger_types(
                 f"trigger type '{ttype}' not in {sorted(_VALID_TRIGGER_TYPES)}",
                 severity="warning",
             )
+
+
+def _check_category_reasoning(
+    synthesis: dict[str, Any], result: ValidationResult,
+) -> None:
+    """Warn when category_reasoning is missing or has empty regime/narrative."""
+    cr = synthesis.get("category_reasoning")
+    if not isinstance(cr, dict):
+        _add(
+            result,
+            "category_reasoning",
+            "missing_category_reasoning",
+            "category_reasoning section is missing or not a dict",
+            severity="warning",
+        )
+        return
+    regime = str(cr.get("market_regime") or "").strip()
+    narrative = str(cr.get("narrative") or "").strip()
+    if not regime and not narrative:
+        _add(
+            result,
+            "category_reasoning",
+            "empty_category_reasoning",
+            "category_reasoning has no market_regime or narrative",
+            severity="warning",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -448,18 +972,22 @@ def validate_synthesis(
             aggregate_lookup[agg.source_id] = agg.value
 
     result = ValidationResult(vendor_name=vendor_name)
+    normalized = _normalized_synthesis_for_validation(synthesis)
 
-    _check_required_sections(synthesis, result)
-    _check_wedge(synthesis, result)
-    _check_confidence_fields(synthesis, result)
-    _check_data_gaps_on_insufficient(synthesis, result)
-    _check_citations(synthesis, valid_source_ids, result)
-    _check_source_ids(synthesis, valid_source_ids, result)
-    _check_value_wrappers(synthesis, aggregate_lookup, result)
-    _check_evidence_type(synthesis, result)
-    _check_migration_coherence(synthesis, result)
-    _check_falsification_structure(synthesis, result)
-    _check_trigger_types(synthesis, result)
+    _check_required_sections(normalized, result)
+    _check_wedge(normalized, result)
+    _check_confidence_fields(normalized, result)
+    _check_data_gaps_on_insufficient(normalized, result)
+    _check_citations(normalized, valid_source_ids, result)
+    _check_source_ids(normalized, valid_source_ids, result)
+    _check_value_wrappers(normalized, aggregate_lookup, result)
+    _check_evidence_type(normalized, result)
+    _check_migration_coherence(normalized, result)
+    _check_named_examples(normalized, result)
+    _check_falsification_structure(normalized, result)
+    _check_segment_constraints(normalized, result)
+    _check_trigger_types(normalized, result)
+    _check_category_reasoning(normalized, result)
 
     if result.errors:
         logger.warning("Synthesis validation FAILED for %s: %s", vendor_name, result.summary())
