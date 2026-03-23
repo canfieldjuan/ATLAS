@@ -20,6 +20,7 @@ from ...config import settings
 from ...services.vendor_target_selection import dedupe_vendor_target_rows
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from ._b2b_shared import _battle_card_company_is_display_safe
 from .b2b_vendor_briefing import build_gate_url
 from .campaign_audit import log_campaign_event
 
@@ -53,6 +54,7 @@ def _build_selling_context(
     booking_url: str = "",
     product_name: str = "",
     affiliate_url: str = "",
+    primary_blog_post: dict[str, Any] | None = None,
     blog_posts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build selling context without hard-coded fallbacks."""
@@ -67,6 +69,8 @@ def _build_selling_context(
         selling["product_name"] = product_name
     if affiliate_url:
         selling["affiliate_url"] = affiliate_url
+    if primary_blog_post:
+        selling["primary_blog_post"] = primary_blog_post
     if blog_posts:
         selling["blog_posts"] = blog_posts
     return selling
@@ -260,6 +264,379 @@ def _safe_float(val, default=None):
         return float(val)
     except (ValueError, TypeError):
         return default
+
+
+def _parse_json_object_field(val: Any) -> dict[str, Any]:
+    """Safely parse a JSONB field that may be a str, dict, or None."""
+    if isinstance(val, dict):
+        return val
+    if isinstance(val, str):
+        try:
+            parsed = json.loads(val)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _dedupe_texts(values: list[str], max_items: int) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        marker = text.lower()
+        if marker in seen:
+            continue
+        seen.add(marker)
+        deduped.append(text)
+        if len(deduped) >= max_items:
+            break
+    return deduped
+
+
+def _briefing_text_list(
+    items: Any, *, keys: tuple[str, ...], max_items: int = 5,
+) -> list[str]:
+    values: list[str] = []
+    if not isinstance(items, list):
+        return values
+    for item in items:
+        if isinstance(item, str):
+            values.append(item)
+            continue
+        if not isinstance(item, dict):
+            continue
+        for key in keys:
+            text = str(item.get(key) or "").strip()
+            if text:
+                values.append(text)
+                break
+    return _dedupe_texts(values, max_items)
+
+
+def _briefing_context_from_data(briefing_data: Any) -> dict[str, Any]:
+    """Extract a compact campaign-safe summary from persisted vendor briefings."""
+    briefing = _parse_json_object_field(briefing_data)
+    if not briefing:
+        return {}
+
+    context: dict[str, Any] = {}
+    for field in (
+        "account_pressure_summary",
+        "timing_summary",
+        "segment_targeting_summary",
+        "trend",
+        "category",
+    ):
+        text = str(briefing.get(field) or "").strip()
+        if text:
+            context[field] = text
+
+    summary = str(
+        briefing.get("executive_summary")
+        or briefing.get("headline")
+        or briefing.get("profile_summary")
+        or ""
+    ).strip()
+    if summary:
+        context["executive_summary"] = summary
+
+    account_names = _briefing_text_list(
+        briefing.get("priority_account_names") or briefing.get("named_accounts"),
+        keys=("account_name", "company_name", "name"),
+    )
+    if account_names:
+        context["priority_account_names"] = account_names
+
+    displacement = _briefing_text_list(
+        briefing.get("top_displacement_targets"),
+        keys=("name", "vendor", "opponent"),
+    )
+    if displacement:
+        context["top_displacement_targets"] = displacement
+
+    feature_gaps = _briefing_text_list(
+        briefing.get("top_feature_gaps"),
+        keys=("feature", "name", "gap"),
+    )
+    if feature_gaps:
+        context["top_feature_gaps"] = feature_gaps
+
+    pain_labels = _briefing_text_list(
+        briefing.get("pain_labels") or briefing.get("pain_breakdown"),
+        keys=("label", "category", "pain_category"),
+    )
+    if pain_labels:
+        context["pain_labels"] = pain_labels
+
+    return context
+
+
+_CAMPAIGN_WORD_RE = re.compile(r"[a-z0-9]+")
+_COMPARISON_TOPIC_TYPES = {
+    "vendor_showdown",
+    "vendor_alternative",
+    "migration_guide",
+    "switching_story",
+    "best_fit_guide",
+    "vendor_deep_dive",
+}
+
+
+def _campaign_tokenize_text(value: str) -> list[str]:
+    return _CAMPAIGN_WORD_RE.findall((value or "").lower())
+
+
+def _campaign_text_matches_term(text: str, term: str) -> bool:
+    hay = _campaign_tokenize_text(text)
+    needle = _campaign_tokenize_text(term)
+    if not hay or not needle:
+        return False
+    if len(needle) == 1:
+        return needle[0] in hay
+    for idx in range(0, len(hay) - len(needle) + 1):
+        if hay[idx:idx + len(needle)] == needle:
+            return True
+    return False
+
+
+def _comparison_candidates_from_context(context: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for item in context.get("recommended_alternatives") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("vendor_name") or "").strip()
+        if not name or name.lower() in seen:
+            continue
+        seen.add(name.lower())
+        candidates.append({
+            "vendor_name": name,
+            "source": "recommended_alternative",
+            "selection_reason": str(item.get("reasoning") or item.get("profile_summary") or "").strip(),
+        })
+
+    for item in context.get("competitors_considering") or []:
+        if isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+            reason = str(item.get("reason") or "").strip()
+        else:
+            name = str(item or "").strip()
+            reason = ""
+        if not name or name.lower() in seen:
+            continue
+        seen.add(name.lower())
+        candidates.append({
+            "vendor_name": name,
+            "source": "competitor_considering",
+            "selection_reason": reason,
+        })
+
+    return candidates
+
+
+def _prioritize_blog_posts_for_context(
+    blog_posts: list[dict[str, Any]],
+    *,
+    incumbent_vendor: str,
+    candidates: list[dict[str, Any]],
+    pain_terms: list[str],
+) -> list[dict[str, Any]]:
+    scored: list[tuple[int, int, dict[str, Any]]] = []
+    primary_vendor = str((candidates[0] or {}).get("vendor_name") or "").strip() if candidates else ""
+
+    for idx, post in enumerate(blog_posts or []):
+        if not isinstance(post, dict):
+            continue
+        text = " ".join(
+            str(post.get(field) or "").strip()
+            for field in ("title", "url", "topic_type")
+        )
+        score = 0
+        primary_vendor_match = bool(primary_vendor and _campaign_text_matches_term(text, primary_vendor))
+        incumbent_vendor_match = bool(incumbent_vendor and _campaign_text_matches_term(text, incumbent_vendor))
+        pain_match = any(_campaign_text_matches_term(text, term) for term in pain_terms)
+        if primary_vendor_match:
+            score += 6
+        if incumbent_vendor_match:
+            score += 4
+        if (
+            str(post.get("topic_type") or "").strip() in _COMPARISON_TOPIC_TYPES
+            and (primary_vendor_match or incumbent_vendor_match or pain_match)
+        ):
+            score += 3
+        if pain_match:
+            score += 2
+        if score <= 0:
+            continue
+        scored.append((score, -idx, post))
+
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [post for _, _, post in scored]
+
+
+def _build_comparison_asset(
+    context: dict[str, Any],
+    blog_posts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    company_name = str(context.get("company") or "").strip()
+    incumbent_vendor = str(context.get("churning_from") or "").strip()
+    pain_terms = [
+        str(item.get("category") or "").strip()
+        for item in context.get("pain_categories") or []
+        if isinstance(item, dict) and str(item.get("category") or "").strip()
+    ]
+    candidates = _comparison_candidates_from_context(context)
+    ranked_posts = _prioritize_blog_posts_for_context(
+        blog_posts,
+        incumbent_vendor=incumbent_vendor,
+        candidates=candidates,
+        pain_terms=pain_terms,
+    )
+    primary_candidate = candidates[0] if candidates else {}
+    primary_post = ranked_posts[0] if ranked_posts else None
+    company_safe = _battle_card_company_is_display_safe(
+        company_name,
+        current_vendor=incumbent_vendor,
+        role=context.get("role_type") or context.get("reviewer_title"),
+        company_size=context.get("company_size") or context.get("seat_count"),
+        buying_stage=context.get("buying_stage") or context.get("decision_timeline"),
+    )
+    reasons = []
+    if company_safe:
+        reasons.append("named_company")
+    if pain_terms:
+        reasons.append("pain_signal")
+    if primary_candidate.get("vendor_name"):
+        reasons.append("comparison_vendor")
+    if primary_post:
+        reasons.append("blog_asset")
+
+    return {
+        "qualified": bool(company_safe and pain_terms and primary_candidate.get("vendor_name") and primary_post),
+        "qualification_reasons": reasons,
+        "company_safe": company_safe,
+        "incumbent_vendor": incumbent_vendor,
+        "alternative_vendor": primary_candidate.get("vendor_name"),
+        "selection_source": primary_candidate.get("source"),
+        "selection_reason": primary_candidate.get("selection_reason"),
+        "pain_categories": pain_terms[:3],
+        "primary_blog_post": primary_post,
+        "supporting_blog_posts": ranked_posts[:3],
+    }
+
+
+def _evaluate_outbound_qualification(
+    comparison_asset: dict[str, Any],
+    *,
+    require_display_safe_company: bool,
+    require_primary_blog_post: bool,
+    min_pain_categories: int,
+) -> dict[str, Any]:
+    pain_categories = [
+        str(item).strip()
+        for item in comparison_asset.get("pain_categories") or []
+        if str(item).strip()
+    ]
+    checks = [
+        ("display_safe_company", (not require_display_safe_company) or bool(comparison_asset.get("company_safe"))),
+        ("pain_categories", len(pain_categories) >= min_pain_categories),
+        ("alternative_vendor", bool(comparison_asset.get("alternative_vendor"))),
+        ("primary_blog_post", (not require_primary_blog_post) or bool(comparison_asset.get("primary_blog_post"))),
+    ]
+    passed_checks = [name for name, passed in checks if passed]
+    missing_checks = [name for name, passed in checks if not passed]
+    return {
+        "qualified": not missing_checks,
+        "passed_checks": passed_checks,
+        "missing_checks": missing_checks,
+        "pain_category_count": len(pain_categories),
+    }
+
+
+async def _prepare_churning_company_context(
+    pool,
+    *,
+    best: dict[str, Any],
+    opps: list[dict[str, Any]],
+    partner_index: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    cfg = settings.b2b_campaign
+    base_context = _build_company_context(best, opps)
+    base_context["opportunity_source"] = best.get("opportunity_source")
+
+    try:
+        from ...services.b2b.product_matching import match_products
+
+        matches = await match_products(
+            churning_from=best["vendor_name"],
+            pain_categories=base_context["pain_categories"],
+            company_size=best.get("seat_count"),
+            industry=best.get("industry"),
+            pool=pool,
+            limit=3,
+        )
+        if matches:
+            has_explicit_alternatives = bool(base_context.get("competitors_considering"))
+            if best.get("opportunity_source") == "accounts_in_motion" and has_explicit_alternatives:
+                base_context["supplemental_recommended_alternatives"] = matches
+            else:
+                base_context["recommended_alternatives"] = matches
+    except Exception:
+        logger.debug("Product matching unavailable, continuing without recommendations")
+
+    pains = [
+        item["category"]
+        for item in base_context.get("pain_categories", [])
+        if item.get("category")
+    ]
+    alternatives = [
+        item.get("vendor_name")
+        for item in base_context.get("recommended_alternatives", [])
+        if isinstance(item, dict) and item.get("vendor_name")
+    ]
+    if not alternatives:
+        alternatives = [
+            item.get("name") or item
+            for item in base_context.get("competitors_considering", [])
+            if (item.get("name") if isinstance(item, dict) else item)
+        ]
+
+    blog_posts = await _fetch_blog_posts(
+        pool,
+        pipeline="b2b",
+        vendor_name=base_context.get("churning_from"),
+        category=base_context.get("category"),
+        pain_categories=pains[:3] or None,
+        alternative_vendors=alternatives[:3] or None,
+        include_drafts=True,
+    )
+    comparison_asset = _build_comparison_asset(base_context, blog_posts)
+    qualification = _evaluate_outbound_qualification(
+        comparison_asset,
+        require_display_safe_company=cfg.require_display_safe_company,
+        require_primary_blog_post=cfg.require_primary_blog_post,
+        min_pain_categories=cfg.min_pain_categories,
+    )
+    comparison_asset["qualified"] = qualification["qualified"]
+    comparison_asset["qualification_reasons"] = qualification["passed_checks"]
+    comparison_asset["missing_requirements"] = qualification["missing_checks"]
+    comparison_asset["qualification_details"] = qualification
+    base_context["comparison_asset"] = comparison_asset
+
+    ordered_blog_posts = comparison_asset.get("supporting_blog_posts") or blog_posts
+    primary_blog_post = comparison_asset.get("primary_blog_post")
+    partner = _match_partner(base_context, partner_index) if partner_index else None
+    return {
+        "base_context": base_context,
+        "qualification": qualification,
+        "primary_blog_post": primary_blog_post,
+        "ordered_blog_posts": ordered_blog_posts,
+        "partner": partner,
+    }
 
 
 from ._blog_matching import fetch_relevant_blog_posts as _fetch_blog_posts
@@ -561,6 +938,9 @@ async def generate_campaigns(
     vendor_filter: str | None = None,
     company_filter: str | None = None,
     target_mode: str | None = None,
+    force: bool = False,
+    ignore_recent_dedup: bool = False,
+    ignore_briefing_gate: bool = False,
 ) -> dict[str, Any]:
     """Core generation logic, shared by autonomous task and manual API trigger.
 
@@ -571,6 +951,8 @@ async def generate_campaigns(
     """
     cfg = settings.b2b_campaign
     mode = target_mode or cfg.target_mode
+    bypass_recent_dedup = force or ignore_recent_dedup
+    bypass_briefing_gate = force or ignore_briefing_gate
 
     # Load calibration weights into cache (best-effort, falls back to static defaults)
     await load_calibration_weights()
@@ -578,16 +960,152 @@ async def generate_campaigns(
     if mode == "vendor_retention":
         return await _generate_vendor_campaigns(
             pool, min_score, limit, vendor_filter, company_filter,
+            bypass_briefing_gate=bypass_briefing_gate,
+            bypass_recent_dedup=bypass_recent_dedup,
         )
     elif mode == "challenger_intel":
         return await _generate_challenger_campaigns(
             pool, min_score, limit, vendor_filter, company_filter,
+            bypass_briefing_gate=bypass_briefing_gate,
+            bypass_recent_dedup=bypass_recent_dedup,
         )
 
     # Default: churning_company (original behavior)
     return await _generate_churning_company_campaigns(
         pool, min_score, limit, vendor_filter, company_filter,
+        bypass_recent_dedup=bypass_recent_dedup,
     )
+
+
+async def list_churning_company_review_candidates(
+    pool,
+    *,
+    min_score: int,
+    max_score: int,
+    limit: int,
+    vendor_filter: str | None = None,
+    company_filter: str | None = None,
+    qualified_only: bool = True,
+    ignore_recent_dedup: bool = False,
+) -> dict[str, Any]:
+    cfg = settings.b2b_campaign
+    fetched = await _fetch_accounts_in_motion_opportunities(
+        pool,
+        min_score=min_score,
+        limit=min(max(limit * 5, limit), 500),
+        vendor_filter=vendor_filter,
+        company_filter=company_filter,
+    )
+    by_company: dict[str, list[dict[str, Any]]] = {}
+    for row in fetched:
+        score = int(row.get("opportunity_score") or 0)
+        if score > max_score:
+            continue
+        company = str(row.get("reviewer_company") or "").strip()
+        if not company:
+            continue
+        by_company.setdefault(company.lower(), []).append(row)
+
+    partner_index = await _fetch_affiliate_partners(pool)
+    candidates: list[dict[str, Any]] = []
+    missing_requirements: dict[str, int] = {}
+    dedup_blocked = 0
+    evaluated = 0
+
+    for company_key, opps in by_company.items():
+        company_name = opps[0].get("reviewer_company") or opps[0]["vendor_name"]
+        recent_campaign_count = 0
+        if not ignore_recent_dedup:
+            recent_campaign_count = int(await pool.fetchval(
+                """
+                SELECT COUNT(*) FROM b2b_campaigns
+                WHERE LOWER(company_name) = $1
+                  AND created_at > NOW() - make_interval(days => $2)
+                """,
+                company_key, cfg.dedup_days,
+            ) or 0)
+        if recent_campaign_count > 0 and qualified_only:
+            dedup_blocked += 1
+            continue
+
+        best = max(opps, key=lambda item: item["opportunity_score"])
+        prepared = await _prepare_churning_company_context(
+            pool,
+            best=best,
+            opps=opps,
+            partner_index=partner_index,
+        )
+        evaluated += 1
+        qualification = prepared["qualification"]
+        for reason in qualification["missing_checks"]:
+            missing_requirements[reason] = missing_requirements.get(reason, 0) + 1
+        if qualified_only and not qualification["qualified"]:
+            continue
+
+        base_context = prepared["base_context"]
+        partner = prepared["partner"]
+        comparison_asset = base_context.get("comparison_asset") or {}
+        candidate = {
+            "company_name": company_name,
+            "vendor_name": best["vendor_name"],
+            "product_category": best.get("product_category"),
+            "opportunity_score": best["opportunity_score"],
+            "urgency_score": float(best.get("urgency") or 0),
+            "role_type": base_context.get("role_type"),
+            "reviewer_title": base_context.get("reviewer_title"),
+            "industry": base_context.get("industry"),
+            "company_size": base_context.get("company_size"),
+            "seat_count": best.get("seat_count"),
+            "buying_stage": best.get("buying_stage"),
+            "pain_categories": base_context.get("pain_categories") or [],
+            "key_quotes": base_context.get("key_quotes") or [],
+            "competitors_considering": base_context.get("competitors_considering") or [],
+            "comparison_asset": comparison_asset,
+            "primary_blog_post": prepared["primary_blog_post"],
+            "supporting_blog_posts": prepared["ordered_blog_posts"],
+            "partner": (
+                {
+                    "id": partner["id"],
+                    "product_name": partner.get("product_name"),
+                    "affiliate_url": partner.get("affiliate_url"),
+                }
+                if partner else None
+            ),
+            "qualification": qualification,
+            "recent_campaign_count": recent_campaign_count,
+            "dedup_blocked": recent_campaign_count > 0,
+            "opportunity_source": best.get("opportunity_source") or "accounts_in_motion",
+            "generate_request": {
+                "target_mode": "churning_company",
+                "company_name": company_name,
+                "vendor_name": best["vendor_name"],
+                "min_score": best["opportunity_score"],
+                "limit": 1,
+                "force": False,
+            },
+        }
+        candidates.append(candidate)
+
+    candidates.sort(
+        key=lambda item: (item["opportunity_score"], item["urgency_score"]),
+        reverse=True,
+    )
+    visible = candidates[:limit]
+    return {
+        "count": len(visible),
+        "candidates": visible,
+        "summary": {
+            "min_score": min_score,
+            "max_score": max_score,
+            "qualified_only": qualified_only,
+            "ignore_recent_dedup": ignore_recent_dedup,
+            "evaluated": evaluated,
+            "qualified": sum(1 for item in candidates if item["qualification"]["qualified"]),
+            "unqualified": max(evaluated - sum(1 for item in candidates if item["qualification"]["qualified"]), 0),
+            "dedup_blocked": dedup_blocked,
+            "missing_requirements": missing_requirements,
+        },
+    }
 
 
 async def _generate_churning_company_campaigns(
@@ -596,17 +1114,27 @@ async def _generate_churning_company_campaigns(
     limit: int,
     vendor_filter: str | None,
     company_filter: str | None,
+    bypass_recent_dedup: bool = False,
 ) -> dict[str, Any]:
     """Original generation path: outreach to the churning company."""
     cfg = settings.b2b_campaign
 
-    # 1. Fetch top opportunities from enriched reviews
-    opportunities = await _fetch_opportunities(
+    # 1. Prefer named account opportunities, then fall back to review rows.
+    opportunities = await _fetch_accounts_in_motion_opportunities(
         pool, min_score, limit,
         vendor_filter=vendor_filter,
         company_filter=company_filter,
-        dm_only=cfg.require_decision_maker,
     )
+    opportunity_source = "accounts_in_motion"
+    if not opportunities:
+        opportunities = await _fetch_opportunities(
+            pool, min_score, limit,
+            vendor_filter=vendor_filter,
+            company_filter=company_filter,
+            dm_only=cfg.require_decision_maker,
+        )
+        opportunity_source = "reviews"
+
     if not opportunities:
         return {"generated": 0, "skipped": 0, "failed": 0, "companies": 0}
 
@@ -623,11 +1151,23 @@ async def _generate_churning_company_campaigns(
         if key not in by_company:
             by_company[key] = []
         by_company[key].append(opp)
+    if not by_company:
+        return {
+            "generated": 0,
+            "skipped": skipped_no_company,
+            "failed": 0,
+            "companies": 0,
+            "candidate_companies": 0,
+            "opportunity_source": opportunity_source,
+        }
 
     # 3. Dedup: skip companies with recent campaigns
     companies_to_process = []
     for company_key, opps in by_company.items():
         company_name = opps[0].get("reviewer_company") or opps[0]["vendor_name"]
+        if bypass_recent_dedup:
+            companies_to_process.append((company_name, opps))
+            continue
         existing = await pool.fetchval(
             """
             SELECT COUNT(*) FROM b2b_campaigns
@@ -664,8 +1204,11 @@ async def _generate_churning_company_campaigns(
     batch_id = f"batch_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
     generated = 0
     failed = 0
-    skipped_no_partner = 0
+    skipped_unqualified = 0
+    generated_without_partner = 0
     sequences_created = 0
+    qualified_companies = 0
+    qualification_summary: dict[str, int] = {}
 
     # Fetch affiliate partners for sender identity matching
     partner_index = await _fetch_affiliate_partners(pool)
@@ -673,46 +1216,55 @@ async def _generate_churning_company_campaigns(
     personas_skipped = 0
 
     for company_name, opps in companies_to_process:
-        # Build base context from best opportunity in the group
         best = max(opps, key=lambda o: o["opportunity_score"])
-        base_context = _build_company_context(best, opps)
-
-        # Inject product profile recommendations (if profiles exist)
-        try:
-            from ...services.b2b.product_matching import match_products
-            matches = await match_products(
-                churning_from=best["vendor_name"],
-                pain_categories=base_context["pain_categories"],
-                company_size=best.get("seat_count"),
-                industry=best.get("industry"),
-                pool=pool,
-                limit=3,
+        prepared = await _prepare_churning_company_context(
+            pool,
+            best=best,
+            opps=opps,
+            partner_index=partner_index,
+        )
+        base_context = prepared["base_context"]
+        qualification = prepared["qualification"]
+        primary_blog_post = prepared["primary_blog_post"]
+        ordered_blog_posts = prepared["ordered_blog_posts"]
+        if not qualification["qualified"]:
+            skipped_unqualified += 1
+            for reason in qualification["missing_checks"]:
+                qualification_summary[reason] = qualification_summary.get(reason, 0) + 1
+            logger.info(
+                "Skipping churning-company campaign for %s; qualification failed: %s",
+                company_name,
+                ", ".join(qualification["missing_checks"]) or "unknown",
             )
-            if matches:
-                base_context["recommended_alternatives"] = matches
-        except Exception:
-            logger.debug("Product matching unavailable, continuing without recommendations")
-
-        # Match to an affiliate partner (Gap 4: sender identity)
-        partner = _match_partner(base_context, partner_index)
-        if not partner:
-            logger.debug("No partner match for %s, skipping", company_name)
-            skipped_no_partner += 1
             continue
+        qualified_companies += 1
 
-        # Inject selling context into base
-        blog_urls = await _fetch_blog_posts(
-            pool, pipeline="b2b", vendor_name=base_context.get("churning_from"), category=base_context.get("category"),
-        )
-        base_context["selling"] = _build_selling_context(
-            sender_name=cfg.default_sender_name,
-            sender_title=cfg.default_sender_title,
-            sender_company=cfg.default_sender_company,
-            product_name=partner["product_name"],
-            affiliate_url=partner["affiliate_url"],
-            blog_posts=blog_urls,
-        )
-        partner_id = partner["id"]
+        partner = prepared["partner"]
+        partner_id: str | None = None
+        if partner:
+            base_context["selling"] = _build_selling_context(
+                sender_name=cfg.default_sender_name,
+                sender_title=cfg.default_sender_title,
+                sender_company=cfg.default_sender_company,
+                product_name=partner["product_name"],
+                affiliate_url=partner["affiliate_url"],
+                primary_blog_post=primary_blog_post,
+                blog_posts=ordered_blog_posts,
+            )
+            partner_id = partner["id"]
+        else:
+            generated_without_partner += 1
+            logger.info(
+                "No partner match for %s; generating with generic selling context",
+                company_name,
+            )
+            base_context["selling"] = _build_selling_context(
+                sender_name=cfg.default_sender_name,
+                sender_title=cfg.default_sender_title,
+                sender_company=cfg.default_sender_company,
+                primary_blog_post=primary_blog_post,
+                blog_posts=ordered_blog_posts,
+            )
 
         # Generate per-persona sequences
         for persona in cfg.personas:
@@ -792,7 +1344,7 @@ async def _generate_churning_company_campaigns(
                             "draft",
                             persona_batch_id,
                             llm_model_name,
-                            _uuid.UUID(partner_id),
+                            _uuid.UUID(partner_id) if partner_id else None,
                             persona_context.get("industry"),
                             "churning_company",
                             json.dumps(best.get("score_components")),
@@ -826,21 +1378,28 @@ async def _generate_churning_company_campaigns(
                     )
 
     logger.info(
-        "Campaign generation (churning_company): %d generated, %d failed, %d skipped (no partner), "
+        "Campaign generation (churning_company): %d generated, %d failed, %d generated without partner, "
         "%d personas skipped, %d sequences from %d companies",
-        generated, failed, skipped_no_partner, personas_skipped, sequences_created, len(companies_to_process),
+        generated, failed, generated_without_partner, personas_skipped, sequences_created, len(companies_to_process),
     )
 
     return {
         "generated": generated,
         "failed": failed,
-        "skipped": len(by_company) - len(companies_to_process),
-        "skipped_no_partner": skipped_no_partner,
+        "skipped": (len(by_company) - len(companies_to_process)) + skipped_no_company + skipped_unqualified,
+        "skipped_dedup": len(by_company) - len(companies_to_process),
+        "skipped_no_company": skipped_no_company,
+        "skipped_unqualified": skipped_unqualified,
+        "skipped_no_partner": 0,
+        "generated_without_partner": generated_without_partner,
         "personas_skipped": personas_skipped,
         "sequences_created": sequences_created,
-        "companies": len(companies_to_process),
+        "companies": qualified_companies,
+        "candidate_companies": len(companies_to_process),
+        "qualification_summary": qualification_summary,
         "batch_id": batch_id,
         "target_mode": "churning_company",
+        "opportunity_source": opportunity_source,
     }
 
 
@@ -1029,6 +1588,8 @@ async def _generate_vendor_campaigns(
     limit: int,
     vendor_filter: str | None,
     company_filter: str | None = None,
+    bypass_briefing_gate: bool = False,
+    bypass_recent_dedup: bool = False,
 ) -> dict[str, Any]:
     """Generate campaigns targeting vendor CS/Product leaders with churn intelligence."""
     cfg = settings.b2b_campaign
@@ -1073,35 +1634,39 @@ async def _generate_vendor_campaigns(
 
         # B->A sequencing: require a briefing before campaign generation
         briefing_row = await pool.fetchrow(
-            """SELECT id, created_at FROM b2b_vendor_briefings
+            """SELECT id, created_at, briefing_data FROM b2b_vendor_briefings
                WHERE LOWER(vendor_name) = LOWER($1)
+                 AND target_mode = $2
                  AND status = 'sent'
                ORDER BY created_at DESC LIMIT 1""",
             vendor_name,
+            "vendor_retention",
         )
-        if not briefing_row:
+        if not briefing_row and not bypass_briefing_gate:
             skipped += 1
             continue
-        days_since_briefing = (
-            datetime.now(timezone.utc) - briefing_row["created_at"]
-        ).days
-        if days_since_briefing < 7:
-            skipped += 1
-            continue
+        if briefing_row and not bypass_briefing_gate:
+            days_since_briefing = (
+                datetime.now(timezone.utc) - briefing_row["created_at"]
+            ).days
+            if days_since_briefing < 7:
+                skipped += 1
+                continue
 
         # Dedup: skip vendor if campaign sent within dedup_days
-        existing = await pool.fetchval(
-            """
-            SELECT COUNT(*) FROM b2b_campaigns
-            WHERE company_name ILIKE $1
-              AND target_mode = 'vendor_retention'
-              AND created_at > NOW() - make_interval(days => $2)
-            """,
-            vendor_name, cfg.dedup_days,
-        )
-        if existing > 0:
-            skipped += 1
-            continue
+        if not bypass_recent_dedup:
+            existing = await pool.fetchval(
+                """
+                SELECT COUNT(*) FROM b2b_campaigns
+                WHERE company_name ILIKE $1
+                  AND target_mode = 'vendor_retention'
+                  AND created_at > NOW() - make_interval(days => $2)
+                """,
+                vendor_name, cfg.dedup_days,
+            )
+            if existing > 0:
+                skipped += 1
+                continue
 
         # Group signals: opportunities where vendor_name matches this target
         products = target.get("products_tracked") or []
@@ -1118,6 +1683,11 @@ async def _generate_vendor_campaigns(
 
         # Build vendor-scoped context
         vendor_ctx = _build_vendor_context(vendor_name, vendor_signals)
+        briefing_context = _briefing_context_from_data(
+            briefing_row.get("briefing_data") if briefing_row else None,
+        )
+        if briefing_context:
+            vendor_ctx["briefing_context"] = briefing_context
         vendor_ctx["signal_summary"]["trend_vs_last_month"] = await _compute_vendor_trend(
             pool, vendor_name, products,
         )
@@ -1140,8 +1710,13 @@ async def _generate_vendor_campaigns(
         review_ids = [o["review_id"] for o in vendor_signals if o.get("review_id")]
 
         # Generate for email_cold and email_followup
+        _vpains = [p["category"] for p in (vendor_ctx.get("signal_summary") or {}).get("pain_distribution", []) if p.get("category")]
+        _vcomps = [c["name"] for c in (vendor_ctx.get("signal_summary") or {}).get("competitor_distribution", []) if c.get("name")]
         vendor_blog_urls = await _fetch_blog_posts(
             pool, pipeline="b2b", vendor_name=vendor_name, category=vendor_ctx.get("category"),
+            pain_categories=_vpains[:3] or None,
+            alternative_vendors=_vcomps[:3] or None,
+            include_drafts=True,
         )
         # Gate URL for vendor-specific report (instead of generic booking page)
         vendor_gate_url = build_gate_url(vendor_name)
@@ -1408,6 +1983,8 @@ async def _generate_challenger_campaigns(
     limit: int,
     vendor_filter: str | None,
     company_filter: str | None = None,
+    bypass_briefing_gate: bool = False,
+    bypass_recent_dedup: bool = False,
 ) -> dict[str, Any]:
     """Generate campaigns targeting challenger Sales/Competitive Intel leaders."""
     cfg = settings.b2b_campaign
@@ -1452,35 +2029,39 @@ async def _generate_challenger_campaigns(
 
         # B->A sequencing: require a briefing before campaign generation
         briefing_row = await pool.fetchrow(
-            """SELECT id, created_at FROM b2b_vendor_briefings
+            """SELECT id, created_at, briefing_data FROM b2b_vendor_briefings
                WHERE LOWER(vendor_name) = LOWER($1)
+                 AND target_mode = $2
                  AND status = 'sent'
                ORDER BY created_at DESC LIMIT 1""",
             challenger_name,
+            "challenger_intel",
         )
-        if not briefing_row:
+        if not briefing_row and not bypass_briefing_gate:
             skipped += 1
             continue
-        days_since_briefing = (
-            datetime.now(timezone.utc) - briefing_row["created_at"]
-        ).days
-        if days_since_briefing < 7:
-            skipped += 1
-            continue
+        if briefing_row and not bypass_briefing_gate:
+            days_since_briefing = (
+                datetime.now(timezone.utc) - briefing_row["created_at"]
+            ).days
+            if days_since_briefing < 7:
+                skipped += 1
+                continue
 
         # Dedup
-        existing = await pool.fetchval(
-            """
-            SELECT COUNT(*) FROM b2b_campaigns
-            WHERE company_name ILIKE $1
-              AND target_mode = 'challenger_intel'
-              AND created_at > NOW() - make_interval(days => $2)
-            """,
-            challenger_name, cfg.dedup_days,
-        )
-        if existing > 0:
-            skipped += 1
-            continue
+        if not bypass_recent_dedup:
+            existing = await pool.fetchval(
+                """
+                SELECT COUNT(*) FROM b2b_campaigns
+                WHERE company_name ILIKE $1
+                  AND target_mode = 'challenger_intel'
+                  AND created_at > NOW() - make_interval(days => $2)
+                """,
+                challenger_name, cfg.dedup_days,
+            )
+            if existing > 0:
+                skipped += 1
+                continue
 
         # Find signals where this challenger is mentioned as a competitor being considered
         challenger_signals = []
@@ -1510,6 +2091,11 @@ async def _generate_challenger_campaigns(
 
         # Build challenger-scoped context
         challenger_ctx = _build_challenger_context(challenger_name, challenger_signals)
+        briefing_context = _briefing_context_from_data(
+            briefing_row.get("briefing_data") if briefing_row else None,
+        )
+        if briefing_context:
+            challenger_ctx["briefing_context"] = briefing_context
 
         # Fetch incumbent archetypes (the vendors losing customers to this challenger)
         incumbent_names = [
@@ -1533,8 +2119,13 @@ async def _generate_challenger_campaigns(
         best = max(challenger_signals, key=lambda o: o["opportunity_score"])
         review_ids = [o["review_id"] for o in challenger_signals if o.get("review_id")]
 
+        _cpains = [p["category"] for p in (challenger_ctx.get("signal_summary") or {}).get("pain_driving_switch", []) if p.get("category")]
+        _cincumbents = [c["name"] for c in (challenger_ctx.get("signal_summary") or {}).get("incumbents_losing", []) if c.get("name")]
         challenger_blog_urls = await _fetch_blog_posts(
             pool, pipeline="b2b", vendor_name=challenger_name, category=challenger_ctx.get("category"),
+            pain_categories=_cpains[:3] or None,
+            alternative_vendors=_cincumbents[:3] or None,
+            include_drafts=True,
         )
         # Gate URL for challenger-specific report
         challenger_gate_url = build_gate_url(challenger_name)
@@ -1697,7 +2288,10 @@ async def _fetch_opportunities(
         idx += 1
 
     if company_filter:
-        extra_conditions += f" AND r.reviewer_company ILIKE '%' || ${idx} || '%'"
+        extra_conditions += (
+            f" AND COALESCE(NULLIF(BTRIM(r.reviewer_company), ''), "
+            f"NULLIF(BTRIM(r.reviewer_company_norm), '')) ILIKE '%' || ${idx} || '%'"
+        )
         params.append(company_filter)
         idx += 1
 
@@ -1706,7 +2300,10 @@ async def _fetch_opportunities(
 
     rows = await pool.fetch(
         f"""
-        SELECT r.id AS review_id, r.vendor_name, r.reviewer_company, r.product_category,
+        SELECT r.id AS review_id,
+               r.vendor_name,
+               COALESCE(NULLIF(BTRIM(r.reviewer_company), ''), NULLIF(BTRIM(r.reviewer_company_norm), '')) AS reviewer_company,
+               r.product_category,
                (r.enrichment->>'urgency_score')::numeric AS urgency,
                (r.enrichment->'reviewer_context'->>'decision_maker')::boolean AS is_dm,
                r.enrichment->'buyer_authority'->>'role_type' AS role_type,
@@ -1734,7 +2331,7 @@ async def _fetch_opportunities(
               AND sent_at > NOW() - INTERVAL '90 days'
         ) prior_eng ON true
         WHERE r.enrichment_status = 'enriched'
-          AND r.enriched_at > NOW() - make_interval(days => $1)
+          AND COALESCE(r.reviewed_at, r.imported_at, r.enriched_at) > NOW() - make_interval(days => $1)
           AND (r.enrichment->>'urgency_score')::numeric >= $2
           {extra_conditions}
         ORDER BY (r.enrichment->>'urgency_score')::numeric DESC
@@ -1780,6 +2377,97 @@ async def _fetch_opportunities(
         reverse=True,
     )
     return opportunities[:limit]
+
+
+async def _fetch_accounts_in_motion_opportunities(
+    pool,
+    min_score: int,
+    limit: int,
+    vendor_filter: str | None = None,
+    company_filter: str | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch named company targets from the latest accounts-in-motion reports."""
+    rows = await pool.fetch(
+        """
+        SELECT DISTINCT ON (LOWER(vendor_filter))
+               vendor_filter, intelligence_data
+        FROM b2b_intelligence
+        WHERE report_type = 'accounts_in_motion'
+          AND vendor_filter IS NOT NULL
+        ORDER BY LOWER(vendor_filter), report_date DESC, created_at DESC
+        """
+    )
+    results: list[dict[str, Any]] = []
+    vendor_filter_lc = str(vendor_filter or "").lower()
+    company_filter_lc = str(company_filter or "").lower()
+
+    for row in rows:
+        vendor_name = str(row.get("vendor_filter") or "").strip()
+        if vendor_filter_lc and vendor_filter_lc not in vendor_name.lower():
+            continue
+        report = row.get("intelligence_data")
+        if isinstance(report, str):
+            try:
+                report = json.loads(report)
+            except (json.JSONDecodeError, TypeError):
+                report = {}
+        if not isinstance(report, dict):
+            continue
+        feature_gaps = _parse_json_field(report.get("feature_gaps"))
+        category = report.get("category")
+        for account in report.get("accounts") or []:
+            if not isinstance(account, dict):
+                continue
+            company = str(account.get("company") or "").strip()
+            if not company:
+                continue
+            if company_filter_lc and company_filter_lc not in company.lower():
+                continue
+            score = int(account.get("opportunity_score") or 0)
+            if score < min_score:
+                continue
+            quote = str(account.get("top_quote") or "").strip()
+            alternatives = [
+                {"name": str(name).strip(), "reason": ""}
+                for name in (account.get("alternatives_considering") or [])
+                if str(name).strip()
+            ]
+            review_ids = account.get("source_reviews") or []
+            results.append({
+                "review_id": review_ids[0] if review_ids else None,
+                "vendor_name": vendor_name or str(report.get("vendor") or "").strip(),
+                "reviewer_company": company,
+                "product_category": category,
+                "opportunity_score": score,
+                "urgency": account.get("urgency"),
+                "pain_json": (
+                    [{"category": account.get("pain_category"), "severity": "primary"}]
+                    if account.get("pain_category") else []
+                ),
+                "competitors": alternatives,
+                "quotable_phrases": [{"text": quote}] if quote else [],
+                "feature_gaps": feature_gaps,
+                "integration_stack": [],
+                "seat_count": account.get("seat_count"),
+                "contract_end": account.get("contract_end"),
+                "decision_timeline": account.get("decision_timeline"),
+                "buying_stage": account.get("buying_stage"),
+                "role_type": account.get("role_level"),
+                "industry": account.get("industry"),
+                "reviewer_title": account.get("title"),
+                "company_size_raw": account.get("company_size"),
+                "score_components": account.get("score_components") or {},
+                "opportunity_source": "accounts_in_motion",
+            })
+
+    results.sort(
+        key=lambda row: (
+            int(row.get("opportunity_score") or 0),
+            float(row.get("urgency") or 0),
+        ),
+        reverse=True,
+    )
+    return results[:limit]
 
 
 def _parse_json_field(val) -> list:
@@ -1854,6 +2542,7 @@ def _build_company_context(best: dict, all_opps: list[dict]) -> dict[str, Any]:
         "seat_count": best.get("seat_count"),
         "contract_end": best.get("contract_end"),
         "decision_timeline": best.get("decision_timeline"),
+        "buying_stage": best.get("buying_stage"),
         "role_type": best.get("role_type"),
         "industry": best.get("industry"),
         "reviewer_title": best.get("reviewer_title"),
@@ -1988,6 +2677,18 @@ def _match_partner(
     """
     by_product = partner_index["by_product"]
     by_category = partner_index["by_category"]
+
+    comparison_asset = context.get("comparison_asset") or {}
+    comparison_vendor = str(comparison_asset.get("alternative_vendor") or "").lower()
+    if comparison_vendor and comparison_vendor in by_product:
+        return by_product[comparison_vendor]
+
+    for alt in context.get("recommended_alternatives") or []:
+        if not isinstance(alt, dict):
+            continue
+        name = str(alt.get("vendor_name") or "").lower()
+        if name and name in by_product:
+            return by_product[name]
 
     # Try exact match on competitor names
     for comp in context.get("competitors_considering", []):

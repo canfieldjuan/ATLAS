@@ -33,6 +33,15 @@ You receive a JSON object with:
 - `selling`: Object with `{sender_name, sender_title, sender_company, booking_url}`
   - `selling.blog_posts` (optional): Array of `{title, url, topic_type}` -- published analysis posts relevant to this challenger's space. Full URLs ready to embed.
 - `incumbent_archetypes` (optional): Object mapping churn archetype to array of incumbent vendor names losing customers with that pattern. Example: `{"pricing_shock": ["Vendor A", "Vendor B"], "feature_gap": ["Vendor C"]}`. When present, indicates WHY the challenger is winning -- the incumbents' churn patterns reveal the market dynamics.
+- `briefing_context` (optional): Compact summary from the latest challenger briefing. May include:
+  - `executive_summary`
+  - `account_pressure_summary`
+  - `timing_summary`
+  - `segment_targeting_summary`
+  - `priority_account_names`
+  - `top_displacement_targets`
+  - `top_feature_gaps`
+  - `pain_labels`
 - `channel`: "email_cold" | "email_followup"
 - `cold_email_context` (only on `email_followup`): `{subject, body}` of the cold email already sent
 
@@ -127,5 +136,11 @@ Return a JSON object:
    - `leadership_redesign` / `acquisition_decay` incumbents: Frame leads as stability-seeking buyers. Emphasize product focus and roadmap continuity.
    - If multiple archetypes are present, lead with the one that has the most incumbents. Do not list all archetypes -- weave the dominant pattern into the narrative naturally.
    - Never name the archetype labels directly (e.g., do not say "pricing_shock pattern"). Translate into natural business language.
+
+26. **Use `briefing_context` to sharpen the narrative, not replace `signal_summary`.**
+   - If `account_pressure_summary` or `timing_summary` is present, use it to calibrate urgency and timing.
+   - If `top_feature_gaps` or `pain_labels` is present, use it to tighten the switching narrative.
+   - If `top_displacement_targets` is present, use it to sharpen the follow-up competitor angle.
+   - `priority_account_names` is internal targeting context only. Never reveal those names in the email.
 
 Return ONLY the JSON object, no markdown fences, no explanation.

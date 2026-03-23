@@ -28,9 +28,23 @@ from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from ...services.scraping.sources import VERIFIED_SOURCES, parse_source_allowlist
-from ._b2b_shared import _fetch_latest_evidence_vault
+from ._b2b_shared import (
+    _fetch_latest_evidence_vault,
+    _segment_targeting_summary,
+    _timing_summary_payload,
+    fetch_all_pool_layers,
+)
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_blog_post_generation")
+
+
+_PLACEHOLDER_RE = re.compile(r"\{\{([^{}]+)\}\}")
+_BLOCKQUOTE_RE = re.compile(r"^\s*>\s*(.+?)\s*$")
+_ANSWER_PREFIX_RE = re.compile(r"(?im)^(\s*)answer:\s*")
+_CRITICAL_BLOG_WARNINGS = {
+    "review_period_not_explicitly_mentioned",
+    "methodology_disclaimer_missing_self_selected",
+}
 
 
 def _blog_source_allowlist() -> list[str]:
@@ -72,6 +86,150 @@ class PostBlueprint:
     cta: dict[str, Any] | None = None
 
 
+def _reasoning_scalar(value: Any) -> Any:
+    """Unwrap a traced reasoning value when present."""
+    if isinstance(value, dict) and "value" in value:
+        return value.get("value")
+    return value
+
+
+def _reasoning_int(value: Any) -> int | None:
+    """Unwrap a traced reasoning value into an integer when possible."""
+    raw = _reasoning_scalar(value)
+    if raw in (None, ""):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        try:
+            return int(float(raw))
+        except (TypeError, ValueError):
+            return None
+
+
+def _blog_account_reasoning_stats(account_reasoning: dict[str, Any] | None) -> dict[str, Any]:
+    """Build deterministic account-pressure stats for blog blueprints."""
+    if not isinstance(account_reasoning, dict):
+        return {}
+    stats: dict[str, Any] = {}
+    summary = str(account_reasoning.get("market_summary") or "").strip()
+    if summary:
+        stats["account_pressure_summary"] = summary
+    for key in ("total_accounts", "high_intent_count", "active_eval_count"):
+        value = _reasoning_int(account_reasoning.get(key))
+        if value is not None:
+            stats[key] = value
+    names: list[str] = []
+    for item in account_reasoning.get("top_accounts") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    if names:
+        stats["priority_accounts"] = names[:3]
+    return stats
+
+
+def _blog_timing_reasoning_stats(timing_intelligence: dict[str, Any] | None) -> dict[str, Any]:
+    """Build deterministic timing stats for blog blueprints."""
+    if not isinstance(timing_intelligence, dict):
+        return {}
+    summary, metrics, triggers = _timing_summary_payload(timing_intelligence)
+    stats: dict[str, Any] = {}
+    if summary:
+        stats["timing_summary"] = summary
+    if metrics:
+        stats.update(metrics)
+    if triggers:
+        stats["priority_timing_triggers"] = triggers[:3]
+    sentiment_direction = str(timing_intelligence.get("sentiment_direction") or "").strip()
+    if sentiment_direction:
+        stats["sentiment_direction"] = sentiment_direction
+    best_window = str(timing_intelligence.get("best_timing_window") or "").strip()
+    if best_window:
+        stats["best_timing_window"] = best_window
+    return stats
+
+
+def _blog_segment_reasoning_stats(
+    segment_playbook: dict[str, Any] | None,
+    timing_intelligence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build deterministic segment-targeting stats for blog blueprints."""
+    if not isinstance(segment_playbook, dict):
+        return {}
+    stats: dict[str, Any] = {}
+    summary = _segment_targeting_summary(segment_playbook, timing_intelligence)
+    if summary:
+        stats["segment_targeting_summary"] = summary
+    segments: list[dict[str, Any]] = []
+    for item in segment_playbook.get("priority_segments") or []:
+        if not isinstance(item, dict):
+            continue
+        segment = str(item.get("segment") or "").strip()
+        if not segment:
+            continue
+        row: dict[str, Any] = {"segment": segment}
+        reach = _reasoning_scalar(item.get("estimated_reach"))
+        if reach not in (None, ""):
+            row["estimated_reach"] = reach
+        angle = str(item.get("best_opening_angle") or "").strip()
+        if angle:
+            row["best_opening_angle"] = angle
+        segments.append(row)
+    if segments:
+        stats["priority_segments"] = segments[:3]
+    return stats
+
+
+def _blog_migration_proof_stats(displacement_reasoning: dict[str, Any] | None) -> dict[str, Any]:
+    """Build deterministic migration-proof stats for blog blueprints."""
+    if not isinstance(displacement_reasoning, dict):
+        return {}
+    proof = displacement_reasoning.get("migration_proof")
+    if not isinstance(proof, dict):
+        return {}
+    stats: dict[str, Any] = {}
+    if "switching_is_real" in proof:
+        stats["switching_is_real"] = bool(proof.get("switching_is_real"))
+    evidence_type = str(proof.get("evidence_type") or "").strip()
+    if evidence_type:
+        stats["evidence_type"] = evidence_type
+    for key in (
+        "switch_volume",
+        "active_evaluation_volume",
+        "displacement_mention_volume",
+        "top_destination",
+        "primary_switch_driver",
+    ):
+        value = _reasoning_scalar(proof.get(key))
+        if value not in (None, "", []):
+            stats[key] = value
+    examples: list[str] = []
+    for item in proof.get("named_examples") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("company") or "").strip()
+        if name and name not in examples:
+            examples.append(name)
+    if examples:
+        stats["named_examples"] = examples[:3]
+    return stats
+
+
+def _blog_category_reasoning_stats(category_reasoning: dict[str, Any] | None) -> dict[str, Any]:
+    """Build deterministic category-reasoning stats for blog blueprints."""
+    if not isinstance(category_reasoning, dict):
+        return {}
+    stats: dict[str, Any] = {}
+    for key in ("market_regime", "narrative", "winner", "loser"):
+        value = str(category_reasoning.get(key) or "").strip()
+        if value:
+            stats[key] = value
+    return stats
+
+
 # -- CTA configuration --------------------------------------------
 
 _CTA_CONFIG: dict[str, dict[str, str]] = {
@@ -109,6 +267,306 @@ def _build_cta(topic_type: str, data_context: dict[str, Any]) -> dict[str, Any] 
         "vendor_filter": vendor,
         "category_filter": category,
     }
+
+
+def _inject_affiliate_links(blueprint: PostBlueprint, content: dict[str, Any]) -> None:
+    """Inject affiliate placeholders/URLs into markdown as proper links."""
+    body = str(content.get("content") or "")
+    if not body:
+        return
+
+    affiliate_url = str(blueprint.data_context.get("affiliate_url") or "").strip()
+    affiliate_slug = str(blueprint.data_context.get("affiliate_slug") or "").strip()
+    partner_info = blueprint.data_context.get("affiliate_partner", {})
+    if not isinstance(partner_info, dict):
+        partner_info = {}
+    partner_name = str(partner_info.get("name") or partner_info.get("product_name") or "").strip()
+
+    if not (affiliate_slug and affiliate_url):
+        return
+
+    md_link = f"[{partner_name}]({affiliate_url})" if partner_name else affiliate_url
+    body = body.replace(f"{{{{affiliate:{affiliate_slug}}}}}", md_link)
+    if affiliate_url in body:
+        body = re.sub(
+            r'(?<!\]\()' + re.escape(affiliate_url) + r'(?!\))',
+            md_link,
+            body,
+        )
+    content["content"] = body
+
+
+def _normalize_quote_text(text: Any) -> str:
+    raw = str(text or "")
+    raw = raw.replace("“", '"').replace("”", '"').replace("’", "'")
+    raw = raw.strip().strip('"').strip("'")
+    raw = re.sub(r"\s+", " ", raw)
+    raw = re.sub(r"[^a-z0-9 ]+", " ", raw.lower())
+    return re.sub(r"\s+", " ", raw).strip()
+
+
+def _extract_quote_body(line: str) -> str:
+    body = str(line or "").strip()
+    if "--" in body:
+        body = body.split("--", 1)[0].strip()
+    return body.strip().strip('"').strip("'").strip()
+
+
+def _extract_blockquote_quotes(markdown: str) -> list[str]:
+    quotes: list[str] = []
+    for line in str(markdown or "").splitlines():
+        match = _BLOCKQUOTE_RE.match(line)
+        if not match:
+            continue
+        quote = _extract_quote_body(match.group(1))
+        if len(quote) >= 12:
+            quotes.append(quote)
+    return quotes
+
+
+def _source_quote_texts(blueprint: PostBlueprint) -> list[str]:
+    phrases = blueprint.quotable_phrases or []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in phrases:
+        if not isinstance(item, dict):
+            continue
+        for key in ("phrase", "text", "quote", "best_quote"):
+            value = str(item.get(key) or "").strip()
+            if not value:
+                continue
+            marker = _normalize_quote_text(value)
+            if not marker or marker in seen:
+                continue
+            seen.add(marker)
+            out.append(value)
+            break
+    return out
+
+
+def _quote_matches_source(quote_text: str, source_quotes: list[str]) -> bool:
+    normalized_quote = _normalize_quote_text(quote_text)
+    if not normalized_quote:
+        return True
+    quote_tokens = set(normalized_quote.split())
+    if not quote_tokens:
+        return True
+
+    for source_text in source_quotes:
+        normalized_source = _normalize_quote_text(source_text)
+        if not normalized_source:
+            continue
+        if normalized_quote in normalized_source or normalized_source in normalized_quote:
+            return True
+        source_tokens = set(normalized_source.split())
+        overlap = len(quote_tokens & source_tokens)
+        min_required = max(5, int(0.6 * min(len(quote_tokens), len(source_tokens))))
+        if overlap >= min_required:
+            return True
+    return False
+
+
+def _remove_unmatched_quote_lines(markdown: str, source_quotes: list[str]) -> tuple[str, int]:
+    if not source_quotes:
+        return markdown, 0
+    removed = 0
+    output: list[str] = []
+    for line in str(markdown or "").splitlines():
+        match = _BLOCKQUOTE_RE.match(line)
+        if not match:
+            output.append(line)
+            continue
+        quote = _extract_quote_body(match.group(1))
+        if quote and not _quote_matches_source(quote, source_quotes):
+            removed += 1
+            continue
+        output.append(line)
+    return "\n".join(output), removed
+
+
+def _sanitize_blog_markdown(markdown: str) -> tuple[str, dict[str, int]]:
+    """Apply deterministic cleanup for common LLM artifacts."""
+    text = str(markdown or "")
+    answer_hits = len(_ANSWER_PREFIX_RE.findall(text))
+    if answer_hits:
+        text = _ANSWER_PREFIX_RE.sub(r"\1", text)
+    return text, {"answer_prefix_removed": answer_hits}
+
+
+def _required_vendor_mentions(blueprint: PostBlueprint, content_text: str) -> list[str]:
+    ctx = blueprint.data_context if isinstance(blueprint.data_context, dict) else {}
+    required: list[str] = []
+    for key in ("vendor", "vendor_a", "vendor_b"):
+        value = str(ctx.get(key) or "").strip()
+        if value:
+            required.append(value)
+    if not required:
+        topic_ctx = ctx.get("topic_ctx")
+        if isinstance(topic_ctx, dict):
+            for key in ("vendor", "vendor_a", "vendor_b"):
+                value = str(topic_ctx.get(key) or "").strip()
+                if value:
+                    required.append(value)
+    missing: list[str] = []
+    haystack = str(content_text or "")
+    for vendor in required:
+        if not re.search(rf"\b{re.escape(vendor)}\b", haystack, re.IGNORECASE):
+            missing.append(vendor)
+    return missing
+
+
+def _apply_blog_quality_gate(
+    blueprint: PostBlueprint,
+    content: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """
+    Run deterministic quality checks and cleanup.
+
+    Returns (possibly cleaned content, quality report).
+    """
+    cleaned = dict(content or {})
+    body = str(cleaned.get("content") or "")
+    body, sanitize_counts = _sanitize_blog_markdown(body)
+
+    source_quotes = _source_quote_texts(blueprint)
+    body, removed_quotes = _remove_unmatched_quote_lines(body, source_quotes)
+    cleaned["content"] = body
+
+    blocking_issues: list[str] = []
+    warnings: list[str] = []
+    fixes_applied: list[str] = []
+
+    if sanitize_counts.get("answer_prefix_removed", 0) > 0:
+        fixes_applied.append(f"removed_answer_prefix:{sanitize_counts['answer_prefix_removed']}")
+    if removed_quotes > 0:
+        fixes_applied.append(f"removed_unmatched_quotes:{removed_quotes}")
+
+    if len(body.strip()) < 1500:
+        warnings.append("content_too_short_for_decision_depth")
+
+    chart_ids = [c.chart_id for c in blueprint.charts]
+    chart_mentions = re.findall(r"\{\{chart:([a-zA-Z0-9\-_]+)\}\}", body)
+    chart_counts = {chart_id: chart_mentions.count(chart_id) for chart_id in chart_ids}
+    for chart_id in chart_ids:
+        count = chart_counts.get(chart_id, 0)
+        if count == 0:
+            blocking_issues.append(f"missing_chart_placeholder:{chart_id}")
+        elif count > 1:
+            blocking_issues.append(f"duplicate_chart_placeholder:{chart_id}")
+    unknown_chart_ids = sorted({cid for cid in chart_mentions if cid not in set(chart_ids)})
+    if unknown_chart_ids:
+        blocking_issues.append(f"unknown_chart_placeholders:{','.join(unknown_chart_ids)}")
+
+    unresolved_tokens: list[str] = []
+    for token in _PLACEHOLDER_RE.findall(body):
+        token = token.strip()
+        if token.startswith("chart:"):
+            continue
+        unresolved_tokens.append(token)
+    if unresolved_tokens:
+        blocking_issues.append(
+            f"unresolved_placeholders:{','.join(sorted(set(unresolved_tokens))[:6])}"
+        )
+
+    quoted = _extract_blockquote_quotes(body)
+    if source_quotes and len(quoted) < 2:
+        blocking_issues.append(f"too_few_sourced_quotes:{len(quoted)}")
+    if not source_quotes and len(quoted) == 0:
+        warnings.append("no_quotes_present")
+
+    review_period = str((blueprint.data_context or {}).get("review_period") or "").strip()
+    if review_period and review_period not in body:
+        warnings.append("review_period_not_explicitly_mentioned")
+    if "self-selected" not in body.lower():
+        warnings.append("methodology_disclaimer_missing_self_selected")
+
+    missing_vendors = _required_vendor_mentions(blueprint, body)
+    if missing_vendors:
+        blocking_issues.append(f"missing_vendor_mentions:{','.join(missing_vendors)}")
+
+    score = max(0, 100 - (18 * len(blocking_issues)) - (6 * len(warnings)))
+    report = {
+        "score": score,
+        "status": "pass" if not blocking_issues else "fail",
+        "blocking_issues": blocking_issues,
+        "warnings": warnings,
+        "fixes_applied": fixes_applied,
+        "quote_count": len(quoted),
+    }
+    return cleaned, report
+
+
+def _quality_feedback(report: dict[str, Any]) -> list[str]:
+    feedback: list[str] = []
+    for issue in report.get("blocking_issues", []) or []:
+        feedback.append(f"Fix: {issue}")
+    for warning in (report.get("warnings", []) or []):
+        if warning == "review_period_not_explicitly_mentioned":
+            feedback.append("Fix: Explicitly state the exact review period from data_context.review_period.")
+        elif warning == "methodology_disclaimer_missing_self_selected":
+            feedback.append("Fix: Include a plain-language methodology line that reviewers are self-selected and signals reflect perception.")
+        else:
+            feedback.append(f"Improve: {warning}")
+    return feedback[:8]
+
+
+def _critical_quality_warnings(report: dict[str, Any]) -> list[str]:
+    return [
+        str(w)
+        for w in (report.get("warnings", []) or [])
+        if str(w) in _CRITICAL_BLOG_WARNINGS
+    ]
+
+
+def _with_unresolved_critical_warnings(report: dict[str, Any]) -> dict[str, Any]:
+    critical = _critical_quality_warnings(report)
+    if not critical:
+        return report
+    enriched = dict(report)
+    blocking = list(enriched.get("blocking_issues", []) or [])
+    for warning in critical:
+        marker = f"critical_warning_unresolved:{warning}"
+        if marker not in blocking:
+            blocking.append(marker)
+    enriched["blocking_issues"] = blocking
+    enriched["status"] = "fail"
+    return enriched
+
+
+def _enforce_blog_quality(
+    llm,
+    blueprint: PostBlueprint,
+    content: dict[str, Any],
+    max_tokens: int,
+    related_posts: list[dict[str, str]] | None = None,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Apply quality gate and perform one retry with feedback when needed."""
+    current = dict(content or {})
+    _inject_affiliate_links(blueprint, current)
+    current, report = _apply_blog_quality_gate(blueprint, current)
+    initial_critical = _critical_quality_warnings(report)
+    needs_retry = bool(report.get("blocking_issues")) or bool(initial_critical)
+    if not needs_retry:
+        return current, report
+
+    retry = _generate_content(
+        llm,
+        blueprint,
+        max_tokens,
+        related_posts=related_posts,
+        quality_feedback=_quality_feedback(report),
+    )
+    if retry is None:
+        if initial_critical:
+            return None, _with_unresolved_critical_warnings(report)
+        return None, report
+
+    _inject_affiliate_links(blueprint, retry)
+    retry, retry_report = _apply_blog_quality_gate(blueprint, retry)
+    retry_report = _with_unresolved_critical_warnings(retry_report)
+    if retry_report.get("blocking_issues"):
+        return None, retry_report
+    return retry, retry_report
 
 
 # -- entry point --------------------------------------------------
@@ -157,6 +615,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
         topic_type, topic_ctx = topic
         data = await _gather_data(pool, topic_type, topic_ctx)
+        await _load_pool_layers_for_blog(pool, topic_type, topic_ctx, data)
 
         sufficiency = _check_data_sufficiency(topic_type, data)
         if not sufficiency["sufficient"]:
@@ -178,28 +637,22 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             logger.warning("LLM failed for B2B topic %s, skipping", blueprint.slug)
             continue
 
-        # Inject affiliate links as proper markdown links
-        affiliate_url = blueprint.data_context.get("affiliate_url", "")
-        affiliate_slug = blueprint.data_context.get("affiliate_slug", "")
-        partner_info = blueprint.data_context.get("affiliate_partner", {})
-        partner_name = partner_info.get("name", "") or partner_info.get("product_name", "")
-        if affiliate_slug and affiliate_url and content.get("content"):
-            md_link = f"[{partner_name}]({affiliate_url})" if partner_name else affiliate_url
-            content["content"] = content["content"].replace(
-                f"{{{{affiliate:{affiliate_slug}}}}}",
-                md_link,
+        content, quality_report = _enforce_blog_quality(
+            llm,
+            blueprint,
+            content,
+            cfg.blog_post_max_tokens,
+            related_posts=link_posts,
+        )
+        if content is None:
+            logger.warning(
+                "Quality gate failed for %s (%s): %s",
+                blueprint.slug,
+                blueprint.topic_type,
+                ", ".join(quality_report.get("blocking_issues", [])[:4]) or "unknown issues",
             )
-            # Also fix any raw affiliate URLs the LLM may have embedded directly
-            # (not already inside a markdown link)
-            raw = content["content"]
-            if affiliate_url in raw:
-                # Match the URL when NOT preceded by ]( (already a markdown link)
-                raw = re.sub(
-                    r'(?<!\]\()' + re.escape(affiliate_url) + r'(?!\))',
-                    md_link,
-                    raw,
-                )
-                content["content"] = raw
+            continue
+        blueprint.data_context["generation_quality"] = quality_report
 
         post_id = await _assemble_and_store(pool, blueprint, content, llm)
         if not post_id:
@@ -300,6 +753,7 @@ async def _regenerate_existing_posts(
             topic_ctx = {**stored_ctx, "slug": slug}
 
             data = await _gather_data(pool, topic_type, topic_ctx)
+            await _load_pool_layers_for_blog(pool, topic_type, topic_ctx, data)
             blueprint = _build_blueprint(topic_type, topic_ctx, data)
             link_posts = await _fetch_related_for_linking(
                 pool, blueprint.tags, blueprint.slug,
@@ -312,25 +766,21 @@ async def _regenerate_existing_posts(
                 logger.warning("Regen: LLM failed for %s, skipping", slug)
                 continue
 
-            # Inject affiliate links
-            affiliate_url = blueprint.data_context.get("affiliate_url", "")
-            affiliate_slug = blueprint.data_context.get("affiliate_slug", "")
-            partner_info = blueprint.data_context.get("affiliate_partner", {})
-            partner_name = partner_info.get("name", "") or partner_info.get("product_name", "")
-            if affiliate_slug and affiliate_url and content.get("content"):
-                md_link = f"[{partner_name}]({affiliate_url})" if partner_name else affiliate_url
-                content["content"] = content["content"].replace(
-                    f"{{{{affiliate:{affiliate_slug}}}}}",
-                    md_link,
+            content, quality_report = _enforce_blog_quality(
+                llm,
+                blueprint,
+                content,
+                cfg.blog_post_max_tokens,
+                related_posts=link_posts,
+            )
+            if content is None:
+                logger.warning(
+                    "Regen quality gate failed for %s: %s",
+                    slug,
+                    ", ".join(quality_report.get("blocking_issues", [])[:4]) or "unknown issues",
                 )
-                raw = content["content"]
-                if affiliate_url in raw:
-                    raw = re.sub(
-                        r'(?<!\]\()' + re.escape(affiliate_url) + r'(?!\))',
-                        md_link,
-                        raw,
-                    )
-                    content["content"] = raw
+                continue
+            blueprint.data_context["generation_quality"] = quality_report
 
             post_id = await _assemble_and_store(pool, blueprint, content, llm)
             if post_id:
@@ -364,6 +814,209 @@ async def _regenerate_existing_posts(
 
 
 # -- Stage 1: Topic Selection -------------------------------------
+
+_CAMPAIGN_GAP_LOOKBACK_DAYS = 14
+_CAMPAIGN_GAP_BONUS_PCT = 0.30
+_B2B_TOPIC_TYPES = (
+    "vendor_alternative",
+    "vendor_showdown",
+    "churn_report",
+    "migration_guide",
+    "vendor_deep_dive",
+    "market_landscape",
+    "pricing_reality_check",
+    "switching_story",
+    "pain_point_roundup",
+    "best_fit_guide",
+)
+
+
+def _normalize_pain_label(value: Any) -> str:
+    """Normalize pain labels for deterministic overlap checks."""
+    text = re.sub(r"[^a-z0-9]+", " ", str(value or "").lower())
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _collect_pain_labels(value: Any) -> set[str]:
+    """Collect normalized pain labels from nested payloads."""
+    labels: set[str] = set()
+    if value is None:
+        return labels
+    if isinstance(value, dict):
+        for key in ("category", "pain_category", "top_pain", "label", "name"):
+            norm = _normalize_pain_label(value.get(key))
+            if len(norm) >= 3:
+                labels.add(norm)
+        for inner in value.values():
+            labels |= _collect_pain_labels(inner)
+        return labels
+    if isinstance(value, list):
+        for item in value:
+            labels |= _collect_pain_labels(item)
+        return labels
+    norm = _normalize_pain_label(value)
+    if len(norm) >= 3:
+        labels.add(norm)
+    return labels
+
+
+def _extract_candidate_pain_labels(topic_type: str, ctx: dict[str, Any]) -> set[str]:
+    """Extract pain labels from candidate context without whole-object substring scans."""
+    labels: set[str] = set()
+    for key in ("pain_category", "top_pain", "pain_categories", "pain_distribution", "pain_breakdown"):
+        labels |= _collect_pain_labels(ctx.get(key))
+
+    # Topic-type inferred pain coverage for deterministic matching.
+    if topic_type == "pricing_reality_check":
+        labels |= {"pricing", "price", "billing", "cost"}
+    return labels
+
+
+def _candidate_overlaps_gap_pain(
+    topic_type: str,
+    ctx: dict[str, Any],
+    gap_pains: set[str],
+) -> bool:
+    """Return True when a candidate explicitly overlaps one of the gap pain labels."""
+    candidate_labels = _extract_candidate_pain_labels(topic_type, ctx)
+    if not candidate_labels:
+        return False
+    for pain in gap_pains:
+        norm = _normalize_pain_label(pain)
+        if len(norm) < 3:
+            continue
+        if norm in candidate_labels:
+            return True
+        if any(norm in cand or cand in norm for cand in candidate_labels):
+            return True
+    return False
+
+
+def _extract_blog_coverage_vendors(
+    data_context: dict[str, Any],
+    topic_ctx: dict[str, Any],
+) -> set[str]:
+    """Extract all vendor identities that a blog post covers."""
+    vendors: set[str] = set()
+    for key in ("vendor", "vendor_a", "vendor_b", "from_vendor", "to_vendor"):
+        for source in (data_context, topic_ctx):
+            value = str(source.get(key) or "").strip().lower()
+            if value:
+                vendors.add(value)
+    return vendors
+
+
+async def _detect_campaign_content_gaps(pool) -> dict[str, set[str]]:
+    """Find (vendor, pain) pairs with recent campaigns but no matching blog post.
+
+    Returns ``{vendor_lower: {pain_lower, ...}}`` for vendors that have
+    campaigns in the last N days but no draft/published blog post mentioning
+    both the vendor and that pain category.
+    """
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT LOWER(vendor_name) AS vendor,
+                   LOWER(
+                       COALESCE(p.value->>'category', p.value #>> '{}')
+                   ) AS pain
+            FROM b2b_campaigns,
+                 LATERAL jsonb_array_elements(
+                     CASE WHEN jsonb_typeof(pain_categories) = 'array'
+                          THEN pain_categories
+                          ELSE '[]'::jsonb END
+                 ) AS p(value)
+            WHERE created_at >= NOW() - make_interval(days => $1)
+              AND status NOT IN ('cancelled', 'failed')
+              AND vendor_name IS NOT NULL
+            GROUP BY 1, 2
+            HAVING count(*) >= 1
+            """,
+            _CAMPAIGN_GAP_LOOKBACK_DAYS,
+        )
+    except Exception:
+        logger.warning("Failed to query campaign content gaps", exc_info=True)
+        return {}
+
+    if not rows:
+        return {}
+
+    # Build campaign demand: {vendor: {pain, ...}}
+    demand: dict[str, set[str]] = {}
+    for r in rows:
+        vendor = (r["vendor"] or "").strip()
+        pain = (r["pain"] or "").strip()
+        if vendor and pain:
+            demand.setdefault(vendor, set()).add(pain)
+
+    if not demand:
+        return {}
+
+    # Check which (vendor, pain) pairs already have blog coverage
+    try:
+        covered_rows = await pool.fetch(
+            """
+            SELECT title, slug, topic_type, tags, data_context
+            FROM blog_posts
+            WHERE status = ANY($1::text[])
+              AND topic_type = ANY($2::text[])
+            """,
+            ["draft", "published"],
+            list(_B2B_TOPIC_TYPES),
+        )
+    except Exception:
+        logger.warning("Failed to query blog coverage for gap detection", exc_info=True)
+        return demand  # Assume no coverage -- treat all as gaps
+
+    # Remove covered pairs
+    for cr in covered_rows:
+        dc = cr.get("data_context")
+        if isinstance(dc, str):
+            try:
+                dc = json.loads(dc)
+            except Exception:
+                dc = {}
+        if not isinstance(dc, dict):
+            dc = {}
+        tc = dc.get("topic_ctx") if isinstance(dc.get("topic_ctx"), dict) else {}
+        covered_vendors = _extract_blog_coverage_vendors(dc, tc)
+        covered_candidates = covered_vendors & set(demand.keys())
+        if not covered_candidates:
+            continue
+        pain_labels: set[str] = set()
+        for key in ("pain_distribution", "pain_breakdown", "pain_categories", "top_pain"):
+            pain_labels |= _collect_pain_labels(dc.get(key))
+            pain_labels |= _collect_pain_labels(tc.get(key))
+        tags = cr.get("tags") or []
+        if isinstance(tags, list):
+            tags_text = " ".join(str(tag).lower() for tag in tags if tag)
+        else:
+            tags_text = str(tags).lower()
+        text_haystack = " ".join(
+            filter(
+                None,
+                [
+                    str(cr.get("title") or "").lower(),
+                    str(cr.get("slug") or "").lower(),
+                    str(cr.get("topic_type") or "").lower(),
+                    tags_text,
+                ],
+            )
+        )
+        for vendor in covered_candidates:
+            covered_pains: set[str] = set()
+            for pain in demand.get(vendor, set()):
+                norm = _normalize_pain_label(pain)
+                if len(norm) < 3:
+                    continue
+                if norm in pain_labels or norm in text_haystack:
+                    covered_pains.add(pain)
+            demand[vendor] -= covered_pains
+            if not demand[vendor]:
+                del demand[vendor]
+
+    return demand
+
 
 async def _select_topic(pool, max_per_run: int = 1) -> tuple[str, dict[str, Any]] | None:
     """Score candidates and pick the best unwritten B2B topic."""
@@ -469,6 +1122,34 @@ async def _select_topic(pool, max_per_run: int = 1) -> tuple[str, dict[str, Any]
             normalized.append((slug, norm, tt, ctx))
 
     raw_candidates = normalized
+
+    # --- Campaign content gap bonus: boost topics filling campaign demand ---
+    content_gaps = await _detect_campaign_content_gaps(pool)
+    if content_gaps:
+        boosted: list[tuple[str, float, str, dict]] = []
+        gap_boost_count = 0
+        for slug, score, topic_type, ctx in raw_candidates:
+            vendor_keys = {
+                str(ctx.get(key) or "").lower().strip()
+                for key in ("vendor", "from_vendor", "vendor_a", "vendor_b")
+                if str(ctx.get(key) or "").strip()
+            }
+            should_boost = False
+            for vendor_key in vendor_keys:
+                gap_pains = content_gaps.get(vendor_key)
+                if gap_pains and _candidate_overlaps_gap_pain(topic_type, ctx, gap_pains):
+                    should_boost = True
+                    break
+            if should_boost:
+                score *= (1.0 + _CAMPAIGN_GAP_BONUS_PCT)
+                gap_boost_count += 1
+            boosted.append((slug, score, topic_type, ctx))
+        raw_candidates = boosted
+        if gap_boost_count:
+            logger.info(
+                "Campaign gap bonus applied to %d/%d candidates",
+                gap_boost_count, len(raw_candidates),
+            )
 
     # --- Data sufficiency gate: filter candidates below minimum review counts ---
     sources = _blog_source_allowlist()
@@ -1168,6 +1849,164 @@ def _build_specialized_blog_review_rows_from_evidence_vault(
         })
     candidates.sort(key=lambda item: (item["_priority"], len(str(item.get("text") or ""))), reverse=True)
     return [{k: v for k, v in item.items() if k != "_priority"} for item in candidates[:limit]]
+
+
+# -- Stage 1b: Reasoning Pool Loading --------------------------------
+
+
+async def _load_pool_layers_for_blog(
+    pool,
+    topic_type: str,
+    topic_ctx: dict[str, Any],
+    data: dict[str, Any],
+) -> None:
+    """Inject reasoning pool data into the blog data dict.
+
+    Loads the 6 reasoning pools via ``fetch_all_pool_layers`` and extracts
+    vendor-specific layers based on the topic context.  Also loads reasoning
+    synthesis views when available for causal narrative injection.
+
+    Mutates *data* in place -- adds keys like ``pool_layers``,
+    ``synthesis_views``, and topic-specific shortcuts (``displacement_a_to_b``,
+    ``category_regime``, etc.) that blueprint functions can reference.
+    """
+    vendor_keys = [
+        str(topic_ctx.get(k) or "").strip()
+        for k in ("vendor", "vendor_a", "vendor_b", "from_vendor", "to_vendor")
+    ]
+    vendor_names = [v for v in vendor_keys if v]
+    category_name = str(topic_ctx.get("category") or "").strip()
+    if not vendor_names and not category_name:
+        return
+
+    window_days = settings.b2b_churn.intelligence_window_days
+    today = date.today()
+
+    try:
+        all_layers = await fetch_all_pool_layers(
+            pool, as_of=today, analysis_window_days=window_days,
+        )
+    except Exception:
+        logger.warning("Failed to load pool layers for blog generation", exc_info=True)
+        all_layers = {}
+
+    if not all_layers:
+        return
+
+    data["pool_layers"] = all_layers
+
+    # Load reasoning synthesis views for causal narratives (scoped to active vendors)
+    if vendor_names:
+        try:
+            from ._b2b_synthesis_reader import load_synthesis_view
+
+            vendor_filters = sorted({v.lower().strip() for v in vendor_names if v})
+            rows = await pool.fetch(
+                """
+                SELECT DISTINCT ON (vendor_name)
+                       vendor_name, as_of_date, schema_version, synthesis
+                FROM b2b_reasoning_synthesis
+                WHERE as_of_date <= $1
+                  AND analysis_window_days = $2
+                  AND LOWER(vendor_name) = ANY($3::text[])
+                ORDER BY vendor_name, as_of_date DESC, created_at DESC
+                """,
+                today,
+                window_days,
+                vendor_filters,
+            )
+            synth_views: dict[str, Any] = {}
+            for row in rows:
+                raw = row["synthesis"]
+                if isinstance(raw, str):
+                    try:
+                        raw = json.loads(raw)
+                    except Exception:
+                        continue
+                if isinstance(raw, dict):
+                    synth_views[row["vendor_name"]] = load_synthesis_view(
+                        raw,
+                        row["vendor_name"],
+                        schema_version=row["schema_version"] or "",
+                        as_of_date=row["as_of_date"],
+                    )
+            data["synthesis_views"] = synth_views
+        except Exception:
+            logger.warning("Failed to load synthesis views for blog generation", exc_info=True)
+            data["synthesis_views"] = {}
+    else:
+        data["synthesis_views"] = {}
+
+    # Extract topic-specific shortcuts for blueprint convenience
+    vendor = str(
+        topic_ctx.get("vendor") or topic_ctx.get("from_vendor") or ""
+    ).strip()
+    vendor_a = str(topic_ctx.get("vendor_a") or "").strip()
+    vendor_b = str(topic_ctx.get("vendor_b") or "").strip()
+
+    if vendor:
+        vl = all_layers.get(vendor) or {}
+        data["pool_segment"] = vl.get("segment")
+        data["pool_temporal"] = vl.get("temporal")
+        data["pool_accounts"] = vl.get("accounts")
+        data["pool_category"] = vl.get("category")
+        data["pool_displacement"] = vl.get("displacement") or []
+
+    if vendor_a and vendor_b:
+        vl_a = all_layers.get(vendor_a) or {}
+        vl_b = all_layers.get(vendor_b) or {}
+        data["pool_segment_a"] = vl_a.get("segment")
+        data["pool_segment_b"] = vl_b.get("segment")
+        data["pool_temporal_a"] = vl_a.get("temporal")
+        data["pool_temporal_b"] = vl_b.get("temporal")
+
+        # Find the displacement edge A->B
+        for edge in vl_a.get("displacement") or []:
+            if isinstance(edge, dict):
+                to = str(edge.get("to_vendor") or "").strip().lower()
+                if to == vendor_b.lower():
+                    data["displacement_a_to_b"] = edge
+                    break
+
+        # Find the displacement edge B->A
+        for edge in vl_b.get("displacement") or []:
+            if isinstance(edge, dict):
+                to = str(edge.get("to_vendor") or "").strip().lower()
+                if to == vendor_a.lower():
+                    data["displacement_b_to_a"] = edge
+                    break
+
+        # Category dynamics (shared by vendors in same category)
+        data["pool_category"] = vl_a.get("category") or vl_b.get("category")
+
+    if category_name and not data.get("pool_category"):
+        category_lower = _normalize_pain_label(category_name)
+        for layers in all_layers.values():
+            if not isinstance(layers, dict):
+                continue
+            cat_layer = layers.get("category")
+            if not isinstance(cat_layer, dict):
+                continue
+            layer_category = _normalize_pain_label(cat_layer.get("category"))
+            evidence_category = _normalize_pain_label(
+                (layers.get("evidence_vault") or {}).get("product_category"),
+            )
+            if category_lower == layer_category or category_lower == evidence_category:
+                data["pool_category"] = cat_layer
+                break
+
+    # Extract synthesis contracts for primary vendor(s)
+    synth = data.get("synthesis_views") or {}
+    primary = vendor or vendor_a
+    if primary and synth.get(primary):
+        view = synth[primary]
+        contracts = view.materialized_contracts()
+        if contracts:
+            data["synthesis_contracts"] = contracts
+            data["synthesis_wedge"] = (
+                view.primary_wedge.value if view.primary_wedge else None
+            )
+            data["synthesis_wedge_label"] = view.wedge_label
 
 
 # -- Stage 2: Data Gathering --------------------------------------
@@ -2210,11 +3049,97 @@ def _blueprint_vendor_alternative(ctx: dict, data: dict) -> PostBlueprint:
         ),
     ))
 
+    # Displacement and temporal context (from reasoning pools)
+    pool_disp = data.get("pool_displacement") or []
+    pool_temporal = data.get("pool_temporal") or {}
+    pool_segment = data.get("pool_segment") or {}
+    synth_contracts = data.get("synthesis_contracts") or {}
+    vendor_core = synth_contracts.get("vendor_core_reasoning") or {}
+    displacement_reasoning = synth_contracts.get("displacement_reasoning") or {}
+    category_reasoning = synth_contracts.get("category_reasoning") or {}
+    account_reasoning = synth_contracts.get("account_reasoning") or {}
+    segment_playbook = vendor_core.get("segment_playbook") if isinstance(vendor_core, dict) else {}
+    timing_intelligence = vendor_core.get("timing_intelligence") if isinstance(vendor_core, dict) else {}
+    causal = vendor_core if isinstance(vendor_core, dict) else {}
+    contract_disp = _blog_migration_proof_stats(displacement_reasoning)
+    contract_timing = _blog_timing_reasoning_stats(timing_intelligence)
+    contract_segment = _blog_segment_reasoning_stats(segment_playbook, timing_intelligence)
+    contract_account = _blog_account_reasoning_stats(account_reasoning)
+    contract_category = _blog_category_reasoning_stats(category_reasoning)
+
+    has_pool_context = bool(
+        pool_disp or pool_temporal or causal or contract_disp or contract_timing
+        or contract_segment or contract_account or contract_category
+    )
+    if has_pool_context:
+        context_stats: dict[str, Any] = {"vendor": vendor}
+        # Top displacement targets
+        if pool_disp:
+            top_targets = sorted(
+                pool_disp,
+                key=lambda e: (e.get("edge_metrics") or {}).get("mention_count") or 0,
+                reverse=True,
+            )[:3]
+            context_stats["displacement_targets"] = [
+                {
+                    "to_vendor": e.get("to_vendor"),
+                    "mentions": (e.get("edge_metrics") or {}).get("mention_count") or 0,
+                    "primary_driver": (e.get("edge_metrics") or {}).get("primary_driver"),
+                }
+                for e in top_targets
+            ]
+        # Temporal triggers
+        tl_summary = pool_temporal.get("timeline_signal_summary") or {}
+        if tl_summary.get("renewal_signals") or tl_summary.get("evaluation_deadline_signals"):
+            context_stats["renewal_signals"] = tl_summary.get("renewal_signals") or 0
+            context_stats["evaluation_deadlines"] = tl_summary.get("evaluation_deadline_signals") or 0
+        # Keyword spikes
+        spikes = pool_temporal.get("keyword_spikes") or {}
+        if spikes.get("spike_count"):
+            context_stats["keyword_spike_count"] = spikes["spike_count"]
+            context_stats["spike_keywords"] = (spikes.get("spike_keywords") or [])[:5]
+        # Segment: decision maker churn
+        budget = pool_segment.get("budget_pressure") or {}
+        if budget.get("dm_churn_rate") is not None:
+            context_stats["dm_churn_rate"] = budget["dm_churn_rate"]
+        # Causal narrative
+        cn = causal.get("causal_narrative")
+        if isinstance(cn, dict) and cn.get("trigger"):
+            context_stats["causal_trigger"] = cn["trigger"]
+            context_stats["causal_why_now"] = cn.get("why_now")
+        context_stats.update(contract_disp)
+        context_stats.update(contract_timing)
+        context_stats.update(contract_segment)
+        context_stats.update(contract_account)
+        if contract_category.get("market_regime"):
+            context_stats["category_market_regime"] = contract_category["market_regime"]
+        if contract_category.get("winner"):
+            context_stats["category_winner"] = contract_category["winner"]
+        if contract_category.get("loser"):
+            context_stats["category_loser"] = contract_category["loser"]
+
+        sections.append(SectionSpec(
+            id="market_context",
+            heading=f"Why Users Are Leaving {vendor} Right Now",
+            goal="Show displacement patterns, temporal triggers, and buyer context",
+            key_stats=context_stats,
+        ))
+
+    verdict_stats: dict[str, Any] = {"vendor": vendor, "urgency": ctx["urgency"]}
+    wedge = data.get("synthesis_wedge")
+    if wedge:
+        verdict_stats["synthesis_wedge"] = wedge
+        verdict_stats["synthesis_wedge_label"] = data.get("synthesis_wedge_label") or ""
+    if contract_category.get("market_regime"):
+        verdict_stats["market_regime"] = contract_category["market_regime"]
+    if contract_account.get("account_pressure_summary"):
+        verdict_stats["account_pressure_summary"] = contract_account["account_pressure_summary"]
+
     sections.append(SectionSpec(
         id="verdict",
         heading="The Verdict",
         goal="Summarize findings and recommend action",
-        key_stats={"vendor": vendor, "urgency": ctx["urgency"]},
+        key_stats=verdict_stats,
     ))
 
     # Build affiliate context
@@ -2322,16 +3247,123 @@ def _blueprint_vendor_showdown(ctx: dict, data: dict) -> PostBlueprint:
             data_summary=f"Pain category comparison across {len(pain_comparison)} categories.",
         ))
 
+    # Displacement dynamics section (from reasoning pools)
+    disp_a_to_b = data.get("displacement_a_to_b") or {}
+    disp_b_to_a = data.get("displacement_b_to_a") or {}
+    edge_a = disp_a_to_b.get("edge_metrics") or {}
+    edge_b = disp_b_to_a.get("edge_metrics") or {}
+    battle_a = disp_a_to_b.get("battle_summary") or {}
+    flow_a = disp_a_to_b.get("flow_summary") or {}
+    switch_reasons = disp_a_to_b.get("switch_reasons") or []
+
+    has_displacement = bool(edge_a.get("mention_count") or edge_b.get("mention_count"))
+    if has_displacement:
+        disp_stats: dict[str, Any] = {
+            "a_to_b_mentions": edge_a.get("mention_count") or 0,
+            "b_to_a_mentions": edge_b.get("mention_count") or 0,
+            "a_to_b_signal_strength": edge_a.get("signal_strength"),
+            "a_to_b_primary_driver": edge_a.get("primary_driver"),
+            "explicit_switches": flow_a.get("explicit_switch_count") or 0,
+            "active_evaluations": flow_a.get("active_evaluation_count") or 0,
+        }
+        if switch_reasons:
+            disp_stats["top_switch_reasons"] = [
+                {"reason": r.get("reason_category") or r.get("reason"), "count": r.get("mention_count", 0)}
+                for r in switch_reasons[:5]
+            ]
+        if battle_a.get("conclusion"):
+            disp_stats["battle_conclusion"] = battle_a["conclusion"]
+            disp_stats["battle_winner"] = battle_a.get("winner")
+            disp_stats["battle_confidence"] = battle_a.get("confidence")
+            disp_stats["battle_durability"] = battle_a.get("durability_assessment")
+        sections.append(SectionSpec(
+            id="displacement",
+            heading="Who Is Actually Switching?",
+            goal="Show displacement patterns: who leaves whom, why, and how fast",
+            key_stats=disp_stats,
+            data_summary=(
+                f"{edge_a.get('mention_count') or 0} displacement signals from {vendor_a} to {vendor_b}, "
+                f"{edge_b.get('mention_count') or 0} from {vendor_b} to {vendor_a}."
+            ),
+        ))
+
+    # Segment intelligence (from reasoning pools)
+    seg_a = data.get("pool_segment_a") or {}
+    seg_b = data.get("pool_segment_b") or {}
+    roles_a = seg_a.get("affected_roles") or []
+    roles_b = seg_b.get("affected_roles") or []
+    has_segments = bool(roles_a or roles_b)
+    if has_segments:
+        seg_stats: dict[str, Any] = {}
+        if roles_a:
+            seg_stats["roles_a"] = [
+                {"role": r.get("role_type"), "count": r.get("review_count", 0), "churn_rate": r.get("churn_rate")}
+                for r in roles_a[:5]
+            ]
+        if roles_b:
+            seg_stats["roles_b"] = [
+                {"role": r.get("role_type"), "count": r.get("review_count", 0), "churn_rate": r.get("churn_rate")}
+                for r in roles_b[:5]
+            ]
+        budget_a = seg_a.get("budget_pressure") or {}
+        budget_b = seg_b.get("budget_pressure") or {}
+        if budget_a.get("dm_churn_rate") is not None:
+            seg_stats["dm_churn_rate_a"] = budget_a["dm_churn_rate"]
+        if budget_b.get("dm_churn_rate") is not None:
+            seg_stats["dm_churn_rate_b"] = budget_b["dm_churn_rate"]
+        sections.append(SectionSpec(
+            id="buyer_segments",
+            heading="Who Is Churning? Buyer Profile Breakdown",
+            goal="Show which buyer roles and segments are most affected",
+            key_stats=seg_stats,
+        ))
+
+    # Category dynamics + synthesis (from reasoning pools)
+    cat_dyn = data.get("pool_category") or {}
+    regime = cat_dyn.get("market_regime") or {}
+    council = cat_dyn.get("council_summary") or {}
+    synth_contracts = data.get("synthesis_contracts") or {}
+    vendor_core = synth_contracts.get("vendor_core_reasoning") or {}
+    category_reasoning = synth_contracts.get("category_reasoning") or {}
+    contract_category = _blog_category_reasoning_stats(category_reasoning)
+    causal = vendor_core if isinstance(vendor_core, dict) else {}
+
+    verdict_stats: dict[str, Any] = {
+        "vendor_a": vendor_a,
+        "vendor_b": vendor_b,
+        "urgency_a": ctx["urgency_a"],
+        "urgency_b": ctx["urgency_b"],
+    }
+    if regime.get("regime_type"):
+        verdict_stats["market_regime"] = regime["regime_type"]
+    if council.get("conclusion"):
+        verdict_stats["category_conclusion"] = council["conclusion"]
+    elif contract_category.get("narrative"):
+        verdict_stats["category_conclusion"] = contract_category["narrative"]
+    if battle_a.get("winner"):
+        verdict_stats["displacement_winner"] = battle_a["winner"]
+        verdict_stats["displacement_confidence"] = battle_a.get("confidence")
+    if causal.get("causal_narrative"):
+        cn = causal["causal_narrative"]
+        if isinstance(cn, dict):
+            verdict_stats["causal_trigger"] = cn.get("trigger")
+            verdict_stats["causal_why_now"] = cn.get("why_now")
+    wedge = data.get("synthesis_wedge")
+    if wedge:
+        verdict_stats["synthesis_wedge"] = wedge
+        verdict_stats["synthesis_wedge_label"] = data.get("synthesis_wedge_label") or ""
+    if contract_category.get("market_regime"):
+        verdict_stats["category_market_regime"] = contract_category["market_regime"]
+    if contract_category.get("winner"):
+        verdict_stats["category_winner"] = contract_category["winner"]
+    if contract_category.get("loser"):
+        verdict_stats["category_loser"] = contract_category["loser"]
+
     sections.append(SectionSpec(
         id="verdict",
         heading="The Verdict",
         goal="Declare which vendor fares better and the decisive factor",
-        key_stats={
-            "vendor_a": vendor_a,
-            "vendor_b": vendor_b,
-            "urgency_a": ctx["urgency_a"],
-            "urgency_b": ctx["urgency_b"],
-        },
+        key_stats=verdict_stats,
     ))
 
     return PostBlueprint(
@@ -2352,6 +3384,20 @@ def _blueprint_churn_report(ctx: dict, data: dict) -> PostBlueprint:
     signals = data.get("signals", [])
     profile = data.get("profile", {})
     market_regime = (data.get("category_overview", {}).get("cross_vendor_analysis") or {}).get("market_regime")
+    synth_contracts = data.get("synthesis_contracts") or {}
+    vendor_core = synth_contracts.get("vendor_core_reasoning") or {}
+    displacement_reasoning = synth_contracts.get("displacement_reasoning") or {}
+    category_reasoning = synth_contracts.get("category_reasoning") or {}
+    account_reasoning = synth_contracts.get("account_reasoning") or {}
+    segment_playbook = vendor_core.get("segment_playbook") if isinstance(vendor_core, dict) else {}
+    timing_intelligence = vendor_core.get("timing_intelligence") if isinstance(vendor_core, dict) else {}
+    contract_disp = _blog_migration_proof_stats(displacement_reasoning)
+    contract_segment = _blog_segment_reasoning_stats(segment_playbook, timing_intelligence)
+    contract_timing = _blog_timing_reasoning_stats(timing_intelligence)
+    contract_category = _blog_category_reasoning_stats(category_reasoning)
+    contract_account = _blog_account_reasoning_stats(account_reasoning)
+    if not market_regime:
+        market_regime = contract_category.get("market_regime")
 
     # Pain distribution chart
     pain_data = [
@@ -2437,11 +3483,112 @@ def _blueprint_churn_report(ctx: dict, data: dict) -> PostBlueprint:
             data_summary=f"Top {len(gap_data)} missing features.",
         ))
 
+    # Reasoning pool enrichment: displacement, segment, temporal
+    pool_disp = data.get("pool_displacement") or []
+    pool_segment = data.get("pool_segment") or {}
+    pool_temporal = data.get("pool_temporal") or {}
+    if pool_disp:
+        top_targets = sorted(
+            pool_disp,
+            key=lambda e: (e.get("edge_metrics") or {}).get("mention_count") or 0,
+            reverse=True,
+        )[:5]
+        disp_stats: dict[str, Any] = {
+            "targets": [
+                {
+                    "to_vendor": e.get("to_vendor"),
+                    "mentions": (e.get("edge_metrics") or {}).get("mention_count") or 0,
+                    "primary_driver": (e.get("edge_metrics") or {}).get("primary_driver"),
+                    "signal_strength": (e.get("edge_metrics") or {}).get("signal_strength"),
+                }
+                for e in top_targets
+            ],
+        }
+        sections.append(SectionSpec(
+            id="displacement",
+            heading=f"Where {vendor} Users Are Going",
+            goal="Show which alternatives are gaining traction and why",
+            key_stats=disp_stats,
+        ))
+    elif contract_disp:
+        sections.append(SectionSpec(
+            id="displacement",
+            heading=f"Where {vendor} Users Are Going",
+            goal="Show which alternatives are gaining traction and why",
+            key_stats=contract_disp,
+        ))
+
+    # Buyer segment breakdown
+    roles = pool_segment.get("affected_roles") or []
+    if roles:
+        seg_stats: dict[str, Any] = {
+            "roles": [
+                {"role": r.get("role_type"), "count": r.get("review_count", 0), "churn_rate": r.get("churn_rate")}
+                for r in roles[:5]
+            ],
+        }
+        budget = pool_segment.get("budget_pressure") or {}
+        if budget.get("dm_churn_rate") is not None:
+            seg_stats["dm_churn_rate"] = budget["dm_churn_rate"]
+        sections.append(SectionSpec(
+            id="buyer_segments",
+            heading="Who Is Churning?",
+            goal="Break down churn by buyer role and seniority",
+            key_stats=seg_stats,
+        ))
+    elif contract_segment:
+        sections.append(SectionSpec(
+            id="buyer_segments",
+            heading="Who Is Churning?",
+            goal="Break down churn by buyer role and seniority",
+            key_stats=contract_segment,
+        ))
+
+    # Temporal context
+    tl_summary = pool_temporal.get("timeline_signal_summary") or {}
+    sentiment = pool_temporal.get("sentiment_trajectory") or {}
+    has_temporal = tl_summary.get("renewal_signals") or sentiment.get("declining_pct")
+    if has_temporal:
+        temporal_stats: dict[str, Any] = {}
+        if tl_summary.get("renewal_signals"):
+            temporal_stats["renewal_signals"] = tl_summary["renewal_signals"]
+        if tl_summary.get("evaluation_deadline_signals"):
+            temporal_stats["evaluation_deadlines"] = tl_summary["evaluation_deadline_signals"]
+        if sentiment.get("declining_pct") is not None:
+            temporal_stats["declining_pct"] = sentiment["declining_pct"]
+            temporal_stats["improving_pct"] = sentiment.get("improving_pct")
+        sections.append(SectionSpec(
+            id="timing",
+            heading="Timing Signals: When to Act",
+            goal="Show contract renewal windows and sentiment trajectory",
+            key_stats=temporal_stats,
+        ))
+    elif contract_timing:
+        sections.append(SectionSpec(
+            id="timing",
+            heading="Timing Signals: When to Act",
+            goal="Show contract renewal windows and sentiment trajectory",
+            key_stats=contract_timing,
+        ))
+
+    outlook_stats: dict[str, Any] = {"vendor": vendor, "avg_urgency": ctx["avg_urgency"]}
+    causal = vendor_core.get("causal_narrative") if isinstance(vendor_core, dict) else {}
+    if isinstance(causal, dict) and causal.get("trigger"):
+        outlook_stats["causal_trigger"] = causal["trigger"]
+        outlook_stats["causal_why_now"] = causal.get("why_now")
+    wedge = data.get("synthesis_wedge")
+    if wedge:
+        outlook_stats["synthesis_wedge"] = wedge
+    if contract_account.get("account_pressure_summary"):
+        outlook_stats["account_pressure_summary"] = contract_account["account_pressure_summary"]
+    if contract_category.get("narrative"):
+        outlook_stats["category_narrative"] = contract_category["narrative"]
+
     sections.append(SectionSpec(
         id="outlook",
         heading="What This Means for Teams Using " + vendor,
         goal="Provide actionable guidance for current users",
-        key_stats={"vendor": vendor, "avg_urgency": ctx["avg_urgency"]},
+        key_stats=outlook_stats,
     ))
 
     return PostBlueprint(
@@ -2461,6 +3608,16 @@ def _blueprint_migration_guide(ctx: dict, data: dict) -> PostBlueprint:
     category = ctx.get("category", "software")
     profile = data.get("profile", {})
     signals = data.get("signals", [])
+    synth_contracts = data.get("synthesis_contracts") or {}
+    vendor_core = synth_contracts.get("vendor_core_reasoning") or {}
+    displacement_reasoning = synth_contracts.get("displacement_reasoning") or {}
+    category_reasoning = synth_contracts.get("category_reasoning") or {}
+    account_reasoning = synth_contracts.get("account_reasoning") or {}
+    timing_intelligence = vendor_core.get("timing_intelligence") if isinstance(vendor_core, dict) else {}
+    contract_disp = _blog_migration_proof_stats(displacement_reasoning)
+    contract_account = _blog_account_reasoning_stats(account_reasoning)
+    contract_timing = _blog_timing_reasoning_stats(timing_intelligence)
+    contract_category = _blog_category_reasoning_stats(category_reasoning)
 
     # Migration sources chart
     switched_from = profile.get("commonly_switched_from", [])
@@ -2552,11 +3709,31 @@ def _blueprint_migration_guide(ctx: dict, data: dict) -> PostBlueprint:
         },
     ))
 
+    takeaway_stats: dict[str, Any] = {"vendor": vendor, "switch_count": ctx["switch_count"]}
+    pool_disp = data.get("pool_displacement") or []
+    if pool_disp:
+        top = sorted(pool_disp, key=lambda e: (e.get("edge_metrics") or {}).get("mention_count") or 0, reverse=True)
+        if top:
+            em = top[0].get("edge_metrics") or {}
+            takeaway_stats["top_displacement_driver"] = em.get("primary_driver")
+            takeaway_stats["displacement_velocity_7d"] = em.get("velocity_7d")
+    causal = (data.get("synthesis_contracts") or {}).get("vendor_core_reasoning") or {}
+    cn = causal.get("causal_narrative")
+    if isinstance(cn, dict) and cn.get("trigger"):
+        takeaway_stats["causal_trigger"] = cn["trigger"]
+    takeaway_stats.update(contract_disp)
+    if contract_account.get("account_pressure_summary"):
+        takeaway_stats["account_pressure_summary"] = contract_account["account_pressure_summary"]
+    if contract_timing.get("timing_summary"):
+        takeaway_stats["timing_summary"] = contract_timing["timing_summary"]
+    if contract_category.get("market_regime"):
+        takeaway_stats["market_regime"] = contract_category["market_regime"]
+
     sections.append(SectionSpec(
         id="takeaway",
         heading="Key Takeaways",
         goal="Summary and recommendations",
-        key_stats={"vendor": vendor, "switch_count": ctx["switch_count"]},
+        key_stats=takeaway_stats,
     ))
 
     return PostBlueprint(
@@ -2578,6 +3755,16 @@ def _blueprint_vendor_deep_dive(ctx: dict, data: dict) -> PostBlueprint:
     profile = data.get("profile", {})
     signals = data.get("signals", [])
     competitor_profiles = data.get("competitor_profiles", [])
+    synth_contracts = data.get("synthesis_contracts") or {}
+    vendor_core = synth_contracts.get("vendor_core_reasoning") or {}
+    category_reasoning = synth_contracts.get("category_reasoning") or {}
+    account_reasoning = synth_contracts.get("account_reasoning") or {}
+    segment_playbook = vendor_core.get("segment_playbook") if isinstance(vendor_core, dict) else {}
+    timing_intelligence = vendor_core.get("timing_intelligence") if isinstance(vendor_core, dict) else {}
+    contract_segment = _blog_segment_reasoning_stats(segment_playbook, timing_intelligence)
+    contract_timing = _blog_timing_reasoning_stats(timing_intelligence)
+    contract_account = _blog_account_reasoning_stats(account_reasoning)
+    contract_category = _blog_category_reasoning_stats(category_reasoning)
 
     charts = []
     sections = [
@@ -2709,11 +3896,33 @@ def _blueprint_vendor_deep_dive(ctx: dict, data: dict) -> PostBlueprint:
             data_summary=f"Commonly compared to: {', '.join(comp_names)}.",
         ))
 
+    verdict_stats: dict[str, Any] = {"vendor": vendor, "review_count": ctx["review_count"]}
+    pool_segment = data.get("pool_segment") or {}
+    pool_temporal = data.get("pool_temporal") or {}
+    roles = pool_segment.get("affected_roles") or []
+    if roles:
+        verdict_stats["top_churning_role"] = roles[0].get("role_type")
+        verdict_stats["top_role_churn_rate"] = roles[0].get("churn_rate")
+    sentiment = pool_temporal.get("sentiment_trajectory") or {}
+    if sentiment.get("declining_pct") is not None:
+        verdict_stats["declining_pct"] = sentiment["declining_pct"]
+    wedge = data.get("synthesis_wedge")
+    if wedge:
+        verdict_stats["synthesis_wedge"] = wedge
+    if contract_segment.get("segment_targeting_summary"):
+        verdict_stats["segment_targeting_summary"] = contract_segment["segment_targeting_summary"]
+    if contract_timing.get("timing_summary"):
+        verdict_stats["timing_summary"] = contract_timing["timing_summary"]
+    if contract_account.get("account_pressure_summary"):
+        verdict_stats["account_pressure_summary"] = contract_account["account_pressure_summary"]
+    if contract_category.get("market_regime"):
+        verdict_stats["market_regime"] = contract_category["market_regime"]
+
     sections.append(SectionSpec(
         id="verdict",
         heading=f"The Bottom Line on {vendor}",
         goal="Synthesize all data into actionable guidance for potential buyers",
-        key_stats={"vendor": vendor, "review_count": ctx["review_count"]},
+        key_stats=verdict_stats,
     ))
 
     return PostBlueprint(
@@ -2810,11 +4019,22 @@ def _blueprint_market_landscape(ctx: dict, data: dict) -> PostBlueprint:
                 },
             ))
 
+    takeaway_stats: dict[str, Any] = {"category": category, "vendor_count": vendor_count}
+    cat_dyn = data.get("pool_category") or {}
+    regime = cat_dyn.get("market_regime") or {}
+    council = cat_dyn.get("council_summary") or {}
+    if regime.get("regime_type"):
+        takeaway_stats["market_regime"] = regime["regime_type"]
+    if council.get("conclusion"):
+        takeaway_stats["category_conclusion"] = council["conclusion"]
+    if council.get("winner"):
+        takeaway_stats["category_winner"] = council["winner"]
+
     sections.append(SectionSpec(
         id="takeaway",
         heading=f"Choosing the Right {category} Platform",
         goal="Synthesize the landscape and help readers pick the right tool",
-        key_stats={"category": category, "vendor_count": vendor_count},
+        key_stats=takeaway_stats,
     ))
 
     vendor_names = [vp["vendor"] for vp in vendor_profiles[:5]]
@@ -2900,11 +4120,22 @@ def _blueprint_pricing_reality_check(ctx: dict, data: dict) -> PostBlueprint:
             data_summary=f"{len(positive_reviews)} positive reviews highlight genuine strengths.",
         ))
 
+    bl_stats: dict[str, Any] = {"vendor": vendor, "pricing_complaints": ctx["pricing_complaints"]}
+    pool_segment = data.get("pool_segment") or {}
+    budget = pool_segment.get("budget_pressure") or {}
+    if budget.get("price_increase_rate") is not None:
+        bl_stats["price_increase_rate"] = budget["price_increase_rate"]
+    if budget.get("dm_churn_rate") is not None:
+        bl_stats["dm_churn_rate"] = budget["dm_churn_rate"]
+    roles = pool_segment.get("affected_roles") or []
+    if roles:
+        bl_stats["top_churning_role"] = roles[0].get("role_type")
+
     sections.append(SectionSpec(
         id="bottom_line",
         heading="The Bottom Line: Is It Worth the Price?",
         goal="Honest verdict -- who should pay for it and who should look elsewhere",
-        key_stats={"vendor": vendor, "pricing_complaints": ctx["pricing_complaints"]},
+        key_stats=bl_stats,
     ))
 
     # Quotable phrases from pricing reviews
@@ -2986,11 +4217,22 @@ def _blueprint_switching_story(ctx: dict, data: dict) -> PostBlueprint:
             },
         ))
 
+    sv_stats: dict[str, Any] = {"vendor": vendor, "avg_urgency": ctx["avg_urgency"]}
+    pool_disp = data.get("pool_displacement") or []
+    if pool_disp:
+        top_edge = max(pool_disp, key=lambda e: (e.get("edge_metrics") or {}).get("mention_count") or 0)
+        em = top_edge.get("edge_metrics") or {}
+        sv_stats["top_destination"] = top_edge.get("to_vendor")
+        sv_stats["displacement_driver"] = em.get("primary_driver")
+        switch_reasons = top_edge.get("switch_reasons") or []
+        if switch_reasons:
+            sv_stats["top_switch_reasons"] = [r.get("reason_category") or r.get("reason") for r in switch_reasons[:3]]
+
     sections.append(SectionSpec(
         id="verdict",
         heading="Should You Stay or Switch?",
         goal="Honest framework for making the decision -- not everyone should switch",
-        key_stats={"vendor": vendor, "avg_urgency": ctx["avg_urgency"]},
+        key_stats=sv_stats,
     ))
 
     quotes = [
@@ -3074,11 +4316,19 @@ def _blueprint_pain_point_roundup(ctx: dict, data: dict) -> PostBlueprint:
             },
         ))
 
+    pp_stats: dict[str, Any] = {"category": category, "vendor_count": ctx["vendor_count"]}
+    cat_dyn = data.get("pool_category") or {}
+    regime = cat_dyn.get("market_regime") or {}
+    if regime.get("regime_type"):
+        pp_stats["market_regime"] = regime["regime_type"]
+    if regime.get("outlier_vendors"):
+        pp_stats["outlier_vendors"] = regime["outlier_vendors"][:3]
+
     sections.append(SectionSpec(
         id="takeaway",
         heading="Every Tool Has a Flaw -- Pick the One You Can Live With",
         goal="Honest summary -- there's no perfect tool, help readers pick the right trade-off",
-        key_stats={"category": category, "vendor_count": ctx["vendor_count"]},
+        key_stats=pp_stats,
     ))
 
     return PostBlueprint(
@@ -3161,11 +4411,19 @@ def _blueprint_best_fit_guide(ctx: dict, data: dict) -> PostBlueprint:
             },
         ))
 
+    bf_stats: dict[str, Any] = {"category": category, "vendor_count": ctx["vendor_count"]}
+    cat_dyn = data.get("pool_category") or {}
+    council = cat_dyn.get("council_summary") or {}
+    if council.get("winner"):
+        bf_stats["category_winner"] = council["winner"]
+    if council.get("conclusion"):
+        bf_stats["category_conclusion"] = council["conclusion"]
+
     sections.append(SectionSpec(
         id="decision_framework",
         heading="How to Actually Choose",
         goal="Give a clear decision framework based on budget, team size, and must-have features",
-        key_stats={"category": category, "vendor_count": ctx["vendor_count"]},
+        key_stats=bf_stats,
     ))
 
     return PostBlueprint(
@@ -3185,6 +4443,7 @@ def _blueprint_best_fit_guide(ctx: dict, data: dict) -> PostBlueprint:
 def _generate_content(
     llm, blueprint: PostBlueprint, max_tokens: int,
     related_posts: list[dict[str, str]] | None = None,
+    quality_feedback: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """Single LLM call: blueprint in, {title, description, content} out."""
     from ...pipelines.llm import clean_llm_output, parse_json_response
@@ -3228,6 +4487,8 @@ def _generate_content(
         }
     if related_posts:
         payload["related_posts"] = related_posts
+    if quality_feedback:
+        payload["quality_feedback"] = quality_feedback[:10]
 
     from ...services.protocols import Message
 

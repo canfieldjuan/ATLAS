@@ -19,7 +19,11 @@ from typing import Any
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
-from ._b2b_shared import _fetch_latest_evidence_vault
+from ._b2b_shared import (
+    _fetch_latest_evidence_vault,
+    _segment_targeting_summary,
+    _timing_summary_payload,
+)
 from ._execution_progress import _update_execution_progress
 
 logger = logging.getLogger("atlas.tasks.b2b_challenger_brief")
@@ -436,6 +440,48 @@ async def _fetch_churn_signal(pool, vendor: str, today: date) -> dict | None:
     }
 
 
+async def _fetch_synthesis_view(
+    pool,
+    vendor: str,
+    today: date,
+    analysis_window_days: int,
+) -> Any | None:
+    """Fetch latest reasoning synthesis view for one vendor."""
+    from ._b2b_synthesis_reader import load_synthesis_view
+
+    row = await pool.fetchrow(
+        """
+        SELECT as_of_date, schema_version, synthesis
+        FROM b2b_reasoning_synthesis
+        WHERE LOWER(vendor_name) = LOWER($1)
+          AND as_of_date <= $2
+          AND analysis_window_days = $3
+        ORDER BY as_of_date DESC, created_at DESC
+        LIMIT 1
+        """,
+        vendor,
+        today,
+        analysis_window_days,
+    )
+    if not row:
+        return None
+
+    raw = row["synthesis"]
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    if not isinstance(raw, dict):
+        return None
+    return load_synthesis_view(
+        raw,
+        vendor,
+        schema_version=row["schema_version"] or "",
+        as_of_date=row["as_of_date"],
+    )
+
+
 async def _fetch_cross_vendor_battle(
     pool, vendor_a: str, vendor_b: str, today: date,
 ) -> dict | None:
@@ -494,6 +540,48 @@ async def _fetch_cross_vendor_battle(
         "key_insights": key_insights,
         "confidence": float(row["confidence"]) if row["confidence"] is not None else None,
     }
+
+
+async def _retire_unselected_challenger_briefs(
+    pool,
+    *,
+    today: date,
+    pairs: list[dict[str, Any]],
+) -> int:
+    """Delete same-day challenger briefs for pairs no longer selected."""
+    active_pairs = {
+        (
+            str(pair.get("incumbent") or "").strip().lower(),
+            str(pair.get("challenger") or "").strip().lower(),
+        )
+        for pair in pairs
+        if str(pair.get("incumbent") or "").strip()
+        and str(pair.get("challenger") or "").strip()
+    }
+    rows = await pool.fetch(
+        """
+        SELECT id, vendor_filter, category_filter
+        FROM b2b_intelligence
+        WHERE report_type = 'challenger_brief'
+          AND report_date = $1
+        """,
+        today,
+    )
+    stale_ids = [
+        row["id"]
+        for row in rows
+        if (
+            str(row["vendor_filter"] or "").strip().lower(),
+            str(row["category_filter"] or "").strip().lower(),
+        ) not in active_pairs
+    ]
+    if not stale_ids:
+        return 0
+    await pool.execute(
+        "DELETE FROM b2b_intelligence WHERE id = ANY($1::uuid[])",
+        stale_ids,
+    )
+    return len(stale_ids)
 
 
 # ---------------------------------------------------------------------------
@@ -560,6 +648,50 @@ def _build_challenger_vault_weaknesses(
             "mention_count": total,
             "count": total,
             "evidence_count": total,
+            "customer_quote": item.get("best_quote") or "",
+            "source": "evidence_vault",
+            "evidence_type": item.get("evidence_type") or "",
+        })
+    normalized.sort(key=lambda row: int(row.get("count") or 0), reverse=True)
+    return normalized[:limit]
+
+
+def _build_challenger_vault_strengths(
+    vault: dict[str, Any] | None,
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Convert canonical vault strength rows to brief-compatible strength rows.
+
+    Mirrors ``_build_challenger_vault_weaknesses`` so the incumbent profile
+    can surface what the vendor does well -- enabling reps to anticipate
+    objections and identify defensible areas.
+    """
+    if not isinstance(vault, dict):
+        return []
+    recent_window_days = int(vault.get("recent_window_days") or 0)
+    normalized: list[dict[str, Any]] = []
+    for item in vault.get("strength_evidence") or []:
+        if not isinstance(item, dict):
+            continue
+        area = str(item.get("label") or item.get("key") or "").strip()
+        if not area:
+            continue
+        total = int(item.get("mention_count_total") or 0)
+        recent = item.get("mention_count_recent")
+        trend = item.get("trend") if isinstance(item.get("trend"), dict) else {}
+        evidence_parts = ["%d mentions" % total] if total else []
+        if recent is not None and recent_window_days:
+            evidence_parts.append("%d in last %d days" % (int(recent), recent_window_days))
+        direction = str(trend.get("direction") or "").strip()
+        if direction:
+            evidence_parts.append("trend %s" % direction)
+        normalized.append({
+            "strength": area,
+            "area": area,
+            "evidence": ", ".join(evidence_parts) or "Canonical strength evidence from evidence vault",
+            "mention_count": total,
+            "count": total,
             "customer_quote": item.get("best_quote") or "",
             "source": "evidence_vault",
             "evidence_type": item.get("evidence_type") or "",
@@ -678,6 +810,62 @@ def _compute_weakness_coverage(
     return coverage
 
 
+def _compute_defensible_areas(
+    incumbent_strengths: list[dict],
+    challenger_profile: dict | None,
+) -> list[dict]:
+    """Identify incumbent strengths the challenger cannot match.
+
+    Inverse of ``_compute_weakness_coverage``: instead of matching incumbent
+    weaknesses to challenger capabilities, this matches incumbent *strengths*
+    against challenger pain_addressed + strengths.  Areas with no overlap are
+    defensible -- the rep should avoid attacking there.
+    """
+    if not incumbent_strengths:
+        return []
+
+    challenger_areas: set[str] = set()
+    if challenger_profile:
+        for item in (challenger_profile.get("pain_addressed") or []):
+            if isinstance(item, dict):
+                area = (item.get("area") or item.get("pain") or item.get("name") or "").lower().strip()
+            else:
+                area = str(item).lower().strip()
+            if area:
+                challenger_areas.add(area)
+        for item in (challenger_profile.get("strengths") or []):
+            if isinstance(item, dict):
+                area = (item.get("aspect") or item.get("area") or item.get("name") or "").lower().strip()
+            else:
+                area = str(item).lower().strip()
+            if area:
+                challenger_areas.add(area)
+
+    defensible: list[dict] = []
+    for s in incumbent_strengths:
+        if not isinstance(s, dict):
+            continue
+        strength_area = (s.get("area") or s.get("strength") or "").lower().strip()
+        if not strength_area:
+            continue
+
+        matched = False
+        for ca in challenger_areas:
+            if ca == strength_area or ca in strength_area or strength_area in ca:
+                matched = True
+                break
+
+        if not matched:
+            defensible.append({
+                "incumbent_strength": strength_area,
+                "mention_count": int(s.get("count") or s.get("mention_count") or 0),
+                "customer_quote": s.get("customer_quote") or "",
+            })
+
+    defensible.sort(key=lambda d: d["mention_count"], reverse=True)
+    return defensible
+
+
 def _filter_target_accounts(
     accounts_data: dict | None,
     challenger: str,
@@ -742,6 +930,75 @@ def _filter_target_accounts(
     return targets, total, considering_count
 
 
+def _reasoning_int(value: Any) -> int | None:
+    """Unwrap a traced numeric contract field into an integer."""
+    raw = value.get("value") if isinstance(value, dict) else value
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        try:
+            return int(float(raw))
+        except (TypeError, ValueError):
+            return None
+
+
+def _account_reasoning_summary_payload(
+    account_reasoning: dict[str, Any] | None,
+) -> tuple[str, dict[str, int]]:
+    """Derive readable summary fields from account reasoning."""
+    if not isinstance(account_reasoning, dict):
+        return "", {}
+    summary = str(account_reasoning.get("market_summary") or "").strip()
+    metrics: dict[str, int] = {}
+    for key in ("total_accounts", "high_intent_count", "active_eval_count"):
+        value = _reasoning_int(account_reasoning.get(key))
+        if value is not None:
+            metrics[key] = value
+    return summary, metrics
+
+
+def _fallback_target_accounts_from_reasoning(
+    account_reasoning: dict[str, Any] | None,
+    *,
+    max_accounts: int,
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Build lightweight target accounts from account reasoning when report rows are missing."""
+    if not isinstance(account_reasoning, dict):
+        return [], 0, 0
+    targets: list[dict[str, Any]] = []
+    for item in account_reasoning.get("top_accounts") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        try:
+            intent_score = float(item.get("intent_score") or 0)
+        except (TypeError, ValueError):
+            intent_score = 0.0
+        targets.append({
+            "company": name,
+            "opportunity_score": max(0, min(100, round(intent_score * 100))),
+            "urgency": round(max(0.0, min(10.0, intent_score * 10)), 1),
+            "buying_stage": "",
+            "seat_count": None,
+            "contract_end": None,
+            "industry": None,
+            "domain": None,
+            "annual_revenue_range": None,
+            "top_quote": None,
+            "considers_challenger": False,
+            "reasoning_backed": True,
+            "source_id": item.get("source_id"),
+        })
+        if len(targets) >= max_accounts:
+            break
+    total_accounts = _reasoning_int(account_reasoning.get("total_accounts"))
+    return targets, total_accounts if total_accounts is not None else len(targets), 0
+
+
 def _build_integration_comparison(
     incumbent_profile: dict | None,
     challenger_profile: dict | None,
@@ -780,11 +1037,13 @@ def _build_challenger_brief(
     challenger_profile: dict | None,
     incumbent_evidence_vault: dict | None = None,
     churn_signal: dict | None,
+    incumbent_synthesis_view: Any | None = None,
     cross_vendor_battle: dict | None,
     review_pain_quotes: list[dict] | None = None,
     battle_card_metadata: dict[str, Any] | None = None,
     quote_similarity_threshold: float | None = None,
     max_target_accounts: int,
+    requested_as_of: date | None = None,
 ) -> dict:
     """Assemble the full challenger brief from pre-computed artifacts."""
 
@@ -865,6 +1124,15 @@ def _build_challenger_brief(
             "source_site": "displacement_evidence",
         }]
 
+    # --- incumbent strengths (from evidence vault) ---
+    inc_strengths: list[dict[str, Any]] = []
+    if incumbent_evidence_vault:
+        inc_strengths = _build_challenger_vault_strengths(
+            incumbent_evidence_vault,
+            limit=5,
+        )
+        used_evidence_vault = bool(inc_strengths) or used_evidence_vault
+
     # Prefer churn_signal data, fall back to battle card objection_data.
     # Use explicit ``is not None`` checks so legitimate 0 / 0.0 values
     # are preserved instead of falling through to the battle-card fallback.
@@ -872,6 +1140,10 @@ def _build_challenger_brief(
         return primary if primary is not None else fallback
 
     cs = churn_signal or {}
+    vault_snapshot = (
+        (incumbent_evidence_vault.get("metric_snapshot") or {})
+        if isinstance(incumbent_evidence_vault, dict) else {}
+    )
     incumbent_section = {
         "archetype": cs.get("archetype"),
         "archetype_confidence": cs.get("archetype_confidence"),
@@ -879,11 +1151,121 @@ def _build_challenger_brief(
         "risk_level": _coalesce(cs.get("risk_level"), bc_risk_level),
         "key_signals": cs.get("key_signals") or [],
         "top_weaknesses": inc_weaknesses[:10],
+        "top_strengths": inc_strengths[:5],
         "top_pain_quotes": inc_pain_quotes[:5],
         "price_complaint_rate": _coalesce(cs.get("price_complaint_rate"), bc_price_complaint_rate),
         "dm_churn_rate": _coalesce(cs.get("dm_churn_rate"), bc_dm_churn_rate),
         "sentiment_direction": _coalesce(cs.get("sentiment_direction"), bc_sentiment_direction),
     }
+    _rr = vault_snapshot.get("recommend_ratio")
+    if _rr is not None:
+        try:
+            incumbent_section["recommend_ratio"] = round(float(_rr), 2)
+        except (TypeError, ValueError):
+            pass
+
+    vendor_core_reasoning: dict[str, Any] = {}
+    displacement_reasoning: dict[str, Any] = {}
+    account_reasoning: dict[str, Any] = {}
+    reasoning_contracts: dict[str, Any] = {}
+    segment_playbook: dict[str, Any] = {}
+    reasoning_contract_gaps: list[str] = []
+    evidence_window: dict[str, Any] = {}
+    evidence_window_days: int | None = None
+    account_pressure_summary = ""
+    account_pressure_metrics: dict[str, int] = {}
+    timing_summary = ""
+    timing_metrics: dict[str, Any] = {}
+    priority_timing_triggers: list[str] = []
+    synthesis_wedge = ""
+    synthesis_wedge_label = ""
+    if incumbent_synthesis_view is not None:
+        from ._b2b_synthesis_reader import (
+            contract_gaps_for_consumer,
+            inject_synthesis_freshness,
+        )
+        reasoning_contracts = incumbent_synthesis_view.materialized_contracts()
+        vendor_core_reasoning = (
+            reasoning_contracts.get("vendor_core_reasoning")
+            if isinstance(reasoning_contracts.get("vendor_core_reasoning"), dict)
+            else {}
+        )
+        displacement_reasoning = (
+            reasoning_contracts.get("displacement_reasoning")
+            if isinstance(reasoning_contracts.get("displacement_reasoning"), dict)
+            else {}
+        )
+        account_reasoning = (
+            reasoning_contracts.get("account_reasoning")
+            if isinstance(reasoning_contracts.get("account_reasoning"), dict)
+            else {}
+        )
+        if isinstance(vendor_core_reasoning, dict):
+            segment_playbook = (
+                vendor_core_reasoning.get("segment_playbook")
+                if isinstance(vendor_core_reasoning.get("segment_playbook"), dict)
+                else {}
+            )
+        evidence_window = incumbent_synthesis_view.meta
+        synthesis_wedge = (
+            incumbent_synthesis_view.primary_wedge.value
+            if incumbent_synthesis_view.primary_wedge else ""
+        )
+        synthesis_wedge_label = incumbent_synthesis_view.wedge_label or ""
+        if evidence_window:
+            ew_start = evidence_window.get("evidence_window_start")
+            ew_end = evidence_window.get("evidence_window_end")
+            if ew_start and ew_end:
+                try:
+                    evidence_window_days = (
+                        date.fromisoformat(str(ew_end)[:10])
+                        - date.fromisoformat(str(ew_start)[:10])
+                    ).days
+                except (TypeError, ValueError):
+                    evidence_window_days = None
+
+        if vendor_core_reasoning:
+            if not incumbent_section.get("key_signals"):
+                cn = incumbent_synthesis_view.section("causal_narrative")
+                fallback_signals = [
+                    value for value in (
+                        cn.get("trigger") if isinstance(cn, dict) else None,
+                        cn.get("why_now") if isinstance(cn, dict) else None,
+                    )
+                    if value
+                ]
+                if fallback_signals:
+                    incumbent_section["key_signals"] = fallback_signals
+        account_pressure_summary, account_pressure_metrics = (
+            _account_reasoning_summary_payload(account_reasoning)
+        )
+        if account_pressure_summary:
+            incumbent_section["account_pressure_summary"] = account_pressure_summary
+        if account_pressure_metrics:
+            incumbent_section["account_pressure_metrics"] = account_pressure_metrics
+        timing_intelligence = (
+            vendor_core_reasoning.get("timing_intelligence")
+            if isinstance(vendor_core_reasoning.get("timing_intelligence"), dict)
+            else {}
+        )
+        timing_summary, timing_metrics, priority_timing_triggers = (
+            _timing_summary_payload(timing_intelligence)
+        )
+        if timing_intelligence:
+            incumbent_section["timing_intelligence"] = timing_intelligence
+        if timing_summary:
+            incumbent_section["timing_summary"] = timing_summary
+        if timing_metrics:
+            incumbent_section["timing_metrics"] = timing_metrics
+        if priority_timing_triggers:
+            incumbent_section["priority_timing_triggers"] = priority_timing_triggers
+        contract_gaps = contract_gaps_for_consumer(
+            incumbent_synthesis_view,
+            "challenger_brief",
+        )
+        reasoning_contract_gaps = contract_gaps
+        if contract_gaps:
+            incumbent_section["reasoning_contract_gaps"] = contract_gaps
 
     # --- challenger_advantage ---
     challenger_strengths = []
@@ -897,9 +1279,12 @@ def _build_challenger_brief(
     challenger_pain_addressed = (challenger_profile.get("pain_addressed") or []) if challenger_profile else []
     weakness_coverage = _compute_weakness_coverage(inc_weaknesses, challenger_pain_addressed)
 
+    defensible_areas = _compute_defensible_areas(inc_strengths, challenger_profile)
+
     challenger_advantage = {
         "strengths": challenger_strengths[:10],
         "weakness_coverage": weakness_coverage,
+        "defensible_areas": defensible_areas,
         "commonly_switched_from": challenger_commonly_switched_from[:10],
         "profile_summary": challenger_summary,
     }
@@ -949,10 +1334,44 @@ def _build_challenger_brief(
             "synthesized": True,
         }
 
+    category_council: dict[str, Any] = {}
+    if accounts_in_motion and isinstance(accounts_in_motion.get("category_council"), dict):
+        src = accounts_in_motion.get("category_council") or {}
+        if any(
+            [
+                src.get("winner"),
+                src.get("loser"),
+                src.get("conclusion"),
+                src.get("market_regime"),
+                src.get("key_insights"),
+            ]
+        ):
+            category_council = {
+                "winner": src.get("winner") or "",
+                "loser": src.get("loser") or "",
+                "conclusion": src.get("conclusion") or "",
+                "market_regime": src.get("market_regime") or "",
+                "durability": src.get("durability") or "",
+                "confidence": src.get("confidence"),
+                "key_insights": src.get("key_insights") or [],
+            }
+
     # --- target_accounts ---
+    target_accounts_source = ""
     target_accounts, total_target, considering_count = _filter_target_accounts(
         accounts_in_motion, challenger, max_accounts=max_target_accounts,
     )
+    if target_accounts:
+        target_accounts_source = "accounts_in_motion"
+    elif account_reasoning:
+        target_accounts, total_target, considering_count = (
+            _fallback_target_accounts_from_reasoning(
+                account_reasoning,
+                max_accounts=max_target_accounts,
+            )
+        )
+        if target_accounts or total_target:
+            target_accounts_source = "account_reasoning"
 
     # --- sales_playbook (from battle card if available) ---
     # LLM-enriched fields are added directly to the card dict (not nested).
@@ -971,11 +1390,21 @@ def _build_challenger_brief(
         incumbent_profile, challenger_profile,
     )
 
+    used_reasoning_synthesis = bool(
+        vendor_core_reasoning
+        or displacement_reasoning
+        or account_reasoning
+        or synthesis_wedge
+        or evidence_window
+    )
+
     # --- data_sources ---
     data_sources = {
         "battle_card": battle_card is not None,
+        "reasoning_synthesis": used_reasoning_synthesis,
         "evidence_vault": used_evidence_vault,
         "accounts_in_motion": accounts_in_motion is not None,
+        "account_reasoning": bool(account_reasoning),
         "product_profiles": (incumbent_profile is not None or challenger_profile is not None),
         "cross_vendor_conclusion": cross_vendor_battle is not None,
         "review_quotes": bool(review_pain_quotes),
@@ -988,6 +1417,12 @@ def _build_challenger_brief(
         f"{mentions} displacement mentions, "
         f"{total_target} target accounts ({considering_count} considering {challenger})."
     )
+    if account_pressure_summary:
+        exec_summary = "%s %s" % (exec_summary, account_pressure_summary)
+    if timing_summary:
+        exec_summary = "%s %s" % (exec_summary, timing_summary)
+    if target_accounts_source == "account_reasoning":
+        exec_summary = "%s Target list uses reasoning-backed account fallback." % exec_summary
 
     result = {
         "incumbent": incumbent,
@@ -1006,6 +1441,59 @@ def _build_challenger_brief(
         "data_sources": data_sources,
         "_executive_summary": exec_summary,
     }
+    if category_council:
+        result["category_council"] = category_council
+    if target_accounts_source:
+        result["target_accounts_source"] = target_accounts_source
+    if reasoning_contracts:
+        result["reasoning_contracts"] = reasoning_contracts
+    if account_reasoning:
+        result["account_reasoning"] = account_reasoning
+    if timing_summary or timing_metrics or priority_timing_triggers:
+        timing_intelligence = (
+            vendor_core_reasoning.get("timing_intelligence")
+            if isinstance(vendor_core_reasoning.get("timing_intelligence"), dict)
+            else {}
+        )
+        if timing_intelligence:
+            result["timing_intelligence"] = timing_intelligence
+        if timing_summary:
+            result["timing_summary"] = timing_summary
+        if timing_metrics:
+            result["timing_metrics"] = timing_metrics
+        if priority_timing_triggers:
+            result["priority_timing_triggers"] = priority_timing_triggers
+    if segment_playbook:
+        result["segment_playbook"] = segment_playbook
+        timing_intelligence = (
+            vendor_core_reasoning.get("timing_intelligence")
+            if isinstance(vendor_core_reasoning.get("timing_intelligence"), dict)
+            else None
+        )
+        targeting_summary = _segment_targeting_summary(
+            segment_playbook,
+            timing_intelligence,
+        )
+        if targeting_summary:
+            result["segment_targeting_summary"] = targeting_summary
+    if synthesis_wedge:
+        result["synthesis_wedge"] = synthesis_wedge
+        result["synthesis_wedge_label"] = synthesis_wedge_label
+    if evidence_window:
+        result["evidence_window"] = evidence_window
+    if evidence_window_days is not None:
+        result["evidence_window_days"] = evidence_window_days
+    if incumbent_synthesis_view is not None:
+        result["synthesis_schema_version"] = incumbent_synthesis_view.schema_version
+    if used_reasoning_synthesis:
+        result["reasoning_source"] = "b2b_reasoning_synthesis"
+        inject_synthesis_freshness(
+            result,
+            incumbent_synthesis_view,
+            requested_as_of=requested_as_of,
+        )
+    if reasoning_contract_gaps:
+        result["reasoning_contract_gaps"] = reasoning_contract_gaps
     if battle_card_metadata:
         if battle_card_metadata.get("battle_card_date"):
             result["battle_card_date"] = battle_card_metadata["battle_card_date"]
@@ -1032,6 +1520,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if today is None:
         return {"_skip_synthesis": "Core signals not fresh for today"}
 
+    from .b2b_churn_intelligence import _normalize_test_vendors
+
     window_days = cfg.intelligence_window_days
     min_mentions = cfg.challenger_brief_min_displacement_mentions
     max_per_incumbent = cfg.challenger_brief_max_pairs_per_incumbent
@@ -1041,6 +1531,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     quote_candidate_limit = cfg.challenger_brief_quote_candidate_limit
     quote_similarity_threshold = cfg.challenger_brief_quote_similarity_threshold
     min_quote_urgency = cfg.quotable_phrase_min_urgency
+    scoped_vendors = _normalize_test_vendors((task.metadata or {}).get("test_vendors"))
+    vendor_scope = {vendor.lower() for vendor in scoped_vendors}
 
     # --- Phase 1: Select displacement pairs ---
     await _update_execution_progress(
@@ -1054,11 +1546,26 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         max_per_incumbent=max_per_incumbent,
         window_days=window_days,
     )
+    if vendor_scope:
+        raw_pair_count = len(pairs)
+        pairs = [
+            pair for pair in pairs
+            if str(pair.get("incumbent") or "").strip().lower() in vendor_scope
+        ]
+        logger.info(
+            "Scoped challenger briefs to %d/%d pairs for vendors: %s",
+            len(pairs), raw_pair_count, sorted(scoped_vendors),
+        )
     if not pairs:
         logger.info("No displacement pairs above threshold, skipping")
         return {"_skip_synthesis": "No displacement pairs above threshold"}
 
     logger.info("Selected %d displacement pairs for challenger briefs", len(pairs))
+    briefs_retired = await _retire_unselected_challenger_briefs(
+        pool,
+        today=today,
+        pairs=pairs,
+    )
 
     try:
         evidence_vault_lookup = await _fetch_latest_evidence_vault(
@@ -1094,6 +1601,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 incumbent_profile,
                 challenger_profile,
                 churn_signal,
+                incumbent_synthesis_view,
                 cross_vendor_battle,
                 review_pain_quotes,
             ) = await asyncio.gather(
@@ -1107,6 +1615,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 _fetch_product_profile(pool, incumbent),
                 _fetch_product_profile(pool, challenger),
                 _fetch_churn_signal(pool, incumbent, today),
+                _fetch_synthesis_view(pool, incumbent, today, window_days),
                 _fetch_cross_vendor_battle(pool, incumbent, challenger, today),
                 _fetch_review_pain_quotes(
                     pool,
@@ -1134,11 +1643,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 challenger_profile=challenger_profile,
                 incumbent_evidence_vault=evidence_vault_lookup.get(incumbent),
                 churn_signal=churn_signal,
+                incumbent_synthesis_view=incumbent_synthesis_view,
                 cross_vendor_battle=cross_vendor_battle,
                 review_pain_quotes=review_pain_quotes,
                 battle_card_metadata=battle_card_metadata if battle_card_record else None,
                 quote_similarity_threshold=quote_similarity_threshold,
                 max_target_accounts=max_target_accounts,
+                requested_as_of=today,
             )
 
             exec_summary = brief.pop("_executive_summary", "")
@@ -1195,8 +1706,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         )
 
     logger.info(
-        "Challenger briefs: %d pairs, %d persisted",
-        len(pairs), persisted,
+        "Challenger briefs: %d pairs, %d persisted, %d retired",
+        len(pairs), persisted, briefs_retired,
     )
     await _update_execution_progress(
         task,
@@ -1212,4 +1723,5 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "_skip_synthesis": "Challenger briefs complete",
         "pairs": len(pairs),
         "persisted": persisted,
+        "briefs_retired": briefs_retired,
     }

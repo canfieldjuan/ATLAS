@@ -91,7 +91,19 @@ If `source_name` is not provided in the quotable phrase data, use `> "quote text
     "source_distribution": {"sources": [...], "verified_count": 52, "community_count": 31},
     "market_regime": "high_churn"
   },
-  "sections": [...],
+  "sections": [
+    {
+      "id": "section_id",
+      "heading": "Section Title",
+      "goal": "What this section should accomplish",
+      "key_stats": {
+        "// Standard fields": "vendor, category, review counts, urgency scores",
+        "// Reasoning fields (when present)": "displacement metrics, battle conclusions, segment roles, temporal triggers, synthesis wedge -- see Reasoning Intelligence Fields section"
+      },
+      "data_summary": "Prose summary of the data for this section",
+      "chart_ids": ["chart-id-to-embed"]
+    }
+  ],
   "available_charts": [...],
   "quotable_phrases": [...],
   "related_posts": [
@@ -326,3 +338,47 @@ Use HTML tables for any 2+ item comparison. AI engines extract tabular data more
 - For each vendor: who reviewers say it works best for, who reports problems, and what the data suggests
 - Use real data (company size distributions, integration counts, pain scores) to support recommendations
 - Don't default to "the most popular" -- the right tool depends on the buyer's context
+
+## Reasoning Intelligence Fields
+
+Blueprint sections may include `key_stats` fields from the reasoning intelligence layer. These are pre-computed, cross-correlated signals -- higher quality than raw review aggregates. Use them to strengthen claims and add depth.
+
+### Displacement data (in `key_stats`)
+- `a_to_b_mentions` / `b_to_a_mentions`: How many reviewers describe switching between these vendors. Use as concrete evidence: "N reviewers describe switching from X to Y."
+- `a_to_b_signal_strength`: Confidence classification of the displacement flow ("strong", "moderate", "emerging"). Frame proportionally.
+- `a_to_b_primary_driver`: The dominant reason reviewers cite for switching. Lead with this in displacement sections.
+- `explicit_switches` / `active_evaluations`: Distinguish between reviewers who already switched and those actively evaluating. "N have already switched; M more are evaluating."
+- `top_switch_reasons`: Ranked list of why reviewers switch. Use these as the structural backbone of displacement analysis.
+- `battle_conclusion`: A pre-computed assessment of which vendor fares better in head-to-head comparison. Use to anchor the verdict, but present as "the data suggests" not "X wins."
+- `battle_winner` / `battle_confidence` / `battle_durability`: Specifics of the competitive assessment. When durability is "structural," frame as a persistent pattern, not a temporary spike.
+
+### Segment data (in `key_stats`)
+- `roles_a` / `roles_b` or `roles`: Buyer roles with review counts and per-role churn rates. Use to say "Decision-makers churn at X% versus end-users at Y%."
+- `dm_churn_rate` / `dm_churn_rate_a` / `dm_churn_rate_b`: Decision-maker specific churn rate. High values (above 0.3) are significant -- frame as "N in 10 decision-makers show switching intent."
+- `top_churning_role` / `top_role_churn_rate`: The role with the highest churn rate. Use for buyer-specific framing.
+- `price_increase_rate`: Rate of reviewers mentioning price increases. Use in pricing-focused posts.
+
+### Temporal data (in `key_stats`)
+- `renewal_signals`: Count of reviewers with contract renewals in the near term. Frame as timing urgency.
+- `evaluation_deadlines`: Count of reviewers with active evaluation deadlines. Stronger signal than renewals.
+- `keyword_spike_count` / `spike_keywords`: Recently spiking complaint keywords. Use to explain "why now" -- what is accelerating.
+- `declining_pct` / `improving_pct`: Sentiment trajectory. If declining_pct is high (above 0.5), frame as worsening trend.
+
+### Category data (in `key_stats`)
+- `market_regime`: Category-level classification ("stable", "high_churn", "disruption", "entrenchment"). Use as backdrop context, not a causal claim.
+- `category_conclusion`: Pre-computed market assessment. Use to anchor landscape and roundup posts.
+- `category_winner`: Which vendor the category council assessment favors. Present as "the data leans toward" not a definitive winner.
+- `outlier_vendors`: Vendors diverging from category trends. Use as narrative hooks.
+
+### Synthesis data (in `key_stats`)
+- `synthesis_wedge`: The primary angle label (e.g., "price_squeeze", "support_erosion", "feature_parity"). Use to sharpen the narrative focus.
+- `synthesis_wedge_label`: Human-readable version of the wedge.
+- `causal_trigger`: The primary trigger driving the churn pattern. Use as the lead insight in outlook/verdict sections.
+- `causal_why_now`: Why the pattern is happening now specifically. Use for temporal framing.
+
+### Rules for reasoning data
+1. **Reasoning data is pre-computed intelligence, not raw reviews.** Present it as analytical conclusions, not reviewer quotes.
+2. **Never fabricate reasoning data.** If a `key_stats` field is absent, do not invent it. Only use what is provided.
+3. **Frame proportionally.** A battle conclusion with confidence 0.5 is uncertain. At 0.8+, it is strong. Adjust language accordingly.
+4. **Combine with review evidence.** Reasoning conclusions are strongest when paired with supporting reviewer quotes. "The data suggests X is winning on pricing (78% confidence), and reviewers confirm: [quote]."
+5. **Distinguish displacement types.** Explicit switches are stronger evidence than active evaluations, which are stronger than implied preferences.

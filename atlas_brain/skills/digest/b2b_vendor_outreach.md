@@ -34,6 +34,15 @@ You receive a JSON object with:
 - `selling`: Object with `{sender_name, sender_title, sender_company, booking_url}`
   - `selling.blog_posts` (optional): Array of `{title, url, topic_type}` -- published analysis posts relevant to this vendor's category. Full URLs ready to embed.
 - `archetype_context` (optional): Object with `{archetype, confidence, falsification}` -- the vendor's classified churn pattern. `archetype` is one of: "pricing_shock", "feature_gap", "support_collapse", "leadership_redesign", "acquisition_decay", "integration_break", "category_disruption", "compliance_gap". `confidence` is 0-1.
+- `briefing_context` (optional): Compact summary from the latest vendor briefing. May include:
+  - `executive_summary`
+  - `account_pressure_summary`
+  - `timing_summary`
+  - `segment_targeting_summary`
+  - `priority_account_names`
+  - `top_displacement_targets`
+  - `top_feature_gaps`
+  - `pain_labels`
 - `channel`: "email_cold" | "email_followup"
 - `cold_email_context` (only on `email_followup`): `{subject, body}` of the cold email already sent
 
@@ -129,5 +138,11 @@ Return a JSON object:
    - `leadership_redesign`: Frame intelligence around product direction concerns. Highlight user frustration with UX or strategy changes.
    - `acquisition_decay` / `integration_break`: Frame as post-change instability signals. Highlight accounts reacting to disruption.
    - If archetype confidence is below 0.5, use general churn framing rather than committing to the archetype angle.
+
+25. **Use `briefing_context` to sharpen the narrative, not replace `signal_summary`.**
+   - If `account_pressure_summary` or `timing_summary` is present, use it to calibrate urgency.
+   - If `top_feature_gaps` or `pain_labels` is present, use it to tighten the angle.
+   - If `top_displacement_targets` is present, reserve competitor naming for the follow-up.
+   - `priority_account_names` is internal targeting context only. Never reveal those names in the email.
 
 Return ONLY the JSON object, no markdown fences, no explanation.

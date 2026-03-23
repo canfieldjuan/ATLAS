@@ -9,7 +9,9 @@ Pipeline isolation ensures B2B and consumer blog posts never cross-match.
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 from typing import Any
 
 logger = logging.getLogger("atlas.autonomous.tasks._blog_matching")
@@ -42,6 +44,27 @@ _PIPELINE_TOPIC_TYPES = {
 }
 
 
+_WORD_RE = re.compile(r"[a-z0-9]+")
+
+
+def _tokenize_text(value: str) -> list[str]:
+    return _WORD_RE.findall((value or "").lower())
+
+
+def _contains_term_as_tokens(text: str, term: str) -> bool:
+    """Token-aware contains check to avoid substring false positives."""
+    hay = _tokenize_text(text)
+    needle = _tokenize_text(term)
+    if not hay or not needle:
+        return False
+    if len(needle) == 1:
+        return needle[0] in hay
+    for idx in range(0, len(hay) - len(needle) + 1):
+        if hay[idx:idx + len(needle)] == needle:
+            return True
+    return False
+
+
 async def fetch_relevant_blog_posts(
     pool,
     *,
@@ -49,6 +72,9 @@ async def fetch_relevant_blog_posts(
     vendor_name: str | None = None,
     category: str | None = None,
     brand_names: list[str] | None = None,
+    pain_categories: list[str] | None = None,
+    alternative_vendors: list[str] | None = None,
+    include_drafts: bool = False,
     limit: int = 3,
 ) -> list[dict[str, Any]]:
     """Fetch published blog posts relevant to a campaign target.
@@ -61,6 +87,13 @@ async def fetch_relevant_blog_posts(
         vendor_name: Vendor/company name to match in title/slug.
         category: Product category to match in ``tags->>0``.
         brand_names: Additional brand names to match in title/slug.
+        pain_categories: Pain categories to match in data_context JSONB
+            (e.g. ``["pricing", "support"]``).  Highest-weight signal.
+        alternative_vendors: Alternative vendor names the target is
+            evaluating.  Matches against ``data_context.vendor_b`` in
+            showdown posts.
+        include_drafts: When true, allow ``draft`` posts as a fallback when
+            no published matches exist.
         limit: Max posts to return (default 3).
 
     Returns:
@@ -88,16 +121,18 @@ async def fetch_relevant_blog_posts(
         search_terms.extend(b.lower() for b in brand_names if b)
 
     try:
+        statuses = ["published", "draft"] if include_drafts else ["published"]
         rows = await pool.fetch(
             """
-            SELECT title, slug, topic_type, tags
+            SELECT title, slug, topic_type, tags, data_context, status
             FROM blog_posts
-            WHERE status = 'published'
+            WHERE status = ANY($2::text[])
               AND topic_type = ANY($1::text[])
             ORDER BY published_at DESC
             LIMIT 50
             """,
             list(topic_types),
+            statuses,
         )
     except Exception:
         logger.exception("Failed to fetch blog posts for matching")
@@ -106,37 +141,88 @@ async def fetch_relevant_blog_posts(
     if not rows:
         return []
 
-    # Score each post
-    scored: list[tuple[int, str, dict]] = []
+    # Prepare matching inputs
     cat_lower = (category or "").lower()
+    pain_lower = [p.lower() for p in (pain_categories or []) if p]
+    alt_lower = [a.lower() for a in (alternative_vendors or []) if a]
+
+    # Score each post
+    published_scored: list[tuple[int, str, dict]] = []
+    draft_scored: list[tuple[int, str, dict]] = []
 
     for row in rows:
         score = 0
         slug = (row["slug"] or "").lower()
         title = (row["title"] or "").lower()
+        status = str(row.get("status") or "published").lower()
         tags = row["tags"] or []
         if isinstance(tags, list):
             tags_text = " ".join(str(tag).lower() for tag in tags if tag)
         else:
             tags_text = str(tags).lower()
 
-        # Category match across tags, slug, and title.
+        # Parse data_context for deep matching
+        dc = row.get("data_context")
+        if isinstance(dc, str):
+            try:
+                dc = json.loads(dc)
+            except Exception:
+                dc = {}
+        if not isinstance(dc, dict):
+            dc = {}
+        tc = dc.get("topic_ctx") if isinstance(dc.get("topic_ctx"), dict) else {}
+
+        # Category match across tags, slug, and title (+2)
         if cat_lower and (cat_lower in tags_text or cat_lower in slug or cat_lower in title):
             score += 2
 
-        # Name match: vendor or brand name appears in tags, slug, or title.
+        # Name match: vendor or brand name appears in tags, slug, or title (+3)
         for term in search_terms:
             if term in tags_text or term in slug or term in title:
                 score += 3
                 break  # one name match is enough
 
+        # Pain category match: post covers the same pain the campaign targets (+4)
+        # Check topic_type, tags, title, slug, and pain-specific data_context
+        # fields -- NOT the entire data_context blob (avoids false positives
+        # from vendor names or categories containing pain keywords).
+        if pain_lower:
+            pain_haystack_parts = [title, slug, tags_text]
+            # Extract pain-specific fields from data_context
+            for pain_key in ("pain_distribution", "pain_breakdown",
+                             "pain_categories", "top_pain"):
+                pv = dc.get(pain_key) or tc.get(pain_key)
+                if pv is not None:
+                    pain_haystack_parts.append(str(pv).lower())
+            # topic_type itself is a pain signal (pricing_reality_check)
+            pain_haystack_parts.append(row["topic_type"] or "")
+            pain_haystack = " ".join(pain_haystack_parts)
+            for pain in pain_lower:
+                if len(pain) >= 3 and pain in pain_haystack:
+                    score += 4
+                    break
+
+        # Alternative vendor match: post compares with the vendor being evaluated (+5)
+        if alt_lower:
+            # Check vendor_b in data_context (showdown posts store the second vendor here)
+            vendor_b = str(tc.get("vendor_b") or dc.get("vendor_b") or "").lower()
+            alt_haystack = " ".join(filter(None, [title, slug, tags_text]))
+            for alt in alt_lower:
+                if len(alt) < 3:
+                    continue  # skip very short names to avoid substring false positives
+                if alt == vendor_b or _contains_term_as_tokens(alt_haystack, alt):
+                    score += 5
+                    break
+
         if score > 0:
-            scored.append((score, row["slug"], {
+            target = published_scored if status == "published" else draft_scored
+            target.append((score, row["slug"], {
                 "title": row["title"],
                 "url": f"{base_url}/blog/{row['slug']}",
                 "topic_type": row["topic_type"],
             }))
 
     # Sort by score desc, then by position in original query (recency)
+    scored = published_scored or (draft_scored if include_drafts else [])
     scored.sort(key=lambda t: -t[0])
     return [item for _, _, item in scored[:limit]]

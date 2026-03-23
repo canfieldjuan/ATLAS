@@ -32,6 +32,7 @@ from ...services.vendor_registry import resolve_vendor_name
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from ...templates.email.vendor_briefing import render_vendor_briefing_html
+from ._b2b_shared import _timing_summary_payload
 from .campaign_suppression import is_suppressed
 
 logger = logging.getLogger("atlas.b2b.vendor_briefing")
@@ -42,6 +43,220 @@ _ACCOUNT_CARD_SYSTEM_PROMPT = (
     "Every claim must be supported by the provided data. "
     "Return only valid JSON."
 )
+
+
+def _apply_reasoning_synthesis_to_briefing(
+    briefing: dict[str, Any],
+    feed_entry: dict[str, Any] | None,
+) -> bool:
+    """Overlay contract-backed reasoning fields from weekly feed entries."""
+    if not isinstance(feed_entry, dict):
+        return False
+
+    used = False
+
+    contracts = feed_entry.get("reasoning_contracts")
+    has_explicit_contracts = isinstance(contracts, dict) and bool(contracts)
+    if not has_explicit_contracts:
+        contracts = {}
+
+    vendor_core = contracts.get("vendor_core_reasoning")
+    if (not isinstance(vendor_core, dict) or not vendor_core) and not has_explicit_contracts:
+        vendor_sections = {
+            section: feed_entry.get(section)
+            for section in ("causal_narrative", "segment_playbook", "timing_intelligence")
+            if isinstance(feed_entry.get(section), dict) and feed_entry.get(section)
+        }
+        if vendor_sections:
+            vendor_core = {
+                "schema_version": "v1",
+                **vendor_sections,
+            }
+
+    displacement = contracts.get("displacement_reasoning")
+    if (not isinstance(displacement, dict) or not displacement) and not has_explicit_contracts:
+        displacement_sections = {
+            section: feed_entry.get(section)
+            for section in ("competitive_reframes", "migration_proof")
+            if isinstance(feed_entry.get(section), dict) and feed_entry.get(section)
+        }
+        if displacement_sections:
+            displacement = {
+                "schema_version": "v1",
+                **displacement_sections,
+            }
+
+    if isinstance(vendor_core, dict) and vendor_core:
+        briefing["vendor_core_reasoning"] = vendor_core
+        timing_intelligence = vendor_core.get("timing_intelligence")
+        if isinstance(timing_intelligence, dict) and timing_intelligence:
+            briefing["timing_intelligence"] = timing_intelligence
+            timing_summary, timing_metrics, priority_triggers = (
+                _timing_summary_payload(timing_intelligence)
+            )
+            if timing_summary:
+                briefing["timing_summary"] = timing_summary
+            if timing_metrics:
+                briefing["timing_metrics"] = timing_metrics
+            if priority_triggers:
+                briefing["priority_timing_triggers"] = priority_triggers
+        used = True
+    if isinstance(displacement, dict) and displacement:
+        briefing["displacement_reasoning"] = displacement
+        used = True
+
+    account_reasoning = contracts.get("account_reasoning")
+    if (not isinstance(account_reasoning, dict) or not account_reasoning) and not has_explicit_contracts:
+        raw_account = feed_entry.get("account_reasoning")
+        if isinstance(raw_account, dict) and raw_account:
+            account_reasoning = raw_account
+    if isinstance(account_reasoning, dict) and account_reasoning:
+        briefing["account_reasoning"] = account_reasoning
+        summary_payload = _account_reasoning_summary_payload(account_reasoning)
+        for key, value in summary_payload.items():
+            if value not in ("", [], {}, None):
+                briefing[key] = value
+        merged_accounts = _merge_named_accounts_with_account_reasoning(
+            briefing.get("named_accounts") or [],
+            account_reasoning,
+        )
+        if merged_accounts:
+            briefing["named_accounts"] = merged_accounts
+        used = True
+
+    if contracts:
+        briefing["reasoning_contracts"] = contracts
+        used = True
+
+    for field in (
+        "synthesis_wedge",
+        "synthesis_wedge_label",
+        "synthesis_schema_version",
+        "evidence_window",
+        "evidence_window_days",
+        "data_as_of_date",
+        "data_stale",
+        "account_pressure_summary",
+        "account_pressure_metrics",
+        "priority_account_names",
+        "timing_summary",
+        "timing_metrics",
+        "priority_timing_triggers",
+        "reasoning_contract_gaps",
+        "reasoning_source",
+        "category_council",
+    ):
+        value = feed_entry.get(field)
+        if value is not None:
+            briefing[field] = value
+            used = True
+
+    return used
+
+
+def _reasoning_int(value: Any) -> int | None:
+    """Coerce traced-number wrappers into ints."""
+    if isinstance(value, dict):
+        value = value.get("value")
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _account_reasoning_named_accounts(
+    account_reasoning: dict[str, Any] | None,
+    *,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Convert account reasoning top_accounts into briefing account rows."""
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    if not isinstance(account_reasoning, dict):
+        return rows
+    for item in account_reasoning.get("top_accounts") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or item.get("company") or "").strip()
+        if not name or name.casefold() in seen:
+            continue
+        seen.add(name.casefold())
+        try:
+            urgency = round(max(0.0, min(float(item.get("intent_score") or 0), 1.0)) * 10, 1)
+        except (TypeError, ValueError):
+            urgency = 0.0
+        rows.append({
+            "company": name,
+            "urgency": urgency,
+            "source": "account_reasoning",
+            "confidence_score": item.get("intent_score"),
+            "reasoning_backed": True,
+            "source_id": item.get("source_id"),
+        })
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def _merge_named_accounts_with_account_reasoning(
+    named_accounts: list[dict[str, Any]] | Any,
+    account_reasoning: dict[str, Any] | None,
+    *,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Preserve richer named-account rows and supplement from account reasoning."""
+    merged = [item for item in (named_accounts or []) if isinstance(item, dict)]
+    seen = {
+        str(item.get("company") or "").strip().casefold()
+        for item in merged
+        if str(item.get("company") or "").strip()
+    }
+    for row in _account_reasoning_named_accounts(account_reasoning, limit=limit):
+        key = str(row.get("company") or "").strip().casefold()
+        if key and key not in seen:
+            merged.append(row)
+            seen.add(key)
+        if len(merged) >= limit:
+            break
+    return merged[:limit]
+
+
+def _account_reasoning_summary_payload(
+    account_reasoning: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build visible account-pressure fields from account reasoning."""
+    if not isinstance(account_reasoning, dict):
+        return {}
+    metrics: dict[str, int] = {}
+    for key in ("total_accounts", "high_intent_count", "active_eval_count"):
+        value = _reasoning_int(account_reasoning.get(key))
+        if value is not None:
+            metrics[key] = value
+    summary = str(account_reasoning.get("market_summary") or "").strip()
+    if not summary:
+        active_eval = metrics.get("active_eval_count")
+        high_intent = metrics.get("high_intent_count")
+        total_accounts = metrics.get("total_accounts")
+        if active_eval is not None and high_intent is not None:
+            summary = (
+                f"{active_eval} accounts are in active evaluation while "
+                f"{high_intent} accounts show high-intent churn signals."
+            )
+        elif high_intent is not None:
+            summary = f"{high_intent} accounts show high-intent churn signals."
+        elif total_accounts is not None:
+            summary = f"{total_accounts} accounts are currently in scope."
+    priority_names = [
+        row["company"] for row in _account_reasoning_named_accounts(account_reasoning)
+    ]
+    payload: dict[str, Any] = {}
+    if summary:
+        payload["account_pressure_summary"] = summary
+    if metrics:
+        payload["account_pressure_metrics"] = metrics
+    if priority_names:
+        payload["priority_account_names"] = priority_names
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +334,14 @@ Do NOT say "immediate", "urgent", "systemic", or "acute".
 If the tone_band says "watchlist" but the data has high-urgency quotes, \
 acknowledge the tension: "While aggregate urgency remains moderate, \
 individual high-risk accounts warrant targeted attention."
+
+STRENGTH CALIBRATION:
+- If `retention_strengths` is present, acknowledge what the vendor does well \
+before stating the risk in the executive_summary. Example: "Despite strong \
+customer satisfaction in [area], [vendor] faces material churn pressure \
+driven by [weakness]." This prevents overstatement and builds credibility \
+with prospects who value parts of the incumbent. Do not fabricate strengths \
+not in the list.
 
 ATTRIBUTION RULES:
 - NEVER make direct attribution claims about named accounts. Do NOT write \
@@ -210,6 +433,17 @@ def _finalize_briefing_presentation(briefing: dict[str, Any]) -> None:
         if raw_category and raw_category not in pain_labels:
             pain_labels[raw_category] = _default_pain_label(raw_category)
     briefing["pain_labels"] = pain_labels
+
+    if not briefing.get("executive_summary"):
+        account_pressure_summary = str(
+            briefing.get("account_pressure_summary") or ""
+        ).strip()
+        if account_pressure_summary:
+            briefing["executive_summary"] = account_pressure_summary
+        else:
+            timing_summary = str(briefing.get("timing_summary") or "").strip()
+            if timing_summary:
+                briefing["executive_summary"] = timing_summary
 
     if not briefing.get("cta_hook"):
         briefing["cta_hook"] = _build_default_cta_hook(briefing)
@@ -309,7 +543,7 @@ def _briefing_named_accounts_from_evidence_vault(
         if not company:
             continue
         pain = str(item.get("pain_category") or "").strip().lower()
-        accounts.append({
+        acct: dict[str, Any] = {
             "company": company,
             "title": item.get("buyer_role"),
             "company_size": item.get("seat_count"),
@@ -321,7 +555,10 @@ def _briefing_named_accounts_from_evidence_vault(
             "source": item.get("source"),
             "contract_end": item.get("contract_end"),
             "confidence_score": item.get("confidence_score"),
-        })
+        }
+        if item.get("decision_maker") is not None:
+            acct["decision_maker"] = item["decision_maker"]
+        accounts.append(acct)
     accounts.sort(
         key=lambda a: (
             float(a.get("urgency") or 0),
@@ -330,6 +567,36 @@ def _briefing_named_accounts_from_evidence_vault(
         reverse=True,
     )
     return accounts[:limit]
+
+
+def _briefing_strengths_from_evidence_vault(
+    vault: dict[str, Any],
+    *,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Map canonical vault strength rows to vendor-briefing retention strengths."""
+    rows: list[dict[str, Any]] = []
+    for item in (vault.get("strength_evidence") or []):
+        if not isinstance(item, dict):
+            continue
+        area = str(item.get("label") or item.get("key") or "").strip()
+        if not area:
+            continue
+        total = int(item.get("mention_count_total") or 0)
+        trend = item.get("trend") if isinstance(item.get("trend"), dict) else {}
+        entry: dict[str, Any] = {
+            "area": area,
+            "mention_count": total,
+        }
+        direction = str(trend.get("direction") or "").strip()
+        if direction:
+            entry["trend"] = direction
+        quote = str(item.get("best_quote") or "").strip()
+        if quote:
+            entry["customer_quote"] = quote
+        rows.append(entry)
+    rows.sort(key=lambda r: int(r.get("mention_count") or 0), reverse=True)
+    return rows[:limit]
 
 
 def _apply_evidence_vault_to_briefing(
@@ -357,6 +624,12 @@ def _apply_evidence_vault_to_briefing(
     if not briefing.get("dm_churn_rate") and snapshot.get("dm_churn_rate") is not None:
         briefing["dm_churn_rate"] = float(snapshot.get("dm_churn_rate") or 0) * 100.0
         used = True
+    if not briefing.get("recommend_ratio") and snapshot.get("recommend_ratio") is not None:
+        try:
+            briefing["recommend_ratio"] = round(float(snapshot["recommend_ratio"]), 2)
+            used = True
+        except (TypeError, ValueError):
+            pass
 
     if not briefing.get("pain_breakdown"):
         pain_breakdown = _briefing_pain_breakdown_from_evidence_vault(vault)
@@ -372,6 +645,11 @@ def _apply_evidence_vault_to_briefing(
         named_accounts = _briefing_named_accounts_from_evidence_vault(vault)
         if named_accounts:
             briefing["named_accounts"] = named_accounts
+            used = True
+    if not briefing.get("retention_strengths"):
+        retention_strengths = _briefing_strengths_from_evidence_vault(vault)
+        if retention_strengths:
+            briefing["retention_strengths"] = retention_strengths
             used = True
 
     existing_evidence = list(briefing.get("evidence") or [])
@@ -419,6 +697,7 @@ async def _enrich_with_analyst_summary(briefing: dict[str, Any]) -> None:
         "trend": trend or "stable",
         "review_count": briefing.get("review_count"),
         "dm_churn_rate": briefing.get("dm_churn_rate"),
+        "recommend_ratio": briefing.get("recommend_ratio"),
         "tone_band": _tone_band(score, urgency),
         "pain_breakdown": briefing.get("pain_breakdown", [])[:5],
         "top_displacement_targets": briefing.get("top_displacement_targets", [])[:5],
@@ -427,7 +706,11 @@ async def _enrich_with_analyst_summary(briefing: dict[str, Any]) -> None:
             for e in (briefing.get("evidence") or [])[:3]
         ],
         "named_accounts": briefing.get("named_accounts", [])[:5],
+        "account_pressure_summary": briefing.get("account_pressure_summary"),
+        "account_pressure_metrics": briefing.get("account_pressure_metrics"),
+        "priority_account_names": briefing.get("priority_account_names", [])[:5],
         "top_feature_gaps": briefing.get("top_feature_gaps", [])[:3],
+        "retention_strengths": briefing.get("retention_strengths", [])[:3],
         "named_account_personas": [
             {"company": a.get("company"), "title": a.get("title"),
              "company_size": a.get("company_size"), "industry": a.get("industry")}
@@ -1117,6 +1400,8 @@ async def build_vendor_briefing(
         "challenger_mode": challenger_mode,
         "data_sources": {
             "weekly_churn_feed": False,
+            "reasoning_synthesis": False,
+            "account_reasoning": False,
             "churn_signals": False,
             "evidence_vault": False,
             "product_profile": False,
@@ -1150,6 +1435,10 @@ async def build_vendor_briefing(
             "category": feed_entry.get("category", "Software"),
             "budget_context": feed_entry.get("budget_context"),
         })
+        if _apply_reasoning_synthesis_to_briefing(briefing, feed_entry):
+            briefing["data_sources"]["reasoning_synthesis"] = True
+        if briefing.get("account_reasoning"):
+            briefing["data_sources"]["account_reasoning"] = True
 
     # ------------------------------------------------------------------
     # Source 2: b2b_churn_signals (fallback if no feed entry)

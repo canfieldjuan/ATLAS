@@ -16,6 +16,7 @@ from typing import Any
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from ._b2b_shared import _segment_targeting_summary, _timing_summary_payload
 from ._execution_progress import _update_execution_progress
 
 logger = logging.getLogger("atlas.tasks.b2b_accounts_in_motion")
@@ -147,6 +148,42 @@ def _clean_alternatives(
     return cleaned
 
 
+def _reasoning_int(value: Any) -> int | None:
+    """Unwrap a traced numeric contract field into an integer."""
+    raw = value.get("value") if isinstance(value, dict) else value
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        try:
+            return int(float(raw))
+        except (TypeError, ValueError):
+            return None
+
+
+def _account_reasoning_summary_payload(
+    account_reasoning: dict[str, Any] | None,
+) -> tuple[str, dict[str, int], list[str]]:
+    """Derive readable summary fields from account reasoning."""
+    if not isinstance(account_reasoning, dict):
+        return "", {}, []
+    summary = str(account_reasoning.get("market_summary") or "").strip()
+    metrics: dict[str, int] = {}
+    for key in ("total_accounts", "high_intent_count", "active_eval_count"):
+        value = _reasoning_int(account_reasoning.get(key))
+        if value is not None:
+            metrics[key] = value
+    priority_names: list[str] = []
+    for item in account_reasoning.get("top_accounts") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if name and name not in priority_names:
+            priority_names.append(name)
+    return summary, metrics, priority_names[:3]
+
+
 def _apply_account_quality_adjustments(account: dict[str, Any], cfg) -> tuple[int, dict[str, int], list[str]]:
     """Apply quality bonuses/penalties to the base account score."""
     delta = 0
@@ -179,6 +216,130 @@ def _apply_account_quality_adjustments(account: dict[str, Any], cfg) -> tuple[in
         components["missing_quote"] = -cfg.accounts_in_motion_missing_quote_penalty
         flags.append("missing_quote")
     return delta, components, flags
+
+
+def _build_fallback_intent_rows(
+    churning_companies: list[dict[str, Any]],
+    *,
+    min_urgency: float,
+) -> list[dict[str, Any]]:
+    """Build high-intent-shaped fallback rows from churning-company aggregates."""
+    fallback: list[dict[str, Any]] = []
+    for vendor_row in churning_companies:
+        vendor = str(vendor_row.get("vendor") or "").strip()
+        if not vendor:
+            continue
+        for company_row in (vendor_row.get("companies") or []):
+            company = str(company_row.get("company") or "").strip()
+            if not company:
+                continue
+            try:
+                urgency = float(company_row.get("urgency") or 0)
+            except (TypeError, ValueError):
+                urgency = 0.0
+            if urgency < float(min_urgency):
+                continue
+            fallback.append({
+                "company": company,
+                "vendor": vendor,
+                "category": None,
+                "title": company_row.get("title"),
+                "company_size": company_row.get("company_size"),
+                "industry": company_row.get("industry"),
+                "role_level": company_row.get("role"),
+                "decision_maker": False,
+                "urgency": urgency,
+                "pain": company_row.get("pain"),
+                "alternatives": [],
+                "quotes": [],
+                "contract_signal": None,
+                "review_id": None,
+                "source": "churning_companies_fallback",
+                "seat_count": None,
+                "contract_end": None,
+                "buying_stage": None,
+            })
+    return fallback
+
+
+def _build_signal_metadata_fallback_rows(
+    signal_metadata: list[dict[str, Any]],
+    *,
+    min_urgency: float,
+) -> list[dict[str, Any]]:
+    """Build fallback intake rows from persisted company-signal metadata."""
+    fallback: list[dict[str, Any]] = []
+    for row in signal_metadata:
+        company = str(row.get("company") or "").strip()
+        vendor = str(row.get("vendor") or "").strip()
+        if not company or not vendor:
+            continue
+        try:
+            urgency = float(row.get("confidence") or 0)
+        except (TypeError, ValueError):
+            urgency = 0.0
+        if urgency < float(min_urgency):
+            continue
+        fallback.append({
+            "company": company,
+            "vendor": vendor,
+            "category": None,
+            "title": None,
+            "company_size": None,
+            "industry": None,
+            "role_level": None,
+            "decision_maker": False,
+            "urgency": urgency,
+            "pain": None,
+            "alternatives": [],
+            "quotes": [],
+            "contract_signal": None,
+            "review_id": None,
+            "source": "company_signals_fallback",
+            "seat_count": None,
+            "contract_end": None,
+            "buying_stage": None,
+        })
+    return fallback
+
+
+def _build_account_pool_seed_rows(
+    account_pool_lookup: dict[str, dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Flatten canonical account-intelligence rows into merge seed records."""
+    seed_rows: list[dict[str, Any]] = []
+    for vendor, payload in (account_pool_lookup or {}).items():
+        if not isinstance(payload, dict):
+            continue
+        for row in payload.get("accounts") or []:
+            if not isinstance(row, dict):
+                continue
+            company = str(row.get("company_name") or row.get("company") or "").strip()
+            if not company:
+                continue
+            seed_rows.append({
+                "company": company,
+                "vendor": vendor,
+                "category": payload.get("category"),
+                "title": row.get("title"),
+                "company_size": row.get("company_size"),
+                "industry": row.get("industry"),
+                "role_level": row.get("buyer_role"),
+                "decision_maker": bool(row.get("decision_maker")),
+                "urgency": row.get("urgency_score"),
+                "pain": row.get("pain_category"),
+                "alternatives": row.get("alternatives") or [],
+                "quotes": row.get("quotes") or [],
+                "review_id": row.get("review_id"),
+                "source": row.get("source") or "account_pool",
+                "seat_count": row.get("seat_count"),
+                "contract_end": row.get("contract_end"),
+                "buying_stage": row.get("buying_stage"),
+                "first_seen": row.get("first_seen_at"),
+                "last_seen": row.get("last_seen_at"),
+                "confidence": row.get("confidence_score"),
+            })
+    return seed_rows
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +400,45 @@ async def _fetch_company_signal_metadata(pool, window_days: int = 90) -> list[di
     ]
 
 
+async def _fetch_latest_synthesis_views(
+    pool,
+    *,
+    as_of: date,
+    analysis_window_days: int,
+) -> dict[str, Any]:
+    """Fetch latest reasoning synthesis rows and wrap them in SynthesisView."""
+    from ._b2b_synthesis_reader import load_synthesis_view
+
+    rows = await pool.fetch(
+        """
+        SELECT DISTINCT ON (vendor_name)
+               vendor_name, as_of_date, schema_version, synthesis
+        FROM b2b_reasoning_synthesis
+        WHERE as_of_date <= $1
+          AND analysis_window_days = $2
+        ORDER BY vendor_name, as_of_date DESC, created_at DESC
+        """,
+        as_of,
+        analysis_window_days,
+    )
+    views: dict[str, Any] = {}
+    for row in rows:
+        raw = row["synthesis"]
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                continue
+        if isinstance(raw, dict):
+            views[row["vendor_name"]] = load_synthesis_view(
+                raw,
+                row["vendor_name"],
+                schema_version=row["schema_version"] or "",
+                as_of_date=row["as_of_date"],
+            )
+    return views
+
+
 # ---------------------------------------------------------------------------
 # Merging
 # ---------------------------------------------------------------------------
@@ -250,6 +450,7 @@ def _merge_company_profiles(
     quotable_evidence: list[dict[str, Any]],
     signal_metadata: list[dict[str, Any]],
     *,
+    seed_rows: list[dict[str, Any]] | None = None,
     min_urgency: float = 5.0,
     apollo_org_lookup: dict[str, dict[str, Any]] | None = None,
     invalid_alternative_terms: list[str] | None = None,
@@ -264,6 +465,59 @@ def _merge_company_profiles(
 
     profiles: dict[tuple[str, str], dict[str, Any]] = {}
     invalid_alternative_terms = invalid_alternative_terms or []
+    seed_rows = seed_rows or []
+
+    for row in seed_rows:
+        company = row.get("company") or ""
+        vendor = _canonicalize_vendor(row.get("vendor") or "")
+        if not company or not vendor:
+            continue
+        urgency = float(row.get("urgency") or 0)
+        if urgency < min_urgency:
+            continue
+        alts = _clean_alternatives(
+            row.get("alternatives") or [],
+            company=company,
+            vendor=vendor,
+            invalid_terms=invalid_alternative_terms,
+        )
+        review_ids: list[str] = []
+        if row.get("review_id"):
+            review_ids.append(str(row["review_id"]))
+        account_quote = _extract_account_quote(row.get("quotes"))
+        source_distribution = {row["source"]: 1} if row.get("source") else {}
+        key = (_normalize_company_key(company), vendor)
+        if key in profiles:
+            continue
+        profiles[key] = {
+            "company": company,
+            "vendor": vendor,
+            "category": row.get("category"),
+            "urgency": urgency,
+            "pain_category": row.get("pain"),
+            "role_level": row.get("role_level"),
+            "decision_maker": bool(row.get("decision_maker")),
+            "buying_stage": row.get("buying_stage"),
+            "seat_count": row.get("seat_count"),
+            "contract_end": row.get("contract_end"),
+            "alternatives_considering": alts,
+            "source_reviews": review_ids,
+            "evidence_count": 0,
+            "title": row.get("title"),
+            "company_size": row.get("company_size"),
+            "industry": row.get("industry"),
+            "evaluation_deadline": None,
+            "decision_timeline": None,
+            "top_quote": account_quote,
+            "quote_match_type": "review" if account_quote else None,
+            "domain": None,
+            "annual_revenue_range": None,
+            "first_seen": row.get("first_seen"),
+            "last_seen": row.get("last_seen"),
+            "confidence": row.get("confidence"),
+            "source_distribution": source_distribution,
+            "pool_seeded": True,
+        }
 
     # 1. Base from high_intent -- group by key, take highest-urgency
     for row in high_intent:
@@ -304,9 +558,9 @@ def _merge_company_profiles(
                 "alternatives_considering": alts,
                 "source_reviews": review_ids,
                 "evidence_count": 1,
-                "title": None,
-                "company_size": None,
-                "industry": None,
+                "title": row.get("title"),
+                "company_size": row.get("company_size"),
+                "industry": row.get("industry"),
                 "evaluation_deadline": None,
                 "decision_timeline": None,
                 "top_quote": account_quote,
@@ -321,7 +575,11 @@ def _merge_company_profiles(
         else:
             # Merge: union alternatives, collect review_ids, max urgency
             existing["urgency"] = max(existing["urgency"], urgency)
-            existing["evidence_count"] = existing.get("evidence_count", 0) + 1
+            current_count = int(existing.get("evidence_count") or 0)
+            if existing.get("pool_seeded") and current_count == 0:
+                existing["evidence_count"] = 1
+            else:
+                existing["evidence_count"] = current_count + 1
             if row.get("review_id") and row["review_id"] not in existing["source_reviews"]:
                 existing["source_reviews"].append(row["review_id"])
             # Merge alternatives
@@ -338,6 +596,8 @@ def _merge_company_profiles(
                 dist = existing.setdefault("source_distribution", {})
                 dist[row["source"]] = dist.get(row["source"], 0) + 1
             # Fill nulls from higher-urgency row
+            if row.get("category") and not existing.get("category"):
+                existing["category"] = row["category"]
             if row.get("pain") and not existing.get("pain_category"):
                 existing["pain_category"] = row["pain"]
             if row.get("decision_maker") and not existing.get("decision_maker"):
@@ -350,6 +610,12 @@ def _merge_company_profiles(
                 existing["seat_count"] = row["seat_count"]
             if row.get("contract_end") and not existing.get("contract_end"):
                 existing["contract_end"] = row["contract_end"]
+            if row.get("title") and not existing.get("title"):
+                existing["title"] = row["title"]
+            if row.get("company_size") and not existing.get("company_size"):
+                existing["company_size"] = row["company_size"]
+            if row.get("industry") and not existing.get("industry"):
+                existing["industry"] = row["industry"]
             if not existing.get("top_quote"):
                 account_quote = _extract_account_quote(row.get("quotes"))
                 if account_quote:
@@ -455,6 +721,9 @@ def _merge_company_profiles(
             if apollo.get("annual_revenue_range"):
                 prof["annual_revenue_range"] = apollo["annual_revenue_range"]
 
+    for prof in profiles.values():
+        prof.pop("pool_seeded", None)
+
     return profiles
 
 
@@ -496,6 +765,31 @@ def _accounts_in_motion_feature_gaps_from_evidence_vault(
     gaps.sort(key=lambda row: int(row.get("mentions") or 0), reverse=True)
     return gaps[:limit]
 
+
+def _infer_top_destination_from_accounts(
+    vendor: str,
+    accounts: list[dict[str, Any]],
+) -> str | None:
+    """Infer likely top destination from account-level alternatives."""
+    vendor_norm = _normalize_company_key(vendor)
+    counts: Counter[str] = Counter()
+    display: dict[str, str] = {}
+    for account in accounts:
+        for alt in (account.get("alternatives_considering") or []):
+            if not isinstance(alt, str):
+                continue
+            name = alt.strip()
+            norm = _normalize_company_key(name)
+            if not norm or norm == vendor_norm:
+                continue
+            counts[norm] += 1
+            display.setdefault(norm, name)
+    if not counts:
+        return None
+    top_norm, _ = counts.most_common(1)[0]
+    return display.get(top_norm)
+
+
 def _build_vendor_aggregate(
     vendor: str,
     accounts: list[dict[str, Any]],
@@ -508,6 +802,9 @@ def _build_vendor_aggregate(
     budget_lookup: dict[str, dict],
     competitor_lookup: dict[str, list[dict]],
     evidence_vault_lookup: dict[str, dict[str, Any]] | None = None,
+    account_pool_lookup: dict[str, dict[str, Any]] | None = None,
+    synthesis_views: dict[str, Any] | None = None,
+    requested_as_of: date | None = None,
 ) -> dict[str, Any]:
     """Build the full accounts_in_motion aggregate for one vendor."""
     source_review_count, source_distribution = _summarize_vendor_evidence(accounts)
@@ -548,18 +845,49 @@ def _build_vendor_aggregate(
     competitors = competitor_lookup.get(vendor, [])
     if competitors:
         top_dest = competitors[0].get("name")
+    if not top_dest:
+        top_dest = _infer_top_destination_from_accounts(vendor, accounts)
 
     # Battle conclusion from xv_lookup
     battle_conclusion = None
     market_regime = None
-    for pair_key, battle in xv_lookup.get("battles", {}).items():
-        if vendor in pair_key:
-            bc = battle.get("conclusion", {})
-            battle_conclusion = bc.get("conclusion", "")
-            break
+    category_council = None
+    preferred_pair = None
+    if top_dest:
+        preferred_pair = tuple(sorted((vendor, top_dest)))
+    preferred_battle = None
+    if preferred_pair:
+        preferred_battle = (xv_lookup.get("battles", {}) or {}).get(preferred_pair)
+    if preferred_battle:
+        bc = preferred_battle.get("conclusion", {})
+        battle_conclusion = bc.get("conclusion", "")
+    else:
+        for pair_key, battle in xv_lookup.get("battles", {}).items():
+            if vendor in pair_key:
+                bc = battle.get("conclusion", {})
+                battle_conclusion = bc.get("conclusion", "")
+                break
     if category:
         council = xv_lookup.get("councils", {}).get(category, {})
         cc = council.get("conclusion", {})
+        if any(
+            [
+                cc.get("winner"),
+                cc.get("loser"),
+                cc.get("conclusion"),
+                cc.get("market_regime"),
+                cc.get("key_insights"),
+            ]
+        ):
+            category_council = {
+                "winner": cc.get("winner") or "",
+                "loser": cc.get("loser") or "",
+                "conclusion": cc.get("conclusion") or "",
+                "market_regime": cc.get("market_regime") or "",
+                "durability": cc.get("durability_assessment") or "",
+                "confidence": council.get("confidence"),
+                "key_insights": cc.get("key_insights") or [],
+            }
         if cc.get("market_regime"):
             market_regime = cc["market_regime"]
 
@@ -574,6 +902,13 @@ def _build_vendor_aggregate(
         if driver:
             parts.append("driven by %s" % driver)
         battle_conclusion = ", ".join(parts) + "."
+    if not battle_conclusion and top_dest:
+        battle_conclusion = (
+            "%s appears in active evaluation sets against %s based on account-level alternatives."
+            % (top_dest, vendor)
+        )
+    if not battle_conclusion:
+        battle_conclusion = "No directional displacement evidence found in the current analysis window."
 
     # Synthesize market_regime from category if missing
     if not market_regime and category:
@@ -585,7 +920,7 @@ def _build_vendor_aggregate(
         "market_regime": market_regime,
     }
 
-    return {
+    result = {
         "vendor": vendor,
         "category": category,
         "archetype": archetype,
@@ -595,10 +930,91 @@ def _build_vendor_aggregate(
         "pricing_pressure": pricing_pressure,
         "feature_gaps": feature_gaps,
         "cross_vendor_context": cross_vendor_context,
+        "category_council": category_council,
         "source_review_count": source_review_count,
         "source_distribution": source_distribution,
-        "data_sources": {"evidence_vault": evidence_vault_used},
+        "data_sources": {
+            "evidence_vault": evidence_vault_used,
+            "account_pool": bool((account_pool_lookup or {}).get(vendor)),
+        },
     }
+    view = (synthesis_views or {}).get(vendor)
+    if view is None:
+        view = (synthesis_views or {}).get(_normalize_company_key(vendor))
+    if view is not None:
+        from ._b2b_synthesis_reader import (
+            contract_gaps_for_consumer,
+            inject_synthesis_freshness,
+        )
+        reasoning_contracts: dict[str, Any] = {}
+        materialized_contracts = getattr(view, "materialized_contracts", None)
+        if callable(materialized_contracts):
+            reasoning_contracts = materialized_contracts() or {}
+        else:
+            for name in (
+                "vendor_core_reasoning",
+                "displacement_reasoning",
+                "category_reasoning",
+                "account_reasoning",
+            ):
+                contract = view.contract(name)
+                if contract:
+                    reasoning_contracts[name] = contract
+            if reasoning_contracts:
+                reasoning_contracts["schema_version"] = "v1"
+        if reasoning_contracts:
+            result["reasoning_contracts"] = reasoning_contracts
+            vendor_core = reasoning_contracts.get("vendor_core_reasoning") or {}
+            account_reasoning = reasoning_contracts.get("account_reasoning") or {}
+            if isinstance(account_reasoning, dict) and account_reasoning:
+                result["account_reasoning"] = account_reasoning
+                summary_text, summary_metrics, priority_names = (
+                    _account_reasoning_summary_payload(account_reasoning)
+                )
+                if summary_text:
+                    result["account_pressure_summary"] = summary_text
+                if summary_metrics:
+                    result["account_pressure_metrics"] = summary_metrics
+                if priority_names:
+                    result["priority_account_names"] = priority_names
+            if isinstance(vendor_core, dict):
+                segment_playbook = vendor_core.get("segment_playbook") or {}
+                timing_intelligence = vendor_core.get("timing_intelligence") or {}
+                if isinstance(timing_intelligence, dict) and timing_intelligence:
+                    result["timing_intelligence"] = timing_intelligence
+                    timing_summary, timing_metrics, priority_triggers = (
+                        _timing_summary_payload(timing_intelligence)
+                    )
+                    if timing_summary:
+                        result["timing_summary"] = timing_summary
+                    if timing_metrics:
+                        result["timing_metrics"] = timing_metrics
+                    if priority_triggers:
+                        result["priority_timing_triggers"] = priority_triggers
+                if isinstance(segment_playbook, dict) and segment_playbook:
+                    result["segment_playbook"] = segment_playbook
+                    targeting_summary = _segment_targeting_summary(
+                        segment_playbook,
+                        timing_intelligence if isinstance(timing_intelligence, dict) else None,
+                    )
+                    if targeting_summary:
+                        result["segment_targeting_summary"] = targeting_summary
+        if view.primary_wedge:
+            result["synthesis_wedge"] = view.primary_wedge.value
+            result["synthesis_wedge_label"] = view.wedge_label
+        if view.meta:
+            result["evidence_window"] = view.meta
+        result["synthesis_schema_version"] = view.schema_version
+        result["reasoning_source"] = "b2b_reasoning_synthesis"
+        inject_synthesis_freshness(
+            result,
+            view,
+            requested_as_of=requested_as_of,
+        )
+        contract_gaps = contract_gaps_for_consumer(view, "accounts_in_motion")
+        if contract_gaps:
+            result["reasoning_contract_gaps"] = contract_gaps
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -643,7 +1059,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _canonicalize_vendor,
         _fetch_budget_signals,
         _fetch_churning_companies,
-        _fetch_competitive_displacement,
+        _fetch_competitive_displacement_source_of_truth,
+        _fetch_latest_account_intelligence,
         _fetch_latest_evidence_vault,
         _fetch_feature_gaps,
         _fetch_high_intent_companies,
@@ -653,6 +1070,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _aggregate_competitive_disp,
     )
     from .b2b_churn_intelligence import (
+        _normalize_test_vendors,
         reconstruct_reasoning_lookup,
         reconstruct_cross_vendor_lookup,
     )
@@ -660,6 +1078,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     window_days = cfg.intelligence_window_days
     min_urgency = cfg.accounts_in_motion_min_urgency
     max_per_vendor = cfg.accounts_in_motion_max_per_vendor
+    scoped_vendors = _normalize_test_vendors((task.metadata or {}).get("test_vendors"))
+    vendor_scope = {vendor.lower() for vendor in scoped_vendors}
 
     # --- Phase 1: Parallel data fetch ---
     await _update_execution_progress(
@@ -679,6 +1099,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             competitive_disp,
             signal_metadata,
             apollo_org_lookup,
+            account_pool_lookup,
         ) = await asyncio.gather(
             _fetch_high_intent_companies(pool, int(min_urgency), window_days),
             _fetch_timeline_signals(pool, window_days),
@@ -687,15 +1108,73 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             _fetch_feature_gaps(pool, window_days, min_mentions=cfg.feature_gap_min_mentions),
             _fetch_price_complaint_rates(pool, window_days),
             _fetch_budget_signals(pool, window_days),
-            _fetch_competitive_displacement(pool, window_days),
+            _fetch_competitive_displacement_source_of_truth(
+                pool,
+                as_of=today,
+                analysis_window_days=window_days,
+            ),
             _fetch_company_signal_metadata(pool, window_days),
             _fetch_apollo_org_lookup(pool),
+            _fetch_latest_account_intelligence(
+                pool,
+                as_of=today,
+                analysis_window_days=window_days,
+            ),
         )
     except Exception:
         logger.exception("Accounts in motion data fetch failed")
         return {"_skip_synthesis": "Data fetch failed"}
 
-    if not high_intent:
+    fallback_intent = _build_fallback_intent_rows(
+        churning_companies,
+        min_urgency=min_urgency,
+    )
+    signal_fallback_intent = _build_signal_metadata_fallback_rows(
+        signal_metadata,
+        min_urgency=min_urgency,
+    )
+    seed_rows = _build_account_pool_seed_rows(account_pool_lookup)
+    combined_intent: list[dict[str, Any]] = list(high_intent)
+    existing_keys = {
+        (_normalize_company_key(row.get("company")), _canonicalize_vendor(row.get("vendor")))
+        for row in high_intent
+        if row.get("company") and row.get("vendor")
+    }
+    added_fallback = 0
+    for row in [*fallback_intent, *signal_fallback_intent]:
+        key = (
+            _normalize_company_key(row.get("company")),
+            _canonicalize_vendor(row.get("vendor")),
+        )
+        if not key[0] or not key[1] or key in existing_keys:
+            continue
+        existing_keys.add(key)
+        combined_intent.append(row)
+        added_fallback += 1
+    if added_fallback:
+        logger.info(
+            "Accounts in motion: added %d fallback high-intent rows from churning companies",
+            added_fallback,
+        )
+
+    if vendor_scope:
+        raw_intent_count = len(combined_intent)
+        raw_seed_count = len(seed_rows)
+        combined_intent = [
+            row for row in combined_intent
+            if str(row.get("vendor") or "").strip().lower() in vendor_scope
+        ]
+        seed_rows = [
+            row for row in seed_rows
+            if str(row.get("vendor") or "").strip().lower() in vendor_scope
+        ]
+        logger.info(
+            "Scoped accounts in motion to %d vendors: intent rows %d/%d, seed rows %d/%d",
+            len(scoped_vendors), len(combined_intent), raw_intent_count,
+            len(seed_rows), raw_seed_count,
+        )
+
+    if not combined_intent and not seed_rows:
         logger.info("No high-intent companies found, skipping")
         return {"_skip_synthesis": "No high-intent companies"}
 
@@ -713,20 +1192,35 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # --- Phase 2: Reconstruct reasoning + cross-vendor ---
     reasoning_lookup = await reconstruct_reasoning_lookup(pool, as_of=today)
     xv_lookup = await reconstruct_cross_vendor_lookup(pool, as_of=today)
+    try:
+        raw_synthesis_views = await _fetch_latest_synthesis_views(
+            pool,
+            as_of=today,
+            analysis_window_days=window_days,
+        )
+    except Exception:
+        logger.exception("Accounts in motion synthesis lookup failed")
+        raw_synthesis_views = {}
+    synthesis_views = {
+        _canonicalize_vendor(vendor): view
+        for vendor, view in raw_synthesis_views.items()
+        if _canonicalize_vendor(vendor)
+    }
 
     # --- Phase 3: Merge company profiles ---
     await _update_execution_progress(
         task,
         stage=_STAGE_BUILDING_ACCOUNTS,
         progress_message="Building merged account profiles and vendor aggregates.",
-        high_intent_companies=len(high_intent),
+        high_intent_companies=len(combined_intent),
     )
     merged = _merge_company_profiles(
-        high_intent,
+        combined_intent,
         timeline_signals,
         churning_companies,
         quotable_evidence,
         signal_metadata,
+        seed_rows=seed_rows,
         min_urgency=min_urgency,
         apollo_org_lookup=apollo_org_lookup,
         invalid_alternative_terms=cfg.accounts_in_motion_invalid_alternative_terms,
@@ -780,6 +1274,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             budget_lookup=budget_lookup,
             competitor_lookup=competitor_lookup,
             evidence_vault_lookup=evidence_vault_lookup,
+            account_pool_lookup=account_pool_lookup,
+            synthesis_views=synthesis_views,
+            requested_as_of=today,
         )
         aggregates.append(agg)
 
@@ -802,12 +1299,24 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             continue
         n_accounts = agg["total_accounts_in_motion"]
         top_score = agg["accounts"][0]["opportunity_score"] if agg["accounts"] else 0
-        exec_summary = (
-            f"Accounts in motion for {vendor}: "
-            f"{n_accounts} accounts, "
-            f"top score {top_score}, "
-            f"archetype {agg.get('archetype') or 'unknown'}."
-        )
+        summary_parts = [
+            (
+                f"Accounts in motion for {vendor}: "
+                f"{n_accounts} accounts, "
+                f"top score {top_score}, "
+                f"archetype {agg.get('archetype') or 'unknown'}."
+            ),
+        ]
+        if agg.get("account_pressure_summary"):
+            summary_parts.append(str(agg["account_pressure_summary"]))
+        if agg.get("timing_summary"):
+            summary_parts.append(str(agg["timing_summary"]))
+        priority_names = agg.get("priority_account_names") or []
+        if priority_names:
+            summary_parts.append(
+                "Priority accounts: %s." % ", ".join(priority_names[:3])
+            )
+        exec_summary = " ".join(summary_parts)
         try:
             await pool.execute(
                 """
