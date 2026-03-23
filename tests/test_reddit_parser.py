@@ -17,6 +17,7 @@ import pytest
 from unittest.mock import MagicMock
 
 from atlas_brain.services.scraping.parsers.reddit import (
+    _apply_author_batch_signals,
     _build_vendor_aliases,
     _build_alias_pattern,
     _extract_insider_evidence,
@@ -475,6 +476,20 @@ class TestParsePost:
         assert result is not None
         assert result["reviewer_title"] is not None
         assert "product manager" in result["reviewer_title"].lower()
+
+    def test_author_batch_signals_do_not_inject_fake_reviewer_title(self):
+        review = {"reviewer_title": None, "raw_metadata": {}}
+        author_posts = [
+            {"title": "Switching from HubSpot", "score": 25},
+            {"title": "Alternative to HubSpot", "score": 18},
+        ]
+
+        _apply_author_batch_signals(review, author_posts, "high")
+
+        assert review["reviewer_title"] is None
+        assert review["raw_metadata"]["author_churn_score"] >= 7
+        assert review["raw_metadata"]["author_high_churn_signal"] is True
+        assert review["raw_metadata"]["trending_score"] == "high"
 
     def test_insider_profile_without_employment_is_community(self):
         """Bug 1: insider profile posts without employment claim should NOT

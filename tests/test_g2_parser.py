@@ -206,6 +206,24 @@ class TestParseReviewCard:
         reviews = _parse_page(html, target, seen)
         assert reviews[0]["source_url"] == "https://www.g2.com/products/my-product/reviews#rev99"
 
+    def test_verified_user_name_is_normalized_and_industry_recovered(self):
+        from atlas_brain.services.scraping.parsers.g2 import _parse_page
+        target = _make_target()
+        html = """
+        <html><body>
+        <div data-review-id="verified-1">
+            <div itemprop="reviewBody">This product is reliable enough for a real review body and long enough to parse correctly.</div>
+            <span itemprop="author">Verified User in Human ResourcesThis reviewer's identity has been verified by our review moderation team. They have asked not to show their name, job title, or picture.</span>
+            <span class="company-size">Mid-Market (51-1000 emp.)</span>
+        </div>
+        </body></html>
+        """
+        seen: set[str] = set()
+        reviews = _parse_page(html, target, seen)
+        assert len(reviews) == 1
+        assert reviews[0]["reviewer_name"] == "Verified User"
+        assert reviews[0]["reviewer_industry"] == "Human Resources"
+
     def test_review_text_truncated_at_10000(self):
         from atlas_brain.services.scraping.parsers.g2 import _parse_page
         target = _make_target()

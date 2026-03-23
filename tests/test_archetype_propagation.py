@@ -760,6 +760,36 @@ class TestBattleCardPrimaryCategorySelection:
         # Must NOT be 350 (200+150)
         assert cards[0]["total_reviews"] == 200
 
+    def test_reasoning_synthesis_lowers_qualification_gate(self):
+        from atlas_brain.autonomous.tasks._b2b_shared import (
+            _build_deterministic_battle_cards,
+        )
+
+        cards = _build_deterministic_battle_cards(
+            [{"vendor_name": "Acme", "product_category": "CRM", "total_reviews": 100,
+              "churn_intent": 12, "avg_urgency": 5.2}],
+            pain_lookup={}, competitor_lookup={}, feature_gap_lookup={},
+            quote_lookup={}, price_lookup={"Acme": 0.05}, budget_lookup={},
+            sentiment_lookup={}, dm_lookup={"Acme": 0.25}, company_lookup={},
+            product_profile_lookup={}, competitive_disp=[], competitor_reasons=[],
+            reasoning_lookup={},
+            reasoning_synthesis_lookup={
+                "Acme": {
+                    "reasoning_contracts": {
+                        "vendor_core_reasoning": {
+                            "causal_narrative": {
+                                "primary_wedge": "price_squeeze",
+                                "confidence": "high",
+                            },
+                        },
+                    },
+                },
+            },
+            limit=10,
+        )
+        assert len(cards) == 1
+        assert cards[0]["vendor"] == "Acme"
+
 
 class TestBattleCardWeaknessEvidenceNormalization:
     """Verify battle-card weaknesses expose a consistent evidence_count field."""
@@ -906,12 +936,13 @@ class TestBattleCardNewSections:
             pain_lookup={}, competitor_lookup={}, feature_gap_lookup={},
             quote_lookup={}, price_lookup={"V": 0.1}, budget_lookup={},
             sentiment_lookup={}, dm_lookup={"V": 0.3},
-            company_lookup={"V": [{"company": "Acme", "urgency": 9}]},
+            company_lookup={"V": [{"company": "Acme", "urgency": 9, "title": "VP Ops"}]},
             product_profile_lookup={}, competitive_disp=[], competitor_reasons=[],
             limit=10,
         )
         assert len(cards) == 1
-        assert cards[0]["high_intent_companies"] == [{"company": "Acme", "urgency": 9}]
+        assert cards[0]["high_intent_companies"][0]["company"] == "Acme"
+        assert cards[0]["high_intent_companies"][0]["title"] == "VP Ops"
 
     def test_evidence_vault_overrides_weaknesses_and_company_signals(self):
         from atlas_brain.autonomous.tasks._b2b_shared import (
@@ -943,6 +974,61 @@ class TestBattleCardNewSections:
         assert [w["area"] for w in cards[0]["vendor_weaknesses"][:2]] == ["Pricing opacity", "support"]
         assert cards[0]["high_intent_companies"][0]["company"] == "Acme"
         assert cards[0]["high_intent_companies"][0]["urgency"] == 9.0
+
+    def test_high_intent_companies_filter_domains_and_competitors(self):
+        from atlas_brain.autonomous.tasks._b2b_shared import (
+            _build_deterministic_battle_cards,
+        )
+
+        cards = _build_deterministic_battle_cards(
+            [{"vendor_name": "Zendesk", "product_category": "Cat", "total_reviews": 50,
+              "churn_intent": 20, "avg_urgency": 7.0}],
+            pain_lookup={},
+            competitor_lookup={"Zendesk": [{"name": "Freshdesk", "mentions": 12}]},
+            feature_gap_lookup={},
+            quote_lookup={}, price_lookup={"Zendesk": 0.1}, budget_lookup={},
+            sentiment_lookup={}, dm_lookup={"Zendesk": 0.3},
+            company_lookup={"Zendesk": [
+                {"company": "ourdomain.com", "urgency": 9, "title": "VP Ops"},
+                {"company": "Freshdesk", "urgency": 8, "title": "VP Ops"},
+                {"company": "Salesforce", "urgency": 8, "title": "VP Ops"},
+                {"company": "Government agency", "urgency": 8, "title": "VP Ops"},
+                {"company": "Costa Rica", "urgency": 8, "title": "VP Ops"},
+                {"company": "ClonePartner", "urgency": 8, "title": "VP Ops"},
+                {"company": "Acme", "urgency": 7, "title": "VP Ops"},
+            ]},
+            product_profile_lookup={"Zendesk": {"top_integrations": ["Salesforce"]}},
+            competitive_disp=[],
+            competitor_reasons=[],
+            limit=10,
+        )
+
+        assert [entry["company"] for entry in cards[0]["high_intent_companies"]] == ["Acme"]
+
+    def test_high_intent_companies_do_not_fallback_to_raw_when_vault_sanitizes_to_empty(self):
+        from atlas_brain.autonomous.tasks._b2b_shared import (
+            _build_deterministic_battle_cards,
+        )
+
+        cards = _build_deterministic_battle_cards(
+            [{"vendor_name": "Zendesk", "product_category": "Cat", "total_reviews": 50,
+              "churn_intent": 20, "avg_urgency": 7.0}],
+            pain_lookup={},
+            competitor_lookup={"Zendesk": [{"name": "Freshdesk", "mentions": 12}]},
+            feature_gap_lookup={},
+            quote_lookup={}, price_lookup={"Zendesk": 0.1}, budget_lookup={},
+            sentiment_lookup={}, dm_lookup={"Zendesk": 0.3},
+            company_lookup={"Zendesk": [
+                {"company": "BoldDesk", "urgency": 8, "title": "VP Ops", "buying_stage": "evaluation"},
+            ]},
+            product_profile_lookup={"Zendesk": {"top_integrations": ["Salesforce"]}},
+            competitive_disp=[],
+            competitor_reasons=[],
+            evidence_vault_lookup={"Zendesk": {"company_signals": []}},
+            limit=10,
+        )
+
+        assert cards[0]["high_intent_companies"] == []
 
     def test_integration_stack_from_profile(self):
         from atlas_brain.autonomous.tasks._b2b_shared import (
@@ -1362,7 +1448,7 @@ class TestReconstructCrossVendorLookup:
             {
                 "analysis_type": "category_council",
                 "vendors": ["A", "B"],
-                "category": "B2B Software",
+                "category": "CRM",
                 "conclusion": json.dumps({
                     "conclusion": "Price pressure is dominant",
                     "market_regime": "price_competition",
@@ -1375,13 +1461,39 @@ class TestReconstructCrossVendorLookup:
             },
         ]
         result = await reconstruct_cross_vendor_lookup(pool, as_of=date(2026, 3, 17))
-        entry = result["councils"]["B2B Software"]["conclusion"]
+        entry = result["councils"]["CRM"]["conclusion"]
         assert entry["conclusion"] == "Price pressure is dominant"
         assert entry["market_regime"] == "price_competition"
         assert entry["key_insights"] == [
             {"insight": "Pricing drives displacement", "evidence": "Pricing drives displacement"},
             {"insight": "SMB segment is most affected", "evidence": "SMB segment is most affected"},
         ]
+
+    @pytest.mark.asyncio
+    async def test_generic_category_council_is_skipped(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_cross_vendor_lookup,
+        )
+        pool = AsyncMock()
+        pool.fetch.return_value = [
+            {
+                "analysis_type": "category_council",
+                "vendors": ["A", "B"],
+                "category": "B2B Software",
+                "conclusion": {"conclusion": "generic council"},
+                "confidence": 0.5,
+            },
+            {
+                "analysis_type": "category_council",
+                "vendors": ["A", "B", "C"],
+                "category": "CRM",
+                "conclusion": {"conclusion": "crm council"},
+                "confidence": 0.7,
+            },
+        ]
+        result = await reconstruct_cross_vendor_lookup(pool, as_of=date(2026, 3, 17))
+        assert "B2B Software" not in result["councils"]
+        assert result["councils"]["CRM"]["conclusion"]["conclusion"] == "crm council"
 
     @pytest.mark.asyncio
     async def test_highest_confidence_wins_dedup(self):
@@ -1454,7 +1566,7 @@ class TestReconstructCrossVendorLookup:
         assert "" in result["councils"]
 
     @pytest.mark.asyncio
-    async def test_empty_vendors_array_produces_empty_tuple_key(self):
+    async def test_empty_vendors_array_is_skipped(self):
         from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
             reconstruct_cross_vendor_lookup,
         )
@@ -1467,7 +1579,60 @@ class TestReconstructCrossVendorLookup:
             },
         ]
         result = await reconstruct_cross_vendor_lookup(pool, as_of=date(2026, 3, 17))
-        assert () in result["battles"]
+        assert result["battles"] == {}
+
+    @pytest.mark.asyncio
+    async def test_self_pair_resource_asymmetry_is_skipped(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_cross_vendor_lookup,
+        )
+        pool = AsyncMock()
+        pool.fetch.return_value = [
+            {
+                "analysis_type": "resource_asymmetry",
+                "vendors": ["Intercom", "Intercom"], "category": None,
+                "conclusion": {"conclusion": "self pair", "resource_advantage": "Intercom"},
+                "confidence": 0.5,
+                "computed_date": date(2026, 3, 21),
+            },
+        ]
+        result = await reconstruct_cross_vendor_lookup(pool, as_of=date(2026, 3, 21))
+        assert result["asymmetries"] == {}
+
+    @pytest.mark.asyncio
+    async def test_same_day_better_quality_entry_replaces_placeholder(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            reconstruct_cross_vendor_lookup,
+        )
+        pool = AsyncMock()
+        pool.fetch.return_value = [
+            {
+                "analysis_type": "resource_asymmetry",
+                "vendors": ["Help Scout", "Intercom"], "category": None,
+                "conclusion": {
+                    "conclusion": "placeholder result",
+                    "winner": "Vendor B",
+                    "resource_advantage": "Vendor B holds the resource advantage due to scale.",
+                },
+                "confidence": 0.5,
+                "computed_date": date(2026, 3, 21),
+            },
+            {
+                "analysis_type": "resource_asymmetry",
+                "vendors": ["Help Scout", "Intercom"], "category": None,
+                "conclusion": {
+                    "conclusion": "Intercom has the stronger resource position.",
+                    "winner": "Intercom",
+                    "resource_advantage": "Intercom holds the resource advantage due to 3.4x review volume.",
+                },
+                "confidence": 0.5,
+                "computed_date": date(2026, 3, 21),
+            },
+        ]
+        result = await reconstruct_cross_vendor_lookup(pool, as_of=date(2026, 3, 21))
+        entry = result["asymmetries"][("Help Scout", "Intercom")]
+        assert entry["conclusion"]["winner"] == "Intercom"
+        assert "3.4x review volume" in entry["conclusion"]["resource_advantage"]
 
     @pytest.mark.asyncio
     async def test_mixed_types_routed_correctly(self):
@@ -1500,6 +1665,49 @@ class TestReconstructCrossVendorLookup:
         assert result["battles"][("A", "B")]["conclusion"]["conclusion"] == "battle"
         assert result["councils"]["CRM"]["conclusion"]["conclusion"] == "council"
         assert result["asymmetries"][("A", "B")]["conclusion"]["conclusion"] == "asymmetry"
+
+
+class TestSpecificCrossVendorEcosystemEvidence:
+    def test_build_specific_cross_vendor_ecosystem_evidence_prefers_specific_categories(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
+            _build_specific_cross_vendor_ecosystem_evidence,
+        )
+
+        specific = _build_specific_cross_vendor_ecosystem_evidence(
+            ecosystem_evidence={
+                "B2B Software": {
+                    "category": "B2B Software",
+                    "vendor_count": 40,
+                    "displacement_intensity": 1.2,
+                },
+            },
+            vendor_scores=[
+                {"vendor_name": "Zendesk", "product_category": "B2B Software"},
+                {"vendor_name": "Freshdesk", "product_category": "B2B Software"},
+                {"vendor_name": "Intercom", "product_category": "B2B Software"},
+            ],
+            reasoning_lookup={
+                "zendesk": {"archetype": "price_squeeze"},
+                "freshdesk": {"archetype": "price_squeeze"},
+                "intercom": {"archetype": "platform_gap"},
+            },
+            evidence_lookup={
+                "zendesk": {"product_category": "Helpdesk"},
+                "freshdesk": {"product_category": "Helpdesk"},
+                "intercom": {"product_category": "Helpdesk"},
+            },
+            competitive_disp=[
+                {"vendor": "zendesk"},
+                {"vendor": "freshdesk"},
+                {"vendor": "intercom"},
+            ],
+            preferred_profile_categories={},
+        )
+
+        assert "B2B Software" not in specific
+        assert specific["Helpdesk"]["vendor_count"] == 3
+        assert specific["Helpdesk"]["displacement_intensity"] == 1.0
+        assert specific["Helpdesk"]["dominant_archetype"] == "price_squeeze"
 
 
 class TestCrossVendorSchemaContract:
@@ -1699,6 +1907,49 @@ class TestBattleCardCacheKeyIntegration:
 
 
 class TestBattleCardDeterministicFallbacks:
+    def test_cross_vendor_council_overrides_generic_reasoning_when_richer(self):
+        from atlas_brain.autonomous.tasks.b2b_battle_cards import (
+            _build_category_council_from_cross_vendor,
+            _build_category_council_from_reasoning,
+            _prefer_richer_category_council,
+        )
+
+        card = {
+            "category": "Helpdesk",
+            "reasoning_contracts": {
+                "schema_version": "v1",
+                "category_reasoning": {
+                    "market_regime": "stable",
+                    "narrative": "The Zendesk market remains stable with low churn velocity and price pressure.",
+                    "confidence_score": 0.5,
+                    "winner": None,
+                    "loser": None,
+                    "key_insights": [],
+                },
+            },
+        }
+        xv_council_row = {
+            "confidence": 0.58,
+            "conclusion": {
+                "conclusion": "Freshdesk and Zoho Desk are actively taking share while pricing competition intensifies.",
+                "market_regime": "price_competition",
+                "winner": "Zoho Desk",
+                "loser": "Freshdesk",
+                "key_insights": [
+                    {"insight": "Pricing is driving displacement.", "evidence": "price pressure"}
+                ],
+                "durability_assessment": "structural",
+            },
+        }
+
+        reasoning = _build_category_council_from_reasoning(card)
+        xv_council = _build_category_council_from_cross_vendor(xv_council_row)
+        chosen = _prefer_richer_category_council(reasoning, xv_council)
+
+        assert chosen["market_regime"] == "price_competition"
+        assert chosen["winner"] == "Zoho Desk"
+        assert chosen["loser"] == "Freshdesk"
+
     def test_active_evaluation_deadlines_use_decision_timeline_when_needed(self):
         from atlas_brain.autonomous.tasks._b2b_shared import _build_active_evaluation_deadlines
 
@@ -1799,20 +2050,21 @@ class TestBattleCardDeterministicFallbacks:
 class TestScorecardNarrativeLLMInput:
     """Verify the LLM input dict construction matches the code in b2b_churn_reports.py."""
 
-    # The exact key tuple from b2b_churn_reports.py:347-351
-    _LLM_INPUT_KEYS = (
-        "vendor", "churn_pressure_score", "risk_level", "churn_signal_density",
-        "avg_urgency", "feature_analysis", "churn_predictors", "competitor_overlap",
-        "trend", "sentiment_direction", "cross_vendor_comparisons",
-    )
-
     def _build_llm_input(self, sc: dict) -> dict:
-        """Replicate the report LLM input filter plus locked-facts injection."""
-        from atlas_brain.autonomous.tasks._b2b_shared import _build_scorecard_locked_facts
+        """Use the real scorecard narrative payload builder."""
+        from atlas_brain.autonomous.tasks.b2b_churn_reports import (
+            _build_scorecard_narrative_payload,
+        )
 
-        llm_input = {k: sc[k] for k in self._LLM_INPUT_KEYS if k in sc}
-        llm_input["locked_facts"] = _build_scorecard_locked_facts(sc)
-        return llm_input
+        reasoning_lookup = {}
+        if sc.get("vendor") and sc.get("archetype"):
+            reasoning_lookup[sc["vendor"]] = {
+                "key_signals": ["price hikes", "support complaints", "migration pressure"],
+            }
+        return _build_scorecard_narrative_payload(
+            sc,
+            reasoning_lookup=reasoning_lookup,
+        )
 
     def test_cross_vendor_comparisons_included_when_present(self):
         sc = {
@@ -1828,6 +2080,26 @@ class TestScorecardNarrativeLLMInput:
         assert "cross_vendor_comparisons" in llm_input
         assert llm_input["cross_vendor_comparisons"][0]["opponent"] == "Freshdesk"
         assert llm_input["locked_facts"]["allowed_opponents"] == ["Freshdesk"]
+
+    def test_category_council_included_when_present(self):
+        sc = {
+            "vendor": "Zendesk",
+            "churn_pressure_score": 72,
+            "risk_level": "high",
+            "category_council": {
+                "winner": "Zoho Desk",
+                "loser": "Freshdesk",
+                "conclusion": "Pricing pressure is fragmenting the helpdesk market.",
+                "market_regime": "price_competition",
+                "durability": "cyclical",
+                "confidence": 0.58,
+                "key_insights": [{"insight": "Pricing is the primary driver."}] * 5,
+            },
+        }
+        llm_input = self._build_llm_input(sc)
+        assert llm_input["category_council"]["winner"] == "Zoho Desk"
+        assert llm_input["category_council"]["market_regime"] == "price_competition"
+        assert len(llm_input["category_council"]["key_insights"]) == 3
 
     def test_cross_vendor_comparisons_absent_when_not_enriched(self):
         sc = {
@@ -1904,6 +2176,90 @@ class TestScorecardNarrativeLLMInput:
         comp = llm_input["cross_vendor_comparisons"][0]
         # Consumer pattern: .get("resource_advantage", "")
         assert comp.get("resource_advantage", "") == ""
+
+    def test_llm_input_uses_compact_reasoning_conclusion_instead_of_full_contracts(self):
+        sc = {
+            "vendor": "Zendesk",
+            "risk_level": "high",
+            "churn_pressure_score": 72,
+            "archetype": "pricing_shock",
+            "archetype_confidence": 0.8,
+            "reasoning_summary": "Pricing pressure is climbing after the latest packaging change.",
+            "reasoning_contracts": {
+                "vendor_core_reasoning": {"causal_narrative": {"trigger": "Price hike"}},
+                "displacement_reasoning": {"migration_proof": {"confidence": "medium"}},
+            },
+        }
+        llm_input = self._build_llm_input(sc)
+        assert "reasoning_contracts" not in llm_input
+        assert "vendor_core_reasoning" not in llm_input
+        assert "displacement_reasoning" not in llm_input
+        assert llm_input["reasoning_conclusion"]["archetype"] == "pricing_shock"
+        assert llm_input["reasoning_conclusion"]["key_signals"] == [
+            "price hikes", "support complaints", "migration pressure",
+        ]
+
+    def test_llm_input_trims_nested_lists_for_compactness(self):
+        sc = {
+            "vendor": "Zendesk",
+            "feature_analysis": {
+                "loved": [{"feature": f"loved-{i}"} for i in range(5)],
+                "hated": [{"feature": f"hated-{i}"} for i in range(5)],
+            },
+            "churn_predictors": {
+                "high_risk_industries": [{"industry": f"ind-{i}"} for i in range(4)],
+                "high_risk_sizes": [{"size": f"size-{i}"} for i in range(4)],
+                "dm_churn_rate": 0.4,
+                "price_complaint_rate": 0.2,
+            },
+            "competitor_overlap": [{"competitor": f"comp-{i}"} for i in range(5)],
+            "cross_vendor_comparisons": [
+                {
+                    "opponent": f"opp-{i}",
+                    "conclusion": "c",
+                    "confidence": 0.7,
+                    "resource_advantage": "adv",
+                }
+                for i in range(4)
+            ],
+        }
+        llm_input = self._build_llm_input(sc)
+        assert len(llm_input["feature_analysis"]["loved"]) == 3
+        assert len(llm_input["feature_analysis"]["hated"]) == 3
+        assert len(llm_input["churn_predictors"]["high_risk_industries"]) == 2
+        assert len(llm_input["churn_predictors"]["high_risk_sizes"]) == 2
+        assert len(llm_input["competitor_overlap"]) == 3
+        assert len(llm_input["cross_vendor_comparisons"]) == 2
+
+    def test_scorecard_narrative_max_tokens_defaults_to_compact_budget(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_reports import (
+            _scorecard_narrative_max_tokens,
+        )
+
+        with patch("atlas_brain.autonomous.tasks.b2b_churn_reports.settings") as mock_settings:
+            mock_settings.llm.openrouter_reasoning_model = "anthropic/claude-3.5-haiku"
+            mock_settings.b2b_churn.scorecard_narrative_max_tokens = 333
+            assert _scorecard_narrative_max_tokens() == 333
+
+    def test_scorecard_narrative_max_tokens_expands_for_gpt_oss(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_reports import (
+            _scorecard_narrative_max_tokens,
+        )
+
+        with patch("atlas_brain.autonomous.tasks.b2b_churn_reports.settings") as mock_settings:
+            mock_settings.llm.openrouter_reasoning_model = "openai/gpt-oss-120b"
+            mock_settings.b2b_churn.scorecard_narrative_gpt_oss_max_tokens = 1600
+            assert _scorecard_narrative_max_tokens() == 1600
+
+    def test_scorecard_narrative_max_tokens_uses_deepseek_budget(self):
+        from atlas_brain.autonomous.tasks.b2b_churn_reports import (
+            _scorecard_narrative_max_tokens,
+        )
+
+        with patch("atlas_brain.autonomous.tasks.b2b_churn_reports.settings") as mock_settings:
+            mock_settings.llm.openrouter_reasoning_model = "deepseek/deepseek-r1"
+            mock_settings.b2b_churn.scorecard_narrative_deepseek_max_tokens = 1200
+            assert _scorecard_narrative_max_tokens() == 1200
 
 
 class TestVendorReasoningCap:

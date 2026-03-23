@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -84,6 +84,39 @@ def test_prepare_scrape_target_prefers_explicit_checkpoint_columns():
     )
 
     assert target.date_cutoff == "2026-03-19"
+
+
+def test_prepare_scrape_target_uses_last_scraped_at_for_date_sparse_sources():
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _prepare_scrape_target
+
+    cfg = SimpleNamespace(exhaustive_lookback_days=365, exhaustive_max_pages_default=40)
+    target, _, _ = _prepare_scrape_target(
+        _row(
+            source="quora",
+            last_scraped_at=datetime(2026, 3, 21, 6, 30, tzinfo=timezone.utc),
+        ),
+        cfg,
+    )
+
+    assert target.date_cutoff == "2026-03-21"
+    assert target.max_pages == 3
+
+
+def test_prepare_scrape_target_uses_last_scraped_at_for_twitter_and_caps_queries():
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _prepare_scrape_target
+
+    cfg = SimpleNamespace(exhaustive_lookback_days=365, exhaustive_max_pages_default=40)
+    target, _, _ = _prepare_scrape_target(
+        _row(
+            source="twitter",
+            last_scraped_at=datetime(2026, 3, 20, 8, 15, tzinfo=timezone.utc),
+            max_pages=50,
+        ),
+        cfg,
+    )
+
+    assert target.date_cutoff == "2026-03-20"
+    assert target.max_pages == 4
 
 
 def test_prepare_scrape_target_ignores_legacy_metadata_scrape_mode_override():
@@ -234,3 +267,196 @@ async def test_sourceforge_parser_stops_at_date_cutoff():
     assert result.stop_reason == "date_cutoff"
     assert result.pages_scraped == 2
     assert [review["source_review_id"] for review in result.reviews] == ["new-1"]
+
+
+class _FakeInsertConn:
+    def __init__(self, pool):
+        self.pool = pool
+
+    async def executemany(self, _sql, rows):
+        self.pool.inserted_rows = list(rows)
+
+
+class _FakeTransaction:
+    def __init__(self, pool):
+        self.pool = pool
+
+    async def __aenter__(self):
+        return _FakeInsertConn(self.pool)
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeInsertPool:
+    def __init__(self):
+        self.inserted_rows = []
+
+    def transaction(self):
+        return _FakeTransaction(self)
+
+    async def fetchrow(self, _sql, _batch_id):
+        return {
+            "cnt": len(self.inserted_rows),
+            "named_company_reviews": 0,
+        }
+
+    async def execute(self, *_args, **_kwargs):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_insert_reviews_dedupes_duplicate_reviews_within_same_batch(monkeypatch):
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _insert_reviews
+
+    async def _resolve(vendor_name):
+        return vendor_name
+
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_scrape_intake.resolve_vendor_name",
+        _resolve,
+    )
+
+    pool = _FakeInsertPool()
+    reviews = [
+        {
+            "source": "g2",
+            "vendor_name": "HubSpot",
+            "source_review_id": "rev-1",
+            "review_text": "A" * 120,
+            "reviewed_at": "2026-03-20",
+        },
+        {
+            "source": "g2",
+            "vendor_name": "HubSpot",
+            "source_review_id": "rev-1",
+            "review_text": "A" * 120,
+            "reviewed_at": "2026-03-20",
+        },
+    ]
+
+    stats = await _insert_reviews(pool, reviews, "batch-1", parser_version="g2:1")
+
+    assert len(pool.inserted_rows) == 1
+    assert stats["inserted"] == 1
+    assert stats["eligible_rows"] == 1
+    assert stats["duplicate_or_existing"] == 1
+    assert stats["duplicate_same_batch"] == 1
+    assert stats["duplicate_existing"] == 0
+    assert stats["duplicate_db_conflict"] == 0
+
+
+@pytest.mark.asyncio
+async def test_insert_reviews_skips_legacy_existing_identity_even_when_hash_differs(monkeypatch):
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import (
+        _insert_reviews,
+        _make_review_identity_key,
+    )
+
+    async def _resolve(vendor_name):
+        return vendor_name
+
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_scrape_intake.resolve_vendor_name",
+        _resolve,
+    )
+
+    pool = _FakeInsertPool()
+    reviews = [
+        {
+            "source": "g2",
+            "vendor_name": "HubSpot",
+            "source_review_id": "rev-legacy",
+            "review_text": "B" * 140,
+            "reviewer_name": "Alice",
+            "reviewed_at": "2026-03-21T00:00:00Z",
+        },
+    ]
+
+    stats = await _insert_reviews(
+        pool,
+        reviews,
+        "batch-2",
+        parser_version="g2:1",
+        known_keys=set(),
+        known_identities={
+            _make_review_identity_key(
+                "g2",
+                "HubSpot",
+                "rev-legacy",
+                "Alice",
+                "2026-03-21T00:00:00+00:00",
+            )
+        },
+    )
+
+    assert pool.inserted_rows == []
+    assert stats["inserted"] == 0
+    assert stats["eligible_rows"] == 0
+    assert stats["duplicate_or_existing"] == 1
+    assert stats["duplicate_same_batch"] == 0
+    assert stats["duplicate_existing"] == 1
+    assert stats["duplicate_db_conflict"] == 0
+
+
+@pytest.mark.asyncio
+async def test_insert_reviews_repairs_missing_fields_on_existing_duplicate(monkeypatch):
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _insert_reviews, _make_dedup_key
+
+    async def _resolve(vendor_name):
+        return vendor_name
+
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_scrape_intake.resolve_vendor_name",
+        _resolve,
+    )
+
+    pool = _FakeInsertPool()
+    pool.execute = AsyncMock(return_value="UPDATE 1")
+    dedup_key = _make_dedup_key("capterra", "Trello", "rev-1", "Namratha C.", "2026-02-23")
+    reviews = [
+        {
+            "source": "capterra",
+            "vendor_name": "Trello",
+            "source_review_id": "rev-1",
+            "reviewer_name": "Namratha C.",
+            "review_text": "A" * 140,
+            "reviewed_at": "2026-02-23",
+            "reviewer_title": "Product owner",
+            "company_size_raw": "1,001 - 5,000 employees",
+            "reviewer_industry": "Insurance",
+        },
+    ]
+
+    stats = await _insert_reviews(
+        pool,
+        reviews,
+        "batch-3",
+        parser_version="capterra:2",
+        known_keys={dedup_key},
+        known_identities=set(),
+    )
+
+    assert pool.inserted_rows == []
+    assert stats["inserted"] == 0
+    assert stats["eligible_rows"] == 0
+    assert stats["duplicate_existing"] == 1
+    assert stats["repaired_existing"] == 1
+    pool.execute.assert_awaited_once()
+    assert pool.execute.await_args.args[0].strip().startswith("UPDATE b2b_reviews")
+    assert pool.execute.await_args.args[1:] == (
+        dedup_key,
+        "Product owner",
+        None,
+        None,
+        "1,001 - 5,000 employees",
+        "Insurance",
+        "capterra:2",
+    )
+
+
+def test_repair_parser_fields_sql_casts_nullable_params():
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _REPAIR_PARSER_FIELDS_SQL
+
+    for token in ("$2::text", "$3::text", "$4::text", "$5::text", "$6::text", "$7::text"):
+        assert token in _REPAIR_PARSER_FIELDS_SQL

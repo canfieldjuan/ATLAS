@@ -1,9 +1,11 @@
 from unittest.mock import AsyncMock
+from types import SimpleNamespace
 
 import pytest
 
 from atlas_brain.config import settings
 from atlas_brain.reasoning.graph import _node_reason, _node_synthesize, _node_triage
+from atlas_brain.reasoning.llm_utils import _activate_openrouter_slot
 from atlas_brain.reasoning.reflection import run_reflection
 from atlas_brain.pipelines.llm import get_pipeline_llm
 
@@ -23,7 +25,7 @@ def test_reasoning_prompt_exports_are_available_from_both_modules():
 
 @pytest.mark.asyncio
 async def test_graph_triage_uses_configured_pipeline_workload(monkeypatch):
-    monkeypatch.setattr(settings.reasoning, "graph_triage_workload", "openrouter")
+    monkeypatch.setattr(settings.reasoning, "graph_triage_workload", "triage")
     monkeypatch.setattr(settings.reasoning, "graph_openrouter_model", "openai/o4-mini")
     calls = []
 
@@ -40,10 +42,11 @@ async def test_graph_triage_uses_configured_pipeline_workload(monkeypatch):
     state = {"event_type": "b2b.high_intent_detected", "source": "test", "entity_type": "company", "entity_id": "Acme", "payload": {}}
     result = await _node_triage(state)
 
+    # Triage should NOT pass graph_openrouter_model override -- uses workload default
     assert calls == [{
-        "workload": "openrouter",
+        "workload": "triage",
         "auto_activate_ollama": False,
-        "openrouter_model": "openai/o4-mini",
+        "openrouter_model": None,
     }]
     assert result["triage_priority"] == "high"
 
@@ -77,7 +80,7 @@ async def test_graph_reason_uses_configured_pipeline_workload(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_graph_synthesis_uses_configured_pipeline_workload(monkeypatch):
-    monkeypatch.setattr(settings.reasoning, "graph_synthesis_workload", "openrouter")
+    monkeypatch.setattr(settings.reasoning, "graph_synthesis_workload", "triage")
     monkeypatch.setattr(settings.reasoning, "graph_openrouter_model", "openai/o4-mini")
     calls = []
 
@@ -94,18 +97,18 @@ async def test_graph_synthesis_uses_configured_pipeline_workload(monkeypatch):
     state = {"should_notify": True, "event_type": "b2b.high_intent_detected", "action_results": [], "rationale": "ok"}
     result = await _node_synthesize(state)
 
+    # Synthesis should NOT pass graph_openrouter_model override
     assert calls == [{
-        "workload": "openrouter",
+        "workload": "triage",
         "auto_activate_ollama": False,
-        "openrouter_model": "openai/o4-mini",
+        "openrouter_model": None,
     }]
     assert result["summary"] == "Summary."
 
 
 @pytest.mark.asyncio
 async def test_reflection_uses_configured_pipeline_workload(monkeypatch):
-    monkeypatch.setattr(settings.reasoning, "graph_reasoning_workload", "openrouter")
-    monkeypatch.setattr(settings.reasoning, "graph_openrouter_model", "openai/o4-mini")
+    monkeypatch.setattr(settings.reasoning, "graph_synthesis_workload", "triage")
     calls = []
 
     def _fake_get_pipeline_llm(**kwargs):
@@ -124,11 +127,10 @@ async def test_reflection_uses_configured_pipeline_workload(monkeypatch):
 
     result = await run_reflection()
 
-    assert calls == [{
-        "workload": "openrouter",
-        "auto_activate_ollama": False,
-        "openrouter_model": "openai/o4-mini",
-    }]
+    # Reflection uses graph_synthesis_workload (triage/Haiku), no model override
+    assert len(calls) == 1
+    assert calls[0]["workload"] == "triage"
+    assert calls[0]["auto_activate_ollama"] is False
     assert result["findings"] == 1
 
 
@@ -146,3 +148,108 @@ def test_openrouter_workload_uses_configured_model(monkeypatch):
 
     assert llm is not None
     assert seen == ["anthropic/claude-haiku-4-5-20251001"]
+
+
+def test_synthesis_explicit_openrouter_override_uses_settings_api_key(monkeypatch):
+    from atlas_brain.services.llm.openrouter import OpenRouterLLM
+
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("ATLAS_B2B_CHURN_OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setattr(settings.b2b_churn, "openrouter_api_key", "test-openrouter-key")
+
+    def _fake_load(self):
+        self._loaded = True
+
+    monkeypatch.setattr(OpenRouterLLM, "load", _fake_load)
+
+    llm = get_pipeline_llm(
+        workload="synthesis",
+        openrouter_model="anthropic/claude-sonnet-4",
+        auto_activate_ollama=False,
+    )
+
+    assert llm is not None
+    assert llm.name == "openrouter"
+    assert llm.model == "anthropic/claude-sonnet-4"
+
+
+def test_synthesis_strict_openrouter_does_not_fallback(monkeypatch):
+    monkeypatch.setattr(settings.llm, "openrouter_reasoning_model", "deepseek/deepseek-v3.2")
+    monkeypatch.setattr(settings.llm, "openrouter_reasoning_strict", True)
+    monkeypatch.setattr("atlas_brain.pipelines.llm._try_openrouter", lambda model=None: None)
+
+    calls = []
+
+    def _record(name):
+        def _inner():
+            calls.append(name)
+            return object()
+        return _inner
+
+    monkeypatch.setattr("atlas_brain.services.llm_router.get_reasoning_llm", _record("reasoning"))
+    monkeypatch.setattr("atlas_brain.services.llm_router.get_draft_llm", _record("draft"))
+    monkeypatch.setattr("atlas_brain.services.llm_router.get_triage_llm", _record("triage"))
+
+    llm = get_pipeline_llm(workload="synthesis", auto_activate_ollama=False)
+
+    assert llm is None
+    assert calls == []
+
+
+def test_activate_openrouter_slot_strict_does_not_fallback(monkeypatch):
+    monkeypatch.setattr(settings.llm, "openrouter_reasoning_strict", True)
+    monkeypatch.setattr("atlas_brain.reasoning.llm_utils._openrouter_api_key", lambda: "test-openrouter-key")
+
+    fallback_calls = []
+
+    def _fake_get_pipeline_llm(**kwargs):
+        fallback_calls.append(kwargs)
+        return object()
+
+    class _DummyRegistry:
+        def get_slot(self, slot_name):
+            return None
+
+        def activate_slot(self, slot_name, backend, **kwargs):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr("atlas_brain.reasoning.llm_utils.get_pipeline_llm", _fake_get_pipeline_llm)
+
+    llm = _activate_openrouter_slot(
+        SimpleNamespace(stratified_openrouter_model="deepseek/deepseek-v3.2"),
+        _DummyRegistry(),
+        "reasoning_heavy",
+    )
+
+    assert llm is None
+    assert fallback_calls == []
+
+
+def test_activate_openrouter_slot_reactivates_unloaded_matching_slot(monkeypatch):
+    monkeypatch.setattr(settings.llm, "openrouter_reasoning_strict", True)
+    monkeypatch.setattr("atlas_brain.reasoning.llm_utils._openrouter_api_key", lambda: "test-openrouter-key")
+
+    existing = SimpleNamespace(model="openai/gpt-oss-120b", is_loaded=False)
+    calls = []
+
+    class _DummyRegistry:
+        def get_slot(self, slot_name):
+            return existing
+
+        def activate_slot(self, slot_name, backend, **kwargs):
+            calls.append((slot_name, backend, kwargs))
+            return SimpleNamespace(model=kwargs["model"], is_loaded=True)
+
+    llm = _activate_openrouter_slot(
+        SimpleNamespace(stratified_openrouter_model="openai/gpt-oss-120b"),
+        _DummyRegistry(),
+        "reasoning_heavy",
+    )
+
+    assert llm is not None
+    assert llm.model == "openai/gpt-oss-120b"
+    assert calls == [(
+        "reasoning_heavy",
+        "openrouter",
+        {"model": "openai/gpt-oss-120b", "api_key": "test-openrouter-key"},
+    )]

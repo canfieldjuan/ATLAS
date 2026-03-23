@@ -1,0 +1,270 @@
+from datetime import date
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from uuid import uuid4
+
+import pytest
+
+
+def test_api_router_exposes_only_tenant_b2b_paths():
+    from atlas_brain.api import router
+
+    paths = {route.path for route in router.routes}
+    assert not any(path.startswith("/b2b/dashboard") for path in paths)
+    assert "/b2b/tenant/reports/compare" in paths
+    assert "/b2b/tenant/reports/compare-companies" in paths
+    assert "/b2b/tenant/reports/company-deep-dive" in paths
+    assert "/b2b/tenant/affiliates/opportunities" in paths
+
+
+def test_tenant_router_covers_all_legacy_dashboard_routes():
+    from fastapi.routing import APIRoute
+
+    from atlas_brain.api.b2b_dashboard import router as legacy_router
+    from atlas_brain.api.b2b_tenant_dashboard import router as tenant_router
+
+    tenant_methods = set()
+    for route in tenant_router.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        for method in (route.methods or set()):
+            if method in {"HEAD", "OPTIONS"}:
+                continue
+            tenant_methods.add((route.path, method))
+
+    legacy_prefix = "/b2b/dashboard"
+    tenant_prefix = "/b2b/tenant"
+    missing = []
+    for route in legacy_router.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        if not route.path.startswith(legacy_prefix):
+            continue
+        tenant_path = tenant_prefix + route.path[len(legacy_prefix):]
+        for method in (route.methods or set()):
+            if method in {"HEAD", "OPTIONS"}:
+                continue
+            if (tenant_path, method) not in tenant_methods:
+                missing.append((method, route.path, tenant_path))
+
+    assert not missing, f"Missing tenant aliases: {missing[:5]}"
+
+
+def test_owner_role_gets_admin_scope_even_without_is_admin_flag(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    user = SimpleNamespace(
+        account_id=str(uuid4()),
+        product="b2b_retention",
+        role="owner",
+        is_admin=False,
+    )
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    assert mod._vendor_scope_sql(1, user) == "TRUE"
+    assert mod._tenant_params(user) == []
+
+
+@pytest.mark.asyncio
+async def test_list_tenant_reports_excludes_stale_and_allows_global_rows(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(is_initialized=True, fetch=AsyncMock(return_value=[]))
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_tenant_reports(
+        report_type=None, include_stale=False, limit=10, user=user
+    )
+
+    assert result == {"reports": [], "count": 0}
+    sql = pool.fetch.await_args.args[0]
+    assert "vendor_filter IS NULL" in sql
+    assert "account_id = $1" in sql
+    assert "COALESCE((intelligence_data->>'data_stale')::boolean, false) = false" in sql
+
+
+@pytest.mark.asyncio
+async def test_list_leads_uses_event_recency_and_company_fallback(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(is_initialized=True, fetch=AsyncMock(return_value=[]))
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_leads(
+        min_urgency=7, window_days=30, limit=20, user=user
+    )
+
+    assert result == {"leads": [], "count": 0}
+    sql = pool.fetch.await_args.args[0]
+    assert "COALESCE(reviewed_at, imported_at, enriched_at)" in sql
+    assert "COALESCE(NULLIF(BTRIM(reviewer_company), ''), NULLIF(BTRIM(reviewer_company_norm), ''))" in sql
+
+
+@pytest.mark.asyncio
+async def test_list_tenant_reviews_uses_event_recency_and_company_fallback(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(is_initialized=True, fetch=AsyncMock(return_value=[]))
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_tenant_reviews(
+        pain_category=None,
+        min_urgency=None,
+        company="Acme",
+        has_churn_intent=None,
+        window_days=90,
+        limit=20,
+        user=user,
+    )
+
+    assert result == {"reviews": [], "count": 0}
+    sql = pool.fetch.await_args.args[0]
+    assert "COALESCE(reviewed_at, imported_at, enriched_at)" in sql
+    assert "COALESCE(NULLIF(BTRIM(reviewer_company), ''), NULLIF(BTRIM(reviewer_company_norm), ''))" in sql
+
+
+@pytest.mark.asyncio
+async def test_tenant_vendor_history_requires_tracked_vendor_and_reads_snapshots(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchval=AsyncMock(return_value=1),
+        fetch=AsyncMock(return_value=[]),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.get_tenant_vendor_history(
+        vendor_name="BigCommerce",
+        days=90,
+        limit=24,
+        user=user,
+    )
+
+    assert result == {"vendor_name": "BigCommerce", "snapshots": [], "count": 0}
+    assert "tracked_vendors" in pool.fetchval.await_args.args[0]
+    assert "FROM b2b_vendor_snapshots" in pool.fetch.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_compare_tenant_vendor_periods_computes_deltas(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchval=AsyncMock(return_value=1),
+        fetchrow=AsyncMock(
+            side_effect=[
+                {
+                    "vendor_name": "BigCommerce",
+                    "snapshot_date": date(2026, 2, 20),
+                    "total_reviews": 120,
+                    "churn_intent": 20,
+                    "churn_density": 0.17,
+                    "avg_urgency": 6.1,
+                    "positive_review_pct": 0.42,
+                    "recommend_ratio": 0.39,
+                    "support_sentiment": 0.31,
+                    "legacy_support_score": 0.22,
+                    "new_feature_velocity": 0.41,
+                    "employee_growth_rate": 0.08,
+                    "top_pain": "reliability",
+                    "top_competitor": "Shopify",
+                    "pain_count": 44,
+                    "competitor_count": 29,
+                    "displacement_edge_count": 13,
+                    "high_intent_company_count": 18,
+                },
+                {
+                    "vendor_name": "BigCommerce",
+                    "snapshot_date": date(2026, 3, 20),
+                    "total_reviews": 140,
+                    "churn_intent": 35,
+                    "churn_density": 0.25,
+                    "avg_urgency": 7.2,
+                    "positive_review_pct": 0.35,
+                    "recommend_ratio": 0.33,
+                    "support_sentiment": 0.27,
+                    "legacy_support_score": 0.19,
+                    "new_feature_velocity": 0.37,
+                    "employee_growth_rate": 0.05,
+                    "top_pain": "security",
+                    "top_competitor": "Shopify",
+                    "pain_count": 61,
+                    "competitor_count": 40,
+                    "displacement_edge_count": 19,
+                    "high_intent_company_count": 26,
+                },
+            ],
+        ),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.compare_tenant_vendor_periods(
+        vendor_name="BigCommerce",
+        period_a_days_ago=30,
+        period_b_days_ago=0,
+        user=user,
+    )
+
+    assert result["vendor_name"] == "BigCommerce"
+    assert result["deltas"]["avg_urgency"] == 1.1
+    assert result["deltas"]["churn_intent"] == 15
+    assert result["deltas"]["total_reviews"] == 20
+    assert pool.fetchrow.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_get_vendor_target_prefers_new_report_types(monkeypatch):
+    from atlas_brain.api import vendor_targets as mod
+
+    target_id = uuid4()
+    account_id = uuid4()
+    target_row = {
+        "id": target_id,
+        "company_name": "Acme",
+        "target_mode": "vendor_retention",
+        "contact_name": None,
+        "contact_email": None,
+        "contact_role": None,
+        "products_tracked": [],
+        "competitors_tracked": [],
+        "tier": "report",
+        "status": "active",
+        "notes": None,
+        "account_id": account_id,
+        "created_at": None,
+        "updated_at": None,
+    }
+    stats_row = {
+        "total_campaigns": 0,
+        "drafts": 0,
+        "sent": 0,
+        "approved": 0,
+        "last_campaign_at": None,
+    }
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchrow=AsyncMock(side_effect=[target_row, stats_row]),
+        fetch=AsyncMock(return_value=[]),
+    )
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+
+    result = await mod.get_vendor_target(target_id=target_id, user=None)
+
+    assert result["company_name"] == "Acme"
+    sql = pool.fetch.await_args.args[0]
+    report_types = pool.fetch.await_args.args[2]
+    assert "report_type = ANY($2::text[])" in sql
+    assert report_types[0] == "accounts_in_motion"
+    assert "weekly_churn_feed" in report_types

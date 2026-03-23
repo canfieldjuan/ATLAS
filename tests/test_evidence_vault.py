@@ -359,6 +359,47 @@ def test_merge_canonical_company_signals_preserves_strongest_current_signal():
     assert signal["confidence_score"] == 0.74
 
 
+def test_merge_canonical_company_signals_preserves_account_context_fields():
+    merged = _merge_canonical_company_signals(
+        current_high_intent=[
+            {
+                "company": "Acme Corp",
+                "vendor": "Zendesk",
+                "urgency": 8.0,
+                "title": "VP Support",
+                "company_size": "500-1000",
+                "industry": "SaaS",
+                "alternatives": [{"name": "Freshdesk"}],
+                "quotes": [{"quote": "We need to switch ASAP"}],
+            },
+        ],
+        persisted_lookup={
+            "Zendesk": [
+                {
+                    "company_name": "acme",
+                    "vendor_name": "Zendesk",
+                    "urgency_score": 7.0,
+                    "alternatives": [{"name": "Help Scout"}],
+                    "quotes": [{"quote": "Support has slipped"}],
+                },
+            ],
+        },
+    )
+
+    signal = merged["Zendesk"][0]
+    assert signal["title"] == "VP Support"
+    assert signal["company_size"] == "500-1000"
+    assert signal["industry"] == "SaaS"
+    assert signal["alternatives"] == [
+        {"name": "Freshdesk"},
+        {"name": "Help Scout"},
+    ]
+    assert signal["quotes"] == [
+        {"quote": "We need to switch ASAP"},
+        {"quote": "Support has slipped"},
+    ]
+
+
 def test_merge_pain_lookup_with_evidence_vault_prefers_canonical_rows():
     merged = _merge_pain_lookup_with_evidence_vault(
         {

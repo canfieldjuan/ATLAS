@@ -36,6 +36,8 @@ import atlas_brain.autonomous.tasks.b2b_accounts_in_motion as accounts_mod
 import atlas_brain.autonomous.tasks.b2b_churn_intelligence as churn_mod
 from atlas_brain.autonomous.tasks.b2b_accounts_in_motion import (
     _apply_account_quality_adjustments,
+    _build_fallback_intent_rows,
+    _build_signal_metadata_fallback_rows,
     _compute_account_opportunity_score,
     _merge_company_profiles,
     _normalize_company_key,
@@ -154,6 +156,62 @@ class TestNormalizeCompanyKey:
         assert _normalize_company_key(None) == ""
 
 
+class TestFallbackIntentRows:
+    def test_build_fallback_intent_rows_filters_by_urgency(self):
+        rows = _build_fallback_intent_rows(
+            [
+                {
+                    "vendor": "Zendesk",
+                    "companies": [
+                        {"company": "Acme", "urgency": 4.9, "pain": "pricing"},
+                        {"company": "Beta", "urgency": 5.0, "pain": "support"},
+                    ],
+                }
+            ],
+            min_urgency=5.0,
+        )
+        assert len(rows) == 1
+        assert rows[0]["company"] == "Beta"
+        assert rows[0]["source"] == "churning_companies_fallback"
+
+    def test_build_fallback_intent_rows_carries_context_fields(self):
+        rows = _build_fallback_intent_rows(
+            [
+                {
+                    "vendor": "Zendesk",
+                    "companies": [
+                        {
+                            "company": "Acme Corp",
+                            "urgency": 7.0,
+                            "role": "executive",
+                            "title": "VP Support",
+                            "company_size": "500-1000",
+                            "industry": "SaaS",
+                        }
+                    ],
+                }
+            ],
+            min_urgency=5.0,
+        )
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["title"] == "VP Support"
+        assert row["company_size"] == "500-1000"
+        assert row["industry"] == "SaaS"
+
+    def test_build_signal_metadata_fallback_rows_uses_confidence_as_urgency(self):
+        rows = _build_signal_metadata_fallback_rows(
+            [
+                {"company": "Acme", "vendor": "Zendesk", "confidence": 4.0},
+                {"company": "Beta", "vendor": "Zendesk", "confidence": 6.2},
+            ],
+            min_urgency=5.0,
+        )
+        assert len(rows) == 1
+        assert rows[0]["company"] == "Beta"
+        assert rows[0]["source"] == "company_signals_fallback"
+
+
 # ---------------------------------------------------------------------------
 # Merging tests
 # ---------------------------------------------------------------------------
@@ -164,6 +222,9 @@ class TestMergeCompanyProfiles:
             "company": company,
             "vendor": vendor,
             "category": "Helpdesk",
+            "title": kw.pop("title", None),
+            "company_size": kw.pop("company_size", None),
+            "industry": kw.pop("industry", None),
             "role_level": "executive",
             "decision_maker": True,
             "urgency": urgency,
@@ -192,6 +253,25 @@ class TestMergeCompanyProfiles:
         assert prof["urgency"] == 8.0
         assert prof["evidence_count"] == 1
         assert "uuid-1" in prof["source_reviews"]
+
+    def test_high_intent_context_fields_are_preserved(self):
+        merged = _merge_company_profiles(
+            [
+                self._make_intent(
+                    title="VP Support",
+                    company_size="500-1000",
+                    industry="SaaS",
+                )
+            ],
+            [],
+            [],
+            [],
+            [],
+        )
+        prof = list(merged.values())[0]
+        assert prof["title"] == "VP Support"
+        assert prof["company_size"] == "500-1000"
+        assert prof["industry"] == "SaaS"
 
     def test_two_reviews_same_company_merge(self):
         """Two reviews for same (company, vendor) should merge."""
@@ -334,6 +414,57 @@ class TestMergeCompanyProfiles:
         assert prof["first_seen"] == "2026-03-01T00:00:00+00:00"
         assert prof["last_seen"] == "2026-03-15T00:00:00+00:00"
         assert prof["confidence"] == 0.85
+
+    def test_seed_rows_are_promoted_when_high_intent_overlay_arrives(self):
+        seed_rows = [{
+            "company": "Acme Corp",
+            "vendor": "Zendesk",
+            "category": "Helpdesk",
+            "urgency": 7.0,
+            "pain": "support",
+            "role_level": "champion",
+            "decision_maker": False,
+            "buying_stage": "evaluation",
+            "seat_count": 75,
+            "contract_end": "2026-06-01",
+            "first_seen": "2026-03-01T00:00:00+00:00",
+            "last_seen": "2026-03-15T00:00:00+00:00",
+            "confidence": 0.7,
+        }]
+        merged = _merge_company_profiles(
+            [self._make_intent(review_id="uuid-9")], [], [], [], [], seed_rows=seed_rows,
+        )
+        prof = list(merged.values())[0]
+        assert prof["evidence_count"] == 1
+        assert prof["source_reviews"] == ["uuid-9"]
+        assert prof["contract_end"] == "2026-06-01"
+        assert prof["decision_maker"] is True
+        assert prof["top_quote"] == "We need to switch ASAP"
+
+    def test_seed_rows_preserve_pool_context_without_overlay(self):
+        seed_rows = [{
+            "company": "Acme Corp",
+            "vendor": "Zendesk",
+            "category": "Helpdesk",
+            "urgency": 7.0,
+            "pain": "pricing",
+            "role_level": "champion",
+            "decision_maker": False,
+            "buying_stage": "evaluation",
+            "alternatives": [{"name": "Freshdesk"}],
+            "quotes": [{"quote": "We need to switch ASAP"}],
+            "review_id": "uuid-1",
+            "source": "g2",
+        }]
+
+        merged = _merge_company_profiles([], [], [], [], [], seed_rows=seed_rows)
+        prof = list(merged.values())[0]
+
+        assert prof["alternatives_considering"] == ["Freshdesk"]
+        assert prof["source_reviews"] == ["uuid-1"]
+        assert prof["top_quote"] == "We need to switch ASAP"
+        assert prof["quote_match_type"] == "review"
+        assert prof["source_distribution"] == {"g2": 1}
 
     def test_apollo_fills_industry_when_none(self):
         """Apollo industry fills when review data has no industry."""
@@ -554,6 +685,194 @@ class TestBuildVendorAggregate:
         )
         assert agg["cross_vendor_context"]["top_destination"] == "Freshdesk"
 
+    def test_cross_vendor_context_falls_back_to_account_alternatives(self):
+        account = self._make_account(alternatives_considering=["Intercom", "Intercom", "Freshdesk"])
+        agg = _build_vendor_aggregate(
+            "Zendesk",
+            [account],
+            category="Helpdesk",
+            reasoning_lookup={},
+            xv_lookup={"battles": {}, "councils": {}, "asymmetries": {}},
+            feature_gap_lookup={},
+            price_lookup={},
+            budget_lookup={},
+            competitor_lookup={},
+        )
+        assert agg["cross_vendor_context"]["top_destination"] == "Intercom"
+        assert "active evaluation sets" in agg["cross_vendor_context"]["battle_conclusion"]
+
+    def test_cross_vendor_context_has_non_empty_conclusion_without_flows(self):
+        agg = _build_vendor_aggregate(
+            "Zendesk",
+            [self._make_account(alternatives_considering=[])],
+            category="Helpdesk",
+            reasoning_lookup={},
+            xv_lookup={"battles": {}, "councils": {}, "asymmetries": {}},
+            feature_gap_lookup={},
+            price_lookup={},
+            budget_lookup={},
+            competitor_lookup={},
+        )
+        assert agg["cross_vendor_context"]["battle_conclusion"]
+
+    def test_cross_vendor_context_prefers_battle_for_top_destination(self):
+        agg = _build_vendor_aggregate(
+            "Zendesk",
+            [self._make_account(alternatives_considering=["Freshdesk"])],
+            category="Helpdesk",
+            reasoning_lookup={},
+            xv_lookup={
+                "battles": {
+                    tuple(sorted(("Zendesk", "Intercom"))): {
+                        "conclusion": {"conclusion": "Intercom is winning evaluations against Zendesk."}
+                    },
+                    tuple(sorted(("Zendesk", "Freshdesk"))): {
+                        "conclusion": {"conclusion": "Freshdesk is displacing Zendesk on pricing."}
+                    },
+                },
+                "councils": {},
+                "asymmetries": {},
+            },
+            feature_gap_lookup={},
+            price_lookup={},
+            budget_lookup={},
+            competitor_lookup={"Zendesk": [{"name": "Freshdesk", "mentions": 10}]},
+        )
+        assert agg["cross_vendor_context"]["top_destination"] == "Freshdesk"
+        assert agg["cross_vendor_context"]["battle_conclusion"] == "Freshdesk is displacing Zendesk on pricing."
+
+    def test_vendor_aggregate_attaches_category_council_when_richer(self):
+        agg = _build_vendor_aggregate(
+            "Zendesk",
+            [self._make_account()],
+            category="Helpdesk",
+            reasoning_lookup={},
+            xv_lookup={
+                "battles": {},
+                "councils": {
+                    "Helpdesk": {
+                        "confidence": 0.58,
+                        "conclusion": {
+                            "winner": "Zoho Desk",
+                            "loser": "Freshdesk",
+                            "conclusion": "Pricing pressure is fragmenting the helpdesk market.",
+                            "market_regime": "price_competition",
+                            "durability_assessment": "cyclical",
+                            "key_insights": [{"insight": "Pricing is the primary driver.", "evidence": "pricing"}],
+                        },
+                    }
+                },
+                "asymmetries": {},
+            },
+            feature_gap_lookup={},
+            price_lookup={},
+            budget_lookup={},
+            competitor_lookup={},
+        )
+        assert agg["category_council"]["winner"] == "Zoho Desk"
+        assert agg["category_council"]["market_regime"] == "price_competition"
+        assert agg["cross_vendor_context"]["market_regime"] == "price_competition"
+
+    def test_vendor_aggregate_attaches_synthesis_contracts(self):
+        class _Wedge:
+            value = "pricing_shock"
+
+        class _View:
+            schema_version = "v2"
+            primary_wedge = _Wedge()
+            wedge_label = "Pricing Shock"
+            meta = {"evidence_window_start": "2026-02-01", "evidence_window_end": "2026-03-01"}
+
+            @staticmethod
+            def contract(name):
+                if name == "vendor_core_reasoning":
+                    return {
+                        "causal_narrative": {"confidence": "high"},
+                        "segment_playbook": {
+                            "confidence": "medium",
+                            "supporting_evidence": {
+                                "top_strategic_roles": [
+                                    {
+                                        "role_type": "economic_buyer",
+                                        "source_id": "segment:role:economic_buyer",
+                                    },
+                                ],
+                                "top_contract_segments": [
+                                    {"segment": "smb", "source_id": "segment:contract:smb"},
+                                ],
+                            },
+                        },
+                        "timing_intelligence": {
+                            "confidence": "medium",
+                            "best_timing_window": "Before renewal review",
+                            "active_eval_signals": {
+                                "value": 2,
+                                "source_id": "accounts:summary:active_eval_signal_count",
+                            },
+                            "sentiment_direction": "declining",
+                            "immediate_triggers": [
+                                {"trigger": "Q2 renewal", "type": "deadline"},
+                            ],
+                        },
+                    }
+                if name == "displacement_reasoning":
+                    return {"competitive_reframes": {"confidence": "medium"}}
+                if name == "account_reasoning":
+                    return {
+                        "market_summary": "Two accounts are actively evaluating alternatives while five accounts show high intent signals overall.",
+                        "high_intent_count": {
+                            "value": 5,
+                            "source_id": "accounts:summary:high_intent_count",
+                        },
+                        "active_eval_count": {
+                            "value": 2,
+                            "source_id": "accounts:summary:active_eval_signal_count",
+                        },
+                        "top_accounts": [
+                            {
+                                "name": "Acme Corp",
+                                "intent_score": 0.9,
+                                "source_id": "accounts:company:acme_corp",
+                            },
+                        ],
+                    }
+                return {}
+
+        agg = _build_vendor_aggregate(
+            "Zendesk",
+            [self._make_account()],
+            category="Helpdesk",
+            reasoning_lookup={},
+            xv_lookup={"battles": {}, "councils": {}, "asymmetries": {}},
+            feature_gap_lookup={},
+            price_lookup={},
+            budget_lookup={},
+            competitor_lookup={},
+            synthesis_views={"Zendesk": _View()},
+        )
+        assert agg["reasoning_source"] == "b2b_reasoning_synthesis"
+        assert agg["synthesis_wedge"] == "pricing_shock"
+        assert "reasoning_contracts" in agg
+        assert agg["reasoning_contracts"]["vendor_core_reasoning"]["causal_narrative"]["confidence"] == "high"
+        assert agg["account_reasoning"]["top_accounts"][0]["name"] == "Acme Corp"
+        assert agg["account_pressure_summary"] == (
+            "Two accounts are actively evaluating alternatives while five accounts show high intent signals overall."
+        )
+        assert agg["account_pressure_metrics"]["high_intent_count"] == 5
+        assert agg["account_pressure_metrics"]["active_eval_count"] == 2
+        assert agg["priority_account_names"] == ["Acme Corp"]
+        assert agg["segment_playbook"]["supporting_evidence"]["top_contract_segments"][0]["segment"] == "smb"
+        assert agg["timing_intelligence"]["best_timing_window"] == "Before renewal review"
+        assert agg["timing_summary"] == (
+            "Before renewal review. 2 active evaluation signals are visible right now. "
+            "Review sentiment is skewing more negative."
+        )
+        assert agg["timing_metrics"]["active_eval_signals"] == 2
+        assert agg["priority_timing_triggers"] == ["Q2 renewal"]
+        assert "economic buyers" in agg["segment_targeting_summary"]
+        assert "smb contracts" in agg["segment_targeting_summary"]
+        assert "vendor_core_reasoning" not in agg
+
     def test_empty_accounts(self):
         """Vendor with no accounts still builds a valid aggregate."""
         agg = _build_vendor_aggregate(
@@ -631,7 +950,7 @@ class TestAccountsInMotionRunProgress:
                 close = getattr(coro, "close", None)
                 if close:
                     close()
-            return ([{"vendor": "Zendesk", "company": "Acme", "urgency": 8.0}], [], [], [], [], [], [], [], [], {})
+            return ([{"vendor": "Zendesk", "company": "Acme", "urgency": 8.0}], [], [], [], [], [], [], [], [], {}, {})
 
         monkeypatch.setattr(accounts_mod.settings.b2b_churn, "enabled", True, raising=False)
         monkeypatch.setattr(accounts_mod.settings.b2b_churn, "intelligence_enabled", True, raising=False)
@@ -663,3 +982,95 @@ class TestAccountsInMotionRunProgress:
             accounts_mod._STAGE_PERSISTING_REPORTS,
             accounts_mod._STAGE_FINALIZING,
         ]
+
+    @pytest.mark.asyncio
+    async def test_run_uses_churning_fallback_rows_when_high_intent_empty(self, monkeypatch):
+        pool = type("Pool", (), {"is_initialized": True, "execute": AsyncMock()})()
+        captured: dict[str, Any] = {}
+
+        async def fake_gather(*_args, **_kwargs):
+            for coro in _args:
+                close = getattr(coro, "close", None)
+                if close:
+                    close()
+            return (
+                [],
+                [],
+                [{"vendor": "Zendesk", "companies": [{"company": "Acme", "urgency": 7.0, "pain": "pricing"}]}],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+                {},
+                {},
+            )
+
+        def fake_merge(high_intent_rows, *_args, **_kwargs):
+            captured["rows"] = high_intent_rows
+            return {}
+
+        monkeypatch.setattr(accounts_mod.settings.b2b_churn, "enabled", True, raising=False)
+        monkeypatch.setattr(accounts_mod.settings.b2b_churn, "intelligence_enabled", True, raising=False)
+        monkeypatch.setattr(accounts_mod, "get_db_pool", lambda: pool)
+        monkeypatch.setattr(accounts_mod, "_check_freshness", AsyncMock(return_value=date(2026, 3, 18)))
+        monkeypatch.setattr(accounts_mod.asyncio, "gather", fake_gather)
+        monkeypatch.setattr(accounts_mod, "_merge_company_profiles", fake_merge)
+        monkeypatch.setattr(churn_mod, "reconstruct_reasoning_lookup", AsyncMock(return_value={}))
+        monkeypatch.setattr(
+            churn_mod,
+            "reconstruct_cross_vendor_lookup",
+            AsyncMock(return_value={"battles": {}, "councils": {}, "asymmetries": {}}),
+        )
+        monkeypatch.setattr(accounts_mod, "_fetch_latest_synthesis_views", AsyncMock(return_value={}))
+        monkeypatch.setattr(accounts_mod, "_update_execution_progress", AsyncMock())
+
+        task = type("Task", (), {"metadata": {"_execution_id": str(uuid4())}})()
+        result = await accounts_mod.run(task)
+
+        assert result["_skip_synthesis"] == "Accounts in motion complete"
+        assert any(row.get("source") == "churning_companies_fallback" for row in captured["rows"])
+
+    @pytest.mark.asyncio
+    async def test_run_scopes_rows_to_test_vendors(self, monkeypatch):
+        pool = type("Pool", (), {"is_initialized": True, "execute": AsyncMock()})()
+        captured: dict[str, Any] = {}
+
+        async def fake_gather(*_args, **_kwargs):
+            for coro in _args:
+                close = getattr(coro, "close", None)
+                if close:
+                    close()
+            return (
+                [
+                    {"vendor": "Zendesk", "company": "Acme", "urgency": 8.0},
+                    {"vendor": "Freshdesk", "company": "Beta", "urgency": 8.0},
+                ],
+                [], [], [], [], [], [], [], [], {}, {},
+            )
+
+        def fake_merge(high_intent_rows, *_args, **_kwargs):
+            captured["rows"] = high_intent_rows
+            return {}
+
+        monkeypatch.setattr(accounts_mod.settings.b2b_churn, "enabled", True, raising=False)
+        monkeypatch.setattr(accounts_mod.settings.b2b_churn, "intelligence_enabled", True, raising=False)
+        monkeypatch.setattr(accounts_mod, "get_db_pool", lambda: pool)
+        monkeypatch.setattr(accounts_mod, "_check_freshness", AsyncMock(return_value=date(2026, 3, 18)))
+        monkeypatch.setattr(accounts_mod.asyncio, "gather", fake_gather)
+        monkeypatch.setattr(accounts_mod, "_merge_company_profiles", fake_merge)
+        monkeypatch.setattr(churn_mod, "reconstruct_reasoning_lookup", AsyncMock(return_value={}))
+        monkeypatch.setattr(
+            churn_mod,
+            "reconstruct_cross_vendor_lookup",
+            AsyncMock(return_value={"battles": {}, "councils": {}, "asymmetries": {}}),
+        )
+        monkeypatch.setattr(accounts_mod, "_fetch_latest_synthesis_views", AsyncMock(return_value={}))
+        monkeypatch.setattr(accounts_mod, "_update_execution_progress", AsyncMock())
+
+        task = type("Task", (), {"metadata": {"_execution_id": str(uuid4()), "test_vendors": ["Zendesk"]}})()
+        result = await accounts_mod.run(task)
+
+        assert result["_skip_synthesis"] == "Accounts in motion complete"
+        assert [row["vendor"] for row in captured["rows"]] == ["Zendesk"]

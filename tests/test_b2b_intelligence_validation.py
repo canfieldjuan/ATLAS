@@ -39,9 +39,15 @@ for _mod in (
 
 import atlas_brain.autonomous.tasks.b2b_churn_intelligence as churn_intel_mod
 from atlas_brain.autonomous.tasks._b2b_shared import (
+    _battle_card_companies_from_evidence_vault,
     _build_battle_card_locked_facts,
+    _build_company_signal_blocked_names_by_vendor,
+    _build_deterministic_battle_cards,
     _build_deterministic_battle_card_competitive_landscape,
     _build_deterministic_battle_card_weakness_analysis,
+    _battle_card_fallback_recommended_plays,
+    _merge_canonical_company_signals,
+    build_account_intelligence,
     _build_scorecard_locked_facts,
     _build_deterministic_vendor_feed,
     _build_validated_executive_summary,
@@ -51,17 +57,36 @@ from atlas_brain.autonomous.tasks._b2b_shared import (
     _executive_source_list,
     _fallback_scorecard_expert_take,
     _sanitize_battle_card_sales_copy,
+    _battle_card_allowed_claims,
     _validate_battle_card_sales_copy,
     _validate_scorecard_expert_take,
     _validate_report,
 )
+from atlas_brain.config import settings
 from atlas_brain.autonomous.tasks.b2b_battle_cards import (
     _BATTLE_CARD_LLM_FIELDS,
+    _apply_battle_card_quality,
+    _battle_card_row_status,
+    _build_battle_card_render_payload,
+    _evaluate_battle_card_quality,
+    _prioritize_seller_usable_primary_weakness,
+    _promote_account_reasoning_to_battle_card,
     _battle_card_llm_options,
     _battle_card_prior_attempt,
+    _battle_card_seller_usable_battles,
+    _pair_opponent,
     _persist_battle_card,
     _parse_battle_card_sales_copy,
+    _retire_gated_out_battle_cards,
     _update_execution_progress,
+)
+from atlas_brain.autonomous.tasks.b2b_churn_reports import (
+    _pair_opponent as _report_pair_opponent,
+    _attach_synthesis_contracts_to_report_entry,
+)
+from atlas_brain.autonomous.tasks._b2b_synthesis_reader import (
+    contract_gaps_for_consumer,
+    load_synthesis_view,
 )
 
 
@@ -201,6 +226,459 @@ class TestValidateReportQuotes:
         )
         assert parsed["weekly_churn_feed"][0]["key_quote"] == "Real quote from source"
         assert not any("Fabricated" in w for w in warnings)
+
+
+class TestChurnReportReasoningContracts:
+    def test_attach_vendor_core_reasoning_to_feed_entry(self):
+        entry = {"vendor": "Zendesk"}
+        view = load_synthesis_view(
+            {
+                "schema_version": "2.1",
+                "reasoning_contracts": {
+                    "vendor_core_reasoning": {
+                        "schema_version": "v1",
+                        "causal_narrative": {
+                            "primary_wedge": "price_squeeze",
+                            "confidence": "high",
+                            "trigger": "Price hike",
+                            "why_now": "AI upsell packaging change",
+                        },
+                        "segment_playbook": {"confidence": "medium"},
+                        "timing_intelligence": {
+                            "confidence": "medium",
+                            "best_timing_window": "Before renewal",
+                            "active_eval_signals": {
+                                "value": 2,
+                                "source_id": "accounts:summary:active_eval_signal_count",
+                            },
+                            "sentiment_direction": "declining",
+                            "immediate_triggers": [
+                                {"trigger": "Q2 renewal", "type": "deadline"},
+                            ],
+                        },
+                    },
+                    "account_reasoning": {
+                        "schema_version": "v1",
+                        "market_summary": "Two accounts are actively evaluating alternatives.",
+                        "total_accounts": {
+                            "value": 6,
+                            "source_id": "accounts:summary:total_accounts",
+                        },
+                        "high_intent_count": {
+                            "value": 4,
+                            "source_id": "accounts:summary:high_intent_count",
+                        },
+                        "active_eval_count": {
+                            "value": 2,
+                            "source_id": "accounts:summary:active_eval_signal_count",
+                        },
+                        "top_accounts": [],
+                    },
+                },
+                "meta": {
+                    "evidence_window_start": "2026-03-01",
+                    "evidence_window_end": "2026-03-18",
+                },
+            },
+            "Zendesk",
+        )
+
+        _attach_synthesis_contracts_to_report_entry(
+            entry,
+            view,
+            consumer_name="weekly_churn_feed",
+            requested_as_of=date(2026, 3, 20),
+            include_displacement=False,
+        )
+
+        assert entry["reasoning_contracts"]["vendor_core_reasoning"]["causal_narrative"]["trigger"] == "Price hike"
+        assert "causal_narrative" not in entry
+        assert entry["synthesis_wedge"] == "price_squeeze"
+        assert entry["reasoning_source"] == "b2b_reasoning_synthesis"
+        assert entry["evidence_window_days"] == 17
+        assert entry["timing_intelligence"]["best_timing_window"] == "Before renewal"
+        assert entry["timing_summary"] == (
+            "Before renewal. 2 active evaluation signals are visible right now. "
+            "Review sentiment is skewing more negative."
+        )
+        assert entry["timing_metrics"]["active_eval_signals"] == 2
+        assert entry["priority_timing_triggers"] == ["Q2 renewal"]
+        assert "displacement_reasoning" not in entry
+
+    def test_attach_displacement_reasoning_to_scorecard_entry(self):
+        entry = {"vendor": "Zendesk"}
+        view = load_synthesis_view(
+            {
+                "schema_version": "2.1",
+                "reasoning_contracts": {
+                    "vendor_core_reasoning": {
+                        "schema_version": "v1",
+                        "causal_narrative": {
+                            "primary_wedge": "price_squeeze",
+                            "confidence": "high",
+                        },
+                    },
+                    "account_reasoning": {
+                        "schema_version": "v1",
+                        "market_summary": "Two accounts are actively evaluating alternatives.",
+                        "total_accounts": {"value": 6, "source_id": "accounts:summary:total_accounts"},
+                        "high_intent_count": {"value": 4, "source_id": "accounts:summary:high_intent_count"},
+                        "active_eval_count": {
+                            "value": 2,
+                            "source_id": "accounts:summary:active_eval_signal_count",
+                        },
+                        "top_accounts": [],
+                    },
+                    "displacement_reasoning": {
+                        "schema_version": "v1",
+                        "competitive_reframes": {"confidence": "medium"},
+                        "migration_proof": {
+                            "confidence": "medium",
+                            "switch_volume": {
+                                "value": 0,
+                                "source_id": "displacement:aggregate:total_explicit_switches",
+                            },
+                        },
+                    },
+                },
+            },
+            "Zendesk",
+        )
+
+        _attach_synthesis_contracts_to_report_entry(
+            entry,
+            view,
+            consumer_name="vendor_scorecard",
+            requested_as_of=date(2026, 3, 20),
+            include_displacement=True,
+        )
+
+        assert "reasoning_contracts" in entry
+        assert entry["reasoning_contracts"]["displacement_reasoning"]["migration_proof"]["switch_volume"]["value"] == 0
+        assert "migration_proof" not in entry
+
+    def test_consumers_require_account_reasoning_contract(self):
+        view = load_synthesis_view(
+            {
+                "schema_version": "2.1",
+                "reasoning_contracts": {
+                    "vendor_core_reasoning": {
+                        "schema_version": "v1",
+                        "causal_narrative": {
+                            "primary_wedge": "price_squeeze",
+                            "confidence": "high",
+                        },
+                    },
+                    "displacement_reasoning": {
+                        "schema_version": "v1",
+                        "competitive_reframes": {"confidence": "medium"},
+                    },
+                },
+            },
+            "Zendesk",
+        )
+
+        battle_gaps = contract_gaps_for_consumer(view, "battle_card")
+        weekly_gaps = contract_gaps_for_consumer(view, "weekly_churn_feed")
+        scorecard_gaps = contract_gaps_for_consumer(view, "vendor_scorecard")
+        motion_gaps = contract_gaps_for_consumer(view, "accounts_in_motion")
+        brief_gaps = contract_gaps_for_consumer(view, "challenger_brief")
+
+        assert "account_reasoning" in battle_gaps
+        assert "account_reasoning" in weekly_gaps
+        assert "account_reasoning" in scorecard_gaps
+        assert "account_reasoning" in motion_gaps
+        assert "account_reasoning" in brief_gaps
+
+    def test_attach_account_reasoning_promotes_summary_and_named_accounts(self):
+        entry = {"vendor": "Zendesk", "named_accounts": []}
+        view = load_synthesis_view(
+            {
+                "schema_version": "2.1",
+                "reasoning_contracts": {
+                    "vendor_core_reasoning": {
+                        "schema_version": "v1",
+                        "causal_narrative": {
+                            "primary_wedge": "price_squeeze",
+                            "confidence": "high",
+                        },
+                    },
+                    "account_reasoning": {
+                        "schema_version": "v1",
+                        "market_summary": "Two accounts are actively evaluating alternatives.",
+                        "total_accounts": {"value": 6, "source_id": "accounts:summary:total_accounts"},
+                        "high_intent_count": {"value": 4, "source_id": "accounts:summary:high_intent_count"},
+                        "active_eval_count": {
+                            "value": 2,
+                            "source_id": "accounts:summary:active_eval_signal_count",
+                        },
+                        "top_accounts": [
+                            {"name": "Acme Corp", "intent_score": 0.9, "source_id": "accounts:item:acme"},
+                            {"name": "Globex", "intent_score": 0.6, "source_id": "accounts:item:globex"},
+                        ],
+                    },
+                },
+            },
+            "Zendesk",
+        )
+
+        _attach_synthesis_contracts_to_report_entry(
+            entry,
+            view,
+            consumer_name="weekly_churn_feed",
+            requested_as_of=date(2026, 3, 20),
+            include_displacement=False,
+        )
+
+        assert entry["reasoning_contracts"]["account_reasoning"]["top_accounts"][0]["name"] == "Acme Corp"
+        assert entry["account_pressure_summary"] == "Two accounts are actively evaluating alternatives."
+        assert entry["account_pressure_metrics"]["high_intent_count"] == 4
+        assert entry["priority_account_names"] == ["Acme Corp", "Globex"]
+        assert entry["named_accounts"][0]["company"] == "Acme Corp"
+        assert entry["named_accounts"][0]["reasoning_backed"] is True
+
+    def test_promote_account_reasoning_to_battle_card(self):
+        card = _sample_battle_card()
+        card["reasoning_contracts"] = {
+            "schema_version": "v1",
+            "account_reasoning": {
+                "schema_version": "v1",
+                "market_summary": "Two accounts are actively evaluating alternatives.",
+                "total_accounts": {"value": 6, "source_id": "accounts:summary:total_accounts"},
+                "high_intent_count": {"value": 4, "source_id": "accounts:summary:high_intent_count"},
+                "active_eval_count": {
+                    "value": 2,
+                    "source_id": "accounts:summary:active_eval_signal_count",
+                },
+                "top_accounts": [
+                    {"name": "Acme Corp", "intent_score": 0.9, "source_id": "accounts:item:acme"},
+                    {"name": "Globex", "intent_score": 0.6, "source_id": "accounts:item:globex"},
+                ],
+            },
+        }
+
+        _promote_account_reasoning_to_battle_card(card)
+
+        assert card["account_reasoning"]["top_accounts"][0]["name"] == "Acme Corp"
+        assert card["account_pressure_summary"] == "Two accounts are actively evaluating alternatives."
+        assert card["account_pressure_metrics"]["high_intent_count"] == 4
+        assert card["priority_account_names"] == ["Acme Corp", "Globex"]
+
+
+class TestChurnReportCrossVendorHelpers:
+    def test_pair_opponent_returns_empty_for_self_only_pair(self):
+        assert _report_pair_opponent(("Zendesk", "Zendesk"), "Zendesk") == ""
+
+    def test_pair_opponent_returns_other_vendor_for_normal_pair(self):
+        assert _report_pair_opponent(("Zendesk", "Freshdesk"), "Zendesk") == "Freshdesk"
+
+
+class TestChurnVendorScoping:
+    def test_apply_vendor_scope_filters_rows_mappings_and_tuple_bundles(self):
+        scoped, names = churn_intel_mod._apply_vendor_scope_to_churn_inputs(
+            {
+                "vendor_scores": [
+                    {"vendor_name": "Zendesk", "score": 1},
+                    {"vendor_name": "Freshdesk", "score": 2},
+                ],
+                "vendor_scores_from_signals": [
+                    {"vendor_name": "Zendesk", "score": 10},
+                    {"vendor_name": "Freshdesk", "score": 20},
+                ],
+                "high_intent": [
+                    {"vendor": "Zendesk", "company": "Acme"},
+                    {"vendor": "Freshdesk", "company": "Beta"},
+                ],
+                "existing_company_signals": {
+                    "Zendesk": [{"company_name": "Acme"}],
+                    "Freshdesk": [{"company_name": "Beta"}],
+                },
+                "displacement_provenance": {
+                    ("Zendesk", "Freshdesk"): {"count": 3},
+                    ("Intercom", "Help Scout"): {"count": 1},
+                },
+                "review_text_aggs": (
+                    [
+                        {"vendor_name": "Zendesk", "quote": "z"},
+                        {"vendor_name": "Freshdesk", "quote": "f"},
+                    ],
+                    [
+                        {"vendor_name": "Freshdesk", "quote": "p"},
+                    ],
+                ),
+                "contract_ctx_aggs": (
+                    [
+                        {"vendor_name": "Zendesk", "value": "annual"},
+                    ],
+                    [
+                        {"vendor_name": "Freshdesk", "value": "monthly"},
+                    ],
+                ),
+            },
+            ["Zendesk"],
+        )
+
+        assert names == ["Zendesk"]
+        assert [row["vendor_name"] for row in scoped["vendor_scores"]] == ["Zendesk"]
+        assert [row["vendor_name"] for row in scoped["vendor_scores_from_signals"]] == ["Zendesk"]
+        assert [row["vendor"] for row in scoped["high_intent"]] == ["Zendesk"]
+        assert list(scoped["existing_company_signals"].keys()) == ["Zendesk"]
+        assert list(scoped["displacement_provenance"].keys()) == [("Zendesk", "Freshdesk")]
+        assert [row["vendor_name"] for row in scoped["review_text_aggs"][0]] == ["Zendesk"]
+        assert scoped["review_text_aggs"][1] == []
+        assert [row["vendor_name"] for row in scoped["contract_ctx_aggs"][0]] == ["Zendesk"]
+        assert scoped["contract_ctx_aggs"][1] == []
+
+    def test_apply_vendor_scope_normalizes_string_input(self):
+        scoped, names = churn_intel_mod._apply_vendor_scope_to_churn_inputs(
+            {
+                "vendor_scores": [
+                    {"vendor_name": "Zendesk", "score": 1},
+                    {"vendor_name": "Freshdesk", "score": 2},
+                ],
+            },
+            " zendesk ",
+        )
+
+        assert names == ["Zendesk"]
+        assert [row["vendor_name"] for row in scoped["vendor_scores"]] == ["Zendesk"]
+
+
+class TestAccountIntelligenceHygiene:
+    def test_build_company_signal_blocked_names_by_vendor_includes_vendors_integrations_and_alternatives(self):
+        blocked = _build_company_signal_blocked_names_by_vendor(
+            ["Zendesk", "Freshdesk", "Salesforce"],
+            high_intent_entries=[
+                {
+                    "vendor": "Zendesk",
+                    "alternatives": [{"name": "Halo"}, {"name": "BoldDesk"}],
+                }
+            ],
+            integration_lookup={
+                "Zendesk": [{"integration_name": "Salesforce"}],
+            },
+        )
+
+        assert "freshdesk" in blocked["Zendesk"]
+        assert "salesforce" in blocked["Zendesk"]
+        assert "halo" in blocked["Zendesk"]
+        assert "bolddesk" in blocked["Zendesk"]
+
+    def test_build_account_intelligence_filters_polluted_company_names(self):
+        acct = build_account_intelligence(
+            "Zendesk",
+            high_intent_entries=[
+                {
+                    "company": "ourdomain.com",
+                    "urgency": 8.0,
+                    "buying_stage": "evaluation",
+                },
+                {
+                    "company": "Government agency",
+                    "urgency": 9.0,
+                    "buying_stage": "evaluation",
+                },
+                {
+                    "company": "Costa Rica",
+                    "urgency": 8.0,
+                    "buying_stage": "evaluation",
+                },
+                {
+                    "company": "ClonePartner",
+                    "urgency": 8.0,
+                    "buying_stage": "evaluation",
+                },
+                {
+                    "company": "Freshdesk",
+                    "urgency": 8.0,
+                    "buying_stage": "evaluation",
+                    "alternatives": [{"name": "Freshdesk"}],
+                },
+                {
+                    "company": "B2B E-Commerce Startup",
+                    "urgency": 8.0,
+                    "buying_stage": "evaluation",
+                },
+                {
+                    "company": "Video Studio",
+                    "urgency": 7.0,
+                    "buying_stage": "evaluation",
+                },
+                {
+                    "company": "Acme Corp",
+                    "urgency": 7.5,
+                    "buying_stage": "evaluation",
+                    "decision_maker": True,
+                },
+            ],
+            persisted_signals=[
+                {
+                    "company_name": "Zendesk",
+                    "urgency_score": 9.0,
+                    "buying_stage": "evaluation",
+                }
+            ],
+            blocked_names={"salesforce", "freshdesk", "halo", "bolddesk"},
+        )
+
+        assert [a["company_name"] for a in acct["accounts"]] == ["Acme Corp"]
+        assert acct["summary"]["total_accounts"] == 1
+        assert acct["summary"]["decision_maker_count"] == 1
+        assert acct["summary"]["active_eval_signal_count"] == 1
+
+    def test_build_account_intelligence_preserves_account_context_from_persisted_signals(self):
+        acct = build_account_intelligence(
+            "Zendesk",
+            persisted_signals=[
+                {
+                    "company_name": "Acme Corp",
+                    "urgency_score": 8.0,
+                    "buying_stage": "evaluation",
+                    "source": "g2",
+                    "review_id": "r-1",
+                    "title": "VP Support",
+                    "company_size": "500",
+                    "industry": "SaaS",
+                    "alternatives": [{"name": "Freshdesk"}],
+                    "quotes": [{"quote": "We need to switch ASAP"}],
+                    "first_seen_at": "2026-03-01T00:00:00+00:00",
+                    "last_seen_at": "2026-03-18T00:00:00+00:00",
+                    "confidence_score": 0.9,
+                },
+            ],
+        )
+
+        account = acct["accounts"][0]
+        assert account["title"] == "VP Support"
+        assert account["company_size"] == "500"
+        assert account["industry"] == "SaaS"
+        assert account["alternatives"] == [{"name": "Freshdesk"}]
+        assert account["quotes"] == [{"quote": "We need to switch ASAP"}]
+        assert account["first_seen_at"] == "2026-03-01T00:00:00+00:00"
+        assert account["last_seen_at"] == "2026-03-18T00:00:00+00:00"
+        assert account["confidence_score"] == 0.9
+
+    def test_merge_canonical_company_signals_filters_persisted_vendor_names_from_review_alternatives(self):
+        merged = _merge_canonical_company_signals(
+            [],
+            {
+                "Zendesk": [
+                    {
+                        "company_name": "Halo",
+                        "urgency_score": 7.0,
+                        "alternatives": [{"name": "Halo"}],
+                    },
+                    {
+                        "company_name": "Acme Corp",
+                        "urgency_score": 8.0,
+                        "alternatives": [{"name": "Freshdesk"}],
+                    },
+                ]
+            },
+            blocked_names_by_vendor={"Zendesk": {"freshdesk", "salesforce"}},
+        )
+
+        assert [row["company_name"] for row in merged["Zendesk"]] == ["acme"]
 
 
 class TestValidateReportSummaryCheck:
@@ -380,7 +858,23 @@ class TestBattleCardSalesCopyValidation:
         warnings = _validate_battle_card_sales_copy(_sample_battle_card(), generated)
         assert not any("unsupported numeric claims" in w for w in warnings)
 
-    def test_allows_numeric_claims_present_in_cross_vendor_input(self):
+    def test_allows_supported_decimal_percentage_variant_equivalent(self):
+        card = _sample_battle_card()
+        card["objection_data"]["price_complaint_rate"] = 0.27
+        generated = {
+            "weakness_analysis": [
+                {
+                    "weakness": "Pricing pressure is rising.",
+                    "evidence": "27.0% price complaint rate across 1156 reviews",
+                    "customer_quote": "",
+                    "winning_position": "Emphasize pricing clarity.",
+                }
+            ]
+        }
+        warnings = _validate_battle_card_sales_copy(card, generated)
+        assert not any("unsupported numeric claims" in w for w in warnings)
+
+    def test_rejects_numeric_claims_present_only_in_cross_vendor_prose(self):
         card = _sample_battle_card()
         card["cross_vendor_battles"] = [{
             "opponent": "WooCommerce",
@@ -394,6 +888,32 @@ class TestBattleCardSalesCopyValidation:
             "competitive_landscape": {
                 "top_alternatives": "WooCommerce remains relevant, but Shopify is winning in the 52% SMB segment."
             }
+        }
+        warnings = _validate_battle_card_sales_copy(card, generated)
+        assert any("unsupported numeric claims" in w for w in warnings)
+
+    def test_allows_numeric_claims_from_structured_reasoning_contracts(self):
+        card = _sample_battle_card() | {
+            "reasoning_contracts": {
+                "schema_version": "v1",
+                "vendor_core_reasoning": {
+                    "schema_version": "v1",
+                    "timing_intelligence": {
+                        "active_eval_signals": {
+                            "value": 9,
+                            "source_id": "segment:aggregate:active_eval_signal_count",
+                        },
+                    },
+                },
+                "category_reasoning": {
+                    "schema_version": "v1",
+                    "vendor_count": 12,
+                    "displacement_flow_count": 43,
+                },
+            },
+        }
+        generated = {
+            "executive_summary": "There are 9 active evaluation signals across a 12-vendor category."
         }
         warnings = _validate_battle_card_sales_copy(card, generated)
         assert not any("unsupported numeric claims" in w for w in warnings)
@@ -431,6 +951,87 @@ class TestBattleCardSalesCopyValidation:
         }
         warnings = _validate_battle_card_sales_copy(_sample_battle_card(), generated)
         assert any("customer_quote is not an exact source quote" in w for w in warnings)
+
+    def test_rejects_unsupported_numeric_claims_in_recommended_play(self):
+        generated = {
+            "recommended_plays": [
+                {
+                    "play": "Target support teams with a renewal benchmark.",
+                    "target_segment": "Support department leaders showing 21% churn rates and 4.1 urgency.",
+                    "key_message": "Lead with cost control.",
+                    "timing": "During renewal planning.",
+                }
+            ]
+        }
+        warnings = _validate_battle_card_sales_copy(_sample_battle_card(), generated)
+        assert any("unsupported numeric claims" in w for w in warnings)
+
+    def test_rejects_overcertain_play_when_account_intelligence_is_missing(self):
+        card = _sample_battle_card() | {
+            "reasoning_contracts": {
+                "schema_version": "v1",
+                "vendor_core_reasoning": {
+                    "schema_version": "v1",
+                    "segment_playbook": {
+                        "confidence": "medium",
+                        "data_gaps": ["No account-level intelligence for targeted outreach"],
+                    },
+                },
+            },
+            "high_intent_companies": [],
+        }
+        generated = {
+            "recommended_plays": [
+                {
+                    "play": "Target SMB support teams with cost audit messaging.",
+                    "target_segment": "Support leaders already dealing with service friction and renewal pressure.",
+                    "key_message": "Lead with cost control.",
+                    "timing": "During renewal planning.",
+                }
+            ]
+        }
+        warnings = _validate_battle_card_sales_copy(card, generated)
+        assert any("overstates segment certainty" in w for w in warnings)
+
+    def test_rejects_duplicate_recommended_play_segments(self):
+        generated = {
+            "recommended_plays": [
+                {
+                    "play": "Best tested on SMB support teams with cost audit messaging.",
+                    "target_segment": "SMB support teams",
+                    "key_message": "Lead with cost control.",
+                    "timing": "During renewal planning.",
+                },
+                {
+                    "play": "Best tested on SMB support teams with migration benchmarking.",
+                    "target_segment": "SMB support teams",
+                    "key_message": "Lead with migration risk reduction.",
+                    "timing": "During annual planning.",
+                },
+            ]
+        }
+        warnings = _validate_battle_card_sales_copy(_sample_battle_card(), generated)
+        assert any("repeat the same target segment" in w for w in warnings)
+
+    def test_rejects_duplicate_recommended_play_segments_even_with_sample_suffix(self):
+        generated = {
+            "recommended_plays": [
+                {
+                    "play": "Best tested on SMB support teams with cost audit messaging.",
+                    "target_segment": "SMB support teams (sample n=12)",
+                    "key_message": "Lead with cost control.",
+                    "timing": "During renewal planning.",
+                },
+                {
+                    "play": "Best tested on SMB support teams with migration benchmarking.",
+                    "target_segment": "SMB support teams (sample n=18)",
+                    "key_message": "Lead with migration risk reduction.",
+                    "timing": "During annual planning.",
+                },
+            ]
+        }
+        warnings = _validate_battle_card_sales_copy(_sample_battle_card(), generated)
+        assert any("repeat the same target segment" in w for w in warnings)
 
 
 class TestBattleCardSalesCopySanitization:
@@ -498,6 +1099,504 @@ class TestBattleCardSalesCopySanitization:
             "Support quality has become inconsistent during peak periods.",
         }
 
+    def test_sanitizes_proof_point_to_supported_structured_count(self):
+        card = _sample_battle_card() | {
+            "reasoning_contracts": {
+                "schema_version": "v1",
+                "vendor_core_reasoning": {
+                    "schema_version": "v1",
+                    "timing_intelligence": {
+                        "active_eval_signals": {
+                            "value": 9,
+                            "source_id": "segment:aggregate:active_eval_signal_count",
+                        },
+                    },
+                },
+            },
+        }
+        generated = {
+            "objection_handlers": [
+                {
+                    "objection": "Our team is already trained on Shopify.",
+                    "acknowledge": "Training investment is real.",
+                    "pivot": "The day-to-day friction may already outweigh the retraining cost.",
+                    "proof_point": "Support departments show a 21% churn rate with average urgency of 4.1.",
+                }
+            ]
+        }
+        sanitized = _sanitize_battle_card_sales_copy(card, generated)
+        warnings = _validate_battle_card_sales_copy(card, sanitized)
+        assert not warnings
+        assert "21%" not in sanitized["objection_handlers"][0]["proof_point"]
+        assert "4.1" not in sanitized["objection_handlers"][0]["proof_point"]
+        assert "9 active evaluation signals" in sanitized["objection_handlers"][0]["proof_point"]
+
+    def test_sanitizes_recommended_play_numeric_claims(self):
+        card = _sample_battle_card()
+        generated = {
+            "recommended_plays": [
+                {
+                    "play": "Target support teams with a renewal benchmark.",
+                    "target_segment": "Support department leaders showing 21% churn rates and 4.1 urgency.",
+                    "key_message": "Reduce costs by 30% with a simpler support stack.",
+                    "timing": "During the next 14 days.",
+                }
+            ]
+        }
+        sanitized = _sanitize_battle_card_sales_copy(card, generated)
+        warnings = _validate_battle_card_sales_copy(card, sanitized)
+        assert not warnings
+        target_segment = sanitized["recommended_plays"][0]["target_segment"]
+        key_message = sanitized["recommended_plays"][0]["key_message"]
+        timing = sanitized["recommended_plays"][0]["timing"]
+        assert "21%" not in target_segment
+        assert "4.1" not in target_segment
+        assert "30%" not in key_message
+        assert "14" not in timing
+
+    def test_sanitizes_recommended_play_numeric_timing_windows(self):
+        card = _sample_battle_card()
+        generated = {
+            "recommended_plays": [
+                {
+                    "play": "Target support teams with a renewal benchmark.",
+                    "target_segment": "Support leaders already dealing with service friction and renewal pressure.",
+                    "key_message": "Lead with pricing clarity.",
+                    "timing": "Over the next 90 days before renewal review.",
+                }
+            ]
+        }
+        sanitized = _sanitize_battle_card_sales_copy(card, generated)
+        warnings = _validate_battle_card_sales_copy(card, sanitized)
+        assert not warnings
+        assert sanitized["recommended_plays"][0]["timing"] == (
+            "Best tested during active evaluation windows, renewal review, or planning cycles."
+        )
+
+    def test_sanitizes_overcertain_play_when_account_intelligence_is_missing(self):
+        card = _sample_battle_card() | {
+            "reasoning_contracts": {
+                "schema_version": "v1",
+                "vendor_core_reasoning": {
+                    "schema_version": "v1",
+                    "segment_playbook": {
+                        "confidence": "medium",
+                        "data_gaps": ["No account-level intelligence for targeted outreach"],
+                    },
+                },
+            },
+            "high_intent_companies": [],
+        }
+        generated = {
+            "recommended_plays": [
+                {
+                    "play": "Target SMB support teams with cost audit messaging.",
+                    "target_segment": "Support leaders already dealing with service friction and renewal pressure.",
+                    "key_message": "Lead with cost control.",
+                    "timing": "During renewal planning.",
+                }
+            ]
+        }
+        sanitized = _sanitize_battle_card_sales_copy(card, generated)
+        warnings = _validate_battle_card_sales_copy(card, sanitized)
+        assert not warnings
+        assert sanitized["recommended_plays"][0]["play"].startswith("Best tested on")
+
+    def test_sanitizes_duplicate_recommended_play_segments_from_segment_playbook(self):
+        card = _sample_battle_card() | {
+            "reasoning_contracts": {
+                "schema_version": "v1",
+                "vendor_core_reasoning": {
+                    "schema_version": "v1",
+                    "segment_playbook": {
+                        "confidence": "medium",
+                        "priority_segments": [
+                            {
+                                "segment": "SMB support teams (50 or fewer employees)",
+                                "best_opening_angle": "Cost-effective support without forced AI upgrades",
+                            },
+                            {
+                                "segment": "Support departments with moderate urgency tolerance",
+                                "best_opening_angle": "Reliable support tooling without complexity overhead",
+                            },
+                        ],
+                    },
+                    "timing_intelligence": {
+                        "best_timing_window": "During renewal review cycles",
+                    },
+                },
+            },
+            "high_intent_companies": [],
+        }
+        generated = {
+            "recommended_plays": [
+                {
+                    "play": "Best tested on SMB support teams with cost audit messaging.",
+                    "target_segment": "SMB support teams",
+                    "key_message": "Lead with cost control.",
+                    "timing": "During renewal planning.",
+                },
+                {
+                    "play": "Best tested on SMB support teams with migration benchmarking.",
+                    "target_segment": "SMB support teams",
+                    "key_message": "Lead with migration risk reduction.",
+                    "timing": "During annual planning.",
+                },
+            ]
+        }
+        sanitized = _sanitize_battle_card_sales_copy(card, generated)
+        warnings = _validate_battle_card_sales_copy(card, sanitized)
+        assert not warnings
+        assert sanitized["recommended_plays"][0]["target_segment"] == "SMB support teams"
+        assert sanitized["recommended_plays"][1]["target_segment"] == "Support departments with moderate urgency tolerance"
+
+    def test_fallback_recommended_plays_surface_segment_sample_size(self):
+        card = _sample_battle_card() | {
+            "reasoning_contracts": {
+                "schema_version": "v1",
+                "vendor_core_reasoning": {
+                    "schema_version": "v1",
+                    "segment_playbook": {
+                        "confidence": "medium",
+                        "priority_segments": [
+                            {
+                                "segment": "Mid-Market operations teams",
+                                "best_opening_angle": "TCO comparison",
+                                "estimated_reach": {
+                                    "value": 22,
+                                    "source_id": "segment:reach:size:mid_market",
+                                },
+                                "sample_size": 22,
+                            },
+                        ],
+                    },
+                    "timing_intelligence": {
+                        "best_timing_window": "During renewal review cycles",
+                    },
+                },
+            },
+            "high_intent_companies": [],
+        }
+
+        plays = _battle_card_fallback_recommended_plays(card)
+
+        assert plays[0]["target_segment"] == "Mid-Market operations teams (sample n=22)"
+
+    def test_fallback_recommended_plays_use_strategic_roles_when_segments_missing(self):
+        card = _sample_battle_card() | {
+            "reasoning_contracts": {
+                "schema_version": "v1",
+                "vendor_core_reasoning": {
+                    "schema_version": "v1",
+                    "segment_playbook": {
+                        "confidence": "medium",
+                        "priority_segments": [],
+                        "supporting_evidence": {
+                            "top_strategic_roles": [
+                                {
+                                    "role_type": "economic_buyer",
+                                    "priority_score": 45,
+                                    "review_count": 15,
+                                    "source_id": "segment:role:economic_buyer",
+                                },
+                            ],
+                            "top_departments": [
+                                {"department": "finance", "source_id": "segment:department:finance"},
+                            ],
+                            "top_contract_segments": [
+                                {"segment": "enterprise", "source_id": "segment:contract:enterprise"},
+                            ],
+                        },
+                    },
+                    "timing_intelligence": {
+                        "best_timing_window": "During renewal review cycles",
+                    },
+                },
+            },
+            "high_intent_companies": [],
+        }
+
+        plays = _battle_card_fallback_recommended_plays(card)
+
+        assert plays[0]["target_segment"] == "economic buyers in Finance teams"
+        assert "pricing predictability" in plays[0]["key_message"].lower()
+        assert plays[0]["timing"] == "During renewal review cycles."
+
+
+class TestBattleCardQualityGate:
+    def test_quality_gate_rejects_conflicting_active_eval_signals(self):
+        card = _sample_battle_card() | {
+            "evidence_window_is_thin": False,
+            "data_stale": False,
+            "account_pressure_metrics": {"active_eval_count": 0},
+            "active_evaluation_deadlines": [{"company": "Acme Transit", "decision_timeline": "within_quarter"}],
+        }
+        quality = _evaluate_battle_card_quality(card, phase="deterministic")
+        assert quality["status"] == "deterministic_fallback"
+        assert any("active-evaluation signal conflict" in item for item in quality["failed_checks"])
+
+    def test_quality_gate_does_not_conflict_across_eval_signal_families(self):
+        card = _sample_battle_card() | {
+            "evidence_window_is_thin": False,
+            "data_stale": False,
+            "data_as_of_date": date.today().isoformat(),
+            "account_pressure_metrics": {"active_eval_count": 2},
+            "timing_metrics": {"active_eval_signals": 228},
+            "high_intent_companies": [
+                {"company": "Acme Transit", "urgency": 9, "buying_stage": "evaluation"},
+            ],
+        }
+        quality = _evaluate_battle_card_quality(card, phase="deterministic")
+        assert quality["status"] != "deterministic_fallback"
+        assert not any("active-evaluation signal conflict" in item for item in quality["failed_checks"])
+
+    def test_quality_gate_requires_high_intent_accounts_with_stage_and_urgency(self):
+        card = _sample_battle_card() | {
+            "evidence_window_is_thin": False,
+            "data_stale": False,
+            "high_intent_companies": [
+                {"company": "Acme Transit", "urgency": 9, "buying_stage": "post_purchase"},
+            ],
+            "recommended_plays": [
+                {
+                    "play": "Run a support health-check audit before renewal",
+                    "target_segment": "IT directors",
+                    "key_message": "Expose hidden support risk before commitment.",
+                    "timing": "Renewal planning workshop this quarter",
+                },
+                {
+                    "play": "Schedule a reliability benchmark workshop with security leadership",
+                    "target_segment": "Security managers",
+                    "key_message": "Benchmark incident response readiness.",
+                    "timing": "After support escalation",
+                },
+            ],
+            "executive_summary": "Support erosion is driving evaluation risk right now.",
+        }
+        quality = _evaluate_battle_card_quality(card, phase="final")
+        assert quality["status"] == "deterministic_fallback"
+        assert any("high-intent account" in item for item in quality["failed_checks"])
+
+    def test_quality_gate_allows_global_eval_fallback_for_stage_gap(self):
+        card = _sample_battle_card() | {
+            "evidence_window_is_thin": False,
+            "data_stale": False,
+            "data_as_of_date": date.today().isoformat(),
+            "timing_metrics": {"active_eval_signals": 8},
+            "high_intent_companies": [
+                {"company": "Acme Transit", "urgency": 9, "buying_stage": "post_purchase"},
+            ],
+        }
+        quality = _evaluate_battle_card_quality(card, phase="deterministic")
+        assert quality["status"] != "deterministic_fallback"
+        assert any("global active-evaluation evidence fallback" in item for item in quality["warnings"])
+
+    def test_quality_gate_uses_data_as_of_stale_days_threshold(self):
+        stale_date = date.fromordinal(date.today().toordinal() - 4).isoformat()
+        card = _sample_battle_card() | {
+            "evidence_window_is_thin": False,
+            "data_stale": False,
+            "data_as_of_date": stale_date,
+            "high_intent_companies": [
+                {"company": "Acme Transit", "urgency": 9, "buying_stage": "evaluation"},
+            ],
+        }
+        quality = _evaluate_battle_card_quality(card, phase="deterministic")
+        assert quality["status"] == "deterministic_fallback"
+        assert any("source data is stale for requested report date" in item for item in quality["failed_checks"])
+
+    def test_quality_gate_clears_data_stale_within_allowed_lag(self):
+        lag_date = date.fromordinal(date.today().toordinal() - 1).isoformat()
+        card = _sample_battle_card() | {
+            "evidence_window_is_thin": False,
+            "data_stale": True,
+            "data_as_of_date": lag_date,
+            "high_intent_companies": [
+                {"company": "Acme Transit", "urgency": 9, "buying_stage": "evaluation"},
+            ],
+        }
+        quality = _evaluate_battle_card_quality(card, phase="deterministic")
+        assert quality["status"] != "deterministic_fallback"
+        assert card["data_stale"] is False
+        assert any("source data lag detected" in item for item in quality["warnings"])
+
+    def test_quality_gate_sales_ready_when_strict_requirements_pass(self):
+        card = _sample_battle_card() | {
+            "evidence_window_is_thin": False,
+            "data_stale": False,
+            "evidence_window_days": 21,
+            "high_intent_companies": [
+                {"company": "Acme Transit", "urgency": 9, "buying_stage": "evaluation"},
+            ],
+            "recommended_plays": [
+                {
+                    "play": "Run a support health-check audit for Acme Transit",
+                    "target_segment": "IT directors at Acme Transit",
+                    "key_message": "Use an audit to expose incident-response gaps before renewal.",
+                    "timing": "Renewal review session this quarter",
+                },
+                {
+                    "play": "Host a reliability benchmark workshop with security evaluators",
+                    "target_segment": "Security evaluators in enterprise accounts",
+                    "key_message": "Benchmark uptime and escalation readiness with a structured assessment.",
+                    "timing": "Within two weeks of support incidents",
+                },
+            ],
+            "executive_summary": "Support and reliability pressure is creating an immediate opening.",
+            "discovery_questions": [
+                "How are support escalations affecting security operations this quarter?",
+                "What is your threshold for switching if reliability misses continue?",
+            ],
+            "landmine_questions": [
+                "When did you last benchmark support SLAs before renewal?",
+                "What happens if alert coverage drops during peak periods?",
+            ],
+            "objection_handlers": [
+                {
+                    "objection": "Switching is disruptive.",
+                    "acknowledge": "That concern is valid.",
+                    "pivot": "The disruption of staying can be larger when support issues persist.",
+                    "proof_point": "Recent evaluation pressure is visible in account signals.",
+                }
+            ],
+            "talk_track": {
+                "opening": "We are seeing support friction during renewal windows.",
+                "mid_call_pivot": "A benchmark workshop can validate reliability risk quickly.",
+                "closing": "Open to a short audit session this week?",
+            },
+        }
+        quality = _evaluate_battle_card_quality(card, phase="final")
+        assert quality["status"] == "sales_ready"
+        assert quality["failed_checks"] == []
+
+    def test_quality_gate_counts_segment_targeted_play_as_actionable(self):
+        card = _sample_battle_card() | {
+            "evidence_window_is_thin": False,
+            "data_stale": False,
+            "data_as_of_date": date.today().isoformat(),
+            "evidence_window_days": 21,
+            "high_intent_companies": [
+                {"company": "Acme Transit", "urgency": 9, "buying_stage": "evaluation"},
+            ],
+            "recommended_plays": [
+                {
+                    "play": "Run a benchmark workshop for renewal planning.",
+                    "target_segment": "SMB transportation accounts evaluating CRM alternatives",
+                    "key_message": "Focus on cost control and lower operating friction.",
+                    "timing": "During active evaluation windows this quarter.",
+                },
+                {
+                    "play": "Launch a pricing assessment for accounts with renewal scrutiny.",
+                    "target_segment": "Mid-market operations teams with budget pressure",
+                    "key_message": "Show transparent pricing paths and migration support.",
+                    "timing": "Immediately after pricing objections in pipeline reviews.",
+                },
+            ],
+            "executive_summary": "Pricing pressure is driving immediate evaluation activity.",
+            "discovery_questions": ["Which renewal accounts are currently evaluating alternatives?"],
+            "landmine_questions": ["What happens if renewal pricing rises again next quarter?"],
+            "objection_handlers": [
+                {
+                    "objection": "Switching cost is too high.",
+                    "acknowledge": "The concern is common in active evaluations.",
+                    "pivot": "A benchmark clarifies near-term ROI and migration risk.",
+                    "proof_point": "Current signals show active evaluation pressure in this segment.",
+                },
+            ],
+            "talk_track": {
+                "opening": "Renewal pricing pressure is visible right now.",
+                "mid_call_pivot": "A benchmark workshop will quantify fit and cost risk quickly.",
+                "closing": "Can we schedule the workshop this week?",
+            },
+        }
+        quality = _evaluate_battle_card_quality(card, phase="final")
+        assert quality["status"] == "sales_ready"
+        assert quality["required_signals"]["actionable_play_count"] >= 1
+
+    def test_quality_gate_repairs_non_actionable_plays_with_deterministic_fallback(self):
+        card = _sample_battle_card() | {
+            "evidence_window_is_thin": False,
+            "data_stale": False,
+            "data_as_of_date": date.today().isoformat(),
+            "evidence_window_days": 21,
+            "high_intent_companies": [
+                {"company": "Acme Transit", "urgency": 9, "buying_stage": "evaluation"},
+            ],
+            "recommended_plays": [
+                {
+                    "play": "Consider this platform at some point.",
+                    "target_segment": "all",
+                    "key_message": "It could help.",
+                    "timing": "sometime",
+                },
+            ],
+            "reasoning_contracts": {
+                "schema_version": "v1",
+                "vendor_core_reasoning": {
+                    "schema_version": "v1",
+                    "segment_playbook": {
+                        "confidence": "medium",
+                        "supporting_evidence": {
+                            "top_strategic_roles": [
+                                {"role_type": "economic_buyer", "source_id": "segment:role:economic_buyer"},
+                                {"role_type": "evaluator", "source_id": "segment:role:evaluator"},
+                            ],
+                            "top_departments": [
+                                {"department": "finance", "source_id": "segment:department:finance"},
+                            ],
+                        },
+                    },
+                    "timing_intelligence": {
+                        "best_timing_window": "During renewal planning this quarter",
+                    },
+                },
+            },
+            "executive_summary": "Pricing pressure is driving evaluation activity.",
+            "discovery_questions": ["What will drive your renewal decision this quarter?"],
+            "landmine_questions": ["What happens if spend rises again at renewal?"],
+            "objection_handlers": [
+                {
+                    "objection": "Switching seems risky.",
+                    "acknowledge": "That concern is valid.",
+                    "pivot": "A benchmark session lowers migration risk quickly.",
+                    "proof_point": "Current evaluation pressure is visible in account signals.",
+                },
+            ],
+            "talk_track": {
+                "opening": "We are seeing renewal pricing pressure.",
+                "mid_call_pivot": "A benchmark can validate fit and cost risk quickly.",
+                "closing": "Can we book a workshop this week?",
+            },
+        }
+        quality = _evaluate_battle_card_quality(card, phase="final")
+        assert quality["status"] in {"sales_ready", "needs_review"}
+        assert not any(
+            "recommended plays are missing role/account targeting + timing + CTA" in item
+            for item in quality["failed_checks"]
+        )
+        assert quality["required_signals"]["actionable_play_count"] >= 1
+
+    def test_prioritize_seller_usable_primary_weakness_skips_other(self):
+        card = _sample_battle_card() | {
+            "weakness_analysis": [
+                {"weakness": "Other concerns keep resurfacing in buyer feedback"},
+                {"weakness": "Pricing pressure is creating renewal scrutiny"},
+                {"weakness": "Ux concerns keep resurfacing in buyer feedback"},
+            ],
+        }
+        _prioritize_seller_usable_primary_weakness(card)
+        assert card["weakness_analysis"][0]["weakness"].lower().startswith("pricing")
+
+    def test_apply_quality_sets_card_contract_and_row_status(self):
+        card = _sample_battle_card() | {
+            "evidence_window_is_thin": False,
+            "data_stale": True,
+        }
+        quality = _apply_battle_card_quality(card, phase="deterministic")
+        assert card["battle_card_quality"]["schema_version"] == "v1"
+        assert card["quality_status"] == quality["status"] == "deterministic_fallback"
+        assert _battle_card_row_status(card) == "deterministic_fallback"
+
 
 class TestBattleCardSalesCopyParsing:
     def test_recovers_truncated_json(self):
@@ -541,6 +1640,16 @@ class TestBattleCardDeterministicSections:
         assert landscape["top_alternatives"][0].startswith("WooCommerce (53 mentions in evaluation sets")
         assert any("Renewal cycles after recent price increases" in item for item in landscape["displacement_triggers"])
 
+    def test_competitive_landscape_uses_category_reasoning_when_council_missing(self):
+        card = _sample_battle_card()
+        card.pop("category_council", None)
+        card["reasoning_contracts"] = {
+            "schema_version": "v1",
+            "category_reasoning": {"schema_version": "v1", "market_regime": "consolidating"},
+        }
+        landscape = _build_deterministic_battle_card_competitive_landscape(card)
+        assert "consolidating" in landscape["vulnerability_window"].lower()
+
     def test_dedupes_competitor_aliases_in_top_alternatives(self):
         card = {
             **_sample_battle_card(),
@@ -555,6 +1664,41 @@ class TestBattleCardDeterministicSections:
         assert len(azure_entries) == 1
         assert "(16 mentions in evaluation sets; primary driver: pricing)" in azure_entries[0]
 
+    def test_allowed_claims_include_aggregated_competitor_mentions(self):
+        card = {
+            **_sample_battle_card(),
+            "competitor_differentiators": [
+                {"competitor": "Azure", "mentions": 9, "switch_count": 0, "primary_driver": "pricing"},
+                {"competitor": "Microsoft Azure", "mentions": 7, "switch_count": 0, "primary_driver": "pricing"},
+            ],
+        }
+        claims = _battle_card_allowed_claims(card)
+        assert "16" in claims
+
+    def test_skips_non_competitor_integration_labels_in_top_alternatives(self):
+        card = {
+            **_sample_battle_card(),
+            "competitor_differentiators": [
+                {"competitor": "Custom ChatGPT integration", "mentions": 8, "switch_count": 0, "primary_driver": "features"},
+                {"competitor": "Custom ChatGPT Integration", "mentions": 5, "switch_count": 0, "primary_driver": "features"},
+                {"competitor": "WooCommerce", "mentions": 53, "switch_count": 0, "primary_driver": "pricing"},
+            ],
+        }
+        landscape = _build_deterministic_battle_card_competitive_landscape(card)
+        assert all("Custom ChatGPT integration" not in item for item in landscape["top_alternatives"])
+        assert any("WooCommerce" in item for item in landscape["top_alternatives"])
+
+    def test_skips_zero_evidence_competitors_in_top_alternatives(self):
+        card = {
+            **_sample_battle_card(),
+            "competitor_differentiators": [
+                {"competitor": "Freshworks", "mentions": 0, "switch_count": 0, "primary_driver": "features"},
+                {"competitor": "WooCommerce", "mentions": 53, "switch_count": 0, "primary_driver": "pricing"},
+            ],
+        }
+        landscape = _build_deterministic_battle_card_competitive_landscape(card)
+        assert all("Freshworks" not in item for item in landscape["top_alternatives"])
+
 
 class _FakePersistPool:
     def __init__(self) -> None:
@@ -562,6 +1706,10 @@ class _FakePersistPool:
 
     async def execute(self, *args: Any) -> None:
         self.calls.append(args)
+
+    async def fetchval(self, *args: Any) -> int:
+        self.calls.append(args)
+        return 0
 
 
 class TestBattleCardPersistence:
@@ -571,6 +1719,11 @@ class TestBattleCardPersistence:
         card = _sample_battle_card()
         card["weakness_analysis"] = _build_deterministic_battle_card_weakness_analysis(card)
         card["competitive_landscape"] = _build_deterministic_battle_card_competitive_landscape(card)
+        card["reasoning_contracts"] = {"schema_version": "v1", "vendor_core_reasoning": {"schema_version": "v1"}}
+        card["vendor_core_reasoning"] = {"schema_version": "v1"}
+        card["render_packet_version"] = "contract_first_v1"
+        card["render_contracts_used"] = True
+        card["render_packet_hash"] = "abc123"
         card["llm_render_status"] = "pending"
 
         persisted = await _persist_battle_card(
@@ -588,6 +1741,9 @@ class TestBattleCardPersistence:
         assert payload["llm_render_status"] == "pending"
         assert payload["weakness_analysis"][0]["customer_quote"] == "We need better control over rising platform costs."
         assert "top_alternatives" in payload["competitive_landscape"]
+        assert payload["render_packet_version"] == "contract_first_v1"
+        assert payload["render_contracts_used"] is True
+        assert payload["render_packet_hash"] == "abc123"
 
     @pytest.mark.asyncio
     async def test_overlay_persist_keeps_deterministic_sections_on_failure(self):
@@ -595,6 +1751,8 @@ class TestBattleCardPersistence:
         card = _sample_battle_card()
         card["weakness_analysis"] = _build_deterministic_battle_card_weakness_analysis(card)
         card["competitive_landscape"] = _build_deterministic_battle_card_competitive_landscape(card)
+        card["render_packet_version"] = "contract_first_v1"
+        card["render_contracts_used"] = False
         card["llm_render_status"] = "failed"
         card["llm_render_error"] = "LLM did not return valid JSON"
 
@@ -613,10 +1771,29 @@ class TestBattleCardPersistence:
         assert payload["llm_render_status"] == "failed"
         assert payload["llm_render_error"] == "LLM did not return valid JSON"
         assert payload["weakness_analysis"][0]["weakness"] == "Pricing pressure is creating renewal scrutiny"
+        assert payload["render_packet_version"] == "contract_first_v1"
+        assert payload["render_contracts_used"] is False
         assert pool.calls[0][8] == "pipeline_deterministic"
+
+    @pytest.mark.asyncio
+    async def test_retire_gated_out_battle_cards_deletes_latest_vendor_rows(self):
+        pool = _FakePersistPool()
+
+        deleted = await _retire_gated_out_battle_cards(
+            pool,
+            ["Google Cloud Platform", " google cloud platform ", ""],
+        )
+
+        assert deleted == 0
+        assert "DELETE FROM b2b_intelligence" in pool.calls[0][0]
+        assert pool.calls[0][1] == ["google cloud platform"]
 
 
 class TestBattleCardLlmRouting:
+    def test_pair_opponent_skips_self_pairs(self):
+        assert _pair_opponent(("Zendesk", "Zendesk"), "Zendesk") == ""
+        assert _pair_opponent(("Freshdesk", "Zendesk"), "Zendesk") == "Freshdesk"
+
     def test_deterministic_sections_removed_from_llm_field_set(self):
         assert "weakness_analysis" not in _BATTLE_CARD_LLM_FIELDS
         assert "competitive_landscape" not in _BATTLE_CARD_LLM_FIELDS
@@ -633,14 +1810,19 @@ class TestBattleCardLlmRouting:
             "openrouter_model": "openai/o4-mini",
         }
 
-    def test_auto_backend_falls_back_to_model_default_when_blank(self):
-        field = type("FieldInfo", (), {"default": "openai/o4-mini"})
-        cfg_type = type("Cfg", (), {"model_fields": {"battle_card_openrouter_model": field}})
-        cfg = cfg_type()
+    def test_auto_backend_falls_back_to_global_reasoning_model_when_blank(self, monkeypatch):
+        import atlas_brain.autonomous.tasks.b2b_battle_cards as battle_cards_mod
+
+        monkeypatch.setattr(
+            battle_cards_mod.settings.llm,
+            "openrouter_reasoning_model",
+            "anthropic/claude-sonnet-4",
+        )
+        cfg = type("Cfg", (), {})()
         cfg.battle_card_llm_backend = "auto"
         cfg.battle_card_openrouter_model = ""
         opts = _battle_card_llm_options(cfg)
-        assert opts["openrouter_model"] == "openai/o4-mini"
+        assert opts["openrouter_model"] == "anthropic/claude-sonnet-4"
 
     def test_anthropic_backend_disables_openrouter(self):
         cfg = type("Cfg", (), {
@@ -653,6 +1835,212 @@ class TestBattleCardLlmRouting:
             "try_openrouter": False,
             "openrouter_model": None,
         }
+
+    def test_render_payload_prefers_reasoning_contracts(self):
+        card = _sample_battle_card() | {
+            "causal_narrative": {"trigger": "Old flat trigger", "primary_wedge": "support_erosion"},
+            "vendor_core_reasoning": {
+                "causal_narrative": {"trigger": "Price hike", "primary_wedge": "price_squeeze"},
+                "segment_playbook": {"confidence": "medium"},
+                "timing_intelligence": {"best_timing_window": "Before renewal", "confidence": "medium"},
+            },
+            "displacement_reasoning": {
+                "migration_proof": {"confidence": "medium", "switching_is_real": False},
+                "competitive_reframes": {"confidence": "medium", "reframes": []},
+            },
+            "category_reasoning": {"market_regime": "fragmented", "schema_version": "v1"},
+            "reasoning_contracts": {
+                "schema_version": "v1",
+                "vendor_core_reasoning": {
+                    "schema_version": "v1",
+                    "causal_narrative": {"trigger": "Contract trigger", "primary_wedge": "price_squeeze"},
+                    "segment_playbook": {"confidence": "high"},
+                    "timing_intelligence": {"best_timing_window": "During planning", "confidence": "medium"},
+                },
+                "displacement_reasoning": {
+                    "schema_version": "v1",
+                    "migration_proof": {"confidence": "high", "switching_is_real": True},
+                    "competitive_reframes": {"confidence": "medium", "reframes": []},
+                },
+                "category_reasoning": {"schema_version": "v1", "market_regime": "consolidating"},
+                "account_reasoning": {
+                    "schema_version": "v1",
+                    "market_summary": "Two accounts are actively evaluating alternatives.",
+                    "total_accounts": {"value": 6, "source_id": "accounts:summary:total_accounts"},
+                    "high_intent_count": {"value": 4, "source_id": "accounts:summary:high_intent_count"},
+                    "active_eval_count": {
+                        "value": 2,
+                        "source_id": "accounts:summary:active_eval_signal_count",
+                    },
+                    "top_accounts": [
+                        {"name": "Acme Corp", "intent_score": 0.9, "source_id": "accounts:item:acme"},
+                    ],
+                },
+            },
+        }
+
+        payload = _build_battle_card_render_payload(card)
+
+        assert payload["render_packet_version"] == "contract_first_v1"
+        assert payload["vendor_core_reasoning"]["causal_narrative"]["trigger"] == "Contract trigger"
+        assert payload["displacement_reasoning"]["migration_proof"]["switching_is_real"] is True
+        assert payload["category_reasoning"]["market_regime"] == "consolidating"
+        assert payload["account_reasoning"]["top_accounts"][0]["name"] == "Acme Corp"
+        assert payload["locked_facts"]["vendor"] == "Shopify"
+        assert "causal_narrative" not in payload
+        assert "timing_intelligence" not in payload
+        assert "migration_proof" not in payload
+
+    def test_render_payload_uses_raw_category_reasoning_when_contract_missing(self):
+        card = _sample_battle_card() | {
+            "category_reasoning": {"schema_version": "v1", "market_regime": "fragmented"},
+            "reasoning_contracts": {
+                "schema_version": "v1",
+                "vendor_core_reasoning": {"schema_version": "v1"},
+            },
+        }
+
+        payload = _build_battle_card_render_payload(card)
+
+        assert payload["category_reasoning"]["market_regime"] == "fragmented"
+
+    def test_render_payload_includes_retry_fields(self):
+        payload = _build_battle_card_render_payload(
+            _sample_battle_card(),
+            prior_attempt="Previous draft",
+            validation_feedback=["unsupported numeric claims", "overstates urgency"],
+        )
+
+        assert payload["prior_attempt"] == "Previous draft"
+        assert payload["validation_feedback"] == [
+            "unsupported numeric claims",
+            "overstates urgency",
+        ]
+
+    def test_render_payload_hash_changes_with_contract_reasoning(self):
+        from atlas_brain.reasoning.semantic_cache import compute_evidence_hash
+
+        base_card = _sample_battle_card()
+        base_hash = compute_evidence_hash(_build_battle_card_render_payload(base_card))
+
+        changed_card = base_card | {
+            "vendor_core_reasoning": {
+                "causal_narrative": {"trigger": "Price hike", "primary_wedge": "price_squeeze"},
+            },
+            "reasoning_contracts": {
+                "schema_version": "v1",
+                "vendor_core_reasoning": {
+                    "schema_version": "v1",
+                    "causal_narrative": {"trigger": "Price hike", "primary_wedge": "price_squeeze"},
+                },
+            },
+        }
+        changed_hash = compute_evidence_hash(_build_battle_card_render_payload(changed_card))
+
+        assert base_hash != changed_hash
+
+    def test_seller_usable_battles_keep_only_target_losing_pairs(self):
+        battles = [
+            {
+                "opponent": "WooCommerce",
+                "winner": "Shopify",
+                "loser": "WooCommerce",
+                "conclusion": "Shopify is winning this battle.",
+            },
+            {
+                "opponent": "BigCommerce",
+                "winner": "BigCommerce",
+                "loser": "Shopify",
+                "conclusion": "Shopify is losing this battle.",
+            },
+        ]
+        usable = _battle_card_seller_usable_battles("Shopify", battles)
+        assert len(usable) == 1
+        assert usable[0]["opponent"] == "BigCommerce"
+
+    def test_render_payload_filters_target_winning_battles(self):
+        card = _sample_battle_card() | {
+            "cross_vendor_battles": [
+                {
+                    "opponent": "WooCommerce",
+                    "winner": "Shopify",
+                    "loser": "WooCommerce",
+                    "conclusion": "Shopify is winning this battle.",
+                },
+                {
+                    "opponent": "BigCommerce",
+                    "winner": "BigCommerce",
+                    "loser": "Shopify",
+                    "conclusion": "Shopify is losing this battle.",
+                },
+            ]
+        }
+
+        payload = _build_battle_card_render_payload(card)
+        assert [b["opponent"] for b in payload["cross_vendor_battles"]] == ["BigCommerce"]
+
+    def test_validator_prefers_contract_claims_over_stale_flat_sections(self):
+        card = _sample_battle_card() | {
+            "causal_narrative": {
+                "primary_wedge": "support_erosion",
+                "trigger": "Stale flat trigger 2024",
+            },
+            "reasoning_contracts": {
+                "schema_version": "v1",
+                "vendor_core_reasoning": {
+                    "schema_version": "v1",
+                    "causal_narrative": {
+                        "primary_wedge": "price_squeeze",
+                        "trigger": "Price hike",
+                    },
+                },
+            },
+        }
+
+        claims = _battle_card_allowed_claims(card)
+        assert "2024" not in claims
+        warnings = _validate_battle_card_sales_copy(
+            card,
+            {"executive_summary": "The key issue showed up in 2024."},
+        )
+        assert any("references a year" in warning for warning in warnings)
+
+    def test_validator_does_not_backfill_missing_contract_section_from_flat_mirror(self):
+        card = _sample_battle_card() | {
+            "timing_intelligence": {
+                "best_timing_window": "Legacy 2024 window",
+            },
+            "reasoning_contracts": {
+                "schema_version": "v1",
+                "vendor_core_reasoning": {
+                    "schema_version": "v1",
+                    "causal_narrative": {
+                        "primary_wedge": "price_squeeze",
+                        "trigger": "Price hike",
+                    },
+                },
+            },
+        }
+
+        claims = _battle_card_allowed_claims(card)
+        assert "2024" not in claims
+
+    def test_validator_does_not_allow_cross_vendor_numeric_tokens_from_prose(self):
+        card = _sample_battle_card() | {
+            "cross_vendor_battles": [
+                {
+                    "opponent": "WooCommerce",
+                    "conclusion": "Shopify is winning in the 52% SMB segment with 43 explicit switches.",
+                    "key_insights": [
+                        {"insight": "52% SMB share", "evidence": "43 explicit switches"},
+                    ],
+                }
+            ]
+        }
+
+        claims = _battle_card_allowed_claims(card)
+        assert "52%" not in claims
+        assert "43" not in claims
 
 
 class TestBattleCardExecutionProgress:
@@ -678,6 +2066,246 @@ class TestBattleCardExecutionProgress:
         assert payload["stage"] == "llm_overlay"
         assert payload["progress_current"] == 2
         assert payload["cards_built"] == 15
+
+
+class TestDeterministicBattleCardBuild:
+    def test_build_deterministic_battle_cards_is_not_capped_at_fifteen_by_default(self):
+        vendor_scores = [
+            {
+                "vendor_name": f"Vendor {idx}",
+                "product_category": "Testing",
+                "total_reviews": 30,
+                "churn_intent": 6,
+                "avg_urgency": 6.5,
+            }
+            for idx in range(20)
+        ]
+
+        cards = _build_deterministic_battle_cards(
+            vendor_scores,
+            pain_lookup={},
+            competitor_lookup={},
+            feature_gap_lookup={},
+            quote_lookup={},
+            price_lookup={},
+            budget_lookup={},
+            sentiment_lookup={},
+            dm_lookup={},
+            company_lookup={},
+            product_profile_lookup={},
+            competitive_disp=[],
+            competitor_reasons=[],
+        )
+
+        assert len(cards) == 20
+
+    def test_build_deterministic_battle_cards_respects_explicit_limit(self):
+        vendor_scores = [
+            {
+                "vendor_name": f"Vendor {idx}",
+                "product_category": "Testing",
+                "total_reviews": 30,
+                "churn_intent": 6,
+                "avg_urgency": 6.5,
+            }
+            for idx in range(8)
+        ]
+
+        cards = _build_deterministic_battle_cards(
+            vendor_scores,
+            pain_lookup={},
+            competitor_lookup={},
+            feature_gap_lookup={},
+            quote_lookup={},
+            price_lookup={},
+            budget_lookup={},
+            sentiment_lookup={},
+            dm_lookup={},
+            company_lookup={},
+            product_profile_lookup={},
+            competitive_disp=[],
+            competitor_reasons=[],
+            limit=3,
+        )
+
+        assert len(cards) == 3
+
+    def test_build_deterministic_battle_cards_promote_segment_and_timing_summaries(self):
+        vendor_scores = [
+            {
+                "vendor_name": "Zendesk",
+                "product_category": "Helpdesk",
+                "total_reviews": 40,
+                "churn_intent": 8,
+                "avg_urgency": 6.8,
+            },
+        ]
+
+        cards = _build_deterministic_battle_cards(
+            vendor_scores,
+            pain_lookup={},
+            competitor_lookup={},
+            feature_gap_lookup={},
+            quote_lookup={},
+            price_lookup={},
+            budget_lookup={},
+            sentiment_lookup={},
+            dm_lookup={},
+            company_lookup={},
+            product_profile_lookup={},
+            competitive_disp=[],
+            competitor_reasons=[],
+            reasoning_synthesis_lookup={
+                "Zendesk": {
+                    "schema_version": "2.1",
+                    "reasoning_contracts": {
+                        "schema_version": "v1",
+                        "vendor_core_reasoning": {
+                            "schema_version": "v1",
+                            "segment_playbook": {
+                                "confidence": "medium",
+                                "supporting_evidence": {
+                                    "top_strategic_roles": [
+                                        {
+                                            "role_type": "economic_buyer",
+                                            "source_id": "segment:role:economic_buyer",
+                                        },
+                                    ],
+                                    "top_departments": [
+                                        {
+                                            "department": "finance",
+                                            "source_id": "segment:department:finance",
+                                        },
+                                    ],
+                                    "top_contract_segments": [
+                                        {
+                                            "segment": "enterprise",
+                                            "source_id": "segment:contract:enterprise",
+                                        },
+                                    ],
+                                },
+                            },
+                            "timing_intelligence": {
+                                "confidence": "medium",
+                                "best_timing_window": "immediate - pricing pressure is current",
+                                "active_eval_signals": {
+                                    "value": 2,
+                                    "source_id": "accounts:summary:active_eval_signal_count",
+                                },
+                                "immediate_triggers": [
+                                    {"trigger": "Q2 renewal", "type": "deadline"},
+                                ],
+                            },
+                        },
+                    },
+                },
+            },
+        )
+
+        assert len(cards) == 1
+        assert "economic buyers" in cards[0]["segment_targeting_summary"]
+        assert "Finance teams" in cards[0]["segment_targeting_summary"]
+        assert "enterprise contracts" in cards[0]["segment_targeting_summary"]
+        assert cards[0]["timing_summary"].startswith(
+            "Immediate - pricing pressure is current."
+        )
+        assert cards[0]["priority_timing_triggers"] == ["Q2 renewal"]
+
+    def test_build_deterministic_battle_cards_normalize_priority_segment_and_add_trigger_detail(self):
+        cards = _build_deterministic_battle_cards(
+            vendor_scores=[
+                {
+                    "vendor_name": "Close",
+                    "product_category": "CRM",
+                    "total_reviews": 40,
+                    "churn_intent": 8,
+                    "avg_urgency": 6.2,
+                },
+            ],
+            pain_lookup={},
+            competitor_lookup={},
+            feature_gap_lookup={},
+            quote_lookup={},
+            price_lookup={},
+            budget_lookup={},
+            sentiment_lookup={},
+            dm_lookup={},
+            company_lookup={},
+            product_profile_lookup={},
+            competitive_disp=[],
+            competitor_reasons=[],
+            reasoning_synthesis_lookup={
+                "Close": {
+                    "schema_version": "2.1",
+                    "reasoning_contracts": {
+                        "schema_version": "v1",
+                        "vendor_core_reasoning": {
+                            "schema_version": "v1",
+                            "segment_playbook": {
+                                "confidence": "medium",
+                                "priority_segments": [
+                                    {
+                                        "segment": "Small Business (1-10 employees)",
+                                        "best_opening_angle": "Highlight a pricing benchmark",
+                                    },
+                                ],
+                            },
+                            "timing_intelligence": {
+                                "confidence": "medium",
+                                "best_timing_window": "Immediate - active evaluation signals are already present",
+                                "active_eval_signals": {
+                                    "value": 3,
+                                    "source_id": "accounts:summary:active_eval_signal_count",
+                                },
+                                "immediate_triggers": [
+                                    {"trigger": "Active evaluation of BambooHR (3 accounts)", "type": "signal"},
+                                ],
+                            },
+                        },
+                    },
+                },
+            },
+        )
+
+        assert cards[0]["segment_targeting_summary"].startswith(
+            "Best current segment wedge is Small Business"
+        )
+        assert "(1 10 employees)" not in cards[0]["segment_targeting_summary"]
+        assert "led with highlight a pricing benchmark." in cards[0]["segment_targeting_summary"]
+        assert "Key trigger: Active evaluation of BambooHR (3 accounts)." in cards[0]["timing_summary"]
+
+
+class TestBattleCardCompanyPrioritization:
+    def test_companies_from_vault_prioritize_required_stage_accounts(self):
+        min_urgency = float(settings.b2b_churn.battle_card_quality_min_high_intent_urgency)
+        vault = {
+            "company_signals": [
+                {"company_name": "Account A", "urgency_score": min_urgency + 2.0, "buyer_role": "ic", "buying_stage": "post_purchase", "source": "reddit"},
+                {"company_name": "Account B", "urgency_score": min_urgency + 1.5, "buyer_role": "ic", "buying_stage": "post_purchase", "source": "reddit"},
+                {"company_name": "Account C", "urgency_score": min_urgency + 1.0, "buyer_role": "ic", "buying_stage": "post_purchase", "source": "reddit"},
+                {"company_name": "Account D", "urgency_score": min_urgency + 0.5, "buyer_role": "ic", "buying_stage": "unknown", "source": "reddit"},
+                {"company_name": "Account E", "urgency_score": min_urgency + 0.2, "buyer_role": "ic", "buying_stage": "post_purchase", "source": "reddit"},
+                {"company_name": "Account Eval", "urgency_score": min_urgency, "buyer_role": "evaluator", "buying_stage": "evaluation", "source": "reddit"},
+            ],
+        }
+
+        companies = _battle_card_companies_from_evidence_vault(vault, limit=5)
+
+        assert len(companies) == 5
+        assert any(str(item.get("buying_stage") or "").lower() == "evaluation" for item in companies)
+
+    def test_companies_from_vault_do_not_promote_low_urgency_required_stage(self):
+        min_urgency = float(settings.b2b_churn.battle_card_quality_min_high_intent_urgency)
+        vault = {
+            "company_signals": [
+                {"company_name": "High Urgency Post", "urgency_score": min_urgency + 2.0, "buyer_role": "ic", "buying_stage": "post_purchase", "source": "reddit"},
+                {"company_name": "Low Urgency Eval", "urgency_score": max(min_urgency - 2.0, 0.0), "buyer_role": "evaluator", "buying_stage": "evaluation", "source": "reddit"},
+            ],
+        }
+
+        companies = _battle_card_companies_from_evidence_vault(vault, limit=2)
+
+        assert companies[0]["company"] == "High Urgency Post"
 
 
 class TestChurnIntelligenceExecutionProgress:

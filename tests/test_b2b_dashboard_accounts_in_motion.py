@@ -91,6 +91,37 @@ async def test_list_accounts_in_motion_live_uses_raw_review_path():
     reviews_mock.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_get_report_handles_null_battle_card_quality():
+    pool = MagicMock()
+    pool.fetchrow = AsyncMock(
+        return_value={
+            "id": "2ea3fd03-7fd9-4b72-8f24-117667f723e9",
+            "report_date": "2026-03-22",
+            "report_type": "battle_card",
+            "vendor_filter": "Zendesk",
+            "category_filter": "Help Desk",
+            "executive_summary": "summary",
+            "intelligence_data": {
+                "quality_status": None,
+                "battle_card_quality": None,
+            },
+            "data_density": {"status": "ok"},
+            "status": "completed",
+            "llm_model": "pipeline_deterministic",
+            "created_at": "2026-03-22T18:00:00",
+            "account_id": None,
+        }
+    )
+
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        result = await b2b_dashboard.get_report("2ea3fd03-7fd9-4b72-8f24-117667f723e9", None)
+
+    assert result["quality_status"] is None
+    assert result["quality_score"] is None
+    assert result["report_type"] == "battle_card"
+
+
 def test_validate_accounts_in_motion_window_rejects_custom_window():
     configured = b2b_dashboard.settings.b2b_churn.intelligence_window_days
     with pytest.raises(b2b_dashboard.HTTPException) as exc:
@@ -162,6 +193,9 @@ async def test_list_accounts_in_motion_from_report_shapes_and_enriches():
     assert result["data_source"] == "persisted_report"
     assert result["vendor"] == "Zendesk"
     assert result["count"] == 1
+    assert "stale_days" in result
+    assert "is_stale" in result
+    assert isinstance(result["is_stale"], bool)
     account = result["accounts"][0]
     assert account["company"] == "Acme Corp"
     assert account["pain_categories"] == [{"category": "pricing", "severity": ""}]

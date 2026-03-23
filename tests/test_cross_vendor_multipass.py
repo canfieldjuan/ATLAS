@@ -57,26 +57,33 @@ def _make_xv_conclusion(**overrides):
         "vendors": ["Acme", "Bravo"],
         "conclusion": "Acme is winning on current metrics.",
         "confidence": 0.8,
-        "key_insights": ["recommend_ratio: 10", "velocity_churn_density: 0.3"],
+        "key_insights": [{"insight": "recommend_ratio gap", "evidence": "recommend_ratio: 10"}],
         "durability_assessment": "temporary",
         "falsification_conditions": ["Bravo improves sentiment"],
         "winner": "Acme",
         "loser": "Bravo",
+        "segment_dynamics": {
+            "enterprise_winner": "",
+            "smb_winner": "",
+            "segment_divergence": False,
+        },
+        "market_regime": "",
         "uncertainty_sources": [],
+        "resource_advantage": "",
     }
     base.update(overrides)
     return base
 
 
-def test_battle_contradictions_flag_velocity_and_sentiment():
+def test_battle_contradictions_flag_locked_direction_mismatch():
     conclusion = {"winner": "Acme", "loser": "Bravo"}
     payload = {
-        "vendor_a": {"name": "Acme", "velocity_churn_density": 0.3, "recommend_ratio": 10},
-        "vendor_b": {"name": "Bravo", "velocity_churn_density": -0.2, "recommend_ratio": 35},
+        "vendor_a": {"name": "Acme"},
+        "vendor_b": {"name": "Bravo"},
+        "locked_direction": {"winner": "Bravo", "loser": "Acme"},
     }
     contradictions = _find_battle_contradictions(conclusion, payload)
-    assert any("improving churn velocity" in c for c in contradictions)
-    assert any("better net sentiment" in c for c in contradictions)
+    assert any("locked displacement direction" in c for c in contradictions)
 
 
 def test_category_contradictions_flag_hhi_and_vendor_count():
@@ -110,11 +117,11 @@ def test_cross_vendor_reasoner_runs_classify_challenge_ground(monkeypatch):
     async def _fake_multi_pass_reason(**kwargs):
         seen["finder"] = kwargs.get("contradiction_finder")
         return MultiPassResult(
-            final_conclusion=_make_xv_conclusion(winner="Bravo", loser="Acme", confidence=0.72),
+            final_conclusion=_make_xv_conclusion(winner="Acme", loser="Bravo", confidence=0.72),
             passes=[
                 PassResult(1, "classify", _make_xv_conclusion(winner="Acme", loser="Bravo", confidence=0.8), 150, 1.0, False),
                 PassResult(2, "challenge", _make_xv_conclusion(winner="Bravo", loser="Acme", confidence=0.7), 150, 1.0, True),
-                PassResult(3, "ground", _make_xv_conclusion(winner="Bravo", loser="Acme", confidence=0.72), 150, 1.0, False),
+                PassResult(3, "ground", _make_xv_conclusion(winner="Acme", loser="Bravo", confidence=0.72), 150, 1.0, False),
             ],
             total_tokens=450,
             total_duration_ms=3.0,
@@ -139,6 +146,8 @@ def test_cross_vendor_reasoner_runs_classify_challenge_ground(monkeypatch):
 
     assert seen["finder"] is not None
     assert result.conclusion["winner"] == "Bravo"
+    assert result.conclusion["loser"] == "Acme"
+    assert "net gainer of defectors" in result.conclusion["conclusion"]
     assert len(cache.stored) == 1
 
 
@@ -178,5 +187,6 @@ def test_cross_vendor_reasoner_skips_ground_when_challenge_unchanged(monkeypatch
 
     result = asyncio.run(_run())
 
-    assert result.conclusion["winner"] == "Acme"
+    assert result.conclusion["winner"] == "Bravo"
+    assert result.conclusion["loser"] == "Acme"
     assert len(cache.stored) == 1

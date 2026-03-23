@@ -44,6 +44,10 @@ from atlas_brain.autonomous.tasks.b2b_challenger_brief import (
     _build_integration_comparison,
     _build_challenger_brief,
     _normalize_product_profile_weaknesses,
+    _retire_unselected_challenger_briefs,
+)
+from atlas_brain.autonomous.tasks._b2b_synthesis_reader import (
+    load_synthesis_view,
 )
 
 
@@ -335,6 +339,15 @@ class TestBuildChallengerBrief:
                     "alternatives_considering": ["Freshdesk", "Help Scout"],
                 },
             ],
+            "category_council": {
+                "winner": "Zoho Desk",
+                "loser": "Freshdesk",
+                "conclusion": "Pricing pressure is fragmenting the helpdesk market.",
+                "market_regime": "price_competition",
+                "durability": "cyclical",
+                "confidence": 0.58,
+                "key_insights": [{"insight": "Pricing is the primary driver.", "evidence": "pricing"}],
+            },
         }
         inc_profile = {
             "strengths": [{"area": "enterprise_features"}],
@@ -397,6 +410,8 @@ class TestBuildChallengerBrief:
         assert brief["head_to_head"]["winner"] == "Freshdesk"
         assert brief["head_to_head"]["loser"] == "Zendesk"
         assert brief["head_to_head"]["confidence"] == 0.78
+        assert brief["category_council"]["winner"] == "Zoho Desk"
+        assert brief["category_council"]["market_regime"] == "price_competition"
         assert len(brief["target_accounts"]) == 1
         assert brief["target_accounts"][0]["considers_challenger"] is True
         assert brief["accounts_considering_challenger"] == 1
@@ -496,6 +511,488 @@ class TestBuildChallengerBrief:
         assert brief["incumbent_profile"]["top_pain_quotes"][0]["company"] == "Beta"
         assert brief["data_sources"]["battle_card"] is True
         assert brief["data_sources"]["evidence_vault"] is True
+
+    def test_synthesis_view_attaches_reasoning_contracts(self):
+        """Challenger brief carries vendor/displacement reasoning contracts."""
+        synthesis_view = load_synthesis_view(
+            {
+                "schema_version": "2.1",
+                "reasoning_contracts": {
+                    "vendor_core_reasoning": {
+                        "schema_version": "v1",
+                        "causal_narrative": {
+                            "primary_wedge": "price_squeeze",
+                            "confidence": "high",
+                            "trigger": "Price hike",
+                            "why_now": "AI bundle forcing higher per-seat spend",
+                        },
+                        "segment_playbook": {
+                            "confidence": "medium",
+                            "supporting_evidence": {
+                                "top_strategic_roles": [
+                                    {
+                                        "role_type": "economic_buyer",
+                                        "source_id": "segment:role:economic_buyer",
+                                    },
+                                ],
+                                "top_departments": [
+                                    {"department": "finance", "source_id": "segment:department:finance"},
+                                ],
+                                "top_contract_segments": [
+                                    {"segment": "enterprise", "source_id": "segment:contract:enterprise"},
+                                ],
+                            },
+                        },
+                        "timing_intelligence": {
+                            "confidence": "medium",
+                            "best_timing_window": "Before renewal",
+                            "active_eval_signals": {
+                                "value": 2,
+                                "source_id": "accounts:summary:active_eval_signal_count",
+                            },
+                            "sentiment_direction": "declining",
+                            "immediate_triggers": [
+                                {"trigger": "Q2 renewal", "type": "deadline"},
+                            ],
+                        },
+                    },
+                    "displacement_reasoning": {
+                        "schema_version": "v1",
+                        "migration_proof": {
+                            "confidence": "medium",
+                            "switch_volume": {
+                                "value": 0,
+                                "source_id": "displacement:aggregate:total_explicit_switches",
+                            },
+                        },
+                        "competitive_reframes": {"confidence": "medium"},
+                    },
+                    "account_reasoning": {
+                        "schema_version": "v1",
+                        "market_summary": "Two accounts are actively evaluating alternatives while nine accounts show high intent signals overall.",
+                        "total_accounts": {
+                            "value": 9,
+                            "source_id": "accounts:summary:total_accounts",
+                        },
+                        "high_intent_count": {
+                            "value": 9,
+                            "source_id": "accounts:summary:high_intent_count",
+                        },
+                        "active_eval_count": {
+                            "value": 2,
+                            "source_id": "accounts:summary:active_eval_signal_count",
+                        },
+                        "top_accounts": [
+                            {
+                                "name": "Acme Corp",
+                                "intent_score": 0.9,
+                                "source_id": "accounts:company:acme_corp",
+                            },
+                        ],
+                    },
+                },
+                "meta": {
+                    "evidence_window_start": "2026-03-01",
+                    "evidence_window_end": "2026-03-18",
+                },
+            },
+            "Zendesk",
+        )
+
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail=self._minimal_displacement(),
+            battle_card=None,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            incumbent_evidence_vault=None,
+            churn_signal=None,
+            incumbent_synthesis_view=synthesis_view,
+            cross_vendor_battle=None,
+            max_target_accounts=15,
+        )
+
+        assert brief["data_sources"]["reasoning_synthesis"] is True
+        assert brief["data_sources"]["account_reasoning"] is True
+        assert brief["reasoning_contracts"]["vendor_core_reasoning"]["causal_narrative"]["trigger"] == "Price hike"
+        assert brief["reasoning_contracts"]["displacement_reasoning"]["migration_proof"]["confidence"] == "medium"
+        assert brief["account_reasoning"]["top_accounts"][0]["name"] == "Acme Corp"
+        assert brief["incumbent_profile"]["account_pressure_summary"] == (
+            "Two accounts are actively evaluating alternatives while nine accounts show high intent signals overall."
+        )
+        assert brief["incumbent_profile"]["account_pressure_metrics"]["high_intent_count"] == 9
+        assert brief["target_accounts_source"] == "account_reasoning"
+        assert brief["target_accounts"][0]["company"] == "Acme Corp"
+        assert brief["target_accounts"][0]["reasoning_backed"] is True
+        assert brief["segment_playbook"]["supporting_evidence"]["top_departments"][0]["department"] == "finance"
+        assert brief["timing_intelligence"]["best_timing_window"] == "Before renewal"
+        assert brief["timing_summary"] == (
+            "Before renewal. 2 active evaluation signals are visible right now. "
+            "Review sentiment is skewing more negative."
+        )
+        assert brief["timing_metrics"]["active_eval_signals"] == 2
+        assert brief["priority_timing_triggers"] == ["Q2 renewal"]
+        assert brief["incumbent_profile"]["timing_intelligence"]["best_timing_window"] == "Before renewal"
+        assert brief["incumbent_profile"]["timing_metrics"]["active_eval_signals"] == 2
+        assert "economic buyers" in brief["segment_targeting_summary"]
+        assert "Finance teams" in brief["segment_targeting_summary"]
+        assert "enterprise contracts" in brief["segment_targeting_summary"]
+        assert "causal_narrative" not in brief["incumbent_profile"]
+        assert "synthesis_wedge" not in brief["incumbent_profile"]
+        assert brief["evidence_window_days"] == 17
+        assert brief["reasoning_source"] == "b2b_reasoning_synthesis"
+
+    def test_empty_synthesis_view_does_not_claim_reasoning_source(self):
+        """Presence of a synthesis row alone should not mark the brief as synthesis-backed."""
+        synthesis_view = load_synthesis_view(
+            {
+                "schema_version": "2.1",
+                "reasoning_contracts": {
+                    "vendor_core_reasoning": {},
+                    "displacement_reasoning": {},
+                },
+                "meta": {},
+            },
+            "Zendesk",
+        )
+
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail=self._minimal_displacement(),
+            battle_card=None,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            incumbent_evidence_vault=None,
+            churn_signal=None,
+            incumbent_synthesis_view=synthesis_view,
+            cross_vendor_battle=None,
+            max_target_accounts=15,
+        )
+
+        assert brief["data_sources"]["reasoning_synthesis"] is False
+        assert "reasoning_source" not in brief
+
+    def test_flat_section_synthesis_view_surfaces_segment_playbook(self):
+        synthesis_view = load_synthesis_view(
+            {
+                "schema_version": "2.1",
+                "causal_narrative": {
+                    "primary_wedge": "price_squeeze",
+                    "confidence": "high",
+                    "trigger": "Price hike",
+                },
+                "segment_playbook": {
+                    "confidence": "medium",
+                    "supporting_evidence": {
+                        "top_roles": [
+                            {"role_type": "economic_buyer", "source_id": "segment:role:economic_buyer"},
+                        ],
+                    },
+                },
+                "timing_intelligence": {
+                    "confidence": "medium",
+                    "best_timing_window": "Before renewal",
+                },
+            },
+            "Zendesk",
+        )
+
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail=self._minimal_displacement(),
+            battle_card=None,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            incumbent_evidence_vault=None,
+            churn_signal=None,
+            incumbent_synthesis_view=synthesis_view,
+            cross_vendor_battle=None,
+            max_target_accounts=15,
+        )
+
+        assert brief["data_sources"]["reasoning_synthesis"] is True
+        assert brief["segment_playbook"]["supporting_evidence"]["top_roles"][0]["role_type"] == "economic_buyer"
+        assert "economic buyers" in brief["segment_targeting_summary"]
+        assert "Best tested before renewal." in brief["segment_targeting_summary"]
+        assert brief["reasoning_contracts"]["vendor_core_reasoning"]["segment_playbook"]["confidence"] == "medium"
+
+    def test_segment_targeting_summary_formats_duration_without_bad_preposition(self):
+        synthesis_view = load_synthesis_view(
+            {
+                "schema_version": "2.1",
+                "segment_playbook": {
+                    "confidence": "medium",
+                    "supporting_evidence": {
+                        "top_roles": [
+                            {"role_type": "economic_buyer", "source_id": "segment:role:economic_buyer"},
+                        ],
+                        "top_usage_durations": [
+                            {"duration": "1 year", "source_id": "segment:duration:1_year"},
+                        ],
+                    },
+                },
+                "timing_intelligence": {
+                    "confidence": "medium",
+                    "best_timing_window": "Before renewal",
+                },
+            },
+            "Zendesk",
+        )
+
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail=self._minimal_displacement(),
+            battle_card=None,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            incumbent_evidence_vault=None,
+            churn_signal=None,
+            incumbent_synthesis_view=synthesis_view,
+            cross_vendor_battle=None,
+            max_target_accounts=15,
+        )
+
+        assert "especially after 1 year of usage." in brief["segment_targeting_summary"]
+        assert "in after" not in brief["segment_targeting_summary"]
+
+    def test_segment_targeting_summary_normalizes_priority_segment_labels_and_uses_timing(self):
+        synthesis_view = load_synthesis_view(
+            {
+                "schema_version": "2.1",
+                "segment_playbook": {
+                    "confidence": "medium",
+                    "priority_segments": [
+                        {
+                            "segment": "end user role",
+                            "best_opening_angle": "Offer a cost-control benchmark",
+                        },
+                    ],
+                },
+                "timing_intelligence": {
+                    "confidence": "medium",
+                    "best_timing_window": "Before renewal",
+                },
+            },
+            "Zendesk",
+        )
+
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail=self._minimal_displacement(),
+            battle_card=None,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            incumbent_evidence_vault=None,
+            churn_signal=None,
+            incumbent_synthesis_view=synthesis_view,
+            cross_vendor_battle=None,
+            max_target_accounts=15,
+        )
+
+        assert "end users" in brief["segment_targeting_summary"]
+        assert "end user role" not in brief["segment_targeting_summary"]
+        assert "led with offer a cost control benchmark." in brief["segment_targeting_summary"]
+        assert "Best tested before renewal." in brief["segment_targeting_summary"]
+
+    def test_segment_targeting_summary_uses_company_size_when_available(self):
+        synthesis_view = load_synthesis_view(
+            {
+                "schema_version": "2.1",
+                "segment_playbook": {
+                    "confidence": "medium",
+                    "supporting_evidence": {
+                        "top_roles": [
+                            {"role_type": "economic_buyer", "source_id": "segment:role:economic_buyer"},
+                        ],
+                        "top_company_sizes": [
+                            {"segment": "Mid-Market", "source_id": "segment:size:mid_market"},
+                        ],
+                        "top_contract_segments": [
+                            {"segment": "smb", "source_id": "segment:contract:smb"},
+                        ],
+                    },
+                },
+            },
+            "Zendesk",
+        )
+
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail=self._minimal_displacement(),
+            battle_card=None,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            incumbent_evidence_vault=None,
+            churn_signal=None,
+            incumbent_synthesis_view=synthesis_view,
+            cross_vendor_battle=None,
+            max_target_accounts=15,
+        )
+
+        assert "Mid Market accounts" in brief["segment_targeting_summary"]
+        assert "smb contracts" in brief["segment_targeting_summary"]
+
+    def test_segment_targeting_summary_dedupes_matching_size_and_contract_labels(self):
+        synthesis_view = load_synthesis_view(
+            {
+                "schema_version": "2.1",
+                "segment_playbook": {
+                    "confidence": "medium",
+                    "supporting_evidence": {
+                        "top_roles": [
+                            {"role_type": "evaluator", "source_id": "segment:role:evaluator"},
+                        ],
+                        "top_company_sizes": [
+                            {"segment": "smb", "source_id": "segment:size:smb"},
+                        ],
+                        "top_contract_segments": [
+                            {"segment": "SMB", "source_id": "segment:contract:smb"},
+                        ],
+                    },
+                },
+            },
+            "Zendesk",
+        )
+
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail=self._minimal_displacement(),
+            battle_card=None,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            incumbent_evidence_vault=None,
+            churn_signal=None,
+            incumbent_synthesis_view=synthesis_view,
+            cross_vendor_battle=None,
+            max_target_accounts=15,
+        )
+
+        summary = brief["segment_targeting_summary"].lower()
+        assert "smb accounts" in summary
+        assert "smb contracts" not in summary
+
+    def test_timing_summary_capitalizes_best_timing_window_text(self):
+        synthesis_view = load_synthesis_view(
+            {
+                "schema_version": "2.1",
+                "timing_intelligence": {
+                    "confidence": "medium",
+                    "best_timing_window": "immediate - pricing pressure is current",
+                    "active_eval_signals": {
+                        "value": 2,
+                        "source_id": "accounts:summary:active_eval_signal_count",
+                    },
+                },
+            },
+            "Zendesk",
+        )
+
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail=self._minimal_displacement(),
+            battle_card=None,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            incumbent_evidence_vault=None,
+            churn_signal=None,
+            incumbent_synthesis_view=synthesis_view,
+            cross_vendor_battle=None,
+            max_target_accounts=15,
+        )
+
+        assert brief["timing_summary"].startswith(
+            "Immediate - pricing pressure is current."
+        )
+
+    def test_timing_summary_adds_concrete_trigger_when_window_is_generic(self):
+        synthesis_view = load_synthesis_view(
+            {
+                "schema_version": "2.1",
+                "timing_intelligence": {
+                    "confidence": "medium",
+                    "best_timing_window": "Immediate - active evaluation signals are already present",
+                    "active_eval_signals": {
+                        "value": 3,
+                        "source_id": "accounts:summary:active_eval_signal_count",
+                    },
+                    "immediate_triggers": [
+                        {"trigger": "Active evaluation of BambooHR (3 accounts)", "type": "signal"},
+                        {"trigger": "Support-related fee increase turning point", "type": "signal"},
+                    ],
+                },
+            },
+            "Zendesk",
+        )
+
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail=self._minimal_displacement(),
+            battle_card=None,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            incumbent_evidence_vault=None,
+            churn_signal=None,
+            incumbent_synthesis_view=synthesis_view,
+            cross_vendor_battle=None,
+            max_target_accounts=15,
+        )
+
+        assert brief["timing_summary"].startswith(
+            "Immediate - active evaluation signals are already present."
+        )
+        assert "Key trigger: Active evaluation of BambooHR (3 accounts)." in brief["timing_summary"]
+
+    def test_timing_summary_drops_contradictory_no_signal_window_when_active_eval_exists(self):
+        synthesis_view = load_synthesis_view(
+            {
+                "schema_version": "2.1",
+                "timing_intelligence": {
+                    "confidence": "medium",
+                    "best_timing_window": "none - no active evaluation or deadline signals detected",
+                    "active_eval_signals": {
+                        "value": 3,
+                        "source_id": "accounts:summary:active_eval_signal_count",
+                    },
+                },
+            },
+            "Zendesk",
+        )
+
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail=self._minimal_displacement(),
+            battle_card=None,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            incumbent_evidence_vault=None,
+            churn_signal=None,
+            incumbent_synthesis_view=synthesis_view,
+            cross_vendor_battle=None,
+            max_target_accounts=15,
+        )
+
+        assert brief["timing_summary"] == "3 active evaluation signals are visible right now."
+        assert "no active evaluation" not in brief["timing_summary"].lower()
 
     def test_executive_summary_format(self):
         """Executive summary includes incumbent, challenger, mentions, accounts."""
@@ -732,6 +1229,36 @@ class TestChallengerBriefFallbacks:
         assert await _check_freshness(pool) == date.today()
 
     @pytest.mark.asyncio
+    async def test_retire_unselected_challenger_briefs_deletes_stale_pairs(self):
+        keep_id = uuid4()
+        stale_id = uuid4()
+        pool = MagicMock()
+        pool.fetch = AsyncMock(return_value=[
+            {
+                "id": keep_id,
+                "vendor_filter": "Zendesk",
+                "category_filter": "Freshdesk",
+            },
+            {
+                "id": stale_id,
+                "vendor_filter": "Azure",
+                "category_filter": "Google Workspace",
+            },
+        ])
+        pool.execute = AsyncMock()
+
+        retired = await _retire_unselected_challenger_briefs(
+            pool,
+            today=date(2026, 3, 21),
+            pairs=[{"incumbent": "Zendesk", "challenger": "Freshdesk"}],
+        )
+
+        assert retired == 1
+        args = pool.execute.await_args.args
+        assert args[0] == "DELETE FROM b2b_intelligence WHERE id = ANY($1::uuid[])"
+        assert args[1] == [stale_id]
+
+    @pytest.mark.asyncio
     async def test_fetch_persisted_report_record_marks_stale_rows(self):
         pool = MagicMock()
         pool.fetchrow = AsyncMock(return_value={
@@ -805,7 +1332,17 @@ class TestChallengerBriefRunProgress:
                 close = getattr(coro, "close", None)
                 if close:
                     close()
-            return (None, None, {"total_mentions": 3, "source_distribution": {"reddit": 3}}, None, None, None, None, [])
+            return (
+                None,
+                None,
+                {"total_mentions": 3, "source_distribution": {"reddit": 3}},
+                None,
+                None,
+                None,
+                None,
+                None,
+                [],
+            )
 
         monkeypatch.setattr(brief_mod.settings.b2b_churn, "enabled", True, raising=False)
         monkeypatch.setattr(brief_mod.settings.b2b_churn, "intelligence_enabled", True, raising=False)
@@ -845,3 +1382,59 @@ class TestChallengerBriefRunProgress:
             brief_mod._STAGE_BUILDING_BRIEFS,
             brief_mod._STAGE_FINALIZING,
         ]
+
+    @pytest.mark.asyncio
+    async def test_run_scopes_pairs_to_test_vendors(self, monkeypatch):
+        pool = type("Pool", (), {"is_initialized": True, "execute": AsyncMock()})()
+
+        async def fake_gather(*_args, **_kwargs):
+            for coro in _args:
+                close = getattr(coro, "close", None)
+                if close:
+                    close()
+            return (
+                None,
+                None,
+                {"total_mentions": 3, "source_distribution": {"reddit": 3}},
+                None,
+                None,
+                None,
+                None,
+                None,
+                [],
+            )
+
+        monkeypatch.setattr(brief_mod.settings.b2b_churn, "enabled", True, raising=False)
+        monkeypatch.setattr(brief_mod.settings.b2b_churn, "intelligence_enabled", True, raising=False)
+        monkeypatch.setattr(brief_mod, "_update_execution_progress", AsyncMock())
+        monkeypatch.setattr(brief_mod, "get_db_pool", lambda: pool)
+        monkeypatch.setattr(brief_mod, "_check_freshness", AsyncMock(return_value=date(2026, 3, 18)))
+        monkeypatch.setattr(brief_mod, "_fetch_latest_evidence_vault", AsyncMock(return_value={}))
+        monkeypatch.setattr(
+            brief_mod,
+            "_select_displacement_pairs",
+            AsyncMock(return_value=[
+                {"incumbent": "Zendesk", "challenger": "Freshdesk"},
+                {"incumbent": "HubSpot", "challenger": "Pipedrive"},
+            ]),
+        )
+        monkeypatch.setattr(brief_mod.asyncio, "gather", fake_gather)
+        monkeypatch.setattr(
+            brief_mod,
+            "_build_challenger_brief",
+            lambda **kwargs: {
+                "_executive_summary": "summary",
+                "displacement_summary": {"total_mentions": 3, "source_distribution": {"reddit": 3}},
+                "data_sources": {"battle_card": False},
+                "total_target_accounts": 0,
+            },
+        )
+
+        task = type("Task", (), {"metadata": {"_execution_id": str(uuid4()), "test_vendors": ["Zendesk"]}})()
+        result = await brief_mod.run(task)
+
+        assert result == {
+            "_skip_synthesis": "Challenger briefs complete",
+            "pairs": 1,
+            "persisted": 1,
+        }
