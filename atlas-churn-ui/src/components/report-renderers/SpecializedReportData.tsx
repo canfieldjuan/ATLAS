@@ -45,7 +45,7 @@ export function isSpecializedReportType(reportType: string): boolean {
 
 function SectionCard({ title, icon, children }: { title: string; icon?: ReactNode; children: ReactNode }) {
   return (
-    <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 min-w-0 overflow-hidden">
+    <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 min-w-0 overflow-hidden [overflow-wrap:anywhere]">
       <h3 className="flex items-center gap-2 text-sm font-medium text-slate-300 mb-3 min-w-0 break-words">
         {icon}
         {title}
@@ -91,7 +91,7 @@ function ChallengerBriefDetail({ data }: { data: ChallengerBriefViewModel }) {
   const sources = data.data_sources
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 min-w-0 [overflow-wrap:anywhere]">
       <div className="flex flex-wrap gap-1.5">
         {Object.entries(sources).map(([key, value]) => (
           <span
@@ -164,7 +164,7 @@ function ChallengerBriefDetail({ data }: { data: ChallengerBriefViewModel }) {
           {Array.isArray(inc.top_weaknesses) && inc.top_weaknesses.length > 0 && (
             <div className="mt-3 overflow-x-auto">
               <p className="text-xs font-medium text-slate-400 mb-1">Top Weaknesses</p>
-              <table className="w-full text-sm table-fixed">
+              <table className="w-full text-sm table-auto">
                 <thead>
                   <tr className="border-b border-slate-700/50">
                     <th className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">Weakness</th>
@@ -203,7 +203,7 @@ function ChallengerBriefDetail({ data }: { data: ChallengerBriefViewModel }) {
 
           {Array.isArray(adv.strengths) && adv.strengths.length > 0 && (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm table-fixed">
+              <table className="w-full text-sm table-auto">
                 <thead>
                   <tr className="border-b border-slate-700/50">
                     <th className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">Strength</th>
@@ -225,7 +225,7 @@ function ChallengerBriefDetail({ data }: { data: ChallengerBriefViewModel }) {
           {Array.isArray(adv.weakness_coverage) && adv.weakness_coverage.length > 0 && (
             <div className="mt-3 overflow-x-auto">
               <p className="text-xs font-medium text-slate-400 mb-1">Weakness Coverage</p>
-              <table className="w-full text-sm table-fixed">
+              <table className="w-full text-sm table-auto">
                 <thead>
                   <tr className="border-b border-slate-700/50">
                     <th className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">Incumbent Weakness</th>
@@ -292,7 +292,7 @@ function ChallengerBriefDetail({ data }: { data: ChallengerBriefViewModel }) {
       {targets.length > 0 && (
         <SectionCard title={`Target Accounts (${data.total_target_accounts ?? targets.length} total, ${data.accounts_considering_challenger ?? 0} considering ${data.challenger})`} icon={<Target className="h-4 w-4 text-amber-400" />}>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm table-fixed">
+            <table className="w-full text-sm table-auto">
               <thead>
                 <tr className="border-b border-slate-700/50">
                   {['Company', 'Score', 'Stage', 'Urg', 'Industry', 'Chall?'].map((header) => (
@@ -437,7 +437,7 @@ function AccountsInMotionDetail({ data }: { data: AccountsInMotionViewModel }) {
   const accounts = data.accounts
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 min-w-0 [overflow-wrap:anywhere]">
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4 text-center">
           <p className="text-xs text-slate-400 mb-1">Total Accounts</p>
@@ -471,7 +471,7 @@ function AccountsInMotionDetail({ data }: { data: AccountsInMotionViewModel }) {
         {gaps.length > 0 && (
           <SectionCard title="Top Feature Gaps">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm table-fixed">
+              <table className="w-full text-sm table-auto">
                 <thead>
                   <tr className="border-b border-slate-700/50">
                     <th className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">Feature</th>
@@ -505,7 +505,7 @@ function AccountsInMotionDetail({ data }: { data: AccountsInMotionViewModel }) {
       {accounts.length > 0 && (
         <SectionCard title={`Prospecting List (${accounts.length} accounts)`} icon={<Target className="h-4 w-4 text-amber-400" />}>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm table-fixed">
+            <table className="w-full text-sm table-auto">
               <thead>
                 <tr className="border-b border-slate-700/50">
                   {['Company', 'Score', 'Stage', 'Urg', 'Pain', 'Industry', 'Domain', 'Alts'].map((header) => (
@@ -578,7 +578,7 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
   ]
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 min-w-0 [overflow-wrap:anywhere]">
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4 text-center">
           <p className="text-xs text-slate-400 mb-1">Churn Pressure</p>
@@ -681,7 +681,7 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
           {data.competitor_differentiators.length > 0 && (
             <SectionCard title="Competitor Differentiators" icon={<Zap className="h-4 w-4 text-green-400" />}>
               <div className="overflow-x-auto">
-                <table className="w-full text-sm table-fixed">
+                <table className="w-full text-sm table-auto">
                   <thead>
                     <tr className="border-b border-slate-700/50">
                       <th className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">Competitor</th>
@@ -749,7 +749,7 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
           {data.active_evaluation_deadlines.length > 0 && (
             <SectionCard title="Active Evaluation Deadlines" icon={<Target className="h-4 w-4 text-red-400" />}>
               <div className="overflow-x-auto">
-                <table className="w-full text-sm table-fixed">
+                <table className="w-full text-sm table-auto">
                   <thead>
                     <tr className="border-b border-slate-700/50">
                       <th className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">Company</th>
@@ -812,7 +812,7 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
         </SectionCard>
       )}
 
-      <StructuredReportData data={rawData} skipKeys={skipKeys} />
+      <StructuredReportData data={rawData} skipKeys={skipKeys} className="xl:grid-cols-1" />
     </div>
   )
 }
@@ -839,10 +839,10 @@ function ComparisonReportDetail({ data, rawData }: { data: ComparisonReportViewM
   ]
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 min-w-0 [overflow-wrap:anywhere]">
       <SectionCard title="Side-by-Side Metrics" icon={<Swords className="h-4 w-4 text-cyan-400" />}>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm table-fixed">
+          <table className="w-full text-sm table-auto">
             <thead>
               <tr className="border-b border-slate-700/50">
                 <th className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">Metric</th>
@@ -930,7 +930,7 @@ function ComparisonReportDetail({ data, rawData }: { data: ComparisonReportViewM
 
 function WeeklyChurnFeedDetail({ items }: { items: WeeklyChurnFeedItemViewModel[] }) {
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 min-w-0 [overflow-wrap:anywhere]">
       {items.map((item, index) => (
         <SectionCard
           key={`${item.vendor ?? 'feed'}-${index}`}
@@ -975,7 +975,7 @@ function WeeklyChurnFeedDetail({ items }: { items: WeeklyChurnFeedItemViewModel[
 
 function VendorScorecardDetail({ items }: { items: VendorScorecardViewModel[] }) {
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 min-w-0 [overflow-wrap:anywhere]">
       {items.map((item, index) => (
         <SectionCard
           key={`${item.vendor ?? 'scorecard'}-${index}`}

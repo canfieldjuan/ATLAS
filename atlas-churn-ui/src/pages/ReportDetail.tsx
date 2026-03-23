@@ -85,7 +85,7 @@ export default function ReportDetail() {
   })
 
   return (
-    <div className="space-y-6 max-w-4xl min-w-0">
+    <div className="space-y-6 max-w-6xl min-w-0">
       <div className="flex items-center justify-between">
         <button
           onClick={() => navigate('/reports')}

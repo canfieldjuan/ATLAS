@@ -134,8 +134,8 @@ function StructuredTable({ rows }: { rows: AnyObject[] }) {
   if (columns.length === 0) return null
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm table-fixed">
+    <div className="overflow-x-auto min-w-0">
+      <table className="w-full text-sm table-auto">
         <thead>
           <tr className="border-b border-slate-700/50">
             {columns.map((column) => (
@@ -511,9 +511,9 @@ export function StructuredReportData({
   if (entries.length === 0) return null
 
   return (
-    <div className={clsx('grid grid-cols-1 lg:grid-cols-2 gap-6', className)}>
+    <div className={clsx('grid grid-cols-1 xl:grid-cols-2 gap-6 min-w-0', className)}>
       {entries.map(([key, value]) => (
-        <div key={key} className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 min-w-0 overflow-hidden">
+        <div key={key} className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 min-w-0 overflow-hidden [overflow-wrap:anywhere]">
           <h4 className="text-xs font-medium text-cyan-400 uppercase tracking-wider mb-3 break-words">
             {humanLabel(key)}
           </h4>
