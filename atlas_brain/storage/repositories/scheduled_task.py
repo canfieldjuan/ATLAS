@@ -344,6 +344,32 @@ class ScheduledTaskRepository:
             logger.error("Failed to update task last run: %s", e)
             raise DatabaseOperationError("update task last run", e)
 
+    async def update_next_run(
+        self,
+        task_id: UUID,
+        next_run_at: Optional[datetime],
+    ) -> None:
+        """Update the persisted next scheduled run time."""
+        pool = get_db_pool()
+
+        if not pool.is_initialized:
+            raise DatabaseUnavailableError("update task next run")
+
+        try:
+            await pool.execute(
+                """
+                UPDATE scheduled_tasks
+                SET next_run_at = $2, updated_at = $3
+                WHERE id = $1
+                """,
+                task_id, next_run_at, datetime.now(timezone.utc),
+            )
+        except DatabaseUnavailableError:
+            raise
+        except Exception as e:
+            logger.error("Failed to update task next run: %s", e)
+            raise DatabaseOperationError("update task next run", e)
+
     async def record_execution(
         self,
         task_id: UUID,

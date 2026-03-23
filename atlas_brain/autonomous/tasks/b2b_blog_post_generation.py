@@ -533,6 +533,41 @@ def _with_unresolved_critical_warnings(report: dict[str, Any]) -> dict[str, Any]
     return enriched
 
 
+def _ensure_methodology_context(
+    blueprint: PostBlueprint,
+    content: dict[str, Any],
+) -> dict[str, Any]:
+    """Inject a deterministic methodology note when the draft omits it."""
+    body = str((content or {}).get("content") or "").strip()
+    if not body:
+        return dict(content or {})
+
+    review_period = str((blueprint.data_context or {}).get("review_period") or "").strip()
+    if not review_period:
+        return dict(content or {})
+
+    has_review_period = review_period in body
+    has_self_selected = "self-selected" in body.lower()
+    if has_review_period and has_self_selected:
+        return dict(content or {})
+
+    source_label = str((blueprint.data_context or {}).get("data_source_label") or "").strip()
+    source_text = source_label or "public software reviews"
+    note = (
+        f"_Methodology note: This analysis reflects self-selected feedback from {source_text} "
+        f"collected between {review_period}. It captures reviewer perception, not a census of all users._"
+    )
+
+    updated = dict(content or {})
+    if body.startswith("# "):
+        head, _, remainder = body.partition("\n")
+        remainder = remainder.lstrip()
+        updated["content"] = f"{head}\n\n{note}\n\n{remainder}" if remainder else f"{head}\n\n{note}"
+    else:
+        updated["content"] = f"{note}\n\n{body}"
+    return updated
+
+
 def _enforce_blog_quality(
     llm,
     blueprint: PostBlueprint,
@@ -541,7 +576,7 @@ def _enforce_blog_quality(
     related_posts: list[dict[str, str]] | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     """Apply quality gate and perform one retry with feedback when needed."""
-    current = dict(content or {})
+    current = _ensure_methodology_context(blueprint, dict(content or {}))
     _inject_affiliate_links(blueprint, current)
     current, report = _apply_blog_quality_gate(blueprint, current)
     initial_critical = _critical_quality_warnings(report)
@@ -561,6 +596,7 @@ def _enforce_blog_quality(
             return None, _with_unresolved_critical_warnings(report)
         return None, report
 
+    retry = _ensure_methodology_context(blueprint, retry)
     _inject_affiliate_links(blueprint, retry)
     retry, retry_report = _apply_blog_quality_gate(blueprint, retry)
     retry_report = _with_unresolved_critical_warnings(retry_report)
@@ -817,6 +853,9 @@ async def _regenerate_existing_posts(
 
 _CAMPAIGN_GAP_LOOKBACK_DAYS = 14
 _CAMPAIGN_GAP_BONUS_PCT = 0.30
+_OUTBOUND_SHOWDOWN_GAP_BONUS_PCT = 0.75
+_OUTBOUND_SHOWDOWN_CANDIDATE_LIMIT = 50
+_OUTBOUND_SHOWDOWN_MAX_SCORE = 100
 _B2B_TOPIC_TYPES = (
     "vendor_alternative",
     "vendor_showdown",
@@ -904,6 +943,290 @@ def _extract_blog_coverage_vendors(
             if value:
                 vendors.add(value)
     return vendors
+
+
+def _normalize_vendor_pair(
+    vendor_a: Any,
+    vendor_b: Any,
+) -> tuple[str, str] | None:
+    """Return a stable vendor pair ordering for deterministic showdown keys."""
+    left = str(vendor_a or "").strip()
+    right = str(vendor_b or "").strip()
+    if not left or not right:
+        return None
+    ordered = sorted((left, right), key=lambda item: item.lower())
+    if ordered[0].lower() == ordered[1].lower():
+        return None
+    return ordered[0], ordered[1]
+
+
+def _showdown_pair_key(vendor_a: Any, vendor_b: Any) -> str:
+    pair = _normalize_vendor_pair(vendor_a, vendor_b)
+    if not pair:
+        return ""
+    return f"{pair[0].lower()}::{pair[1].lower()}"
+
+
+def _normalized_text_contains_term(text: Any, term: Any) -> bool:
+    haystack = f" {_normalize_pain_label(text)} "
+    needle = _normalize_pain_label(term)
+    if len(needle) < 2:
+        return False
+    return f" {needle} " in haystack
+
+
+def _blog_post_covers_showdown_pair(
+    post: dict[str, Any],
+    vendor_a: Any,
+    vendor_b: Any,
+) -> bool:
+    """Return True when a blog post already covers a specific showdown pair."""
+    if str(post.get("topic_type") or "").strip() != "vendor_showdown":
+        return False
+
+    data_context = post.get("data_context")
+    if isinstance(data_context, str):
+        try:
+            data_context = json.loads(data_context)
+        except Exception:
+            data_context = {}
+    if not isinstance(data_context, dict):
+        data_context = {}
+    topic_ctx = data_context.get("topic_ctx") if isinstance(data_context.get("topic_ctx"), dict) else {}
+
+    pair_key = _showdown_pair_key(vendor_a, vendor_b)
+    covered_key = _showdown_pair_key(
+        topic_ctx.get("vendor_a") or data_context.get("vendor_a"),
+        topic_ctx.get("vendor_b") or data_context.get("vendor_b"),
+    )
+    if pair_key and pair_key == covered_key:
+        return True
+
+    text = " ".join(
+        str(post.get(field) or "").strip()
+        for field in ("title", "slug", "url")
+    )
+    return (
+        _normalized_text_contains_term(text, vendor_a)
+        and _normalized_text_contains_term(text, vendor_b)
+    )
+
+
+def _blog_post_showdown_pair_key(post: dict[str, Any]) -> str:
+    """Extract a normalized showdown pair key from stored blog post context."""
+    data_context = post.get("data_context")
+    if isinstance(data_context, str):
+        try:
+            data_context = json.loads(data_context)
+        except Exception:
+            data_context = {}
+    if not isinstance(data_context, dict):
+        data_context = {}
+    topic_ctx = data_context.get("topic_ctx") if isinstance(data_context.get("topic_ctx"), dict) else {}
+    return _showdown_pair_key(
+        topic_ctx.get("vendor_a") or data_context.get("vendor_a"),
+        topic_ctx.get("vendor_b") or data_context.get("vendor_b"),
+    )
+
+
+def _canonicalize_showdown_candidate(candidate: dict[str, Any]) -> dict[str, Any] | None:
+    """Normalize showdown pair ordering while keeping metrics attached to the right vendor."""
+    vendor_a = str(candidate.get("vendor_a") or "").strip()
+    vendor_b = str(candidate.get("vendor_b") or "").strip()
+    pair = _normalize_vendor_pair(vendor_a, vendor_b)
+    if not pair:
+        return None
+
+    normalized = dict(candidate)
+    if pair != (vendor_a, vendor_b):
+        normalized["vendor_a"], normalized["vendor_b"] = pair
+        normalized["reviews_a"], normalized["reviews_b"] = (
+            candidate.get("reviews_b"),
+            candidate.get("reviews_a"),
+        )
+        normalized["urgency_a"], normalized["urgency_b"] = (
+            candidate.get("urgency_b"),
+            candidate.get("urgency_a"),
+        )
+    else:
+        normalized["vendor_a"], normalized["vendor_b"] = pair
+    return normalized
+
+
+def _merge_showdown_candidates(
+    organic: list[dict[str, Any]],
+    outbound: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Merge organic showdown rows with outbound-driven pair demand."""
+    merged: dict[str, dict[str, Any]] = {}
+
+    for source_rows in (organic, outbound):
+        for row in source_rows:
+            normalized = _canonicalize_showdown_candidate(row)
+            if not normalized:
+                continue
+            key = _showdown_pair_key(normalized["vendor_a"], normalized["vendor_b"])
+            existing = merged.get(key)
+            if not existing:
+                merged[key] = normalized
+                continue
+
+            combined = dict(existing)
+            for field in ("category", "slug"):
+                if not combined.get(field) and normalized.get(field):
+                    combined[field] = normalized[field]
+            for field in ("reviews_a", "reviews_b", "total_reviews", "urgency_a", "urgency_b", "pain_diff"):
+                left = combined.get(field)
+                right = normalized.get(field)
+                if left in (None, ""):
+                    combined[field] = right
+                elif right not in (None, ""):
+                    combined[field] = max(left, right)
+            if normalized.get("outbound_gap_priority"):
+                combined["outbound_gap_priority"] = True
+            if normalized.get("outbound_gap_company_count"):
+                combined["outbound_gap_company_count"] = max(
+                    int(combined.get("outbound_gap_company_count") or 0),
+                    int(normalized.get("outbound_gap_company_count") or 0),
+                )
+            companies = [
+                str(name).strip()
+                for name in (combined.get("outbound_gap_companies") or [])
+                + (normalized.get("outbound_gap_companies") or [])
+                if str(name).strip()
+            ]
+            if companies:
+                combined["outbound_gap_companies"] = list(dict.fromkeys(companies))[:5]
+            merged[key] = combined
+
+    return list(merged.values())
+
+
+async def _fetch_existing_showdown_posts(pool) -> list[dict[str, Any]]:
+    """Return existing showdown posts so the selector can avoid duplicate pair coverage."""
+    return await pool.fetch(
+        """
+        SELECT title, slug, topic_type, data_context
+        FROM blog_posts
+        WHERE status = ANY($1::text[])
+          AND topic_type = 'vendor_showdown'
+        """,
+        ["draft", "published"],
+    )
+
+
+async def _fetch_outbound_review_queue_candidates(pool) -> list[dict[str, Any]]:
+    """Fetch active account-backed outbound candidates to identify missing comparison assets."""
+    from .b2b_campaign_generation import list_churning_company_review_candidates
+
+    result = await list_churning_company_review_candidates(
+        pool,
+        min_score=max(int(settings.b2b_campaign.review_queue_min_score), 1),
+        max_score=_OUTBOUND_SHOWDOWN_MAX_SCORE,
+        limit=_OUTBOUND_SHOWDOWN_CANDIDATE_LIMIT,
+        qualified_only=False,
+        ignore_recent_dedup=True,
+    )
+    return result.get("candidates") or []
+
+
+async def _build_outbound_showdown_candidate(
+    pool,
+    *,
+    vendor_a: str,
+    vendor_b: str,
+    category: str | None,
+) -> dict[str, Any] | None:
+    """Build a showdown candidate shape from outbound demand."""
+    stats_a, stats_b = await asyncio.gather(
+        _fetch_vendor_stats(pool, vendor_a),
+        _fetch_vendor_stats(pool, vendor_b),
+    )
+    if not stats_a or not stats_b:
+        return None
+
+    return {
+        "vendor_a": vendor_a,
+        "vendor_b": vendor_b,
+        "category": category or stats_a.get("category") or stats_b.get("category") or "software",
+        "reviews_a": int(stats_a.get("total") or 0),
+        "reviews_b": int(stats_b.get("total") or 0),
+        "total_reviews": int(stats_a.get("total") or 0) + int(stats_b.get("total") or 0),
+        "urgency_a": round(float(stats_a.get("avg_urgency") or 0), 1),
+        "urgency_b": round(float(stats_b.get("avg_urgency") or 0), 1),
+        "pain_diff": round(
+            abs(float(stats_a.get("avg_urgency") or 0) - float(stats_b.get("avg_urgency") or 0)),
+            1,
+        ),
+    }
+
+
+async def _find_outbound_showdown_gap_candidates(pool) -> list[dict[str, Any]]:
+    """Return missing incumbent-vs-alternative showdowns from the live outbound queue."""
+    existing_posts, review_candidates = await asyncio.gather(
+        _fetch_existing_showdown_posts(pool),
+        _fetch_outbound_review_queue_candidates(pool),
+    )
+    covered_pairs = {
+        _blog_post_showdown_pair_key(post)
+        for post in existing_posts
+        if _blog_post_showdown_pair_key(post)
+    }
+
+    pair_demand: dict[str, dict[str, Any]] = {}
+    for item in review_candidates:
+        comparison_asset = item.get("comparison_asset") or {}
+        incumbent = str(
+            comparison_asset.get("incumbent_vendor") or item.get("vendor_name") or ""
+        ).strip()
+        alternative = str(comparison_asset.get("alternative_vendor") or "").strip()
+        if not incumbent or not alternative:
+            continue
+        if not comparison_asset.get("company_safe"):
+            continue
+        if not comparison_asset.get("pain_categories"):
+            continue
+
+        pair_key = _showdown_pair_key(incumbent, alternative)
+        if not pair_key or pair_key in covered_pairs:
+            continue
+
+        primary_post = comparison_asset.get("primary_blog_post") or item.get("primary_blog_post") or {}
+        if isinstance(primary_post, dict) and _blog_post_covers_showdown_pair(primary_post, incumbent, alternative):
+            continue
+
+        company_name = str(item.get("company_name") or "").strip()
+        current = pair_demand.setdefault(
+            pair_key,
+            {
+                "vendor_a": incumbent,
+                "vendor_b": alternative,
+                "category": str(item.get("product_category") or "").strip(),
+                "companies": [],
+                "max_score": 0,
+            },
+        )
+        if company_name and company_name not in current["companies"]:
+            current["companies"].append(company_name)
+        current["max_score"] = max(current["max_score"], int(item.get("opportunity_score") or 0))
+
+    candidates: list[dict[str, Any]] = []
+    for demand in pair_demand.values():
+        built = await _build_outbound_showdown_candidate(
+            pool,
+            vendor_a=demand["vendor_a"],
+            vendor_b=demand["vendor_b"],
+            category=demand.get("category"),
+        )
+        if not built:
+            continue
+        built["outbound_gap_priority"] = True
+        built["outbound_gap_company_count"] = len(demand["companies"])
+        built["outbound_gap_companies"] = demand["companies"][:5]
+        built["outbound_gap_max_score"] = demand["max_score"]
+        candidates.append(built)
+
+    return candidates
 
 
 async def _detect_campaign_content_gaps(pool) -> dict[str, set[str]]:
@@ -1023,12 +1346,13 @@ async def _select_topic(pool, max_per_run: int = 1) -> tuple[str, dict[str, Any]
     today = date.today()
     month_suffix = today.strftime("%Y-%m")
 
-    (alternatives, showdowns, churn_reports, migrations,
+    (alternatives, showdowns, outbound_showdowns, churn_reports, migrations,
      deep_dives, landscapes,
      pricing_checks, switching_stories, pain_roundups, fit_guides,
     ) = await asyncio.gather(
         _find_vendor_alternative_candidates(pool),
         _find_vendor_showdown_candidates(pool),
+        _find_outbound_showdown_gap_candidates(pool),
         _find_churn_report_candidates(pool),
         _find_migration_guide_candidates(pool),
         _find_vendor_deep_dive_candidates(pool),
@@ -1041,6 +1365,7 @@ async def _select_topic(pool, max_per_run: int = 1) -> tuple[str, dict[str, Any]
     )
     alternatives = alternatives if not isinstance(alternatives, Exception) else []
     showdowns = showdowns if not isinstance(showdowns, Exception) else []
+    outbound_showdowns = outbound_showdowns if not isinstance(outbound_showdowns, Exception) else []
     churn_reports = churn_reports if not isinstance(churn_reports, Exception) else []
     migrations = migrations if not isinstance(migrations, Exception) else []
     deep_dives = deep_dives if not isinstance(deep_dives, Exception) else []
@@ -1049,6 +1374,7 @@ async def _select_topic(pool, max_per_run: int = 1) -> tuple[str, dict[str, Any]
     switching_stories = switching_stories if not isinstance(switching_stories, Exception) else []
     pain_roundups = pain_roundups if not isinstance(pain_roundups, Exception) else []
     fit_guides = fit_guides if not isinstance(fit_guides, Exception) else []
+    showdowns = _merge_showdown_candidates(showdowns, outbound_showdowns)
 
     raw_candidates: list[tuple[str, float, str, dict[str, Any]]] = []
 
@@ -1151,6 +1477,20 @@ async def _select_topic(pool, max_per_run: int = 1) -> tuple[str, dict[str, Any]
                 gap_boost_count, len(raw_candidates),
             )
 
+    boosted_showdowns: list[tuple[str, float, str, dict]] = []
+    showdown_gap_boost_count = 0
+    for slug, score, topic_type, ctx in raw_candidates:
+        if topic_type == "vendor_showdown" and ctx.get("outbound_gap_priority"):
+            score *= (1.0 + _OUTBOUND_SHOWDOWN_GAP_BONUS_PCT)
+            showdown_gap_boost_count += 1
+        boosted_showdowns.append((slug, score, topic_type, ctx))
+    raw_candidates = boosted_showdowns
+    if showdown_gap_boost_count:
+        logger.info(
+            "Outbound showdown gap bonus applied to %d candidate(s)",
+            showdown_gap_boost_count,
+        )
+
     # --- Data sufficiency gate: filter candidates below minimum review counts ---
     sources = _blog_source_allowlist()
     vendor_counts = await _batch_vendor_review_counts(pool, raw_candidates, sources)
@@ -1219,7 +1559,10 @@ async def _select_topic(pool, max_per_run: int = 1) -> tuple[str, dict[str, Any]
         (score, topic_type, ctx)
         for slug, score, topic_type, ctx in raw_candidates
         if slug not in existing_slugs
-        and not _vendor_keys(ctx) & covered_vendors  # no overlap with recent posts
+        and (
+            ctx.get("outbound_gap_priority")
+            or not _vendor_keys(ctx) & covered_vendors
+        )
     ]
 
     if not candidates:

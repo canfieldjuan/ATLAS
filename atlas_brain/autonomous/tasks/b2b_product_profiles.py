@@ -61,6 +61,24 @@ _PAIN_CATEGORIES = [
 ]
 
 
+def _normalize_test_vendors(raw: Any) -> list[str]:
+    """Normalize optional runtime vendor scope from task metadata."""
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        values = [part.strip() for part in raw.split(",")]
+        return [value for value in values if value]
+    if isinstance(raw, (list, tuple, set)):
+        normalized: list[str] = []
+        for item in raw:
+            value = str(item or "").strip()
+            if value:
+                normalized.append(value)
+        return normalized
+    value = str(raw).strip()
+    return [value] if value else []
+
+
 def _safe_json(value: Any, default: Any = None) -> Any:
     """Safely deserialize a JSON value."""
     if default is None:
@@ -808,6 +826,20 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _fetch_aggregate_metrics(pool, window_days, min_reviews),
         _fetch_source_distribution(pool, window_days),
     )
+
+    scoped_vendors = _normalize_test_vendors((task.metadata or {}).get("test_vendors"))
+    if scoped_vendors:
+        scoped_vendor_keys = {vendor.lower().strip() for vendor in scoped_vendors if vendor}
+        aggregate_metrics = {
+            vendor: metrics
+            for vendor, metrics in aggregate_metrics.items()
+            if vendor.lower().strip() in scoped_vendor_keys
+        }
+        logger.info(
+            "Product profile generation scoped to %d vendor(s): %s",
+            len(aggregate_metrics),
+            sorted(aggregate_metrics),
+        )
 
     if not aggregate_metrics:
         logger.info("No vendors with >= %d enriched reviews, nothing to generate", min_reviews)

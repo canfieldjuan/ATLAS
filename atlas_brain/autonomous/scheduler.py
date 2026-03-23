@@ -113,7 +113,7 @@ class TaskScheduler:
 
             for task in tasks:
                 try:
-                    self._register_task(task)
+                    await self.register_and_schedule(task)
                 except Exception as e:
                     logger.error("Failed to register task '%s': %s", task.name, e)
 
@@ -1208,10 +1208,26 @@ class TaskScheduler:
             logger.debug("Failed to get next run time for %s: %s", task.id, e)
         return None
 
-    async def register_and_schedule(self, task: ScheduledTask) -> None:
-        """Register a new task (called when task is created via API)."""
-        if self._running and task.enabled:
+    async def _sync_next_run_time(self, task: ScheduledTask) -> ScheduledTask:
+        """Persist the scheduler's current next run time for a task."""
+        from ..storage.repositories.scheduled_task import get_scheduled_task_repo
+
+        repo = get_scheduled_task_repo()
+        next_run = self._get_next_run_time(task) if task.enabled else None
+        await repo.update_next_run(task.id, next_run)
+        task.next_run_at = next_run
+        refreshed = await repo.get_by_id(task.id)
+        return refreshed or task
+
+    async def register_and_schedule(self, task: ScheduledTask) -> ScheduledTask:
+        """Register a task and persist its current next run state."""
+        if not self._running:
+            return task
+        if task.enabled:
             self._register_task(task)
+        else:
+            self.unregister_task(str(task.id))
+        return await self._sync_next_run_time(task)
 
     async def run_now(self, task: ScheduledTask) -> dict:
         """Execute a task immediately (manual trigger). Returns immediately with execution ID."""

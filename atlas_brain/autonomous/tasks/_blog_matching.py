@@ -65,6 +65,26 @@ def _contains_term_as_tokens(text: str, term: str) -> bool:
     return False
 
 
+def _normalized_post_dedupe_key(
+    row: dict[str, Any],
+    data_context: dict[str, Any],
+    topic_ctx: dict[str, Any],
+) -> str:
+    """Build a stable dedupe key so draft/published variants do not both surface."""
+    topic_type = str(row.get("topic_type") or "").lower()
+    if topic_type == "vendor_showdown":
+        vendor_a = str(topic_ctx.get("vendor_a") or data_context.get("vendor_a") or "").strip().lower()
+        vendor_b = str(topic_ctx.get("vendor_b") or data_context.get("vendor_b") or "").strip().lower()
+        if vendor_a and vendor_b:
+            ordered = "::".join(sorted((vendor_a, vendor_b)))
+            return f"{topic_type}:{ordered}"
+    slug = str(row.get("slug") or "").strip().lower()
+    slug = re.sub(r"-draft$", "", slug)
+    if slug:
+        return f"{topic_type}:{slug}"
+    return f"{topic_type}:{str(row.get('title') or '').strip().lower()}"
+
+
 async def fetch_relevant_blog_posts(
     pool,
     *,
@@ -128,7 +148,7 @@ async def fetch_relevant_blog_posts(
             FROM blog_posts
             WHERE status = ANY($2::text[])
               AND topic_type = ANY($1::text[])
-            ORDER BY published_at DESC
+            ORDER BY COALESCE(published_at, created_at) DESC
             LIMIT 50
             """,
             list(topic_types),
@@ -147,14 +167,16 @@ async def fetch_relevant_blog_posts(
     alt_lower = [a.lower() for a in (alternative_vendors or []) if a]
 
     # Score each post
-    published_scored: list[tuple[int, str, dict]] = []
-    draft_scored: list[tuple[int, str, dict]] = []
+    allowed_statuses = set(statuses)
+    scored_rows: list[tuple[int, int, int, str, dict[str, Any]]] = []
 
-    for row in rows:
+    for idx, row in enumerate(rows):
         score = 0
         slug = (row["slug"] or "").lower()
         title = (row["title"] or "").lower()
         status = str(row.get("status") or "published").lower()
+        if status not in allowed_statuses:
+            continue
         tags = row["tags"] or []
         if isinstance(tags, list):
             tags_text = " ".join(str(tag).lower() for tag in tags if tag)
@@ -215,14 +237,23 @@ async def fetch_relevant_blog_posts(
                     break
 
         if score > 0:
-            target = published_scored if status == "published" else draft_scored
-            target.append((score, row["slug"], {
+            status_rank = 1 if status == "published" else 0
+            dedupe_key = _normalized_post_dedupe_key(row, dc, tc)
+            scored_rows.append((score, status_rank, -idx, dedupe_key, {
                 "title": row["title"],
                 "url": f"{base_url}/blog/{row['slug']}",
                 "topic_type": row["topic_type"],
             }))
 
-    # Sort by score desc, then by position in original query (recency)
-    scored = published_scored or (draft_scored if include_drafts else [])
-    scored.sort(key=lambda t: -t[0])
-    return [item for _, _, item in scored[:limit]]
+    # Sort by relevance first, then prefer published over draft, then recency.
+    scored_rows.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+    results: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    for _, _, _, dedupe_key, item in scored_rows:
+        if dedupe_key in seen_keys:
+            continue
+        seen_keys.add(dedupe_key)
+        results.append(item)
+        if len(results) >= limit:
+            break
+    return results

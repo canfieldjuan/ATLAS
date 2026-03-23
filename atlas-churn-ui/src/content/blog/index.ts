@@ -37,6 +37,8 @@ import realCostOfMailchimp202603 from './real-cost-of-mailchimp-2026-03'
 import mailchimpVsIntercom202603 from './mailchimp-vs-intercom-2026-03'
 import salesforceVsHubspot202603 from './salesforce-vs-hubspot-2026-03'
 import asanaVsMondaycom202603 from './asana-vs-mondaycom-2026-03'
+import crowdstrikeVsSentinelone202603 from './crowdstrike-vs-sentinelone-2026-03'
+import paloAltoNetworksVsMicrosoftDefenderForEndpoint202603 from './palo-alto-networks-vs-microsoft-defender-for-endpoint-2026-03'
 type ChartValue = string | number | null | undefined
 type ChartDatum = Record<string, ChartValue>
 
@@ -143,4 +145,6 @@ export const POSTS: BlogPost[] = [
   mailchimpVsIntercom202603,
   salesforceVsHubspot202603,
   asanaVsMondaycom202603,
+  crowdstrikeVsSentinelone202603,
+  paloAltoNetworksVsMicrosoftDefenderForEndpoint202603,
 ]

@@ -132,7 +132,7 @@ async def create_task(req: TaskCreateRequest):
 
     # Register with scheduler if enabled
     scheduler = get_task_scheduler()
-    await scheduler.register_and_schedule(task)
+    task = await scheduler.register_and_schedule(task)
 
     # Reload hooks if this is a hook task
     if task.task_type == "hook":
@@ -175,7 +175,7 @@ async def update_task(task_id: UUID, req: TaskUpdateRequest):
     # Re-register with scheduler
     scheduler = get_task_scheduler()
     scheduler.unregister_task(str(task_id))
-    await scheduler.register_and_schedule(task)
+    task = await scheduler.register_and_schedule(task)
 
     # Reload hooks if this is a hook task
     if task.task_type == "hook":
@@ -261,7 +261,7 @@ async def enable_task(task_id: UUID):
         raise HTTPException(404, "Task not found")
 
     scheduler = get_task_scheduler()
-    await scheduler.register_and_schedule(task)
+    task = await scheduler.register_and_schedule(task)
 
     # Reload hooks if this is a hook task
     if task.task_type == "hook":
@@ -283,7 +283,7 @@ async def disable_task(task_id: UUID):
         raise HTTPException(404, "Task not found")
 
     scheduler = get_task_scheduler()
-    scheduler.unregister_task(str(task_id))
+    task = await scheduler.register_and_schedule(task)
 
     # Reload hooks if this is a hook task
     if task.task_type == "hook":
