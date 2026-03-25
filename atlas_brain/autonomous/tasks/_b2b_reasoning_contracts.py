@@ -412,6 +412,22 @@ def _preferred_migration_eval_wrapper(
     return best or current
 
 
+def _preferred_migration_switch_wrapper(
+    packet: Any,
+    current: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Use the canonical explicit-switch aggregate when it exists."""
+    aggregate = _aggregate_wrapper(
+        packet,
+        "displacement:aggregate:total_explicit_switches",
+    )
+    if aggregate is not None and aggregate.get("value") is not None:
+        return aggregate
+    if isinstance(current, dict):
+        return _normalize_wrapper_value(current)
+    return current
+
+
 def _preferred_displacement_mention_wrapper(
     packet: Any,
     current: dict[str, Any] | None,
@@ -1181,6 +1197,12 @@ def build_reasoning_contracts(
             or _sanitize_text_wrapper(migration_proof.get("primary_switch_driver"))
         )
     if migration_proof or not has_explicit_contracts:
+        preferred_switch_volume = _preferred_migration_switch_wrapper(
+            packet,
+            migration_proof.get("switch_volume"),
+        )
+        if preferred_switch_volume is not None:
+            migration_proof["switch_volume"] = preferred_switch_volume
         preferred_migration_eval = _preferred_migration_eval_wrapper(
             packet,
             migration_proof.get("active_evaluation_volume"),

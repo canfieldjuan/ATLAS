@@ -285,7 +285,9 @@ class VisionEventRepository:
             return {}
 
         if since is None:
-            since = datetime.now(timezone.utc) - timedelta(hours=1)
+            # vision_events.event_timestamp is stored as timestamp (no tz),
+            # so we pass naive UTC datetimes to asyncpg.
+            since = datetime.utcnow() - timedelta(hours=1)
 
         # Validate group_by to prevent SQL injection
         valid_fields = {"class_name", "source_id", "node_id", "event_type"}
@@ -345,7 +347,9 @@ class VisionEventRepository:
         if not pool.is_initialized:
             return []
 
-        since = datetime.now(timezone.utc) - timedelta(minutes=since_minutes)
+        # vision_events.event_timestamp is stored as timestamp (no tz),
+        # so we pass naive UTC datetimes to asyncpg.
+        since = datetime.utcnow() - timedelta(minutes=since_minutes)
 
         rows = await pool.fetch(
             """

@@ -509,7 +509,7 @@ async def search_product_reviews(
     category: Filter by hardware_category or source_category (partial match)
     min_pain_score: Minimum pain_score threshold (0-10)
     has_safety_flag: Filter by safety_flagged in deep_extraction
-    enrichment_status: Filter by status (pending, enriched, failed, not_applicable)
+    enrichment_status: Filter by status (pending, enriched, quarantined, failed, not_applicable)
     window_days: How far back to look in days (default 30)
     limit: Maximum results (default 20, cap 100)
     """

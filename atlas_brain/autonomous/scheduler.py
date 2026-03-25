@@ -195,11 +195,11 @@ class TaskScheduler:
                   AND st.schedule_type = 'cron'
                   AND st.cron_expression IS NOT NULL
                   AND (st.last_run_at IS NULL
-                       OR st.last_run_at < $1 - make_interval(secs => $2))
+                       OR st.last_run_at < ($1::timestamptz - make_interval(secs => $2::double precision)))
                   AND NOT EXISTS (
                       SELECT 1 FROM task_executions te
                       WHERE te.task_id = st.id
-                        AND te.started_at >= $1 - make_interval(secs => $2)
+                        AND te.started_at >= ($1::timestamptz - make_interval(secs => $2::double precision))
                         AND te.status IN ('completed', 'running')
                   )
                 """,

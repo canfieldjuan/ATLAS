@@ -542,6 +542,7 @@ async def _fetch_company_signal_review_context(
                COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry
         FROM b2b_reviews
         WHERE id = ANY($1::uuid[])
+          AND enrichment_status = 'enriched'
         """,
         review_ids,
     )
@@ -589,6 +590,21 @@ def _normalize_test_vendors(raw: Any) -> list[str]:
         seen.add(key)
         normalized.append(canon)
     return normalized
+
+
+def _count_analyzed_vendors(vendor_scores: Any) -> int:
+    """Count unique canonical vendors from vendor-score style rows."""
+    if not isinstance(vendor_scores, list):
+        return 0
+    seen: set[str] = set()
+    for row in vendor_scores:
+        if not isinstance(row, dict):
+            continue
+        vendor_name = row.get("vendor_name") or row.get("vendor") or ""
+        canon = _canonicalize_vendor(vendor_name)
+        if canon:
+            seen.add(canon)
+    return len(seen)
 
 
 def _vendor_scope_contains(value: Any, vendor_scope: set[str]) -> bool:
@@ -1751,7 +1767,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     scoped_vendors = _normalize_test_vendors((task.metadata or {}).get("test_vendors"))
     if scoped_vendors:
-        raw_vendor_count = len(vendor_scores)
+        raw_vendor_count = _count_analyzed_vendors(vendor_scores)
         scoped_data, scoped_vendors = _apply_vendor_scope_to_churn_inputs(
             {
                 "vendor_scores": vendor_scores,
@@ -1823,10 +1839,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _turning_points_raw = scoped_data["turning_points_raw"]
         logger.info(
             "Scoped churn intelligence to %d/%d vendors for test run: %s",
-            len(vendor_scores),
+            _count_analyzed_vendors(vendor_scores),
             raw_vendor_count,
             sorted(scoped_vendors),
         )
+    analyzed_vendor_count = _count_analyzed_vendors(vendor_scores)
     insider_lookup = _build_insider_lookup(insider_aggregates_raw)
 
     # Build idle field lookups
@@ -1864,7 +1881,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         progress_current=0,
         progress_total=reasoning_target,
         progress_message="Running temporal and stratified reasoning over vendor evidence.",
-        vendors_analyzed=len(vendor_scores),
+        vendors_analyzed=analyzed_vendor_count,
         high_intent_companies=len(high_intent),
         fetcher_failures=fetcher_failures,
         synced_firmographics=synced_firmographics,
@@ -2164,7 +2181,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                             progress_current=completed,
                             progress_total=reasoning_target,
                             progress_message="Running temporal and stratified reasoning over vendor evidence.",
-                            vendors_analyzed=len(vendor_scores),
+                            vendors_analyzed=analyzed_vendor_count,
                             high_intent_companies=len(high_intent),
                             fetcher_failures=fetcher_failures,
                             synced_firmographics=synced_firmographics,
@@ -2174,7 +2191,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             reasoning_vendors = _deduped_ev[:cfg.stratified_reasoning_vendor_cap]
             logger.info(
                 "Reasoning over %d/%d vendors (cap=%d)",
-                len(reasoning_vendors), len(vendor_scores),
+                len(reasoning_vendors), analyzed_vendor_count,
                 cfg.stratified_reasoning_vendor_cap,
             )
             await asyncio.gather(*[
@@ -2471,7 +2488,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         progress_current=len(reasoning_lookup),
         progress_total=reasoning_target,
         progress_message="Running temporal and stratified reasoning over vendor evidence.",
-        vendors_analyzed=len(vendor_scores),
+        vendors_analyzed=analyzed_vendor_count,
         high_intent_companies=len(high_intent),
         fetcher_failures=fetcher_failures,
         synced_firmographics=synced_firmographics,
@@ -4550,6 +4567,7 @@ async def _head_to_head_from_edges(
             SELECT vendor_name, id AS review_id, reviewer_company
             FROM b2b_reviews
             WHERE id = ANY($1::uuid[])
+              AND enrichment_status = 'enriched'
               AND reviewer_company IS NOT NULL
               AND BTRIM(reviewer_company) <> ''
             """,

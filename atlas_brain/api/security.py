@@ -17,6 +17,39 @@ logger = logging.getLogger("atlas.api.security")
 router = APIRouter(prefix="/security", tags=["security"])
 
 
+def _security_enabled_config() -> dict[str, Any]:
+    return {
+        "network_monitor": settings.security.network_monitor_enabled,
+        "network_ids": settings.security.network_ids_enabled,
+        "asset_tracking": settings.security.asset_tracking_enabled,
+        "arp_monitor": settings.security.arp_monitor_enabled,
+        "traffic_analysis": settings.security.traffic_analysis_enabled,
+        "pcap": settings.security.pcap_enabled,
+    }
+
+
+def _security_runtime_config() -> dict[str, Any]:
+    return {
+        "network_interface": settings.security.network_interface,
+        "protocols_to_monitor": settings.security.protocols_to_monitor,
+        "pcap_directory": settings.security.pcap_directory,
+        "pcap_max_size_mb": settings.security.pcap_max_size_mb,
+        "asset_stale_after_seconds": settings.security.asset_stale_after_seconds,
+        "asset_max_tracked": settings.security.asset_max_tracked,
+    }
+
+
+def _get_security_monitor_or_none():
+    try:
+        from ..security import get_security_monitor
+        return get_security_monitor()
+    except ModuleNotFoundError as exc:
+        if exc.name == "scapy":
+            logger.warning("Security monitor unavailable: missing optional dependency 'scapy'")
+            return None
+        raise
+
+
 class AssetObservationRequest(BaseModel):
     """Observation payload for security asset trackers."""
 
@@ -28,9 +61,24 @@ class AssetObservationRequest(BaseModel):
 @router.get("/status")
 async def get_security_status():
     """Get live security monitor runtime and detector telemetry."""
-    from ..security import get_security_monitor
+    monitor = _get_security_monitor_or_none()
+    if monitor is None:
+        return {
+            "enabled": _security_enabled_config(),
+            "config": _security_runtime_config(),
+            "monitor": {
+                "is_running": False,
+                "runtime": {},
+                "assets": {},
+                "unavailable_reason": "scapy_not_installed",
+            },
+            "detectors": {
+                "port_scan": {"active_sources": 0, "sources": {}},
+                "arp": {"tracked_ips": 0, "tracked_changes": 0},
+                "traffic": {},
+            },
+        }
 
-    monitor = get_security_monitor()
     port_detector = monitor.get_port_scan_detector()
     arp_monitor = monitor.get_arp_monitor()
     traffic_analyzer = monitor.get_traffic_analyzer()
@@ -41,22 +89,8 @@ async def get_security_status():
     traffic_metrics = traffic_analyzer.get_metrics() if traffic_analyzer else {}
 
     return {
-        "enabled": {
-            "network_monitor": settings.security.network_monitor_enabled,
-            "network_ids": settings.security.network_ids_enabled,
-            "asset_tracking": settings.security.asset_tracking_enabled,
-            "arp_monitor": settings.security.arp_monitor_enabled,
-            "traffic_analysis": settings.security.traffic_analysis_enabled,
-            "pcap": settings.security.pcap_enabled,
-        },
-        "config": {
-            "network_interface": settings.security.network_interface,
-            "protocols_to_monitor": settings.security.protocols_to_monitor,
-            "pcap_directory": settings.security.pcap_directory,
-            "pcap_max_size_mb": settings.security.pcap_max_size_mb,
-            "asset_stale_after_seconds": settings.security.asset_stale_after_seconds,
-            "asset_max_tracked": settings.security.asset_max_tracked,
-        },
+        "enabled": _security_enabled_config(),
+        "config": _security_runtime_config(),
         "monitor": {
             "is_running": monitor.is_running,
             "runtime": monitor.get_runtime_stats(),
@@ -82,9 +116,15 @@ async def list_security_assets(
     limit: int = Query(default=200, ge=1, le=5000),
 ):
     """List tracked assets from in-memory asset trackers."""
-    from ..security import get_security_monitor
+    monitor = _get_security_monitor_or_none()
+    if monitor is None:
+        return {
+            "count": 0,
+            "total": 0,
+            "assets": [],
+            "unavailable_reason": "scapy_not_installed",
+        }
 
-    monitor = get_security_monitor()
     assets = monitor.list_assets(asset_type=asset_type)
     return {
         "count": min(len(assets), limit),
@@ -96,9 +136,15 @@ async def list_security_assets(
 @router.post("/assets/observe")
 async def observe_security_asset(req: AssetObservationRequest):
     """Record an observed security asset into active asset trackers."""
-    from ..security import get_security_monitor
+    monitor = _get_security_monitor_or_none()
+    if monitor is None:
+        return {
+            "recorded": False,
+            "reason": "scapy_not_installed",
+            "asset_type": req.asset_type,
+            "identifier": req.identifier,
+        }
 
-    monitor = get_security_monitor()
     asset = monitor.observe_asset(
         asset_type=req.asset_type,
         identifier=req.identifier,
