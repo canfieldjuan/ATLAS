@@ -3076,7 +3076,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             progress_current=persistence_progress,
             progress_total=len(_PERSISTENCE_PHASES),
             progress_message="Persisting churn intelligence outputs.",
-            vendors_analyzed=len(vendor_scores),
+            vendors_analyzed=analyzed_vendor_count,
             high_intent_companies=len(high_intent),
             fetcher_failures=fetcher_failures,
             upsert_failures=upsert_failures,
@@ -3524,7 +3524,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             """,
             today,
             json.dumps({
-                "vendors_analyzed": len(vendor_scores),
+                "vendors_analyzed": analyzed_vendor_count,
                 "upsert_failures": upsert_failures,
                 "elapsed_seconds": round(budget.elapsed(), 1),
             }),
@@ -3565,7 +3565,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         progress_current=len(_PERSISTENCE_PHASES),
         progress_total=len(_PERSISTENCE_PHASES),
         progress_message="Finalizing churn-intelligence execution status.",
-        vendors_analyzed=len(vendor_scores),
+        vendors_analyzed=analyzed_vendor_count,
         high_intent_companies=len(high_intent),
         fetcher_failures=fetcher_failures,
         upsert_failures=upsert_failures,
@@ -3589,7 +3589,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     response = {
         "_skip_synthesis": "B2B churn intelligence complete",
         "date": str(today),
-        "vendors_analyzed": len(vendor_scores),
+        "vendors_analyzed": analyzed_vendor_count,
         "high_intent_companies": len(high_intent),
         "competitive_flows": len(competitive_disp),
         "fetcher_failures": fetcher_failures,
@@ -3616,7 +3616,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         output_data=response,
         metadata={
             "reasoning": build_reasoning_trace_context(
-                decision={"vendors_analyzed": len(vendor_scores)},
+                decision={"vendors_analyzed": analyzed_vendor_count},
                 evidence={
                     "fetcher_failures": fetcher_failures,
                     "upsert_failures": upsert_failures,
@@ -3658,7 +3658,7 @@ async def _emit_reasoning_events(
         EventType.B2B_INTELLIGENCE_GENERATED,
         source="b2b_churn_intelligence",
         payload={
-            "vendors_analyzed": len(vendor_scores),
+            "vendors_analyzed": _count_analyzed_vendors(vendor_scores),
             "high_intent_count": len(high_intent),
             "executive_summary": parsed.get("executive_summary", ""),
         },
@@ -3920,7 +3920,7 @@ async def gather_intelligence_data(
     result = {
         "payload": payload,
         "fetcher_failures": fetcher_failures,
-        "vendors_analyzed": len(data["vendor_scores"]),
+        "vendors_analyzed": _count_analyzed_vendors(data["vendor_scores"]),
         "high_intent_companies": len(data["high_intent"]),
         "competitive_flows": len(data["competitive_disp"]),
         "pain_categories": len(data["pain_dist"]),
